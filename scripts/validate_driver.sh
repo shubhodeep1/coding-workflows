@@ -94,6 +94,20 @@ else
 	APP_URL_EXPLICIT=0
 fi
 APP_URL="${APP_URL-http://localhost:8080/health}"
+APP_PROBE_PORT=""
+APP_URL_INVALID=0
+if [ "${APP_URL_EXPLICIT}" = "1" ] && [ -n "${APP_URL}" ]; then
+	# Require a literal IPv4 loopback destination; curl must not resolve a
+	# manifest-controlled hostname or interpret an ambiguous URL authority.
+	if [[ ! "${APP_URL}" =~ ^https?://127[.]0[.]0[.]1:([1-9][0-9]{0,4})(/[-A-Za-z0-9_./~%?\&=+:]*)?$ ]]; then
+		APP_URL_INVALID=1
+	else
+		APP_PROBE_PORT="${BASH_REMATCH[1]}"
+		if [ "${APP_PROBE_PORT}" -gt 65535 ]; then
+			APP_URL_INVALID=1
+		fi
+	fi
+fi
 # Accept both env var naming conventions. The generate prompt instructs Codex
 # to emit HEALTH_TIMEOUT_SECONDS / HEALTH_POLL_INTERVAL_SECONDS in validate.env,
 # while the driver historically reads HEALTH_TIMEOUT / HEALTH_POLL_INTERVAL.
@@ -399,6 +413,9 @@ run_preflight_checks()
 	if ! command -v docker >/dev/null 2>&1; then
 		fail_fast "preflight_docker" "docker is not installed" "${COMPOSE_LOG}" "preflight"
 	fi
+	if [ "${APP_URL_INVALID}" = "1" ]; then
+		fail_fast "preflight_app_url" "APP_URL must be an HTTP(S) URL on 127.0.0.1 with a valid explicit port" "${COMPOSE_LOG}" "preflight" 1
+	fi
 
 	if ! docker compose version >/dev/null 2>&1; then
 		fail_fast "preflight_compose" "docker compose is not available" "${COMPOSE_LOG}" "preflight"
@@ -599,6 +616,7 @@ wait_for_health()
 	local app_service_log
 	local service_ready
 	local url_ready
+	local published_ports
 
 	app_service_log="${LOG_DIR}/${APP_SERVICE//[^A-Za-z0-9_.-]/_}.log"
 	deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
@@ -645,8 +663,36 @@ wait_for_health()
 
 		if [ "${APP_URL_EXPLICIT}" = "1" ] && [ -n "${APP_URL}" ]; then
 			url_ready=0
-			if curl -fsS --max-time 2 "${APP_URL}" >/dev/null 2>&1; then
+			if [ "${service_ready}" -eq 1 ]; then
+				# A local port belonging to another service is not permission to probe.
+				# Inspect the selected container, not the compose file or host sockets.
+				published_ports="$(docker inspect -f '{{json .NetworkSettings.Ports}}' "${container_id}" 2>/dev/null)" || published_ports=""
+				if ! printf '%s' "${published_ports}" | python3 -c '
+import json
+import sys
+
+try:
+    ports = json.load(sys.stdin)
+    valid = isinstance(ports, dict) and any(
+        key.endswith("/tcp") and isinstance(bindings, list) and any(
+            isinstance(binding, dict) and binding.get("HostIp") == "127.0.0.1"
+            and binding.get("HostPort") == sys.argv[1]
+            for binding in bindings
+        )
+        for key, bindings in ports.items() if isinstance(key, str)
+    )
+except (ValueError, TypeError):
+    valid = False
+sys.exit(0 if valid else 1)
+' "${APP_PROBE_PORT}"; then
+					fail_fast "preflight_app_url_binding" "APP_URL port is not published on 127.0.0.1 by the selected app container" "${COMPOSE_LOG}" "health" 1
+				fi
+				if env -u CURL_HOME -u CURL_CA_BUNDLE -u CURL_SSL_BACKEND -u SSL_CERT_FILE -u SSL_CERT_DIR -u SSLKEYLOGFILE \
+					-u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u NO_PROXY \
+					-u http_proxy -u https_proxy -u all_proxy -u no_proxy \
+					curl -q --proto '=http,https' --noproxy '*' -fsS --max-time 2 -- "${APP_URL}" >/dev/null 2>&1; then
 				url_ready=1
+				fi
 			fi
 		fi
 

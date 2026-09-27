@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 
@@ -15,6 +17,32 @@ AGENTS_MD = REPO_ROOT / "agents.md"
 
 def _workflow(path: Path = ORCHESTRATE_POLL_WF) -> str:
 	return path.read_text(encoding="utf-8")
+
+
+def test_state_authentication_uses_verified_support_and_signed_initial_post() -> None:
+	poll = _workflow()
+	initial = _workflow(ORCHESTRATE_WF)
+	process = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert "orchestrate_state_v2.py" in poll
+	assert 'poller_trusted_support_file scripts/orchestrate_state_v2.py' in process
+	assert "for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_state_v2.py" in initial
+	assert 'python3 -I "${ORCHESTRATE_TRUSTED_DIR}/orchestrate_state_v2.py" sign' in initial
+	assert 'ORCHESTRATOR_STATE_SIGNING_KEY: ${{ secrets.ORCHESTRATOR_STATE_SIGNING_KEY }}' in initial
+	assert 'ORCHESTRATOR_STATE_SIGNING_KEY: ${{ secrets.ORCHESTRATOR_STATE_SIGNING_KEY }}' in poll
+	assert initial.index('name: Publish authenticated project descriptor') < initial.index('name: Create Wave 1 issues only')
+	assert '--kind descriptor' in initial and '--descriptor-file "${RECOVERY_DESCRIPTOR_FILE}"' in process
+	assert 'persist-credentials: false' in initial
+	assert '--role plan --workspace "${GITHUB_WORKSPACE}"' in initial
+	assert '--sandbox read-only' in initial
+	assert 'git remote set-url origin "https://x-access-token:' not in initial
+	assert 'gh api repos/shubhodeep1/coding-workflows/branches/main' in initial
+	assert 'gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable' in initial
+	assert 'name: Verify run-start support source' in initial
+	assert 'git -C .codex-workflow-src rev-parse HEAD' in initial
+	assert 'jq -n --rawfile body "${INITIAL_STATE_SIGNED}"' in initial
+	assert 'authenticated_state_comments "${state_issue_num}"' in process
+	assert 'authenticated_state_comments "${issue_num}" "${comments_json}"' in process
+	assert '--require-complete-first-wave' in process
 
 
 def test_stall_control_env_defaults_are_declared() -> None:
@@ -105,6 +133,9 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 	assert "MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}" in wf
 	assert "MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}" in wf
 	assert "SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}" in wf
+	assert "SECURITY_PASS_LINE_OWNERSHIP: ${{ vars.SECURITY_PASS_LINE_OWNERSHIP || 'project-lines' }}" in wf
+	assert "SECURITY_PASS_OWNERSHIP_CONTEXT_LINES: ${{ vars.SECURITY_PASS_OWNERSHIP_CONTEXT_LINES || '3' }}" in wf
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_CAP: ${{ vars.SECURITY_PASS_ADVISORY_FOLLOWUP_CAP || '5' }}" in wf
 	assert "SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}" in wf
 	assert "MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}" in wf
 	assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}" in wf
@@ -123,6 +154,34 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 		"references/security-money-lens.txt",
 	):
 		assert asset in wf
+
+
+def test_poller_audit_support_is_sha_bound_and_frozen_outside_checkout() -> None:
+	wf = _workflow()
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'branch_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"' in wf
+	assert "'.protected // false'" in wf
+	assert 'gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable' in wf
+	assert 'git/tags/${support_sha}' in wf
+	assert 'echo "SCRIPT_REF=${support_sha}"' in wf
+	assert wf.count('git -C .codex-workflow-src rev-parse HEAD)" = "${SCRIPT_REF}"') == 2
+	assert "Checkout workflow support source fallback" not in wf
+	assert "Checkout workflow support source fallback for gh retry" not in wf
+	assert 'mktemp -d "${RUNNER_TEMP%/}/poller-support-' in wf
+	assert 'echo "POLLER_TRUSTED_SUPPORT_DIR=${trusted_support_root}"' in wf
+	for relative_asset in (
+		"security_audit.sh", "codex_heartbeat.sh", "write_codex_config.sh",
+		"ai_memory_lib.py", "orchestrate_lib.py", "openrouter_prompt_cache.py",
+		"semantic_cache.py", "memory_injection_patterns.py", "codex_model_catalog.json",
+		"security_audit_fp_exclusions.json", "render_prompt.py",
+	):
+		assert relative_asset in wf
+	assert 'SECURITY_AUDIT_SUPPORT_DIR="${POLLER_TRUSTED_SUPPORT_DIR}"' in poller
+	assert 'SECURITY_AUDIT_FP_EXCLUSIONS="${trusted_security_exclusions}"' in poller
+	assert '--catalog-path "${trusted_security_catalog}"' in poller
+	assert 'python3 -I - "${PWD}" "${STATE_FILE}" "${TRACKING_NUM}" "${trusted_python_dir}"' in poller
+	assert "PYTHONPATH=\"${PWD}/scripts" not in poller
+	assert "sys.path.insert(0, 'scripts')" not in poller
 
 
 def test_security_pass_recovery_log_prefixes_are_registered() -> None:
@@ -165,7 +224,52 @@ def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> No
 	assert "ORCH_WORKTREE_TTL_SECS: ${{ vars.ORCH_WORKTREE_TTL_SECS || '3600' }}" in wf
 	assert "- name: Run worktree registry GC" in wf
 	assert "if: steps.find_tracking.outputs.has_work == 'true'\n        run: bash scripts/worktree_gc.sh" not in wf
-	assert "run: bash scripts/worktree_gc.sh" in wf
+	assert 'WORKTREE_REGISTRY_ROOT="${GITHUB_WORKSPACE}" PYTHONSAFEPATH=1 bash "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/worktree_gc.sh"' in wf
+	assert 'python3 -I "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/build_state_snapshot.py"' in wf
+	assert '--schema-root "${POLLER_TRUSTED_SUPPORT_DIR}/ai-memory"' in wf
+	assert 'source "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/memory_helpers.sh"' in wf
+	assert 'source "${support_dir}/scripts/tg_helpers.sh"' in wf
+	assert 'source scripts/tg_helpers.sh' not in wf
+
+
+def test_post_checkout_helpers_are_resolved_only_from_verified_support() -> None:
+	wf = _workflow()
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	for dependency in (
+		"orchestrate_state_v2.py", "ai_labels.py", "check_integration_pr_readiness.py",
+		"security_audit_causality.py", "worktree_registry.sh", "build_state_snapshot.py",
+		"gh_helpers.sh", "tg_helpers.sh", "memory_helpers.sh", "blocker_check.py",
+		"state_snapshot.v1.json", "label_contract.v1.json",
+	):
+		assert dependency in wf
+	for dependency in (
+		"scripts/orchestrate_state_v2.py", "scripts/ai_labels.py",
+		"scripts/check_integration_pr_readiness.py", "scripts/security_audit_causality.py",
+		".github/ai/label_contract.v1.json",
+	):
+		assert f"poller_trusted_support_file {dependency}" in poller
+	assert "python3 scripts/orchestrate_state_v2.py" not in poller
+	assert "python3 scripts/ai_labels.py" not in poller
+	assert "python3 scripts/check_integration_pr_readiness.py" not in poller
+	assert "sys.executable, \"-I\", str(causality_helper)" in poller
+	assert 'source "${POLLER_TRUSTED_SUPPORT_DIR}/scripts/memory_helpers.sh"' in wf
+	assert 'source "${support_dir}/scripts/tg_helpers.sh"' in wf
+
+
+def test_telegram_helper_does_not_source_checkout_rate_limit_helper(tmp_path: Path) -> None:
+	trusted = tmp_path / "trusted" / "scripts"
+	trusted.mkdir(parents=True)
+	for name in ("tg_helpers.sh", "gh_helpers.sh", "emit_event.sh"):
+		(trusted / name).write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
+	checkout = tmp_path / "checkout"
+	(checkout / "scripts").mkdir(parents=True)
+	marker = tmp_path / "executed"
+	(checkout / "scripts" / "gh_helpers.sh").write_text(f'touch "{marker}"\n', encoding="utf-8")
+	env = os.environ.copy()
+	env.pop("BASH_ENV", None)
+	result = subprocess.run(["bash", "-c", 'source "$1"', "bash", str(trusted / "tg_helpers.sh")], cwd=checkout, env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert not marker.exists()
 
 
 def main() -> int:

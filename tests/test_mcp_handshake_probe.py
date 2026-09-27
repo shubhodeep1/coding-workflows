@@ -383,6 +383,39 @@ def test_setup_serena_writes_block_only_when_probe_succeeds() -> None:
 		assert github_env.read_text(encoding="utf-8").splitlines()[-1] == "SERENA_AVAILABLE=false"
 
 
+def test_setup_serena_stdin_python_ignores_checkout_imports() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		setup_script = _stage_setup_serena(root)
+		home = root / "home"
+		home.mkdir()
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		fake_serena = bin_dir / "serena"
+		_write_fake_serena(fake_serena)
+		# The fake server is isolated too, so a poisoned checkout can only
+		# affect the setup and handshake Python processes under test.
+		fake_serena.write_text(fake_serena.read_text(encoding="utf-8").replace(
+			'"${PYTHON_BIN:?}" "${FAKE_SERENA_FIXTURE:?}"',
+			'"${PYTHON_BIN:?}" -I "${FAKE_SERENA_FIXTURE:?}"',
+		), encoding="utf-8")
+		fixture = root / "isolated-server.py"
+		_write_slow_happy_fixture(fixture, delay_seconds=0)
+		marker = root / "import-hijacked"
+		for name in ("json", "pathlib"):
+			(root / f"{name}.py").write_text(
+				f"open({str(marker)!r}, 'w').close()\nraise RuntimeError('hijack')\n", encoding="utf-8"
+			)
+		result = _run_staged_setup(
+			setup_script, home=home, path_value=f"{bin_dir}:{os.environ.get('PATH', '')}",
+			github_env=root / "result.env",
+			extra_env={"FAKE_SERENA_FIXTURE": str(fixture), "PYTHONPATH": str(root)},
+		)
+		assert result.returncode == 0, result.stderr
+		assert (home / ".codex" / "config.toml").is_file(), result.stderr
+		assert not marker.exists()
+
+
 def test_setup_serena_probe_kill_switch_forces_success() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)

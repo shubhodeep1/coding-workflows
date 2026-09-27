@@ -181,7 +181,7 @@ clear_serena_codex_config()
 	SERENA_BLOCK_COMMAND="" \
 	SERENA_STARTUP_TIMEOUT_SEC="${SERENA_STARTUP_TIMEOUT_SEC}" \
 	PYTHONDONTWRITEBYTECODE=1 \
-	"${SERENA_UV_PYTHON_BIN}" - <<'PY'
+	"${SERENA_UV_PYTHON_BIN}" -I - <<'PY'
 from __future__ import annotations
 
 import json
@@ -275,7 +275,7 @@ write_serena_codex_config()
 	SERENA_BLOCK_COMMAND="${serena_bin}" \
 	SERENA_STARTUP_TIMEOUT_SEC="${SERENA_STARTUP_TIMEOUT_SEC}" \
 	PYTHONDONTWRITEBYTECODE=1 \
-	"${SERENA_UV_PYTHON_BIN}" - <<'PY'
+	"${SERENA_UV_PYTHON_BIN}" -I - <<'PY'
 from __future__ import annotations
 
 import json
@@ -405,7 +405,7 @@ probe_mcp_handshake()
 
 	MCP_HANDSHAKE_PROBE_TIMEOUT="${MCP_HANDSHAKE_PROBE_TIMEOUT:-${SERENA_STARTUP_TIMEOUT_SEC}}" \
 	PYTHONDONTWRITEBYTECODE=1 \
-	"${SERENA_UV_PYTHON_BIN}" "${SCRIPT_DIR}/mcp_handshake_probe.py" \
+	"${SERENA_UV_PYTHON_BIN}" -I "${SCRIPT_DIR}/mcp_handshake_probe.py" \
 		--name "serena" \
 		-- "${serena_bin}" start-mcp-server --context=codex --project-from-cwd --transport stdio
 }

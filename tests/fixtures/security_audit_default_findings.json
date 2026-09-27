@@ -1,0 +1,12 @@
+{
+  "counts": {
+    "kept": 0,
+    "suppressed_excluded": 0,
+    "suppressed_invalid": 0,
+    "suppressed_low_confidence": 0,
+    "suppressed_out_of_scope": 0,
+    "suppressed_waived": 0
+  },
+  "findings": [],
+  "schema_version": "security_audit_findings.v1"
+}

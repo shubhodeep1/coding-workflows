@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import io
 import os
+import subprocess
 import sys
 import tempfile
 from contextlib import redirect_stderr
@@ -181,6 +182,7 @@ def test_mirror_state_cli_matches_state_issue_payloads() -> None:
 		],
 	}
 
+
 	with tempfile.TemporaryDirectory() as td:
 		root = Path(td)
 		state_path = root / "state.json"
@@ -218,6 +220,19 @@ def test_mirror_state_cli_matches_state_issue_payloads() -> None:
 			assert actual == expected
 		finally:
 			_restore_task_state_root(previous_root, previous_flag)
+
+
+def test_private_task_state_helper_mirrors_into_explicit_checkout(tmp_path: Path) -> None:
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps({"waves": [{"wave": 1, "issues": [{"id": "issue-1", "status": "pending"}]}]}), encoding="utf-8")
+	env = os.environ.copy()
+	env["ORCH_TASK_FILES_ENABLED"] = "true"
+	result = subprocess.run(
+		[sys.executable, "-I", str(Path(task_state.__file__)), "--repo-root", str(tmp_path), "mirror-state", "--state-file", str(state_file)],
+		cwd=tmp_path, env=env, capture_output=True, text=True,
+	)
+	assert result.returncode == 0, result.stderr
+	assert json.loads((tmp_path / ".tasks" / "1" / "issue-1.json").read_text(encoding="utf-8"))["id"] == "issue-1"
 
 
 def test_mirror_state_unblocks_dependents_after_writing_newly_terminal_tasks() -> None:

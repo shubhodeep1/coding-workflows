@@ -32,6 +32,48 @@ def _self_heal_prompt_text() -> str:
 	return SELF_HEAL_PROMPT_PATH.read_text(encoding="utf-8")
 
 
+def test_discovery_is_read_only_and_cached_hints_use_schema(tmp_path: Path) -> None:
+	text = _validate_process_text()
+	launch = text.split("run_validate_codex_attempt() {", 1)[1].split("export PATH=", 1)[0]
+	assert 'if [ "${phase_name}" != "validate_discover" ] && [ "${phase_name}" != "validate_diagnose" ]; then' in launch
+	assert 'local validate_isolated_role="judge"' in launch
+	assert 'validate_isolated_role="implement"' not in launch
+	assert 'bash "${_validate_script_dir}/untrusted_process_sandbox.sh"' in launch
+	assert 'local renderer_script="${VALIDATE_TRUSTED_SUPPORT_ROOT}/scripts/render_validation_templates.py"' in text
+	assert 'env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY' in text
+	check = "validate_hints_sanity_check() {" + text.split("validate_hints_sanity_check() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+	for content, expected in (
+		("type: python-repo-checks\nslots:\n  project_name: test\n  canary_tools: [bash]\n", 0),
+		("type: python-repo-checks\nslots: []\n", 1),
+		("type: [broken\n", 1),
+	):
+		manifest = tmp_path / "hints.yml"
+		manifest.write_text(content, encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", check + 'validate_hints_sanity_check "$1"', "--", str(manifest)],
+			capture_output=True, text=True, env={**os.environ, "BASH_ENV": "", "VALIDATE_TRUSTED_SUPPORT_ROOT": str(REPO_ROOT)},
+		)
+		assert result.returncode == expected, result.stderr
+
+
+def test_renderer_ignores_workspace_helper_replacements_on_rerender(tmp_path: Path) -> None:
+	text = _validate_process_text()
+	function = "run_template_validation_harness_renderer()\n{" + text.split("run_template_validation_harness_renderer()\n{", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+	manifest = tmp_path / ".ai" / "validate.yml"
+	manifest.parent.mkdir()
+	manifest.write_text("type: python-repo-checks\nentry: app.py\nslots:\n  project_name: test\n  canary_tools: [bash]\n", encoding="utf-8")
+	untrusted_script = tmp_path / "scripts" / "render_validation_templates.py"
+	untrusted_script.parent.mkdir()
+	untrusted_script.write_text("raise SystemExit('WORKSPACE_HELPER_RAN')\n", encoding="utf-8")
+	env = {**os.environ, "BASH_ENV": "", "VALIDATE_TRUSTED_SUPPORT_ROOT": str(REPO_ROOT),
+	       "VALIDATION_RENDERER_DEPENDENCIES_READY": "true", "GENERATE_LOG_FILE": str(tmp_path / "renderer.log")}
+	result = subprocess.run(["bash", "-c", function + "run_template_validation_harness_renderer && run_template_validation_harness_renderer"],
+	                        cwd=tmp_path, env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "WORKSPACE_HELPER_RAN" not in (tmp_path / "renderer.log").read_text(encoding="utf-8")
+	assert (tmp_path / "validation" / "tests" / "00_canary.sh").is_file()
+
+
 def _git(cmd: list[str], *, cwd: Path) -> None:
 	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 	env["BASH_ENV"] = ""

@@ -131,6 +131,9 @@ security_audit_append_prompt_context() {
 			echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return 1
 		fi
 		sed 's/^/- /' "${CHANGED_FILES_FILE}" || return 1
+		if [ "${SECURITY_AUDIT_LINE_OWNERSHIP}" = "project-lines" ]; then
+			echo "Only lines the project itself added or modified in the range block completion; a finding on an older line in these files is still worth reporting and is routed as an advisory. Cite the exact line where the defect is, not the nearest project-written line." || return 1
+		fi
 		echo "You may read any file in the repository to trace cross-file impact (callers, configuration, trust boundaries), but only emit findings whose cited file appears in the changed list above; findings citing unchanged files are dropped by the post-filter." || return 1
 	else
 		if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
@@ -173,8 +176,8 @@ security_audit_append_prompt_context() {
 			cat "${WAIVED_FINDINGS_PROMPT_FILE}" || return 1
 			echo "=== END UNTRUSTED ACCEPTED FINDINGS ===" || return 1
 			echo "Rules for accepted findings:" || return 1
-			echo "- Never report an accepted finding again, neither under its finding_id nor under a new one, for the same location or the same defect at that location." || return 1
-			echo "- An acceptance covers one location. Other locations in the scoped files remain in scope." || return 1
+			echo "- Report candidate findings normally, including findings similar to accepted rows. Exact waiver_match_key suppression is performed deterministically after normalization." || return 1
+			echo "- Do not suppress a candidate based on finding_id, location, category, or model judgment; other provenance or locations remain in scope." || return 1
 		fi
 		if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
 			echo || return 1
@@ -221,6 +224,27 @@ if { [ -n "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -z "${SECURITY_AUDIT_DIFF_HEAD}" 
 	exit 1
 fi
 
+SECURITY_AUDIT_LINE_OWNERSHIP="${SECURITY_AUDIT_LINE_OWNERSHIP:-file}"
+case "${SECURITY_AUDIT_LINE_OWNERSHIP}" in
+	file|project-lines)
+		;;
+	*)
+		echo "SECURITY_AUDIT_LINE_OWNERSHIP must be file or project-lines" >&2
+		exit 1
+		;;
+esac
+SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES="${SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES:-3}"
+if ! [[ "${SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES}" =~ ^[0-9]+$ ]] \
+		|| [ "${SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES}" -gt 50 ]; then
+	echo "SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES must be an integer from 0 to 50" >&2
+	exit 1
+fi
+if [ "${SECURITY_AUDIT_LINE_OWNERSHIP}" = "project-lines" ] \
+		&& { [ "${SECURITY_AUDIT_OUTPUT_MODE}" != "findings-json" ] || [ -z "${SECURITY_AUDIT_DIFF_BASE}" ]; }; then
+	echo "line ownership requires findings-json mode and an explicit diff range" >&2
+	exit 1
+fi
+
 # Optional delta narrowing for the explicit range: when set, only files that
 # also changed in SECURITY_AUDIT_DIFF_SINCE..SECURITY_AUDIT_DIFF_HEAD stay in
 # scope, so a re-audit after a merged fix looks at the fix (plus any prior
@@ -246,16 +270,17 @@ fi
 # the orchestrator's security-pass exhaustion judge accepted as known risks
 # for the audited project (findings-json mode only).  They are appended to the
 # prompt as accepted findings the model must not report again, and the
-# post-filter drops any re-report deterministically: an exact `finding_id`
-# match, or the same file and category within
-# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line (model-generated
-# ids drift between runs and fix commits move lines).  Counted as
+# post-filter drops a re-report only when its engine-generated,
+# provenance-bound `waiver_match_key` exactly matches. Model-generated ids and
+# location proximity are never authorization. Counted as
 # `suppressed_waived`.  Malformed input fails closed like prior findings.
 SECURITY_AUDIT_WAIVED_FINDINGS="${SECURITY_AUDIT_WAIVED_FINDINGS:-}"
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
 	echo "SECURITY_AUDIT_WAIVED_FINDINGS is only valid in findings-json mode" >&2
 	exit 1
 fi
+# Compatibility input retained for callers that still export it. Matching no
+# longer uses a line window; only waiver_match_key is authoritative.
 SECURITY_AUDIT_WAIVER_LINE_WINDOW="${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}"
 if ! [[ "${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" =~ ^[0-9]+$ ]]; then
 	echo "SECURITY_AUDIT_WAIVER_LINE_WINDOW must be a non-negative integer" >&2
@@ -348,11 +373,10 @@ SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_FP_EXCLUSIONS:-scripts/security_a
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "${REPO_ROOT}"
 
-# Consumer-called runs (workflow-templates/ai-security-audit.yml wrapper) stage
-# this repo's scripts/prompts outside the audited checkout and point
-# SECURITY_AUDIT_SUPPORT_DIR at that staged tree. Source-repo runs leave it
-# unset so support files resolve from the audited checkout itself,
-# byte-identical to the pre-consumer behaviour.
+# The scheduled/dispatch workflow pins a verified support checkout outside
+# the audit target for source-repo and consumer runs alike. The fallback
+# remains for direct local invocations, which have no privileged workflow
+# checkout and retain their existing support-path contract.
 SECURITY_AUDIT_SUPPORT_DIR="${SECURITY_AUDIT_SUPPORT_DIR:-${REPO_ROOT}}"
 
 # Resolve the exclusion catalog: a copy in the audited repository wins (so a
@@ -370,6 +394,7 @@ fi
 }
 
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+export PYTHONSAFEPATH=1
 
 security_audit_require_cmd bash
 security_audit_require_cmd python3
@@ -400,6 +425,7 @@ fi
 TRACKER_TITLE="AI Security Audit Tracker"
 TRACKER_MARKER="<!-- ai:security-audit-tracker:v1 -->"
 FOLLOWUP_MARKER_PREFIX="<!-- ai:security-finding:"
+FOLLOWUP_KEY_MARKER_PREFIX="<!-- ai:security-waiver-key:"
 LAST_SHA_MARKER_PREFIX="<!-- ai:security-audit-last-sha:"
 # Past this many changed files an incremental diff stops being cheaper than a
 # full audit, so the scope resolver falls back to the full default-branch scope.
@@ -416,6 +442,8 @@ RENDER_PROMPT_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prompt-render-error.txt"
 CODEX_OUTPUT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-output.json"
 CODEX_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-error.txt"
 FILTERED_FINDINGS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filtered-findings.json"
+ADVISORY_FINDINGS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/advisory-findings.json"
+VERIFIED_FIXED_FINDING_IDS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/verified-fixed-finding-ids.json"
 FILTER_SUMMARY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filter-summary.json"
 EXISTING_FOLLOWUPS_JSON="${SECURITY_AUDIT_RUNTIME_DIR}/existing-followups.json"
 TRACKER_COMMENT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-comment.md"
@@ -430,6 +458,7 @@ FINDINGS_PACKAGE_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/findings-package-erro
 DELTA_CHANGED_FILES_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/delta-changed-files.txt"
 PRIOR_FINDINGS_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-scope.txt"
 PRIOR_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-prompt.txt"
+PRIOR_FINDINGS_IDS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-ids.json"
 PRIOR_FINDINGS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-error.txt"
 WAIVED_FINDINGS_NORMALIZED_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings.json"
 WAIVED_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings-prompt.txt"
@@ -485,7 +514,7 @@ gh_retry gh issue list \
 	--limit 50 \
 		--json number,title,body,state,url > "${TRACKER_CANDIDATES_JSON}"
 
-python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" > "${TRACKER_SELECTION_ENV}" <<'PY'
+python3 -I - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" > "${TRACKER_SELECTION_ENV}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -669,15 +698,18 @@ echo "security-audit: scope=${AUDIT_SCOPE_MODE} (${AUDIT_SCOPE_REASON})"
 PRIOR_FINDINGS_COUNT=0
 : > "${PRIOR_FINDINGS_SCOPE_FILE}"
 : > "${PRIOR_FINDINGS_PROMPT_FILE}"
+printf '[]\n' > "${PRIOR_FINDINGS_IDS_FILE}"
 if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
-	if ! PRIOR_FINDINGS_COUNT="$(python3 - \
+	if ! PRIOR_FINDINGS_COUNT="$(python3 -I - \
 		"${REPO_ROOT}" \
 		"${SECURITY_AUDIT_PRIOR_FINDINGS}" \
 		"${PRIOR_FINDINGS_SCOPE_FILE}" \
-		"${PRIOR_FINDINGS_PROMPT_FILE}" 2> "${PRIOR_FINDINGS_ERROR_FILE}" <<'PY'
+		"${PRIOR_FINDINGS_PROMPT_FILE}" \
+		"${PRIOR_FINDINGS_IDS_FILE}" 2> "${PRIOR_FINDINGS_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -685,6 +717,7 @@ repo_root = Path(sys.argv[1]).resolve()
 prior_findings_path = Path(sys.argv[2])
 scope_path = Path(sys.argv[3])
 prompt_path = Path(sys.argv[4])
+ids_path = Path(sys.argv[5])
 
 try:
 	prior_findings = json.loads(prior_findings_path.read_text(encoding="utf-8"))
@@ -710,6 +743,7 @@ def text_field(finding: dict, key: str) -> str:
 
 scope_files: list[str] = []
 prompt_lines: list[str] = []
+finding_ids: list[str] = []
 for index, finding in enumerate(prior_findings):
 	if not isinstance(finding, dict):
 		raise SystemExit(f"prior finding #{index} must be an object")
@@ -732,6 +766,8 @@ for index, finding in enumerate(prior_findings):
 	if resolved.is_file() and relative_file not in scope_files:
 		scope_files.append(relative_file)
 	finding_id = text_field(finding, "finding_id") or f"prior-finding-{index + 1}"
+	if finding_id not in finding_ids:
+		finding_ids.append(finding_id)
 	line_value = finding.get("line")
 	location = relative_file
 	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
@@ -757,6 +793,7 @@ for index, finding in enumerate(prior_findings):
 
 scope_path.write_text("".join(f"{path}\n" for path in scope_files), encoding="utf-8")
 prompt_path.write_text("".join(f"{line}\n" for line in prompt_lines), encoding="utf-8")
+ids_path.write_text(json.dumps(finding_ids, ensure_ascii=True) + "\n", encoding="utf-8")
 print(len(prior_findings))
 PY
 	)"; then
@@ -784,7 +821,7 @@ FIX_CYCLE_DIFFS_SUMMARY=""
 : > "${FIX_CYCLE_DIFFS_SCOPE_FILE}"
 : > "${FIX_CYCLE_DIFFS_PROMPT_FILE}"
 if [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
-	if FIX_CYCLE_DIFFS_SUMMARY="$(python3 - \
+	if FIX_CYCLE_DIFFS_SUMMARY="$(python3 -I - \
 		"${REPO_ROOT}" \
 		"${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" \
 		"${FIX_CYCLE_DIFFS_SCOPE_FILE}" \
@@ -794,9 +831,11 @@ if [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 
 repo_root = Path(sys.argv[1]).resolve()
@@ -1012,19 +1051,22 @@ WAIVED_FINDINGS_COUNT=0
 : > "${WAIVED_FINDINGS_PROMPT_FILE}"
 printf '[]\n' > "${WAIVED_FINDINGS_NORMALIZED_FILE}"
 if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
-	if ! WAIVED_FINDINGS_COUNT="$(python3 - \
+	if ! WAIVED_FINDINGS_COUNT="$(python3 -I - \
 		"${SECURITY_AUDIT_WAIVED_FINDINGS}" \
 		"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
-		"${WAIVED_FINDINGS_PROMPT_FILE}" 2> "${WAIVED_FINDINGS_ERROR_FILE}" <<'PY'
+		"${WAIVED_FINDINGS_PROMPT_FILE}" \
+		"${SECURITY_AUDIT_LINE_OWNERSHIP}" 2> "${WAIVED_FINDINGS_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path, PurePosixPath
 
 waived_findings_path = Path(sys.argv[1])
 normalized_path = Path(sys.argv[2])
 prompt_path = Path(sys.argv[3])
+ownership_mode = sys.argv[4]
 
 try:
 	waived_findings = json.loads(waived_findings_path.read_text(encoding="utf-8"))
@@ -1053,6 +1095,11 @@ prompt_lines: list[str] = []
 for index, finding in enumerate(waived_findings):
 	if not isinstance(finding, dict):
 		raise SystemExit(f"waived finding #{index} must be an object")
+	# An automatic line-ownership advisory is not an explicit risk acceptance.
+	# In per-file mode it must never enter the prompt or the suppression filter.
+	if (ownership_mode == "file"
+		and finding.get("source") == "preexisting" and finding.get("waived_by") == "line-ownership"):
+		continue
 	finding_id = text_field(finding, "finding_id")
 	if not finding_id:
 		raise SystemExit(f"waived finding #{index} is missing its finding_id")
@@ -1072,12 +1119,50 @@ for index, finding in enumerate(waived_findings):
 	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
 		line_number = line_value
 	category = text_field(finding, "owasp_or_stride_category")
+	waiver_match_key = text_field(finding, "waiver_match_key")
+	if waiver_match_key and not re.fullmatch(r"sha256:[0-9a-f]{64}", waiver_match_key):
+		raise SystemExit(f"waived finding #{index} has an invalid waiver_match_key")
+	audited_head_sha = text_field(finding, "audited_head_sha")
+	if audited_head_sha and not re.fullmatch(r"[0-9a-fA-F]{40,64}", audited_head_sha):
+		raise SystemExit(f"waived finding #{index} has an invalid audited_head_sha")
+	causal_scope_schema = text_field(finding, "causal_scope_schema")
+	causal_scope_status = text_field(finding, "causal_scope_status")
+	causal_scope_fingerprint = text_field(finding, "causal_scope_fingerprint")
+	causal_scope_symbol = text_field(finding, "causal_scope_symbol")
+	causal_scope_files = finding.get("causal_scope_files")
+	if causal_scope_schema and causal_scope_schema != "security_audit_causal_scope.v1":
+		raise SystemExit(f"waived finding #{index} has an invalid causal_scope_schema")
+	if causal_scope_status and causal_scope_status not in {"complete", "indeterminate"}:
+		raise SystemExit(f"waived finding #{index} has an invalid causal_scope_status")
+	if causal_scope_fingerprint and not re.fullmatch(r"sha256:[0-9a-f]{64}", causal_scope_fingerprint):
+		raise SystemExit(f"waived finding #{index} has an invalid causal_scope_fingerprint")
+	if len(causal_scope_symbol) > 300:
+		raise SystemExit(f"waived finding #{index} has an oversized causal_scope_symbol")
+	if causal_scope_files is None:
+		causal_scope_files = []
+	if not isinstance(causal_scope_files, list) or len(causal_scope_files) > 200:
+		raise SystemExit(f"waived finding #{index} has invalid causal_scope_files")
+	normalized_causal_files: list[str] = []
+	for causal_file in causal_scope_files:
+		if not isinstance(causal_file, str):
+			raise SystemExit(f"waived finding #{index} has invalid causal_scope_files")
+		causal_path = PurePosixPath(causal_file)
+		if causal_path.is_absolute() or ".." in causal_path.parts or not causal_file:
+			raise SystemExit(f"waived finding #{index} has invalid causal_scope_files")
+		normalized_causal_files.append(causal_path.as_posix())
 	normalized.append(
 		{
 			"finding_id": finding_id,
+			"waiver_match_key": waiver_match_key,
 			"file": relative_file,
 			"line": line_number,
 			"owasp_or_stride_category": category,
+			"audited_head_sha": audited_head_sha,
+			"causal_scope_schema": causal_scope_schema,
+			"causal_scope_status": causal_scope_status,
+			"causal_scope_fingerprint": causal_scope_fingerprint,
+			"causal_scope_files": normalized_causal_files,
+			"causal_scope_symbol": causal_scope_symbol,
 		}
 	)
 	location = relative_file or "(location not recorded)"
@@ -1104,13 +1189,17 @@ PY
 		exit 1
 	fi
 	[[ "${WAIVED_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || WAIVED_FINDINGS_COUNT=0
-	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (line window ${SECURITY_AUDIT_WAIVER_LINE_WINDOW})"
+	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (provenance-key match only)"
 fi
 
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
 SECURITY_AUDIT_PROMPT_PATH="${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"
+SECURITY_AUDIT_SANDBOX_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/untrusted_process_sandbox.sh"
+SECURITY_AUDIT_CAUSALITY_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit_causality.py"
 security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_RENDER_HELPER}"
 security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_PROMPT_PATH}"
+security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_SANDBOX_HELPER}"
+security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_CAUSALITY_HELPER}"
 security_audit_require_directory "prompt-preflight" "${SECURITY_AUDIT_RUNTIME_DIR}"
 security_audit_require_writable_destination "prompt-preflight" "${RENDERED_PROMPT_FILE}"
 security_audit_require_writable_destination "prompt-preflight" "${RENDER_PROMPT_ERROR_FILE}"
@@ -1157,7 +1246,13 @@ fi
 security_audit_require_writable_destination "codex-preflight" "${CODEX_OUTPUT_FILE}"
 security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FILE}"
 
-if codex --ask-for-approval never \
+if bash "${SECURITY_AUDIT_SANDBOX_HELPER}" \
+		--role audit \
+		--workspace "${REPO_ROOT}" \
+		--config-format codex \
+		--config "${SECURITY_AUDIT_CODEX_HOME}" \
+		--runtime-dir "${SECURITY_AUDIT_RUNTIME_DIR}" \
+		-- codex --ask-for-approval never \
 		-c model_verbosity=low \
 		-c include_apply_patch_tool=true \
 		exec \
@@ -1173,7 +1268,7 @@ else
 	exit "${CODEX_EXECUTION_STATUS}"
 fi
 
-python3 - \
+python3 -I - \
 	"${REPO_ROOT}" \
 	"${CODEX_OUTPUT_FILE}" \
 	"${SECURITY_AUDIT_FP_EXCLUSIONS}" \
@@ -1183,11 +1278,24 @@ python3 - \
 	"${AUDIT_SCOPE_MODE}" \
 	"${CHANGED_FILES_FILE}" \
 	"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
-	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" <<'PY'
+	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" \
+	"${SECURITY_AUDIT_LINE_OWNERSHIP}" \
+	"${SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES}" \
+	"${AUDIT_SCOPE_BASE_SHA}" \
+	"${AUDIT_SCOPE_HEAD_SHA}" \
+	"${PRIOR_FINDINGS_IDS_FILE}" \
+	"${ADVISORY_FINDINGS_FILE}" \
+	"${VERIFIED_FIXED_FINDING_IDS_FILE}" \
+	"${AUDIT_SCOPE_SINCE_SHA:-}" \
+	"${SECURITY_AUDIT_CAUSALITY_HELPER}" <<'PY'
 from __future__ import annotations
 
+import hashlib
 import json
+import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 
 repo_root = Path(sys.argv[1]).resolve()
@@ -1200,6 +1308,15 @@ audit_scope_mode = sys.argv[7]
 changed_files_path = Path(sys.argv[8])
 waived_findings_path = Path(sys.argv[9])
 waiver_line_window = int(sys.argv[10])
+line_ownership_mode = sys.argv[11]
+ownership_context_lines = int(sys.argv[12])
+audit_scope_base_sha = sys.argv[13]
+audit_scope_head_sha = sys.argv[14]
+prior_finding_ids_path = Path(sys.argv[15])
+advisory_findings_path = Path(sys.argv[16])
+verified_fixed_finding_ids_path = Path(sys.argv[17])
+audit_scope_since_sha = sys.argv[18]
+causality_helper_path = Path(sys.argv[19])
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -1223,6 +1340,8 @@ severity_rank = {
 }
 allowed_exact_fields = {"finding_id", "owasp_or_stride_category", "severity", "file"}
 allowed_contains_fields = {"exploit_scenario", "recommendation"}
+file_line_counts: dict[str, int] = {}
+finding_provenance_cache: dict[tuple[str, int], str | None] = {}
 
 
 def fail(message: str) -> None:
@@ -1306,6 +1425,8 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 
 	if not finding_id:
 		return None, "finding_id is required"
+	if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,200}", finding_id):
+		finding_id = "finding-" + hashlib.sha256(finding_id.encode("utf-8")).hexdigest()
 	if not category:
 		return None, f"{finding_id}: owasp_or_stride_category is required"
 	if severity not in severity_rank:
@@ -1334,6 +1455,8 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		normalized_file = normalized_file[2:]
 	if not normalized_file or normalized_file == ".":
 		return None, f"{finding_id}: file must resolve to a repository file"
+	if any(ord(character) < 32 or ord(character) == 127 for character in normalized_file):
+		return None, f"{finding_id}: file contains a control character"
 
 	resolved_path = (repo_root / normalized_file).resolve()
 	try:
@@ -1342,6 +1465,8 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		return None, f"{finding_id}: file escapes repository root"
 	if not resolved_path.is_file():
 		return None, f"{finding_id}: file does not exist in checkout"
+	if any(character in normalized_file for character in ("*", "?", "[", "]", "`")):
+		fail(f"{finding_id}: tracked file path cannot be encoded safely in generated advisory metadata")
 
 	try:
 		line_count = len(resolved_path.read_text(encoding="utf-8", errors="replace").splitlines())
@@ -1351,6 +1476,99 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 		return None, f"{finding_id}: file is empty and cannot back a concrete line reference"
 	if line > line_count:
 		return None, f"{finding_id}: line {line} exceeds file length {line_count}"
+	file_line_counts[normalized_file] = line_count
+	provenance_cache_key = (normalized_file, line)
+	provenance_commit = finding_provenance_cache.get(provenance_cache_key)
+	if provenance_cache_key not in finding_provenance_cache:
+		try:
+			provenance_result = subprocess.run(
+				[
+					"git", "blame", "--porcelain", "-L", f"{line},{line}",
+					audit_scope_head_sha or "HEAD", "--", normalized_file,
+				],
+				cwd=repo_root,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+				errors="replace",
+				check=False,
+			)
+		except (OSError, ValueError):
+			provenance_commit = None
+		else:
+			provenance_match = re.match(r"^\^?([0-9a-f]{40,64})\s", provenance_result.stdout)
+			provenance_commit = provenance_match.group(1) if provenance_result.returncode == 0 and provenance_match else None
+		if provenance_commit is None and re.fullmatch(r"[0-9a-f]{40,64}", audit_scope_head_sha):
+			# A blame failure must not suppress the model finding. Binding the key
+			# to the immutable audited head plus exact location is conservative;
+			# ownership classification separately keeps the finding blocking.
+			provenance_commit = audit_scope_head_sha
+		finding_provenance_cache[provenance_cache_key] = provenance_commit
+	if provenance_commit is None:
+		fail(f"{finding_id}: unable to derive immutable Git provenance for cited line")
+	normalized_category = " ".join(category.lower().split())
+	waiver_key_payload = json.dumps(
+		[normalized_file, normalized_category, line, provenance_commit],
+		ensure_ascii=True,
+		separators=(",", ":"),
+	)
+	waiver_match_key = "sha256:" + hashlib.sha256(waiver_key_payload.encode("utf-8")).hexdigest()
+	causal_scope = {
+		"causal_scope_schema": "security_audit_causal_scope.v1",
+		"causal_scope_status": "indeterminate",
+		"causal_scope_fingerprint": "",
+		"causal_scope_files": [],
+		"causal_scope_symbol": "",
+		"causal_scope_changed_files": [],
+	}
+	if normalized_file.endswith(".py"):
+		try:
+			causal_result = subprocess.run(
+				[
+					sys.executable, "-I", str(causality_helper_path),
+					"--repo", str(repo_root),
+					"--file", normalized_file,
+					"--line", str(line),
+					"--base", audit_scope_base_sha,
+					"--head", audit_scope_head_sha,
+				],
+				cwd=repo_root,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+				errors="replace",
+				check=False,
+			)
+			parsed_causal_scope = json.loads(causal_result.stdout)
+			if causal_result.returncode == 0 and isinstance(parsed_causal_scope, dict):
+				causal_scope = parsed_causal_scope
+		except (OSError, ValueError, json.JSONDecodeError):
+			pass
+	causal_status = str(causal_scope.get("causal_scope_status") or "")
+	causal_fingerprint = str(causal_scope.get("causal_scope_fingerprint") or "")
+	causal_files = causal_scope.get("causal_scope_files")
+	causal_symbol = str(causal_scope.get("causal_scope_symbol") or "")
+	causal_changed_files = causal_scope.get("causal_scope_changed_files")
+	causal_reason = re.sub(r"[\r\n]+", " ", str(causal_scope.get("reason") or ""))[:300]
+	if (
+		causal_status not in {"complete", "indeterminate"}
+		or (causal_fingerprint and re.fullmatch(r"sha256:[0-9a-f]{64}", causal_fingerprint) is None)
+		or not isinstance(causal_files, list)
+		or len(causal_files) > 200
+		or any(not isinstance(path, str) or not path or path.startswith("/") or ".." in PurePosixPath(path).parts for path in causal_files)
+		or len(causal_symbol) > 300
+		or not isinstance(causal_changed_files, list)
+	):
+		causal_status = "indeterminate"
+		causal_fingerprint = ""
+		causal_files = []
+		causal_symbol = ""
+		causal_changed_files = []
+	if causal_status != "complete" and causal_reason:
+		print(
+			f"::warning::security-audit: causal analysis indeterminate for {normalized_file}:{line}: {causal_reason}",
+			file=sys.stderr,
+		)
 
 	return (
 		{
@@ -1362,6 +1580,13 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 			"line": line,
 			"exploit_scenario": exploit_scenario,
 			"recommendation": recommendation,
+			"waiver_match_key": waiver_match_key,
+			"causal_scope_schema": "security_audit_causal_scope.v1",
+			"causal_scope_status": causal_status,
+			"causal_scope_fingerprint": causal_fingerprint,
+			"causal_scope_files": causal_files,
+			"causal_scope_symbol": causal_symbol,
+			"causal_scope_changed_files": causal_changed_files,
 		},
 		None,
 	)
@@ -1393,45 +1618,319 @@ exclusion_rules = normalize_exclusions(load_json(exclusions_path, label="securit
 waived_findings_input = load_json(waived_findings_path, label="waived findings") if waived_findings_path.is_file() else []
 if not isinstance(waived_findings_input, list):
 	fail("waived findings must be a JSON array")
+prior_finding_ids_input = load_json(prior_finding_ids_path, label="prior finding ids")
+if not isinstance(prior_finding_ids_input, list) or any(
+	not isinstance(finding_id, str) or not finding_id for finding_id in prior_finding_ids_input
+):
+	fail("prior finding ids must be a JSON array of non-empty strings")
 
 
 def matching_waiver(finding: dict[str, object]) -> str | None:
-	"""Return the waived finding_id this finding re-reports, if any.
-
-	Exact id first; otherwise the same file and category within the line
-	window of the waived line, because the auditor mints a new id on every
-	run and a fix commit shifts the cited line.
-	"""
-	finding_id = str(finding.get("finding_id") or "")
-	finding_file = str(finding.get("file") or "")
-	finding_category = " ".join(str(finding.get("owasp_or_stride_category") or "").lower().split())
-	finding_line = int(finding.get("line") or 0)
+	"""Return the authoritative provenance key matched by a waiver, if any."""
+	finding_key = str(finding.get("waiver_match_key") or "")
+	if not re.fullmatch(r"sha256:[0-9a-f]{64}", finding_key):
+		return None
 	for waiver in waived_findings_input:
 		if not isinstance(waiver, dict):
 			continue
-		waived_id = str(waiver.get("finding_id") or "")
-		if waived_id and waived_id == finding_id:
-			return waived_id
-		waived_file = str(waiver.get("file") or "")
-		waived_category = " ".join(str(waiver.get("owasp_or_stride_category") or "").lower().split())
-		waived_line = waiver.get("line")
-		if not waived_file or not waived_category or not isinstance(waived_line, int) or isinstance(waived_line, bool) or waived_line < 1:
-			continue
-		if waived_file == finding_file and waived_category == finding_category and abs(waived_line - finding_line) <= waiver_line_window:
-			return waived_id or "(unnamed waiver)"
+		waived_key = str(waiver.get("waiver_match_key") or "")
+		if (
+			re.fullmatch(r"sha256:[0-9a-f]{64}", waived_key)
+			and waived_key == finding_key
+			and waiver_causality_unchanged(waiver, finding)
+		):
+			return waived_key
 	return None
+
+
+blame_header_pattern = re.compile(r"^\^?([0-9a-f]{40,64}) [0-9]+ [0-9]+(?: [0-9]+)?$")
+ancestry_cache: dict[str, bool | None] = {}
+ownership_warned_files: set[str] = set()
+causal_diff_cache: dict[str, tuple[bool | None, list[tuple[int, int, bool, bool, bool, bool]]]] = {}
+cross_file_causal_change_cache: tuple[bool, bool, bool] | None = None
+# DIFF_SINCE selects candidate files only. Ownership and deleted-guard
+# causality always cover the complete project range.
+causal_diff_base_sha = audit_scope_base_sha
+guard_deletion_pattern = re.compile(
+	r"(?i)\b(?:auth\w*|permission|privilege|admin|guard|middleware|before_request|require_\w+|login_required|is_authenticated|authenticated|authori[sz]e|can_access|forbidden|check_(?:user|permission|access)|role|access[_ -]?control|policy|allow|deny)\b"
+)
+cross_file_guard_deletion_pattern = re.compile(
+	r"(?ix)(?:"
+	r"^\s*@\s*(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*\b"
+	r"|^\s*(?:await\s+)?(?:[A-Za-z_]\w*\.)*(?:auth\w*|authori[sz]\w*|login_required|check_\w+|verify_\w+|require_\w+|enforce_\w+|ensure_\w+|has_\w+|can_\w+|rate_limit\w*)\s*\("
+	r"|^\s*(?:if|elif|while|assert|return|raise)\b[^\n]*\b(?:authori[sz]\w*|permission\w*|privilege\w*|access[_ -]?control|entitlement|is_admin|is_authenticated|login_required|forbidden|(?:has|can|may)_\w+)\b"
+	r")"
+)
+access_control_finding_pattern = re.compile(
+	r"(?i)\b(?:broken access control|authori[sz]ation|authentication|permission|privilege|elevation of privilege|spoofing)\b"
+)
+waiver_revalidation_cache: dict[tuple[str, str, str, tuple[str, ...]], bool] = {}
+
+
+def waiver_causality_unchanged(
+	waiver: dict[str, object], finding: dict[str, object]
+) -> bool:
+	"""Delegate to the shared fail-closed causal validator."""
+	audited_head_sha = str(waiver.get("audited_head_sha") or "")
+	file_name = str(finding.get("file") or "")
+	finding_causal_fingerprint = str(finding.get("causal_scope_fingerprint") or "")
+	finding_causal_files = finding.get("causal_scope_files")
+	causal_file_key = tuple(finding_causal_files) if isinstance(finding_causal_files, list) else ()
+	cache_key = (audited_head_sha, file_name, finding_causal_fingerprint, causal_file_key)
+	if cache_key in waiver_revalidation_cache:
+		return waiver_revalidation_cache[cache_key]
+	try:
+		with tempfile.TemporaryDirectory(prefix="security-waiver-") as temporary_directory:
+			finding_path = Path(temporary_directory) / "finding.json"
+			waiver_path = Path(temporary_directory) / "waiver.json"
+			finding_path.write_text(json.dumps(finding, ensure_ascii=True), encoding="utf-8")
+			waiver_path.write_text(json.dumps(waiver, ensure_ascii=True), encoding="utf-8")
+			validation_result = subprocess.run(
+				[
+					sys.executable, "-I",
+					str(causality_helper_path),
+					"revalidate-waiver",
+					"--repo", str(repo_root),
+					"--audited-head", audited_head_sha,
+					"--current-head", audit_scope_head_sha,
+					"--finding-json", str(finding_path),
+					"--waiver-json", str(waiver_path),
+				],
+				cwd=repo_root,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+				errors="replace",
+				check=False,
+			)
+			validation_payload = json.loads(validation_result.stdout)
+			unchanged = (
+				validation_result.returncode == 0
+				and isinstance(validation_payload, dict)
+				and validation_payload.get("valid") is True
+			)
+	except (OSError, TypeError, ValueError, json.JSONDecodeError):
+		unchanged = False
+	waiver_revalidation_cache[cache_key] = unchanged
+	return unchanged
+
+
+def warn_ownership_once(file_name: str) -> None:
+	if file_name in ownership_warned_files:
+		return
+	ownership_warned_files.add(file_name)
+	print(
+		f"::warning::security-audit: line ownership could not be determined for {file_name}; findings remain blocking",
+		file=sys.stderr,
+	)
+
+
+def finding_is_project_owned(finding: dict[str, object]) -> bool:
+	"""Return True unless every blamed line is provably owned by the base."""
+	global cross_file_causal_change_cache
+	if line_ownership_mode != "project-lines":
+		return True
+	file_name = str(finding["file"])
+	line_number = int(finding["line"])
+	causal_status = str(finding.get("causal_scope_status") or "")
+	causal_changed_files = finding.get("causal_scope_changed_files")
+	category = str(finding.get("owasp_or_stride_category") or "")
+	if access_control_finding_pattern.search(category):
+		if causal_status != "complete" or not isinstance(causal_changed_files, list):
+			warn_ownership_once(file_name)
+			return True
+		if causal_changed_files:
+			return True
+	if cross_file_causal_change_cache is None:
+		try:
+			cross_file_causal_result = subprocess.run(
+				[
+					"git", "diff", "--no-color", "--no-ext-diff", "--unified=0",
+					f"{causal_diff_base_sha}..{audit_scope_head_sha}",
+				],
+				cwd=repo_root,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+				errors="replace",
+				check=False,
+			)
+		except (OSError, ValueError):
+			cross_file_causal_change_cache = (False, False, False)
+		else:
+			cross_file_non_python_added = False
+			current_diff_path = ""
+			for diff_line in cross_file_causal_result.stdout.splitlines():
+				if diff_line.startswith("+++ b/"):
+					current_diff_path = diff_line[6:]
+				elif diff_line.startswith("diff --git "):
+					current_diff_path = ""
+				elif diff_line.startswith("rename to "):
+					if not diff_line[10:].endswith((".py", ".md", ".txt", ".rst")):
+						cross_file_non_python_added = True
+				elif diff_line.startswith(("Binary files ", "GIT binary patch", "deleted file mode ")):
+					cross_file_non_python_added = True
+				elif diff_line.startswith(("+", "-")) and not diff_line.startswith(("+++", "---")):
+					if not current_diff_path or not current_diff_path.endswith((".py", ".md", ".txt", ".rst")):
+						cross_file_non_python_added = True
+			cross_file_guard_deleted = any(
+				diff_line.startswith("-")
+				and not diff_line.startswith("---")
+				and cross_file_guard_deletion_pattern.search(diff_line[1:]) is not None
+				for diff_line in cross_file_causal_result.stdout.splitlines()
+			)
+			cross_file_causal_change_cache = (
+				cross_file_causal_result.returncode == 0,
+				cross_file_guard_deleted,
+				cross_file_non_python_added,
+			)
+	cross_file_causal_ok, cross_file_guard_deleted, cross_file_non_python_added = cross_file_causal_change_cache
+	if not cross_file_causal_ok:
+		warn_ownership_once(file_name)
+		return True
+	if (cross_file_guard_deleted or cross_file_non_python_added) and access_control_finding_pattern.search(
+		str(finding.get("owasp_or_stride_category") or "")
+	):
+		return True
+	if file_name not in causal_diff_cache:
+		try:
+			causal_result = subprocess.run(
+				[
+					"git", "diff", "--no-color", "--no-ext-diff", "--unified=0",
+					"--function-context", f"{causal_diff_base_sha}..{audit_scope_head_sha}",
+					"--", file_name,
+				],
+				cwd=repo_root,
+				capture_output=True,
+				text=True,
+				encoding="utf-8",
+				errors="replace",
+				check=False,
+			)
+		except (OSError, ValueError):
+			causal_diff_cache[file_name] = (None, [])
+		else:
+			hunks: list[tuple[int, int, bool, bool, bool, bool]] = []
+			current_hunk: dict[str, object] | None = None
+			for diff_line in causal_result.stdout.splitlines():
+				hunk_match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@(.*)$", diff_line)
+				if hunk_match is not None:
+					if current_hunk is not None:
+						hunks.append(tuple(current_hunk.values()))
+					start_line = int(hunk_match.group(1))
+					line_span = int(hunk_match.group(2) or "1")
+					current_hunk = {
+						"start": start_line,
+						"end": start_line + max(line_span, 1) - 1,
+						"has_deletion": False,
+						"has_control_change": False,
+						"has_context_name": bool(hunk_match.group(3).strip()),
+						"has_guard_deletion": False,
+					}
+				elif current_hunk is not None and diff_line.startswith("-") and not diff_line.startswith("---"):
+					current_hunk["has_deletion"] = True
+					if re.match(r"^-\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line):
+						current_hunk["has_control_change"] = True
+					if guard_deletion_pattern.search(diff_line[1:]):
+						current_hunk["has_guard_deletion"] = True
+				elif current_hunk is not None and diff_line.startswith("+") and not diff_line.startswith("+++"):
+					if re.match(r"^\+\s*(?:if|elif|else|for|while|match|case|try|except|finally|with|switch|catch)\b", diff_line):
+						current_hunk["has_control_change"] = True
+			if current_hunk is not None:
+				hunks.append(tuple(current_hunk.values()))
+			causal_diff_cache[file_name] = (causal_result.returncode == 0, hunks)
+	causal_ok, causal_hunks = causal_diff_cache[file_name]
+	if causal_ok is not True:
+		warn_ownership_once(file_name)
+		return True
+	for hunk_start, hunk_end, has_deletion, has_control_change, has_context_name, has_guard_deletion in causal_hunks:
+		if hunk_start <= line_number <= hunk_end and (has_deletion or has_control_change):
+			return True
+	line_count = file_line_counts.get(file_name, 0)
+	low_line = max(1, line_number - ownership_context_lines)
+	high_line = min(line_count, line_number + ownership_context_lines)
+	try:
+		blame_result = subprocess.run(
+			[
+				"git",
+				"blame",
+				"--porcelain",
+				"-L",
+				f"{low_line},{high_line}",
+				audit_scope_head_sha,
+				"--",
+				file_name,
+			],
+			cwd=repo_root,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			check=False,
+		)
+	except (OSError, ValueError):
+		warn_ownership_once(file_name)
+		return True
+	if blame_result.returncode != 0:
+		warn_ownership_once(file_name)
+		return True
+	blamed_commits: list[str] = []
+	source_line_count = 0
+	for blame_line in blame_result.stdout.splitlines():
+		header_match = blame_header_pattern.match(blame_line)
+		if header_match is not None:
+			blamed_commits.append(header_match.group(1))
+		elif blame_line.startswith("\t"):
+			source_line_count += 1
+	expected_line_count = high_line - low_line + 1
+	if source_line_count != expected_line_count or len(blamed_commits) != expected_line_count:
+		warn_ownership_once(file_name)
+		return True
+	project_owned = False
+	ownership_indeterminate = False
+	for blamed_commit in sorted(set(blamed_commits)):
+		is_ancestor = ancestry_cache.get(blamed_commit)
+		if blamed_commit not in ancestry_cache:
+			try:
+				ancestry_result = subprocess.run(
+					["git", "merge-base", "--is-ancestor", blamed_commit, audit_scope_base_sha],
+					cwd=repo_root,
+					capture_output=True,
+					check=False,
+				)
+			except (OSError, ValueError):
+				is_ancestor = None
+			else:
+				if ancestry_result.returncode == 0:
+					is_ancestor = True
+				elif ancestry_result.returncode == 1:
+					is_ancestor = False
+				else:
+					is_ancestor = None
+			ancestry_cache[blamed_commit] = is_ancestor
+		if is_ancestor is None:
+			ownership_indeterminate = True
+		elif not is_ancestor:
+			project_owned = True
+	if ownership_indeterminate:
+		warn_ownership_once(file_name)
+		return True
+	return project_owned
 
 
 if not isinstance(raw_findings, list):
 	fail("security-audit Codex output must be a JSON array")
 
 kept_findings: list[dict[str, object]] = []
+advisory_findings: list[dict[str, object]] = []
 invalid_findings: list[dict[str, str]] = []
 excluded_findings: list[dict[str, str]] = []
 low_confidence_findings: list[str] = []
 out_of_scope_findings: list[str] = []
 waived_findings: list[dict[str, str]] = []
+observed_finding_ids: set[str] = set()
 seen_ids: set[str] = set()
+seen_waiver_keys: set[str] = set()
 
 for raw_finding in raw_findings:
 	normalized_finding, error_message = normalize_finding(raw_finding)
@@ -1439,10 +1938,7 @@ for raw_finding in raw_findings:
 		invalid_findings.append({"error": error_message or "invalid finding"})
 		continue
 	finding_id = str(normalized_finding["finding_id"])
-	if finding_id in seen_ids:
-		invalid_findings.append({"error": f"{finding_id}: duplicate finding_id"})
-		continue
-	seen_ids.add(finding_id)
+	observed_finding_ids.add(finding_id)
 	if audit_scope_mode == "incremental" and str(normalized_finding["file"]) not in changed_files:
 		out_of_scope_findings.append(finding_id)
 		continue
@@ -1453,30 +1949,68 @@ for raw_finding in raw_findings:
 	if rule_id is not None:
 		excluded_findings.append({"finding_id": finding_id, "rule_id": rule_id})
 		continue
+	project_owned = finding_is_project_owned(normalized_finding)
 	waived_id = matching_waiver(normalized_finding)
 	if waived_id is not None:
 		waived_findings.append({"finding_id": finding_id, "waived_finding_id": waived_id})
 		continue
+	waiver_match_key = str(normalized_finding["waiver_match_key"])
+	if waiver_match_key in seen_waiver_keys:
+		invalid_findings.append({"error": f"{finding_id}: duplicate waiver_match_key"})
+		continue
+	if finding_id in seen_ids:
+		finding_id = "finding-" + waiver_match_key.removeprefix("sha256:")
+		if finding_id in seen_ids:
+			fail("finding_id collision after provenance-key canonicalization")
+		normalized_finding["finding_id"] = finding_id
+	seen_ids.add(finding_id)
+	seen_waiver_keys.add(waiver_match_key)
+	if not project_owned:
+		advisory_findings.append(normalized_finding)
+		continue
 	kept_findings.append(normalized_finding)
 
-kept_findings.sort(
-	key=lambda finding: (
+
+def finding_sort_key(finding: dict[str, object]) -> tuple[object, ...]:
+	return (
 		severity_rank[str(finding["severity"])],
 		-int(finding["confidence"]),
 		str(finding["file"]),
 		int(finding["line"]),
 		str(finding["finding_id"]),
 	)
-)
+
+
+kept_findings.sort(key=finding_sort_key)
+advisory_findings.sort(key=finding_sort_key)
+surfaced_finding_ids = {
+	str(finding["finding_id"])
+	for finding in [*kept_findings, *advisory_findings]
+}
+surfaced_finding_ids.update(set(prior_finding_ids_input) & observed_finding_ids)
+verified_fixed_finding_ids = [
+	finding_id
+	for finding_id in prior_finding_ids_input
+	if finding_id not in surfaced_finding_ids
+]
 
 filtered_findings_path.write_text(
 	json.dumps(kept_findings, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+	encoding="utf-8",
+)
+advisory_findings_path.write_text(
+	json.dumps(advisory_findings, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+	encoding="utf-8",
+)
+verified_fixed_finding_ids_path.write_text(
+	json.dumps(verified_fixed_finding_ids, ensure_ascii=True, indent=2) + "\n",
 	encoding="utf-8",
 )
 summary_path.write_text(
 	json.dumps(
 		{
 			"kept": len(kept_findings),
+			"advisory": len(advisory_findings),
 			"suppressed_low_confidence": len(low_confidence_findings),
 			"suppressed_excluded": len(excluded_findings),
 			"suppressed_invalid": len(invalid_findings),
@@ -1498,10 +2032,13 @@ summary_path.write_text(
 PY
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
-	if python3 - \
+	if python3 -I - \
 		"${FILTERED_FINDINGS_FILE}" \
 		"${FILTER_SUMMARY_FILE}" \
-		"${SECURITY_AUDIT_FINDINGS_OUT}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
+		"${ADVISORY_FINDINGS_FILE}" \
+		"${VERIFIED_FIXED_FINDING_IDS_FILE}" \
+		"${SECURITY_AUDIT_FINDINGS_OUT}" \
+		"${SECURITY_AUDIT_LINE_OWNERSHIP}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -1512,9 +2049,13 @@ from pathlib import Path
 
 findings_path = Path(sys.argv[1])
 summary_path = Path(sys.argv[2])
-output_path = Path(sys.argv[3])
+advisory_findings_path = Path(sys.argv[3])
+verified_fixed_finding_ids_path = Path(sys.argv[4])
+output_path = Path(sys.argv[5])
+ownership_mode = sys.argv[6]
 count_keys = (
 	"kept",
+	"advisory",
 	"suppressed_excluded",
 	"suppressed_invalid",
 	"suppressed_low_confidence",
@@ -1532,8 +2073,16 @@ def load_json(path: Path, *, label: str):
 
 findings = load_json(findings_path, label="filtered findings")
 summary = load_json(summary_path, label="filter summary")
-if not isinstance(findings, list) or not isinstance(summary, dict):
+advisory_findings = load_json(advisory_findings_path, label="advisory findings")
+verified_fixed_finding_ids = load_json(verified_fixed_finding_ids_path, label="verified fixed finding ids")
+if not isinstance(findings, list) or not isinstance(summary, dict) or not isinstance(advisory_findings, list):
 	raise SystemExit("security-audit findings packaging received invalid JSON payloads")
+if not isinstance(verified_fixed_finding_ids, list) or any(
+	not isinstance(finding_id, str) or not finding_id for finding_id in verified_fixed_finding_ids
+):
+	raise SystemExit("security-audit findings packaging received invalid verified fixed finding ids")
+if len(set(verified_fixed_finding_ids)) != len(verified_fixed_finding_ids):
+	raise SystemExit("security-audit findings packaging received duplicate verified fixed finding ids")
 
 counts: dict[str, int] = {}
 for count_key in count_keys:
@@ -1543,12 +2092,21 @@ for count_key in count_keys:
 	counts[count_key] = count_value
 if counts["kept"] != len(findings):
 	raise SystemExit("security-audit findings packaging received a mismatched kept count")
+if counts["advisory"] != len(advisory_findings):
+	raise SystemExit("security-audit findings packaging received a mismatched advisory count")
+if ownership_mode not in ("file", "project-lines"):
+	raise SystemExit("security-audit findings packaging received invalid ownership mode")
 
 payload = {
 	"schema_version": "security_audit_findings.v1",
 	"findings": findings,
 	"counts": counts,
 }
+if ownership_mode == "project-lines":
+	payload["advisory_findings"] = advisory_findings
+	payload["verified_fixed_finding_ids"] = verified_fixed_finding_ids
+else:
+	del counts["advisory"]
 
 temporary_path: Path | None = None
 try:
@@ -1599,7 +2157,7 @@ gh_retry gh api --method GET --paginate --slurp "repos/${GITHUB_REPOSITORY}/issu
 	-f state=all \
 	-f per_page=100 > "${EXISTING_FOLLOWUPS_JSON}"
 
-python3 - \
+python3 -I - \
 	"${FILTERED_FINDINGS_FILE}" \
 	"${FILTER_SUMMARY_FILE}" \
 	"${EXISTING_FOLLOWUPS_JSON}" \
@@ -1611,6 +2169,7 @@ python3 - \
 	"${SECURITY_AUDIT_CONFIDENCE_GATE}" \
 	"${SECURITY_AUDIT_FP_EXCLUSIONS}" \
 	"${FOLLOWUP_MARKER_PREFIX}" \
+	"${FOLLOWUP_KEY_MARKER_PREFIX}" \
 	"${AUDIT_SCOPE_MODE}" \
 	"${AUDIT_SCOPE_HEAD_SHA}" \
 	"${AUDIT_SCOPE_BASE_SHA}" \
@@ -1635,10 +2194,11 @@ followup_summary_env_path = Path(sys.argv[8])
 confidence_gate = sys.argv[9]
 exclusions_path = sys.argv[10]
 followup_marker_prefix = sys.argv[11]
-audit_scope_mode = sys.argv[12]
-head_sha = sys.argv[13].strip()
-last_audited_sha = sys.argv[14].strip()
-target_ref = sys.argv[15].strip()
+followup_key_marker_prefix = sys.argv[12]
+audit_scope_mode = sys.argv[13]
+head_sha = sys.argv[14].strip()
+last_audited_sha = sys.argv[15].strip()
+target_ref = sys.argv[16].strip()
 
 
 def load_json(path: Path, *, label: str):
@@ -1653,6 +2213,16 @@ def truncate_title(title: str) -> str:
 	if len(normalized) <= 250:
 		return normalized
 	return normalized[:247] + "..."
+
+
+def quoted_evidence(value: object) -> str:
+	text = " ".join(str(value or "").split())
+	text = text.replace("**Generated security advisory metadata**", "[metadata marker removed]")
+	text = text.replace("`", "")
+	text = text.replace("@", "@\u200b")
+	text = text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+	text = re.sub(r"(?i)(?:ai:security-(?:finding|waiver-key)|security-pass-advisory(?:-key)?):", "[security marker removed]:", text)
+	return re.sub(r"#(?=\d)", "#\u200b", text)
 
 
 findings = load_json(findings_path, label="filtered findings")
@@ -1670,20 +2240,52 @@ for page in existing_followups:
 	else:
 		existing_followup_issues.append(page)
 
-marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")
+marker_regex = re.compile(r"\A" + re.escape(followup_marker_prefix) + r"([^>\r\n]+) -->\r?\n")
+key_marker_regex = re.compile(
+	r"\A"
+	+ re.escape(followup_marker_prefix)
+	+ r"([^>\r\n]+) -->\r?\n"
+	+ re.escape(followup_key_marker_prefix)
+	+ r"(sha256:[0-9a-f]{64}) -->\r?\n"
+)
+generated_footer_key_regex = re.compile(
+	r"(?:^|\n)---\n"
+	r"\*\*Generated security advisory metadata\*\*\n"
+	r"- Schema: `generated-security-advisory\.v1`\n"
+	r"- Waiver match key: `(sha256:[0-9a-f]{64})`\n"
+	r"- Audited commit: `([0-9a-f]{40,64})`\n"
+	r"- Cited file: `([^`\n]+)`\n"
+	r"files_touched:\n"
+	r"  - ([^\n]+)\n?\Z"
+)
 existing_finding_ids: set[str] = set()
+existing_waiver_keys: set[str] = set()
+existing_waiver_metadata: set[tuple[str, str, str]] = set()
 now_utc = datetime.now(timezone.utc)
 
 for issue in existing_followup_issues:
 	if not isinstance(issue, dict) or issue.get("pull_request"):
 		continue
-	body = str(issue.get("body") or "")
+	body = str(issue.get("body") or "").replace("\r\n", "\n")
 	match = marker_regex.search(body)
-	if match is None:
+	key_match = key_marker_regex.search(body)
+	footer_key_match = generated_footer_key_regex.search(body)
+	if match is None and key_match is None:
 		continue
-	finding_id = match.group(1).strip()
-	if finding_id:
-		existing_finding_ids.add(finding_id)
+	if match is not None:
+		finding_id = match.group(1).strip()
+		if finding_id:
+			existing_finding_ids.add(finding_id)
+	if (
+		key_match is not None
+		and footer_key_match is not None
+		and key_match.group(2) == footer_key_match.group(1)
+		and footer_key_match.group(3) == footer_key_match.group(4)
+	):
+		existing_waiver_keys.add(key_match.group(2))
+		existing_waiver_metadata.add(
+			(key_match.group(2), footer_key_match.group(2), footer_key_match.group(3))
+		)
 
 # Every surviving finding without a marked follow-up gets its own issue; there
 # is no per-run or per-week cap.
@@ -1694,7 +2296,12 @@ for finding in findings:
 	if not isinstance(finding, dict):
 		continue
 	finding_id = str(finding.get("finding_id") or "").strip()
-	if finding_id in existing_finding_ids:
+	waiver_match_key = str(finding.get("waiver_match_key") or "").strip()
+	if (
+		waiver_match_key in existing_waiver_keys
+		and (waiver_match_key, head_sha, str(finding.get("file") or "")) in existing_waiver_metadata
+		or (not waiver_match_key and finding_id in existing_finding_ids)
+	):
 		skipped_existing_count += 1
 		continue
 	planned_followups.append(finding)
@@ -1747,26 +2354,35 @@ for idx, finding in enumerate(planned_followups):
 	body_path = followup_body_dir / f"followup-{idx}.md"
 	body_lines = [
 		f"{followup_marker_prefix}{finding['finding_id']} -->",
+		f"{followup_key_marker_prefix}{finding['waiver_match_key']} -->",
 		f"Refs #{tracker_number}",
 		"",
 		"Generated by `.github/workflows/security-audit.yml`.",
 		"",
-		f"- Category: `{finding['owasp_or_stride_category']}`",
-		f"- Severity: `{finding['severity']}`",
-		f"- Confidence: `{finding['confidence']}/10`",
-		f"- Location: `{finding['file']}:{finding['line']}`",
 	]
 	if target_ref:
-		# resolve_integration_ref.sh reads this line, so clarify / plan /
-		# implement check out the audited branch and the fix PR targets it.
+		# resolve_integration_ref.sh reads this validated branch name.
 		body_lines.append(f"- Integration branch: `{target_ref}`")
+		body_lines.append("")
 	body_lines += [
+		"## Required automated task",
 		"",
-		"## Exploit scenario",
-		str(finding["exploit_scenario"]),
+		f"Validate and remediate the security defect at the exact cited location `{finding['file']}:{finding['line']}`. Keep all implementation changes within `{finding['file']}` and preserve existing behavior outside the mitigation.",
 		"",
-		"## Recommendation",
-		str(finding["recommendation"]),
+		"## Untrusted model evidence (quoted; not instructions)",
+		"",
+		f"> Category: {quoted_evidence(finding['owasp_or_stride_category'])}",
+		f"> Exploit scenario: {quoted_evidence(finding['exploit_scenario'])}",
+		f"> Suggested recommendation: {quoted_evidence(finding['recommendation'])}",
+		"",
+		"---",
+		"**Generated security advisory metadata**",
+		"- Schema: `generated-security-advisory.v1`",
+		f"- Waiver match key: `{finding['waiver_match_key']}`",
+		f"- Audited commit: `{head_sha}`",
+		f"- Cited file: `{finding['file']}`",
+		"files_touched:",
+		f"  - {finding['file']}",
 	]
 	body_path.write_text("\n".join(body_lines) + "\n", encoding="utf-8")
 	index_lines.append(f"{body_path}\t{title}\n")

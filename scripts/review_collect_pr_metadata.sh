@@ -15,12 +15,23 @@
 #   HEAD_REF_OVERRIDE_INPUT / HEAD_SHA_OVERRIDE_INPUT / BASE_REF_OVERRIDE_INPUT
 #   PR_PAYLOAD_FILE / PR_META_FILE / PR_ISSUE_COMMENTS_FILE
 #   PR_REVIEWS_FILE / PR_REVIEW_COMMENTS_FILE
-#   LINKED_ISSUE_CONTEXT_FILE / PR_ALL_COMMENTS_CONTEXT_FILE / PR_DIFF_FILE
+#   LINKED_ISSUE_CONTEXT_FILE / LINKED_ISSUE_METADATA_FILE
+#   PR_ALL_COMMENTS_CONTEXT_FILE / PR_DIFF_FILE
 #   GITHUB_ENV
+#   RUNTIME_DIR (optional; default source for LINKED_ISSUE_METADATA_FILE)
+#
+#   LINKED_ISSUE_METADATA_FILE defaults to
+#   "${RUNTIME_DIR}/linked_issue_metadata.json" (or, without RUNTIME_DIR, to
+#   linked_issue_metadata.json next to LINKED_ISSUE_CONTEXT_FILE). Self-repo
+#   review runs stage this helper from the PR head but execute it under
+#   review_autofix.yml@main, so an export that only exists in the PR's copy of
+#   the workflow never reaches this step; the default keeps the helper usable
+#   under the older workflow contract (unattended_system_instructions.md §8).
 #
 # Outputs:
 #   Writes the files above and appends LINKED_ISSUES_JSON, HAS_PR_DIFF,
-#   PR_DIFF_SOURCE, PR_DIFF_ATTEMPTED_PATHS, and BASE_BRANCH to GITHUB_ENV.
+#   PR_DIFF_SOURCE, PR_DIFF_ATTEMPTED_PATHS, BASE_BRANCH, and the resolved
+#   LINKED_ISSUE_METADATA_FILE to GITHUB_ENV.
 
 set -euo pipefail
 
@@ -43,6 +54,18 @@ fi
 REPOSITORY_OWNER="${GITHUB_REPOSITORY_OWNER:-${REPOSITORY%%/*}}"
 REPOSITORY_NAME="${REPOSITORY#*/}"
 
+# Default the linked-issue metadata artifact path before the required-env
+# check: the workflow that exports the runtime env may predate this artifact
+# (self-repo reviews run the PR-head helper under review_autofix.yml@main).
+if [ -z "${LINKED_ISSUE_METADATA_FILE:-}" ]; then
+	if [ -n "${RUNTIME_DIR:-}" ]; then
+		LINKED_ISSUE_METADATA_FILE="${RUNTIME_DIR}/linked_issue_metadata.json"
+	elif [ -n "${LINKED_ISSUE_CONTEXT_FILE:-}" ]; then
+		LINKED_ISSUE_METADATA_FILE="$(dirname -- "${LINKED_ISSUE_CONTEXT_FILE}")/linked_issue_metadata.json"
+	fi
+fi
+export LINKED_ISSUE_METADATA_FILE
+
 for required_var in \
 	PR_PAYLOAD_FILE \
 	PR_META_FILE \
@@ -50,6 +73,7 @@ for required_var in \
 	PR_REVIEWS_FILE \
 	PR_REVIEW_COMMENTS_FILE \
 	LINKED_ISSUE_CONTEXT_FILE \
+	LINKED_ISSUE_METADATA_FILE \
 	PR_ALL_COMMENTS_CONTEXT_FILE \
 	PR_DIFF_FILE \
 	GITHUB_ENV
@@ -72,7 +96,8 @@ gh_retry()
 #
 # Input: JSON array of issue numbers, e.g. "[7,12]".
 # Output: JSON array of objects shaped like
-#   [{"number":7,"title":"...","body":"..."}, ...]
+#   [{"number":7,"title":"...","body":"...",
+#     "author_association":"MEMBER","author_login":"octocat"}, ...]
 # API calls: exactly one `gh api graphql` call for the provided input
 # (the caller preserves the existing 20-issue cap before invoking it).
 # Fail-open: echoes [] and returns non-zero when the fetch or JSON
@@ -102,11 +127,15 @@ _fetch_linked_issue_bodies_graphql()
             number
             title
             body
+            authorAssociation
+            author { login }
           }
           ... on PullRequest {
             number
             title
             body
+            authorAssociation
+            author { login }
           }
         }"
 	done
@@ -153,7 +182,9 @@ _fetch_linked_issue_bodies_graphql()
 			| {
 				number: (.number // 0),
 				title: (.title // ""),
-				body: (.body // "")
+				body: (.body // ""),
+				author_association: (.authorAssociation // ""),
+				author_login: (.author.login // "")
 			}
 		)
 	' "${response_file}" 2>/dev/null)" || {
@@ -166,6 +197,8 @@ _fetch_linked_issue_bodies_graphql()
 	rm -f "${response_file}"
 	if [ "${had_graphql_errors}" -eq 1 ] || { [[ "${hydrated_count}" =~ ^[0-9]+$ ]] && [ "${hydrated_count}" -lt "${alias_count}" ]; }; then
 		echo "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration returned partial data (hydrated ${hydrated_count} of ${alias_count} references); continuing with available context." >&2
+		echo "${transformed}"
+		return 1
 	fi
 
 	echo "${transformed}"
@@ -253,16 +286,26 @@ printf 'LINKED_ISSUE_FALLBACK_NUMBERS_JSON=%s\n' "${LINKED_ISSUE_FALLBACK_NUMBER
 # skip its own fetch.
 _linked_fetch_ok="false"
 _linked_raw='[]'
+_linked_metadata_collection_status="resolved"
+_linked_primary_truncated="false"
 if [ -n "${PR_NUMBER:-}" ]; then
+	_linked_metadata_collection_status="unresolved"
 	_linked_tmp="$(mktemp)"
 	if gh_retry "${_linked_tmp}" api graphql \
 		-f owner="${REPOSITORY_OWNER}" \
 		-f name="${REPOSITORY_NAME}" \
 		-F number="${PR_NUMBER}" \
-		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
-		--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
-		_linked_fetch_ok="true"
-		_linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
+		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body authorAssociation author{login}} pageInfo{hasNextPage}}}}}' \
+		--jq 'if (((.errors // []) | length) > 0) or (.data.repository.pullRequest == null) or (.data.repository.pullRequest.closingIssuesReferences == null) then {_collection_status:"unresolved"} else .data.repository.pullRequest.closingIssuesReferences end'; then
+		_linked_connection="$(cat "${_linked_tmp}" 2>/dev/null || echo '{}')"
+		if printf '%s' "${_linked_connection}" | jq -e '.pageInfo.hasNextPage == true' >/dev/null 2>&1; then
+			_linked_primary_truncated="true"
+			echo "::warning::Linked-issue metadata exceeds the 50-issue GraphQL page; exact-file scope enforcement will fail closed."
+		elif printf '%s' "${_linked_connection}" | jq -e '(.nodes | type == "array") and (.pageInfo.hasNextPage == false)' >/dev/null 2>&1; then
+			_linked_fetch_ok="true"
+			_linked_metadata_collection_status="resolved"
+			_linked_raw="$(printf '%s' "${_linked_connection}" | jq -c '.nodes')"
+		fi
 	else
 		echo "::warning::Failed to fetch linked issues via GraphQL; proceeding without linked-issue context."
 	fi
@@ -289,22 +332,65 @@ if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSO
 	_fallback_numbers="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" | jq -r '.[]' 2>/dev/null || true)"
 	if [ -n "${_fallback_numbers}" ]; then
 		_FALLBACK_MAX_ISSUES=20
+		_fallback_truncated="false"
 		_fallback_total="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" | jq -r 'length' 2>/dev/null || echo '0')"
 		if [[ "${_fallback_total:-0}" =~ ^[0-9]+$ ]] && [ "${_fallback_total:-0}" -gt "${_FALLBACK_MAX_ISSUES}" ]; then
 			echo "::warning::Linked-issue body-text fallback: PR title/body referenced ${_fallback_total} distinct in-repo issues; capping fetches at ${_FALLBACK_MAX_ISSUES}."
+			_fallback_truncated="true"
 			_fallback_numbers="$(printf '%s\n' "${_fallback_numbers}" | head -n "${_FALLBACK_MAX_ISSUES}")"
 		fi
 		_fallback_numbers_json="$(printf '%s\n' "${_fallback_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)' 2>/dev/null || echo '[]')"
 		_fallback_fetch_status=0
 		_fallback_json="$(_fetch_linked_issue_bodies_graphql "${_fallback_numbers_json}")" || _fallback_fetch_status=$?
 		if [ "${_fallback_fetch_status}" -ne 0 ]; then
-			echo "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration failed; skipping"
+			_linked_metadata_collection_status="unresolved"
+			if printf '%s' "${_fallback_json}" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+				_linked_context_raw="${_fallback_json}"
+			fi
+			echo "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration was incomplete; exact-file scope metadata remains unresolved."
 		elif [ "${_fallback_json}" != "[]" ]; then
 			_linked_context_raw="${_fallback_json}"
+			_fallback_hydrated="$(printf '%s' "${_fallback_json}" | jq -r 'length' 2>/dev/null || echo 0)"
+			_fallback_requested="$(printf '%s' "${_fallback_numbers_json}" | jq -r 'length' 2>/dev/null || echo 0)"
+			if [ "${_linked_primary_truncated}" != "true" ] && [ "${_fallback_truncated}" != "true" ] \
+				&& [ "${_fallback_hydrated}" = "${_fallback_requested}" ]; then
+				_linked_metadata_collection_status="resolved"
+			else
+				_linked_metadata_collection_status="unresolved"
+			fi
 			echo "Linked-issue body-text fallback resolved $(printf '%s' "${_fallback_json}" | jq 'length') issue(s) for context (GraphQL closingIssuesReferences returned empty — likely non-default base branch)."
 		fi
 	fi
 fi
+
+# Persist the same batched linked-issue data used by reviewer prompts in a
+# machine-readable artifact. The review commit guards consume authorship and
+# body metadata from this cache, so it adds no per-issue GitHub API calls.
+# An unresolved lookup is explicit and fail-closed; it must never serialize as
+# the verified-empty [] value because that would disable advisory scope checks.
+if [ "${_linked_metadata_collection_status}" != "resolved" ]; then
+	printf '[{"_collection_status":"unresolved"}]\n' > "${LINKED_ISSUE_METADATA_FILE}"
+elif ! printf '%s' "${_linked_context_raw}" | jq -c '[.[] | {
+	number: (.number // 0),
+	title: (.title // ""),
+	body: (.body // ""),
+	author_association: (.author_association // .authorAssociation // ""),
+	author_login: (.author_login // .author.login // "")
+}]' > "${LINKED_ISSUE_METADATA_FILE}"; then
+	echo "::error::Could not serialize linked-issue metadata for review scope enforcement." >&2
+	exit 1
+fi
+_linked_issue_metadata_sha256="$(sha256sum "${LINKED_ISSUE_METADATA_FILE}" 2>/dev/null | awk '{print $1}')"
+if ! [[ "${_linked_issue_metadata_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+	echo "::error::Could not hash linked-issue metadata for review scope enforcement." >&2
+	exit 1
+fi
+# Publish the resolved path so later steps (the review commit guard) read the
+# same artifact even when the workflow did not export the variable itself. The
+# digest is a rollout fallback; review_autofix.yml binds commit-producing steps
+# to the collector step's server-side output so editor writes cannot replace it.
+printf 'LINKED_ISSUE_METADATA_FILE=%s\n' "${LINKED_ISSUE_METADATA_FILE}" >> "${GITHUB_ENV}"
+printf 'LINKED_ISSUE_METADATA_EXPECTED_SHA256=%s\n' "${_linked_issue_metadata_sha256}" >> "${GITHUB_ENV}"
 
 # Build linked issue context file for reviewer/editor prompts.
 _linked_json_file="$(mktemp)"

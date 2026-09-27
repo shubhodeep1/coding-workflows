@@ -1934,6 +1934,52 @@ Summary
 	assert state["security_pass_head_sha"] == ""
 
 
+def test_descriptor_reconstruction_refuses_mutated_graph_and_incomplete_children(tmp_path):
+	data = {
+		"project_title": "Demo", "project_summary": "Test project",
+		"issues": [
+			{"id": "first", "title": "First", "body": "Real first body", "priority": 1},
+			{"id": "later", "title": "Later", "body": "Real deferred body", "priority": 2},
+		],
+		"dependency_edges": [{"from": "first", "to": "later"}],
+	}
+	data_file = tmp_path / "decomposition.json"
+	data_file.write_text(json.dumps(data), encoding="utf-8")
+	descriptor_file = tmp_path / "descriptor.json"
+	issued_branch = "orchestrator/project-192"
+	command = [sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py")]
+	env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+	frozen = subprocess.run(command + ["freeze-project-descriptor", "--input-file", str(data_file),
+	                        "--tracking-issue", "192", "--integration-branch", issued_branch],
+	                       capture_output=True, text=True, env=env)
+	assert frozen.returncode == 0, frozen.stderr
+	descriptor = json.loads(frozen.stdout)
+	descriptor_file.write_text(frozen.stdout, encoding="utf-8")
+	body_file = tmp_path / "body.txt"
+	body = orchestrate_lib.build_tracking_issue_body(data, orchestrate_lib.compute_waves(data), integration_branch=issued_branch)
+	base_command = command + ["rebuild-state", "--body-file", str(body_file), "--descriptor-file", str(descriptor_file),
+	                          "--tracking-issue", "192", "--require-complete-first-wave"]
+	for candidate_body, issue_map, succeeds in (
+		(body, {"first": 10}, True),
+		(body.replace("First", "Changed", 1), {"first": 10}, False),
+		(body.replace("Later", "Changed", 1), {"first": 10}, False),
+		(body.replace("`first` -> `later`", "`later` -> `first`"), {"first": 10}, False),
+		(body.replace("### Wave 2", "### Wave 3"), {"first": 10}, False),
+		(body + "\n**Integration branch:** `orchestrator/project-192`\n", {"first": 10}, False),
+		(body.replace(issued_branch, "orchestrator/project-193"), {"first": 10}, False),
+		(body, {}, False),
+		(body, {"first": 10, "later": 11}, False),
+		(body.replace("[ ]", "[x]", 1), {"first": 10}, False),
+	):
+		body_file.write_text(candidate_body, encoding="utf-8")
+		result = subprocess.run(base_command + ["--issue-map-json", json.dumps(issue_map)], capture_output=True, text=True, env=env)
+		assert (result.returncode == 0) is succeeds, result.stderr
+		if succeeds:
+			state = json.loads(result.stdout)
+			assert state["pending_issue_defs"]["later"]["body"] == "Real deferred body"
+	assert descriptor["waves"] == [["first"], ["later"]]
+
+
 def test_parse_tracking_body_captures_completion_marks():
 	body = (
 		"## Project: P\n\n"

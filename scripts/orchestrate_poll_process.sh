@@ -10,6 +10,87 @@
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TOOL_CALL_BUDGET_JUDGE
 
 set -euo pipefail
+if [ -z "${ORCHESTRATOR_STATE_SIGNING_KEY:-}" ]; then
+  echo "::error::Dedicated orchestrator state signing credential unavailable; refusing state mutations" >&2
+  exit 1
+fi
+if [ "${ORCHESTRATOR_STATE_SIGNING_KEY}" = "${GH_TOKEN:-}" ]; then
+  echo "::error::Orchestrator state signing credential must differ from GitHub credential" >&2
+  exit 1
+fi
+# The poller later checks out untrusted integration code without restarting.
+# Inherited Python children must never import modules from that checkout.
+export PYTHONSAFEPATH=1
+
+# Set by the verified support staging step. A missing export deliberately
+# resolves outside any usable bundle; never substitute the project checkout.
+POLLER_TRUSTED_SUPPORT_DIR="${POLLER_TRUSTED_SUPPORT_DIR:-${RUNNER_TEMP:-/nonexistent}/poller-support-unavailable}"
+POLLER_TRUSTED_SUPPORT_SHA="${POLLER_TRUSTED_SUPPORT_SHA:-}"
+poller_trusted_support_file() {
+  local relative_path="$1" root resolved
+  [[ "${POLLER_TRUSTED_SUPPORT_DIR}" = /* ]] || return 1
+  root="$(realpath -e -- "${POLLER_TRUSTED_SUPPORT_DIR}" 2>/dev/null)" || return 1
+  [[ "${root}" = "${RUNNER_TEMP:-/nonexistent}"/poller-support-* ]] || return 1
+  [[ "${POLLER_TRUSTED_SUPPORT_SHA}" =~ ^[0-9a-f]{40}$ && ! -L "${root}/.support_sha" ]] || return 1
+  [ "$(cat "${root}/.support_sha" 2>/dev/null)" = "${POLLER_TRUSTED_SUPPORT_SHA}" ] || return 1
+  resolved="$(realpath -e -- "${root}/${relative_path}" 2>/dev/null)" || return 1
+  [[ "${resolved}" = "${root}/${relative_path}" && -f "${resolved}" ]] || return 1
+  printf '%s\n' "${resolved}"
+}
+
+poller_trusted_python_dir() {
+  poller_trusted_support_file scripts/ai_memory_lib.py >/dev/null || return 1
+  poller_trusted_support_file scripts/orchestrate_lib.py >/dev/null || return 1
+  poller_trusted_support_file scripts/openrouter_prompt_cache.py >/dev/null || return 1
+  poller_trusted_support_file scripts/semantic_cache.py >/dev/null || return 1
+  poller_trusted_support_file scripts/memory_injection_patterns.py >/dev/null || return 1
+  printf '%s/scripts\n' "${POLLER_TRUSTED_SUPPORT_DIR}"
+}
+
+poller_trusted_python() {
+  poller_trusted_support_file scripts/orchestrate_lib.py >/dev/null || return 1
+  PYTHONDONTWRITEBYTECODE=1 python3 -I "$@"
+}
+
+poller_trusted_orchestrate_lib() {
+  local trusted_lib
+  trusted_lib="$(poller_trusted_support_file scripts/orchestrate_lib.py)" || return 1
+  PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_lib}" "$@"
+}
+
+# Share the single token-identity lookup with the later fingerprint-cap sweep.
+NOOP_CAP_TRUSTED_LOGIN=""
+NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
+state_comment_login() {
+  if [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "unset" ]; then
+    NOOP_CAP_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+    if [ -n "${NOOP_CAP_TRUSTED_LOGIN}" ]; then
+      NOOP_CAP_TRUSTED_LOGIN_STATE="ok"
+    else
+      NOOP_CAP_TRUSTED_LOGIN_STATE="failed"
+    fi
+  fi
+  [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "ok" ] || return 1
+  printf '%s\n' "${NOOP_CAP_TRUSTED_LOGIN}"
+}
+
+# Input: paginated REST/GraphQL comments array. Output: only records whose
+# exact bytes, repository, issue, purpose and API-reported author are trusted.
+authenticated_state_comments() {
+  local issue_num="$1" comments_json="$2" trusted_login trusted_state_helper comments_file
+  [[ "${issue_num}" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ -n "${GH_TOKEN:-}" ] || return 1
+  trusted_login="$(state_comment_login)" || return 1
+  trusted_state_helper="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)" || return 1
+  comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_authenticated_comments.XXXXXX")" || return 1
+  printf '%s' "${comments_json}" > "${comments_file}"
+  PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_helper}" filter \
+    --repo "${GITHUB_REPOSITORY}" --issue "${issue_num}" \
+    --login "${trusted_login}" --comments-json "${comments_file}"
+  local auth_rc=$?
+  rm -f "${comments_file}"
+  return "${auth_rc}"
+}
 
 # ---------------------------------------------------------------
 # Helper: Telegram (tracked via tg_helpers.sh)
@@ -31,6 +112,12 @@ fi
 if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
+  # Functions in memory_helpers.sh launch ai_memory.py at call time. Pin
+  # their script directory before an integration checkout can replace it.
+  if poller_trusted_support_file scripts/ai_memory.py >/dev/null \
+    && trusted_memory_script_dir="$(poller_trusted_python_dir)"; then
+    MEMORY_SCRIPTS_DIR="${trusted_memory_script_dir}"
+  fi
 fi
 if [ -f "scripts/transcript_archive.sh" ]; then
   # shellcheck disable=SC1091
@@ -91,6 +178,9 @@ declare -gA _ENSURED_LABELS_CACHE=()
 # Marker-search results are cached per tracking issue so accepted findings pay
 # at most one reconciliation lookup per poller process, not one per finding.
 declare -gA _SECURITY_PASS_ADVISORY_SEARCH_CACHE=()
+# Successful creates remain visible within this process even if state persistence
+# fails; callers still require durable state before draining the backlog.
+declare -gA _SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE=()
 
 # _gh_url constructs a full GitHub URL for the current repository.
 _gh_url() {
@@ -161,6 +251,100 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+
+TRUSTED_POLLER_GIT_WRITER="${RUNTIME_DIR}/trusted_git_write.sh"
+TRUSTED_POLLER_RESOLVER_GUARD="${RUNTIME_DIR}/check_resolver_diff.sh"
+if [ -z "${POST_AGENT_ARTIFACT_DIR:-}" ]; then
+	if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "${RUNNER_TEMP}" ]; then
+		echo "::error::RUNNER_TEMP is required for post-agent artifacts." >&2
+		exit 78
+	fi
+	POST_AGENT_ARTIFACT_DIR="$(mktemp -d "${RUNNER_TEMP%/}/post-agent-poller-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}.XXXXXX")"
+	export POST_AGENT_ARTIFACT_DIR
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		printf 'POST_AGENT_ARTIFACT_DIR=%s\n' "${POST_AGENT_ARTIFACT_DIR}" >> "${GITHUB_ENV}"
+	fi
+fi
+TRUSTED_POLLER_REVIEW_SCOPE_GUARD="${POST_AGENT_ARTIFACT_DIR}/files_touched_scope_guard.py"
+TRUSTED_POLLER_WORKSPACE_GUARD="${POST_AGENT_ARTIFACT_DIR}/post_agent_workspace_guard.py"
+POST_AGENT_VALIDATION_CHECKER="${POST_AGENT_ARTIFACT_DIR}/check_workflow_script_refs.py"
+export POST_AGENT_VALIDATION_CHECKER
+UNTRUSTED_POLLER_SANDBOX="${RUNTIME_DIR}/untrusted_process_sandbox.sh"
+UNTRUSTED_POLLER_PROVIDER_PROXY="${RUNTIME_DIR}/model_provider_proxy.py"
+POLLER_VALIDATOR_OUTPUT_DIR="${POST_AGENT_ARTIFACT_DIR}/validator-output-poller"
+mkdir -p "${POLLER_VALIDATOR_OUTPUT_DIR}"
+TRUSTED_POLLER_WORKSPACE_GUARD_SHA256="$(sha256sum "${TRUSTED_POLLER_WORKSPACE_GUARD}" 2>/dev/null | awk '{print $1}')"
+if [ ! -f "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" ] && [ -f scripts/files_touched_scope_guard.py ]; then
+	install -m 0755 scripts/files_touched_scope_guard.py "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}"
+fi
+prepare_untrusted_poller_runtime() {
+	[ -x "${TRUSTED_POLLER_GIT_WRITER}" ] || {
+		echo "::error::Pre-staged trusted Git writer is unavailable" >&2
+		return 1
+	}
+	[ -x "${TRUSTED_POLLER_RESOLVER_GUARD}" ] || {
+		echo "::error::Pre-staged integration resolver guard is unavailable" >&2
+		return 1
+	}
+	[ -x "${POST_AGENT_VALIDATION_CHECKER}" ] || {
+		echo "::error::Pre-staged workflow-reference checker is unavailable" >&2
+		return 1
+	}
+	[ -x "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" ] || {
+		echo "::error::Pre-staged review scope guard is unavailable" >&2
+		return 1
+	}
+	[ -x "${TRUSTED_POLLER_WORKSPACE_GUARD}" ] \
+		&& [[ "${TRUSTED_POLLER_WORKSPACE_GUARD_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
+		&& [ "$(sha256sum "${TRUSTED_POLLER_WORKSPACE_GUARD}" 2>/dev/null | awk '{print $1}')" = "${TRUSTED_POLLER_WORKSPACE_GUARD_SHA256}" ] || {
+		echo "::error::Pre-staged post-agent workspace guard is unavailable or changed" >&2
+		return 1
+	}
+	[ -x "${UNTRUSTED_POLLER_SANDBOX}" ] && [ -x "${UNTRUSTED_POLLER_PROVIDER_PROXY}" ] || {
+		echo "::error::Pre-staged untrusted-process runtime is unavailable" >&2
+		return 1
+	}
+}
+
+run_poller_workspace_guard() {
+	local guard_action="$1"
+	local guard_workspace="$2"
+	shift 2
+	prepare_untrusted_poller_runtime || return 1
+	bash "${UNTRUSTED_POLLER_SANDBOX}" \
+		--role workspace-guard --guard-action "${guard_action}" --workspace "${guard_workspace}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+		-- /usr/bin/python3 -I -S "${TRUSTED_POLLER_WORKSPACE_GUARD}" "${guard_action}" \
+		--workspace "${guard_workspace}" "$@"
+}
+
+run_poller_isolated_python() {
+	local validator_workspace="$1"
+	shift
+	prepare_untrusted_poller_runtime || return 1
+	bash "${UNTRUSTED_POLLER_SANDBOX}" \
+		--role validator --workspace "${validator_workspace}" --runtime-dir "${POST_AGENT_ARTIFACT_DIR}" \
+		--writable-output-dir "${POLLER_VALIDATOR_OUTPUT_DIR}" \
+		-- /usr/bin/python3 -I -S "$@"
+}
+
+run_untrusted_poller_codex() {
+  local sandbox_role="$1"
+  local sandbox_workspace="$2"
+  shift 2
+  local sandbox_helper="${UNTRUSTED_POLLER_SANDBOX}"
+	prepare_untrusted_poller_runtime || return 1
+  if [ ! -x "${sandbox_helper}" ]; then
+    echo "::error::Required untrusted-process sandbox is unavailable: ${sandbox_helper}" >&2
+    return 1
+  fi
+  bash "${sandbox_helper}" \
+    --role "${sandbox_role}" \
+    --workspace "${sandbox_workspace}" \
+    --config-format codex \
+    --config "${CODEX_HOME:-${HOME}/.codex}" \
+    --runtime-dir "${RUNTIME_DIR}" \
+    -- "$@"
+}
 if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
   nag_reminder_enabled() { return 1; }
 fi
@@ -184,8 +368,9 @@ worktree_registry_register() {
 
 	worktree_registry_enabled || return 0
 	[ -n "${name}" ] || return 0
-	[ -f "scripts/worktree_registry.sh" ] || return 0
-	bash scripts/worktree_registry.sh register "${name}" "${path}" "${branch}" "${task_id}" "${owner_phase}" || true
+  local trusted_registry
+  trusted_registry="$(poller_trusted_support_file scripts/worktree_registry.sh)" || return 0
+	WORKTREE_REGISTRY_ROOT="${GITHUB_WORKSPACE:-${PWD}}" bash "${trusted_registry}" register "${name}" "${path}" "${branch}" "${task_id}" "${owner_phase}" || true
 }
 
 worktree_registry_deregister() {
@@ -193,8 +378,9 @@ worktree_registry_deregister() {
 
 	worktree_registry_enabled || return 0
 	[ -n "${name}" ] || return 0
-	[ -f "scripts/worktree_registry.sh" ] || return 0
-	bash scripts/worktree_registry.sh deregister "${name}" || true
+	local trusted_registry
+	trusted_registry="$(poller_trusted_support_file scripts/worktree_registry.sh)" || return 0
+	WORKTREE_REGISTRY_ROOT="${GITHUB_WORKSPACE:-${PWD}}" bash "${trusted_registry}" deregister "${name}" || true
 }
 
 # _judge_truncate_pr_diff_file — Truncate a PR diff file in place to at
@@ -213,7 +399,7 @@ _judge_truncate_pr_diff_file()
 	[ -f "${diff_path}" ] || return 1
 	[[ "${max_bytes}" =~ ^[1-9][0-9]*$ ]] || return 1
 	truncated_tmp="$(mktemp)" || return 1
-	if PYTHONDONTWRITEBYTECODE=1 python3 - "${diff_path}" "${max_bytes}" > "${truncated_tmp}" 2>/dev/null <<'PY'
+	if PYTHONDONTWRITEBYTECODE=1 python3 -I - "${diff_path}" "${max_bytes}" > "${truncated_tmp}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
@@ -241,9 +427,10 @@ extract_judge_json_with_status() {
   local parsed_json=""
 
   [ -s "${output_file}" ] || return 0
-  parsed_json="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${output_file}" <<'PY' 2>/dev/null || true
+  parsed_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I - "${output_file}" <<'PY' 2>/dev/null || true
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -349,6 +536,7 @@ emit_judge_lessons_learned_records() {
   local pr_number="${3:-}"
   local judge_json="${4:-}"
   local telemetry_json=""
+  local trusted_python_dir
 
   if ! is_truthy "${AI_MEMORY_ENABLED:-true}" || ! is_truthy "${LESSONS_LEARNED_ENABLED:-true}"; then
     return 0
@@ -357,16 +545,20 @@ emit_judge_lessons_learned_records() {
   if ! command -v python3 >/dev/null 2>&1; then
     return 0
   fi
+  trusted_python_dir="$(poller_trusted_python_dir)" || {
+    echo "::warning::${source_name} lessons-learned write failed; trusted support unavailable" >&2
+    return 0
+  }
 
   telemetry_json="$(printf '%s\n' "${judge_json}" | {
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${PWD}" "${source_name}" "${issue_number}" "${pr_number}" <<'PY'
+    python3 -I - "${PWD}" "${source_name}" "${issue_number}" "${pr_number}" "${trusted_python_dir}" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, sys.argv[5])
 from ai_memory_lib import persist_memory_operation, record_lessons_learned, resolve_memory_root_dir
 
 
@@ -458,7 +650,10 @@ record_orchestrator_lesson_event() {
   if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ]; then
     return 0
   fi
-  if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py append-lesson-event \
+  # The project checkout is untrusted; use the support-ref copy staged outside it.
+  local trusted_lesson_lib
+  trusted_lesson_lib="$(poller_trusted_support_file scripts/orchestrate_lib.py)" || trusted_lesson_lib=""
+  if [ -z "${trusted_lesson_lib}" ] || ! PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_lesson_lib}" append-lesson-event \
     --state-file "${STATE_FILE}" --event-json "${event_json}" >/dev/null; then
     echo "::warning::tracking #${TRACKING_NUM:-?}: could not record orchestrator lesson event; continuing fail-open" >&2
   fi
@@ -556,6 +751,7 @@ lesson_event_json_for_stall() {
 # AI_MEMORY_ENABLED / LESSONS_LEARNED_ENABLED; fail-open; no GitHub API calls.
 emit_orchestrator_completion_lessons() {
   local telemetry_json=""
+  local trusted_python_dir
 
   if ! is_truthy "${AI_MEMORY_ENABLED:-true}" || ! is_truthy "${LESSONS_LEARNED_ENABLED:-true}"; then
     return 0
@@ -566,16 +762,20 @@ emit_orchestrator_completion_lessons() {
   if ! command -v python3 >/dev/null 2>&1; then
     return 0
   fi
+  trusted_python_dir="$(poller_trusted_python_dir)" || {
+    echo "::warning::orchestrator completion lessons write failed; trusted support unavailable" >&2
+    return 0
+  }
 
   telemetry_json="$(
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "${PWD}" "${STATE_FILE}" "${TRACKING_NUM}" <<'PY' 2>&1
+    python3 -I - "${PWD}" "${STATE_FILE}" "${TRACKING_NUM}" "${trusted_python_dir}" <<'PY' 2>&1
 import json
 import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, sys.argv[4])
 from ai_memory_lib import persist_memory_operation, record_lessons_learned, resolve_memory_root_dir
 from orchestrate_lib import build_completion_lessons
 
@@ -1536,6 +1736,28 @@ if ! [[ "${SECURITY_PASS_CONFIDENCE_GATE}" =~ ^[0-9]+$ ]] \
   SECURITY_PASS_CONFIDENCE_GATE="8"
 fi
 
+SECURITY_PASS_LINE_OWNERSHIP="${SECURITY_PASS_LINE_OWNERSHIP:-project-lines}"
+case "${SECURITY_PASS_LINE_OWNERSHIP}" in
+  project-lines|file)
+    ;;
+  *)
+    echo "::warning::SECURITY_PASS_LINE_OWNERSHIP must be project-lines or file; defaulting to project-lines"
+    SECURITY_PASS_LINE_OWNERSHIP="project-lines"
+    ;;
+esac
+
+SECURITY_PASS_OWNERSHIP_CONTEXT_LINES="${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES:-3}"
+if ! [[ "${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" =~ ^[0-9]+$ ]] \
+  || [ "${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" -gt 50 ]; then
+  echo "::warning::SECURITY_PASS_OWNERSHIP_CONTEXT_LINES must be an integer from 0 to 50; defaulting to 3"
+  SECURITY_PASS_OWNERSHIP_CONTEXT_LINES="3"
+fi
+SECURITY_PASS_OWNERSHIP_CONTEXT_LINES="$((10#${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}))"
+
+# Retain the exported setting for compatibility; pre-existing advisories are
+# now all attempted on the audit tick, including when the old cap is zero.
+SECURITY_PASS_ADVISORY_FOLLOWUP_CAP="${SECURITY_PASS_ADVISORY_FOLLOWUP_CAP:-5}"
+
 # Cap on how many times a security-pass fix issue that ended in
 # ai:implementation-failed may be closed and re-issued within one fix
 # cycle before the pass fails closed (recoverable via /re-security-pass).
@@ -2320,16 +2542,18 @@ post_state_comment() {
   # but if the staging list omits it we surface a hard error here rather
   # than silently swallowing pack failures and falling through to stale
   # V1 state on the next poll cycle.
-  if [ ! -f "scripts/orchestrate_state_v2.py" ]; then
-    echo "::error::scripts/orchestrate_state_v2.py is missing from the staged scripts tree; V2 state persistence cannot run for issue #${TRACKING_NUM}. Update the workflow's 'Stage workflow support files' loop to include this helper." >&2
+  local trusted_state_writer
+  if ! trusted_state_writer="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)"; then
+    echo "::error::Verified orchestrate_state_v2.py unavailable for issue #${TRACKING_NUM}." >&2
     return 1
   fi
   local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx chunk_count
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/orchstate_v2_pack.XXXXXX")"
-  if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
+  if ! manifest_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_writer}" pack \
       --state-file "${STATE_FILE}" \
+      --repo "${GITHUB_REPOSITORY}" --issue "${TRACKING_NUM}" \
       --out-dir "${pack_dir}" 2>&1)"; then
-    echo "::error::orchestrate_state_v2 pack failed for issue #${TRACKING_NUM}: ${manifest_json}" >&2
+    echo "::error::orchestrate_state_v2 pack failed for issue #${TRACKING_NUM}" >&2
     rm -rf "${pack_dir}"
     return 1
   fi
@@ -2377,10 +2601,8 @@ _mirror_task_state_files_from_state() {
 		return 0
 	fi
 
-	local script_dir task_state_helper
-	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
-	task_state_helper="${script_dir}/task_state.py"
-	if [ ! -f "${task_state_helper}" ]; then
+	local task_state_helper
+	if ! task_state_helper="$(poller_trusted_support_file scripts/task_state.py)"; then
 		echo "TASK_STATE_WRITE_FAIL helper_missing task_state_py_not_staged" >&2
 		return 0
 	fi
@@ -2390,7 +2612,7 @@ _mirror_task_state_files_from_state() {
 		return 0
 	fi
 
-	if ! python3 "${task_state_helper}" mirror-state --state-file "${STATE_FILE}"; then
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I "${task_state_helper}" --repo-root "${GITHUB_WORKSPACE:-${PWD}}" mirror-state --state-file "${STATE_FILE}"; then
 		echo "TASK_STATE_WRITE_FAIL state_file mirror_state_command_failed" >&2
 	fi
 	return 0
@@ -2733,7 +2955,7 @@ refresh_validation_dispatch_wave_gate() {
     ahead_by="0"
   fi
 
-  wave_status="$(python3 scripts/orchestrate_lib.py check-wave-status \
+  wave_status="$(poller_trusted_orchestrate_lib check-wave-status \
     --state-file "${STATE_FILE}" \
     --labels-json "${labels_json}" \
     --issue-states-json "${issue_states_json}" \
@@ -2768,6 +2990,7 @@ is_valid_orchestrator_state_json() {
 
 extract_latest_valid_orchestrator_state() {
   local comments_json="$1"
+  local state_issue_num="${2:-${TRACKING_NUM:-}}"
   local candidate
   local candidate_body
   local candidate_state
@@ -2778,17 +3001,24 @@ extract_latest_valid_orchestrator_state() {
   EXTRACTED_STATE_FALLBACK_USED="false"
   EXTRACTED_STATE_COMMENT_COUNT=0
 
+  local authenticated_comments trusted_login
+  state_comment_login >/dev/null || return 1
+  authenticated_comments="$(authenticated_state_comments "${state_issue_num}" "${comments_json}")" || return 1
+  trusted_login="${NOOP_CAP_TRUSTED_LOGIN}"
+
   # Try the V2 chunked-chain reader first.  If a complete V2 chain is
   # present (newest write wins), use it; otherwise fall through to the
   # legacy V1 single-comment scan.  This keeps existing tracking issues
   # whose state was last persisted as V1 readable until a V2 write
   # supersedes them.  See scripts/orchestrate_state_v2.py for framing.
-  local _v2_comments_file _v2_payload_file _v2_rc
+  local _v2_comments_file _v2_payload_file _v2_rc trusted_state_reader
   _v2_comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_comments.XXXXXX")"
   _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
   printf '%s' "${comments_json}" > "${_v2_comments_file}"
-  python3 scripts/orchestrate_state_v2.py extract \
-    --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
+  trusted_state_reader="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)" || return 1
+  PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_reader}" extract \
+    --strict-latest --comments-json "${_v2_comments_file}" --repo "${GITHUB_REPOSITORY}" \
+    --issue "${state_issue_num}" --login "${trusted_login}" > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
   if [ "${_v2_rc}" = "0" ] && [ -s "${_v2_payload_file}" ]; then
     # Independent size guard: the extractor enforces its own per-chunk
@@ -2819,6 +3049,13 @@ extract_latest_valid_orchestrator_state() {
     fi
   fi
   rm -f "${_v2_comments_file}" "${_v2_payload_file}"
+  if [ "${_v2_rc}" = "4" ] || [ "${_v2_rc}" = "0" ]; then
+    # A complete but invalid payload is no safer than a torn write.
+    echo "::warning::Newest authenticated V2 state for #${state_issue_num} is incomplete or unusable; refusing older snapshots." >&2
+    return 1
+  fi
+
+  comments_json="${authenticated_comments}"
 
   while IFS= read -r candidate; do
     [ -n "${candidate}" ] || continue
@@ -2850,7 +3087,8 @@ ensure_label_exists() {
     return 0
   fi
 
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file
+  contract_file="$(poller_trusted_support_file .github/ai/label_contract.v1.json)" || return 1
   local color="1d76db"
   local description="AI workflow label"
   local contract_color=""
@@ -2900,7 +3138,9 @@ ensure_label_exists() {
 set_issue_phase_label() {
   local issue_num="$1"
   local phase_label="$2"
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file trusted_labels
+  contract_file="$(poller_trusted_support_file .github/ai/label_contract.v1.json)" || return 1
+  trusted_labels="$(poller_trusted_support_file scripts/ai_labels.py)" || return 1
 
   ensure_label_exists "${phase_label}"
 
@@ -2912,7 +3152,7 @@ set_issue_phase_label() {
   local phase_changes
   local _resolve_err_file
   _resolve_err_file="$(mktemp)"
-  if ! phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
+  if ! phase_changes="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_labels}" resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
     local _resolve_err
     _resolve_err="$(tr '\n' ' ' < "${_resolve_err_file}" 2>/dev/null || true)"
     rm -f "${_resolve_err_file}"
@@ -3012,7 +3252,7 @@ reconcile_tracking_issue_body_from_state() {
 
 	current_hash="$(jq -r '.tracking_body_sync_hash // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
 	if [ -z "${current_hash}" ] && jq -e '(.project_body_snapshot // "") != ""' "${STATE_FILE}" >/dev/null 2>&1; then
-		current_hash="$(python3 - "${STATE_FILE}" <<'PY'
+		current_hash="$(python3 -I - "${STATE_FILE}" <<'PY'
 import hashlib
 import json
 import sys
@@ -3039,7 +3279,7 @@ PY
 	}
 
 	if jq -e '(.project_body_snapshot // "") != ""' "${STATE_FILE}" >/dev/null 2>&1; then
-		if ! python3 scripts/orchestrate_lib.py render-tracking-body \
+		if ! poller_trusted_orchestrate_lib render-tracking-body \
 			--state-file "${STATE_FILE}" > "${desired_body_file}" 2>"${render_err_file}"; then
 			render_err="$(tr '\n' ' ' < "${render_err_file}" 2>/dev/null | head -c 512 || true)"
 			echo "::warning::[tracking-body-sync] failed to render tracking body for issue #${TRACKING_NUM}: ${render_err:-unknown error}" >&2
@@ -3061,7 +3301,7 @@ PY
 			rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
 			return 1
 		fi
-		if ! python3 - "${issue_json_file}" > "${template_body_file}" <<'PY'
+		if ! python3 -I - "${issue_json_file}" > "${template_body_file}" <<'PY'
 import json
 import sys
 
@@ -3081,7 +3321,7 @@ PY
 		if [ -z "${current_hash}" ]; then
 			current_hash="$(sha256sum "${template_body_file}" 2>/dev/null | awk '{print $1}' || true)"
 		fi
-		if ! python3 scripts/orchestrate_lib.py render-tracking-body \
+		if ! poller_trusted_orchestrate_lib render-tracking-body \
 			--state-file "${STATE_FILE}" \
 			--template-body-file "${template_body_file}" > "${desired_body_file}" 2>"${render_err_file}"; then
 			render_err="$(tr '\n' ' ' < "${render_err_file}" 2>/dev/null | head -c 512 || true)"
@@ -3138,7 +3378,9 @@ PY
 				write_label_names_file_from_json "${TRACKING_LABELS:-[]}" "${tracking_labels_file}"
 				pr_labels_json="$(get_issue_labels_json "${final_pr}")"
 				write_label_names_file_from_json "${pr_labels_json}" "${pr_labels_file}"
-				if python3 scripts/check_integration_pr_readiness.py \
+				local trusted_readiness
+				trusted_readiness="$(poller_trusted_support_file scripts/check_integration_pr_readiness.py)" || return 1
+				if PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_readiness}" \
 					--repo "${GITHUB_REPOSITORY}" \
 					--head-ref "${pr_head_ref}" \
 					--head-sha "${pr_head_sha}" \
@@ -3773,7 +4015,9 @@ backfill_validation_fix_issue_merged_label() {
   # `get_issue_labels_json` round-trip.  When empty/omitted the helper
   # falls back to fetching itself, preserving the original contract.
   local cached_labels="${2:-}"
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file trusted_labels
+  contract_file="$(poller_trusted_support_file .github/ai/label_contract.v1.json)" || return 1
+  trusted_labels="$(poller_trusted_support_file scripts/ai_labels.py)" || return 1
   local fix_labels
   local phase_changes
   local edit_args=()
@@ -3801,7 +4045,7 @@ backfill_validation_fix_issue_merged_label() {
 
   edit_args+=(--add-label "ai:merged")
   if [ -f "${contract_file}" ]; then
-    phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
+    phase_changes="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_labels}" resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
     while IFS= read -r remove_label; do
       [ -n "${remove_label}" ] || continue
       if has_label "${fix_labels}" "${remove_label}"; then
@@ -4063,7 +4307,9 @@ reconcile_managed_issue_labels() {
   local issue_state="$3"
   local pr_state="$4"
   local pr_merged="$5"
-  local contract_file=".github/ai/label_contract.v1.json"
+  local contract_file trusted_labels
+  contract_file="$(poller_trusted_support_file .github/ai/label_contract.v1.json)" || return 1
+  trusted_labels="$(poller_trusted_support_file scripts/ai_labels.py)" || return 1
 
   if [ ! -f "${contract_file}" ]; then
     echo "${labels_json}"
@@ -4073,10 +4319,10 @@ reconcile_managed_issue_labels() {
   local labels_csv
   labels_csv="$(echo "${labels_json}" | jq -r 'join(",")' 2>/dev/null || echo "")"
   local repair_json
-  repair_json="$(python3 scripts/ai_labels.py repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
+  repair_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_labels}" repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
 
   local plan_json
-  plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
+  plan_json="$(python3 -I - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
 import json
 import sys
 
@@ -4573,7 +4819,7 @@ resolve_active_orchestrator_context_for_issue() {
     rm -f "${tracking_comments_pages_file}"
 
     tracking_state_json=""
-    if ! extract_latest_valid_orchestrator_state "${tracking_comments}"; then
+    if ! extract_latest_valid_orchestrator_state "${tracking_comments}" "${tracking_num}"; then
       continue
     fi
     tracking_state_json="${EXTRACTED_STATE_JSON}"
@@ -4895,6 +5141,16 @@ ensure_security_pass_state_fields() {
     | .security_pass_last_audited_sha = (
       if (.security_pass_last_audited_sha | type) == "string" then .security_pass_last_audited_sha else "" end
     )
+    | .security_pass_audited_ownership = (
+      if .security_pass_audited_ownership == "project-lines" or .security_pass_audited_ownership == "file"
+      then .security_pass_audited_ownership else "" end
+    )
+    | .security_pass_audited_context_lines = (
+      if (.security_pass_audited_context_lines | type) == "number"
+        and (.security_pass_audited_context_lines | floor) == .security_pass_audited_context_lines
+        and .security_pass_audited_context_lines >= 0 and .security_pass_audited_context_lines <= 50
+      then .security_pass_audited_context_lines else null end
+    )
     | .security_pass_reported_findings = (
       if (.security_pass_reported_findings | type) == "array" then
         .security_pass_reported_findings
@@ -4912,7 +5168,66 @@ ensure_security_pass_state_fields() {
       if (.security_pass_waived_findings | type) == "array" then
         .security_pass_waived_findings
         | map(select(type == "object" and (.finding_id | type) == "string" and (.finding_id | length) > 0))
-        | .[-100:]
+		| map(
+			.causal_scope_schema = (
+			  if (.causal_scope_schema // "") == "security_audit_causal_scope.v1"
+			  then .causal_scope_schema else "" end
+			)
+			| .causal_scope_status = (
+			  if (.causal_scope_status // "") | IN("complete", "indeterminate")
+			  then .causal_scope_status else "indeterminate" end
+			)
+			| .causal_scope_fingerprint = (
+			  if (.causal_scope_fingerprint | type) == "string"
+				and (.causal_scope_fingerprint | test("^sha256:[0-9a-f]{64}$"))
+			  then .causal_scope_fingerprint else "" end
+			)
+			| .causal_scope_files = (
+			  if (.causal_scope_files | type) == "array"
+				and (.causal_scope_files | length) <= 200
+				and all(.causal_scope_files[];
+				  (type == "string") and (length > 0) and (startswith("/") | not)
+				  and ((split("/") | index("..")) == null))
+			  then (.causal_scope_files | unique | sort) else [] end
+			)
+			| .causal_scope_symbol = (
+			  if (.causal_scope_symbol | type) == "string"
+			  then .causal_scope_symbol[0:300] else "" end
+			)
+		)
+      else [] end
+    )
+    | .security_pass_advisory_backlog = (
+      if (.security_pass_advisory_backlog | type) == "array" then
+        .security_pass_advisory_backlog
+        | map(select(
+          type == "object"
+          and (.finding_id | type) == "string" and (.finding_id | length) > 0
+          and (((.waiver_match_key // "") == "") or ((.waiver_match_key | type) == "string" and (.waiver_match_key | test("^sha256:[0-9a-f]{64}$"))))
+          and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
+          and (.severity | IN("critical", "high", "medium", "low"))
+          and (.confidence | type) == "number" and (.confidence | floor) == .confidence and .confidence >= 1 and .confidence <= 10
+          and (.file | type) == "string"
+          and ((.file | gsub("^\\./"; "")) | length > 0)
+          and ((.file | gsub("^\\./"; "")) != ".")
+          and ((.file | startswith("/")) | not)
+          and ((.file | split("/") | index("..")) == null)
+          and (.line | type) == "number" and (.line | floor) == .line and .line > 0
+          and (.exploit_scenario | type) == "string" and (.exploit_scenario | length) > 0
+          and (.recommendation | type) == "string" and (.recommendation | length) > 0
+          and (.audited_head_sha | type) == "string" and (.audited_head_sha | test("^[0-9a-fA-F]{7,64}$"))
+        ))
+        | map(
+          .finding_id = .finding_id[0:200]
+          | .waiver_match_key = (.waiver_match_key // "")
+          | .owasp_or_stride_category = .owasp_or_stride_category[0:500]
+          | .exploit_scenario = .exploit_scenario[0:2000]
+          | .recommendation = .recommendation[0:2000]
+        )
+        | sort_by(
+            ({critical: 0, high: 1, medium: 2, low: 3}[.severity] // 4),
+            (-.confidence), .file, .line, .waiver_match_key
+          )
       else [] end
     )
     | .security_pass_followup_issues = (
@@ -4921,9 +5236,9 @@ ensure_security_pass_state_fields() {
         | map(select(
           type == "object"
           and (.finding_id | type) == "string" and (.finding_id | length) > 0
+          and (((.waiver_match_key // "") == "") or ((.waiver_match_key | type) == "string" and (.waiver_match_key | test("^sha256:[0-9a-f]{64}$"))))
           and (.issue | type) == "number" and (.issue | floor) == .issue and .issue > 0
         ))
-        | .[-100:]
       else [] end
     )
     | .security_pass_followups_merge_checked = (
@@ -4980,10 +5295,74 @@ ensure_security_pass_state_fields() {
 security_pass_current_head_is_valid() {
   local integration_head_sha="$1"
   [ -n "${integration_head_sha}" ] || return 1
+  security_pass_policy_matches_current || return 1
   jq -e --arg head_sha "${integration_head_sha}" '
     .security_pass_status == "passed"
     and .security_pass_head_sha == $head_sha
   ' "${STATE_FILE}" >/dev/null 2>&1
+}
+
+security_pass_policy_matches_current() {
+  jq -e --arg ownership "${SECURITY_PASS_LINE_OWNERSHIP}" \
+    --argjson context "${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" '
+    .security_pass_audited_ownership == $ownership
+    and .security_pass_audited_context_lines == $context
+  ' "${STATE_FILE}" >/dev/null 2>&1
+}
+
+# security_pass_rebind_if_no_new_project_lines <head_sha> <merge_base_sha> <default_ref>
+#
+# A clean pass is still valid after a default->integration sync merge when the
+# candidate tree exactly equals Git's conflict-free merge of the audited head
+# and the refreshed default head. This checks resulting content rather than a
+# combined diff, which omits conflict resolutions that select either parent.
+# Missing objects, ancestry ambiguity, conflicts, parse errors, or a tree
+# mismatch fail closed to the ordinary model re-audit.
+security_pass_rebind_if_no_new_project_lines() {
+  local head_sha="$1"
+  local merge_base_sha="$2"
+  local default_ref="$3"
+  local last_audited_sha default_sha expected_tree head_tree merge_tree_output commits_file commit_sha parents_line
+
+  security_pass_policy_matches_current || return 1
+
+  last_audited_sha="$(jq -r '.security_pass_last_audited_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  [ -n "${last_audited_sha}" ] || return 1
+  git cat-file -e "${last_audited_sha}^{commit}" 2>/dev/null || return 1
+  git cat-file -e "${head_sha}^{commit}" 2>/dev/null || return 1
+  git cat-file -e "${merge_base_sha}^{commit}" 2>/dev/null || return 1
+  default_sha="$(git rev-parse --verify "${default_ref}^{commit}" 2>/dev/null)" || return 1
+  git merge-base --is-ancestor "${last_audited_sha}" "${head_sha}" 2>/dev/null || return 1
+  git merge-base --is-ancestor "${default_sha}" "${head_sha}" 2>/dev/null || return 1
+  commits_file="${RUNTIME_DIR}/security_pass_rebind_commits_${TRACKING_NUM}.txt"
+  git rev-list "${head_sha}" "^${last_audited_sha}" "^${default_sha}" > "${commits_file}" 2>/dev/null || return 1
+  [ -s "${commits_file}" ] || return 1
+  while IFS= read -r commit_sha; do
+    [[ "${commit_sha}" =~ ^[0-9a-f]{40,64}$ ]] || return 1
+    parents_line="$(git rev-list --parents -n 1 "${commit_sha}" 2>/dev/null)" || return 1
+    [ "$(printf '%s\n' "${parents_line}" | awk '{print NF}')" -ge 3 ] || return 1
+  done < "${commits_file}"
+  merge_tree_output="$(git merge-tree --write-tree "${last_audited_sha}" "${default_sha}" 2>/dev/null)" || return 1
+  expected_tree="$(printf '%s\n' "${merge_tree_output}" | head -n1)"
+  [[ "${expected_tree}" =~ ^[0-9a-f]{40,64}$ ]] || return 1
+  [ "$(printf '%s\n' "${merge_tree_output}" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 1 ] || return 1
+  head_tree="$(git rev-parse --verify "${head_sha}^{tree}" 2>/dev/null)" || return 1
+  [ "${expected_tree}" = "${head_tree}" ] || return 1
+
+  if ! jq --arg head_sha "${head_sha}" '
+    .status = (if .status == "security-pass" then "in_progress" else .status end)
+    | .security_pass_status = "passed"
+    | .security_pass_head_sha = $head_sha
+    | .security_pass_last_audited_sha = $head_sha
+    | .security_pass_active_fix_issues = []
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    rm -f "${STATE_FILE}.tmp"
+    return 1
+  fi
+  reconcile_tracking_body_after_security_pass_transition
+  post_state_comment || true
+  echo "SECURITY_PASS_REBOUND tracking_issue=${TRACKING_NUM} from=${last_audited_sha} to=${head_sha} reason=deterministic_merge_tree_match"
+  return 0
 }
 
 # reconcile_tracking_body_after_security_pass_transition
@@ -5061,11 +5440,12 @@ Completion remains gated. The scheduled poller will retry automatically."
 # non-zero exit means the findings file was unreadable or malformed.
 render_security_pass_findings_table() {
   local findings_file="$1"
-  python3 - "${findings_file}" <<'PY'
+  python3 -I - "${findings_file}" <<'PY'
 from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -5598,7 +5978,7 @@ create_security_pass_fix_issue() {
   if ! render_security_pass_findings_table "${findings_file}" > "${findings_table_file}"; then
     return 1
   fi
-  if ! python3 - "${findings_table_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
+  if ! python3 -I - "${findings_table_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
 from __future__ import annotations
 
 import sys
@@ -5726,7 +6106,7 @@ PY
   fi
   post_tracking_comment "## 🔒 Project security pass blocked
 
-The security pass found blocking issues and ${security_pass_fix_action} #${issue_number} for cycle $((completed_cycles + 1))/${MAX_SECURITY_PASS_CYCLES}. Completion will resume only after its PR merges and a clean re-audit passes."
+The security pass found blocking issues and ${security_pass_fix_action} #${issue_number} for cycle $((completed_cycles + 1))/${MAX_SECURITY_PASS_CYCLES}. Completion will resume only after its PR merges and a clean re-audit passes.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
   COMPLETION_STATUS_STATE_CHANGED="false"
   update_completion_status_comment "waiting" \
     "## Completion status"$'\n\n'"**State:** \`security-pass-fixing\`"$'\n\n'"Security-pass fix issue #${issue_number} is in the normal delivery pipeline. Completion remains gated until it merges and a clean current-head re-audit passes." \
@@ -5782,9 +6162,11 @@ security_pass_findings_rows_json() {
 # security_pass_apply_waivers_to_findings <findings_file>
 #
 # Poller-side enforcement of security_pass_waived_findings on an engine
-# result: drops re-reports of accepted findings (exact finding_id, or the
-# same file and category within SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of
-# the waived line) and rewrites the findings file in place with the kept
+# result: drops re-reports only when their deterministic provenance-bound
+# waiver_match_key exactly matches an authoritative waiver row. Model IDs and
+# location proximity are display/reconciliation hints, never authorization.
+# Legacy keyless waivers remain readable but cannot suppress a finding. Rewrites
+# the findings file in place with the kept
 # rows and an updated counts.kept / counts.suppressed_waived.  The engine
 # applies the same rule when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this
 # keeps an older staged engine honest.  Fail-open: any error leaves the file
@@ -5795,43 +6177,63 @@ security_pass_apply_waivers_to_findings() {
   waived_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
   [[ "${waived_count}" =~ ^[0-9]+$ ]] || waived_count=0
   [ "${waived_count}" -gt 0 ] || return 0
-  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}" <<'PY'
+	local current_waiver_head causality_helper
+	current_waiver_head="$(git rev-parse HEAD 2>/dev/null || true)"
+	causality_helper="$(poller_trusted_support_file scripts/security_audit_causality.py)" || return 1
+  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 -I - "${findings_file}" "${STATE_FILE}" "${current_waiver_head}" "${causality_helper}" "${SECURITY_PASS_LINE_OWNERSHIP}" <<'PY'
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 findings_path = Path(sys.argv[1])
 state_path = Path(sys.argv[2])
-line_window = int(sys.argv[3])
+current_head_sha = sys.argv[3]
+causality_helper = Path(sys.argv[4])
+ownership_mode = sys.argv[5]
 
 payload = json.loads(findings_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8"))
-waivers = [row for row in state.get("security_pass_waived_findings", []) if isinstance(row, dict)]
-
-
-def norm_category(value: object) -> str:
-	return " ".join(str(value or "").lower().split())
+waivers = [
+	row for row in state.get("security_pass_waived_findings", [])
+	if isinstance(row, dict)
+	and not (row.get("source") == "preexisting" and row.get("waived_by") == "line-ownership"
+		and ownership_mode == "file")
+]
 
 
 def waiver_for(finding: dict) -> str | None:
-	finding_id = str(finding.get("finding_id") or "")
+	finding_key = str(finding.get("waiver_match_key") or "")
 	for waiver in waivers:
-		waived_id = str(waiver.get("finding_id") or "")
-		if waived_id and waived_id == finding_id:
-			return waived_id
-		waived_line = waiver.get("line")
-		if (
-			str(waiver.get("file") or "")
-			and str(waiver.get("file") or "") == str(finding.get("file") or "")
-			and norm_category(waiver.get("owasp_or_stride_category"))
-			and norm_category(waiver.get("owasp_or_stride_category")) == norm_category(finding.get("owasp_or_stride_category"))
-			and isinstance(waived_line, int)
-			and not isinstance(waived_line, bool)
-			and abs(int(waived_line) - int(finding.get("line") or 0)) <= line_window
-		):
-			return waived_id or "(unnamed waiver)"
+		if str(waiver.get("waiver_match_key") or "") != finding_key:
+			continue
+		with tempfile.TemporaryDirectory(prefix="poller-waiver-") as temporary_directory:
+			finding_file = Path(temporary_directory) / "finding.json"
+			waiver_file = Path(temporary_directory) / "waiver.json"
+			finding_file.write_text(json.dumps(finding, ensure_ascii=True), encoding="utf-8")
+			waiver_file.write_text(json.dumps(waiver, ensure_ascii=True), encoding="utf-8")
+			validation = subprocess.run(
+				[
+					sys.executable, "-I", str(causality_helper), "revalidate-waiver",
+					"--repo", ".",
+					"--audited-head", str(waiver.get("audited_head_sha") or ""),
+					"--current-head", current_head_sha,
+					"--finding-json", str(finding_file),
+					"--waiver-json", str(waiver_file),
+				],
+				capture_output=True,
+				text=True,
+				check=False,
+			)
+			try:
+				validation_payload = json.loads(validation.stdout)
+			except json.JSONDecodeError:
+				continue
+			if validation.returncode == 0 and validation_payload.get("valid") is True:
+				return finding_key
 	return None
 
 
@@ -5866,21 +6268,39 @@ PY
 
 # security_pass_record_waivers <waivers_json_array>
 #
-# Upsert waiver rows (by finding_id) into security_pass_waived_findings,
-# drop the same ids from security_pass_reported_findings so the next delta
-# audit does not ask the engine to re-verify them, and keep the array
-# bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
-# severity, justification, source, waived_by, waived_at_cycle, issue}.
+# Upsert waiver rows by waiver_match_key into security_pass_waived_findings,
+# drop the same keys from security_pass_reported_findings so the next delta
+# audit does not ask the engine to re-verify them. The untruncated authorization
+# history is persisted through the chunked V2 state chain. Rows carry
+# {finding_id, file, line, owasp_or_stride_category, severity, justification,
+# source, waived_by, waived_at_cycle, issue}.
 security_pass_record_waivers() {
-  local waivers_json="$1"
-  if ! jq --argjson waivers "${waivers_json}" '
-    (.security_pass_waived_findings // []) as $existing
-    | ($waivers | map(.finding_id)) as $ids
+  local waivers_json="$1" waivers_file
+  waivers_file="${RUNTIME_DIR}/security_pass_waivers_${TRACKING_NUM}.json"
+  printf '%s\n' "${waivers_json}" > "${waivers_file}"
+  if ! jq --slurpfile waivers "${waivers_file}" '
+    ($waivers[0] // [] | map(select(
+      (.waiver_match_key | type) == "string"
+      and (.waiver_match_key | test("^sha256:[0-9a-f]{64}$"))
+    ))) as $waiver_rows
+    | if ($waiver_rows | length) != (($waivers[0] // []) | length) then error("invalid waiver_match_key") else . end
+    | (.security_pass_waived_findings // []) as $existing
+    | (.security_pass_followup_issues // []) as $followups
+    | ($waiver_rows | map(.waiver_match_key)) as $keys
     | .security_pass_waived_findings = (
-        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waivers) | .[-100:]
+        [$existing[] | select(((.waiver_match_key // "") | IN($keys[])) | not)]
+        + [$waiver_rows[] as $row
+          | ([$existing[] | select(.waiver_match_key == $row.waiver_match_key)] | last) as $old
+          | ([$followups[] | select(.waiver_match_key == $row.waiver_match_key) | .issue] | last) as $filed_issue
+          | if $row.source == "preexisting" and $row.waived_by == "line-ownership" then
+              if $old.source == "judge" or $old.source == "operator" then $old
+              else $row | .issue = (if ($filed_issue | type) == "number" then $filed_issue else ($old.issue // null) end)
+              end
+            else $row
+            end]
       )
     | .security_pass_reported_findings = (
-        [(.security_pass_reported_findings // [])[] | select((.finding_id | IN($ids[])) | not)]
+        [(.security_pass_reported_findings // [])[] | select(((.waiver_match_key // "") | IN($keys[])) | not)]
       )
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     rm -f "${STATE_FILE}.tmp"
@@ -5895,8 +6315,9 @@ security_pass_record_waivers() {
 # finding and leave its number in SECURITY_PASS_ADVISORY_ISSUE_NUMBER (empty
 # when nothing was filed).  Dedupes on security_pass_followup_issues in
 # state (one cheap jq read, no API call); the body carries the weekly
-# audit's `<!-- ai:security-finding:<id> -->` marker so the scheduled audit's
-# own dedupe recognises it, plus `<!-- security-pass-advisory:<tracking>:<id> -->`.
+# audit's `<!-- ai:security-finding:<id> -->` marker plus the provenance-keyed
+# advisory marker. Remote reconciliation requires the canonical generated
+# footer; legacy finding-id rows are reconciled only through authoritative state.
 # API cost: one paginated reconciliation search per tracking issue per poller
 # process, one `gh issue create` per new accepted finding, and the first cached
 # `gh label create` attempt for `ai:security`. Fail-open: lookup/create failures
@@ -5912,18 +6333,42 @@ create_security_pass_advisory_followup() {
   # the body tells the pipeline the cited code is already on the default
   # branch; empty on the legacy judge-time filing path.
   local merged_pr="${6:-}"
-  local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
+  local finding_id finding_file waiver_match_key existing_issue body_file title issue_url issue_number advisory_marker legacy_advisory_marker remote_followups_json advisory_cache_key
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
+  finding_file="$(printf '%s' "${finding_json}" | jq -r '.file // ""' 2>/dev/null || true)"
+  waiver_match_key="$(printf '%s' "${finding_json}" | jq -r '.waiver_match_key // ""' 2>/dev/null || true)"
   [ -n "${finding_id}" ] || return 0
-  existing_issue="$(jq -r --arg id "${finding_id}" '
-    [(.security_pass_followup_issues // [])[] | select(.finding_id == $id) | .issue] | last // empty
+  if ! [[ "${waiver_match_key}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    if [ -n "${waiver_match_key}" ]; then
+      echo "::warning::Advisory follow-up ${finding_id} has an invalid waiver key; retaining it for retry."
+      return 0
+    fi
+    if ! [[ "${head_sha}" =~ ^[0-9a-f]{40,64}$ ]]; then
+      echo "::warning::Legacy advisory ${finding_id} has no full audited commit; retaining it for retry."
+      return 0
+    fi
+    waiver_match_key="sha256:$(printf '%s\0%s\0%s' "${TRACKING_NUM}" "${head_sha}" "${finding_json}" | sha256sum | awk '{print $1}')"
+    finding_json="$(printf '%s' "${finding_json}" | jq -c --arg key "${waiver_match_key}" '.waiver_match_key = $key')" || return 0
+    echo "::notice::Migrated legacy keyless advisory ${finding_id} to a non-suppressing follow-up key."
+  fi
+  advisory_cache_key="${TRACKING_NUM}:${waiver_match_key}"
+  existing_issue="${_SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]:-}"
+  if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
+    SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
+    return 0
+  fi
+  existing_issue="$(jq -r --arg key "${waiver_match_key}" '
+    [(.security_pass_followup_issues // [])[]
+      | select(.waiver_match_key == $key)
+      | .issue] | last // empty
   ' "${STATE_FILE}" 2>/dev/null || true)"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
     SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
     return 0
   fi
-  advisory_marker="<!-- security-pass-advisory:${TRACKING_NUM}:${finding_id} -->"
+  advisory_marker="<!-- security-pass-advisory-key:${TRACKING_NUM}:${waiver_match_key} -->"
+  legacy_advisory_marker="<!-- security-pass-advisory:${TRACKING_NUM}:${finding_id} -->"
   if [ -z "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]+set}" ]; then
     # The state cache and weekly-audit lookup cannot detect an issue whose
     # create succeeded but whose response/state write was lost. This single
@@ -5931,17 +6376,22 @@ create_security_pass_advisory_followup() {
     # fails open to an empty cache; subsequent findings reuse the result.
     remote_followups_json="$(gh_retry gh api --method GET --paginate --slurp "search/issues" \
       -f per_page=100 \
-      -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security security-pass-advisory:${TRACKING_NUM} in:body" 2>/dev/null || echo '[]')"
+      -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security (\"security-pass-advisory-key:${TRACKING_NUM}\" OR \"security-pass-advisory:${TRACKING_NUM}\") in:body" 2>/dev/null || echo '[]')"
     _SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]="${remote_followups_json}"
   fi
-  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg marker "${advisory_marker}" '
-    [if type == "array" then .[].items[]? else .items[]? end | select((.body // "") | contains($marker)) | .number]
+  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg id "${finding_id}" --arg key "${waiver_match_key}" --arg marker "${advisory_marker}" --arg file "${finding_file}" --arg head "${head_sha}" '
+    [if type == "array" then .[].items[]? else .items[]? end
+      | select(((.body // "") | gsub("\r\n"; "\n")) as $body
+          | ($body | startswith("<!-- ai:security-finding:\($id) -->\n<!-- ai:security-waiver-key:\($key) -->\n\($marker)\n"))
+            and ($body | endswith("---\n**Generated security advisory metadata**\n- Schema: `generated-security-advisory.v1`\n- Waiver match key: `\($key)`\n- Audited commit: `\($head)`\n- Cited file: `\($file)`\nfiles_touched:\n  - \($file)\n")))
+      | .number]
     | first // empty
   ' 2>/dev/null || true)"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
-    if ! jq --arg id "${finding_id}" --argjson issue "${existing_issue}" '
-      .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(.finding_id != $id)] + [{finding_id: $id, issue: $issue}] | .[-100:])
-      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end]
+    if ! jq --arg id "${finding_id}" --arg key "${waiver_match_key}" --argjson issue "${existing_issue}" '
+      def same_advisory: .waiver_match_key == $key;
+      .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(same_advisory | not)] + [{finding_id: $id, waiver_match_key: $key, issue: $issue}])
+      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if same_advisory then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end]
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
       rm -f "${STATE_FILE}.tmp"
       echo "::warning::Found advisory follow-up #${existing_issue} for security-pass finding ${finding_id}, but could not reconcile it into state."
@@ -5951,13 +6401,13 @@ create_security_pass_advisory_followup() {
   fi
   body_file="${RUNTIME_DIR}/security_pass_advisory_${TRACKING_NUM}_$(printf '%s' "${finding_id}" | tr -c 'A-Za-z0-9._-' '_').md"
   printf '%s\n' "${finding_json}" > "${body_file}.finding.json"
-  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
+  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 -I - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
 from __future__ import annotations
 
 import json
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 finding = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 body_path = Path(sys.argv[2])
@@ -5972,21 +6422,44 @@ merged_pr = sys.argv[8] if len(sys.argv) > 8 else ""
 def prose(value: object) -> str:
 	text = " ".join(str(value or "").split())
 	# Audit- and judge-generated prose must not notify users or auto-link issues.
-	return re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b"))
+	text = text.replace("**Generated security advisory metadata**", "[metadata marker removed]")
+	text = text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+	text = re.sub(r"(?i)(?:ai:security-(?:finding|waiver-key)|security-pass-advisory(?:-key)?):", "[security marker removed]:", text)
+	return re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b").replace("`", ""))
 
 
 finding_id = prose(finding.get("finding_id"))
-location = f"{finding.get('file')}:{finding.get('line')}"
+waiver_match_key = str(finding.get("waiver_match_key") or "")
+file_name = str(finding.get("file") or "")
+line_number = finding.get("line")
+file_path = PurePosixPath(file_name)
+if not re.fullmatch(r"sha256:[0-9a-f]{64}", waiver_match_key):
+	raise SystemExit("invalid waiver_match_key")
+if file_path.is_absolute() or ".." in file_path.parts or not file_name or "`" in file_name:
+	raise SystemExit("invalid cited file")
+if not isinstance(line_number, int) or isinstance(line_number, bool) or line_number < 1:
+	raise SystemExit("invalid cited line")
+if not re.fullmatch(r"[0-9a-f]{40,64}", head_sha):
+	raise SystemExit("invalid audited head")
+location = f"{file_name}:{line_number}"
 accepted_by = {
 	"judge": "the orchestrator's security-pass exhaustion judge",
 	"operator": "an operator (`/security-pass-waive`)",
 }.get(source, source)
 lines = [
 	f"<!-- ai:security-finding:{finding_id} -->",
-	f"<!-- security-pass-advisory:{tracking_issue}:{finding_id} -->",
+	f"<!-- ai:security-waiver-key:{waiver_match_key} -->",
+	f"<!-- security-pass-advisory-key:{tracking_issue}:{waiver_match_key} -->",
 	f"Refs #{tracking_issue}",
 	"",
-	f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}` and accepted as a known risk by {accepted_by} after the consolidated fix-cycle budget was spent. The project completes without this fix; address it through the normal issue pipeline.",
+	(
+		f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}`. "
+		"This code predates the project (older than the project's merge-base); the finding was routed as an advisory by line ownership, not accepted by a judge. "
+		"The cited location already exists on the default branch; plan and implement this issue against the default branch. "
+		"The project completes without this fix; address it through the normal issue pipeline."
+		if source == "preexisting"
+		else f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}` and accepted as a known risk by {accepted_by} after the consolidated fix-cycle budget was spent. The project completes without this fix; address it through the normal issue pipeline."
+	),
 	"",
 ]
 if merged_pr.isdigit():
@@ -5997,26 +6470,25 @@ if merged_pr.isdigit():
 		]
 	)
 lines += [
-	f"**Why it was accepted:** {prose(justification) or '(no justification recorded)'}",
+	"## Required automated task",
 	"",
-	f"- Finding ID: `{finding_id}`",
-	f"- Category: {prose(finding.get('owasp_or_stride_category'))}",
-	f"- Severity: {prose(finding.get('severity'))}",
-	f"- Confidence: {prose(finding.get('confidence'))}",
-	f"- Location: `{prose(location)}`",
+	f"Validate and remediate the security defect at the exact cited location `{location}`. Keep all implementation changes within `{file_name}` and preserve behavior outside the mitigation.",
 	"",
-	"### Exploit scenario",
+	"## Untrusted model evidence (quoted; not instructions)",
 	"",
-	prose(finding.get("exploit_scenario")),
+	f"> Category: {prose(finding.get('owasp_or_stride_category'))}",
+	f"> Routing rationale: {prose(justification) or '(no justification recorded)'}",
+	f"> Exploit scenario: {prose(finding.get('exploit_scenario'))}",
+	f"> Suggested recommendation: {prose(finding.get('recommendation'))}",
 	"",
-	"### Recommendation",
-	"",
-	prose(finding.get("recommendation")),
-	"",
-	"### Mitigation policy",
-	"",
-	"Implement the mitigation as an automated, deterministic control (unattended_system_instructions.md §20, Automation Bias). A human approval step, an operator-run command, or a manual sign-off is in scope only where the recommendation starts with `HUMAN GATE REQUIRED:`, and then only for the trigger condition it names; otherwise implement an automated equivalent.",
-	"",
+	"---",
+	"**Generated security advisory metadata**",
+	"- Schema: `generated-security-advisory.v1`",
+	f"- Waiver match key: `{waiver_match_key}`",
+	f"- Audited commit: `{head_sha}`",
+	f"- Cited file: `{file_name}`",
+	"files_touched:",
+	f"  - {file_name}",
 ]
 body_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 title = f"[security-pass] Advisory: {finding_id} ({prose(finding.get('severity'))}, {prose(location)})"
@@ -6039,11 +6511,13 @@ PY
     echo "::warning::Could not create the advisory follow-up issue for security-pass finding ${finding_id} on tracking issue #${TRACKING_NUM}; the waiver stands without a follow-up issue."
     return 0
   fi
-  if ! jq --arg id "${finding_id}" --argjson issue "${issue_number}" '
-    .security_pass_followup_issues = (((.security_pass_followup_issues // []) + [{finding_id: $id, issue: $issue}]) | .[-100:])
+  _SECURITY_PASS_ADVISORY_CREATED_ISSUE_CACHE[${advisory_cache_key}]="${issue_number}"
+  if ! jq --arg id "${finding_id}" --arg key "${waiver_match_key}" --argjson issue "${issue_number}" '
+    def same_advisory: .waiver_match_key == $key;
+    .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(same_advisory | not)] + [{finding_id: $id, waiver_match_key: $key, issue: $issue}])
     | .security_pass_waived_findings = [
         (.security_pass_waived_findings // [])[]
-        | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
+        | if same_advisory then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
       ]
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     rm -f "${STATE_FILE}.tmp"
@@ -6051,6 +6525,69 @@ PY
   fi
   echo "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=${TRACKING_NUM} finding=${finding_id} issue=${issue_number} source=${source}"
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${issue_number}"
+  return 0
+}
+
+# security_pass_file_advisory_findings <integration_branch> <head_sha>
+#
+# File every queued pre-existing-line finding in severity/confidence order.
+# Each row is attempted at most once per tracking issue in this process;
+# failed creates remain queued for the next poll, when marker/state dedupe
+# reconciles responses lost after a successful create. Returns 0 always.
+security_pass_file_advisory_findings() {
+  local integration_branch="$1"
+  local head_sha="$2"
+  local pending_json row_json finding_json finding_id waiver_match_key audited_head_sha justification attempt_key
+  local queued_count routed_count filed_count=0 filed_issues
+
+  # A queued automatic advisory from an older policy is not authorization to file it.
+  [ "${SECURITY_PASS_LINE_OWNERSHIP}" != "file" ] || return 0
+  security_pass_policy_matches_current || return 0
+
+  pending_json="$(jq -c '.security_pass_advisory_backlog // []' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+
+  while IFS= read -r row_json; do
+    [ -n "${row_json}" ] || continue
+    attempt_key="$(printf '%s' "${row_json}" | sha256sum | cut -d' ' -f1)"
+    [ -z "${_SECURITY_PASS_ADVISORY_ATTEMPTED_ROWS[${attempt_key}]+set}" ] || continue
+    _SECURITY_PASS_ADVISORY_ATTEMPTED_ROWS[${attempt_key}]=1
+    finding_json="$(printf '%s' "${row_json}" | jq -c 'del(.audited_head_sha)')"
+    finding_id="$(printf '%s' "${row_json}" | jq -r '.finding_id')"
+    waiver_match_key="$(printf '%s' "${row_json}" | jq -r '.waiver_match_key // ""')"
+    audited_head_sha="$(printf '%s' "${row_json}" | jq -r '.audited_head_sha // empty')"
+    [ -n "${audited_head_sha}" ] || audited_head_sha="${head_sha}"
+    justification="The cited line predates this project's merge-base and already exists on the default branch; routed as a non-blocking advisory by line ownership."
+    create_security_pass_advisory_followup "${finding_json}" "${integration_branch}" "${audited_head_sha}" "${justification}" "preexisting"
+    if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]] \
+      && jq -e --arg id "${finding_id}" --arg key "${waiver_match_key}" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
+        any((.security_pass_followup_issues // [])[];
+          (($key != "" and .waiver_match_key == $key) or ($key == "" and .finding_id == $id)) and .issue == $issue)
+      ' "${STATE_FILE}" >/dev/null 2>&1; then
+      filed_count=$((filed_count + 1))
+      SECURITY_PASS_ADVISORY_FILED_ISSUES="${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}${SECURITY_PASS_ADVISORY_FILED_ISSUES:+, }#${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+      security_pass_mark_followup_merge_checked "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" || \
+        echo "::warning::Could not record pre-existing-code advisory follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER} as merge-checked on tracking issue #${TRACKING_NUM}."
+      if ! jq --arg id "${finding_id}" --arg key "${waiver_match_key}" '
+        .security_pass_advisory_backlog = [(.security_pass_advisory_backlog // [])[]
+          | select((($key != "" and .waiver_match_key == $key) or ($key == "" and .finding_id == $id)) | not)]
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+        rm -f "${STATE_FILE}.tmp"
+        echo "::warning::Could not remove filed pre-existing-code advisory ${finding_id} from the backlog for tracking issue #${TRACKING_NUM}; marker dedupe will reconcile it next tick."
+      fi
+    fi
+  done < <(printf '%s' "${pending_json}" | jq -c '.[]')
+
+  queued_count="$(jq -r '.security_pass_advisory_backlog // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${queued_count}" =~ ^[0-9]+$ ]] || queued_count=0
+  routed_count="${SECURITY_PASS_ADVISORY_ROUTED_COUNT:-0}"
+  [[ "${routed_count}" =~ ^[0-9]+$ ]] || routed_count=0
+  if [ "${routed_count}" -eq 0 ]; then
+    routed_count="${filed_count}"
+  fi
+  filed_issues="${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}"
+  if [ "${routed_count}" -gt 0 ]; then
+    SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX=" ${routed_count} finding(s) on pre-existing code were routed as non-blocking \`ai:security\` follow-ups: ${filed_issues:-none filed this tick} (${queued_count} still queued)."
+  fi
   return 0
 }
 
@@ -6102,10 +6639,10 @@ security_pass_file_deferred_advisory_followups() {
       # issue; when it returned an issue it already knew from
       # security_pass_followup_issues the row would stay pending forever, so
       # settle it here as well (idempotent).
-      if ! jq --arg id "$(printf '%s' "${row_json}" | jq -r '.finding_id')" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
+      if ! jq --arg id "$(printf '%s' "${row_json}" | jq -r '.finding_id')" --arg key "$(printf '%s' "${row_json}" | jq -r '.waiver_match_key // ""')" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
         .security_pass_waived_findings = [
           (.security_pass_waived_findings // [])[]
-          | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
+          | if (($key != "" and .waiver_match_key == $key) or ($key == "" and ((.waiver_match_key // "") == "") and .finding_id == $id)) then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
         ]
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
         rm -f "${STATE_FILE}.tmp"
@@ -6288,7 +6825,13 @@ security_pass_exhaustion_judge() {
     echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=rounds_exhausted rounds=${judge_rounds} cap=${MAX_SECURITY_PASS_JUDGE_ROUNDS}"
     return 1
   fi
-  if [ ! -f prompts/mode-judge-security-pass-exhaustion.txt ] || [ ! -f scripts/write_codex_config.sh ]; then
+  local trusted_judge_config trusted_judge_heartbeat trusted_judge_renderer trusted_judge_prompt trusted_judge_catalog
+  trusted_judge_config="$(poller_trusted_support_file scripts/write_codex_config.sh)" || return 1
+  trusted_judge_heartbeat="$(poller_trusted_support_file scripts/codex_heartbeat.sh)" || return 1
+  trusted_judge_renderer="$(poller_trusted_support_file scripts/render_prompt.sh)" || return 1
+  trusted_judge_prompt="$(poller_trusted_support_file prompts/mode-judge-security-pass-exhaustion.txt)" || return 1
+  trusted_judge_catalog="$(poller_trusted_support_file scripts/codex_model_catalog.json)" || return 1
+  if [ ! -f "${trusted_judge_prompt}" ]; then
     echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=prompt_unavailable"
     return 1
   fi
@@ -6362,7 +6905,7 @@ security_pass_exhaustion_judge() {
     echo
     echo "=== SECURITY PASS EXHAUSTION JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-security-pass-exhaustion.txt
+    SEMBLE_PREFETCH="${semble_prefetch}" bash "${trusted_judge_renderer}" "${trusted_judge_prompt}"
     echo
     echo "=== SECURITY PASS EXHAUSTION DIAGNOSTICS JSON ==="
     echo
@@ -6370,23 +6913,33 @@ security_pass_exhaustion_judge() {
   } > "${prompt_file}"
 
   effective_judge_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"
-  if ! bash scripts/write_codex_config.sh --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" >/dev/null 2>"${error_file}"; then
+  if ! bash "${trusted_judge_config}" --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" --catalog-path "${trusted_judge_catalog}" >/dev/null 2>"${error_file}"; then
     echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=codex_config_failed"
     return 1
   fi
 
   judge_success="false"
+	if ! prepare_untrusted_poller_runtime; then
+		echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=sandbox_runtime_unavailable"
+		return 1
+	fi
   for attempt in 1 2; do
     : > "${output_file}"
     if [ -n "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
       printf '%s\n' "${MOCK_SECURITY_PASS_JUDGE_JSON}" > "${output_file}"
     else
       sanitize_codex_prompt_file "${prompt_file}"
-      bash scripts/codex_heartbeat.sh \
+      bash "${trusted_judge_heartbeat}" \
         --phase "orchestrate-security-pass-judge" \
         --stdout-file "${output_file}" \
         --stderr-file "${error_file}" \
-        -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
+        -- bash "${UNTRUSTED_POLLER_SANDBOX}" \
+          --role judge \
+          --workspace "${PWD}" \
+          --config-format codex \
+          --config "${CODEX_HOME:-${HOME}/.codex}" \
+          --runtime-dir "${RUNTIME_DIR}" \
+          -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
           --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true
     fi
     judge_json="$(_robust_parse_json_file "${output_file}")"
@@ -6494,16 +7047,23 @@ ${decisions_table}}"
       --argjson defer "$([ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ] && echo true || echo false)" '
       [.decisions[] | select(.action == "accept_with_followup") | {
         finding_id: .finding.finding_id,
+        waiver_match_key: .finding.waiver_match_key,
         file: .finding.file,
         line: .finding.line,
         owasp_or_stride_category: .finding.owasp_or_stride_category,
-        severity: .finding.severity,
-        justification: .justification,
+	        severity: .finding.severity,
+	        causal_scope_schema: .finding.causal_scope_schema,
+	        causal_scope_status: .finding.causal_scope_status,
+	        causal_scope_fingerprint: .finding.causal_scope_fingerprint,
+	        causal_scope_files: .finding.causal_scope_files,
+	        causal_scope_symbol: .finding.causal_scope_symbol,
+	        justification: .justification,
         source: "judge",
         waived_by: "security-pass-exhaustion-judge",
         waived_at_cycle: $cycle,
+        audited_head_sha: $head_sha,
         issue: null
-      } + (if $defer then {followup_pending: true, audited_head_sha: $head_sha, finding: .finding} else {} end)]' "${verdict_file}")"
+      } + (if $defer then {followup_pending: true, finding: .finding} else {} end)]' "${verdict_file}")"
     if ! security_pass_record_waivers "${waivers_json}"; then
       echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=waiver_state_write_failed round=${judge_round}"
       return 1
@@ -6586,7 +7146,7 @@ ${decisions_table}}"
 # Strip notification triggers from judge- or audit-generated prose before it
 # lands in a tracking comment (same rule as render_security_pass_findings_table).
 security_pass_prose() {
-  printf '%s' "${1:-}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+  printf '%s' "${1:-}" | PYTHONDONTWRITEBYTECODE=1 python3 -I -c '
 import re, sys
 text = " ".join(sys.stdin.read().split())
 sys.stdout.write(re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b")))
@@ -6595,7 +7155,7 @@ sys.stdout.write(re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b")))
 
 render_security_pass_judge_decisions_table() {
   local verdict_file="$1"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${verdict_file}" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 python3 -I - "${verdict_file}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -6641,8 +7201,9 @@ run_security_pass_inline() {
   local verified_analysis_sha="${4:-}"
   local verified_recheck_refspec="${5:-}"
   local prior_security_status current_integration_ref current_head_sha current_default_ref merge_base_sha
-  local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model
-  local required_security_asset
+  local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model security_pass_advisory_backlog_file
+  local required_security_asset security_pass_policy_changed="false"
+  local trusted_security_config trusted_security_heartbeat trusted_security_audit trusted_security_catalog trusted_security_exclusions
 
   prior_security_status="$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
   if [ -z "${integration_branch}" ]; then
@@ -6673,32 +7234,22 @@ run_security_pass_inline() {
     security_pass_fail_closed "engine_unavailable" "The integration head commit could not be resolved for read-only analysis." "${prior_security_status}"
     return 1
   fi
-  if security_pass_current_head_is_valid "${current_head_sha}"; then
-    return 0
+  if ! security_pass_policy_matches_current && jq -e '
+    (.security_pass_last_audited_sha // "") != ""
+    or (.security_pass_head_sha // "") != ""
+    or .security_pass_status == "passed"
+    or any((.security_pass_waived_findings // [])[];
+      .source == "preexisting" and .waived_by == "line-ownership")
+    or ((.security_pass_advisory_backlog // []) | length > 0)
+  ' "${STATE_FILE}" >/dev/null 2>&1; then
+    security_pass_policy_changed="true"
   fi
-  # A recorded clean pass that no longer matches the current head means new
-  # commits landed after that audit -- a `chore: sync <default> into
-  # <integration>` merge, a resolver/judge conflict resolution, or a fix PR.
-  # `security_pass_cycle` bounds *persistent* findings: consecutive fix cycles
-  # that failed to clear the same audit.  A proven-clean audit breaks that
-  # chain, so carrying the spent budget across the invalidation terminalizes
-  # the project on the first finding in the newly-arrived code without ever
-  # granting it a fix cycle.  Incident: project #3965 passed at 75048a2c with
-  # the budget already at 3/3, a routine `chore: sync main into
-  # orchestrator/project-3965` merge advanced the head to 56f71c8f, and the
-  # re-audit's 2 findings went straight to security_pass_terminal_failure with
-  # zero cycles spent on them.  Completion still requires a clean SHA-bound
-  # pass at the current head (security_pass_current_head_is_valid above), so a
-  # fresh budget cannot let unaudited code through -- it only restores the fix
-  # loop those findings are entitled to.
-  if [ "${prior_security_status}" = "passed" ]; then
-    if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
-      && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
-      echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
-    else
-      rm -f "${STATE_FILE}.tmp"
-      echo "::warning::Could not reset the security-pass fix-cycle budget for tracking issue #${TRACKING_NUM} after the audited head advanced to ${current_head_sha}; the previous budget stands."
+  if security_pass_current_head_is_valid "${current_head_sha}"; then
+    security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
     fi
+    return 0
   fi
 
   for required_security_asset in \
@@ -6709,11 +7260,22 @@ run_security_pass_inline() {
     prompts/mode-security-audit.txt \
     prompts/_templates/mode-security-audit.txt \
     prompts/references/security-money-lens.txt; do
-    if [ ! -f "${required_security_asset}" ]; then
+    if ! poller_trusted_support_file "${required_security_asset}" >/dev/null; then
       security_pass_fail_closed "engine_unavailable" "Required security-pass asset ${required_security_asset} is unavailable." "${prior_security_status}"
       return 1
     fi
   done
+  for required_security_asset in scripts/render_prompt.sh scripts/render_prompt.py scripts/assemble_prompt.sh scripts/security_audit_causality.py scripts/untrusted_process_sandbox.sh scripts/ai_memory_lib.py scripts/orchestrate_lib.py scripts/codex_model_catalog.json; do
+    if ! poller_trusted_support_file "${required_security_asset}" >/dev/null; then
+      security_pass_fail_closed "engine_unavailable" "Required security-pass asset ${required_security_asset} is unavailable." "${prior_security_status}"
+      return 1
+    fi
+  done
+  trusted_security_config="$(poller_trusted_support_file scripts/write_codex_config.sh)"
+  trusted_security_heartbeat="$(poller_trusted_support_file scripts/codex_heartbeat.sh)"
+  trusted_security_audit="$(poller_trusted_support_file scripts/security_audit.sh)"
+  trusted_security_catalog="$(poller_trusted_support_file scripts/codex_model_catalog.json)"
+  trusted_security_exclusions="$(poller_trusted_support_file scripts/security_audit_fp_exclusions.json)"
 
   if [ -n "${verified_analysis_ref}" ]; then
     if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}"; then
@@ -6742,6 +7304,30 @@ run_security_pass_inline() {
   if [ -z "${merge_base_sha}" ]; then
     security_pass_fail_closed "engine_unavailable" "No merge base exists between the default branch and integration head." "${prior_security_status}"
     return 1
+  fi
+
+  if [ "${prior_security_status}" = "passed" ] \
+    && security_pass_rebind_if_no_new_project_lines "${current_head_sha}" "${merge_base_sha}" "${current_default_ref}"; then
+    security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
+    fi
+    return 0
+  fi
+
+  # A recorded clean pass that cannot be safely rebound means project-owned
+  # commits may have landed after that audit. `security_pass_cycle` bounds
+  # persistent findings, so start a fresh fix budget before the mandatory
+  # re-audit. Completion still requires a clean SHA-bound result at this head.
+  if [ "${prior_security_status}" = "passed" ] \
+    && [ "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" != "${current_head_sha}" ]; then
+    if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
+      && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
+    else
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::Could not reset the security-pass fix-cycle budget for tracking issue #${TRACKING_NUM} after the audited head advanced to ${current_head_sha}; the previous budget stands."
+    fi
   fi
 
   # Delta re-audit.  Every earlier audit of this project already covered the
@@ -6780,6 +7366,12 @@ run_security_pass_inline() {
       security_pass_audit_scope_reason="last_audited_sha_not_ancestor_of_head"
     fi
   fi
+  if [ "${security_pass_policy_changed}" = "true" ]; then
+    # Policy changes invalidate incremental classification even when HEAD is unchanged.
+    security_pass_audit_since_sha=""
+    security_pass_audit_scope_mode="full"
+    security_pass_audit_scope_reason="ownership_policy_changed"
+  fi
   security_pass_prior_findings_file="${RUNTIME_DIR}/security_pass_prior_findings_${TRACKING_NUM}.json"
   rm -f "${security_pass_prior_findings_file}"
   security_pass_prior_findings_count="$(jq -r '.security_pass_reported_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
@@ -6799,10 +7391,18 @@ run_security_pass_inline() {
   # the same suppression on the result (security_pass_apply_waivers_to_findings).
   security_pass_waived_findings_file="${RUNTIME_DIR}/security_pass_waived_findings_${TRACKING_NUM}.json"
   rm -f "${security_pass_waived_findings_file}"
-  security_pass_waived_findings_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  security_pass_waived_findings_count="$(jq -r --arg ownership "${SECURITY_PASS_LINE_OWNERSHIP}" --arg changed "${security_pass_policy_changed}" '
+    [.security_pass_waived_findings[]? | select(
+      ((.source == "preexisting" and .waived_by == "line-ownership")
+        and ($ownership == "file" or $changed == "true")) | not)] | length
+  ' "${STATE_FILE}" 2>/dev/null || echo 0)"
   [[ "${security_pass_waived_findings_count}" =~ ^[0-9]+$ ]] || security_pass_waived_findings_count=0
   if [ "${security_pass_waived_findings_count}" -gt 0 ]; then
-    if ! jq '.security_pass_waived_findings // []' "${STATE_FILE}" > "${security_pass_waived_findings_file}" 2>/dev/null; then
+    if ! jq --arg ownership "${SECURITY_PASS_LINE_OWNERSHIP}" --arg changed "${security_pass_policy_changed}" '
+      [.security_pass_waived_findings[]? | select(
+        ((.source == "preexisting" and .waived_by == "line-ownership")
+          and ($ownership == "file" or $changed == "true")) | not)]
+    ' "${STATE_FILE}" > "${security_pass_waived_findings_file}" 2>/dev/null; then
       rm -f "${security_pass_waived_findings_file}"
       security_pass_waived_findings_count=0
       echo "::warning::Could not export the waived security-pass findings for tracking issue #${TRACKING_NUM}; the audit runs without them and the poller re-applies the waivers to its result."
@@ -6892,7 +7492,7 @@ run_security_pass_inline() {
     rm -f "${security_pass_fix_cycle_diffs_file}"
     security_pass_fix_cycle_diffs_file=""
   fi
-  echo "SECURITY_PASS_SCOPE tracking_issue=${TRACKING_NUM} mode=${security_pass_audit_scope_mode} reason=${security_pass_audit_scope_reason} base_sha=${merge_base_sha} since_sha=${security_pass_audit_since_sha:-none} head_sha=${current_head_sha} prior_findings=${security_pass_prior_findings_count} waived_findings=${security_pass_waived_findings_count} fix_cycle_diff_entries=${security_pass_fix_cycle_diff_entries} fix_cycle_diff_files=${security_pass_fix_cycle_diff_files}"
+  echo "SECURITY_PASS_SCOPE tracking_issue=${TRACKING_NUM} mode=${security_pass_audit_scope_mode} reason=${security_pass_audit_scope_reason} base_sha=${merge_base_sha} since_sha=${security_pass_audit_since_sha:-none} head_sha=${current_head_sha} prior_findings=${security_pass_prior_findings_count} waived_findings=${security_pass_waived_findings_count} fix_cycle_diff_entries=${security_pass_fix_cycle_diff_entries} fix_cycle_diff_files=${security_pass_fix_cycle_diff_files} ownership=${SECURITY_PASS_LINE_OWNERSHIP} context=${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}"
 
   context_file="${RUNTIME_DIR}/security_pass_project_${TRACKING_NUM}.txt"
   findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.json"
@@ -6915,12 +7515,14 @@ run_security_pass_inline() {
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
 
   effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"
-  if ! bash scripts/write_codex_config.sh --model "${effective_security_model}" --reasoning xhigh >/dev/null 2>"${audit_error_file}"; then
+  if ! bash "${trusted_security_config}" --model "${effective_security_model}" --reasoning xhigh --catalog-path "${trusted_security_catalog}" >/dev/null 2>"${audit_error_file}"; then
     security_pass_fail_closed "engine_unavailable" "The security-pass model configuration could not be prepared." "${prior_security_status}"
     return 1
   fi
 
   if ! SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
+    SECURITY_AUDIT_SUPPORT_DIR="${POLLER_TRUSTED_SUPPORT_DIR}" \
+    SECURITY_AUDIT_FP_EXCLUSIONS="${trusted_security_exclusions}" \
     SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
     SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
     SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
@@ -6928,19 +7530,32 @@ run_security_pass_inline() {
     SECURITY_AUDIT_PRIOR_FINDINGS="${security_pass_prior_findings_file}" \
     SECURITY_AUDIT_WAIVED_FINDINGS="${security_pass_waived_findings_file}" \
     SECURITY_AUDIT_FIX_CYCLE_DIFFS="${security_pass_fix_cycle_diffs_file}" \
+    SECURITY_AUDIT_LINE_OWNERSHIP="${SECURITY_PASS_LINE_OWNERSHIP}" \
+    SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES="${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" \
     SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
     WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
-    bash scripts/codex_heartbeat.sh \
+    bash "${trusted_security_heartbeat}" \
       --phase "orchestrate-security-pass" \
       --stderr-file "${audit_error_file}" \
-      -- bash scripts/security_audit.sh "${context_file}"; then
+      -- bash "${trusted_security_audit}" "${context_file}"; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
     return 1
   fi
 
   if ! jq -e '
+    def valid_finding:
+      (.finding_id | type) == "string" and (.finding_id | test("^[A-Za-z0-9][A-Za-z0-9._:-]{0,200}$"))
+      and (.waiver_match_key | type) == "string" and (.waiver_match_key | test("^sha256:[0-9a-f]{64}$"))
+      and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
+      and (.severity == "critical" or .severity == "high" or .severity == "medium" or .severity == "low")
+      and (.confidence | type) == "number"
+      and (.confidence | floor) == .confidence and .confidence >= 1 and .confidence <= 10
+      and (.file | type) == "string" and (.file | length) > 0
+      and (.line | type) == "number" and (.line | floor) == .line and .line > 0
+      and (.exploit_scenario | type) == "string" and (.exploit_scenario | length) > 0
+      and (.recommendation | type) == "string" and (.recommendation | length) > 0;
     .schema_version == "security_audit_findings.v1"
     and (.findings | type) == "array"
     and (.counts | type) == "object"
@@ -6955,16 +7570,17 @@ run_security_pass_inline() {
       .counts.suppressed_out_of_scope,
       .counts.suppressed_waived
     ][]; (type == "number") and (floor == .) and . >= 0)
-    and all(.findings[];
-      (.finding_id | type) == "string" and (.finding_id | length) > 0
-      and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
-      and (.severity == "critical" or .severity == "high" or .severity == "medium" or .severity == "low")
-      and (.confidence | type) == "number"
-      and (.confidence | floor) == .confidence and .confidence >= 1 and .confidence <= 10
-      and (.file | type) == "string" and (.file | length) > 0
-      and (.line | type) == "number" and (.line | floor) == .line and .line > 0
-      and (.exploit_scenario | type) == "string" and (.exploit_scenario | length) > 0
-      and (.recommendation | type) == "string" and (.recommendation | length) > 0)
+    and all(.findings[]; valid_finding)
+    and ((has("advisory_findings") | not)
+      or ((.advisory_findings | type) == "array" and all(.advisory_findings[]; valid_finding)))
+    and ((has("verified_fixed_finding_ids") | not)
+      or ((.verified_fixed_finding_ids | type) == "array"
+        and all(.verified_fixed_finding_ids[]; (type == "string") and (length > 0))))
+    and ((.counts | has("advisory") | not)
+      or ((.counts.advisory | type) == "number"
+        and (.counts.advisory | floor) == .counts.advisory
+        and .counts.advisory >= 0
+        and .counts.advisory == ((.advisory_findings // []) | length)))
   ' "${findings_file}" >/dev/null 2>&1; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit output was missing or invalid." "${prior_security_status}"
     return 1
@@ -6996,9 +7612,91 @@ run_security_pass_inline() {
     return 1
   fi
 
+  if [ "${SECURITY_PASS_LINE_OWNERSHIP}" = "file" ] \
+    && ! jq -e '(.advisory_findings // []) | length == 0' "${findings_file}" >/dev/null 2>&1; then
+    security_pass_fail_closed "engine_unavailable" "The file-ownership audit returned non-blocking advisories." "${prior_security_status}"
+    return 1
+  fi
+
+  if [ "${security_pass_policy_changed}" = "true" ]; then
+    # Only a successful, head-verified audit can retire the old classification.
+    # Filed follow-ups stay in security_pass_followup_issues for deduplication.
+    if ! jq '
+      .security_pass_waived_findings = [(.security_pass_waived_findings // [])[]
+        | select((.source == "preexisting" and .waived_by == "line-ownership") | not)]
+      | .security_pass_advisory_backlog = []
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      rm -f "${STATE_FILE}.tmp"
+      security_pass_fail_closed "policy_reconcile_failed" "The previous ownership classification could not be retired." "${prior_security_status}"
+      return 1
+    fi
+  fi
+
   security_pass_apply_waivers_to_findings "${findings_file}"
   finding_count="$(jq -r '.findings | length' "${findings_file}")"
   completed_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}")"
+  security_pass_verified_fixed_ids="$(jq -r '(.verified_fixed_finding_ids // []) | join(",")' "${findings_file}")"
+  if [ -n "${security_pass_verified_fixed_ids}" ]; then
+    echo "SECURITY_PASS_VERIFIED_FIXED tracking_issue=${TRACKING_NUM} ids=${security_pass_verified_fixed_ids}"
+  fi
+  security_pass_advisory_count="$(jq -r '(.advisory_findings // []) | length' "${findings_file}")"
+  SECURITY_PASS_ADVISORY_ROUTED_COUNT="${security_pass_advisory_count}"
+  if [ "${security_pass_advisory_count}" -gt 0 ]; then
+    security_pass_advisory_justification="The cited line predates this project's merge-base and already exists on the default branch; routed as a non-blocking advisory by line ownership."
+    security_pass_advisory_waivers="$(jq -c --argjson cycle "${completed_cycles}" --arg justification "${security_pass_advisory_justification}" --arg head_sha "${current_head_sha}" '
+      [(.advisory_findings // [])[] | {
+        finding_id: .finding_id,
+        waiver_match_key: .waiver_match_key,
+        file: .file,
+        line: .line,
+        owasp_or_stride_category: .owasp_or_stride_category,
+	        severity: .severity,
+	        causal_scope_schema: .causal_scope_schema,
+	        causal_scope_status: .causal_scope_status,
+	        causal_scope_fingerprint: .causal_scope_fingerprint,
+	        causal_scope_files: .causal_scope_files,
+	        causal_scope_symbol: .causal_scope_symbol,
+	        justification: $justification,
+        source: "preexisting",
+        waived_by: "line-ownership",
+        waived_at_cycle: $cycle,
+        audited_head_sha: $head_sha,
+        issue: null
+      }]
+    ' "${findings_file}")"
+    security_pass_advisory_backlog="$(jq -c --arg head_sha "${current_head_sha}" '
+      [(.advisory_findings // [])[]
+        | .exploit_scenario = (.exploit_scenario[0:2000])
+        | .recommendation = (.recommendation[0:2000])
+        | . + {audited_head_sha: $head_sha}]
+    ' "${findings_file}")"
+    security_pass_advisory_backlog_file="${RUNTIME_DIR}/security_pass_advisory_backlog_${TRACKING_NUM}.json"
+    printf '%s\n' "${security_pass_advisory_backlog}" > "${security_pass_advisory_backlog_file}"
+    if ! jq --slurpfile backlog "${security_pass_advisory_backlog_file}" '
+      (($backlog[0] // []) | map(.waiver_match_key)) as $keys
+      | .security_pass_advisory_backlog = (
+          [(.security_pass_advisory_backlog // [])[] | select(((.waiver_match_key // "") | IN($keys[])) | not)]
+          + ($backlog[0] // [])
+          | sort_by(
+              ({critical: 0, high: 1, medium: 2, low: 3}[.severity] // 4),
+              (-.confidence), .file, .line, .waiver_match_key
+            )
+        )
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      rm -f "${STATE_FILE}.tmp"
+      security_pass_fail_closed "advisory_backlog_persist_failed" "The full pre-existing-code advisory queue could not be checkpointed." "${prior_security_status}"
+      return 1
+    fi
+    if ! security_pass_record_waivers "${security_pass_advisory_waivers}"; then
+      security_pass_fail_closed "advisory_waiver_persist_failed" "The provenance-bound advisory waivers could not be checkpointed." "${prior_security_status}"
+      return 1
+    fi
+    if ! post_state_comment; then
+      security_pass_fail_closed "advisory_backlog_checkpoint_failed" "The complete advisory queue could not be written to authoritative orchestrator state." "${prior_security_status}"
+      return 1
+    fi
+    echo "SECURITY_PASS_ADVISORY_ROUTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} count=${security_pass_advisory_count} ids=$(printf '%s' "${security_pass_advisory_waivers}" | jq -r 'map(.finding_id) | join(",")')"
+  fi
   # Record the audited head as the base of the next delta re-audit and
   # remember every blocking finding so the next audit verifies it instead of
   # re-discovering the project.  A clean result clears the memory: nothing is
@@ -7006,12 +7704,15 @@ run_security_pass_inline() {
   # commits.  Long free-text fields are trimmed so state stays bounded.  The
   # current cycle's fix-cycle diff entry is remembered the same way so the
   # next re-audit carries it over once (security_pass_fix_touched_files).
-  jq --arg head_sha "${current_head_sha}" --argjson findings_count "${finding_count}" \
+  jq --arg head_sha "${current_head_sha}" --arg ownership "${SECURITY_PASS_LINE_OWNERSHIP}" \
+    --argjson context "${SECURITY_PASS_OWNERSHIP_CONTEXT_LINES}" --argjson findings_count "${finding_count}" \
     --argjson cycle "$((completed_cycles + 1))" --slurpfile audit_result "${findings_file}" \
     --argjson fix_cycle_entry "${security_pass_fix_cycle_current_entry:-null}" \
     --argjson fix_cycle_current "${security_pass_fix_cycle_current:-0}" '
     .security_pass_head_sha = $head_sha
     | .security_pass_last_audited_sha = $head_sha
+    | .security_pass_audited_ownership = $ownership
+    | .security_pass_audited_context_lines = $context
     | .security_pass_status = (if $findings_count == 0 then "passed" else "blocked" end)
     | .security_pass_fix_touched_files = (
         if $findings_count == 0 then []
@@ -7033,6 +7734,7 @@ run_security_pass_inline() {
             | {
                 cycle: $cycle,
                 finding_id: .finding_id,
+                waiver_match_key: .waiver_match_key,
                 owasp_or_stride_category: .owasp_or_stride_category,
                 severity: .severity,
                 confidence: .confidence,
@@ -7046,6 +7748,10 @@ run_security_pass_inline() {
         end
       )
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  if [ "${security_pass_advisory_count}" -gt 0 ]; then
+    security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+  fi
 
   if [ "${finding_count}" -eq 0 ]; then
     jq '.status = "in_progress" | .security_pass_active_fix_issues = []' \
@@ -7137,6 +7843,10 @@ ensure_security_pass_before_completion() {
     return 1
   fi
   if security_pass_current_head_is_valid "${current_head_sha}"; then
+    security_pass_file_advisory_findings "${integration_branch}" "${current_head_sha}"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
+    fi
     return 0
   fi
   run_security_pass_inline \
@@ -7351,14 +8061,14 @@ ensure_integration_conflict_state_fields() {
 }
 
 extract_autofix_resolver_retry_state_from_pr_body() {
-  # Read the PR body before invoking `python3 - <<'PY'`: the heredoc
+  # Read the PR body before invoking `python3 -I - <<'PY'`: the heredoc
   # consumes stdin for the script itself, so piping directly into
   # python would otherwise drop the body and make the extractor fail
   # closed on every call.
   local retry_state_body=""
   retry_state_body="$(cat)"
 
-  RETRY_STATE_BODY="${retry_state_body}" python3 - <<'PY'
+  RETRY_STATE_BODY="${retry_state_body}" python3 -I - <<'PY'
 from __future__ import annotations
 
 import json
@@ -7469,7 +8179,7 @@ normalize_judge_justification_for_fingerprint() {
   # poller invocation that touched judge fingerprints into a non-zero
   # exit. Reading the text from RAW_TEXT and the script from stdin
   # (`python3 -`) sidesteps the FD-3 dance entirely.
-  RAW_TEXT="${raw_text}" python3 - <<'PY'
+  RAW_TEXT="${raw_text}" python3 -I - <<'PY'
 import os
 import re
 
@@ -7502,7 +8212,7 @@ judge_justification_fingerprint() {
     printf '%s' "${normalized_text}" | shasum -a 256 | awk '{print $1}'
     return 0
   fi
-  printf '%s' "${normalized_text}" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+  printf '%s' "${normalized_text}" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 }
 
 # Capture merged-sub-issue intent fingerprints for a sub-issue whose
@@ -7626,7 +8336,7 @@ capture_intent_fingerprints_for_merged_subissue() {
     FINGERPRINT_MIN_PATTERN_CHARS="${FINGERPRINT_MIN_PATTERN_CHARS}" \
     GIT_COMMAND_TIMEOUT_SECS="${integration_fetch_timeout_secs}" \
     FINGERPRINT_POST_MERGE_REF="${integration_ref_for_capture}" \
-    python3 - "${diff_file}" <<'PY' 2>/dev/null || true
+    python3 -I - "${diff_file}" <<'PY' 2>/dev/null || true
 import json, os, re, subprocess, sys
 from collections import Counter
 
@@ -8101,7 +8811,7 @@ update_eager_pr_validation_status_section() {
 
   pr_body="$(printf '%s' "${pr_json}" | jq -r '.body // ""' 2>/dev/null || echo '')"
   validation_block="$(build_eager_pr_validation_status_block "${next_action_override}")"
-  updated_body="$(printf '%s' "${pr_body}" | VALIDATION_STATUS_BLOCK="${validation_block}" python3 -c '
+  updated_body="$(printf '%s' "${pr_body}" | VALIDATION_STATUS_BLOCK="${validation_block}" python3 -I -c '
 from __future__ import annotations
 
 import os
@@ -8430,17 +9140,190 @@ invoke_judge_for_integration_conflict() {
   local final_pr="$1"
   local integration_branch="$2"
   local default_branch="$3"
+	local integration_judge_workspace=""
+	local integration_head_sha=""
+	local default_head_sha=""
+	local integration_allowed_paths_file=""
+	local integration_actual_paths_file=""
+	local integration_conflict_spans_file=""
+	local integration_clean_manifest_file=""
+	local integration_merge_tree_output=""
+	local integration_expected_tree=""
+	local integration_fingerprints_file=""
+	local poller_repo_root="${PWD}"
 
   [ -n "${final_pr}" ] || return 1
 
   echo "  [integration-heal] Escalating to judge for final PR #${final_pr} (${integration_branch} -> ${default_branch})."
+	if [ -n "${GH_MOCK_STORE:-}" ]; then
+		echo "  [integration-heal] Fixture mode records a successful isolated judge dispatch."
+		return 0
+	fi
+	prepare_untrusted_poller_runtime || return 1
+	if ! git fetch --no-tags origin \
+		"refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+		"refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1; then
+		echo "::warning::Could not fetch exact integration-conflict refs for PR #${final_pr}."
+		return 1
+	fi
+	integration_head_sha="$(git rev-parse "refs/remotes/origin/${integration_branch}" 2>/dev/null || true)"
+	default_head_sha="$(git rev-parse "refs/remotes/origin/${default_branch}" 2>/dev/null || true)"
+	if ! [[ "${integration_head_sha}" =~ ^[0-9a-f]{40,64}$ ]] || ! [[ "${default_head_sha}" =~ ^[0-9a-f]{40,64}$ ]]; then
+		echo "::warning::Could not resolve immutable integration-conflict refs for PR #${final_pr}."
+		return 1
+	fi
+	integration_judge_workspace="$(mktemp -d "${RUNNER_TEMP}/integration-judge-worktree.XXXXXX")"
+	rmdir "${integration_judge_workspace}"
+	if ! git worktree add --detach "${integration_judge_workspace}" "${integration_head_sha}" >/dev/null 2>&1; then
+		echo "::warning::Could not create isolated integration-conflict worktree for PR #${final_pr}."
+		return 1
+	fi
+	integration_allowed_paths_file="${POST_AGENT_ARTIFACT_DIR}/integration_judge_allowed_${final_pr}.txt"
+	integration_actual_paths_file="${POST_AGENT_ARTIFACT_DIR}/integration_judge_actual_${final_pr}.txt"
+	integration_conflict_spans_file="${POST_AGENT_ARTIFACT_DIR}/integration_judge_conflict_spans_${final_pr}.json"
+	integration_clean_manifest_file="${POST_AGENT_ARTIFACT_DIR}/integration_judge_clean_manifest_${final_pr}.tsv"
+	integration_merge_tree_output="${RUNTIME_DIR}/integration_judge_merge_tree_${final_pr}.txt"
+	integration_fingerprints_file="${POST_AGENT_ARTIFACT_DIR}/integration_judge_fingerprints_${final_pr}.json"
+	integration_merge_tree_rc=0
+	git -C "${integration_judge_workspace}" merge-tree --write-tree \
+		"${integration_head_sha}" "${default_head_sha}" > "${integration_merge_tree_output}" 2>/dev/null \
+		|| integration_merge_tree_rc=$?
+	integration_expected_tree="$(head -n1 "${integration_merge_tree_output}" | tr -d '\r')"
+	if ! [[ "${integration_expected_tree}" =~ ^[0-9a-f]{40,64}$ ]] \
+		|| ! git -C "${integration_judge_workspace}" cat-file -e "${integration_expected_tree}^{tree}" 2>/dev/null \
+		|| { [ "${integration_merge_tree_rc}" -ne 0 ] && [ "${integration_merge_tree_rc}" -ne 1 ]; }; then
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		echo "::warning::Could not deterministically recompute the integration merge tree for PR #${final_pr}."
+		return 1
+	fi
+	if git -C "${integration_judge_workspace}" -c core.hooksPath=/dev/null merge \
+		--no-commit --no-ff "${default_head_sha}" >/dev/null 2>&1; then
+		:
+	elif ! git -C "${integration_judge_workspace}" diff --name-only --diff-filter=U | grep -q .; then
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		echo "::warning::Integration merge preparation failed without resolvable conflicts for PR #${final_pr}."
+		return 1
+	fi
+	git -C "${integration_judge_workspace}" diff --name-only --diff-filter=U \
+		| sed '/^$/d' | LC_ALL=C sort -u > "${integration_allowed_paths_file}"
+	if [ ! -s "${integration_allowed_paths_file}" ]; then
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		echo "::warning::Prepared integration merge for PR #${final_pr} has no bounded changed-path set."
+		return 1
+	fi
+	if grep -n $'[\t\r]' "${integration_allowed_paths_file}" >/dev/null 2>&1; then
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		echo "::warning::Integration conflict paths cannot be represented safely for PR #${final_pr}."
+		return 1
+	fi
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I - \
+		"${integration_judge_workspace}" "${integration_allowed_paths_file}" "${integration_conflict_spans_file}" \
+		"${integration_expected_tree}" <<'PY'
+import base64
+import json
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+
+workspace = Path(sys.argv[1]).resolve()
+paths = [line for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines() if line]
+output = Path(sys.argv[3])
+expected_tree = sys.argv[4]
+manifest = {}
+for path_name in paths:
+	path = PurePosixPath(path_name)
+	if path.is_absolute() or ".." in path.parts or any(ord(char) < 32 for char in path_name):
+		raise SystemExit("unsafe conflict path")
+	file_path = workspace / path
+	if not file_path.is_file() or file_path.is_symlink():
+		raise SystemExit("binary, delete/modify, or non-regular conflict")
+	data = file_path.read_bytes()
+	if b"\0" in data:
+		raise SystemExit("binary conflict")
+	lines = data.splitlines(keepends=True)
+	anchors = []
+	anchor_start = 0
+	offset = 0
+	index = 0
+	while index < len(lines):
+		line = lines[index]
+		if not line.startswith(b"<<<<<<< "):
+			offset += len(line)
+			index += 1
+			continue
+		anchors.append(data[anchor_start:offset])
+		index += 1
+		offset += len(line)
+		separator_seen = False
+		while index < len(lines):
+			line = lines[index]
+			offset += len(line)
+			index += 1
+			if line.startswith(b"<<<<<<< "):
+				raise SystemExit("nested conflict marker")
+			if line.startswith(b"======="):
+				separator_seen = True
+				break
+		if not separator_seen:
+			raise SystemExit("missing conflict separator")
+		end_seen = False
+		while index < len(lines):
+			line = lines[index]
+			offset += len(line)
+			index += 1
+			if line.startswith(b">>>>>>> "):
+				end_seen = True
+				break
+		if not end_seen:
+			raise SystemExit("missing conflict terminator")
+		anchor_start = offset
+	anchors.append(data[anchor_start:])
+	if len(anchors) < 2:
+		raise SystemExit("conflicted path has no textual markers")
+	ls_tree = subprocess.run(
+		["git", "ls-tree", expected_tree, "--", path_name], cwd=workspace,
+		capture_output=True, text=True, check=False,
+	)
+	if ls_tree.returncode != 0 or not ls_tree.stdout.strip():
+		raise SystemExit("conflicted path has no deterministic merged mode")
+	expected_mode = ls_tree.stdout.split(" ", 1)[0]
+	if expected_mode not in {"100644", "100755"}:
+		raise SystemExit("conflicted path has unsupported merged mode")
+	manifest[path_name] = {
+		"anchors": [base64.b64encode(anchor).decode("ascii") for anchor in anchors],
+		"mode": expected_mode,
+	}
+output.write_text(json.dumps(manifest, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+PY
+	then
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		echo "::warning::Integration conflicts are not safely text-resolvable for PR #${final_pr}."
+		return 1
+	fi
+	: > "${integration_clean_manifest_file}"
+	while IFS= read -r integration_merge_path; do
+		[ -n "${integration_merge_path}" ] || continue
+		grep -Fxq -- "${integration_merge_path}" "${integration_allowed_paths_file}" && continue
+		integration_tree_row="$(git -C "${integration_judge_workspace}" ls-tree "${integration_expected_tree}" -- "${integration_merge_path}" 2>/dev/null || true)"
+		if [ -z "${integration_tree_row}" ]; then
+			printf '000000\t-\t%s\n' "${integration_merge_path}" >> "${integration_clean_manifest_file}"
+			continue
+		fi
+		integration_tree_mode="${integration_tree_row%% *}"
+		integration_tree_rest="${integration_tree_row#* }"
+		integration_tree_blob="${integration_tree_rest#* }"
+		integration_tree_blob="${integration_tree_blob%%$'\t'*}"
+		printf '%s\t%s\t%s\n' "${integration_tree_mode}" "${integration_tree_blob}" "${integration_merge_path}" >> "${integration_clean_manifest_file}"
+	done < <(git -C "${integration_judge_workspace}" diff-tree --no-commit-id --name-only -r \
+		"${integration_head_sha}" "${integration_expected_tree}" | LC_ALL=C sort -u)
 
   # Ensure codex config exists — mirrors the review-blocked judge setup.
   # Centralised in scripts/write_codex_config.sh — see that script's
   # header for the apply_patch / trust / elevation rationale.
-  bash scripts/write_codex_config.sh \
+  bash "$(poller_trusted_support_file scripts/write_codex_config.sh)" \
     --model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+    --catalog-path "$(poller_trusted_support_file scripts/codex_model_catalog.json)"
 
   local prompt_file
   local output_file
@@ -8512,21 +9395,23 @@ invoke_judge_for_integration_conflict() {
     echo "mergeable state. Final PR #${final_pr} (${integration_branch} -> ${default_branch})"
     echo "is currently unmergeable."
     echo
-    echo "Your task: fetch both branches, resolve the merge conflicts in a"
+		echo "The privileged poller prepared the exact merge state before this call."
+		echo "Your task: resolve only the conflicts already present in the working tree"
     echo "way that preserves the intent of every sub-issue already merged"
-    echo "into ${integration_branch}, push the resolution to"
-    echo "${integration_branch}, and then verify GitHub reports the final"
-    echo "PR as mergeable=true. Do NOT merge the PR yourself — the poller"
-    echo "will do that once mergeability is restored."
+		echo "into ${integration_branch}. Do not fetch, commit, push, access GitHub, or"
+		echo "modify Git metadata. Deterministic privileged code validates and publishes"
+		echo "an accepted resolution after this process exits."
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
-    echo "Context:"
+	    echo "Context:"
     echo "- Tracking issue: #${TRACKING_NUM}"
     echo "- Final PR number: ${final_pr}"
     echo "- Integration branch: ${integration_branch}"
     echo "- Default branch: ${default_branch}"
-    echo "- Automated resolver attempts so far: ${retries}"
+	    echo "- Automated resolver attempts so far: ${retries}"
+	    echo "- Initially conflicted paths (the only editable paths):"
+	    sed 's/^/  - /' "${integration_allowed_paths_file}"
     echo
     echo "Changed files in final PR (JSON):"
     printf '%s\n' "${pr_files}"
@@ -8566,13 +9451,105 @@ invoke_judge_for_integration_conflict() {
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
-  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
-    echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
-    return 0
-  fi
+	integration_workspace_manifest="${POST_AGENT_ARTIFACT_DIR}/post-agent-integration-${final_pr}.manifest.json"
+	integration_workspace_report="${POST_AGENT_ARTIFACT_DIR}/post-agent-integration-${final_pr}.report.json"
+	integration_workspace_quarantine="${POST_AGENT_ARTIFACT_DIR}/post-agent-integration-${final_pr}.quarantine"
+	run_poller_workspace_guard snapshot "${integration_judge_workspace}" \
+		--manifest "${integration_workspace_manifest}" || return 1
+	integration_model_rc=0
+	run_untrusted_poller_codex resolver "${integration_judge_workspace}" \
+		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
+			exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
+		--sandbox workspace-write < "${prompt_file}" > "${output_file}" \
+		2>> "${RUNTIME_DIR}/integration_judge.log" || integration_model_rc=$?
+	if ! run_poller_workspace_guard reconcile "${integration_judge_workspace}" \
+		--manifest "${integration_workspace_manifest}" \
+		--quarantine-dir "${integration_workspace_quarantine}" \
+		--changed-paths-out "${integration_actual_paths_file}" --report "${integration_workspace_report}"; then
+		echo "::warning::Integration-conflict workspace guard rejected PR #${final_pr}; discarding the isolated worktree."
+		git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+		return 1
+	fi
+	if [ "${integration_model_rc}" -eq 0 ]; then
+		if ! POST_AGENT_VALIDATION_SANDBOX="${UNTRUSTED_POLLER_SANDBOX}" \
+			POST_AGENT_VALIDATION_RUNTIME_DIR="${POST_AGENT_ARTIFACT_DIR}" \
+			bash "${TRUSTED_POLLER_RESOLVER_GUARD}" \
+			--repo-root "${integration_judge_workspace}" \
+			--conflicted-set "${integration_allowed_paths_file}" \
+			--touched-set "${integration_actual_paths_file}" \
+			--conflict-spans "${integration_conflict_spans_file}" \
+			--clean-manifest "${integration_clean_manifest_file}"; then
+			echo "::warning::Integration-conflict resolver violated the prepared merge boundary for PR #${final_pr}."
+			git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+			rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}" \
+				"${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_conflict_spans_file}" \
+				"${integration_clean_manifest_file}" "${integration_merge_tree_output}" "${integration_fingerprints_file}"
+			return 1
+		elif ! git -C "${integration_judge_workspace}" add -A --; then
+			echo "::warning::Could not stage isolated integration-conflict output for PR #${final_pr}."
+		else
+			if git -C "${integration_judge_workspace}" diff --name-only --diff-filter=U | grep -q .; then
+				echo "::warning::Integration-conflict resolver left unresolved paths for PR #${final_pr}."
+			else
+				{
+				git -C "${integration_judge_workspace}" diff --name-only HEAD --
+				git -C "${integration_judge_workspace}" ls-files --others --exclude-standard
+			} | sed '/^$/d' | LC_ALL=C sort -u > "${integration_actual_paths_file}"
+			integration_out_of_scope="$(LC_ALL=C comm -23 "${integration_actual_paths_file}" "${integration_allowed_paths_file}" || true)"
+			if [ -n "${integration_out_of_scope}" ]; then
+				echo "::warning::Integration-conflict resolver changed paths outside the prepared merge set: ${integration_out_of_scope//$'\n'/,}"
+			elif ! git -C "${integration_judge_workspace}" diff --check HEAD --; then
+				echo "::warning::Integration-conflict resolver output failed diff validation for PR #${final_pr}."
+			else
+				integration_syntax_ok=true
+				while IFS= read -r integration_changed_path; do
+					[ -n "${integration_changed_path}" ] || continue
+					case "${integration_changed_path}" in
+						*.sh) bash -n "${integration_judge_workspace}/${integration_changed_path}" || integration_syntax_ok=false ;;
+						*.py) run_poller_isolated_python "${integration_judge_workspace}" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])' "${integration_judge_workspace}/${integration_changed_path}" || integration_syntax_ok=false ;;
+					esac
+				done < "${integration_actual_paths_file}"
+				if [ "${integration_syntax_ok}" = "true" ]; then
+					jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${integration_fingerprints_file}"
+					integration_fingerprint_rc=0
+					INTEGRATION_BRANCH_NAME="${integration_branch}" \
+						run_poller_isolated_python "${integration_judge_workspace}" \
+						"${poller_repo_root}/scripts/verify_integration_fingerprints.py" \
+						--repo-root "${integration_judge_workspace}" \
+						"${integration_fingerprints_file}" || integration_fingerprint_rc=$?
+					if [ "${integration_fingerprint_rc}" -eq 0 ]; then
+						git -C "${integration_judge_workspace}" add -A --
+						if bash "${TRUSTED_POLLER_GIT_WRITER}" commit \
+							--repo "${integration_judge_workspace}" \
+							--expected-local-head "${integration_head_sha}" \
+							--message "[ai-merge-resolve] resolve integration conflict for PR #${final_pr}"; then
+							integration_resolved_head="$(git -C "${integration_judge_workspace}" rev-parse HEAD)"
+							if GH_TOKEN="${GH_TOKEN}" bash "${TRUSTED_POLLER_GIT_WRITER}" push \
+								--repo "${integration_judge_workspace}" \
+								--branch "${integration_branch}" \
+								--expected-local-head "${integration_resolved_head}" \
+								--expected-remote-head "${integration_head_sha}" \
+								--remote-url "https://github.com/${GITHUB_REPOSITORY}.git"; then
+								git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+								rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}" \
+									"${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_fingerprints_file}"
+								echo "  [integration-heal] Validated resolution pushed for PR #${final_pr}."
+								return 0
+							fi
+						fi
+					else
+						echo "::warning::Integration-conflict resolver failed fingerprint verification for PR #${final_pr}."
+					fi
+				fi
+				fi
+			fi
+		fi
+	fi
 
   echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
+	git worktree remove --force "${integration_judge_workspace}" >/dev/null 2>&1 || true
+	rm -f "${integration_allowed_paths_file}" "${integration_actual_paths_file}" "${integration_conflict_spans_file}" \
+		"${integration_clean_manifest_file}" "${integration_merge_tree_output}" "${integration_fingerprints_file}"
   rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
   return 1
 }
@@ -8980,12 +9957,12 @@ _iso8601_to_epoch() {
 
 _branch_rebuild_audit_get() {
   local integration_branch="$1"
-  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || [ ! -f "scripts/ai_memory.py" ]; then
+  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || ! poller_trusted_support_file scripts/ai_memory.py >/dev/null; then
     return 1
   fi
 
   local audit_json
-  audit_json="$(python3 scripts/ai_memory.py branch-rebuild-audit get \
+  audit_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/ai_memory.py)" branch-rebuild-audit get \
     --repo "${GITHUB_REPOSITORY}" \
     --tracking-issue "${TRACKING_NUM}" \
     --integration-branch "${integration_branch}" 2>/dev/null || echo "")"
@@ -8998,7 +9975,7 @@ _branch_rebuild_audit_get() {
 _branch_rebuild_audit_put() {
   local integration_branch="$1"
   local audit_json="$2"
-  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || [ ! -f "scripts/ai_memory.py" ]; then
+  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || ! poller_trusted_support_file scripts/ai_memory.py >/dev/null; then
     return 1
   fi
 
@@ -9007,7 +9984,7 @@ _branch_rebuild_audit_put() {
   audit_file="$(mktemp "${TMPDIR:-/tmp}/branch-rebuild-audit.XXXXXX" 2>/dev/null || true)"
   [ -n "${audit_file}" ] || return 1
   printf '%s\n' "${audit_json}" > "${audit_file}"
-  result_json="$(python3 scripts/ai_memory.py branch-rebuild-audit put \
+  result_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/ai_memory.py)" branch-rebuild-audit put \
     --repo "${GITHUB_REPOSITORY}" \
     --tracking-issue "${TRACKING_NUM}" \
     --integration-branch "${integration_branch}" \
@@ -12014,7 +12991,7 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
     post_state_comment || true
   fi
-  post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review."
+  post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
   tg_cleanup_msgs "${TRACKING_NUM}"
   MSG="Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
   MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
@@ -12214,8 +13191,8 @@ _load_actions_runs_cached() {
   local now_epoch
   now_epoch="$(date +%s)"
 
-  if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-    cache_json="$(python3 scripts/ai_memory.py actions-runs-cache get --repo "${repo}" || echo '{}')"
+  if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && poller_trusted_support_file scripts/ai_memory.py >/dev/null; then
+    cache_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/ai_memory.py)" actions-runs-cache get --repo "${repo}" || echo '{}')"
     cache_hit="$(printf '%s' "${cache_json}" | jq -r 'if (.ok == true and .hit == true and (.cache | type == "object")) then "true" else "false" end' 2>/dev/null || echo 'false')"
     if [ "${cache_hit}" = "true" ]; then
       cache_payload="$(printf '%s' "${cache_json}" | jq -c '.cache // {}' 2>/dev/null || echo '{}')"
@@ -12295,8 +13272,8 @@ _load_actions_runs_cached() {
       ttl_put_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-refresh.XXXXXX" 2>/dev/null || true)"
       if [ -n "${ttl_put_file}" ]; then
         jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' > "${ttl_put_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${ttl_put_file}"
-        if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-          python3 scripts/ai_memory.py actions-runs-cache put \
+        if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && poller_trusted_support_file scripts/ai_memory.py >/dev/null; then
+          PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/ai_memory.py)" actions-runs-cache put \
             --repo "${repo}" \
             --runs-file "${ttl_put_file}" \
             --etag "${response_etag:-${cached_etag}}" \
@@ -12330,8 +13307,8 @@ _load_actions_runs_cached() {
 		if [ ! -s "${response_body_file}" ]; then
 			jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' > "${response_body_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${response_body_file}"
 		fi
-	if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-		python3 scripts/ai_memory.py actions-runs-cache put \
+	if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && poller_trusted_support_file scripts/ai_memory.py >/dev/null; then
+		PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/ai_memory.py)" actions-runs-cache put \
 			--repo "${repo}" \
 			--runs-file "${response_body_file}" \
 	        --etag "${response_etag}" \
@@ -12481,7 +13458,7 @@ prime_phase_concurrency_snapshot() {
   fi
   rm -f "${actions_runs_blob_file}" 2>/dev/null || true
   rm -f "${actions_runs_fetch_err_file}" 2>/dev/null || true
-  caps_cmd=(python3 scripts/orchestrate_lib.py concurrency-caps --caps-path "${caps_path}" --threshold-minutes "${STALL_THRESHOLD_MINUTES:-120}")
+  caps_cmd=(poller_trusted_orchestrate_lib concurrency-caps --caps-path "${caps_path}" --threshold-minutes "${STALL_THRESHOLD_MINUTES:-120}")
   if [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ]; then
     caps_cmd+=(--implementing-threshold-minutes "${STALL_THRESHOLD_IMPLEMENTING_MINUTES}")
   fi
@@ -13112,7 +14089,8 @@ STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"
 # lets callers that already hold the comments list avoid re-hitting the
 # GitHub API just to re-parse the same data, which was previously a
 # significant contributor to rate-limit pressure during standalone stall
-# recovery sweeps.
+# recovery sweeps. Callers MUST pass only the result of
+# authenticated_state_comments; raw comments can never select a PATCH target.
 _extract_standalone_state_comment_id_from_comments() {
   local comments_json="$1"
   printf '%s' "${comments_json:-[]}" \
@@ -13165,8 +14143,9 @@ get_standalone_state_comment_id() {
   local issue_num="$1"
   local comments_json
   if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
-    comments_json='[]'
+    return 1
   fi
+  comments_json="$(authenticated_state_comments "${issue_num}" "${comments_json}")" || return 1
   _extract_standalone_state_comment_id_from_comments "${comments_json}"
 }
 
@@ -13174,8 +14153,9 @@ read_standalone_state_json() {
   local issue_num="$1"
   local comments_json
   if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
-    comments_json='[]'
+    return 1
   fi
+  comments_json="$(authenticated_state_comments "${issue_num}" "${comments_json}")" || return 1
   _extract_standalone_state_json_from_comments "${comments_json}"
 }
 
@@ -13183,11 +14163,21 @@ write_standalone_state_json() {
   local issue_num="$1"
   local state_json="$2"
   local comment_body
-  local comment_id
+  local comment_id trusted_state_helper unsigned_file
 
   comment_body="${STANDALONE_STATE_MARKER_OPEN}
 ${state_json}
 ${STANDALONE_STATE_MARKER_CLOSE}"
+
+  trusted_state_helper="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)" || return 1
+  unsigned_file="$(mktemp "${TMPDIR:-/tmp}/orch_standalone_state.XXXXXX")" || return 1
+  printf '%s' "${comment_body}" > "${unsigned_file}"
+  if ! comment_body="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "${trusted_state_helper}" sign \
+      --repo "${GITHUB_REPOSITORY}" --issue "${issue_num}" --body-file "${unsigned_file}")"; then
+    rm -f "${unsigned_file}"
+    return 1
+  fi
+  rm -f "${unsigned_file}"
 
   # Optional 3rd argument: caller-supplied comment id.  Passing it (even
   # empty) skips the otherwise-automatic lookup, which saves a full
@@ -13201,6 +14191,7 @@ ${STANDALONE_STATE_MARKER_CLOSE}"
     comment_id="$(get_standalone_state_comment_id "${issue_num}")"
   fi
   if [ -n "${comment_id}" ] && [ "${comment_id}" != "null" ]; then
+    [[ "${comment_id}" =~ ^[1-9][0-9]*$ ]] || return 1
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
       -X PATCH -f body="${comment_body}" >/dev/null 2>&1 || true
   else
@@ -13224,9 +14215,9 @@ recovery_action_for_phase() {
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
-import sys
-sys.path.insert(0, 'scripts')
+  action="$(poller_trusted_python - "$phase" "$recovery_count" "$effective_max_recoveries" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import resolve_stall_recovery_action
 
 phase = sys.argv[1]
@@ -13256,9 +14247,9 @@ normalize_stall_recovery_action() {
   local candidate_action="${3:-}"
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
-import sys
-sys.path.insert(0, 'scripts')
+  action="$(poller_trusted_python - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" "$MAX_STALL_RECOVERIES_DONE" <<'PY'
+import os, sys
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import resolve_effective_stall_recovery_action
 
 phase = sys.argv[1]
@@ -13302,7 +14293,7 @@ stall_recovery_action_is_terminal() {
 _robust_parse_json_file() {
   local file_path="$1"
   local parse_log="${RUNTIME_DIR:-/tmp}/stall_judge.log"
-  python3 -c "
+  python3 -I -c "
 import json, re, sys
 
 try:
@@ -14402,7 +15393,7 @@ invoke_stall_judge() {
     echo
     echo "=== STALL JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt
+    SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash "$(poller_trusted_support_file scripts/render_prompt.sh)" prompts/mode-judge-stall-recovery.txt
     echo
     echo "=== STALL DIAGNOSTICS JSON ==="
     echo
@@ -14410,9 +15401,10 @@ invoke_stall_judge() {
   } > "${stall_judge_prompt_file}"
 
   # Centralised in scripts/write_codex_config.sh.
-  bash scripts/write_codex_config.sh \
+  bash "$(poller_trusted_support_file scripts/write_codex_config.sh)" \
     --model "${MODEL_EDITOR}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+    --catalog-path "$(poller_trusted_support_file scripts/codex_model_catalog.json)"
 
   local judge_success="false"
   local attempt
@@ -14441,7 +15433,11 @@ invoke_stall_judge() {
         printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
       else
         sanitize_codex_prompt_file "${stall_judge_prompt_file}"
-        codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
+        run_untrusted_poller_codex judge "${PWD}" \
+          codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
+          exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only \
+          < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" \
+          2>> "${RUNTIME_DIR}/stall_judge.log" || true
       fi
       if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
         judge_success="true"
@@ -15665,6 +16661,13 @@ run_standalone_stall_recovery() {
     return
   fi
 
+  # Resolve once in the parent shell; the per-issue filter runs in a
+  # command substitution and cannot propagate its cache to this process.
+  if ! state_comment_login >/dev/null; then
+    echo "::warning::Standalone state token identity unavailable; deferring stall recovery." >&2
+    return
+  fi
+
   echo ""
   echo "========================================"
   echo "Standalone issue stall recovery"
@@ -15688,7 +16691,7 @@ run_standalone_stall_recovery() {
         t_comments='[]'
       fi
       t_state_json=""
-      if extract_latest_valid_orchestrator_state "${t_comments}"; then
+      if extract_latest_valid_orchestrator_state "${t_comments}" "${t_num}"; then
         t_state_json="${EXTRACTED_STATE_JSON}"
       fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
@@ -15808,9 +16811,9 @@ run_standalone_stall_recovery() {
     phase=""
     _standalone_latch_label=""
     _standalone_phase_resolve_rc=0
-    IFS=$'\t' read -r phase _standalone_latch_label < <(python3 - "$labels_json" <<'PY'
-import json, sys
-sys.path.insert(0, 'scripts')
+    IFS=$'\t' read -r phase _standalone_latch_label < <(poller_trusted_python - "$labels_json" <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import determine_phase, stall_recovery_latch_label
 labels = json.loads(sys.argv[1])
 print(f"{determine_phase(labels)}\t{stall_recovery_latch_label(labels) or ''}")
@@ -15878,10 +16881,15 @@ PY
       continue
     fi
 
-    state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
-    state_json="$(_extract_standalone_state_json_from_comments "${comments_json}")"
+    local trusted_standalone_comments
+    trusted_standalone_comments="$(authenticated_state_comments "${issue_num}" "${comments_json}")" || {
+      echo "::warning::Standalone state authentication unavailable for issue #${issue_num}; skipping recovery this cycle." >&2
+      continue
+    }
+    state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${trusted_standalone_comments}")"
+    state_json="$(_extract_standalone_state_json_from_comments "${trusted_standalone_comments}")"
 
-    updated_state="$(python3 - "$state_json" "$phase" <<'PY'
+    updated_state="$(python3 -I - "$state_json" "$phase" <<'PY'
 import json, sys, time
 state = json.loads(sys.argv[1])
 phase = sys.argv[2]
@@ -15909,9 +16917,9 @@ PY
     if [ "${phase}" = "ai:done" ]; then
       effective_max_recoveries="${MAX_STALL_RECOVERIES_DONE}"
     fi
-    threshold_minutes="$(python3 - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
-import json, sys
-sys.path.insert(0, 'scripts')
+    threshold_minutes="$(poller_trusted_python - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import DEFAULT_PHASE_STALL_THRESHOLDS
 phase = sys.argv[1]
 fallback = int(sys.argv[2])
@@ -16766,9 +17774,9 @@ REISSUE_EOF
 # Read the impl_noop_count for a local_id from the state file.
 get_impl_noop_count() {
   local lid="$1"
-  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -c "
+  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" poller_trusted_python -c "
 import json, os, sys
-sys.path.insert(0, 'scripts')
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import get_impl_noop_count
 
 with open(os.environ['STATE_FILE']) as f:
@@ -16785,9 +17793,9 @@ except (TypeError, ValueError):
 # Increment the impl_noop_count for a local_id in the state file.
 bump_impl_noop_count() {
   local lid="$1"
-  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -c "
+  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" poller_trusted_python -c "
 import json, os, sys
-sys.path.insert(0, 'scripts')
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import increment_impl_noop_count
 
 with open(os.environ['STATE_FILE']) as f:
@@ -17436,7 +18444,7 @@ _runtime_blocker_dispatch_eligible()
 		echo "::warning::[runtime-blocker] failed to create temp file for ${local_id}; failing open."
 		return 0
 	fi
-	if ! blocker_result="$(python3 scripts/blocker_check.py \
+	if ! blocker_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/blocker_check.py)" \
 		--state-file "${STATE_FILE}" \
 		--local-id "${local_id}" \
 		--candidate-details-json "${candidate_truth_json}" 2>"${blocker_err_file}")"; then
@@ -17509,6 +18517,10 @@ write_state_snapshot_actions_runs_export || true
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
+  declare -A _SECURITY_PASS_ADVISORY_ATTEMPTED_ROWS=()
+  SECURITY_PASS_ADVISORY_FILED_ISSUES=""
+  SECURITY_PASS_ADVISORY_ROUTED_COUNT=0
+  SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX=""
   unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
   unset _INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE
   HEALING_NOTES=()
@@ -17555,12 +18567,17 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   if [ "${STATE_FALLBACK_USED}" = "true" ] && [ -n "${STATE_JSON}" ]; then
-    printf '%s\n' "${STATE_JSON}" > "${STATE_FILE}"
-    post_state_comment || true
-    echo "::warning::Detected malformed latest ORCHESTRATOR_STATE_V1 for issue #${TRACKING_NUM}; restored from older valid state and posted healed canonical state."
+    echo "::warning::Newer authenticated state for issue #${TRACKING_NUM} is unusable; refusing to rewind to an older snapshot."
+    continue
   fi
 
   if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then
+    # Only producer-authenticated state evidence can veto recovery. A marker
+    # posted by an arbitrary commenter is not evidence that state ever existed.
+    if ! state_comment_login >/dev/null || [ -z "${GH_TOKEN:-}" ]; then
+      echo "::warning::No authenticated state for tracking issue #${TRACKING_NUM}; refusing reconstruction from unverified comments."
+      continue
+    fi
     # A failed (or unvalidated) comments fetch is NOT evidence that the
     # orchestrator state is missing.  The state comment may exist but be
     # temporarily unreadable — e.g. a paginated fetch of a tracking issue
@@ -17580,6 +18597,36 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # later poll cycle read the real state.
     if [ "${COMMENTS_FETCH_OK}" != "true" ]; then
       echo "::warning::Comments fetch failed for tracking issue #${TRACKING_NUM}; cannot confirm orchestrator state is missing. Skipping state reconstruction this cycle (will retry next poll)."
+      continue
+    fi
+    TRUSTED_RECOVERY_COMMENTS="$(authenticated_state_comments "${TRACKING_NUM}" "${COMMENTS}")" || {
+      echo "::warning::State comment authentication unavailable for #${TRACKING_NUM}; deferring reconstruction."
+      continue
+    }
+    # A broken authenticated snapshot is evidence of an advanced project;
+    # recovery from a descriptor would reset it to wave one.
+    if printf '%s' "${TRUSTED_RECOVERY_COMMENTS}" | jq -e 'any(.[]; (.body // "") | test("^<!-- ORCHESTRATOR_STATE_V[12]"))' >/dev/null 2>&1; then
+      echo "::warning::Authenticated but unusable state for #${TRACKING_NUM}; deferring reconstruction."
+      continue
+    fi
+    # If a producer wrote an incomplete descriptor, never accept an older
+    # complete chain or editable tracking prose as its replacement.
+    if printf '%s' "${COMMENTS}" | jq -e --arg login "${NOOP_CAP_TRUSTED_LOGIN}" \
+      'any(.[]; ((.user.login // "" | ascii_downcase) == $login) and ((.body // "") | startswith("<!-- ORCHESTRATOR_PROJECT_DESCRIPTOR_V1")))' >/dev/null 2>&1; then
+      :
+    else
+      echo "::warning::No authenticated project descriptor evidence for #${TRACKING_NUM}; deferring reconstruction."
+      continue
+    fi
+    RECOVERY_COMMENTS_FILE="${RUNTIME_DIR}/rebuild_comments_${TRACKING_NUM}.json"
+    RECOVERY_DESCRIPTOR_FILE="${RUNTIME_DIR}/rebuild_descriptor_${TRACKING_NUM}.json"
+    printf '%s' "${COMMENTS}" > "${RECOVERY_COMMENTS_FILE}"
+    TRUSTED_STATE_READER="$(poller_trusted_support_file scripts/orchestrate_state_v2.py)" || continue
+    if ! PYTHONDONTWRITEBYTECODE=1 python3 -I "${TRUSTED_STATE_READER}" extract \
+      --kind descriptor --comments-json "${RECOVERY_COMMENTS_FILE}" \
+      --repo "${GITHUB_REPOSITORY}" --issue "${TRACKING_NUM}" \
+      --login "${NOOP_CAP_TRUSTED_LOGIN}" > "${RECOVERY_DESCRIPTOR_FILE}"; then
+      echo "::warning::Incomplete or unauthenticated project descriptor for #${TRACKING_NUM}; deferring reconstruction."
       continue
     fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
@@ -17605,6 +18652,22 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       -f q="repo:${GITHUB_REPOSITORY} \"Tracking issue: #${TRACKING_NUM}\" in:body" \
       --jq '.items // []' 2>/dev/null || echo '[]')"
 
+    # Search results are untrusted. Only children created by the same
+    # workflow identity may justify rebuilding a missing initial snapshot.
+    if ! CHILD_ISSUES="$(printf '%s' "${CHILD_ISSUES}" | jq -ce --arg login "${NOOP_CAP_TRUSTED_LOGIN}" '
+      [ .[] | select((.user.login // "" | ascii_downcase) == $login) ]
+    ')"; then
+      echo "::warning::Child issue evidence unavailable for #${TRACKING_NUM}; deferring reconstruction."
+      continue
+    fi
+    if ! printf '%s' "${CHILD_ISSUES}" | jq -e '
+      [ .[] | (.body // "" | capture("Local ID: `(?<id>[^`]+)`")? | .id) ]
+      | length == (unique | length)
+    ' >/dev/null 2>&1; then
+      echo "::warning::Conflicting child issue mappings for #${TRACKING_NUM}; deferring reconstruction."
+      continue
+    fi
+
     # Build issue_number_map from child issue bodies: extract Local ID metadata
     ISSUE_MAP_JSON="$(echo "${CHILD_ISSUES}" | jq '
       reduce .[] as $issue ({};
@@ -17625,9 +18688,11 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # ReconstructionUnsafeError when the body marks completed work the issue
     # map cannot account for) is surfaced in the log instead of discarded.
     REBUILD_ERR_FILE="${RUNTIME_DIR}/rebuild_err_${TRACKING_NUM}.txt"
-    if python3 scripts/orchestrate_lib.py rebuild-state \
+    if poller_trusted_orchestrate_lib rebuild-state \
       --body-file "${REBUILD_BODY_FILE}" \
+      --descriptor-file "${RECOVERY_DESCRIPTOR_FILE}" \
       --issue-map-json "${ISSUE_MAP_JSON}" \
+      --require-complete-first-wave \
       --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>"${REBUILD_ERR_FILE}"; then
 
       rm -f "${REBUILD_ERR_FILE}"
@@ -17760,7 +18825,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was not applied: ${SECURITY_PASS_WAIVE_REJECT_TEXT}."
       else
         echo "  /security-pass-waive requested for project #${TRACKING_NUM} by ${SECURITY_PASS_WAIVE_AUTHOR}: $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'join(" ")')"
-        SECURITY_PASS_WAIVERS_JSON="$(jq -c --argjson ids "${SECURITY_PASS_WAIVE_IDS_JSON}" --arg by "${SECURITY_PASS_WAIVE_AUTHOR}" '
+        SECURITY_PASS_WAIVERS_JSON="$(jq -c --argjson ids "${SECURITY_PASS_WAIVE_IDS_JSON}" --arg by "${SECURITY_PASS_WAIVE_AUTHOR}" --arg head_sha "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" '
           (.security_pass_reported_findings // []) as $reported
           | (.security_pass_cycle // 0) as $cycle
           | [
@@ -17768,26 +18833,44 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
               | ([$reported[] | select(.finding_id == $id)] | last) as $known
               | {
                   finding_id: $id,
+                  waiver_match_key: ($known.waiver_match_key // ""),
                   file: ($known.file // ""),
                   line: ($known.line // 0),
                   owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
-                  severity: ($known.severity // ""),
-                  justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
+	                  severity: ($known.severity // ""),
+	                  causal_scope_schema: ($known.causal_scope_schema // ""),
+	                  causal_scope_status: ($known.causal_scope_status // ""),
+	                  causal_scope_fingerprint: ($known.causal_scope_fingerprint // ""),
+	                  causal_scope_files: ($known.causal_scope_files // []),
+	                  causal_scope_symbol: ($known.causal_scope_symbol // ""),
+	                  justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
                   source: "operator",
                   waived_by: $by,
                   waived_at_cycle: $cycle,
+                  audited_head_sha: $head_sha,
                   issue: null,
                   finding: $known
                 }
             ]
         ' "${STATE_FILE}")"
+        if ! printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -e '
+          length > 0 and all(.[]; (.waiver_match_key | test("^sha256:[0-9a-f]{64}$")))
+        ' >/dev/null 2>&1; then
+          echo "SECURITY_PASS_WAIVE_REJECTED tracking_issue=${TRACKING_NUM} comment=${SECURITY_PASS_WAIVE_COMMENT_ID} reason=unknown_or_legacy_finding"
+          post_tracking_comment "<!-- security-pass-waive-dedup:${SECURITY_PASS_WAIVE_COMMENT_ID} -->
+
+## ⛔ Security-pass waiver not applied
+
+Every requested finding must still be reported with a provenance-bound waiver key. Unknown or legacy keyless finding IDs cannot be waived."
+          continue
+        fi
         # With SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED the row keeps the
         # finding payload and a followup_pending flag so
         # security_pass_file_deferred_advisory_followups can file the
         # advisory after the final merge (same contract as the judge path).
         if [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ]; then
-          SECURITY_PASS_WAIVERS_STATE_JSON="$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c --arg head_sha "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" '
-            map(if .finding != null then . + {followup_pending: true, audited_head_sha: $head_sha} else del(.finding) end)
+          SECURITY_PASS_WAIVERS_STATE_JSON="$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c '
+            map(if .finding != null then . + {followup_pending: true} else del(.finding) end)
           ')"
         else
           SECURITY_PASS_WAIVERS_STATE_JSON="$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c 'map(del(.finding))')"
@@ -17870,6 +18953,12 @@ The active security-pass fix cycle continues; the waivers apply from its next re
   fi
 
   if [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
+    security_pass_file_advisory_findings \
+      "${INTEGRATION_BRANCH_TRACKING}" \
+      "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+    if [ -n "${SECURITY_PASS_ADVISORY_FILED_ISSUES:-}" ]; then
+      post_state_comment || true
+    fi
     SECURITY_FIX_ISSUES_JSON="$(jq -c '.security_pass_active_fix_issues // []' "${STATE_FILE}" 2>/dev/null || echo '[]')"
     SECURITY_FIX_ISSUE="$(printf '%s' "${SECURITY_FIX_ISSUES_JSON}" | jq -r '.[0] // empty' 2>/dev/null || echo '')"
     if ! [[ "${SECURITY_FIX_ISSUE}" =~ ^[0-9]+$ ]]; then
@@ -18165,7 +19254,7 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
           set_tracking_phase_label "ai:merged"
           post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
 
-The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored."
+The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
           tg_cleanup_msgs "${TRACKING_NUM}"
           MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
           MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
@@ -18194,9 +19283,10 @@ The orchestrator detected that the integration PR was squash-merged outside the 
   # the merge tick, or follow-ups filed before this check existed), so a
   # parked advisory is never left waiting for a human.
   if [ "$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")" = "merged" ] \
-    && jq -e '
+    && jq -e --arg security_pass_enabled "${ENABLE_SECURITY_PASS}" '
       (((.security_pass_followups_merge_checked // []) | map(select(type == "number"))) as $checked
-      | any((.security_pass_waived_findings // [])[]; (.followup_pending // false) == true and .issue == null and (.finding | type) == "object")
+      | ($security_pass_enabled == "true" and ((.security_pass_advisory_backlog // []) | length) > 0)
+        or any((.security_pass_waived_findings // [])[]; (.followup_pending // false) == true and .issue == null and (.finding | type) == "object")
         or any((.security_pass_followup_issues // [])[]; (.issue | type) == "number" and ((.issue as $row_issue | $checked | index($row_issue)) == null)))
     ' "${STATE_FILE}" >/dev/null 2>&1; then
     security_pass_unblock_filed_advisory_followups \
@@ -18207,6 +19297,11 @@ The orchestrator detected that the integration PR was squash-merged outside the 
       "${INTEGRATION_BRANCH_TRACKING}" \
       "${DEFAULT_BRANCH_TRACKING}" \
       "$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+    if [ "${ENABLE_SECURITY_PASS}" = "true" ]; then
+      security_pass_file_advisory_findings \
+        "${INTEGRATION_BRANCH_TRACKING}" \
+        "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || true)"
+    fi
     post_state_comment || true
   fi
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
@@ -18261,7 +19356,7 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     emit_orchestrator_completion_lessons
     handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:merged"
-    post_tracking_comment "Project completed successfully. Issue kept open for manual review."
+    post_tracking_comment "Project completed successfully. Issue kept open for manual review.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
     tg_cleanup_msgs "${TRACKING_NUM}"
     MSG="✅ Project #${TRACKING_NUM} completed successfully."
     MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
@@ -18742,7 +19837,7 @@ The security pass that parked this project ran on workflow engine \`${SP_AUTO_RE
       if [ -z "${REVALIDATE_COMMENT_URL}" ] && [[ "${REVALIDATE_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
         REVALIDATE_COMMENT_URL="$(_gh_url "issues/${TRACKING_NUM}#issuecomment-${REVALIDATE_COMMENT_ID}")"
       fi
-      REVALIDATE_REASON="$(REVALIDATE_COMMENT_BODY="${REVALIDATE_COMMENT_BODY}" python3 - <<'PY'
+      REVALIDATE_REASON="$(REVALIDATE_COMMENT_BODY="${REVALIDATE_COMMENT_BODY}" python3 -I - <<'PY'
 from __future__ import annotations
 
 import os
@@ -19523,7 +20618,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # Update issue phase timestamps for stall tracking
   # ---------------------------------------------------------------
   STATE_HASH_BEFORE="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
-  python3 scripts/orchestrate_lib.py update-timestamps \
+  poller_trusted_orchestrate_lib update-timestamps \
     --state-file "${STATE_FILE}" \
     --labels-json "${LABELS_JSON}" || true
   STATE_HASH_AFTER="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
@@ -19540,7 +20635,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # backpressure, and the staleness alert all reuse the same compare result.
   check_integration_branch_staleness "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH:-}" "${CWS_AHEAD_BY}" || true
 
-  WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
+  WAVE_STATUS="$(poller_trusted_orchestrate_lib check-wave-status \
     --state-file "${STATE_FILE}" \
     --labels-json "${LABELS_JSON}" \
     --issue-states-json "${ISSUE_STATES_JSON}" \
@@ -20014,9 +21109,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
     # Ensure codex config exists for the judge.
     # Centralised in scripts/write_codex_config.sh.
-    bash scripts/write_codex_config.sh \
+    bash "$(poller_trusted_support_file scripts/write_codex_config.sh)" \
       --model "${MODEL_EDITOR}" \
-      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
+      --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+      --catalog-path "$(poller_trusted_support_file scripts/codex_model_catalog.json)"
 
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
     REVIEW_BLOCKED_STATE_CHANGED=false
@@ -20188,10 +21284,12 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       # Collect full PR context for the judge. Apply the same byte cap as the
       # wave judge because minified single-line diffs defeat the line cap used
       # when this prompt is rendered below.
-      _rb_pr_diff_tmp="$(mktemp)"
-      _rb_pr_diff_capped_tmp="$(mktemp)"
-      if gh_retry_to_file "${_rb_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
-        -H 'Accept: application/vnd.github.diff'; then
+	      _rb_pr_diff_tmp="$(mktemp)"
+	      _rb_pr_diff_capped_tmp="$(mktemp)"
+	      RB_REVIEW_FIX_DIFF_FILE="${RUNTIME_DIR}/rb_review_fix_${RB_PR}.diff"
+	      if gh_retry_to_file "${_rb_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
+	        -H 'Accept: application/vnd.github.diff'; then
+	        cp "${_rb_pr_diff_tmp}" "${RB_REVIEW_FIX_DIFF_FILE}"
         head -n 1000 "${_rb_pr_diff_tmp}" > "${_rb_pr_diff_capped_tmp}" 2>/dev/null || printf '%s' '(diff unavailable)' > "${_rb_pr_diff_capped_tmp}"
         _rb_pr_diff_bytes="$(wc -c < "${_rb_pr_diff_capped_tmp}" 2>/dev/null | tr -cd '0-9' || true)"
         [[ "${_rb_pr_diff_bytes}" =~ ^[0-9]+$ ]] || _rb_pr_diff_bytes=0
@@ -20199,7 +21297,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
           if _judge_truncate_pr_diff_file "${_rb_pr_diff_capped_tmp}" "${JUDGE_PR_DIFF_MAX_BYTES}"; then
             PR_DIFF="[NOTE: PR diff is ${_rb_pr_diff_bytes} bytes after the 1000-line cap; truncated to a prefix within ${JUDGE_PR_DIFF_MAX_BYTES} bytes to fit codex stdin (1 MB cap). Read the PR's files directly for the elided tail if needed.]
 $(cat "${_rb_pr_diff_capped_tmp}")"
-          else
+	      else
             echo "::warning::Failed to truncate PR #${RB_PR} diff for review-blocked judge; eliding ${_rb_pr_diff_bytes} bytes instead of embedding an over-budget payload." >&2
             PR_DIFF="[NOTE: PR diff elided because byte truncation failed; ${_rb_pr_diff_bytes} bytes omitted. Read the PR's files directly if this diff matters to the verdict.]"
           fi
@@ -20208,7 +21306,8 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         fi
       else
         echo "::warning::Failed to fetch PR #${RB_PR} diff for review-blocked judge; falling back to '(diff unavailable)'." >&2
-        PR_DIFF="(diff unavailable)"
+	        PR_DIFF="(diff unavailable)"
+	        printf '%s' '(diff unavailable)' > "${RB_REVIEW_FIX_DIFF_FILE}"
       fi
       rm -f "${_rb_pr_diff_tmp}" "${_rb_pr_diff_capped_tmp}"
       unset _rb_pr_diff_tmp _rb_pr_diff_capped_tmp _rb_pr_diff_bytes
@@ -20439,14 +21538,39 @@ ${FOLLOWUP_BLOCK_REASON}"
       # Reset workspace state (tracked files only) after a combined judge
       # call whose decision was NOT fix. Untracked files are left alone so
       # pre-fetched scripts and artifacts are not swept.
-      rb_cleanup_combined_workspace() {
+	      rb_cleanup_combined_workspace() {
         if [ "${RB_COMBINED_MODE}" = "true" ]; then
           git reset --hard HEAD 2>/dev/null || true
           git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
         fi
-      }
+	      }
 
-      # Build the judge prompt for review-blocked evaluation
+	      RB_REVIEW_FIX_AUTHORIZATION_FILE="${RUNTIME_DIR}/rb_review_fix_authorization_${RB_PR}.json"
+	      RB_REVIEW_FIX_COMMENTS_FILE="${RUNTIME_DIR}/rb_review_fix_comments_${RB_PR}.json"
+	      RB_REVIEW_FIX_REVIEW_COMMENTS_FILE="${RUNTIME_DIR}/rb_review_fix_review_comments_${RB_PR}.json"
+	      RB_REVIEW_FIX_AUTHORIZATION_AVAILABLE=false
+	      printf '%s\n' "${PR_COMMENTS}" > "${RB_REVIEW_FIX_COMMENTS_FILE}"
+	      printf '%s\n' "${PR_REVIEW_COMMENTS}" > "${RB_REVIEW_FIX_REVIEW_COMMENTS_FILE}"
+	      RB_REVIEW_FIX_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+	      if [ "${RB_COMBINED_MODE}" = true ] && [ -z "$(git status --porcelain 2>/dev/null)" ] \
+	        && PYTHONDONTWRITEBYTECODE=1 python3 "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" \
+	          --build-review-fix-authorization \
+	          --review-fix-repo "${PWD}" \
+	          --review-fix-repository "${GITHUB_REPOSITORY}" \
+	          --review-fix-pr-number "${RB_PR}" \
+	          --review-fix-head-sha "${RB_REVIEW_FIX_HEAD_SHA}" \
+	          --review-fix-producer-run "${GITHUB_RUN_ID:-poller}" \
+	          --review-fix-diff-file "${RB_REVIEW_FIX_DIFF_FILE}" \
+	          --review-fix-comments-json-file "${RB_REVIEW_FIX_COMMENTS_FILE}" \
+	          --review-fix-comments-json-file "${RB_REVIEW_FIX_REVIEW_COMMENTS_FILE}" \
+	          --review-fix-output "${RB_REVIEW_FIX_AUTHORIZATION_FILE}"; then
+	        RB_REVIEW_FIX_AUTHORIZATION_AVAILABLE=true
+	      else
+	        : > "${RB_REVIEW_FIX_AUTHORIZATION_FILE}"
+	        echo "::warning::No trusted current-head review-fix authorization is available for PR #${RB_PR}; combined action=fix will be rejected."
+	      fi
+
+	      # Build the judge prompt for review-blocked evaluation
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
 
@@ -20459,7 +21583,7 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash "$(poller_trusted_support_file scripts/render_prompt.sh)" prompts/mode-judge-review-blocked.txt
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -20481,7 +21605,14 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo
         echo "=== PR #${RB_PR} INLINE REVIEW COMMENTS ==="
         echo
-        echo "${PR_REVIEW_COMMENTS}" | jq '.'
+	        echo "${PR_REVIEW_COMMENTS}" | jq '.'
+	        echo
+	        echo "=== TRUSTED REVIEW-FIX AUTHORIZATION ==="
+	        if [ "${RB_REVIEW_FIX_AUTHORIZATION_AVAILABLE}" = true ]; then
+	          jq '{schema_version,repository,pr_number,head_sha,targets}' "${RB_REVIEW_FIX_AUTHORIZATION_FILE}"
+	        else
+	          echo '{"schema_version":"review_fix_authorization.v1","targets":[]}'
+	        fi
         echo
         echo "=== ORCHESTRATOR CONTEXT ==="
         echo "Review-blocked retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
@@ -20531,8 +21662,26 @@ ${FOLLOWUP_BLOCK_REASON}"
       else
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
-          cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
-          if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
+          rb_workspace_manifest="${POST_AGENT_ARTIFACT_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.manifest.json"
+          rb_workspace_report="${POST_AGENT_ARTIFACT_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.report.json"
+          rb_workspace_paths="${POST_AGENT_ARTIFACT_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.paths.txt"
+          rb_workspace_quarantine="${POST_AGENT_ARTIFACT_DIR}/post-agent-poller-rb-${RB_PR}-${attempt}.quarantine"
+          if ! run_poller_workspace_guard snapshot "${PWD}" --manifest "${rb_workspace_manifest}"; then
+			echo "::error::Review-blocked workspace snapshot failed for PR #${RB_PR}; terminating the poller before model execution."
+			exit 78
+		  fi
+          rb_model_rc=0
+          run_untrusted_poller_codex judge-fix "${PWD}" \
+            codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
+            exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox workspace-write \
+            < "${RB_JUDGE_PROMPT_FILE}" > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || rb_model_rc=$?
+          if ! run_poller_workspace_guard reconcile "${PWD}" \
+            --manifest "${rb_workspace_manifest}" --quarantine-dir "${rb_workspace_quarantine}" \
+            --changed-paths-out "${rb_workspace_paths}" --report "${rb_workspace_report}"; then
+			echo "::error::Review-blocked workspace guard rejected PR #${RB_PR}; terminating the poller before output parsing."
+			exit 78
+          fi
+          if [ "${rb_model_rc}" -eq 0 ] && grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
             break
           fi
@@ -20553,10 +21702,10 @@ ${FOLLOWUP_BLOCK_REASON}"
       fi
 
       # Parse judge output
-      RB_JUDGE_JSON="$(python3 -c "
+      RB_JUDGE_JSON="$(run_poller_isolated_python "${PWD}" -c "
 import json, re, sys
 
-raw = open('${RB_JUDGE_OUTPUT_FILE}', 'r').read()
+raw = sys.stdin.read()
 
 try:
     data = json.loads(raw.strip())
@@ -20588,7 +21737,7 @@ for i, ch in enumerate(cleaned):
 
 print('Could not parse review-blocked judge JSON', file=sys.stderr)
 sys.exit(1)
-" 2>/dev/null || echo "")"
+" < "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || echo "")"
 
       if [ -z "${RB_JUDGE_JSON}" ]; then
         echo "::warning::Could not parse review-blocked judge output for #${rb_issue}"
@@ -20600,8 +21749,25 @@ sys.exit(1)
 
       RB_ACTION="$(echo "${RB_JUDGE_JSON}" | jq -r '.action')"
       RB_JUSTIFICATION="$(echo "${RB_JUDGE_JSON}" | jq -r '.justification // "no justification"')"
-      RB_FIX_DESC="$(echo "${RB_JUDGE_JSON}" | jq -r '.fix_description // ""')"
-      RB_REMAINING="$(echo "${RB_JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')"
+	      RB_FIX_DESC="$(echo "${RB_JUDGE_JSON}" | jq -r '.fix_description // ""')"
+	      RB_REMAINING="$(echo "${RB_JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')"
+	      RB_REVIEW_FIX_SELECTED_FILE="${RUNTIME_DIR}/rb_review_fix_selected_${RB_PR}.json"
+	      if ! printf '%s\n' "${RB_JUDGE_JSON}" | jq -e '.fix_targets // [] | if type == "array" then . else error("fix_targets must be an array") end' \
+	        > "${RB_REVIEW_FIX_SELECTED_FILE}" 2>/dev/null; then
+	        printf '[]\n' > "${RB_REVIEW_FIX_SELECTED_FILE}"
+	      fi
+	      if [ "${RB_ACTION}" = fix ] && { [ "${RB_REVIEW_FIX_AUTHORIZATION_AVAILABLE}" != true ] \
+	        || [ "$(jq 'length' "${RB_REVIEW_FIX_SELECTED_FILE}")" -eq 0 ]; }; then
+	        echo "::error::Judge selected action=fix without trusted current-head fix_targets; refusing publication."
+	        RB_ACTION="skip"
+	        rb_cleanup_combined_workspace
+	      fi
+	      RB_REVIEW_FIX_AUTHORIZATION_MARKER=""
+	      if [ "${RB_REVIEW_FIX_AUTHORIZATION_AVAILABLE}" = true ]; then
+	        rb_review_fix_authorization_sha256="$(sha256sum "${RB_REVIEW_FIX_AUTHORIZATION_FILE}" | awk '{print $1}')"
+	        rb_review_fix_authorization_payload="$(base64 -w0 "${RB_REVIEW_FIX_AUTHORIZATION_FILE}")"
+	        RB_REVIEW_FIX_AUTHORIZATION_MARKER="<!-- REVIEW_FIX_AUTHORIZATION_V1 head=${RB_REVIEW_FIX_HEAD_SHA} sha256=${rb_review_fix_authorization_sha256} payload=${rb_review_fix_authorization_payload} -->"
+	      fi
 
       echo "  Judge decision for #${rb_issue}: ${RB_ACTION}"
       echo "  Justification: ${RB_JUSTIFICATION}"
@@ -20613,7 +21779,9 @@ sys.exit(1)
 **Retry:** $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}
 **Justification:** ${RB_JUSTIFICATION}
 
-**Remaining issues:** ${RB_REMAINING}"
+**Remaining issues:** ${RB_REMAINING}
+
+${RB_REVIEW_FIX_AUTHORIZATION_MARKER}"
 
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
         -f body="${RB_COMMENT}" >/dev/null 2>&1 || true
@@ -20852,28 +22020,65 @@ sys.exit(1)
               esac
               unset _orig_origin_url
 
-              # Check if there are changes to commit
-              if [ -n "$(git status --porcelain)" ]; then
-                git config user.name "codex-bot"
-                git config user.email "codex@users.noreply.github.com"
-                if [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ]; then
-                  # Use a single add call so empty/minimal repos do not fail on
-                  # exclude-only pathspecs.
-                  # NOTE: do not list .gitignored directories (node_modules)
-                  # as `:!` exclude pathspecs here. `git add -A -- . ':!<dir>'`
-                  # treats the exclude path as an explicit name and fails with
-                  # "The following paths are ignored by one of your .gitignore
-                  # files" + exit 1 when that dir exists on disk. .gitignore
-                  # already excludes them; the pathspec exclude is redundant
-                  # and turns into a hard failure once a step creates
-                  # node_modules/.
-                  git add -A -- . ':!.github/prompts' ':!.github/scripts'
-                else
-                  # Keep workflow-edit guard exclusions while avoiding brittle
-                  # tracked/untracked split staging pathspec failures. Same
-                  # gitignore-dir exclusion caveat as above applies.
-                  git add -A -- . ':!scripts' ':!prompts' ':!.github/ai' ':!.github/workflows' ':!.github/prompts' ':!.github/scripts'
-                fi
+	              # Check if there are changes to commit
+	              if [ -n "$(git status --porcelain)" ]; then
+	                git config user.name "codex-bot"
+	                git config user.email "codex@users.noreply.github.com"
+	                rb_review_fix_touched_file="${RUNTIME_DIR}/rb_review_fix_touched_${RB_PR}.txt"
+	                rb_review_fix_allowed_file="${POLLER_VALIDATOR_OUTPUT_DIR}/rb_review_fix_allowed_${RB_PR}.txt"
+	                rb_review_fix_spans_file="${POLLER_VALIDATOR_OUTPUT_DIR}/rb_review_fix_spans_${RB_PR}.json"
+	                rb_review_fix_clean_file="${RUNTIME_DIR}/rb_review_fix_clean_${RB_PR}.tsv"
+	                if [ -s "${rb_workspace_paths:-/nonexistent}" ]; then
+	                  cp "${rb_workspace_paths}" "${rb_review_fix_touched_file}"
+	                else
+	                  : > "${rb_review_fix_touched_file}"
+	                fi
+	                : > "${rb_review_fix_clean_file}"
+	                if ! run_poller_isolated_python "${PWD}" "${TRUSTED_POLLER_REVIEW_SCOPE_GUARD}" \
+	                  --validate-review-fix-authorization \
+	                  --review-fix-repo "${PWD}" \
+	                  --review-fix-repository "${GITHUB_REPOSITORY}" \
+	                  --review-fix-pr-number "${RB_PR}" \
+	                  --review-fix-head-sha "${RB_REVIEW_FIX_HEAD_SHA}" \
+	                  --review-fix-diff-file "${RB_REVIEW_FIX_DIFF_FILE}" \
+	                  --review-fix-comments-json-file "${RB_REVIEW_FIX_COMMENTS_FILE}" \
+	                  --review-fix-comments-json-file "${RB_REVIEW_FIX_REVIEW_COMMENTS_FILE}" \
+	                  --review-fix-authorization-file "${RB_REVIEW_FIX_AUTHORIZATION_FILE}" \
+	                  --review-fix-selected-targets-file "${RB_REVIEW_FIX_SELECTED_FILE}" \
+	                  --review-fix-spans-output "${rb_review_fix_spans_file}" \
+	                  --staged-file "${rb_review_fix_touched_file}" \
+	                  --allowlist-out "${rb_review_fix_allowed_file}"; then
+	                  echo "::warning::Review-blocked poller fix exceeded trusted authorization; discarding it."
+	                  rb_cleanup_combined_workspace
+	                  REVIEW_BLOCKED_STATE_CHANGED=true
+	                  continue
+	                fi
+	                if [ "${ALLOW_WORKFLOW_EDITS:-true}" != true ] \
+	                  && grep -Eq '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)' "${rb_review_fix_touched_file}"; then
+	                  echo "::warning::Protected review-fix path is disabled by ALLOW_WORKFLOW_EDITS=false; discarding it."
+	                  rb_cleanup_combined_workspace
+	                  REVIEW_BLOCKED_STATE_CHANGED=true
+	                  continue
+	                fi
+	                if ! POST_AGENT_VALIDATION_SANDBOX="${UNTRUSTED_POLLER_SANDBOX}" \
+	                  POST_AGENT_VALIDATION_RUNTIME_DIR="${POST_AGENT_ARTIFACT_DIR}" \
+	                  bash "${TRUSTED_POLLER_RESOLVER_GUARD}" \
+	                  --repo-root "${PWD}" \
+	                  --conflicted-set "${rb_review_fix_allowed_file}" \
+	                  --touched-set "${rb_review_fix_touched_file}" \
+	                  --conflict-spans "${rb_review_fix_spans_file}" \
+	                  --clean-manifest "${rb_review_fix_clean_file}" \
+	                  --strict-manifests; then
+	                  echo "::warning::Review-blocked poller fix changed bytes outside authorized hunks; discarding it."
+	                  rb_cleanup_combined_workspace
+	                  REVIEW_BLOCKED_STATE_CHANGED=true
+	                  continue
+	                fi
+	                git reset -q HEAD -- .
+	                while IFS= read -r rb_review_fix_authorized_path; do
+	                  [ -n "${rb_review_fix_authorized_path}" ] || continue
+	                  git add -- "${rb_review_fix_authorized_path}"
+	                done < "${rb_review_fix_allowed_file}"
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
                 if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
@@ -20884,14 +22089,19 @@ sys.exit(1)
                   echo "Error: .github/prompts or .github/scripts is staged"
                   exit 1
                 fi
-                git commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
+                prepare_untrusted_poller_runtime || exit 1
+                rb_fix_commit_message="[orchestrator-fix] address review-blocked issues for #${rb_issue}
 
 Orchestrator judge applied fixes to unblock the review pipeline.
 Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
-${RB_FIX_DESC}" || true
-
-                git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+${RB_FIX_DESC}"
+                if ! bash "${TRUSTED_POLLER_GIT_WRITER}" commit --repo . --message "${rb_fix_commit_message}"; then
+                  echo "::warning::Trusted commit rejected orchestrator fix for PR #${RB_PR}."
+                  rb_cleanup_combined_workspace
+                  continue
+                fi
+                rb_fix_local_head="$(git rev-parse HEAD)"
 
                 if [ "${RB_TARGET_MERGED}" = "true" ]; then
                   # Push follow-up branch and create a new PR
@@ -20901,7 +22111,12 @@ ${RB_FIX_DESC}" || true
                     tg_notify "Refused merged follow-up PR creation for review-blocked issue #${rb_issue} (PR #${RB_PR}): integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base was '${BASE_REF}'."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
                     RB_FOLLOWUP_REFUSED="true"
                     REVIEW_BLOCKED_STATE_CHANGED=true
-                  elif git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                  elif GH_TOKEN="${GH_TOKEN}" bash "${TRUSTED_POLLER_GIT_WRITER}" push \
+                    --repo . \
+                    --branch "${FOLLOWUP_BRANCH}" \
+                    --expected-local-head "${rb_fix_local_head}" \
+                    --expected-remote-head absent \
+                    --remote-url "https://github.com/${GITHUB_REPOSITORY}.git"; then
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
 
                     if [ "${STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
@@ -20962,7 +22177,12 @@ ${RB_FIX_DESC}
                   fi
                 else
                   # Push to existing open PR branch
-                  if git push origin "HEAD:${HEAD_REF}" 2>/dev/null; then
+                  if GH_TOKEN="${GH_TOKEN}" bash "${TRUSTED_POLLER_GIT_WRITER}" push \
+                    --repo . \
+                    --branch "${HEAD_REF}" \
+                    --expected-local-head "${rb_fix_local_head}" \
+                    --expected-remote-head "${RB_HEAD_SHA}" \
+                    --remote-url "https://github.com/${GITHUB_REPOSITORY}.git"; then
                     echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
                     # Remove review-blocked label — the push triggers synchronize
                     # which re-runs review_autofix with a reset autofix counter.
@@ -21324,7 +22544,7 @@ ${RB_FIX_DESC}
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
       done
 
-      WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
+      WAVE_STATUS="$(poller_trusted_orchestrate_lib check-wave-status \
         --state-file "${STATE_FILE}" \
         --labels-json "${LABELS_JSON}")"
       WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
@@ -21857,7 +23077,7 @@ fi
     fi
     _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
 
-    STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
+    STALLS_JSON="$(poller_trusted_orchestrate_lib check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
 
     STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
@@ -21977,9 +23197,9 @@ fi
           STALL_STATE_CHANGED=true
 
           if [ "${STALL_RECOVERY_SHOULD_INCREMENT}" = "true" ] && [ -n "${STALL_LOCAL_ID}" ] && [ "${STALL_LOCAL_ID}" != "null" ]; then
-            python3 -c "
-import json, time, sys
-sys.path.insert(0, 'scripts')
+            poller_trusted_python -c "
+import json, time, os, sys
+sys.path.insert(0, os.environ['POLLER_TRUSTED_SUPPORT_DIR'] + '/scripts')
 from orchestrate_lib import increment_stall_recovery
 
 with open('${STATE_FILE}') as f:
@@ -22137,9 +23357,10 @@ Manual intervention required." >/dev/null
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
   echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-high}"
   # Centralised in scripts/write_codex_config.sh.
-  bash scripts/write_codex_config.sh \
+  bash "$(poller_trusted_support_file scripts/write_codex_config.sh)" \
     --model "${MODEL_EDITOR}" \
-    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
+    --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+    --catalog-path "$(poller_trusted_support_file scripts/codex_model_catalog.json)"
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
     continue
@@ -22299,7 +23520,7 @@ ${PR_DIFF}
     echo
     echo "=== JUDGE TASK ==="
     echo
-    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt
+    SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash "$(poller_trusted_support_file scripts/render_prompt.sh)" prompts/mode-judge.txt
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -22440,7 +23661,11 @@ ${PR_DIFF}
     # The pipeline may return 141 (SIGPIPE) when the prompt is larger
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.
-    cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    run_untrusted_poller_codex judge "${PWD}" \
+      codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true \
+      exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only \
+      < "${judge_effective_prompt_file}" > "${JUDGE_OUTPUT_FILE}" \
+      2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
     rm -f "${judge_attempt_prompt_file}"
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
     if [ -n "${judge_json_candidate}" ]; then
@@ -22589,7 +23814,7 @@ PRs to revert: ${REVERT_COUNT}"
         handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
 
         set_tracking_phase_label "ai:merged"
-        post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s) (${JUDGE_STALL_CYCLES} stall). Issue kept open for manual review."
+        post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s) (${JUDGE_STALL_CYCLES} stall). Issue kept open for manual review.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
 
         tg_cleanup_msgs "${TRACKING_NUM}"
         MSG="Project #${TRACKING_NUM} completed! All waves merged and judge approved."
@@ -22615,7 +23840,7 @@ PRs to revert: ${REVERT_COUNT}"
 
 **Reason:** ${JUDGE_JUSTIFICATION}
 
-All waves have merged and the judge is satisfied. Transitioning to runtime validation (cycle ${VALIDATION_CYCLE}) to confirm correctness before closing."
+All waves have merged and the judge is satisfied. Transitioning to runtime validation (cycle ${VALIDATION_CYCLE}) to confirm correctness before closing.${SECURITY_PASS_ADVISORY_SUMMARY_SUFFIX:-}"
 
       jq --argjson cycle "${VALIDATION_CYCLE}" \
         '.status = "validating" |
@@ -22922,7 +24147,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
         _gate_violations=""
         if [ -n "${_gate_integration_branch}" ] \
            && [ "${_gate_fp_count}" -gt 0 ] \
-           && [ -f "scripts/verify_integration_fingerprints.py" ]; then
+           && poller_trusted_support_file scripts/verify_integration_fingerprints.py >/dev/null; then
           # Resolve a fresh ref for the integration branch. In the normal
           # GitHub Actions path, fetch the branch and pin FETCH_HEAD to a
           # concrete commit SHA immediately so later git operations cannot
@@ -22993,7 +24218,7 @@ The next poll tick will re-run the gate against the cleaned state. If an underly
             jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
             _gate_exit=0
             INTEGRATION_BRANCH_NAME="${_gate_integration_branch}" \
-              python3 scripts/verify_integration_fingerprints.py \
+              PYTHONDONTWRITEBYTECODE=1 python3 -I "$(poller_trusted_support_file scripts/verify_integration_fingerprints.py)" \
                 --ref "${_gate_ref}" \
                 "${_gate_fp_file}" \
                 > "${_gate_log_file}" 2>&1 || _gate_exit=$?
@@ -23381,8 +24606,7 @@ NOOP_RECOVERY_BLOCKED=0
 NOOP_RECOVERY_CAP_SKIPPED=0
 # Token identity that posts the fingerprint-cap marker. Resolved lazily
 # (one GET /user per cycle, only when a cap marker is seen) and cached.
-NOOP_CAP_TRUSTED_LOGIN=""
-NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
+# Token identity is cached by state_comment_login for the whole poll run.
 NOOP_MAX_RETRIES=3
 # Operator-facing opt-outs. `e2e-smoke-test` mirrors the workflow's
 # own auto-merge suppression so the smoke-test bait-removal race
@@ -23392,9 +24616,9 @@ NOOP_MAX_RETRIES=3
 NOOP_FORCE_MERGE_SKIP_LABELS=$'e2e-smoke-test\nforce-review'
 
 # Source the shared audit helper once, outside the loop.
-if [ -f scripts/validate_editor_audit.sh ]; then
+if trusted_editor_audit="$(poller_trusted_support_file scripts/validate_editor_audit.sh)"; then
 	# shellcheck source=scripts/validate_editor_audit.sh disable=SC1091
-	source scripts/validate_editor_audit.sh
+	source "${trusted_editor_audit}"
 fi
 
 for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
@@ -23519,14 +24743,8 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 				--arg marker "<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA} " \
 				'[.[] | select((.body // "") | contains($marker)) | (.user.login // "" | ascii_downcase)] | unique | .[]' \
 				2>/dev/null || echo "")"
-			if [ -n "${N_NOOP_CAP_AUTHORS}" ] && [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "unset" ]; then
-				NOOP_CAP_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
-				if [ -n "${NOOP_CAP_TRUSTED_LOGIN}" ]; then
-					NOOP_CAP_TRUSTED_LOGIN_STATE="ok"
-				else
-					NOOP_CAP_TRUSTED_LOGIN_STATE="failed"
-					echo "::warning::Noop-suspicious sweep could not resolve the token identity; fingerprint-cap skip disabled this cycle (re-dispatch continues)."
-				fi
+			if [ -n "${N_NOOP_CAP_AUTHORS}" ]; then
+				state_comment_login >/dev/null || echo "::warning::Noop-suspicious sweep could not resolve the token identity; fingerprint-cap skip disabled this cycle (re-dispatch continues)."
 			fi
 			if [ -n "${N_NOOP_CAP_AUTHORS}" ] && [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "ok" ] \
 				&& printf '%s\n' "${N_NOOP_CAP_AUTHORS}" | grep -Fxq -- "${NOOP_CAP_TRUSTED_LOGIN}"; then

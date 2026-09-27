@@ -6,6 +6,8 @@ The optional structured issue form and the default free-form issue path both ent
 
 The primary issue → PR pipeline spans twelve core phases: clarify (`clarify.yml`, `internal-clarify.yml`), clarify-respond (`orchestrate_clarify_respond.yml`, `internal-orchestrate-clarify-respond.yml`), plan (`plan.yml`, `internal-plan.yml`), implement (`implement.yml`, `internal-implement.yml`), implement-diagnose (`scripts/implement_diagnose_post_codex_failure.sh`), implement-repair (`prompts/mode-implement-repair.txt`, `prompts/mode-implement-repair-syntax.txt`), review autofix (`review_autofix.yml`, `internal-review.yml`), conflict resolver (`scripts/review_conflict_resolve.sh` inside review autofix), orchestrate (`orchestrate.yml`, `internal-orchestrate.yml`, `orchestrate_poll.yml`, `internal-orchestrate-poll.yml`), judge (`prompts/mode-judge*.txt` plus `scripts/review_rb_judge.sh` in review-blocked recovery), validate (`validate.yml`, `internal-validate.yml`), and workflow log analysis (`workflow-log-analysis.yml`); the separate `check_failure_triage.yml` and workflow-failure-heal paths (`workflow_failure_heal.yml`, `workflow-failure-heal-intake.yml`) are adjacent automation, but not part of the main issue-state machine below. Heal listens for the human-needed escalation labels (`ai:needs-human` and the terminal latches) and for failed release runs, and re-enters the machine by opening an `ai:workflow-heal` issue.
 
+An explicit validation `target_ref` uses a verified support commit for root instructions, ignores the target branch's prompt overlay, and runs discovery, diagnosis, and self-heal model calls in the credentialless provider-proxied sandbox. Branch-owned agent files and README content remain untrusted repository data; unavailable support or isolation stops that validation run. Ordinary validation without `target_ref` retains its existing staging path.
+
 ## Label state machine
 
 The diagram focuses on the main issue-phase labels from `.github/ai/label_contract.v1.json`. `ai:review-skipped` is shown because it is a PR-side label that changes the linked issue's next transition.
@@ -20,7 +22,9 @@ flowchart LR
   ready --> merged["ai:merged"]
 
   security_entry["judge complete"] --> security_pass["ai:security-pass"]
-  security_pass -->|clean current-head audit| validating["ai:validating"]
+  security_pass -->|clean current-head audit or clean sync rebind| validating["ai:validating"]
+  security_pass -->|pre-existing-code findings only| advisory_followups["non-blocking ai:security follow-ups"]
+  advisory_followups --> validating
   security_pass -->|findings| security_pass_fixing["ai:security-pass-fixing"]
   security_pass_fixing -->|fix issue merged, re-audit| security_pass
   security_pass -->|budget exhausted, judge accepts all| validating
@@ -53,6 +57,10 @@ Happy path
 
 Security-pass gate (default on, before validation or finalization)
   judge complete -> ai:security-pass -> clean -> ai:validating
+  ai:security-pass -> clean default-branch sync merge -> rebind pass to new head
+    without another model run
+  ai:security-pass -> findings only on code older than the project merge-base
+    -> bounded non-blocking ai:security follow-ups -> ai:validating
   judge complete -> ai:security-pass -> findings -> ai:security-pass-fixing
     -> fix issue merged -> ai:security-pass (delta re-audit: files changed since
        the last audited commit + files of prior findings + the previous fix

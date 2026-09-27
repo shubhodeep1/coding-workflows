@@ -50,20 +50,14 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_claude_fixer_handoff.sh"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh untrusted_process_sandbox.sh model_provider_proxy.py package_download_proxy.py trusted_git_write.sh post_agent_workspace_guard.py security_audit_causality.py write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh files_touched_scope_guard.py review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh review_pre_review_merge_topology.sh review_detect_merge_conflicts.sh review_append_iteration_summary.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_claude_fixer_handoff.sh"
 # Keep this registry for compatibility, but all runtime files now come from
 # the same verified workflow commit as the required bootstrap scripts.
 #
-# render_prompt.py is main-primary because it validates arbitrary embedded
+# render_prompt.py remains registered for compatibility. It validates arbitrary embedded
 # PR-diff text before every reviewer/editor call. A false-positive in that
-# validator (e.g. a lone `${{` in the diff tripping the unmatched-delimiter
-# check, fixed on main by #3593) otherwise wedges the review of any in-flight
-# PR whose branch predates the fix — the very PR that surfaced the bug can
-# never carry the fix on its own branch. Sourcing it main-primary lets a
-# render_prompt fix on main immediately protect wedged branches, matching the
-# resolver-safety rationale above. It stays fail-open: some refs still ship a
-# self-contained render_prompt.sh, so when the backend is absent from both refs
-# bootstrap preserves that ref's bundled bash renderer instead of hard-failing.
+# validator (e.g. a lone `${{` in the diff) must ship on the verified
+# workflow commit rather than an independently moving branch.
 #
 # opencode_helpers.sh / write_opencode_config.sh are main-primary because
 # review_conflict_resolve.sh (already main-primary above) sources them from
@@ -71,7 +65,10 @@ REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.
 # absent. Staging them from the same snapshot as the resolver keeps the
 # resolver and its dependencies in lockstep, so a main-side resolver change
 # can never land in a bundle whose helpers came from an older ref.
-MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"
+# review_apply_fixes.sh, the workspace guard, and the sandbox are likewise
+# staged from one snapshot so a new guard role is never paired with an older
+# sandbox that does not implement it.
+MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_collect_pr_metadata.sh files_touched_scope_guard.py post_agent_workspace_guard.py check_resolver_diff.sh review_apply_fixes.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh review_rb_judge.sh trusted_git_write.sh render_prompt.py opencode_helpers.sh untrusted_process_sandbox.sh model_provider_proxy.py package_download_proxy.py write_opencode_config.sh"
 # Optional bootstrap scripts: allowed to be missing from both
 # refs.  The bootstrap emits a warning and continues — callers
 # that depend on these must themselves tolerate absence.  Keep
@@ -90,6 +87,7 @@ for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
+main_primary_bootstrap_root=".codex-workflow-src"
 mkdir -p "${SUPPORT_SCRIPTS_DIR}/review_sandbox"
 install -m 0644 ".codex-workflow-src/scripts/review_sandbox/Dockerfile" "${SUPPORT_SCRIPTS_DIR}/review_sandbox/Dockerfile" || {
   echo "::error::Required trusted review sandbox Dockerfile is missing from verified support commit ${SCRIPT_REF}." >&2
@@ -116,6 +114,13 @@ for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
+
+post_agent_workspace_guard_sha256="$(sha256sum "${SUPPORT_SCRIPTS_DIR}/post_agent_workspace_guard.py" 2>/dev/null | awk '{print $1}')"
+if ! [[ "${post_agent_workspace_guard_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "::error::Could not anchor post-agent workspace guard."
+  exit 1
+fi
+echo "POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256=${post_agent_workspace_guard_sha256}" >> "$GITHUB_ENV"
 
 for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
   src=".codex-workflow-src/scripts/${f}"
@@ -466,6 +471,12 @@ setup_context()
 			echo "::error::Explicit validation requires an immutable support ref." >&2
 			exit 1
 		}
+		for support_target_dir in scripts prompts ai-memory; do
+			if [ -L "${support_target_dir}" ] || { [ -e "${support_target_dir}" ] && [ ! -d "${support_target_dir}" ]; }; then
+				echo "::error::Unsafe explicit validation support destination ${support_target_dir}" >&2
+				exit 1
+			fi
+		done
 	fi
 	RESOLVED_SCRIPT_REF="${ORIGINAL_SCRIPT_REF}"
 
@@ -517,16 +528,17 @@ bootstrap_support_roots()
 	SUPPORT_PRIMARY_ROOT=""
 	SUPPORT_MAIN_ROOT=""
 
-	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
-		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
-	elif checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
+	# Validation never uses the target checkout as executable support, even
+	# when the target and workflow live in the same repository.
+	if [[ "${ORIGINAL_SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] &&
+	   checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
 		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
-	elif [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/primary"; then
-		echo "::warning::Support checkout ref ${ORIGINAL_SCRIPT_REF} is unavailable; using main."
-		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
-		RESOLVED_SCRIPT_REF="main"
 	else
-		echo "::error::Failed to stage workflow support files from ${WORKFLOW_SOURCE_REPO} (${ORIGINAL_SCRIPT_REF} and main fallback)." >&2
+		echo "::error::Failed to stage immutable validation support from ${WORKFLOW_SOURCE_REPO}." >&2
+		exit 1
+	fi
+	if [ "$(git -C "${SUPPORT_PRIMARY_ROOT}" rev-parse HEAD 2>/dev/null)" != "${ORIGINAL_SCRIPT_REF}" ]; then
+		echo "::error::Validation support checkout is not the verified commit." >&2
 		exit 1
 	fi
 
@@ -542,9 +554,29 @@ copy_from_ref_or_local()
 	local require_remote="${3:-false}"
 	local allow_main_fallback="${4:-true}"
 	local source_path=""
+	if [ "${TARGET_NAME:-}" = "validate" ]; then
+		# The verified SHA is the only permitted source of executable support.
+		allow_main_fallback="false"
+		local target_parent="${target_path}"
+		while [ "${target_parent}" != "." ]; do
+			if [ -L "${target_parent}" ]; then
+				echo "::error::Unsafe validation support destination ${repo_path}" >&2
+				return 1
+			fi
+			target_parent="$(dirname -- "${target_parent}")"
+		done
+	fi
 	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		require_remote="true"
 		allow_main_fallback="false"
+		local target_parent="${target_path}"
+		while [ "${target_parent}" != "." ]; do
+			if [ -L "${target_parent}" ]; then
+				echo "::error::Unsafe explicit validation support destination ${repo_path}" >&2
+				return 1
+			fi
+			target_parent="$(dirname -- "${target_parent}")"
+		done
 	fi
 
 	mkdir -p "$(dirname "${target_path}")"
@@ -557,6 +589,10 @@ copy_from_ref_or_local()
 	fi
 
 	if [ -n "${source_path}" ]; then
+		if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] && [ -L "${source_path}" ]; then
+			echo "::error::Explicit validation support file is a symlink: ${repo_path}" >&2
+			return 1
+		fi
 		if [ -e "${target_path}" ] && [ "${source_path}" -ef "${target_path}" ]; then
 			return 0
 		fi
@@ -680,6 +716,24 @@ stage_optional_preserve_entry()
 	local track_path="$3"
 	local emit_notice="${4:-true}"
 	local tmp_path
+	# Validation executables are always supplied by the verified SHA. Never
+	# preserve an executable from the target checkout as a fallback.
+	if [ "${TARGET_NAME:-}" = "validate" ] && [ "${executable}" = "true" ]; then
+		if [ ! -f "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ] || [ -L "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ]; then
+			emit_optional_missing_notice "${repo_path}" || true
+			return 0
+		fi
+		copy_from_ref_or_local "${repo_path}" "${repo_path}" "true" "false"
+		chmod +x "${repo_path}"
+		record_fetched_script "${track_path}"
+		return 0
+	fi
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
+	   { [ -L "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ] ||
+	     { [ -e "${repo_path}" ] && [ ! -f "${SUPPORT_PRIMARY_ROOT}/${repo_path}" ]; }; }; then
+		echo "::error::Cannot use target-owned optional support file ${repo_path} for explicit validation." >&2
+		return 1
+	fi
 
 	if [ -f "${repo_path}" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		if [ "${executable}" = "true" ]; then
@@ -745,6 +799,25 @@ stage_required_if_missing_entry()
 	local repo_path="$1"
 	if [ ! -f "${repo_path}" ]; then
 		copy_from_ref_or_local "${repo_path}" "${repo_path}" "false" "true"
+	fi
+}
+
+stage_explicit_target_instruction()
+{
+	local repo_path="$1"
+	local source_path="${SUPPORT_PRIMARY_ROOT}/${repo_path}"
+	local temp_path
+	# An explicit project checkout is untrusted, even when it already has a
+	# file with this name. Never read its instruction bytes as a fallback.
+	if [ -z "${SUPPORT_PRIMARY_ROOT}" ] || [ -L "${source_path}" ] || [ ! -f "${source_path}" ] ||
+	   [ -L "${repo_path}" ] || { [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; }; then
+		echo "::error::Unsafe or missing verified instruction file ${repo_path}" >&2
+		return 1
+	fi
+	temp_path="$(mktemp "./.${repo_path}.XXXXXX")"
+	if ! cp -- "${source_path}" "${temp_path}" || ! mv -f -- "${temp_path}" "${repo_path}"; then
+		rm -f -- "${temp_path}"
+		return 1
 	fi
 }
 
@@ -819,9 +892,16 @@ emit_consumer_gitignore()
 run_overlay_loader()
 {
 	: "${GITHUB_ENV:?GITHUB_ENV must be set}"
+	if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+		# A project branch's overlay may replace the trusted validation prompt.
+		# Explicit-target metadata is data, not an operator prompt override.
+		printf 'WORKFLOW_OVERLAY_ENABLED=false\nWORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON=\nWORKFLOW_OVERLAY_REPO_ROOT=\n' >> "${GITHUB_ENV}"
+		return 0
+	fi
 	# WORKFLOW.md overlay is opt-in by file presence; absent file must
 	# stay a no-op while valid prompt overrides flow through render_prompt.py.
-	PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+	env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u PYTHONPATH \
+		PYTHONDONTWRITEBYTECODE=1 python3 -E "${SUPPORT_PRIMARY_ROOT}/scripts/load_workflow_overlay.py" \
 		--repo-root "${REPO_ROOT}" \
 		--schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
 		--github-env "${GITHUB_ENV}"
@@ -830,6 +910,55 @@ run_overlay_loader()
 stage_validate_support()
 {
 	local repo_path require_remote_when_external model_catalog_path serena_template_path
+	# Compare every target template to the pinned manifest before any staging
+	# can overwrite it. The renderer subsequently reads only the private copy.
+	local trusted_root="${RUNNER_TEMP:?}/validate-support-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
+	env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u PYTHONPATH \
+		PYTHONDONTWRITEBYTECODE=1 python3 -I - "${MANIFEST_PATH}" "${REPO_ROOT}" "${SUPPORT_PRIMARY_ROOT}" "${trusted_root}" <<'PY'
+import json
+import pathlib
+import shutil
+import sys
+
+manifest_path, target_path, source_path, private_path = map(pathlib.Path, sys.argv[1:])
+manifest = json.loads(manifest_path.read_text())
+prefix = pathlib.PurePosixPath('workflow-templates/validation-harness')
+listed = set()
+for entry in manifest['optional_copy_files']:
+	path = pathlib.PurePosixPath(entry)
+	if path == prefix or prefix not in path.parents or path.suffix != '.j2' or '..' in path.parts or entry != str(path) or entry in listed:
+		raise SystemExit('::error::Unsafe validation template manifest entry')
+	listed.add(entry)
+for entry in sorted(listed):
+	source = source_path / entry
+	if source.is_symlink() or not source.is_file():
+		raise SystemExit(f'::error::Missing verified validation template: {entry}')
+source_templates = source_path / prefix
+if {item.relative_to(source_path).as_posix() for item in source_templates.rglob('*.j2')} != listed:
+	raise SystemExit('::error::Verified template tree differs from validation manifest')
+target_root = target_path / prefix
+if (target_path / 'workflow-templates').is_symlink():
+	raise SystemExit('::error::Untrusted validation template parent')
+if target_root.exists() or target_root.is_symlink():
+	for item in (target_root, *target_root.rglob('*')):
+		rel = item.relative_to(target_path).as_posix()
+		if item.is_symlink() or (item.is_file() and (rel not in listed or item.read_bytes() != (source_path / rel).read_bytes())) or (not item.is_file() and not item.is_dir()):
+			raise SystemExit(f'::error::Untrusted validation template: {rel}')
+if private_path.exists() or private_path.is_symlink():
+	raise SystemExit('::error::Validation support directory already exists')
+private_path.mkdir(mode=0o700)
+for entry in ('scripts', 'prompts', 'ai-memory', 'workflow-templates/validation-harness'):
+	source = source_path / entry
+	if not source.is_dir() or source.is_symlink():
+		raise SystemExit(f'::error::Missing verified validation support: {entry}')
+	for item in source.rglob('*'):
+		if item.is_symlink():
+			raise SystemExit(f'::error::Symlink in verified validation support: {entry}')
+	shutil.copytree(source, private_path / entry, dirs_exist_ok=True)
+PY
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		echo "VALIDATE_TRUSTED_SUPPORT_ROOT=${trusted_root}" >> "${GITHUB_ENV}"
+	fi
 	if [ -n "${GITHUB_ENV:-}" ]; then
 		echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" >> "$GITHUB_ENV"
 		echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" >> "$GITHUB_ENV"
@@ -900,6 +1029,14 @@ stage_validate_support()
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
+		if [ -n "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
+			case "${repo_path}" in
+				unattended_system_instructions.md|ai_pipeline.md)
+					stage_explicit_target_instruction "${repo_path}"
+					continue
+					;;
+			esac
+		fi
 		stage_required_if_missing_entry "${repo_path}"
 	done < <(json_array_lines "required_root_files_if_missing")
 

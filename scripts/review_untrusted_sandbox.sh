@@ -10,6 +10,16 @@ case "${action}" in prepare|run|cleanup) ;; *) exit 2 ;; esac
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Review isolation requires Docker and Python' >&2; exit 1; }
 [ -f "${support}/review_untrusted_workspace.py" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/review_sandbox/Dockerfile" ] || { echo '::error::Review isolation support missing' >&2; exit 1; }
 
+if [ "${action}" != cleanup ]; then
+	# The review worktree is distinct from the runner checkout. An explicitly
+	# selected but unavailable worktree must never fall back to the checkout.
+	if [ "${WORKSPACE_PATH+x}" ]; then
+		workspace="${WORKSPACE_PATH}"
+	fi
+	[ -n "${workspace}" ] && workspace="$(realpath -e -- "${workspace}")" && [ -d "${workspace}" ] || { echo '::error::Review worktree unavailable' >&2; exit 1; }
+	workspace_identity="$(stat -Lc '%d:%i' -- "${workspace}")" || { echo '::error::Review worktree identity unavailable' >&2; exit 1; }
+fi
+
 # Only the trusted prepare step may select a root; never accept a path from
 # the PR checkout or a model-controlled environment variable.
 if [ "${action}" = prepare ]; then
@@ -18,6 +28,7 @@ if [ "${action}" = prepare ]; then
 	trap 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${dep_container}" >/dev/null 2>&1 || true; rm -rf -- "${root}"' EXIT
 	mkdir -m 0700 "${root}/socket" "${root}/home"
 	mkdir -m 0755 "${root}/source"
+	printf '%s\0%s\0' "${workspace}" "${workspace_identity}" > "${root}/workspace-identity"
 	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json"
 	version="${OPENCODE_VERSION:-1.18.23}"
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
@@ -98,6 +109,10 @@ if [ "${action}" = cleanup ]; then
 	rm -rf -- "${root}"
 	exit 0
 fi
+
+# A prepared snapshot cannot be published into a different worktree, even
+# when the environment points to another valid directory on a later step.
+[ -f "${root}/workspace-identity" ] && cmp -s "${root}/workspace-identity" <(printf '%s\0%s\0' "${workspace}" "${workspace_identity}") || { echo '::error::Review worktree changed since snapshot' >&2; exit 1; }
 
 [ "$#" -eq 6 ] || exit 2
 prompt="$2"

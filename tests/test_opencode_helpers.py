@@ -85,6 +85,7 @@ def test_command_argv_is_fixed_and_prompt_remains_on_stdin() -> None:
 				"STDIN_FILE": str(stdin_file),
 				"CONFIG_ENV_FILE": str(config_env_file),
 				"PROMPT": prompt,
+				"UNTRUSTED_PROCESS_ISOLATED": "1",
 			},
 		)
 		assert result.returncode == 0, result.stderr.decode()
@@ -129,7 +130,7 @@ def test_reviewer_command_omits_writer_auto_approval() -> None:
 		config.write_text("{}\n", encoding="utf-8")
 		result = _bash(
 			f"source {HELPERS}; opencode_run_cmd reviewer vendor/model low {config} {root}",
-			{"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+			{"PATH": f"{bin_dir}:{os.environ['PATH']}", "UNTRUSTED_PROCESS_ISOLATED": "1"},
 		)
 		assert result.returncode == 0
 		assert b"--auto" not in result.stdout

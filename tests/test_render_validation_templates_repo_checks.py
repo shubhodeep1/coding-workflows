@@ -141,11 +141,32 @@ def test_repo_checks_family_honours_requirements_file_slot() -> None:
 
 
 def main() -> int:
+	test_repo_checks_entry_is_data_not_host_shell_source()
 	test_repo_checks_family_avoids_flask_defaults()
 	test_repo_checks_family_renders_repo_check_runner_and_passes_lint()
 	test_repo_checks_family_installs_consumer_requirements()
 	test_repo_checks_family_honours_requirements_file_slot()
 	return 0
+
+
+def test_repo_checks_entry_is_data_not_host_shell_source() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-entry-") as td:
+		root = Path(td)
+		manifest = root / "validate.yml"
+		payload = _manifest_payload()
+		payload["type"] = "python-repo-checks"
+		payload["entry"] = "sh scripts/run_validation_repo_checks.sh"
+		_write_yaml(manifest, payload)
+		result = _run_renderer(manifest, root / "out")
+		assert result.returncode == 0, result.stderr
+		text = (root / "out/tests/40_repo_checks.sh").read_text(encoding="utf-8")
+		assert "REPO_CHECK_ENTRY='sh scripts/run_validation_repo_checks.sh'" in text
+		assert 'docker compose -f "${COMPOSE_FILE}" exec -T' in text
+		payload["entry"] = "python3 $(touch marker)"
+		_write_yaml(manifest, payload)
+		result = _run_renderer(manifest, root / "out")
+		assert result.returncode != 0
+		assert not (root / "marker").exists()
 
 
 if __name__ == "__main__":

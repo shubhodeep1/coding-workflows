@@ -22,6 +22,7 @@ import textwrap
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+TRUSTED_GIT_WRITE_SCRIPT = REPO_ROOT / "scripts" / "trusted_git_write.sh"
 IMPLEMENT_STAGED_SUPPORT_WORKSPACE_SCRIPT = REPO_ROOT / "scripts" / "implement_staged_support_workspace.sh"
 IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
@@ -517,6 +518,12 @@ def _run_diagnose_step(
 	runtime_dir = tmp_path / "runtime"
 	bin_dir = tmp_path / "bin"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
+	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
+	support_run_dir.mkdir(parents=True, exist_ok=True)
+	(support_run_dir / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+	verifier = runtime_dir / "verify_staged_support.sh"
+	verifier.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	verifier.chmod(0o755)
 	bin_dir.mkdir(parents=True, exist_ok=True)
 
 	_install_mock_gh(bin_dir)
@@ -559,7 +566,7 @@ def _run_diagnose_step(
 	calls_file = runtime_dir / "codex_calls.log"
 	stdin_file = runtime_dir / "codex_stdin.txt"
 
-	script = _render_github_expressions(_extract_run_script("Diagnose post-Codex failure and create fix-up issues"))
+	script = 'bash scripts/implement_diagnose_post_codex_failure.sh'
 	env = os.environ.copy()
 	env.update(
 		{
@@ -645,6 +652,12 @@ def _run_resolve_checkout_ref_step(
 	runtime_dir = tmp_path / "runtime"
 	bin_dir.mkdir(parents=True, exist_ok=True)
 	runtime_dir.mkdir(parents=True, exist_ok=True)
+	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
+	support_run_dir.mkdir(parents=True, exist_ok=True)
+	(support_run_dir / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+	verifier = runtime_dir / "verify_staged_support.sh"
+	verifier.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	verifier.chmod(0o755)
 
 	_install_mock_gh(bin_dir)
 
@@ -836,6 +849,12 @@ def _run_capture_step(
 	bin_dir.mkdir(parents=True, exist_ok=True)
 	runtime_dir.mkdir(parents=True, exist_ok=True)
 
+	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
+	support_run_dir.mkdir(parents=True, exist_ok=True)
+	(support_run_dir / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+	verifier = runtime_dir / "verify_staged_support.sh"
+	verifier.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	verifier.chmod(0o755)
 	_install_capture_step_mock_gh(bin_dir)
 
 	gh_state_file = runtime_dir / "capture_gh_state.json"
@@ -861,8 +880,10 @@ def _run_capture_step(
 			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			"GH_TOKEN": "test-token",
 			"GITHUB_OUTPUT": str(github_output),
-			"RUNTIME_DIR": str(runtime_dir),
-			"ISSUE_NUMBER": "948",
+				"RUNTIME_DIR": str(runtime_dir),
+				"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(support_run_dir),
+				"IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER": str(verifier),
+				"ISSUE_NUMBER": "948",
 			"MOCK_CAPTURE_GH_STATE_FILE": str(gh_state_file),
 			"TMPDIR": str(runtime_dir),
 		}
@@ -1169,6 +1190,7 @@ def test_checkout_repository_fallback_uses_checkout_ref_output_chain() -> None:
 def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> None:
 	fetch_step = _step_block_text("Fetch issue metadata")
 	fetch_block = _extract_run_script("Fetch issue metadata")
+	precheck_block = _extract_run_script("Precheck approval phase label")
 	assert "IMPLEMENT_METADATA_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fetch_step, (
 		"Fetch issue metadata must keep PR_BASE_BRANCH anchored to the integration/default ref, not the baseline checkout override"
 	)
@@ -1177,6 +1199,15 @@ def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> 
 	assert "steps.checkout_ref.outputs.ref" not in fetch_block, (
 		"PR_BASE_BRANCH must not follow the optional prior_pr_baseline_branch checkout override"
 	)
+	assert 'echo "issue_author_association=$(jq -r \'.author_association // ""\' "${ISSUE_META_FILE}")"' in fetch_block
+	assert 'echo "issue_author_login=$(jq -r \'.user.login // ""\' "${ISSUE_META_FILE}")"' in fetch_block
+	assert 'echo "ISSUE_AUTHOR_ASSOCIATION=${ISSUE_AUTHOR_ASSOCIATION}" >> "$GITHUB_ENV"' not in precheck_block
+	assert 'echo "ISSUE_AUTHOR_LOGIN=${ISSUE_AUTHOR_LOGIN}" >> "$GITHUB_ENV"' not in precheck_block
+
+	for guarded_step_name in ("Preflight destructive-commit guard", "Commit changes"):
+		guarded_step = _step_block_text(guarded_step_name)
+		assert "ISSUE_AUTHOR_ASSOCIATION: ${{ steps.fetch_issue_metadata.outputs.issue_author_association }}" in guarded_step
+		assert "ISSUE_AUTHOR_LOGIN: ${{ steps.fetch_issue_metadata.outputs.issue_author_login }}" in guarded_step
 
 
 def test_fetch_issue_metadata_reuses_matching_cache_without_api_call() -> None:
@@ -1254,6 +1285,7 @@ def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
 
 def test_failure_comment_step_skips_destructive_blocked_runs() -> None:
 	wf = _workflow_text()
+	wf = wf.replace(" && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true'", "")
 	assert (
 		"if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' "
 		"&& steps.commit_changes.outputs.destructive_commit_blocked == ''"
@@ -1293,7 +1325,7 @@ def test_self_repo_guards_use_exact_canonical_repo_match() -> None:
 		assert 'if [ "${{ github.repository }}" = "${wf_source}" ]; then' in block
 		assert 'if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then' not in block
 
-	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_commit_changes.sh"' in commit_step
 	assert 'wf_source="shubhodeep1/coding-workflows"' in commit_helper
 	assert 'if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then' in commit_helper
 	assert 'if [[ "${GITHUB_REPOSITORY:-}" == *"/coding-workflows" ]]; then' not in commit_helper
@@ -1354,6 +1386,7 @@ def test_commit_helper_fails_closed_on_unsafe_fetched_manifest_paths() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, repo_dir / "scripts" / "trusted_git_write.sh")
 		outside_path.write_text("keep\n", encoding="utf-8")
 		github_output = repo_dir / "github_output.txt"
 		github_output.write_text("", encoding="utf-8")
@@ -1392,7 +1425,8 @@ def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
-		_git(["git", "add", "scripts/implement_commit_changes.sh"], cwd=repo_dir)
+		shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, repo_dir / "scripts" / "trusted_git_write.sh")
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/trusted_git_write.sh"], cwd=repo_dir)
 		_git(["git", "commit", "-m", "add helper"], cwd=repo_dir)
 		github_output = tmp_path / "github_output.txt"
 		github_output.write_text("", encoding="utf-8")
@@ -1431,8 +1465,10 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, repo_dir / "scripts" / "trusted_git_write.sh")
 		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, repo_dir / "scripts" / "files_touched_scope_guard.py")
-		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
+		shutil.copy2(REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh", repo_dir / "scripts" / "untrusted_process_sandbox.sh")
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py", "scripts/trusted_git_write.sh", "scripts/untrusted_process_sandbox.sh"], cwd=repo_dir)
 		_git(["git", "commit", "-m", "add scope helpers"], cwd=repo_dir)
 		baseline_head = subprocess.run(
 			["git", "rev-parse", "HEAD"],
@@ -1448,6 +1484,8 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 		github_output.write_text("", encoding="utf-8")
 		runtime_dir = tmp_path / "runtime"
 		runtime_dir.mkdir()
+		artifact_dir = tmp_path / "artifacts"
+		artifact_dir.mkdir(mode=0o700)
 		env = _isolated_test_env(
 			{
 				"GITHUB_OUTPUT": str(github_output),
@@ -1455,6 +1493,9 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 				"ISSUE_NUMBER": "948",
 				"ISSUE_SCOPE_LOCK_GLOB": "scripts/**/*.sh",
 				"RUNTIME_DIR": str(runtime_dir),
+				"POST_AGENT_ARTIFACT_DIR": str(artifact_dir),
+				"RUNNER_TEMP": str(tmp_path),
+				"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
 				"SCOPE_LOCK_LABEL_ENABLED": "true",
 				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
 				"SERENA_PROJECT_PREEXISTED": "false",
@@ -1520,10 +1561,11 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 	_bootstrap_git_repo(repo_dir)
 	(repo_dir / "scripts").mkdir()
 	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+	shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, repo_dir / "scripts" / "trusted_git_write.sh")
 	helper = repo_dir / "scripts" / "helper.sh"
 	helper.write_text(_STAGED_HELPER_BRANCH, encoding="utf-8")
 	helper.chmod(0o644)
-	_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/helper.sh"], cwd=repo_dir)
+	_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/trusted_git_write.sh", "scripts/helper.sh"], cwd=repo_dir)
 	_git(["git", "commit", "-m", "branch-side helper edit"], cwd=repo_dir)
 	baseline_head = subprocess.run(
 		["git", "rev-parse", "HEAD"],
@@ -1538,7 +1580,9 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 	runtime_dir.mkdir()
 	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
 	support_run_dir.mkdir(parents=True)
+	shutil.copy2(REPO_ROOT / "scripts" / "untrusted_process_sandbox.sh", support_run_dir / "untrusted_process_sandbox.sh")
 	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, support_run_dir / "implement_commit_changes.sh")
+	shutil.copy2(TRUSTED_GIT_WRITE_SCRIPT, support_run_dir / "trusted_git_write.sh")
 	base_dir = runtime_dir / "staged_support_base"
 	(base_dir / "scripts").mkdir(parents=True)
 	(base_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
@@ -1556,12 +1600,17 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 
 	github_output = tmp_path / "github_output.txt"
 	github_output.write_text("", encoding="utf-8")
+	artifact_dir = tmp_path / "artifacts"
+	artifact_dir.mkdir(mode=0o700)
 	env = _isolated_test_env(
 		{
 			"GITHUB_OUTPUT": str(github_output),
 			"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
 			"ISSUE_NUMBER": "4075",
 			"RUNTIME_DIR": str(runtime_dir),
+			"POST_AGENT_ARTIFACT_DIR": str(artifact_dir),
+			"RUNNER_TEMP": str(tmp_path),
+			"UNTRUSTED_PROCESS_SANDBOX_TEST_MODE": "1",
 			"SCRIPT_REF": "abc123",
 			"SERENA_PROJECT_BOOTSTRAP_HASH": "",
 			"SERENA_PROJECT_PREEXISTED": "false",
@@ -1939,10 +1988,10 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do" in stage_block
+	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh files_touched_scope_guard.py post_agent_workspace_guard.py; do" in stage_block
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
-	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"'
+	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_staged_support_workspace.sh"'
 	restore_call = 'bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" restore'
 	reinstall_call = 'bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" reinstall'
 	assert implement_run.count(helper_line) == 1
@@ -1954,7 +2003,7 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert implement_run.index(restore_call) < implement_run.index("python3 scripts/targeted_file_context.py")
 	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
 	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
-	assert implement_run.rindex("bash scripts/codex_thread_reuse.sh direct-run") < implement_run.index(reinstall_call)
+	assert implement_run.rindex('bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_thread_reuse.sh" direct-run') < implement_run.index(reinstall_call)
 	assert implement_run.index(reinstall_call) < implement_run.index('if [ "${implement_succeeded}" = "true" ]; then')
 	repair_run = _extract_run_script("Attempt post-Codex syntax repair")
 	assert repair_run.count(restore_call) == 1
@@ -2109,11 +2158,16 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	assert stage_block.index("STAGED_SUPPORT_LEDGER=") > stage_block.index('install -m 0644 "${src}" "prompts/${prompt_assembly_asset}"')
 	assert 'STAGED_SUPPORT_LEDGER="${RUNTIME_DIR}/staged_support_overwrites.txt"' in stage_block
 	assert 'STAGED_SUPPORT_BASE_DIR="${RUNTIME_DIR}/staged_support_base"' in stage_block
-	assert 'IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"' in stage_block
+	assert 'IMPLEMENT_STAGED_SUPPORT_ROOT="${RUNTIME_DIR}/staged_support_run"' in stage_block
+	assert 'IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${IMPLEMENT_STAGED_SUPPORT_ROOT}/scripts"' in stage_block
+	assert 'IMPLEMENT_STAGED_SUPPORT_MANIFEST="${RUNTIME_DIR}/staged_support_run.sha256"' in stage_block
+	assert 'sha256sum --check --strict "${IMPLEMENT_STAGED_SUPPORT_MANIFEST}"' in stage_block
 	assert 'echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"' in stage_block
 	assert 'echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"' in stage_block
 	assert 'echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"' in stage_block
 	assert 'install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"' in stage_block
+	assert "Refetch memory helpers after commit cleanup" not in _workflow_text()
+	assert "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}" not in _workflow_text()
 	assert 'for _staged_support_path in "${_staged_support_installed_paths[@]}"; do' in stage_block
 	assert 'git diff --quiet HEAD -- "${_staged_support_path}"' in stage_block
 	assert "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=" in stage_block
@@ -2134,9 +2188,9 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	# The restore runs before anything is staged.
 	assert script_text.index("IMPLEMENT_STAGED_SUPPORT_RESTORE ") < script_text.index('git add -u -- "${add_u_excludes[@]}"')
 	commit_block = _step_block_text("Commit changes")
-	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_block
-	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"' in _step_block_text("Push branch")
-	assert 'python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/lint_pr_body_auto_close.py"' in _step_block_text(
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_commit_changes.sh"' in commit_block
+	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh"' in _step_block_text("Push branch")
+	assert '/usr/bin/python3 -I -S "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/lint_pr_body_auto_close.py"' in _step_block_text(
 		"Pre-flight — lint PR title/body for auto-close keywords against tracking issues"
 	)
 
@@ -2237,6 +2291,7 @@ def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
 
 def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
 	telegram_block = _step_block_text("Telegram failure notification")
+	telegram_block = telegram_block.replace(" && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true'", "")
 	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in telegram_block, (
 		"Post-failure Telegram flow must be skipped for destructive-blocked runs; only the dedicated "
 		"destructive-guard CRITICAL alert should fire"
@@ -2253,7 +2308,8 @@ def test_staged_support_failure_uses_dedicated_handler_and_skips_generic_diagnos
 	assert "SSB_FILES: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict_files || steps.commit_changes.outputs.staged_support_rebase_conflict_files }}" in guard_block
 	for step_name in (
 		"Capture post-Codex validation errors",
-		"Diagnose post-Codex failure and create fix-up issues",
+		"Diagnose post-Codex failure without GitHub authorization",
+		"Publish normalized post-Codex diagnosis",
 		"Comment on issue failure",
 		"Telegram failure notification",
 	):
@@ -2416,7 +2472,8 @@ def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
 	assert 'install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in stage_block
 	assert workflow.find("- name: Stage workflow support files") < workflow.find("- name: Commit changes") < workflow.find("- name: Destructive-commit guard — label + alert on rejection")
 	assert _extract_run_script("Destructive-commit guard — label + alert on rejection") == (
-		'set -euo pipefail\nbash "${RUNTIME_DIR}/implement_handle_guard_block.sh"\n'
+		'set -euo pipefail\nbash "${IMPLEMENT_STAGED_SUPPORT_VERIFY_HELPER}"\n'
+		'bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"\n'
 	)
 	assert len(guard_block.encode("utf-8")) < 21_000
 	for env_name in (
@@ -2459,11 +2516,13 @@ def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow
 	)
 
 	capture_block = _step_block_text("Capture post-Codex validation errors")
+	capture_block = capture_block.replace(" && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true'", "")
 	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in capture_block, (
 		"Captured validation diagnostics must not run for destructive-blocked failures"
 	)
 
-	diagnose_block = _step_block_text("Diagnose post-Codex failure and create fix-up issues")
+	diagnose_block = _step_block_text("Diagnose post-Codex failure without GitHub authorization")
+	diagnose_block = diagnose_block.replace(" && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true'", "")
 	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in diagnose_block, (
 		"Diagnose/fix-up automation must be skipped for destructive-blocked runs"
 	)
@@ -2472,6 +2531,23 @@ def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow
 	assert 'FIX_COUNT="$(jq -r \'(.fix_issues // []) | if type == "array" then length else 0 end\' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"' in diagnose_script, (
 		"needs_fixes handling must tolerate non-array fix_issues without aborting"
 	)
+
+
+def test_post_codex_diagnosis_separates_provider_and_github_credentials() -> None:
+	generation_block = _step_block_text("Diagnose post-Codex failure without GitHub authorization")
+	publish_block = _step_block_text("Publish normalized post-Codex diagnosis")
+	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in generation_block
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" not in generation_block
+	assert "IMPLEMENT_DIAGNOSE_MODE: diagnose" in generation_block
+	assert "env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN" in generation_block
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in publish_block
+	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" not in publish_block
+	assert "IMPLEMENT_DIAGNOSE_MODE: publish" in publish_block
+	assert "env -u OPENROUTER_API_KEY" in publish_block
+	diagnose_script = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+	assert '--role diagnose' in diagnose_script
+	assert "normalize_diagnose_result" in diagnose_script
+	assert 'if [ "${IMPLEMENT_DIAGNOSE_MODE}" != "publish" ]; then\nDIAGNOSE_MODE_PROMPT_TEMPLATE=' in diagnose_script
 
 def test_destructive_guard_knobs_wired_from_repo_variables() -> None:
 	# RC-1 regression guard: both destructive-guard shells read these knobs
@@ -2538,7 +2614,7 @@ def test_destructive_guard_handler_covers_unsafe_fetched_manifest_rejections() -
 def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
 	commit_step = _step_block_text("Commit changes")
 	commit_helper = _implement_commit_script_text()
-	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_commit_changes.sh"' in commit_step
 	assert 'STEP_NAME="Commit changes"' not in commit_step
 	assert "canonical_deletions" in commit_helper
 	assert "ALLOW_WORKFLOW_EDITS" in commit_helper
@@ -2626,7 +2702,8 @@ def test_protect_workflow_files_cleans_untracked_workflow_directory_when_head_la
 def test_successful_repair_path_still_flows_into_commit_gated_push_and_pr_steps() -> None:
 	push_block = _step_block_text("Push branch")
 	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'" in push_block
-	assert "bash \"${health_script}\" repair" in push_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/git_ref_health_check.sh" repair' in push_block
+	assert ".codex-workflow-src" not in push_block
 
 	create_pr_block = _step_block_text("Create Pull Request")
 	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'" in create_pr_block
@@ -3177,7 +3254,7 @@ def test_needs_fixes_labels_source_issue_and_generic_failure_step_is_bypassed():
 	wf = _workflow_text()
 	assert "--add-label 'ai:implementation-failed'" in wf
 	assert "--remove-label 'ai:awaiting-approval'" in wf
-	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true'" in wf
+	assert "steps.diagnose_post_codex_failure.outputs.handled != 'true'" in wf
 
 
 def test_idempotency_skips_diagnose_and_issue_creation_when_already_failed_label():
@@ -3318,7 +3395,7 @@ def test_diagnose_reasoning_patch_preserves_serena_mcp_block() -> None:
 	assert "rest_lines = lines[first_table_idx:]" in diagnose
 	assert 're.match(r"^(\\[[^\\]]+\\]|\\[\\[[^\\]]+\\]\\])(?:[ \\t]+#.*)?$", stripped)' in diagnose
 	assert 'config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")' in diagnose
-	assert 'if ! patch_diagnose_reasoning_into_config; then' in diagnose
+	assert 'if [ "${IMPLEMENT_DIAGNOSE_MODE}" != "publish" ] && ! patch_diagnose_reasoning_into_config; then' in diagnose
 	assert 'Failed to patch ~/.codex/config.toml for diagnose reasoning; leaving existing config unchanged.' in diagnose
 	assert "[mcp_servers.serena]" not in diagnose.split("patch_diagnose_reasoning_into_config()", 1)[1].split("patch_diagnose_reasoning_into_config", 1)[0], (
 		"Diagnose reasoning patch must update only the top-level model_reasoning_effort key without inlining Serena table rewrites"
@@ -4897,41 +4974,27 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 		"abort the job — the underlying Codex failure is still the "
 		"primary signal"
 	)
-	# CRITICAL: the gh-issue-comment guard checks `[ -n "${GH_TOKEN:-}" ]`.
-	# If GH_TOKEN isn't in the step's `env:` block, the guard always
-	# fails and the entire diagnostics-posting branch is dead code —
-	# the same regression that the multi-model consensus review caught
-	# on commit 523cc99. Parse the workflow YAML and look up the
-	# step's env directly so this assertion is robust to harmless
-	# workflow refactors (re-ordering, run-syntax changes, etc.) — a
-	# previous fixed-anchor implementation was flagged as brittle in
-	# review.
+	# The untrusted implementation step must be tokenless. A separate trusted
+	# continuation posts the already-sanitized diagnostics after model exit.
 	import yaml as _yaml
 	wf_doc = _yaml.safe_load(_workflow_text())
 	codex_step_env: dict | None = None
+	diagnostics_step: dict | None = None
 	for job in (wf_doc.get("jobs") or {}).values():
 		for step in (job.get("steps") or []):
 			if isinstance(step, dict) and step.get("name") == "Run Codex implementation":
 				codex_step_env = step.get("env") or {}
-				break
-		if codex_step_env is not None:
+			if isinstance(step, dict) and step.get("name") == "Post implementation failure diagnostics":
+				diagnostics_step = step
+		if codex_step_env is not None and diagnostics_step is not None:
 			break
 	assert codex_step_env is not None, (
 		"could not locate `Run Codex implementation` step in workflow YAML"
 	)
-	assert "GH_TOKEN" in codex_step_env, (
-		"`Run Codex implementation` step must declare GH_TOKEN in its "
-		"env: block so the Fix #5 diagnostics-posting branch (`gh issue "
-		"comment`) can authenticate. Without it, the `[ -n \"${GH_TOKEN:-}\" ]` "
-		"guard is always false and the whole diagnostics feature is dead "
-		f"code at runtime. Step env keys: {sorted(codex_step_env.keys())}"
-	)
-	assert "${{ secrets.GH_PAT }}" in str(codex_step_env["GH_TOKEN"]), (
-		"GH_TOKEN must reference `${{ secrets.GH_PAT }}` (the workflow's "
-		"canonical secret name for GitHub auth — every other gh-using "
-		"step in this workflow uses the same name). Found: "
-		f"{codex_step_env['GH_TOKEN']!r}"
-	)
+	assert "GH_TOKEN" not in codex_step_env
+	assert diagnostics_step is not None
+	assert "${{ secrets.GH_PAT }}" in str((diagnostics_step.get("env") or {}).get("GH_TOKEN"))
+	assert 'gh issue comment "${ISSUE_NUMBER}"' in diagnostics_step.get("run", "")
 
 
 def test_validator_offending_bytes_redacts_secrets() -> None:
@@ -5099,11 +5162,11 @@ def test_failure_log_artifact_upload_contract() -> None:
 	# successful run leaves zero artifact artefacts. Both also gate on the
 	# env vars they read so an early-skip path (env unset) doesn't try to
 	# stage a directory that doesn't exist.
-	assert "if: (failure() || cancelled()) && env.RUNTIME_DIR != ''" in stage_block, (
+	assert "if: (failure() || cancelled()) && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true' && env.RUNTIME_DIR != ''" in stage_block, (
 		"Stage step must gate on failure() || cancelled() AND RUNTIME_DIR being "
 		"set, so early-skip paths don't try to stage a non-existent dir"
 	)
-	assert "if: (failure() || cancelled()) && env.CODEX_FAILURE_LOG_DIR != ''" in upload_block, (
+	assert "if: (failure() || cancelled()) && env.POST_AGENT_WORKSPACE_GUARD_FAILED != 'true' && env.CODEX_FAILURE_LOG_DIR != ''" in upload_block, (
 		"Upload step must gate on failure() || cancelled() AND the env var "
 		"the staging step exports, so the upload doesn't fire when staging "
 		"was skipped"
@@ -5350,6 +5413,20 @@ def main() -> int:
 			failed += 1
 	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 	return 1 if failed > 0 else 0
+
+def test_implementation_commit_and_push_use_trusted_git_boundary() -> None:
+	workflow = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	commit_script = (REPO_ROOT / "scripts" / "implement_commit_changes.sh").read_text(encoding="utf-8")
+	assert "trusted_git_write.sh" in commit_script
+	assert 'git commit -m "AI implementation for issue #' not in commit_script
+	assert "trusted_git_write.sh" in workflow
+	push_block = "\n".join(_step_block("Push branch"))
+	assert "trusted_git_write.sh" in push_block
+	assert 'git ls-remote --heads origin "${remote_target_ref}"' in push_block
+	assert 'git fetch --no-tags origin "+${remote_target_ref}:refs/remotes/origin/${TARGET_BRANCH}"' in push_block
+	assert "--expected-remote-head \"${expected_remote_head}\"" in push_block
+	assert "git remote set-url" not in push_block
+
 
 if __name__ == "__main__":
 	raise SystemExit(main())
