@@ -956,6 +956,21 @@ def test_scope_index_isolation_disables_opencode_snapshot() -> None:
 			assert sorted(path.name for path in Path(directory).iterdir()) == ["resolver_opencode.json"]
 
 
+def test_resolver_prompts_forbid_staging_and_committing() -> None:
+	# Issue #4545 conformance: review_conflict_prepare.sh renders the
+	# integration-sync template instead of the generic one on
+	# `orchestrator/project-*` heads, and both run through the same
+	# isolated model attempt, so both must carry the staging/committing
+	# prohibition in the rules list that holds their other "Do not" rules.
+	for name in ("conflict-resolver.txt", "integration-sync-conflict-resolver.txt"):
+		text = (PROMPTS_DIR / name).read_text(encoding="utf-8")
+		rules = [block for block in text.split("\n\n") if "\n- Do not access the network.\n" in block + "\n"]
+		assert len(rules) == 1, name
+		rules = rules[0] + "\n"
+		assert "- Do not run `git add`, `git rm --cached`, `git commit`, `git stage`, or any\n" in rules, name
+		assert "A separate, trusted step stages and commits your file\n" in rules, name
+
+
 def test_scope_symlink_restore_preserves_preexisting_target() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		repo, env = _scope_fixture(Path(directory))
@@ -1013,6 +1028,7 @@ def main() -> int:
 	test_scope_index_isolation_wiring_scoped_to_model_attempt()
 	test_scope_isolated_model_commit_still_fails_closed()
 	test_scope_index_isolation_disables_opencode_snapshot()
+	test_resolver_prompts_forbid_staging_and_committing()
 	test_scope_symlink_restore_preserves_preexisting_target()
 	test_scope_feedback_is_available_for_generic_resolver()
 	print(

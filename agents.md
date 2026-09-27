@@ -1952,8 +1952,10 @@ depend on it.
   Since #4545, the model's own attempt also gets an isolated `GIT_INDEX_FILE`
   pointed at a disposable copy of the real index (`_resolver_prepare_scratch_index`,
   seeded after the worktree/merge-index snapshot and torn down right after the
-  attempt): a model-issued `git add` — the prompt now explicitly forbids staging
-  or committing, but the isolation is what actually contains it — lands on that
+  attempt): a model-issued `git add` — both resolver prompts
+  (`prompts/conflict-resolver.txt` and `prompts/integration-sync-conflict-resolver.txt`)
+  now explicitly forbid staging or committing, but the isolation is what
+  actually contains it — lands on that
   scratch copy instead of mutating the real index the post-attempt check compares
   against, so it can no longer trip the "merge index changed" fail-closed path on
   a resolution that never touched an out-of-scope path. Only the index is
