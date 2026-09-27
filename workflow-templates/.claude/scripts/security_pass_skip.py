@@ -145,7 +145,9 @@ def _label_applied_at_creation(issue: dict[str, Any], events: list[Any], label: 
 		return f"labeled event for {label} has no readable created_at"
 	first_at = min(applied_at)
 	delay = (first_at - created).total_seconds()
-	if delay < 0 or delay > LABEL_AT_CREATION_WINDOW_SECONDS:
+	if delay < 0:
+		return f"labeled event for {label} is dated {int(-delay)}s before the issue's creation, not at creation"
+	if delay > LABEL_AT_CREATION_WINDOW_SECONDS:
 		return f"{label} was applied {int(delay)}s after creation, not at creation"
 	return ""
 

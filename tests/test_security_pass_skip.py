@@ -120,6 +120,12 @@ def test_label_added_by_author_after_creation_runs():
 	assert result["skip"] is False and "not at creation" in result["reason"]
 
 
+def test_label_event_dated_before_creation_runs():
+	result = _decide(_issue(), [_labeled("ai:security", at="2026-09-27T08:25:01Z")], _tracker())
+	assert result["skip"] is False
+	assert "5s before the issue's creation" in result["reason"] and "-5s" not in result["reason"]
+
+
 def test_label_within_window_skips():
 	assert _decide(_issue(), [_labeled("ai:security", at="2026-09-27T08:27:06Z")], _tracker())["skip"] is True
 

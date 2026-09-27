@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #4645
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01FJKco7zdoJ1ez3JY6t8ui9   safety net and hand-back re-armed by the round-2 stage session session_012CkE7YGUj1z2aXiafbLS3B (ids in its report)
+- Check-in: checker session_01FJKco7zdoJ1ez3JY6t8ui9   safety net and hand-back re-armed by the round-3 stage session session_01LBFSeYPYc9BA8zmu85Ee7j (ids in its report)
 - Last updated: 2026-09-27
-- Last note: review round 2: 1 finding fixed (allowlist contract test now asserts the bare `python3` entry as well as the `PYTHONDONTWRITEBYTECODE=1` one), 0 rejected
+- Last note: review round 3: 1 finding fixed (a labeled event dated before the issue's creation now gets its own diagnostic instead of "applied -5s after creation"), 2 rejected (agents.md parenthesis is balanced; docs/INVENTORY.md parity does not cover `.claude/`)
 
 ## Phases
-1. [ ] Phase 1 — verified security-pass skip (`.claude/scripts/security_pass_skip.py`, commands, allowlist, tests, docs, changelog)   — PR #4645 open (waiting); review rounds: 2; interventions: 0
+1. [ ] Phase 1 — verified security-pass skip (`.claude/scripts/security_pass_skip.py`, commands, allowlist, tests, docs, changelog)   — PR #4645 open (waiting); review rounds: 3; interventions: 0
 
 ## Conformance
 
