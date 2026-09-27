@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:line ~266 | flagged_by: [minimax_minimax-m3]\n  PROBLEM: `has_trusted_reclarify` accepts any comment body beginning with `/reclarify`, including strings such as `/reclarifyXYZ`.\n  WHY: The prefix check accepts text beyond the literal `/reclarify` command.\n- scripts/claude_issue_intake.sh:~line 156 | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The dispatcher login regex accepts trailing hyphens, such as `user-`.\n  WHY: GitHub rejects those logins, so the guard's accepted format differs from GitHub's documented login rules.\n- scripts/claude_issue_intake.sh:line ~197 | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `dispatcher_not_authorized` rejection detail includes the full permissions map in the Telegram ERROR.\n  WHY: The detail could expose more permissions information than the offending login alone.\n- scripts/claude_issue_intake.sh:lines 166-167, 174-175, 192-194 | flagged_by: [z-ai_glm-5_2]\n  PROBLEM: For `authorization_read_failed`, the rejection detail reads the first 200 bytes of output that contains `gh_retry_to_file` warning text rather than the raw API error.\n  WHY: `gh_retry_to_file` redirects the command's stderr to a private temp file and emits its own warning/error lines to the caller's stderr redirect, so the operator does not see the actual API error.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/claude_issue_route.py\n  Location: has_trusted_reclarify, line ~266, `body.startswith(RECLARIFY_COMMAND_PREFIX)`\n  Issue: The `/reclarify` gate uses bare `startswith(\"/reclarify\")`, so `/reclarifyXYZ`, `/reclarify-bypass`, and similar prefixes would be accepted as a vouching comment. The test `[_comment(body=\"/reclarify please\", association=\"MEMBER\")]` is intentionally matched, but the boundary is broader than the literal command name in the plan (\"commented `/reclarify`).\n  Suggested minimal fix: tighten to `body == \"/reclarify\" or body.startswith(\"/reclarify\\n\") or body.startswith(\"/reclarify \")`. Update one test row (`\"/reclarify please\"`).\n  Estimated lines changed: 2\n\n- File: scripts/claude_issue_intake.sh\n  Location: `if ! [[ \"${dispatcher_login}\" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$ ]]; then`, ~line 156\n  Issue: The login regex accepts trailing hyphens (e.g. `user-`), which GitHub itself rejects. Not a security bypass because the permission read still fails on an invalid login, but the guard's contract drifts from GitHub's documented login rules.\n  Suggested minimal fix: `^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\[bot\\])?$`.\n  Estimated lines changed: 1\n\n- File: scripts/claude_issue_intake.sh\n  Location: reject() at the `dispatcher_not_authorized` branch, line ~197\n  Issue: The `dispatcher(s) $(jq -c '.' \"${PERMISSIONS_FILE}\")` detail includes the full permissions map in the Telegram ERROR. Acceptable for operators, but the detail could be tightened to the offending login only.\n  Suggested minimal fix: when reason is `dispatcher_not_authorized`, log only the failing login (already known in scope). One-line jq change.\n  Estimated lines changed: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: scripts/claude_issue_intake.sh\n  Location: lines 166-167, 174-175, 192-194 (reject detail for authorization_read_failed)\n  Issue: The reject() detail for authorization_read_failed reads the first 200 bytes of the error file, but gh_retry_to_file internally captures the command's stderr in a private temp file and only emits its own ::warning:: lines to the caller's stderr redirect. The operator sees \"gh command failed (attempt 1/5)...\" rather than the actual API error (e.g., \"HTTP 404\" or \"Resource not accessible\").\n  Suggested minimal fix: After a failed gh_retry_to_file call, the actual last-attempt error is already gone (temp file deleted). Instead, grep for the \"::error::\" line that gh_retry_to_file emits on final failure, which includes the command: `detail=\"$(grep '::error::' \"${RUNTIME_DIR}/permission_error.txt\" | head -1)\"`. Alternatively, accept the current diagnostic \u2014 it already names the failing command and attempt count.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bb524571662be01570702f89f8d49b326840065750f8a18cd09a42b42c97b17b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36307409233",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36307409233",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927090525_1a07eae1da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36307409233"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T09:05:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
