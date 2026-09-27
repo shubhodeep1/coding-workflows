@@ -46,6 +46,8 @@ failed (the JSON then carries `error` and `done` is false).
     `claude/implement-plan-*` head keeps the --stuck-hours window). A live
     `ai:claude-fix-claim` on the current head reports `claimed` and a hold
     reports `held`; both are not done, so nobody starts a second fixer.
+    A claim counts only when an owner / member / collaborator posted it as
+    the PR's author or as CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN (issue #4622).
     --min-age-hours keeps a due fix waiting until it has been visible that
     long (`since`). Every verdict carries `kind`, `head_sha`, `claim`,
     `hand_backs`, `cap` and `cap_reached` (hand-backs counted per distinct
@@ -385,10 +387,37 @@ def _env_positive_float(name: str, default: float) -> float:
 	return value if value > 0 else default
 
 
-def read_fix_claims(comments: list, head_sha: str, now: dt.datetime, ignore_by: tuple[str, ...] = ()) -> dict:
+def _fix_claim_trusted_logins(pr: dict) -> tuple[str, ...]:
+	"""Casefolded logins whose `ai:claude-fix-claim` comments count on `pr`.
+
+	Only the identities that actually post claims (issue #4622): the PR's own
+	author, whose Claude sessions push and fix it through the session proxy,
+	and the configured workflow account CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN, the
+	`GH_PAT` login the catch-all sweep posts its reservations with. Any other
+	collaborator's claim or hold is ignored. No API calls: `pr` is the
+	`pulls/N` object the caller already fetched. Empty when neither is known,
+	so no claim counts (fail closed).
+	"""
+	logins = []
+	author = pr.get("user")
+	if isinstance(author, dict) and isinstance(author.get("login"), str) and author["login"]:
+		logins.append(author["login"].casefold())
+	workflow_login = os.environ.get("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "").strip()
+	if workflow_login:
+		logins.append(workflow_login.casefold())
+	return tuple(logins)
+
+
+def read_fix_claims(comments: list, head_sha: str, now: dt.datetime, ignore_by: tuple[str, ...] = (),
+	trusted_logins: tuple[str, ...] = ()) -> dict:
 	"""Summarise the trusted `ai:claude-fix-claim` markers on one PR.
 
-	Input: the PR's issue comments (REST objects) and its current head sha.
+	Input: the PR's issue comments (REST objects), its current head sha, and
+	the casefolded `trusted_logins` whose claims count
+	(`_fix_claim_trusted_logins`). A claim counts only when its comment's
+	author association is owner / member / collaborator **and** its author's
+	login is in `trusted_logins`; an empty tuple counts no claim (fail
+	closed), so a collaborator cannot forge a hold or push a PR to the cap.
 	Output: `{"claim": {"state": none|live|expired|held, "kind", "by", "at"},
 	"hand_backs": n, "cap": c, "cap_reached": bool}`. The latest trusted claim
 	on the current head decides `claim`; a `hold` never expires while the head
@@ -406,6 +435,10 @@ def read_fix_claims(comments: list, head_sha: str, now: dt.datetime, ignore_by: 
 	latest = None
 	for comment in sorted(comments, key=lambda entry: entry.get("id") if type(entry.get("id")) is int else 0):
 		if comment.get("author_association") not in FIX_CLAIM_TRUSTED_ASSOCIATIONS:
+			continue
+		claim_author = comment.get("user")
+		if (not isinstance(claim_author, dict) or not isinstance(claim_author.get("login"), str)
+			or claim_author["login"].casefold() not in trusted_logins):
 			continue
 		body = comment.get("body")
 		if not isinstance(body, str):
@@ -466,7 +499,7 @@ def check_pr_hand_back(repo: str, number: int, stuck_hours: float, min_age_hours
 		raise ValueError("PR head sha must be 40 lowercase hex characters")
 
 	comments = gh_api_list(f"repos/{repo}/issues/{number}/comments")
-	claims = read_fix_claims(comments, head_sha, now, ignore_claim_by)
+	claims = read_fix_claims(comments, head_sha, now, ignore_claim_by, trusted_logins=_fix_claim_trusted_logins(pr))
 	base = {"head_sha": head_sha, **claims}
 	claim = claims["claim"]
 	if claim["state"] == "held":

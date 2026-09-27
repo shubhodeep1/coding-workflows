@@ -34,6 +34,7 @@ REF = "claude/fix-something"
 PLAN_REF = "claude/implement-plan-demo-phase-1"
 RUN_ID = 42
 RUN_URL = f"https://github.com/{REPO}/actions/runs/{RUN_ID}"
+PR_AUTHOR = "pr-author"
 
 
 def _pr(ref=REF, **overrides):
@@ -44,6 +45,7 @@ def _pr(ref=REF, **overrides):
 		"mergeable_state": "clean",
 		"updated_at": "2026-09-26T08:00:00Z",
 		"head": {"sha": HEAD, "ref": ref},
+		"user": {"login": PR_AUTHOR, "type": "User"},
 	}
 	pr.update(overrides)
 	return pr
@@ -69,9 +71,10 @@ def _commit(date):
 	return {f"repos/o/r/commits/{HEAD}": {"commit": {"committer": {"date": date}}}}
 
 
-def _claim(head=HEAD, kind="ci", by="session_01x", created_at="2026-09-26T11:00:00Z", association="OWNER", comment_id=None):
+def _claim(head=HEAD, kind="ci", by="session_01x", created_at="2026-09-26T11:00:00Z", association="OWNER", comment_id=None,
+	login=PR_AUTHOR):
 	body = claimer.claim_body(head, kind, by)
-	comment = {"body": body, "author_association": association, "created_at": created_at, "user": {"login": "u", "type": "User"}}
+	comment = {"body": body, "author_association": association, "created_at": created_at, "user": {"login": login, "type": "User"}}
 	if comment_id is not None:
 		comment["id"] = comment_id
 	return comment
@@ -241,6 +244,61 @@ def test_untrusted_claims_are_ignored(monkeypatch, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, [_claim(association="NONE")])
 	_, out = _run(capsys)
 	assert out["done"] is True and out["claim"] == {"state": "none"} and out["hand_backs"] == 0
+
+
+def test_a_collaborators_forged_hold_is_ignored(monkeypatch, capsys):
+	# Issue #4622: a collaborator who is neither the PR's author nor the
+	# workflow account cannot park the PR with a hold marker.
+	forged = _claim(kind="hold", by="session_01x", association="COLLABORATOR", login="mallory", created_at="2026-09-01T00:00:00Z")
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, [forged])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "blocked" and out["claim"] == {"state": "none"}
+
+
+def test_a_collaborators_forged_claims_do_not_reach_the_cap(monkeypatch, capsys):
+	forged = [
+		_claim(head=head, kind=kind, association="COLLABORATOR", login="mallory", comment_id=index)
+		for index, (head, kind) in enumerate((("d" * 40, "ci"), ("e" * 40, "conflict"), ("f" * 40, "blocked"), (HEAD, "ci")), 1)
+	]
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, forged)
+	_, out = _run(capsys)
+	assert out["done"] is True and out["claim"] == {"state": "none"}
+	assert out["hand_backs"] == 0 and out["cap_reached"] is False
+
+
+def test_the_workflow_accounts_sweep_reservation_counts(monkeypatch, capsys):
+	reservation = _claim(kind="blocked", by="sweep-run-77", login="workflow-bot")
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, [reservation])
+	_, out = _run(capsys)
+	assert out["state"] == "claimed" and out["claim"]["by"] == "sweep-run-77" and out["hand_backs"] == 1
+
+
+def test_claim_logins_match_case_insensitively(monkeypatch, capsys):
+	comments = [_claim(kind="hold", login="PR-Author", comment_id=1)]
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, comments)
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "Workflow-Bot")
+	_, out = _run(capsys)
+	assert out["state"] == "held"
+	assert checker._fix_claim_trusted_logins({"user": {"login": "PR-Author"}}) == ("pr-author", "workflow-bot")
+
+
+def test_without_a_pr_author_only_the_workflow_account_counts(monkeypatch, capsys):
+	comments = [_claim(kind="hold", comment_id=1), _claim(kind="ci", by="sweep-run-5", login="workflow-bot", comment_id=2)]
+	pr = _pr(labels=[{"name": "ai:review-blocked"}])
+	del pr["user"]
+	_stub(monkeypatch, {"repos/o/r/pulls/7": pr}, comments)
+	_, out = _run(capsys)
+	assert out["state"] == "claimed" and out["claim"]["by"] == "sweep-run-5"
+
+
+def test_no_trusted_login_counts_no_claim(monkeypatch, capsys):
+	pr = _pr(labels=[{"name": "ai:review-blocked"}])
+	pr["user"] = None
+	_stub(monkeypatch, {"repos/o/r/pulls/7": pr}, [_claim(kind="hold"), _claim(kind="ci", login="workflow-bot")])
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "")
+	_, out = _run(capsys)
+	assert out["done"] is True and out["claim"] == {"state": "none"} and out["hand_backs"] == 0
+	assert checker.read_fix_claims([_claim(kind="hold")], HEAD, NOW)["claim"] == {"state": "none"}
 
 
 def test_hand_backs_count_distinct_head_and_kind(monkeypatch, capsys):
