@@ -825,7 +825,13 @@ ID. The validated block is placed ahead of the review-blocked footer
 (`REISSUE_ORCHESTRATOR_METADATA_CARRIED` / `_ABSENT`), and its spot-fix
 `files_touched` allowlist unions the judge's cited files with the closed PR's
 changed files that still exist at its head (`REISSUE_FILES_TOUCHED_UNION`,
-fail-open on a failed `pulls/<n>/files` listing).
+fail-open on a failed `pulls/<n>/files` listing), then with the new files the
+judge declares in `new_output_paths` (`REISSUE_FILES_TOUCHED_NEW_OUTPUTS`).
+A declared path is kept only when it passes the path validator, carries no
+glob character or trailing `/`, is not `.git`, and does not exist at the
+closed head; at most 10 are read, and a rejected one is skipped, never a
+fallback to `redo`. Incident: #4664's reissue needed a new changelog fragment
+and four new fixtures that neither source could list (heal #4665).
 Before that block is appended, canonical tracking-issue, integration-branch,
 and local-ID lines are removed from the judge-generated issue prose, so only
 the PR-base-validated block can supply successor-adoption lineage. Incident:
@@ -1023,6 +1029,7 @@ and shipped:
 - `REISSUE_BASELINE_DISCARDED`
 - `REISSUE_MODE`
 - `REISSUE_FILES_TOUCHED_UNION`
+- `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`
 - `REISSUE_ORCHESTRATOR_METADATA_CARRIED`
 - `REISSUE_ORCHESTRATOR_METADATA_ABSENT`
 - `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1`
@@ -1196,6 +1203,7 @@ LOG_PREFIX.name=REISSUE_BASELINE_PRESERVED
 LOG_PREFIX.name=REISSUE_BASELINE_DISCARDED
 LOG_PREFIX.name=REISSUE_MODE
 LOG_PREFIX.name=REISSUE_FILES_TOUCHED_UNION
+LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_CARRIED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_ABSENT
 LOG_PREFIX.name=FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1

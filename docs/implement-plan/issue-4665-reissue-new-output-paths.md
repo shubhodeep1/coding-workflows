@@ -3,22 +3,22 @@
 - Plan: docs/plans/issue-4665-reissue-new-output-paths-plan.md
 - Source issue: shubhodeep1/coding-workflows#4665
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: stable
-- Project branch: claude/implement-plan-issue-4665-reissue-new-output-paths   Final PR: pending
+- Project branch: claude/implement-plan-issue-4665-reissue-new-output-paths   Final PR: #4667 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-27
-- Last note: project branch opened from stable; phase 1 in progress.
+- Last note: phase 1 implemented and verified (390 related tests pass under pytest; the three CI-run files pass as scripts); phase 1 PR opened against the project branch.
 
 ## Phases
 1. [ ] Phase 1 — declare and union new output paths (`new_output_paths` in the judge contract, validated union into the spot-fix `files_touched` allowlist, tests, docs, changelog fragment)
-   - [ ] Prompt schema + rules in `prompts/mode-judge-review-blocked.txt` and `prompts/_templates/mode-judge-review-blocked.txt`
-   - [ ] Validated third union source in `scripts/review_rb_judge.sh` with `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`
-   - [ ] Tests: `tests/test_review_rb_judge_label_propagation.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_orchestrate_poll_workflow_contract.py`
-   - [ ] Docs: `README.md`, `agents.md`; fragment `changelog.d/4665-reissue-new-output-paths.md`
+   - [x] Prompt schema + rules in `prompts/mode-judge-review-blocked.txt` and `prompts/_templates/mode-judge-review-blocked.txt`
+   - [x] Validated third union source in `scripts/review_rb_judge.sh` with `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`
+   - [x] Tests: `tests/test_review_rb_judge_label_propagation.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_orchestrate_poll_workflow_contract.py`
+   - [x] Docs: `README.md`, `agents.md`; fragment `changelog.d/4665-reissue-new-output-paths.md`
    - Done: new tests pass, existing reissue / scope-guard / prompt / contract suites pass, and a reissue without the field is byte-identical.
 
 ## Conformance
@@ -44,3 +44,4 @@
 ## Notes
 - Issue mode: base `stable` from the issue's `Target branch:` line; no merged PR has `stable` as its head, so the base did not move. Security pass skipped per the plan header. Activation n/a for a non-default base: the project ends after the final merge, which closes #4665 explicitly with `ai:merged`.
 - Permission mode auto (no start-up question needed).
+- `.github/workflows/review_autofix.yml` is 505,498 bytes on `stable`, above the §27 480,000-byte guard but under GitHub's 512,000 limit. `stable` predates `tests/test_workflow_file_size_limit.py`, and `main` has already split the file (451,394 bytes), so the next promotion fixes it. This project does not touch the file (§5).
