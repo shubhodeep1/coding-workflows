@@ -317,4 +317,5 @@ def test_template_copy_matches():
 def test_settings_allow_the_script():
 	for settings in (ROOT / ".claude" / "settings.json", ROOT / "workflow-templates" / ".claude" / "settings.json"):
 		allow = json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"]
-		assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/security_pass_skip.py *)" in allow
+		assert "Bash(python3 .claude/scripts/security_pass_skip.py *)" in allow, settings
+		assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/security_pass_skip.py *)" in allow, settings

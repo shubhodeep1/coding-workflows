@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #4645
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01FJKco7zdoJ1ez3JY6t8ui9   safety net and hand-back re-armed by the round-1 stage session session_013kjKpzmRVeSASDYQCjDfqe (ids in its report)
+- Check-in: checker session_01FJKco7zdoJ1ez3JY6t8ui9   safety net and hand-back re-armed by the round-2 stage session session_012CkE7YGUj1z2aXiafbLS3B (ids in its report)
 - Last updated: 2026-09-27
-- Last note: review round 1: 3 findings fixed (earliest label event by timestamp, blank-stderr diagnostic, agents.md citation), 2 rejected (template mirror already byte-identical; JSON-decode error already distinct)
+- Last note: review round 2: 1 finding fixed (allowlist contract test now asserts the bare `python3` entry as well as the `PYTHONDONTWRITEBYTECODE=1` one), 0 rejected
 
 ## Phases
-1. [ ] Phase 1 — verified security-pass skip (`.claude/scripts/security_pass_skip.py`, commands, allowlist, tests, docs, changelog)   — PR #4645 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — verified security-pass skip (`.claude/scripts/security_pass_skip.py`, commands, allowlist, tests, docs, changelog)   — PR #4645 open (waiting); review rounds: 2; interventions: 0
 
 ## Conformance
 
