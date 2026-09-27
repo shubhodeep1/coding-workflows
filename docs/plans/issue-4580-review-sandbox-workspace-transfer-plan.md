@@ -1,7 +1,7 @@
 # Review sandbox: snapshot and transfer the per-PR workspace, not the checkout
 
 Source issue: shubhodeep1/coding-workflows#4580 (https://github.com/shubhodeep1/coding-workflows/issues/4580)
-Base branch: ai/issue-4568
+Base branch: claude/implement-plan-orchestrator-sync-contract-list-union-security-fix-1 (was ai/issue-4568, whose PR #4572 closed unmerged on 2026-09-27 and continued in #4602 from the same head; moved on Q2: A)
 Security pass: skip (ai:workflow-heal: automation-produced issue)
 
 ## Summary

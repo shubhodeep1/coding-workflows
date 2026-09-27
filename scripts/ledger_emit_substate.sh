@@ -22,15 +22,18 @@ ledger_substates_enabled()
 
 resolve_ai_memory_script()
 {
-	local script_dir repo_root candidate
+	local script_dir candidate
 
 	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
+	# Trust boundary (issue #4568): the ai_memory.py child runs on the host
+	# with the job's environment, and its own directory goes on sys.path for
+	# ai_memory_lib.py. Only the workflow-set override or the copy staged next
+	# to this helper qualify; the working directory's checkout is never a
+	# candidate, so a branch cannot supply the child or its sibling modules.
 	for candidate in \
 		"${LEDGER_AI_MEMORY_SCRIPT:-}" \
-		"${script_dir}/ai_memory.py" \
-		"${repo_root}/scripts/ai_memory.py"; do
+		"${script_dir}/ai_memory.py"; do
 		[ -n "${candidate}" ] || continue
 		if [ -f "${candidate}" ]; then
 			printf '%s\n' "${candidate}"
@@ -55,7 +58,7 @@ build_metadata_payload()
 	LEDGER_TOKENS_TOTAL="${tokens_total}" \
 	LEDGER_TOKENS_LOG_FILE="${tokens_log_file}" \
 	LEDGER_TOKENS_LOG_MAX_BYTES="${LEDGER_TOKENS_LOG_MAX_BYTES:-}" \
-	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+	python3 -I -B - <<'PY'
 import json
 import os
 import re
@@ -257,7 +260,7 @@ emit_deduped_run_event()
 	LEDGER_ACTOR="${actor}" \
 	LEDGER_METADATA_PAYLOAD="${metadata_payload}" \
 	LEDGER_EMIT_TIMEOUT_SECONDS="${LEDGER_EMIT_TIMEOUT_SECONDS:-}" \
-	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+	python3 -I -B - <<'PY'
 import fcntl
 import hashlib
 import json
@@ -287,8 +290,17 @@ with lock_path.open("a+", encoding="utf-8") as handle:
 			print("duplicate")
 			raise SystemExit(0)
 
+	# -I keeps the working directory, PYTHONPATH and user site-packages off
+	# the child's import path; ai_memory.py's sibling modules come only from
+	# the support directory it lives in, added explicitly (issue #4568).
 	cmd = [
 		sys.executable,
+		"-I",
+		"-B",
+		"-c",
+		"import os, runpy, sys; sys.argv = sys.argv[1:]; "
+		"sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); "
+		"runpy.run_path(sys.argv[0], run_name='__main__')",
 		ai_memory_script,
 		"record-run-event",
 		"--repo-root",

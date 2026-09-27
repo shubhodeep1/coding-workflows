@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /workspace
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends bash jq coreutils git \
+	&& apt-get install -y --no-install-recommends bash jq coreutils git procps \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY . /workspace

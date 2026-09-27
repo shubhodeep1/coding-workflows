@@ -108,7 +108,13 @@ def _run_terminate(
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir(exist_ok=True)
 	fake_sudo = bin_dir / "sudo"
-	fake_sudo.write_text(FAKE_SUDO, encoding="utf-8")
+	# PATH below is pinned to /usr/bin:/bin, which does not hold python3 in
+	# the python:*-slim validation image (/usr/local/bin/python3), so the fake
+	# names the running interpreter instead of resolving it through env.
+	fake_sudo.write_text(
+		FAKE_SUDO.replace("#!/usr/bin/env python3", f"#!{sys.executable}", 1),
+		encoding="utf-8",
+	)
 	fake_sudo.chmod(0o755)
 	if probe_failure:
 		fake_pgrep = bin_dir / "pgrep"

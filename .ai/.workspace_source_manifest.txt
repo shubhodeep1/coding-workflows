@@ -24,6 +24,7 @@
 .claude/hooks/pr_watch_guard.py
 .claude/hooks/session-start.sh
 .claude/scripts/check_in_status.py
+.claude/scripts/stale_routines.py
 .claude/settings.json
 .gitattributes
 .github/ISSUE_TEMPLATE/structured-task.yml
@@ -144,11 +145,10 @@ analysis/workflow-optimization-2026-09-23.md
 analysis/workflow-optimization-2026-09-24-2.md
 analysis/workflow-optimization-2026-09-24.md
 analysis/workflow-optimization-2026-09-25.md
-analysis/workflow-optimization-2026-09-26-2.md
 analysis/workflow-optimization-2026-09-26.md
 changelog.d/.gitkeep
 changelog.d/3576-security-audit-uncapped-followups.md
-changelog.d/3965-clarify-review-relay-budgets.md
+changelog.d/3928-judge-prompt-pr-diff-byte-cap.md
 changelog.d/3965-orchestrator-state-author-identity.md
 changelog.d/3965-rb-judge-pending-approval-comment-dedupe.md
 changelog.d/3965-review-autofix-security-boundaries-cycle-3.md
@@ -156,10 +156,10 @@ changelog.d/3965-review-security-boundaries.md
 changelog.d/3965-security-pass-cycle-5.md
 changelog.d/3965-security-pass-fix-cycle-2.md
 changelog.d/3965-security-pass-hardening.md
+changelog.d/3965-security-pass-loop-convergence.md
 changelog.d/3965-security-pass-pyyaml-duplicate-key-hardening.md
 changelog.d/3965-security-pass-waiver-marker-auth.md
 changelog.d/3965-sync-contract-list-union.md
-changelog.d/3965-validation-renderer-deps-bootstrap.md
 changelog.d/3996-forged-state-resolver-scope.md
 changelog.d/4075-editor-isolation-process-group-kill.md
 changelog.d/4088-broker-policy-rejection-fail-fast.md
@@ -168,12 +168,12 @@ changelog.d/4088-resolver-stall-guard-nesting.md
 changelog.d/4090-broker-input-cost-budgets-status-first-locator.md
 changelog.d/4092-security-pass-cycle-6-immutable-support.md
 changelog.d/4113-security-isolation.md
+changelog.d/4134-auto-apply-analysis-and-stable-release.md
 changelog.d/4175-python-isolation.md
 changelog.d/4216-orchestrator-security-isolation-hardening.md
 changelog.d/4255-python-startup-isolation.md
 changelog.d/4305-editor-checksum-and-gate-retry-queueing.md
 changelog.d/4305-editor-checksum-summary-warning.md
-changelog.d/4311-security-runtime-provenance.md
 changelog.d/4327-review-failure-fingerprint-cap.md
 changelog.d/4329-heal-self-repo-pr-target-branch.md
 changelog.d/4332-terminal-resume-conflicts-and-catalog-backfill.md
@@ -195,6 +195,7 @@ changelog.d/4439-audit-plans-implement-plan-claude-gate.md
 changelog.d/4440-implement-plan-auto-decisions.md
 changelog.d/4443-claude-issue-implementer.md
 changelog.d/4447-resolver-scope-retry.md
+changelog.d/4450-check-in-hand-back-to-pushing-session.md
 changelog.d/4451-pin-security-audit-support.md
 changelog.d/4452-validate-target-ref-sandbox.md
 changelog.d/4453-claude-fixer-verdict-verification.md
@@ -203,17 +204,16 @@ changelog.d/4470-trusted-security-audit-exclusions.md
 changelog.d/4472-resolver-symlink-touched-set.md
 changelog.d/4476-pipeline-failure-guards.md
 changelog.d/4481-validation-renderer-dependency-preflight.md
-changelog.d/4507-wire-overlay-core-test-into-ci.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
 changelog.d/implement-plan-failed-run-blocks.md
-changelog.d/implement-plan-one-checker-per-project.md
 changelog.d/noop-sweep-fingerprint-cap-skip.md
 changelog.d/orchestrator-state-auth-yaml-bounds.md
 changelog.d/post-push-pr-status-check-in.md
 changelog.d/review-autofix-workflow-size-limit.md
 changelog.d/review-blocked-stale-head-merge.md
+changelog.d/security-audit-concurrency-deadlock.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -454,7 +454,6 @@ scripts/drift_audit.sh
 scripts/editor_isolation_preflight.sh
 scripts/emit_event.py
 scripts/emit_event.sh
-scripts/evaluate_behavioural_smoke.py
 scripts/files_touched_scope_guard.py
 scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch
 scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch
@@ -541,7 +540,6 @@ scripts/review_synthesise_smoke.sh
 scripts/review_untrusted_sandbox.sh
 scripts/review_untrusted_workspace.py
 scripts/reviewer_failback_chains.json
-scripts/run_behavioural_smoke_assertions.sh
 scripts/run_plan_codex.sh
 scripts/run_validation_repo_checks.sh
 scripts/run_workspace_hook.sh
@@ -721,7 +719,6 @@ tests/test_ci_inventory_parity_order_contract.py
 tests/test_ci_poll_test_sharding.py
 tests/test_ci_shared_shell_block_guard.py
 tests/test_clarify_informal_detect.py
-tests/test_clarify_openrouter_broker_budgets.py
 tests/test_claude_issue_route.py
 tests/test_claude_md_section_numbers.py
 tests/test_codex_heartbeat.py
@@ -888,6 +885,7 @@ tests/test_session_start_extract_repo_slug.py
 tests/test_setup_serena_toml.py
 tests/test_slop_scan_local.py
 tests/test_smoke_alert_silencing_contract.py
+tests/test_stale_routines.py
 tests/test_stall_freshness_branch_fallback.py
 tests/test_stall_loop_and_churn_fixes.py
 tests/test_stall_recovery_pr_lookup.py
@@ -927,7 +925,6 @@ tests/test_validate_preflight_canary_tools_scope.py
 tests/test_validate_process_cross_cycle_escalation.py
 tests/test_validate_process_fixup_labels.py
 tests/test_validate_process_render_recovery.py
-tests/test_validate_process_renderer_deps.py
 tests/test_validate_process_template_mode.py
 tests/test_validate_semble_contract.py
 tests/test_validate_target_ref_input.py
@@ -986,6 +983,7 @@ workflow-templates/.claude/hooks/pr_merge_status_guard.py
 workflow-templates/.claude/hooks/pr_watch_guard.py
 workflow-templates/.claude/hooks/session-start.sh
 workflow-templates/.claude/scripts/check_in_status.py
+workflow-templates/.claude/scripts/stale_routines.py
 workflow-templates/.claude/settings.json
 workflow-templates/CLAUDE.md
 workflow-templates/ai-cancel-on-pr-close.yml

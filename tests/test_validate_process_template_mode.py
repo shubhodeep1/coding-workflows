@@ -62,11 +62,10 @@ def test_template_mode_selection_contract_present() -> None:
 	assert 'attempt_render_recovery_after_preflight_failure()' in text
 	assert 'if attempt_render_recovery_after_preflight_failure; then' in text
 	assert 'attempt_self_heal_and_reexec "render"' in text
-	# Template rendering runs python3 through the shared isolated-launcher
-	# helper (env -i with a pinned PATH/LANG/PYTHONDONTWRITEBYTECODE, -I -B),
-	# not a bare local python3_bin variable.
-	assert "if ! validate_run_isolated_python -- -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then" in text
-	assert 'renderer_summary="$(PATH="${renderer_path}" validate_run_isolated_python -- "${renderer_script}" \\' in text
+	assert "python3_bin=\"$(command -v python3 2>/dev/null || printf '%s' 'python3')\"" in text
+	assert "if ! (cd \"${renderer_empty_dir}\" && \"${renderer_python}\" -I -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)') >/dev/null 2>&1; then" in text
+	# The renderer script lives in the immutable support bundle (absolute path).
+	assert '"${renderer_python}" -I "${renderer_script}"' in text
 	assert 'Template renderer requires python3 >= 3.9' in text
 	assert 'Template rendering is now the only supported harness generation path.' in text
 

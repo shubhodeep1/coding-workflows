@@ -166,8 +166,8 @@ for budget_var in MAX_REQUESTS MAX_OUTPUT_TOKENS MAX_TOTAL_OUTPUT_TOKENS MAX_INP
 	budget_var="MODEL_PROVIDER_BROKER_${budget_var}"
 	[ -z "${!budget_var:-}" ] || broker_budget_env+=("${budget_var}=${!budget_var}")
 done
-env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}" PYTHONDONTWRITEBYTECODE=1 "${broker_budget_env[@]}" \
-	python3 "${support}/clarify_openrouter_broker.py" review-broker "${root}/socket/provider.sock" &
+env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}" "${broker_budget_env[@]}" \
+	python3 -I -B "${support}/clarify_openrouter_broker.py" review-broker "${root}/socket/provider.sock" &
 broker_pid=$!
 for _ in $(seq 1 50); do
 	[ -S "${root}/socket/provider.sock" ] && break

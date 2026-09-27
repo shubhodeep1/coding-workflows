@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+python3 -I -B - <<'PY'
 from __future__ import annotations
 
 import json
