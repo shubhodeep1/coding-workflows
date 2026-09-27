@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4620-intake-authorize-target-issue-plan.md
 - Source issue: shubhodeep1/coding-workflows#4620
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4620-intake-authorize-target-issue   Final PR: pending
+- Project branch: claude/implement-plan-issue-4620-intake-authorize-target-issue   Final PR: #4633 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (opened right after this commit; the — resume. block carries its number)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-27
-- Last note: project branch opened by session_01NBLHb1ZnPwLW1njQTFnP7D
+- Last note: phase 1 implemented and verified (149 tests in tests/test_claude_issue_route.py + tests/test_implement_issue_claude_command.py pass; ruff, yamllint, actionlint, shellcheck clean) by session_01NBLHb1ZnPwLW1njQTFnP7D
 
 ## Phases
-1. [ ] Phase 1 — intake authorizes the target issue and dispatcher
+1. [ ] Phase 1 — intake authorizes the target issue and dispatcher   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -37,4 +37,6 @@
 ## Lessons
 
 ## Notes
+- Security pass skipped per plan header (ai:security follow-up).
+- The Claude Code Web proxy refuses `repos/<repo>/collaborators/<login>/permission` (HTTP 403), so the permission read was verified only against stubs and GitHub's documented shape; the intake runs it in Actions with GH_PAT, outside the proxy.
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4620#issuecomment-5854273112
