@@ -124,6 +124,23 @@ def test_label_within_window_skips():
 	assert _decide(_issue(), [_labeled("ai:security", at="2026-09-27T08:27:06Z")], _tracker())["skip"] is True
 
 
+def test_earliest_label_event_is_used_whatever_the_order():
+	# Newest-first order: a later same-author re-application must not hide the
+	# creation-time event.
+	events = [
+		_labeled("ai:security", at="2026-09-28T00:00:00Z"),
+		{"event": "unlabeled", "actor": {"login": OWNER}, "created_at": "2026-09-27T09:00:00Z", "label": {"name": "ai:security"}},
+		_labeled("ai:security"),
+	]
+	assert _decide(_issue(), events, _tracker())["skip"] is True
+
+
+def test_unreadable_label_event_time_runs():
+	events = [_labeled("ai:security"), _labeled("ai:security", at="not-a-time")]
+	result = _decide(_issue(), events, _tracker())
+	assert result["skip"] is False and "no readable created_at" in result["reason"]
+
+
 def test_missing_labeled_event_runs():
 	result = _decide(_issue(), [_labeled("ai:claude")], _tracker())
 	assert result["skip"] is False and "no labeled event for ai:security" in result["reason"]
@@ -265,6 +282,17 @@ def test_cli_events_read_failure_exits_2(monkeypatch, capsys):
 	})
 	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 2
 	assert json.loads(capsys.readouterr().out)["skip"] is False
+
+
+def test_gh_error_detail_falls_back_to_stdout_when_stderr_is_blank(monkeypatch):
+	class Proc:
+		returncode = 1
+		stderr = "  \n"
+		stdout = '{"message": "Not Found"}\ngh: Not Found (HTTP 404)\n'
+
+	monkeypatch.setattr(skip.subprocess, "run", lambda *args, **kwargs: Proc())
+	with pytest.raises(skip.ReadError, match=r"HTTP 404"):
+		skip._gh_get_json("repos/o/r/issues/1")
 
 
 @pytest.mark.parametrize("argv", [["--repo", "bad", "--issue", "1"], ["--repo", REPO, "--issue", "0"]])

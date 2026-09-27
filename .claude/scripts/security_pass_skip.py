@@ -82,7 +82,8 @@ def _gh_get_json(path: str) -> Any:
 	except (OSError, subprocess.TimeoutExpired) as exc:
 		raise ReadError(f"gh api {path} failed: {exc}") from exc
 	if proc.returncode != 0:
-		detail = (proc.stderr or proc.stdout).strip().splitlines()
+		# A whitespace-only stderr must not hide stdout's diagnostic.
+		detail = ((proc.stderr or "").strip() or (proc.stdout or "").strip()).splitlines()
 		raise ReadError(f"gh api {path} failed: {detail[-1] if detail else f'exit {proc.returncode}'}")
 	try:
 		return json.loads(proc.stdout)
@@ -137,9 +138,12 @@ def _label_applied_at_creation(issue: dict[str, Any], events: list[Any], label: 
 	for event in applied:
 		if _login(event.get("actor")) != author:
 			return f"{label} was applied by {_login(event.get('actor')) or 'an unknown account'}, not the issue author"
-	first_at = _timestamp(applied[0].get("created_at"))
-	if first_at is None:
+	# The earliest event by timestamp, not by list position, so the check does
+	# not depend on the order the events endpoint returns.
+	applied_at = [_timestamp(event.get("created_at")) for event in applied]
+	if any(at is None for at in applied_at):
 		return f"labeled event for {label} has no readable created_at"
+	first_at = min(applied_at)
 	delay = (first_at - created).total_seconds()
 	if delay < 0 or delay > LABEL_AT_CREATION_WINDOW_SECONDS:
 		return f"{label} was applied {int(delay)}s after creation, not at creation"
