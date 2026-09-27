@@ -7,14 +7,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #4645
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01FJKco7zdoJ1ez3JY6t8ui9   safety net trig_012KqWpQZHZoqof9Z4ApSWLV   hand-back trig_01CYxu8gtd8HYRezG3X41XFn
 - Last updated: 2026-09-27
 - Last note: phase 1 implemented and verified; phase PR opened against the project branch
 
 ## Phases
-1. [ ] Phase 1 — verified security-pass skip (`.claude/scripts/security_pass_skip.py`, commands, allowlist, tests, docs, changelog)
+1. [ ] Phase 1 — verified security-pass skip (`.claude/scripts/security_pass_skip.py`, commands, allowlist, tests, docs, changelog)   — PR #4645 open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -41,3 +41,4 @@
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#4623: start`); invoking session session_01WLQwN8LRQ8ih2NrbkY1ky6.
 - Phase 1 used the issue-events endpoint instead of the timeline named in the plan (plan updated in the phase PR); a non-automation author now costs one REST read instead of two.
 - Draft final PR #4635 opened 2026-09-27.
+- Local verification: `tests/test_orchestrate_poll_process.py` (446 tests) runs >40 min on this container's Python 3.11 and was not finished when the PR opened; CI's sharded Python 3.12 run is authoritative for it. `tests/test_workflow_retro.py` cannot be collected on Python 3.11 (pre-existing, unrelated).
