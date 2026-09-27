@@ -1201,6 +1201,17 @@ your own judgement.
    treat the GraphQL-backed command as a fallback, never the reverse — the
    same reasoning §21.D applies to the merged-PR guard.
 
+4. **Shape `gh api` calls so the §23.H guard can approve them.** Put GET
+   parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
+   pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
+   send a POST). Keep `gh api` calls out of loops, `$(...)`, `$VAR` paths,
+   file redirects, and heredoc scripts, and edit a PR's title or body with
+   `mcp__github__update_pull_request`. Reads and §23.B routine writes are
+   approved without a prompt when the command holds only them plus the safe
+   helpers §23.H lists (`cd`, `sleep`, `echo`, `2>&1`, pipes into `head`,
+   `tail`, `wc -l`, `sort`); beside anything else the guard leaves the
+   decision to the allow list or the Auto-mode classifier.
+
 Transport, in order of preference:
 
 ```
@@ -1278,6 +1289,50 @@ Consequences:
   Tool Access blocks). Keep accepting both; prefer `GH_TOKEN` when both are set.
 - The unattended pipelines read `unattended_system_instructions.md` and never
   see this file, so §23 grants no new access to any codex-driven phase.
+
+### H) Permission Guard for `gh api`
+
+Whether a `gh api` call prompts is decided by
+`.claude/hooks/gh_api_write_guard.py`, a `PreToolUse` hook on `Bash` in
+`.claude/settings.json`, not by `permissions.ask` rules. The seven former
+ask rules (`gh api * -X *`, `--method`, `-f`, `-F`, `--field`,
+`--raw-field`, `--input`) could not tell a read from a write: a search that
+passes query parameters with `-X GET -f q=...` prompted like a
+`-X DELETE`, and an ask rule prompts even in Auto mode and even when a hook
+allows, so unattended stage sessions stopped on reads. Do not add
+`gh api` ask rules back; they would override the hook.
+
+For each `gh api` call the hook works out the method the way `gh` does
+(`-X`/`--method`, else POST when fields or `--input` are present, else GET)
+and classifies it:
+
+| Class | What | Outcome |
+|---|---|---|
+| read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion | not prompted by the hook |
+| routine | a §23.B write to the local checkout's repository (or `{owner}/{repo}`): create a PR; edit a PR's or issue's `title`/`body`; add or edit an issue or PR comment; reply to a review thread; add or remove one label; request reviewers; dispatch (`ref`, `inputs` only) one of the workflows `.claude/settings.json` already allows as `gh workflow run <file> *` (§23.C command-invoked carve-out) | not prompted by the hook |
+| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input`, a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a `$(...)` or backtick word, handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode |
+
+The hook decides once for the whole Bash call: **ask** when any call is a
+write; **allow** when every call is a read or routine and the command
+holds nothing else but safe helpers (items joined by `;` or `&&`, each a
+`gh api` call, optionally piped into `head`/`tail -n N`, `wc -l`, or
+`sort -n -r -u -k K -t C`, or a standalone `cd <path>`, `sleep <n>`,
+`echo <text>`, or `true`; `2>&1` as the only redirect; no `$`, backticks,
+globs, subshells, or loops); otherwise **no decision**, so the allow list
+or the Auto-mode classifier decides, because an allow would also approve
+code the guard has not read (a loop, a `python3` heredoc, a `$VAR`
+redirect). `gh api` text that is only data (`git commit -m`, `grep`,
+`echo`) is ignored.
+
+It fails **closed**, unlike the §21/§25/§26 hooks: an unreadable, invalid,
+or non-object payload, or an internal error, asks. Empty input is allowed
+silently. It issues no GitHub API calls (§15), runs only
+`git config --get remote.origin.url` (and only when a call could be
+routine), and has no environment-variable escape hatch. It does not see
+`gh` behind an expansion (`$GH api ...`), which the old ask rules did not
+either. The hook and the settings entry ship to consumer repos through the
+same `.claude/` sync as the other hooks; `tests/test_gh_api_write_guard.py`
+covers the rules and the wiring and runs in its own `ci.yml` step.
 
 ### I) Permission Prompt Reports
 

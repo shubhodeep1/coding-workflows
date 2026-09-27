@@ -107,15 +107,6 @@
       "CronDelete",
       "CronList",
       "PushNotification"
-    ],
-    "ask": [
-      "Bash(gh api * -X *)",
-      "Bash(gh api * --method *)",
-      "Bash(gh api * -f *)",
-      "Bash(gh api * -F *)",
-      "Bash(gh api * --field *)",
-      "Bash(gh api * --raw-field *)",
-      "Bash(gh api * --input *)"
     ]
   },
   "hooks": {
@@ -137,6 +128,16 @@
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pr_merge_status_guard.py",
             "timeout": 90
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/gh_api_write_guard.py",
+            "timeout": 30
           }
         ]
       },
