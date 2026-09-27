@@ -127,7 +127,7 @@ snapshot listing it, or the reverse, still loses edits.
 
 1. **Phase 1 — transfer editor edits into the per-PR workspace.**
    - Files: `scripts/review_untrusted_sandbox.sh`, `scripts/review_untrusted_workspace.py`,
-     `tests/test_model_provider_broker.py`, `tests/test_review_autofix_review_pipeline_contract.py`,
+     `tests/test_model_provider_broker.py`,
      `README.md`, `agents.md`, `changelog.d/4580-review-sandbox-workspace-transfer.md` [new].
    - Done when: the new regression test passes, fails when the sandbox fix is reverted, and
      the existing sandbox, broker, and pipeline-contract tests pass.
@@ -159,7 +159,6 @@ Phase 1:
 - `scripts/review_untrusted_sandbox.sh`
 - `scripts/review_untrusted_workspace.py`
 - `tests/test_model_provider_broker.py`
-- `tests/test_review_autofix_review_pipeline_contract.py`
 - `README.md`
 - `agents.md`
 - `changelog.d/4580-review-sandbox-workspace-transfer.md` [new]

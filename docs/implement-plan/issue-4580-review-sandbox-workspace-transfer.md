@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-4580-review-sandbox-workspace-transfer-plan.md
 - Source issue: shubhodeep1/coding-workflows#4580
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: ai/issue-4568
-- Project branch: claude/implement-plan-issue-4580-review-sandbox-workspace-transfer   Final PR: pending (draft)
+- Project branch: claude/implement-plan-issue-4580-review-sandbox-workspace-transfer   Final PR: #4585 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-27
-- Last note: project branch opened from ai/issue-4568; implementing phase 1.
+- Last note: phase 1 implemented and verified; phase PR opened against the project branch.
 
 ## Phases
 1. [ ] Phase 1 — transfer review-editor edits into the per-PR workspace (WORKSPACE_PATH) instead of the checkout
