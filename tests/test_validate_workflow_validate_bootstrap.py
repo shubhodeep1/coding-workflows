@@ -495,6 +495,7 @@ def main() -> int:
 	test_validate_workflow_passes_template_default_env()
 	test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 	test_renderer_dependency_preflight_blocks_rendering()
+	test_renderer_isolated_imports_ignore_workspace_shadows_and_reject_external_origins()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	test_validate_workflow_bootstraps_codex_heartbeat_support()
 	test_codex_heartbeat_helper_contract()
