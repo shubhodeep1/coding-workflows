@@ -232,6 +232,10 @@
     "ai:claude-issue-queue-stale": {
       "color": "b60205",
       "description": "Claude issue queue item nobody picked up in time; restart the pickup with /claude-issue-pickup start — restart"
+    },
+    "ai:permission-prompt": {
+      "color": "c5def5",
+      "description": "A Claude Code session stopped at a permission prompt or Auto-mode denial (coding-workflows only; filed by permission_prompts.py)"
     }
   },
   "phase_groups": [
