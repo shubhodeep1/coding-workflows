@@ -1,17 +1,17 @@
 # Implement-Plan Log — Bind Claude issue queue items to the run that queued them
 
-- Plan: docs/plans/issue-4621-bind-claude-queue-payloads-plan.md
+- Plan: docs/completed/issue-4621-bind-claude-queue-payloads-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4621
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4621-bind-claude-queue-payloads   Final PR: #4636 draft
-- Status: IN_PROGRESS
-- Stage: conformance 1/3 — review round
-- Activation: not started
-- Waiting on: PR #4649
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (claude/implement-plan-issue-4621-bind-claude-queue-payloads-complete)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01HuPy8SJxGNHdJhSC3PfGv4   safety net trig_01ESrqLtp3dX9ztYLcoRrLK1   hand-back trig_01WtWxDrr6TagupefZsm7Hs1
+- Check-in: checker session_01HuPy8SJxGNHdJhSC3PfGv4 (reused for every wait)   safety net and hand-back: the ids are in the completion stage's report (armed after the PR opened)
 - Last updated: 2026-09-27
-- Last note: review round 1 on PR #4649 handled by session_01Mvs4azqbwcc1TNRfwEmiFo: the one consensus finding (the fix edited phase 1's changelog fragment instead of shipping its own) fixed by AD-8; waiting on the next review round or merge
+- Last note: validation cycle 1 passed (run 36324854460, 10/10 tests on 163878f); completion PR moves the plan to docs/completed/, then the final PR #4636 is marked ready (stage final-merge 1/1)
 
 ## Phases
 1. [x] Phase 1 — bind queue items to their producing run and verify the binding at pickup   — PR #4639 merged 2026-09-27; review rounds: 1; interventions: 0
@@ -23,14 +23,19 @@
    - Done when: the listed tests pass and both workflows parse and upload `claude-issue-queue-binding` with `if: always()`
 
 ## Conformance
-- Run 1 — 2026-09-27: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR #4649: the pickup read binding runs for only the first `limit` targets, so `limit` stuck unbound items (left open per AD-3) deferred every bound item behind them forever; the window is now 3 × limit (AD-7) (pre-security); review rounds: 1
+- Run 1 — 2026-09-27: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR #4649: the pickup read binding runs for only the first `limit` targets, so `limit` stuck unbound items (left open per AD-3) deferred every bound item behind them forever; the window is now 3 × limit (AD-7) (pre-security); review rounds: 1; merged 2026-09-27
+- Run 2 — 2026-09-27: CONFORMANT (Implemented COMPLETE, Correctness PASS) — no findings, no fix PR (session_01VXh8ECtZnvKEuye8WjQ3pQ). Before it, `main` was merged into the project branch (163878f; docstring conflict in `scripts/claude_pr_sweep.py` resolved keeping both sides).
 
 ## Security pass
 - Skipped: `Security pass: skip (ai:security: automation-produced issue)` in the plan header
 
 ## Validation
+- Cycle 1 — run 36324854460 2026-09-27 (target_ref: claude/implement-plan-issue-4621-bind-claude-queue-payloads, validated 163878f): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 289s); no fix issues
 
 ## Completion
+- Completion PR (branch claude/implement-plan-issue-4621-bind-claude-queue-payloads-complete) — doc moved to docs/completed/issue-4621-bind-claude-queue-payloads-plan.md
+- Merged PRs into the project branch: #4639 (phase 1/1, merged 2026-09-27), #4649 (conformance fix 1, merged 2026-09-27)
+- Final PR #4636 draft — marked ready in stage final-merge 1/1
 
 ## Activation
 
@@ -59,3 +64,4 @@
 - Local verification: 412 tests across every file referencing the changed files passed; the full suite was not completed locally (network-bound legacy tests exceed the 25-minute local timeout, and `tests/test_workflow_retro.py` needs Python 3.12 f-strings while the container has 3.11). CI runs the full suite.
 - Conformance 1/3 (2026-09-27): merged `main` into the project branch (0a0c369, docs-only, clean). The pickup budget in the plan (runs of the first `limit` targets) is widened to 3 × limit by AD-7.
 - Conformance 1/3 review round 1 (PR #4649, head af0676b9467c, ledgers 943acd8d… and df476940…): both review runs on the head reported the same single task gap (no fragment of its own, 6 of 6 reviewers); fixed per AD-8. Its evidence that editing the fragment "retroactively rewrites PR #4639's entry" does not hold: project-branch fragments reach `main` only through the final PR.
+- Validation 1/3 (2026-09-27, session_014PqWQykxyzqGwNVKkABfqV): read `validation_status.json` from artifact `ai-validation-36324854460-1` (status=pass) and confirmed from the run log that the checkout was the authorized project-branch head 163878f; no validation-fix PR, so no conformance re-run was due.
