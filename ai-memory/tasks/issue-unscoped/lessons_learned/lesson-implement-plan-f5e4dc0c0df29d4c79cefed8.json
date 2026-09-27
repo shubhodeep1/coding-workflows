@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T22:27:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Consumer wrappers pin the library workflow by 40-hex release SHA (`@<sha> # stable`), not `@stable`, so any `referenced_workflows` trust check must accept SHA pins or every consumer run fails verification.",
+  "phase": "implement_plan",
+  "pr_number": 4651,
+  "record_id": "lesson-implement-plan-f5e4dc0c0df29d4c79cefed8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:claude-fixer-unattended-convergence",
+    "file:scripts/review_claude_fixer_evidence.py",
+    "file:scripts/workflow_wrapper_refs.py"
+  ]
+}
