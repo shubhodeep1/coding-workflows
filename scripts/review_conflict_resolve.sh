@@ -638,13 +638,16 @@ PY
 }
 
 # Source-repo only: give the model attempt a disposable copy of the real
-# merge index via GIT_INDEX_FILE, so a model-issued `git add`/`git commit`
-# (observed staging conflict-marker-free content ahead of the trusted
+# merge index via GIT_INDEX_FILE, so a model-issued `git add` (observed
+# staging conflict-marker-free content ahead of the trusted
 # stage_resolver_touched_path_or_fail step) writes to the scratch copy
 # instead of mutating the real index that _resolver_scope_state's
-# merge_state() snapshot/check compares against. The real index and
-# MERGE_HEAD are never touched here; only the scratch file is created,
-# seeded from the real index's current bytes, or removed on failure.
+# merge_state() snapshot/check compares against. This isolates the index
+# only: a model-issued `git commit` still moves HEAD and removes
+# MERGE_HEAD, and merge_state() still fails the attempt closed on that.
+# The real index and MERGE_HEAD are never touched here; only the scratch
+# file is created, seeded from the real index's current bytes, or removed
+# on failure.
 _resolver_prepare_scratch_index() {
   local real_index
   real_index="$(git rev-parse --git-path index)" || return 1
@@ -2270,12 +2273,17 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
     # Source-repo only: scope the model's Git index to the disposable
     # copy _resolver_prepare_scratch_index seeded above, so a model-
-    # issued `git add`/`git commit` cannot change the real index that
-    # the post-attempt scope check compares against. Unset again right
-    # after the attempt so every later step (scope check, staging,
-    # commit) uses the real index as before.
+    # issued `git add` (or an opportunistic index refresh) cannot change
+    # the real index that the post-attempt scope check compares against.
+    # Only the index is isolated: a model-issued `git commit` still
+    # moves HEAD and removes MERGE_HEAD, which the unchanged scope check
+    # detects and fails closed on. Unset again right after the attempt,
+    # and only when this block exported it, so every later step (scope
+    # check, staging, commit) uses the real index as before.
+    _resolver_index_isolated=false
     if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
       export GIT_INDEX_FILE="${RESOLVER_SCRATCH_INDEX}"
+      _resolver_index_isolated=true
     fi
     if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
       timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
@@ -2297,7 +2305,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" > "${tmp_output}" \
         || _codex_exit=$?
     fi
-    if [ -n "${GIT_INDEX_FILE:-}" ]; then
+    if [ "${_resolver_index_isolated}" = "true" ]; then
       unset GIT_INDEX_FILE
       rm -f "${RESOLVER_SCRATCH_INDEX}"
     fi
