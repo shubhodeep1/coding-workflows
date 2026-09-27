@@ -190,9 +190,18 @@ def test_topology_gate_hands_conflicts_to_claude_regardless_of_resolver_toggle()
 def _gate_jq(label: str) -> str:
 	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
 	block = gate_run.split("# ----- Claude-fixer mode", 1)[1].split("# ----- Terminal same-head skip", 1)[0]
-	programs = re.findall(r"jq -e --arg head \"\$\{pr_head_sha_gate\}\" --arg author \"\$\{gate_marker_author_login\}\"(?: --arg bot \"\$\{CLAUDE_FIXER_VERDICT_BOT_LOGIN\}\")? '(.*?)'", block, re.S)
-	assert len(programs) == 3, programs
-	return programs[1] if label == "converged" else programs[2]
+	pattern = r"jq -e --arg head \"\$\{pr_head_sha_gate\}\" --arg author \"\$\{gate_marker_author_login\}\"(?: --arg bot \"\$\{CLAUDE_FIXER_VERDICT_BOT_LOGIN\}\")? '(.*?)'"
+	programs = re.findall(pattern, block, re.S)
+	assert len(programs) == 2, programs
+	if label == "converged":
+		return programs[1]
+	# The hand-off predicate lives in gate_claude_handoff_on_head(), shared by
+	# the awaiting-session skip and the deterministic-skip hand-off guard.
+	helper = gate_run.split("gate_claude_handoff_on_head()", 1)[1].split("\n}\n", 1)[0]
+	helper_programs = re.findall(pattern, helper, re.S)
+	assert len(helper_programs) == 1, helper_programs
+	assert block.count("gate_claude_handoff_on_head") == 1
+	return helper_programs[0]
 
 
 def _jq_true(program: str, comments: list[dict]) -> bool:

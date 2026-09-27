@@ -716,6 +716,22 @@ jobs:
             fi
           }
 
+          # True (exit 0) when a workflow-issued Claude hand-off (findings or
+          # pre-review conflict) exists for the current head. Shared by the
+          # claude_fixer_awaiting_session dispatch skip and the pending
+          # hand-off guard on the deterministic skip, so a change to the
+          # hand-off comment format is a single edit. The caller must have
+          # run gate_fetch_marker_comments and checked for state "ok"; the
+          # predicate reads that cached file and issues no API call.
+          gate_claude_handoff_on_head()
+          {
+            jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
+                any(.[]; .author_login == $author and
+                  ((.body // "") | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\\n")) and
+                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->$"))))
+              ' "${gate_marker_comments_file}" >/dev/null 2>&1
+          }
+
           # ----- Claude-fixer mode (every PR-backed claude/* head) -----
           # Claude PRs (/implement-plan-claude stages, and any session's PR
           # under CLAUDE.md §26) keep the reviewer panel but hand the fixes to
@@ -799,11 +815,7 @@ jobs:
             && [ "${claude_fixer_force_review}" != "true" ] \
             && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
             gate_fetch_marker_comments
-            if [ "${gate_marker_fetch_state}" = "ok" ] && jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
-                any(.[]; .author_login == $author and
-                  ((.body // "") | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\\n")) and
-                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->$"))))
-              ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
+            if [ "${gate_marker_fetch_state}" = "ok" ] && gate_claude_handoff_on_head; then
               SHOULD_RUN="false"
               SKIP_REASON="claude_fixer_awaiting_session"
               echo "AUTOFIX_GATE_SKIP reason=claude_fixer_awaiting_session pr=${PR_NUMBER} head_sha=${pr_head_sha_gate}"
@@ -1476,11 +1488,7 @@ jobs:
                 if [ "${gate_marker_fetch_state}" != "ok" ] || ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
                   CLAUDE_HANDOFF_SKIP_SUPPRESSED="true"
                   echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_handoff_unverified pr=${PR_NUMBER} fetch_state=${gate_marker_fetch_state} head_sha=${pr_head_sha_gate:-unknown} candidate=${candidate_skip_reason}"
-                elif jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
-                    any(.[]; .author_login == $author and
-                      ((.body // "") | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\\n")) and
-                      ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->$"))))
-                  ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
+                elif gate_claude_handoff_on_head; then
                   CLAUDE_HANDOFF_SKIP_SUPPRESSED="true"
                   echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_pending_handoff pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} candidate=${candidate_skip_reason}"
                 fi
