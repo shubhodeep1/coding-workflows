@@ -27,10 +27,11 @@ Batching contract (CLAUDE.md §15):
   calls   one read of this repo's open queue per run; per repo, one open-PR
           list call per 100 PRs; per `claude/*` candidate, the
           check_in_status.py hand-back reads (1 PR read, 1 per 100 comments,
-          check-run pages, at most 1 commit read, 1 hand-off run read and 3
-          active-run reads); per queued fixer, 1 queue-issue POST and the
-          claim (1 PR read + 1 comment POST); the queue binding is a local
-          file write (no call);
+          check-run pages, at most 1 commit read, 1 hand-off run read,
+          1 compare read when that run was triggered by an older push than
+          the head it reviewed, and 3 active-run reads); per queued fixer,
+          1 queue-issue POST and the claim (1 PR read + 1 comment POST);
+          the queue binding is a local file write (no call);
   output  one `CLAUDE_PR_SWEEP` log line per decision plus a summary line;
   failure fail open per PR and per repo: a read error is logged and the
           sweep moves on; nothing is retried in a tight loop. A failed queue
