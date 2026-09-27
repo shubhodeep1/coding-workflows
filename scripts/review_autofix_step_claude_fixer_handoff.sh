@@ -20,7 +20,22 @@
 #   * nothing at all (no finding in any ledger block, fresh ready check snapshot)
 #       -> no comment; CLAUDE_FIXER_ZERO_FINDINGS=true is exported so the
 #          workflow's own auto-merge step runs, as it does when the editor
-#          finds nothing to commit.
+#          finds nothing to commit;
+#   * nothing found, no check failed, but checks still running after the
+#     refresh wait (CLAUDE_FIXER_CHECKS_PENDING_ENABLED, default true)
+#       -> no hand-off: one "clean, waiting for checks" comment per head
+#          (updated in place) carrying
+#          `<!-- ai:claude-fixer-checks-pending:v1 head=<sha> round=<n> run=<run_id> -->`.
+#          The review sweep's next dispatch takes the gate's merge-check path
+#          (scripts/review_autofix_step_claude_fixer_merge_check.sh) instead
+#          of re-running the reviewers.
+#
+# Every outcome also writes the round's evidence (outcome, head, round,
+# ledger digest, finding count, failing checks) through
+# scripts/review_claude_fixer_evidence.py into CLAUDE_FIXER_EVIDENCE_DIR
+# (default ${RUNTIME_DIR}/claude_fixer_evidence); the workflow uploads it as
+# the `claude-fixer-evidence-<run_id>-<run_attempt>` artifact, and later
+# decisions trust only that artifact, never a comment marker.
 #
 # The hand-off marker is
 #   <!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->
@@ -34,10 +49,13 @@
 # AUTOFIX_PRE_REVIEW_RESOLVE,
 # AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED, REVIEWER_CONSENSUS_FILE,
 # PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR, GITHUB_RUN_ID,
-# GITHUB_SERVER_URL, RUNTIME_DIR.
+# GITHUB_SERVER_URL, RUNTIME_DIR, CLAUDE_FIXER_CHECKS_PENDING_ENABLED
+# (default true), CLAUDE_FIXER_EVIDENCE_DIR (optional).
 # API calls: on a clean candidate, the existing check-run collector refreshes
 # its paginated check-runs GET; on findings, the ledger chunks from
-# post_review_comment.sh and one hand-off comment are posted.
+# post_review_comment.sh and one hand-off comment are posted; on checks
+# pending, one GET /user, one paginated GET of the PR's comments (to update
+# this head's checks-pending comment in place) and one POST or PATCH.
 set -euo pipefail
 
 # shellcheck source=/dev/null
@@ -63,6 +81,70 @@ claude_fixer_post_marker_comment()
   rm -f "${payload_file}"
 }
 
+claude_fixer_evidence_dir="${CLAUDE_FIXER_EVIDENCE_DIR:-${RUNTIME_DIR:-${TMPDIR:-/tmp}}/claude_fixer_evidence}"
+
+# Write this round's evidence.json (and a copy of the ledger) for the
+# evidence artifact. Returns non-zero when the helper is missing or fails;
+# callers that depend on the evidence (checks pending) fall back to the
+# hand-off, the others only warn.
+claude_fixer_write_evidence()
+{
+  local evidence_outcome="$1"
+  local evidence_ledger_args=()
+  if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_claude_fixer_evidence.py" ]; then
+    echo "::warning::review_claude_fixer_evidence.py is not staged; no Claude-fixer evidence for outcome ${evidence_outcome}."
+    return 1
+  fi
+  if [ -s "${REVIEWER_CONSENSUS_FILE:-}" ]; then
+    evidence_ledger_args=(--ledger-file "${REVIEWER_CONSENSUS_FILE}")
+  fi
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/review_claude_fixer_evidence.py" write \
+    --out-dir "${claude_fixer_evidence_dir}" \
+    --pr "${PR_NUMBER}" \
+    --head "${HEAD_SHA}" \
+    --round "${claude_fixer_round}" \
+    --outcome "${evidence_outcome}" \
+    --ledger-sha256 "${claude_fixer_ledger_digest:-}" \
+    --finding-count "${claude_fixer_finding_count:-0}" \
+    --failed-checks "${claude_fixer_failed_checks:-}" \
+    "${evidence_ledger_args[@]}" >/dev/null; then
+    echo "::warning::Could not write Claude-fixer evidence for outcome ${evidence_outcome}."
+    return 1
+  fi
+  return 0
+}
+
+# Post this head's "clean, waiting for checks" comment, or update it in
+# place when it is already the newest Claude-fixer marker comment for the
+# head (a newer hand-off on the same head gets a fresh comment instead, so
+# the gate's newest-marker rule sees the current state).
+claude_fixer_upsert_checks_pending_comment()
+{
+  local marker_login="" existing_id="" payload_file
+  marker_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+  if [ -n "${marker_login}" ]; then
+    # $login and $head are jq variables, not shell expansions.
+    # shellcheck disable=SC2016
+    existing_id="$(gh_retry gh api --paginate -X GET "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
+      --jq '.[] | {id: .id, login: (.user.login // ""), body: (.body // "")}' 2>/dev/null \
+      | jq -rs --arg login "${marker_login}" --arg head "${HEAD_SHA}" '
+          [.[] | select(.login == $login and ((.id | type) == "number")) |
+            select(.body | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-(handoff:v1 kind=(findings|conflict)|checks-pending:v1) head=" + $head + " ")))]
+          | max_by(.id) // empty
+          | select(.body | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-checks-pending:v1 head=" + $head + " ")))
+          | .id
+        ' 2>/dev/null || true)"
+  fi
+  payload_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/claude_fixer_checks_pending_payload.XXXXXX")"
+  jq -n --rawfile body "${claude_fixer_body_file}" '{body: $body}' > "${payload_file}"
+  if [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
+    gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" --input "${payload_file}" >/dev/null
+  else
+    gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input "${payload_file}" >/dev/null
+  fi
+  rm -f "${payload_file}"
+}
+
 if [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" = "true" ]; then
   if [ "${CLAUDE_FIXER_VERIFICATION:-false}" = "true" ]; then
     echo "CLAUDE_FIXER_VERIFICATION_FAILED=true" >> "$GITHUB_ENV"
@@ -82,6 +164,7 @@ if [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" = "true" ]; then
       echo "<!-- ai:claude-fixer-verification:v1 head=${HEAD_SHA} result=unresolved -->"
     fi
   } > "${claude_fixer_body_file}"
+  claude_fixer_write_evidence conflict || true
   claude_fixer_post_marker_comment
   echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=conflict"
   exit 0
@@ -147,7 +230,38 @@ if [ "${claude_fixer_clean_ledger}" = "true" ] && [ -z "${claude_fixer_failed_ch
     && grep -Fxq 'incomplete_count: 0' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
     && ! grep -Eq '^(failed|incomplete)\[[0-9]+\]\.' "${PR_CHECK_RUNS_CONTEXT_FILE}"; then
     echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=none findings=0 failed_checks=0 action=auto_merge"
+    claude_fixer_write_evidence clean || true
     echo "CLAUDE_FIXER_ZERO_FINDINGS=true" >> "$GITHUB_ENV"
+    exit 0
+  fi
+  # A check that failed while the reviewers ran is handed off as findings
+  # (the fixer treats it as a `ci` round), naming it in the hand-off.
+  if [ "${claude_fixer_checks_refreshed}" = "true" ] && [ -s "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ]; then
+    claude_fixer_failed_checks="$(sed -n 's/^failed\[[0-9]*\]\.name: //p' "${PR_CHECK_RUNS_CONTEXT_FILE}" | paste -sd, - || true)"
+  fi
+  # Checks pending is not a Claude hand-off (the review was clean). The
+  # snapshot must be for this head and name no failure; a disabled or broken
+  # collector keeps today's hand-off so the round can never wait forever.
+  if [ "${CLAUDE_FIXER_CHECKS_PENDING_ENABLED:-true}" != "false" ] \
+    && [ -z "${claude_fixer_failed_checks}" ] \
+    && [ "${claude_fixer_checks_refreshed}" = "true" ] \
+    && [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] \
+    && [ -s "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ] \
+    && [ "$(sed -n '1p' "${PR_CHECK_RUNS_CONTEXT_FILE}")" = "PR_CHECK_RUNS_CONTEXT" ] \
+    && [ "$(sed -n '2p' "${PR_CHECK_RUNS_CONTEXT_FILE}")" = "head_sha: ${HEAD_SHA}" ] \
+    && grep -Eqx 'collection_status: (ready|timeout|api_error)' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
+    && grep -Fxq 'failed_count: 0' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
+    && claude_fixer_write_evidence checks-pending; then
+    {
+      echo "## Review round ${claude_fixer_round}: clean, waiting for checks"
+      echo
+      echo "The reviewer panel found nothing on head \`${HEAD_SHA}\` ([workflow run](${claude_fixer_run_url})), but not every check run on it has completed, so auto-merge is not enabled yet and nothing is handed to the Claude session."
+      echo "The review sweep re-dispatches this workflow about every 30 minutes, and each of those runs is a merge check without reviewers: green checks enable auto-merge bound to this head, a failing check is handed to the Claude session, and checks that are still running wait for the next sweep."
+      echo
+      echo "<!-- ai:claude-fixer-checks-pending:v1 head=${HEAD_SHA} round=${claude_fixer_round} run=${GITHUB_RUN_ID} -->"
+    } > "${claude_fixer_body_file}"
+    claude_fixer_upsert_checks_pending_comment
+    echo "CLAUDE_FIXER_CHECKS_PENDING pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} run=${GITHUB_RUN_ID} action=wait"
     exit 0
   fi
   echo "::warning::Claude-fixer clean review has no fresh ready same-head check-run snapshot; auto-merge disabled."
@@ -191,5 +305,6 @@ fi
     echo "<!-- ai:claude-fixer-verification:v1 head=${HEAD_SHA} result=unresolved -->"
   fi
 } > "${claude_fixer_body_file}"
+claude_fixer_write_evidence findings || true
 claude_fixer_post_marker_comment
 echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=findings findings=${claude_fixer_finding_count} ledger=${claude_fixer_ledger_state} failed_checks=${claude_fixer_failed_checks:-none}"

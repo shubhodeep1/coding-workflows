@@ -291,7 +291,32 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 """
 
 
-def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False):
+EVIDENCE_HELPER = REPO_ROOT / "scripts" / "review_claude_fixer_evidence.py"
+
+# Records every call; answers `api user` with MOCK_GH_LOGIN (empty by
+# default, so the checks-pending comment is always a fresh POST) and a
+# comments GET with MOCK_GH_COMMENTS run through the caller's --jq.
+RECORDING_GH = """#!/usr/bin/env python3
+import json, os, subprocess, sys
+args = sys.argv[1:]
+payload = None
+if '--input' in args:
+	payload = json.load(open(args[args.index('--input') + 1]))
+open(os.environ['MOCK_GH_CALLS'], 'a').write(json.dumps({'args': args, 'payload': payload}) + '\\n')
+jq = args[args.index('--jq') + 1] if '--jq' in args else None
+def emit(value):
+	text = json.dumps(value)
+	if jq is not None:
+		text = subprocess.run(['jq', '-rc', jq], input=text, capture_output=True, text=True, check=True).stdout
+	sys.stdout.write(text)
+if 'user' in args and os.environ.get('MOCK_GH_LOGIN'):
+	emit({'login': os.environ['MOCK_GH_LOGIN']})
+elif any(a.endswith('/comments') for a in args) and 'GET' in args:
+	emit(json.loads(os.environ.get('MOCK_GH_COMMENTS') or '[]'))
+"""
+
+
+def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, fresh_failed: str = "", fresh_head: str = HEAD, extra_env: dict | None = None, evidence_helper: bool = True):
 	support = tmp / "support"
 	support.mkdir()
 	calls = tmp / "calls.jsonl"
@@ -299,24 +324,23 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		f"#!/usr/bin/env bash\necho post_review_comment \"$REVIEWER_CONSENSUS_FILE\" \"$PR_NUMBER\" >> {tmp / 'posts.log'}\n",
 		encoding="utf-8",
 	)
+	failed_names = [name for name in fresh_failed.split(",") if name]
+	fresh_context = (
+		f"PR_CHECK_RUNS_CONTEXT\nhead_sha: {fresh_head}\ncollection_status: {fresh_status}\ntotal_check_runs: 1\n"
+		f"failed_count: {len(failed_names)}\nincomplete_count: 0\n"
+		+ "".join(f"failed[{i}].name: {name}\n" for i, name in enumerate(failed_names))
+	)
 	(support / "collect_pr_check_runs_context.py").write_text(
 		"import os\nfrom pathlib import Path\n"
-		f"Path(os.environ['PR_CHECK_RUNS_CONTEXT_FILE']).write_text('PR_CHECK_RUNS_CONTEXT\\nhead_sha: {HEAD}\\ncollection_status: {fresh_status}\\ntotal_check_runs: 1\\nfailed_count: 0\\nincomplete_count: 0\\n')\n",
+		f"Path(os.environ['PR_CHECK_RUNS_CONTEXT_FILE']).write_text({fresh_context!r})\n",
 		encoding="utf-8",
 	)
+	if evidence_helper:
+		(support / "review_claude_fixer_evidence.py").write_text(EVIDENCE_HELPER.read_text(encoding="utf-8"), encoding="utf-8")
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	gh = bin_dir / "gh"
-	gh.write_text(
-		"#!/usr/bin/env python3\n"
-		"import json, sys\n"
-		"args = sys.argv[1:]\n"
-		"payload = None\n"
-		"if '--input' in args:\n"
-		"\tpayload = json.load(open(args[args.index('--input') + 1]))\n"
-		f"open({str(calls)!r}, 'a').write(json.dumps({{'args': args, 'payload': payload}}) + '\\n')\n",
-		encoding="utf-8",
-	)
+	gh.write_text(RECORDING_GH, encoding="utf-8")
 	gh.chmod(0o755)
 	ledger_path = tmp / "reviewer_consensus.txt"
 	if ledger is not None:
@@ -344,7 +368,10 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		"GITHUB_ENV": str(github_env),
 		"CLAUDE_FIXER_VERIFICATION": "true" if verification else "false",
 		"REVIEWERS_SUCCESSFUL": "2",
+		"MOCK_GH_CALLS": str(calls),
+		"MOCK_GH_LOGIN": "",
 	}
+	env.update(extra_env or {})
 	proc = subprocess.run(["bash", "-c", f'source "{HANDOFF_SCRIPT}"'], env=env, capture_output=True, text=True)
 	gh_calls = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
 	posts = (tmp / "posts.log").read_text() if (tmp / "posts.log").exists() else ""
@@ -379,12 +406,112 @@ def test_handoff_zero_findings_exports_auto_merge_flag_without_comments():
 
 
 def test_handoff_does_not_merge_without_fresh_ready_checks():
-	for status in ("timeout", "disabled", "api_error"):
+	# Pending (or a transient API error) waits for the merge check; a
+	# collector that can never become ready keeps the hand-off.
+	for status, pending in (("timeout", True), ("api_error", True), ("disabled", False), ("unavailable", False)):
 		with tempfile.TemporaryDirectory() as td:
 			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_status=status)
 		assert proc.returncode == 0, proc.stderr
 		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
-		assert len(calls) == 1
+		posts = [call for call in calls if call["payload"]]
+		assert len(posts) == 1, (status, calls)
+		body = posts[0]["payload"]["body"]
+		assert ("ai:claude-fixer-checks-pending:v1" in body) is pending, status
+		assert ("ai:claude-fixer-handoff:v1" in body) is not pending, status
+
+
+def _evidence(tmp: Path) -> dict:
+	return json.loads((tmp / "claude_fixer_evidence" / "evidence.json").read_text(encoding="utf-8"))
+
+
+def test_clean_review_with_running_checks_posts_checks_pending_not_a_handoff():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_EMPTY, fresh_status="timeout")
+		evidence = _evidence(tmp)
+		ledger_copy = (tmp / "claude_fixer_evidence" / "reviewer_consensus.txt").read_text(encoding="utf-8")
+	assert proc.returncode == 0, proc.stderr
+	assert posts == ""  # no ledger chunks for a clean round
+	post = [call for call in calls if call["payload"]][0]
+	assert post["args"][:4] == ["api", "-X", "POST", "repos/o/r/issues/42/comments"]
+	body = post["payload"]["body"]
+	assert body.startswith("## Review round 2: clean, waiting for checks\n")
+	assert body.rstrip().endswith(f"<!-- ai:claude-fixer-checks-pending:v1 head={HEAD} round=2 run=99 -->")
+	assert "ai:claude-fixer-handoff" not in body
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert f"CLAUDE_FIXER_CHECKS_PENDING pr=42 head={HEAD} round=2 run=99 action=wait" in proc.stdout
+	assert evidence["outcome"] == "checks-pending" and evidence["pr"] == 42 and evidence["head_sha"] == HEAD and evidence["round"] == 2
+	assert evidence["ledger_sha256"] == hashlib.sha256(LEDGER_EMPTY.encode()).hexdigest()
+	assert ledger_copy == LEDGER_EMPTY
+
+
+def test_checks_pending_kill_switch_restores_the_handoff():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_status="timeout",
+			extra_env={"CLAUDE_FIXER_CHECKS_PENDING_ENABLED": "false"})
+	assert proc.returncode == 0, proc.stderr
+	assert len(calls) == 1
+	assert f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=2 -->" in calls[0]["payload"]["body"]
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+
+
+def test_checks_pending_needs_evidence_and_the_current_head():
+	for kwargs in ({"evidence_helper": False}, {"fresh_head": "d" * 40}, {"extra_env": {"GITHUB_RUN_ID": ""}}):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, _env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_status="timeout", **kwargs)
+		assert proc.returncode == 0, proc.stderr
+		assert len(calls) == 1, kwargs
+		assert "ai:claude-fixer-handoff:v1 kind=findings" in calls[0]["payload"]["body"], kwargs
+
+
+def test_a_check_that_failed_during_review_is_handed_off_by_name():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, calls, _posts, github_env = _run_handoff(tmp, ledger=LEDGER_EMPTY, fresh_status="ready", fresh_failed="ci / lint")
+		evidence = _evidence(tmp)
+	assert proc.returncode == 0, proc.stderr
+	assert len(calls) == 1
+	body = calls[0]["payload"]["body"]
+	assert "ai:claude-fixer-handoff:v1 kind=findings" in body and "Failing check runs on this head: `ci / lint`" in body
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert evidence["outcome"] == "findings" and evidence["failed_checks"] == ["ci / lint"]
+
+
+def test_checks_pending_comment_is_updated_in_place_for_the_same_head():
+	pending = f"## Review round 2: clean, waiting for checks\n\n<!-- ai:claude-fixer-checks-pending:v1 head={HEAD} round=2 run=50 -->"
+	handoff = f"## Review round 1: findings handed to the Claude session\n\n<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=1 -->"
+	cases = (
+		([{"id": 7, "user": {"login": AUTHOR}, "body": handoff}, {"id": 9, "user": {"login": AUTHOR}, "body": pending}], "PATCH"),
+		# A newer hand-off on the same head: post a fresh comment.
+		([{"id": 7, "user": {"login": AUTHOR}, "body": pending}, {"id": 9, "user": {"login": AUTHOR}, "body": handoff}], "POST"),
+		# Someone else's copy of the marker is not ours to edit.
+		([{"id": 9, "user": {"login": "someone"}, "body": pending}], "POST"),
+		# Another head's comment is left alone.
+		([{"id": 9, "user": {"login": AUTHOR}, "body": pending.replace(HEAD, "d" * 40)}], "POST"),
+	)
+	for comments, method in cases:
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, _env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_status="timeout",
+				extra_env={"MOCK_GH_LOGIN": AUTHOR, "MOCK_GH_COMMENTS": json.dumps(comments)})
+		assert proc.returncode == 0, proc.stderr
+		write = [call for call in calls if call["payload"]][0]
+		assert write["args"][2] == method, (comments, calls)
+		if method == "PATCH":
+			assert write["args"][3] == "repos/o/r/issues/comments/9"
+		assert "run=99 -->" in write["payload"]["body"]
+
+
+def test_every_handoff_outcome_writes_evidence():
+	for kwargs, outcome in (
+		({"ledger": LEDGER_WITH_FINDINGS}, "findings"),
+		({"ledger": LEDGER_EMPTY}, "clean"),
+		({"ledger": None, "pre_review_resolve": True}, "conflict"),
+	):
+		with tempfile.TemporaryDirectory() as td:
+			tmp = Path(td)
+			proc, _calls, _posts, _env = _run_handoff(tmp, **kwargs)
+			assert proc.returncode == 0, proc.stderr
+			assert _evidence(tmp)["outcome"] == outcome, kwargs
 
 
 def test_handoff_does_not_treat_unparseable_zero_ledger_as_clean():
@@ -498,7 +625,7 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 			{"id": i, "user": {"login": c["author_login"], "type": c["author_type"]}, "author_association": c["author_association"], "created_at": "2026-09-25T00:00:00Z", "body": c["body"]}
 			for i, c in enumerate(comments, 1)
 		],
-		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1"},
+		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": (extra_env or {}).get("MOCK_MERGEABLE") != "false", "mergeable_state": "dirty" if (extra_env or {}).get("MOCK_MERGEABLE") == "false" else "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1"},
 	}), encoding="utf-8")
 	output_file = tmp / "out.txt"
 	output_file.write_text("", encoding="utf-8")
@@ -657,3 +784,281 @@ def test_gate_disabled_by_repo_var():
 		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF)], extra_env={"CLAUDE_FIXER_ENABLED": "false"})
 	assert proc.returncode == 0, proc.stderr
 	assert out["claude_fixer"] == "false" and out["should_run"] == "true"
+
+
+# ---- checks pending: merge check step, gate routing, workflow wiring ----
+
+MERGE_CHECK_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_merge_check.sh"
+PENDING = f"## Review round 2: clean, waiting for checks\n\n<!-- ai:claude-fixer-checks-pending:v1 head={HEAD} round=2 run=555 -->"
+
+
+def _run_merge_check(tmp: Path, *, verdict: dict, context: str | None, evidence_helper: bool = True):
+	support = tmp / "support"
+	support.mkdir()
+	calls = tmp / "calls.jsonl"
+	if evidence_helper:
+		# verify answers from MOCK_VERIFY; write runs the real helper.
+		(support / "review_claude_fixer_evidence.py").write_text(
+			"import json, os, runpy, sys\n"
+			"if sys.argv[1] == 'verify':\n"
+			"\topen(os.environ['MOCK_VERIFY_ARGS'], 'w').write(json.dumps(sys.argv[1:]))\n"
+			"\tprint(os.environ['MOCK_VERIFY'])\n"
+			"\tsys.exit(0)\n"
+			f"sys.argv = [{str(EVIDENCE_HELPER)!r}] + sys.argv[1:]\n"
+			f"runpy.run_path({str(EVIDENCE_HELPER)!r}, run_name='__main__')\n",
+			encoding="utf-8",
+		)
+	if context is not None:
+		(support / "collect_pr_check_runs_context.py").write_text(
+			"import json, os\nfrom pathlib import Path\n"
+			f"open({str(tmp / 'collector_env.json')!r}, 'w').write(json.dumps({{k: os.environ.get(k, '') for k in ('CHECK_RUNS_WAIT_TIMEOUT_SECS', 'SELF_RUN_ID', 'CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT')}}))\n"
+			f"Path(os.environ['PR_CHECK_RUNS_CONTEXT_FILE']).write_text({context!r})\n",
+			encoding="utf-8",
+		)
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "gh").write_text(RECORDING_GH, encoding="utf-8")
+	(bin_dir / "gh").chmod(0o755)
+	github_env = tmp / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	env = {
+		**os.environ,
+		"PATH": os.pathsep.join((str(bin_dir), os.environ.get("PATH", ""))),
+		"PR_NUMBER": "42",
+		"GH_TOKEN": "t",
+		"GITHUB_REPOSITORY": "o/r",
+		"HEAD_SHA": HEAD,
+		"HEAD_REF": FIXER_REF,
+		"DEFAULT_BRANCH": "main",
+		"CLAUDE_FIXER_MERGE_CHECK_RUN_ID": "555",
+		"CLAUDE_FIXER_ROUND_INDEX": "4",
+		"PR_CHECK_RUNS_CONTEXT_FILE": str(tmp / "checks.txt"),
+		"SUPPORT_SCRIPTS_DIR": str(support),
+		"GITHUB_RUN_ID": "600",
+		"RUNTIME_DIR": str(tmp),
+		"GITHUB_ENV": str(github_env),
+		"MOCK_GH_CALLS": str(calls),
+		"MOCK_VERIFY": json.dumps(verdict),
+		"MOCK_VERIFY_ARGS": str(tmp / "verify_args.json"),
+	}
+	proc = subprocess.run(["bash", "-c", f'source "{MERGE_CHECK_SCRIPT}"'], env=env, capture_output=True, text=True)
+	gh_calls = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+	evidence_file = tmp / "claude_fixer_evidence" / "evidence.json"
+	evidence = json.loads(evidence_file.read_text()) if evidence_file.exists() else None
+	collector_env = json.loads((tmp / "collector_env.json").read_text()) if (tmp / "collector_env.json").exists() else None
+	verify_args = json.loads((tmp / "verify_args.json").read_text()) if (tmp / "verify_args.json").exists() else None
+	return proc, gh_calls, github_env.read_text(), evidence, collector_env, verify_args
+
+
+VERIFIED = {"verified": True, "reason": "ok", "evidence": {"schema": 1, "pr": 42, "head_sha": HEAD, "round": 2, "outcome": "checks-pending"}}
+GREEN = f"PR_CHECK_RUNS_CONTEXT\nhead_sha: {HEAD}\ncollection_status: ready\ntotal_check_runs: 3\nfailed_count: 0\nincomplete_count: 0\n"
+RUNNING = f"PR_CHECK_RUNS_CONTEXT\nhead_sha: {HEAD}\ncollection_status: timeout\ntotal_check_runs: 3\nfailed_count: 0\nincomplete_count: 1\nincomplete[0].name: ci / test\n"
+FAILED = f"PR_CHECK_RUNS_CONTEXT\nhead_sha: {HEAD}\ncollection_status: ready\ntotal_check_runs: 3\nfailed_count: 2\nincomplete_count: 0\nfailed[0].name: ci / lint\nfailed[1].name: ci / test\n"
+
+
+def test_merge_check_green_enables_auto_merge_without_comments():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, github_env, evidence, collector_env, verify_args = _run_merge_check(Path(td), verdict=VERIFIED, context=GREEN)
+	assert proc.returncode == 0, proc.stderr
+	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
+	assert calls == []
+	assert f"CLAUDE_FIXER_CHECKS_PENDING pr=42 head={HEAD} run=555 action=auto_merge" in proc.stdout
+	assert evidence["outcome"] == "clean" and evidence["round"] == 2
+	assert collector_env == {"CHECK_RUNS_WAIT_TIMEOUT_SECS": "0", "SELF_RUN_ID": "600", "CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT": "true"}
+	for pair in (["--run-id", "555"], ["--expect-outcome", "checks-pending"], ["--pr-head-ref", FIXER_REF], ["--default-branch", "main"], ["--head", HEAD]):
+		index = verify_args.index(pair[0])
+		assert verify_args[index + 1] == pair[1], pair
+
+
+def test_merge_check_failed_checks_are_handed_to_the_session():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, github_env, evidence, _collector, _args = _run_merge_check(Path(td), verdict=VERIFIED, context=FAILED)
+	assert proc.returncode == 0, proc.stderr
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert len(calls) == 1 and calls[0]["args"][:4] == ["api", "-X", "POST", "repos/o/r/issues/42/comments"]
+	body = calls[0]["payload"]["body"]
+	# Same header and marker as the hand-off step (gate + check_in_status.py).
+	assert body.startswith("## Review round 2: findings handed to the Claude session\n")
+	assert f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=2 -->" in body
+	assert "`ci / lint`, `ci / test`" in body
+	assert "action=handoff_ci" in proc.stdout
+	assert evidence["outcome"] == "findings" and evidence["failed_checks"] == ["ci / lint", "ci / test"]
+
+
+def test_merge_check_running_checks_wait_for_the_next_sweep():
+	for context in (RUNNING, GREEN.replace("total_check_runs: 3", "total_check_runs: 0"), RUNNING.replace("timeout", "api_error")):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, github_env, evidence, _collector, _args = _run_merge_check(Path(td), verdict=VERIFIED, context=context)
+		assert proc.returncode == 0, proc.stderr
+		assert calls == [] and "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+		assert "action=still_waiting" in proc.stdout
+		assert evidence is None
+
+
+def test_merge_check_unverified_evidence_falls_back_to_the_handoff():
+	for verdict, helper in (({"verified": False, "reason": "untrusted_caller_ref", "evidence": None}, True), (VERIFIED, False)):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, github_env, _evidence, collector_env, _args = _run_merge_check(Path(td), verdict=verdict, context=GREEN, evidence_helper=helper)
+		assert proc.returncode == 0, proc.stderr
+		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+		assert collector_env is None  # checks are never read on unverified evidence
+		assert len(calls) == 1
+		body = calls[0]["payload"]["body"]
+		assert f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=5 -->" in body
+		assert "could not be verified" in body
+		assert "action=evidence_unverified" in proc.stdout
+
+
+def test_merge_check_unusable_snapshot_falls_back_to_the_handoff():
+	for context in (GREEN.replace("ready", "disabled"), GREEN.replace(HEAD, "d" * 40), None):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, github_env, _evidence, _collector, _args = _run_merge_check(Path(td), verdict=VERIFIED, context=context)
+		assert proc.returncode == 0, proc.stderr
+		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+		assert len(calls) == 1 and "ai:claude-fixer-handoff:v1 kind=findings" in calls[0]["payload"]["body"]
+		assert "action=snapshot_unavailable" in proc.stdout
+
+
+def test_merge_check_rejects_malformed_head():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc = subprocess.run(
+			["bash", "-c", f'source "{MERGE_CHECK_SCRIPT}"'],
+			env={**os.environ, "PR_NUMBER": "42", "HEAD_SHA": "nothex", "SUPPORT_SCRIPTS_DIR": str(tmp), "GITHUB_ENV": str(tmp / "e")},
+			capture_output=True,
+			text=True,
+		)
+	assert proc.returncode == 1 and "40-hex HEAD_SHA" in proc.stdout
+
+
+def _pending_c(body: str = PENDING, author: str = AUTHOR) -> dict:
+	return {"body": body, "author_login": author, "author_type": "User", "author_association": "OWNER"}
+
+
+def test_gate_routes_a_checks_pending_head_to_the_merge_check():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF.replace(HEAD, "d" * 40)), _pending_c()])
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "true" and out["skip_reason"] == ""
+	assert out["claude_fixer_merge_check"] == "true" and out["claude_fixer_merge_check_run"] == "555"
+	assert f"AUTOFIX_GATE_CLAUDE_FIXER_MERGE_CHECK pr=42 head={HEAD} evidence_run=555" in proc.stdout
+
+
+def test_gate_newest_marker_decides_between_merge_check_and_awaiting_session():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF), _pending_c()])
+	assert out["claude_fixer_merge_check"] == "true", proc.stdout
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_pending_c(), _c(HANDOFF)])
+	assert out["claude_fixer_merge_check"] == "false"
+	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_awaiting_session"
+
+
+def test_gate_ignores_checks_pending_markers_it_must_not_trust():
+	cases = (
+		({"comments": [_pending_c(author="someone")]}, "untrusted author"),
+		({"comments": [_pending_c(body="Quote:\n" + PENDING)]}, "no workflow header"),
+		({"comments": [_pending_c(body=PENDING.replace(HEAD, "d" * 40))]}, "another head"),
+		({"comments": [_pending_c()], "extra_env": {"CLAUDE_FIXER_CHECKS_PENDING_ENABLED": "false"}}, "kill switch"),
+		({"comments": [_pending_c()], "event_name": "pull_request"}, "pull_request event"),
+		({"comments": [_pending_c()], "extra_env": {"FORCE_RB_JUDGE": "true"}}, "force_rb_judge"),
+	)
+	for kwargs, label in cases:
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=FIXER_REF, **kwargs)
+		assert proc.returncode == 0, proc.stderr
+		assert out["claude_fixer_merge_check"] == "false", label
+		assert out["should_run"] == "true", label  # a normal full review runs
+
+
+def test_gate_does_not_merge_check_a_conflicted_pr():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, out = _run_gate(tmp, head_ref=FIXER_REF, comments=[_pending_c()], extra_env={"MOCK_MERGEABLE": "false"})
+	assert proc.returncode == 0, proc.stderr
+	assert out["claude_fixer_merge_check"] == "false" and out["should_run"] == "true"
+
+
+def test_gate_merge_check_bypasses_the_terminal_same_head_skip():
+	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
+	block = gate_run.split("# ----- Terminal same-head skip", 1)[1].split("terminal_force_review=\"false\"", 1)[0]
+	assert '&& [ "${CLAUDE_FIXER_MERGE_CHECK}" != "true" ] \\' in block
+	assert 'CLAUDE_FIXER_MERGE_CHECK="false"' in gate_run and 'CLAUDE_FIXER_MERGE_CHECK_RUN=""' in gate_run
+
+
+def test_merge_check_wiring_in_the_workflow():
+	outputs = WORKFLOW["jobs"]["gate"]["outputs"]
+	assert outputs["claude_fixer_merge_check"] == "${{ steps.evaluate.outputs.claude_fixer_merge_check }}"
+	assert outputs["claude_fixer_merge_check_run"] == "${{ steps.evaluate.outputs.claude_fixer_merge_check_run }}"
+	gate_env = _steps(WORKFLOW, "gate")["Evaluate review gate"]["env"]
+	assert gate_env["CLAUDE_FIXER_CHECKS_PENDING_ENABLED"] == "${{ vars.CLAUDE_FIXER_CHECKS_PENDING_ENABLED || 'true' }}"
+	agent_env = WORKFLOW["jobs"]["codex-agent"]["env"]
+	assert agent_env["CLAUDE_FIXER_MERGE_CHECK"] == "${{ needs.gate.outputs.claude_fixer_merge_check }}"
+	assert agent_env["CLAUDE_FIXER_MERGE_CHECK_RUN_ID"] == "${{ needs.gate.outputs.claude_fixer_merge_check_run }}"
+	handoff = AGENT_STEPS["Hand review round to Claude session (Claude-fixer mode)"]
+	assert handoff["env"]["CLAUDE_FIXER_CHECKS_PENDING_ENABLED"] == "${{ vars.CLAUDE_FIXER_CHECKS_PENDING_ENABLED || 'true' }}"
+	names = list(AGENT_STEPS)
+	merge_check = "Claude-fixer merge check"
+	upload = "Upload Claude-fixer evidence"
+	assert names.index("Hand review round to Claude session (Claude-fixer mode)") < names.index(merge_check) < names.index(upload) < names.index("Enable auto-merge on PR")
+	step = AGENT_STEPS[merge_check]
+	assert step["if"] == "env.CLAUDE_FIXER_MERGE_CHECK == 'true' && env.CLAUDE_FIXER_MODE == 'true' && env.PR_CLOSED != 'true'"
+	assert step["env"]["HEAD_SHA"] == "${{ env.INITIAL_HEAD_SHA }}"
+	assert step["env"]["DEFAULT_BRANCH"] == "${{ github.event.repository.default_branch }}"
+	step = AGENT_STEPS[upload]
+	assert step["if"] == "always() && env.CLAUDE_FIXER_MODE == 'true'"
+	assert step["continue-on-error"] is True
+	assert step["uses"].startswith("actions/upload-artifact@")
+	assert step["with"]["name"] == "claude-fixer-evidence-${{ github.run_id }}-${{ github.run_attempt }}"
+	assert step["with"]["path"] == "${{ env.RUNTIME_DIR }}/claude_fixer_evidence/"
+	assert step["with"]["retention-days"] == 30
+	# The merge check never labels the PR review-blocked (its reviewers are skipped on purpose).
+	assert "env.CLAUDE_FIXER_MERGE_CHECK != 'true'" in AGENT_STEPS["Label Claude-fixer PR review-blocked (autofix exhaustion)"]["if"]
+
+
+def _run_retrigger_guard(tmp: Path, *, merge_check: bool, force_rb_judge: bool = False, autofix_commits: int = 0) -> dict:
+	repo = tmp / "repo"
+	repo.mkdir()
+	git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com"]
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "base"], check=True)
+	for index in range(autofix_commits):
+		subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", f"[claude-autofix] review round {index + 1}: x"], check=True)
+	output = tmp / "out.txt"
+	output.write_text("", encoding="utf-8")
+	env = {
+		**os.environ,
+		"GITHUB_OUTPUT": str(output),
+		"MAX_AUTOFIX_ITERATIONS": "5",
+		"FORCE_RB_JUDGE": "true" if force_rb_judge else "false",
+		"ORCH_PR_AUTOFIX_FLOW_ENABLED": "false",
+		"ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-",
+		"PR_META_FILE": str(tmp / "missing.json"),
+		"CLAUDE_FIXER_MERGE_CHECK": "true" if merge_check else "false",
+	}
+	proc = subprocess.run(["bash", "-c", AGENT_STEPS["Count autofix iterations"]["run"]], cwd=repo, env=env, capture_output=True, text=True)
+	assert proc.returncode == 0, proc.stderr
+	lines = output.read_text(encoding="utf-8").splitlines()
+	keys = [line.split("=", 1)[0] for line in lines]
+	assert len(keys) == len(set(keys)), lines  # every output written once
+	return dict(line.split("=", 1) for line in lines)
+
+
+def test_merge_check_short_circuits_reviewers_and_judge():
+	with tempfile.TemporaryDirectory() as td:
+		out = _run_retrigger_guard(Path(td), merge_check=True, autofix_commits=2)
+	assert out["max_iterations_reached"] == "true" and out["skip_judge"] == "true" and out["autofix_iteration"] == "2"
+	for kwargs, expected in (({"merge_check": False}, "false"), ({"merge_check": False, "force_rb_judge": True}, "true"), ({"merge_check": False, "autofix_commits": 5}, "true")):
+		with tempfile.TemporaryDirectory() as td:
+			out = _run_retrigger_guard(Path(td), **kwargs)
+		assert out["skip_judge"] == "false" and out["max_iterations_reached"] == expected, kwargs
+	# skip_judge=true is what keeps the auto-merge steps eligible and the
+	# review-blocked judge / exhaustion steps off.
+	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
+		assert "(steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true')" in AGENT_STEPS[name]["if"]
+	for name in ("Review-blocked judge decision", "Mark linked issues review-blocked (autofix exhaustion)", "Post review-blocked comment on PR (autofix exhaustion)"):
+		assert "steps.retrigger_guard.outputs.skip_judge != 'true'" in AGENT_STEPS[name]["if"], name
+
+
+def test_review_autofix_stays_under_the_phase_size_budget():
+	assert REVIEW_AUTOFIX_WORKFLOW_PATH.stat().st_size < 470_000
