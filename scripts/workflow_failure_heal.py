@@ -1114,6 +1114,11 @@ _REVIEWER_SLOT_EXIT_RE = re.compile(r"Reviewer slot (?P<slot>\S+) .*execution fa
 _SUMMARISER_EXIT_RE = re.compile(r"summariser \([^)]*\): (?:attempt [0-9]+ exited rc=(?P<rc>[0-9]{1,3})\.|all [0-9]+ attempts failed \(last rc=(?P<last_rc>[0-9]{1,3})\))")
 # summarize_reviewer_consensus.sh logs an attempt that exited 0 with no final
 # message this way (issue #4653: all 10 pass-1 attempts on PR #4607).
+# The prefix is copied verbatim into the evidence, and the same log carries
+# the model's stderr tail, so the class stays bounded instead of `[^)]*`:
+# no spaces or free text reach the fingerprint or the heal report. The script
+# only accepts `--prefix pass1|review`; a test pins every accepted prefix to
+# this class, so widening that list without widening the class fails CI.
 _SUMMARISER_EMPTY_STDOUT_RE = re.compile(r"summariser \((?P<prefix>[A-Za-z0-9_.-]{1,40})\): attempt [0-9]+ produced empty stdout\b")
 # A support script that names itself at the start of its error line, e.g.
 # `untrusted_process_sandbox: …` or `write_opencode_config.sh: …`.
