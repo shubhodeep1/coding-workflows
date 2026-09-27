@@ -5,10 +5,10 @@
 - How it runs: coding-workflows: `pull_request` / `workflow_dispatch` via `internal-review.yml` → `review_autofix.yml@main` (P2, P4), and `repository_dispatch` `workflow-failure-heal` → `workflow-failure-heal-intake.yml` (P1, P3). Consumers: `workflow-templates/ai-review.yml:39` → `review_autofix.yml@stable`, scripts staged from `stable`. P3 routing is self-repo only by design.
 - Status: IN_PROGRESS
 - Last updated: 2026-09-27
-- Last note: 2026-09-27: runbook created (session_016P7FeK9zr1XzmHTkH6eUxe). Live in coding-workflows; consumers wait on the `@stable` promotion that docs/deploy-activation/pr-4443.md step 9 performs. Step 1 emitted.
+- Last note: 2026-09-27: step 1 done (operator `done`); step 2 (read-only kill-switch baseline) emitted.
 
 ## Runbook
-1. [ ] Prereqs: Homebrew, git, gh, jq, `gh auth login` (repo, workflow), clone
+1. [x] Prereqs: Homebrew, git, gh, jq, `gh auth login` (repo, workflow), clone   — done 2026-09-27: operator confirmed `done` (no output pasted)
 2. [ ] Baseline read (read-only): the three kill switches (`REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED` read at `review_autofix.yml:361,374,458`; `REVIEW_EDITOR_PREFLIGHT_ENABLED` at `review_autofix.yml:4081`; `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` at `workflow-failure-heal-intake.yml:77`; all default `true`) in coding-workflows and the 13 consumers, plus `PROMOTE_CYCLE_ENABLED` in coding-workflows
 3. [ ] Wait for docs/deploy-activation/pr-4443.md steps 9a/9 (re-enable promotion, promote main → `@stable`); no operator action for this project. Then verify on `stable` content, not ancestry: `autofix-identical-failure-count` and `REVIEW_EDITOR_PREFLIGHT_ENABLED` in `review_autofix.yml`, `--preflight` in `scripts/review_apply_fixes.sh`, on both the `stable` branch and the `stable` tag
 4. [ ] Verify LIVE in one consumer: a review run after the promotion logs `AUTOFIX_FINGERPRINT cap=` and `REVIEW_EDITOR_PREFLIGHT result=`
