@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T02:51:11Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When isolating a model's Git state with `GIT_INDEX_FILE`, state in comments and docs that only the index is isolated: `git commit` still moves `HEAD` and removes `MERGE_HEAD`, and cleanup must be keyed to what the block itself exported, not to whether the variable happens to be set.",
+  "phase": "implement_plan",
+  "pr_number": 4591,
+  "record_id": "lesson-implement-plan-c9405bff1cf880aa99040ac4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4545-resolver-index-isolation",
+    "file:scripts/review_conflict_resolve.sh",
+    "file:agents.md"
+  ]
+}
