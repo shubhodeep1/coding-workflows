@@ -142,7 +142,7 @@ def test_review_rounds_are_fixed_by_claude(text):
 	assert "<!-- ai:claude-fixer-verdict:v2 head=<sha> round=<r> ledger=<64hex> -->" in text
 	assert "CLAUDE_FIXER_VERDICT_BOT_LOGIN" in text
 	assert "one fresh reviewer panel on that head" in text
-	assert "-f claude_fixer_converged_head=<sha>" in text
+	assert "--input claude_fixer_converged_head=<sha>" in text
 	assert "`[claude-merge-resolve] merge <base branch>`" in text
 	assert "`[claude-intervention] <summary>`" in text
 	assert "the workflow never runs the GPT review-blocked judge" in text
@@ -150,7 +150,7 @@ def test_review_rounds_are_fixed_by_claude(text):
 
 
 def test_security_dispatch_targets_project_branch(text):
-	assert "`-f ref=claude/implement-plan-<slug>`" in text
+	assert "`--input ref=claude/implement-plan-<slug>`" in text
 	# The audit files every finding (no weekly cap), so no bypass input exists.
 	assert "bypass_weekly_cap" not in text
 	assert "deferred_by_weekly_cap" not in text
@@ -160,14 +160,16 @@ def test_convergence_dispatch_goes_straight_to_review_autofix_here(text):
 	# internal-review.yml pins review_autofix.yml@main; forwarding a new input
 	# through it made every run on the PR adding the input a startup_failure
 	# (run 36095647423).
-	assert "`gh workflow run review_autofix.yml -R <owner>/<repo> -f pr_number=<N> -f claude_fixer_converged_head=<sha>`" in text
+	assert "`--workflow review_autofix.yml --input pr_number=<N> --input claude_fixer_converged_head=<sha>`" in text
 	assert "gh workflow run internal-review.yml" not in text
+	assert "--workflow internal-review.yml" not in text
 
 
 def test_validation_dispatch_inputs(text):
-	assert "plus `-f pr_number=0` for `internal-validate.yml` only" in text
-	assert "`-f target_ref=claude/implement-plan-<slug>`" in text
+	assert "plus `--input pr_number=0` for `internal-validate.yml` only" in text
+	assert "`--input target_ref=claude/implement-plan-<slug>`" in text
 	assert "-f tracking_issue=0 -f pr_number=0" not in text
+	assert "--input tracking_issue=0 --input pr_number=0" not in text
 
 
 def test_checker_starts_with_effort_low_then_one_shot_instructions(text):
@@ -256,3 +258,17 @@ def test_issue_mode_archives_stopped_stage_sessions(text):
 	assert "If that read fails, archive nothing: treat the label as still present" in text
 	# The stop title must not collide with a stage title that is still working.
 	assert "blocked on issue" not in text.replace("— blocked on issue", "")
+
+
+def test_third_conformance_fix_gets_a_fix_check_not_a_fourth_run(text):
+	# Issue #4545's chain stopped at "conformance 4/3": the third run opened a
+	# fix PR, and re-auditing it would have been a fourth run.
+	assert "3 conformance runs per project" in text
+	assert "the next stage is `conformance 3/3 — fix check` instead" in text
+	assert "`docs/plans/<slug>-plan.md — scope fix-check #<fix PR> — unattended`" in text
+	assert "opens no fix PR, and does not count toward the cap" in text
+	assert "**FIX-VERIFIED** → continue as **CONFORMANT with no fix PR** below" in text
+	assert "**FIX-DEFECTIVE**" in text and "never auto-decided (§28.C)" in text
+	assert "after the third run's fix PR merges, the fix check replaces it" in text
+	assert "`Outside fix-check scope`" in text
+	assert "conformance 3/3 — fix check | security-pass" in text
