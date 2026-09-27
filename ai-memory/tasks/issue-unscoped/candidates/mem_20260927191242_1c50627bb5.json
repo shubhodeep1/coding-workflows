@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"the pickup reads producer runs for the first 3 \u00d7 limit targets (30) so stuck unbound items cannot starve bound items\" (AD-7, implemented in #4649).\n  expected_change_site: tests/test_claude_issue_route.py (`test_cli_stuck_unbound_items_do_not_starve_a_bound_item`)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test hard-codes the value 3 instead of referencing the `route.QUEUE_BINDING_SCAN_FACTOR` constant. A future edit to the constant in the implementation would silently cause the test to deviate from the contract, making it a maintenance liability.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"the pickup reads producer runs for the first 3 \u00d7 limit targets (30) so stuck unbound items cannot starve bound items\" (AD-7, implemented in #4649).\n  Expected change site: tests/test_claude_issue_route.py (`test_cli_stuck_unbound_items_do_not_starve_a_bound_item`)\n  Evidence of absence: The test hard-codes the value 3 instead of referencing the `route.QUEUE_BINDING_SCAN_FACTOR` constant. A future edit to the constant in the implementation would silently cause the test to deviate from the contract, making it a maintenance liability.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "96289738a4b441f7b9db68f90cc259b9ce3ce049ee1507a0cb96c6c27dd06121",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4636,
+    "run_id": "36342346276",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36342346276",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927191242_1c50627bb5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4636,
+    "run_id": "36342346276"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T19:12:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
