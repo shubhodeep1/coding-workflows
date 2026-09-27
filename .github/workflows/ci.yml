@@ -426,6 +426,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stale_routines.py
 
+      - name: Claude-fixer hand-back, claim and catch-all sweep tests (CLAUDE.md §26.C, §26.H)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status_hand_back.py tests/test_claude_pr_sweep.py
+
       - name: /implement-plan-claude command contract tests
         run: |
           set -euo pipefail
