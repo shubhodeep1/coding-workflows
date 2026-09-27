@@ -19,6 +19,7 @@
 .claude/commands/validate-consumer-issue.md
 .claude/commands/verify-activation.md
 .claude/commands/write-plan.md
+.claude/hooks/gh_api_write_guard.py
 .claude/hooks/pr_check_in_reminder.py
 .claude/hooks/pr_merge_status_guard.py
 .claude/hooks/pr_watch_guard.py
@@ -716,6 +717,7 @@ tests/test_files_touched_scope_guard.py
 tests/test_fingerprint_quarantine.py
 tests/test_fingerprint_state_selfheal.py
 tests/test_generate_resource_id.py
+tests/test_gh_api_write_guard.py
 tests/test_gh_helpers_list_runs_method.py
 tests/test_gh_helpers_parse_reset_header.py
 tests/test_header_render.sh
@@ -933,6 +935,7 @@ workflow-templates/.claude/commands/seed-repo.md
 workflow-templates/.claude/commands/validate-consumer-issue.md
 workflow-templates/.claude/commands/verify-activation.md
 workflow-templates/.claude/commands/write-plan.md
+workflow-templates/.claude/hooks/gh_api_write_guard.py
 workflow-templates/.claude/hooks/pr_check_in_reminder.py
 workflow-templates/.claude/hooks/pr_merge_status_guard.py
 workflow-templates/.claude/hooks/pr_watch_guard.py
