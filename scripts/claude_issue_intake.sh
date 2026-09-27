@@ -12,8 +12,14 @@
 #   2. Opens one `ai:claude-issue-queue` issue in this repo with the fixed-key
 #      payload (no issue prose), using the workflow's GITHUB_TOKEN so no
 #      workflow reacts to it. An open queue issue for the same target issue is
-#      reused, never duplicated.
-#   3. Comments on the target issue that it is queued.
+#      reused, never duplicated: its body is rewritten with the fresh payload
+#      and this run's URL.
+#   3. Records the queue issue (number, title, payload) in this run's binding
+#      file, which the workflow uploads as the `claude-issue-queue-binding`
+#      artifact. The pickup starts nothing an artifact of the run named in
+#      the item's `Intake run:` line does not list unchanged (issue #4621),
+#      so an edited queue issue is refused.
+#   4. Comments on the target issue that it is queued.
 #
 # The pickup session (.claude/commands/claude-issue-pickup.md) starts the Opus
 # `/implement-issue-claude` session for each queue issue with create_session
@@ -37,6 +43,8 @@
 #   CLAUDE_ISSUE_REGISTRY         default .github/ai/consumer_repos.json
 #   CLAUDE_ISSUE_ROUTE_PY         default scripts/claude_issue_route.py
 #   CLAUDE_ISSUE_ROUTINE_ID       deprecated, ignored (logged when set)
+#   CLAUDE_ISSUE_QUEUE_BINDING_FILE  default ${RUNTIME_DIR}/claude-issue-queue-binding/claude_issue_queue_binding.json
+#   GITHUB_RUN_ID                 set by Actions; without it no binding is written
 #   RUN_URL, RUNTIME_DIR
 
 set -euo pipefail
@@ -61,6 +69,8 @@ ROUTE_PY="${CLAUDE_ISSUE_ROUTE_PY:-scripts/claude_issue_route.py}"
 RUN_URL="${RUN_URL:-}"
 RUNTIME_DIR="${RUNTIME_DIR:-$(mktemp -d)}"
 mkdir -p "${RUNTIME_DIR}"
+BINDING_FILE="${CLAUDE_ISSUE_QUEUE_BINDING_FILE:-${RUNTIME_DIR}/claude-issue-queue-binding/claude_issue_queue_binding.json}"
+RUN_ID="${GITHUB_RUN_ID:-}"
 
 # Best-effort target for failure reporting, read before validation so an
 # unregistered-but-well-formed repo still hears why nothing happened.
@@ -119,6 +129,13 @@ QUEUE_FILE="${RUNTIME_DIR}/queue_issue.json"
 python3 "${ROUTE_PY}" queue-issue --validated-json "${VALIDATED_FILE}" --run-url "${RUN_URL}" > "${QUEUE_FILE}"
 QUEUE_TITLE="$(jq -r '.title' "${QUEUE_FILE}")"
 QUEUE_LABEL="$(jq -r '.label' "${QUEUE_FILE}")"
+# The body is read once and checked here: a `$(jq ...)` inside a gh argument
+# is exempt from `set -e`, so a missing, empty, or NUL-carrying body (bash
+# drops NUL bytes) would otherwise be written and then fail the pickup's
+# binding check with no trace in this run (issue #4621).
+if ! QUEUE_BODY="$(jq -er '.body | select(type == "string" and length > 0 and (contains("\u0000") | not))' "${QUEUE_FILE}" 2>/dev/null)"; then
+	fail "queue_failed" "the rendered queue issue body is missing, empty, or not writable text"
+fi
 
 # One read of the open queue (≤ 100 items; the pickup drains it hourly) to
 # reuse an open item for the same target issue instead of duplicating it.
@@ -129,12 +146,20 @@ fi
 QUEUE_NUMBER="$(jq -r --arg t "${QUEUE_TITLE}" '[.[]? | select(.title == $t and (.user.login // "") == "github-actions[bot]") | .number] | first // empty' "${OPEN_QUEUE_FILE}" 2>/dev/null || true)"
 
 if [ -n "${QUEUE_NUMBER}" ]; then
+	# Rewrite the reused item so its body is exactly what this run binds: an
+	# item bound by an earlier run, never bound, or edited since is healed by
+	# the next intake for its target (issue #4621).
+	if ! GH_TOKEN="${QUEUE_TOKEN}" gh_retry gh api -X PATCH "repos/${SELF_REPO}/issues/${QUEUE_NUMBER}" \
+		-f body="${QUEUE_BODY}" \
+		--jq '.number' > /dev/null 2> "${RUNTIME_DIR}/queue_update_error.txt"; then
+		fail "queue_failed" "could not rewrite queue issue #${QUEUE_NUMBER}: $(head -c 200 "${RUNTIME_DIR}/queue_update_error.txt" | tr '\n' ' ')"
+	fi
 	log "already_queued repo=${REPO} issue=${ISSUE_NUMBER} trigger=${TRIGGER} queue_issue=${QUEUE_NUMBER}"
 else
 	GH_TOKEN="${QUEUE_TOKEN}" ensure_label_exists "${QUEUE_LABEL}" "${SELF_REPO}" || true
 	if ! QUEUE_NUMBER="$(GH_TOKEN="${QUEUE_TOKEN}" gh_retry gh api "repos/${SELF_REPO}/issues" \
 		-f title="${QUEUE_TITLE}" \
-		-f body="$(jq -r '.body' "${QUEUE_FILE}")" \
+		-f body="${QUEUE_BODY}" \
 		-f "labels[]=${QUEUE_LABEL}" \
 		--jq '.number' 2> "${RUNTIME_DIR}/queue_create_error.txt")" || ! [[ "${QUEUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
 		fail "queue_failed" "could not open the queue issue: $(head -c 200 "${RUNTIME_DIR}/queue_create_error.txt" | tr '\n' ' ')"
@@ -143,7 +168,24 @@ else
 fi
 QUEUE_URL="https://github.com/${SELF_REPO}/issues/${QUEUE_NUMBER}"
 
-# --- 3. Record on the issue -----------------------------------------------------------
+# --- 3. Bind the queue issue to this run (issue #4621) ---------------------------------
+
+if [[ "${RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+	if ! python3 "${ROUTE_PY}" add-queue-binding \
+		--binding-file "${BINDING_FILE}" \
+		--repository "${SELF_REPO}" \
+		--run-id "${RUN_ID}" \
+		--queue-issue "${QUEUE_NUMBER}" \
+		--queue-issue-json "${QUEUE_FILE}" \
+		2> "${RUNTIME_DIR}/binding_error.txt"; then
+		fail "queue_failed" "could not bind queue issue #${QUEUE_NUMBER} to this run: $(head -c 200 "${RUNTIME_DIR}/binding_error.txt" | tr '\n' ' ')"
+	fi
+	log "bound queue_issue=${QUEUE_NUMBER} run_id=${RUN_ID} binding_file=${BINDING_FILE}"
+else
+	log "warn binding_skipped queue_issue=${QUEUE_NUMBER} reason=no_run_id (the pickup refuses unbound items)"
+fi
+
+# --- 4. Record on the issue -----------------------------------------------------------
 
 BODY="<!-- ai:claude-issue-dispatched:v1 -->
 🤖 Queued for the Claude issue pickup (trigger \`${TRIGGER}\`). Within about an hour it starts the Claude session that implements this issue in \`${REPO}\`, and that session posts its progress here.
