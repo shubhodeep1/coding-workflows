@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/deploy-activation/pr-4443.md:7-8 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The `Last updated` header remains dated 2026-09-26 while the latest note is dated 2026-09-27.\n  WHY: The stale header misrepresents the runbook's freshness; severity was reported as NIT by reviewers that specified severity.\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/deploy-activation/pr-4443.md:7 | severity=NIT | confidence=4\n  PROBLEM: The `Last updated:` header date (`2026-09-26`) was not refreshed to match the new content date (`2026-09-27`). Every diff hunk carries 2026-09-27 timestamps and references events that occurred on 2026-09-27, but the header still claims the file was last updated on 2026-09-26.\n  WHY: Not a runtime failure \u2014 this is a documentation freshness inaccuracy. An operator or automation scanning the front matter sees a stale date and may wrongly conclude no update has been applied since the previous day.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- docs/deploy-activation/pr-4443.md:7 | severity=NIT | confidence=4\n  PROBLEM: The \"Last updated\" date (2026-09-26) does not match the most recent note date (2026-09-27).\n  WHY: It provides conflicting information regarding the freshness of the runbook, potentially misleading operators.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/deploy-activation/pr-4443.md:7 | severity=NIT | confidence=3\n  PROBLEM: The \"Last updated\" header date is not refreshed in this change, so it stays at 2026-09-26 while the new \"Last note\" content (the canonical freshness signal in this runbook) is dated 2026-09-27. The pre-change \"Last note\" referenced \"2026-09-26 05:16 UTC\" and matched the header, so the prior invariant held.\n  WHY: A later reader or automation that keys off the \"Last updated\" header to gauge how stale the runbook is sees a one-day-stale header alongside a fresh \"Last note\", misrepresenting the file's actual freshness. The mismatch also breaks the previously-established invariant that the two fields agree, which any consumer that cross-checks them would now flag.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/deploy-activation/pr-4443.md:7-8 | severity=NIT | confidence=5\n  PROBLEM: The \"Last updated\" header field on line 7 remains `2026-09-26` while the \"Last note\" on line 8 and the new notes section starting at line 61 are both dated `2026-09-27`. The metadata header does not reflect the most recent content update.\n  WHY: An operator or automation scanning the file's front-matter summary sees a stale \"Last updated\" date (2026-09-26) that misrepresents the actual freshness of the runbook, which now contains 2026-09-27 content. This is a documentation consistency defect.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- docs/deploy-activation/pr-4443.md:7 | severity=NIT | confidence=3\n  PROBLEM: stale \"Last updated: 2026-09-26\" vs 2026-09-27 note\n  WHY: Not reported.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/deploy-activation/pr-4443.md:7 | PROBLEM: The \"Last updated\" header still reads 2026-09-26 while the newest note (line 8) and the 2026-09-27 check in Notes are both dated 2026-09-27, so the freshness header is stale by one day. WHY: Not reported.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7f796659ffa6331b07a8d2cf1061b117db19c5a8044637cd0ffd575f6f6cf1fc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4584,
+    "run_id": "36287771774",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36287771774",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927022342_b33fbcdcb7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4584,
+    "run_id": "36287771774"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T02:23:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
