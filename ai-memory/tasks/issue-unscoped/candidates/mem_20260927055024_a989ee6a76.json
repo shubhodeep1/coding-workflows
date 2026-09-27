@@ -1,0 +1,40 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/move-checking-roles-to-claude-plan.md:173-179 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The plan does not specify how the validation session and `validate_process.sh` coordinate when the script runs inside Docker and cannot yield its inline prompts to the parent Claude session.\n  WHY: Implementing P3 requires a file-based handoff protocol or a redesign to accept pre-rendered prompts, but neither mechanism is described.\n- docs/plans/move-checking-roles-to-claude-plan.md:89-106,176-177,396-407 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The \u00a76 new-identifier enumeration omits `VALIDATE_LLM_ENGINE`, `VALIDATE_SIDE_EFFECTS`, and `--apply-result`, while the plan also leaves defaults unspecified for the two environment variables.\n  WHY: The identifier list is presented as the authoritative grep-verified contract, so implementing these later-referenced identifiers conflicts with that contract and leaves the promised defaults incomplete.\n- docs/plans/move-checking-roles-to-claude-plan.md:41 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The Security audit row attaches `run_security_pass_inline` to `scripts/orchestrate_poll_process.sh:6935-6938`, although the function is defined at `scripts/orchestrate_poll_process.sh:6637`.\n  WHY: An implementer following the citation to find the function definition will land at the heartbeat-wrapped invocation instead.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The plan introduces a new label `ai:claude-check-dispatched` (step 6 of P1) that needs to be registered in `.github/ai/label_contract.v1.json` consistent with the established convention for all `ai:*` labels.\n  expected_change_site: Step 11 (Docs) of P1 in `docs/plans/move-checking-roles-to-claude-plan.md`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Step 11 enumerates README, agents.md, `docs/INVENTORY.md`, registry entry, and changelog fragment, but `.github/ai/label_contract.v1.json` is not mentioned; existing peers `ai:claude-issue-queue` and `ai:claude-issue-queue-stale` are registered at lines 228-235 of the contract.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/plans/move-checking-roles-to-claude-plan.md:173-179 | severity=high | confidence=4\n  PROBLEM: The plan says the validation session runs `validate_process.sh` with `VALIDATE_LLM_ENGINE=claude-session` and \"answers the discover/diagnose prompts as they appear,\" but `validate_process.sh` has no mechanism to yield control to the parent Claude session for model interaction.\n  WHY: The plan does not explain how the Bash subprocess inside Docker coordinates with the enclosing Claude session via file-based IPC, leaving P3 to require a significant, undescribed implementation mechanism.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The plan introduces a new label `ai:claude-check-dispatched` (step 6 of P1) that needs to be registered in `.github/ai/label_contract.v1.json` consistent with the established convention for all `ai:*` labels (existing peers `ai:claude-issue-queue` and `ai:claude-issue-queue-stale` are registered at lines 228-235 of the contract with color and description).\n  Expected change site: Step 11 (Docs) of P1 in `docs/plans/move-checking-roles-to-claude-plan.md` should explicitly list `.github/ai/label_contract.v1.json` as an update site.\n  Evidence of absence: Step 11 enumerates README, agents.md, `docs/INVENTORY.md`, registry entry, and changelog fragment, but `.github/ai/label_contract.v1.json` is not mentioned. Other plans introducing new AI labels (e.g. `docs/plans/review-blocked-approval-gate-trust-scope-plan.md:18` and `docs/plans/confine-human-steps-to-activation-plan.md:249`) explicitly list the contract as an update site alongside label helpers and phase tests; this plan diverges from that established pattern.\n  SEVERITY: low\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/plans/move-checking-roles-to-claude-plan.md:89-106,176-177,396-407 | severity=high | confidence=4\n  PROBLEM: The \u00a76 \"New identifiers (repo-wide grep ... zero hits)\" enumeration omits two new environment variables that later steps reference: `VALIDATE_LLM_ENGINE` (set to `claude-session` in the `/claude-check` validation kind at line 176, distinct from the `VALIDATION_ENGINE` repo var whose values are `claude`|`gpt`) and `VALIDATE_SIDE_EFFECTS` (set to `off` at line 177 and defined in step 19 at line 400). The `--apply-result <dir>` CLI flag for `validate_process.sh` (step 19, line 404) is likewise not enumerated.\n  WHY: An implementer following \u00a76 as the authoritative contract could fail to create `VALIDATE_LLM_ENGINE`/`VALIDATE_SIDE_EFFECTS`, breaking the in-session validation flow at P3, or create them outside the documented identifier set, violating the \u00a76 grep-zero-hits guarantee; neither variable has the default promised by \u00a74.\n- docs/plans/move-checking-roles-to-claude-plan.md:41 | severity=low | confidence=4\n  PROBLEM: The Context table Security audit row cites `scripts/orchestrate_poll_process.sh:6935-6938`, `run_security_pass_inline`, although the function is defined at `scripts/orchestrate_poll_process.sh:6637`.\n  WHY: An implementer grepping for the function to find the seam site would land at line 6637 and not recognize 6935-6938 as the call site; the orchestrator-side reference points to the heartbeat wrapper invocation rather than the function definition.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3d992e7d00973a9f761121d620f38e84a1559d15ec2846c1c082508d65affb50",
+  "injection_suspected": true,
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36297628874",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36297628874",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927055024_a989ee6a76",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36297628874"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T05:50:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
