@@ -312,16 +312,20 @@ jobs:
   # CLAUDE.md §26.H catch-all. Every PR-backed claude/* head runs in
   # Claude-fixer mode, so its conflicts, failed checks, review hand-offs and
   # blocks wait for a Claude session. The §26 checker hands them to the
-  # session that pushed the PR; this job starts one fresh Opus 5.5 fixer
-  # (via the "Claude issue dispatcher" routine, payload claude_pr_fix.v1)
-  # for any such PR, here or in a registered consumer repo, whose fix has
-  # been due for CLAUDE_PR_SWEEP_MIN_AGE_HOURS with no live claim. Without
-  # CLAUDE_ISSUE_ROUTINE_ID / CLAUDE_ISSUE_ROUTINE_TOKEN it only reports.
+  # session that pushed the PR; this job queues one fresh Opus 5.5 fixer
+  # (an ai:claude-issue-queue item with a claude_pr_fix.v1 payload, started
+  # by the Claude issue pickup session) for any such PR, here or in a
+  # registered consumer repo, whose fix has been due for
+  # CLAUDE_PR_SWEEP_MIN_AGE_HOURS with no live claim. Queue items are
+  # opened with this job's GITHUB_TOKEN, the only author the pickup trusts.
   # Decision, API budget and fail-open rules: scripts/claude_pr_sweep.py.
   claude-pr-catch-all:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Check out the sweep scripts and the consumer registry
         uses: actions/checkout@v5
@@ -332,9 +336,8 @@ jobs:
       - name: Start Claude fixers for unhandled claude/* PRs
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          CLAUDE_ISSUE_ROUTINE_ID: ${{ vars.CLAUDE_ISSUE_ROUTINE_ID || '' }}
-          CLAUDE_ISSUE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ISSUE_ROUTINE_TOKEN }}
-          CLAUDE_ISSUE_ROUTINE_BETA: ${{ vars.CLAUDE_ISSUE_ROUTINE_BETA || 'experimental-cc-routine-2026-04-01' }}
+          # The queue lives in this repo; GITHUB_TOKEN writes do not start workflows.
+          CLAUDE_PR_SWEEP_QUEUE_TOKEN: ${{ github.token }}
           CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN: ${{ vars.CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN || '' }}
           CLAUDE_FIXER_VERDICT_BOT_LOGIN: ${{ vars.CLAUDE_FIXER_VERDICT_BOT_LOGIN || '' }}
           CLAUDE_PR_SWEEP_MIN_AGE_HOURS: ${{ vars.CLAUDE_PR_SWEEP_MIN_AGE_HOURS || '2' }}

@@ -207,8 +207,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
 15. **Claude issue implementer** (`clarify.yml` route step,
     `scripts/claude_issue_route.py`, `scripts/claude_issue_handoff.sh`,
     `claude-issue-intake.yml`, `scripts/claude_issue_intake.sh`,
+    `.claude/commands/claude-issue-pickup.md`,
     `.claude/commands/claude-issue-dispatch.md`,
-    `.claude/commands/implement-issue-claude.md`) — standalone issues are
+    `.claude/commands/implement-issue-claude.md`,
+    `claude-issue-queue-watchdog.yml`,
+    `scripts/claude_issue_queue_watchdog.sh`) — standalone issues are
     implemented by Claude Code by default. On issue open / `/reclarify`,
     clarify's `Decide clarify route` step routes each issue that would
     otherwise run Codex clarify. Orchestrator-managed issues (label or
@@ -219,12 +222,26 @@ Phases of the unattended pipeline (each is a separate workflow file under
     A Claude route skips Codex clarify, claims the issue with `ai:claude`, and
     sends a `claude-issue` `repository_dispatch` (`claude_issue.v1`, ≤ 10
     top-level keys) to coding-workflows. The intake validates the repo against
-    `.github/ai/consumer_repos.json` plus coding-workflows and POSTs the
-    **Claude issue dispatcher** routine's `/fire` endpoint (repo var
-    `CLAUDE_ISSUE_ROUTINE_ID`, secret `CLAUDE_ISSUE_ROUTINE_TOKEN`, header
-    `CLAUDE_ISSUE_ROUTINE_BETA`), retrying 408/429/5xx/network errors with
-    2/4/8/16 s backoff. Fire text is fixed keys only, with no issue prose.
-    The routine starts an Opus session in the target repo running
+    `.github/ai/consumer_repos.json` plus coding-workflows and queues it as one
+    `ai:claude-issue-queue` issue in coding-workflows (title
+    `[claude-issue-queue] <repo>#<N>`, body = marker + fixed-key payload, no
+    issue prose), opened with the job's `GITHUB_TOKEN` so no workflow reacts;
+    an open item for the same target is reused. The **Claude issue pickup**
+    (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 3,
+    woken hourly by the cron trigger `Claude issue pickup: hourly` bound to
+    itself (no new session per wake, so no lineage-depth growth), reads the
+    queue with
+    `claude_issue_route.py queue-pending --fetch-repo` (one REST read; only
+    items by `github-actions[bot]` for registered repos; ≤ 10 per wake),
+    starts one Opus session per target issue via `claude-issue-dispatch.md`
+    step 2, and closes the queue issues with a `Dispatched:` line (no
+    comment). A claude.ai routine run cannot do this: it gets no
+    claude-code-remote tools (#4525), so `CLAUDE_ISSUE_ROUTINE_ID` /
+    `CLAUDE_ISSUE_ROUTINE_TOKEN` / `CLAUDE_ISSUE_ROUTINE_BETA` are deprecated
+    and unused. `claude-issue-queue-watchdog.yml` (hourly :17) labels items
+    older than `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (default 3)
+    `ai:claude-issue-queue-stale` and sends a Telegram ERROR (log prefix
+    `CLAUDE_ISSUE_QUEUE_WATCHDOG`). The implementation session runs
     `/implement-issue-claude`: a single-phase plan
     `docs/plans/issue-<N>-<topic>-plan.md` (header `Source issue:`,
     `Base branch:` from the issue's `Integration branch:` / `Target branch:`
@@ -238,7 +255,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `ai:claude` and no `ai:codex`. Failures label `ai:claude-handoff-failed`
     (handoff / intake) or `ai:claude-blocked` (a CLAUDE.md §28.C stop, asked
     on the issue). Issue-mode sessions auto-decide every question, start-up
-    checks included (CLAUDE.md §28.A).
+    checks included (CLAUDE.md §28.A), but never whether to run the chain: a
+    session without claude-code-remote tools stops with `ai:claude-blocked`
+    (§28.C).
     Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
@@ -885,13 +904,17 @@ reviews, comments, and conflicts stay a direct §12 request.
   `.github/ai/consumer_repos.json` with `GH_PAT`: for each open, non-draft,
   same-repo `claude/*` PR whose fix has been due for
   `CLAUDE_PR_SWEEP_MIN_AGE_HOURS` (default 2) with no live claim or hold,
-  it POSTs the Claude dispatcher routine's `/fire` endpoint with a
-  `claude_pr_fix.v1` payload (retrying 408 / 429 / 5xx with 2/4/8/16 s
-  backoff) and then claims the head as `sweep-run-<run id>`.
-  `claude-issue-dispatch.md` starts one Opus 5.5 session at high effort
-  running `/fix-claude-pr`. Without `CLAUDE_ISSUE_ROUTINE_ID` /
-  `CLAUDE_ISSUE_ROUTINE_TOKEN` the job only logs `::warning::` lines. Read
-  failures fail open per PR and per repo. `/implement-plan-claude` PRs
+  it opens one `ai:claude-issue-queue` item (title
+  `[claude-issue-queue] fix <repo>#<n>`, a `claude_pr_fix.v1` block built by
+  `scripts/claude_issue_route.py` `build_pr_fix_queue_issue`) with the
+  job's `GITHUB_TOKEN` (`CLAUDE_PR_SWEEP_QUEUE_TOKEN`, job permission
+  `issues: write`), skips PRs that already have an open item, and then
+  claims the head as `sweep-run-<run id>`. `queue-pending` returns these
+  as `item_type: pr_fix` entries, and the Claude issue pickup starts one
+  Opus 5.5 session at high effort running `/fix-claude-pr` per entry
+  (`claude-issue-dispatch.md` step 2). Without the queue token, or when the
+  queue read fails, the job only logs `::warning::` lines. Read failures
+  fail open per PR and per repo. `/implement-plan-claude` PRs
   keep their 6-hour stuck window, and their stage sessions claim the PRs
   they fix. Tests: `tests/test_check_in_status_hand_back.py`,
   `tests/test_claude_pr_sweep.py`.
@@ -1970,6 +1993,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
 .github/workflows/claude-issue-intake.yml
+.github/workflows/claude-issue-queue-watchdog.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml

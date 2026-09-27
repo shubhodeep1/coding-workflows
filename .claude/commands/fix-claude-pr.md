@@ -2,7 +2,7 @@ Fix **one `claude/*` pull request** that is waiting on Claude: a merge conflict,
 
 - **the session that pushed the PR**, in place, when its §26 checker hands a due fix back (CLAUDE.md §26.D) — it holds the context, so it is the preferred fixer;
 - **a fresh session** the §26 checker starts when the pushing session is gone (§26.C step 5);
-- **a fresh session** the catch-all sweep starts through the Claude dispatcher (§26.H, `scripts/claude_pr_sweep.py`).
+- **a fresh session** the Claude issue pickup starts for a queue item the catch-all sweep opened (§26.H, `scripts/claude_pr_sweep.py`, `.claude/commands/claude-issue-pickup.md`).
 
 Fresh sessions run on Opus 5.5 at high effort (the two-step start in CLAUDE.md §26.B). `$ARGUMENTS` is the PR URL, optionally followed by `— kind <conflict | ci | review | blocked> — head <sha>` and, from the sweep, `— claim sweep-run-<id>` (the reservation the sweep posted for this session). Those are hints from whoever started this session; the PR's live state decides (step 2). Nobody is at the keyboard in a fresh session: it never waits on a question except the cap and dead-end holds below, which it parks with a hold claim and a push notification.
 

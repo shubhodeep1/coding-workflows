@@ -2013,6 +2013,9 @@ run_template_validation_harness_renderer()
 	local templates_root="workflow-templates/validation-harness"
 	local renderer_summary=""
 	local python3_bin="python3"
+	local renderer_python="${RUNTIME_DIR:-}/renderer-venv/bin/python"
+	local renderer_empty_dir="${RUNTIME_DIR:-}/renderer-empty"
+	local renderer_workspace=""
 
 	HARNESS_GENERATOR_MODE="templates"
 
@@ -2034,33 +2037,64 @@ run_template_validation_harness_renderer()
 		return 15
 	fi
 
+	# Do not run even diagnostic Python probes from the credentialed workspace.
+	if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${renderer_empty_dir}" ]; then
+		printf '%s\n' 'Trusted renderer runtime is unavailable; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
 	python3_bin="$(command -v python3 2>/dev/null || printf '%s' 'python3')"
+	if [ ! -f "${renderer_python}" ]; then
+		printf '%s\n' 'Isolated renderer Python is unavailable; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
 	{
 		printf '\n--- python3 environment probe ---\n'
-		printf 'command -v python3: %s\n' "$(command -v python3 2>&1 || echo 'not found')"
-		printf 'python3 -V: %s\n' "$("${python3_bin}" -V 2>&1 || echo 'failed')"
-		"${python3_bin}" -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))' 2>&1 \
+		printf 'command -v python3: %s\n' "${python3_bin}"
+		printf 'renderer python3 -V: %s\n' "$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -V 2>&1 || echo 'failed')"
+		(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))') 2>&1 \
 			|| printf '(python3 -c probe failed)\n'
 		printf -- '--- end python3 environment probe ---\n'
 	} >> "${GENERATE_LOG_FILE}" 2>&1
-	if ! "${python3_bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
-		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $("${python3_bin}" -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
+	if ! (cd "${renderer_empty_dir}" && "${renderer_python}" -I -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)') >/dev/null 2>&1; then
+		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(cd "${renderer_empty_dir}" && "${renderer_python}" -I -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
 		return 17
 	fi
 	if [ "${VALIDATION_RENDERER_DEPENDENCIES_READY:-true}" != "true" ]; then
 		printf '%s\n' 'Template renderer dependency setup did not succeed; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
 		return 14
 	fi
-	if ! "${python3_bin}" -c 'import yaml, jsonschema, jinja2' >/dev/null 2>&1; then
-		printf '%s\n' 'Template renderer dependencies (yaml, jsonschema, jinja2) are not importable by python3; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+	renderer_workspace="$(pwd -P)"
+	# Resolve all paths before leaving the workspace. -I removes both the script
+	# directory and PYTHON* / user-site paths from the renderer import search.
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c '
+import importlib.util
+import pathlib
+import sys
+import sysconfig
+environment = pathlib.Path(sys.argv[1]).resolve()
+if pathlib.Path(sys.prefix).resolve() != environment:
+    raise SystemExit("Renderer interpreter is not the isolated environment")
+roots = [pathlib.Path(sysconfig.get_path(key)).resolve() for key in ("purelib", "platlib")]
+if not all(root.is_relative_to(environment) for root in roots):
+    raise SystemExit("Renderer package paths are not in the isolated environment")
+for name in ("yaml", "jsonschema", "jinja2"):
+    spec = importlib.util.find_spec(name)
+    if spec is None or spec.origin is None or not any(pathlib.Path(spec.origin).resolve().is_relative_to(root) for root in roots):
+        raise SystemExit("Renderer dependency origin is not in the isolated environment: " + name)
+    if spec.submodule_search_locations and not all(any(pathlib.Path(location).resolve().is_relative_to(root) for root in roots) for location in spec.submodule_search_locations):
+        raise SystemExit("Renderer dependency search path is not in the isolated environment: " + name)
+import yaml, jsonschema, jinja2
+' "${RUNTIME_DIR}/renderer-venv" 2>&1)"; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+		printf '%s\n' 'Template renderer dependencies (yaml, jsonschema, jinja2) are unavailable in the isolated environment; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
 		return 14
 	fi
 
-	if ! renderer_summary="$("${python3_bin}" "${renderer_script}" \
-		--manifest "${manifest_path}" \
-		--schema "${schema_path}" \
-		--templates-root "${templates_root}" \
-		--output-root validation 2>&1)"; then
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I "${renderer_workspace}/${renderer_script}" \
+		--manifest "${renderer_workspace}/${manifest_path}" \
+		--schema "${renderer_workspace}/${schema_path}" \
+		--templates-root "${renderer_workspace}/${templates_root}" \
+		--output-root "${renderer_workspace}/validation" 2>&1)"; then
 		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
 		return 14
 	fi

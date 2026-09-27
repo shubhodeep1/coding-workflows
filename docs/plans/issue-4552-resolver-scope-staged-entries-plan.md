@@ -1,7 +1,7 @@
 # Resolver scope check: compare staged entries, forbid model staging
 
 Source issue: shubhodeep1/coding-workflows#4552 (https://github.com/shubhodeep1/coding-workflows/issues/4552)
-Base branch: claude/quirky-wozniak-e9t88m
+Base branch: main (was claude/quirky-wozniak-e9t88m, which merged into main as #4549 on 2026-09-26)
 Security pass: skip (ai:workflow-heal: automation-produced issue)
 
 ## Summary
@@ -172,9 +172,11 @@ Phase 1:
 
 ## Rollout
 
-Ships on the PR #4549 branch (`claude/quirky-wozniak-e9t88m`, the issue's
-target branch) and reaches `main` and consumers with that PR and the next
-`@stable` release. Nothing needs to be enabled.
+Planned to ship on the PR #4549 branch (`claude/quirky-wozniak-e9t88m`, the
+issue's target branch). That branch merged into `main` as #4549 on 2026-09-26,
+so the project moved onto `main` (Issue Mode base-branch rule): the final PR
+#4555 targets `main` and reaches consumers with the next `@stable` release.
+Nothing needs to be enabled.
 
 ## Auto-decisions
 

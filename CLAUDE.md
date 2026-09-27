@@ -1859,8 +1859,9 @@ sweep runs in the sessions that create them, never in Actions:
   Routines to delete. Later pages are left for later sweeps.
 - **What it deletes**: only Routines these flows create, matched by name
   (`PR #<n> status check-in…`, `PR #<n> hand-back`,
-  `implement-plan <slug>: …`, and the Claude dispatcher's
-  `dispatch <owner>/<repo>#<n>: …`), and only when they have ended
+  `implement-plan <slug>: …`, and the start trigger of a session the
+  dispatcher steps start, `dispatch <owner>/<repo>#<n>: …`), and only when
+  they have ended
   (`ended_reason` set) or are a hand-back (its prompt reads `… hand-back
   for …` and names the PR URL) whose PR merged or closed more than 24
   hours ago. A Routine the user paused, and every Routine with any
@@ -1917,14 +1918,18 @@ sweep runs in the sessions that create them, never in Actions:
   `.github/ai/consumer_repos.json` (`scripts/claude_pr_sweep.py`, with
   `GH_PAT`). For each open, non-draft, same-repository `claude/*` PR whose
   fix has been due for `CLAUDE_PR_SWEEP_MIN_AGE_HOURS` (default 2) with no
-  live claim or hold, it fires the "Claude issue dispatcher" routine with a
-  `claude_pr_fix.v1` payload and posts a claim for the head as
-  `sweep-run-<run id>`; the dispatcher starts one Opus 5.5 session at high
-  effort running `/fix-claude-pr`, which looks past that reservation
-  (`check_in_status.py --ignore-claim-by`). This
+  live claim or hold, it opens one `ai:claude-issue-queue` item with a
+  `claude_pr_fix.v1` payload (as the job's `github-actions[bot]`, the only
+  author the queue trusts) and posts a claim for the head as
+  `sweep-run-<run id>`. The Claude issue pickup session
+  (`.claude/commands/claude-issue-pickup.md`, hourly) starts one Opus 5.5
+  session at high effort running `/fix-claude-pr`, which looks past that
+  reservation (`check_in_status.py --ignore-claim-by`). A claude.ai routine
+  run cannot start sessions (issue #4525), so the queue is the only way in.
+  This
   covers PRs whose fixer did not act and PRs with no checker at all.
-  Without `CLAUDE_ISSUE_ROUTINE_ID` / `CLAUDE_ISSUE_ROUTINE_TOKEN` it only
-  logs each due PR as a warning. `tests/test_claude_pr_sweep.py` and
+  Without a queue token it only logs each due PR as a warning, and an open
+  queue item for the same PR is never duplicated. `tests/test_claude_pr_sweep.py` and
   `tests/test_check_in_status_hand_back.py` cover the rules.
 
 ---
@@ -2044,6 +2049,13 @@ This is an explicit carve-out from §0 and §2 (including §2's
   performs them; a project that needs one lists it as an operator step,
   and `/deploy-activate` walks the human through it.
 - A question with no option that satisfies §28.B's hard rules.
+- **Whether to run the chain at all.** The stages, the conformance audit, the
+  security pass, and validation are the project, not options. A session that
+  cannot run them (no claude-code-remote tools to start stage sessions and
+  checkers, as in a claude.ai routine run; issue #4525) stops as a failure
+  escalation above. It never ships a smaller substitute, such as a direct edit
+  without the plan, the project branch, and those passes, and never records
+  one as an auto-decision.
 
 ### D) Recording
 

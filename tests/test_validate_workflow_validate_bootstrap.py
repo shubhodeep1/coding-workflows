@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import venv
 from pathlib import Path
 
 
@@ -139,9 +140,14 @@ def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_mai
 def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
-	assert 'python3 -E -P -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2' in wf
+	assert 'RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}' in wf
+	assert 'cd "${RUNTIME_DIR}/renderer-empty"' in wf
+	assert 'python3 -I -m venv "${RUNTIME_DIR}/renderer-venv"' in wf
+	assert '"${RUNTIME_DIR}/renderer-venv/bin/python" -I -m pip --isolated install --disable-pip-version-check --quiet pyyaml jsonschema jinja2' in wf
 	assert "id: renderer_dependencies" in wf
-	assert "python3 -E -P -c 'import yaml, jsonschema, jinja2'" in wf
+	assert '"${RUNTIME_DIR}/renderer-venv/bin/python" -I -c' in wf
+	assert 'if pathlib.Path(sys.prefix).resolve() != environment:' in wf
+	assert 'pathlib.Path(spec.origin).resolve().is_relative_to(root)' in wf
 	assert "VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}" in wf
 	assert "if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'" in wf
 
@@ -156,14 +162,14 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 	step = step_match.group("body")
 	assert "          BASH_ENV: ''\n" in step
 	assert 'if [ -f "scripts/render_validation_templates.py" ]; then' in step
-	assert 'cd "${RUNNER_TEMP:?}"' in step
+	assert 'cd "${RUNTIME_DIR}/renderer-empty"' in step
 	script = textwrap.dedent(step.split("        run: |\n", 1)[1])
 	with tempfile.TemporaryDirectory() as tmpdir:
 		root = Path(tmpdir)
 		workspace = root / "workspace"
-		runner_temp = root / "runner-temp"
+		runtime_dir = root / "runtime"
 		bin_dir = root / "bin"
-		for directory in (workspace / "scripts", runner_temp, bin_dir):
+		for directory in (workspace / "scripts", runtime_dir, bin_dir):
 			directory.mkdir(parents=True)
 		(workspace / "scripts" / "render_validation_templates.py").touch()
 		startup_file = root / "shell-startup"
@@ -175,16 +181,15 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 			f"Path({str(startup_file)!r}).write_text('compromised')\n",
 			encoding="utf-8",
 		)
+		# One shim stands in for the host python3 and the renderer venv's python:
+		# every call must be isolated (-I) and must not see the workspace. The venv
+		# origin probe itself is exercised against a real venv in
+		# test_renderer_isolated_imports_ignore_workspace_shadows_and_reject_external_origins.
 		python_shim = bin_dir / "python3"
 		python_shim.write_text(
 			"#!/bin/sh\n"
-			"[ \"$1\" = -E ] && [ \"$2\" = -P ] || exit 11\n"
-			"case \"$3\" in\n"
-			"  -m) [ \"$4\" = pip ] || exit 12;;\n"
-			"  -c) [ \"$4\" = 'import yaml, jsonschema, jinja2' ] || exit 13;;\n"
-			"  *) exit 14;;\n"
-			"esac\n"
-			"exec \"$REAL_PYTHON3\" -E -P -c '"
+			"[ \"$1\" = -I ] || exit 11\n"
+			"\"$REAL_PYTHON3\" -I -c '"
 			"import importlib, importlib.util, os, pathlib, sys; "
 			"workspace = pathlib.Path(os.environ[\"GITHUB_WORKSPACE\"]).resolve(); "
 			"assert pathlib.Path.cwd() != workspace; "
@@ -193,7 +198,17 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 			"not spec.origin or pathlib.Path(spec.origin).resolve() != workspace / (name + \".py\") "
 			"for name in (\"pip\", \"yaml\", \"jsonschema\", \"jinja2\")); "
 			"[importlib.import_module(name) for name in (\"yaml\", \"jsonschema\", \"jinja2\") "
-			"if importlib.util.find_spec(name)]'\n",
+			"if importlib.util.find_spec(name)]' || exit 15\n"
+			"case \"$2\" in\n"
+			"  -m)\n"
+			"    case \"$3\" in\n"
+			"      venv) mkdir -p \"$4/bin\" && cp \"$0\" \"$4/bin/python\" && exit 0;;\n"
+			"      pip) [ \"$4\" = --isolated ] || exit 12; exit 0;;\n"
+			"    esac\n"
+			"    exit 12;;\n"
+			"  -c) case \"$3\" in *'import yaml, jsonschema, jinja2'*) exit 0;; esac; exit 13;;\n"
+			"esac\n"
+			"exit 14\n",
 			encoding="utf-8",
 		)
 		python_shim.chmod(0o755)
@@ -205,13 +220,15 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 			"PYTHONHOME": str(workspace),
 			"PYTHONPATH": str(workspace),
 			"REAL_PYTHON3": sys.executable,
-			"RUNNER_TEMP": str(runner_temp),
+			"RUNTIME_DIR": str(runtime_dir),
 		})
 		result = subprocess.run(
 			["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
 			cwd=workspace, env=env, capture_output=True, text=True, timeout=30,
 		)
 		assert result.returncode == 0, result.stdout + result.stderr
+		assert (runtime_dir / "renderer-empty").is_dir()
+		assert (runtime_dir / "renderer-venv" / "bin" / "python").exists()
 		assert not startup_marker.exists()
 		assert not import_marker.exists()
 		assert startup_file.read_text(encoding="utf-8") == f"touch {startup_marker}\n"
@@ -223,6 +240,8 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 	function_text = "run_template_validation_harness_renderer()\n{" + function_text + "\n}\n"
 	assert "VALIDATION_RENDERER_DEPENDENCIES_READY" in function_text
 	assert "import yaml, jsonschema, jinja2" in function_text
+	assert '"${renderer_python}" -I -c' in function_text
+	assert '"${renderer_python}" -I "${renderer_workspace}/${renderer_script}"' in function_text
 	for setup_ready, imports_available, expected_status in (
 		("true", "false", 14),
 		("false", "true", 14),
@@ -231,6 +250,9 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 	):
 		with tempfile.TemporaryDirectory() as tmpdir:
 			root = Path(tmpdir)
+			runtime_dir = root / "runtime"
+			(runtime_dir / "renderer-empty").mkdir(parents=True)
+			(runtime_dir / "renderer-venv" / "bin").mkdir(parents=True)
 			for asset in (
 				".ai/validate.yml",
 				"scripts/render_validation_templates.py",
@@ -245,19 +267,24 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 			shim = root / "python3"
 			shim.write_text(
 				"#!/bin/sh\n"
-				"if [ \"$1\" = '-c' ] && [ \"$2\" = 'import yaml, jsonschema, jinja2' ]; then\n"
-				"  [ \"$IMPORTS_AVAILABLE\" = 'true' ] && exit 0\n"
-				"  exit 1\n"
+				"if [ \"$1\" = '-I' ]; then shift; fi\n"
+				"if [ \"$1\" = '-c' ]; then\n"
+				"  case \"$2\" in\n"
+				"    *'import importlib.util'*) [ \"$IMPORTS_AVAILABLE\" = 'true' ] && exit 0; exit 1;;\n"
+				"  esac\n"
 				"fi\n"
 				"case \"$1\" in\n"
-				"  scripts/render_validation_templates.py) touch renderer-invoked; exit 0;;\n"
+				"  */scripts/render_validation_templates.py) touch renderer-invoked; exit 0;;\n"
 				"esac\n"
 				"exec \"$REAL_PYTHON3\" \"$@\"\n",
 				encoding="utf-8",
 			)
 			shim.chmod(0o755)
+			(runtime_dir / "renderer-venv" / "bin" / "python").write_bytes(shim.read_bytes())
+			(runtime_dir / "renderer-venv" / "bin" / "python").chmod(0o755)
 			env = os.environ.copy()
 			env.update({
+				"RUNTIME_DIR": str(runtime_dir),
 				"PATH": f"{root}:{os.environ['PATH']}",
 				"REAL_PYTHON3": sys.executable,
 				"IMPORTS_AVAILABLE": imports_available,
@@ -275,9 +302,91 @@ def test_renderer_dependency_preflight_blocks_rendering() -> None:
 			assert result.returncode == expected_status, result.stdout + result.stderr
 			log_text = (root / "renderer.log").read_text(encoding="utf-8")
 			assert "printf: --: invalid option" not in log_text
-			assert (root / "renderer-invoked").exists() == (expected_status == 0)
+			assert (runtime_dir / "renderer-empty" / "renderer-invoked").exists() == (expected_status == 0)
 			if expected_status == 14:
 				assert "dependenc" in log_text.lower()
+
+
+def test_renderer_isolated_imports_ignore_workspace_shadows_and_reject_external_origins() -> None:
+	process_text = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	function_text = process_text.split("run_template_validation_harness_renderer()\n{", 1)[1].split("\n}\n", 1)[0]
+	function_text = "run_template_validation_harness_renderer()\n{" + function_text + "\n}\n"
+	workflow_probe = textwrap.dedent(_workflow_text().split('"${RUNTIME_DIR}/renderer-venv/bin/python" -I -c \'\n', 1)[1].split('\n          \' "${RUNTIME_DIR}/renderer-venv"\n', 1)[0])
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir)
+		workspace = root / "workspace"
+		runtime_dir = root / "runtime"
+		workspace.mkdir()
+		(runtime_dir / "renderer-empty").mkdir(parents=True)
+		venv.EnvBuilder(with_pip=False).create(runtime_dir / "renderer-venv")
+		python = runtime_dir / "renderer-venv" / "bin" / "python"
+		purelib = Path(subprocess.check_output(
+			[str(python), "-I", "-c", 'import sysconfig; print(sysconfig.get_path("purelib"))'],
+			text=True, cwd=runtime_dir / "renderer-empty",
+		).strip())
+		for name in ("yaml", "jsonschema", "jinja2"):
+			package = purelib / name
+			package.mkdir()
+			(package / "__init__.py").write_text("# installed package fixture\n", encoding="utf-8")
+		for asset in (
+			".ai/validate.yml", "scripts/templates/slot_manifest.schema.json",
+			"workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
+			"workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
+			"workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2",
+		):
+			path = workspace / asset
+			path.parent.mkdir(parents=True, exist_ok=True)
+			path.touch()
+		renderer = workspace / "scripts" / "render_validation_templates.py"
+		renderer.write_text(
+			'import yaml, jsonschema, jinja2\n'
+			'print("isolated renderer ran")\n', encoding="utf-8",
+		)
+		leak_marker = root / "leaked"
+		shadow = 'import os\nfrom pathlib import Path\nPath(os.environ["LEAK_MARKER"]).write_text(os.environ["GH_TOKEN"])\n'
+		(workspace / "yaml.py").write_text(shadow, encoding="utf-8")
+		(workspace / "scripts" / "yaml.py").write_text(shadow, encoding="utf-8")
+		env = os.environ.copy()
+		env.update({
+			"RUNTIME_DIR": str(runtime_dir),
+			"GENERATE_LOG_FILE": str(root / "renderer.log"),
+			"VALIDATION_RENDERER_DEPENDENCIES_READY": "true",
+			"GH_TOKEN": "fixture-secret",
+			"LEAK_MARKER": str(leak_marker),
+			"PYTHONPATH": str(workspace),
+			"PYTHONHOME": str(workspace),
+		})
+		env.pop("BASH_ENV", None)
+		def probe() -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[str(python), "-I", "-c", workflow_probe, str(runtime_dir / "renderer-venv")],
+				cwd=runtime_dir / "renderer-empty", env=env, capture_output=True, text=True, timeout=30,
+			)
+
+		def render() -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				["bash", "-c", function_text + "\nrun_template_validation_harness_renderer"],
+				cwd=workspace, env=env, capture_output=True, text=True, timeout=30,
+			)
+
+		assert probe().returncode == 0
+		assert subprocess.run(
+			[str(python), "-I", "-c", workflow_probe, str(workspace)],
+			cwd=runtime_dir / "renderer-empty", env=env, capture_output=True, text=True, timeout=30,
+		).returncode != 0
+		assert render().returncode == 0
+		assert "isolated renderer ran" in (root / "renderer.log").read_text(encoding="utf-8")
+		assert not leak_marker.exists()
+		(purelib / "yaml" / "__init__.py").unlink()
+		assert probe().returncode != 0
+		assert render().returncode == 14  # Missing dependency cannot fall back to workspace.
+		assert not leak_marker.exists()
+		outside = root / "outside.py"
+		outside.write_text(shadow, encoding="utf-8")
+		(purelib / "yaml" / "__init__.py").symlink_to(outside)
+		assert probe().returncode != 0
+		assert render().returncode == 14  # A symlinked origin is not trusted.
+		assert not leak_marker.exists()
 
 
 def test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
