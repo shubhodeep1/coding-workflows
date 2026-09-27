@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:Diagnostic issue-comment path | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The diagnostic issue-comment path remains unreachable because its outer guard checks GH_TOKEN after it has been unset.\n  WHY: Failures in implement runs are not surfaced to issue comments, blocking necessary diagnosis of automation failures.\n- .github/workflows/issue_pr_status.yml:fetch_from_ref_or_local call | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: This function call is undefined, preventing ingest_implement_plan_lessons.py from being staged.\n  WHY: Lessons ingestion is skipped when relevant PRs merge, causing loss of workflow performance / bug-fix priors.\n- .github/workflows/issue_pr_status.yml:Telegram alert step | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Removing the curl fallback means Telegram alerts and cleanup fail when trusted Telegram helper scripts are unavailable.\n  WHY: No PR-merged Telegram alert is sent when the helper script is missing, and cleanup of the notification context fails.\n- .github/workflows/orchestrate_poll.yml:Credential helper environment | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The credential helper written to GITHUB_ENV supplies GH_TOKEN for any git credential request in subsequent steps.\n  WHY: Git operations against other GitHub hosts or repositories can unintentionally receive the GH_PAT credential, broadening the credential scope beyond what is intended.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:Diagnostic issue-comment path | severity=high | confidence=4\n  PROBLEM: The diagnostic issue-comment path remains unreachable because its outer guard checks GH_TOKEN after it has been unset.\n  WHY: Failures in implement runs are not surfaced to issue comments, blocking necessary diagnosis of automation failures.\n- .github/workflows/issue_pr_status.yml:fetch_from_ref_or_local call | severity=critical | confidence=5\n  PROBLEM: This function call is undefined, preventing ingest_implement_plan_lessons.py from being staged.\n  WHY: Lessons ingestion is skipped when relevant PRs merge, causing loss of workflow performance / bug-fix priors.\n- .github/workflows/issue_pr_status.yml:Telegram alert step | severity=low | confidence=3\n  PROBLEM: Removing the curl fallback means Telegram alerts and cleanup fail when trusted Telegram helper scripts are unavailable.\n  WHY: No PR-merged Telegram alert is sent when the helper script is missing, and cleanup of the notification context fails.\n- .github/workflows/orchestrate_poll.yml:Credential helper environment | severity=high | confidence=3\n  PROBLEM: The credential helper written to GITHUB_ENV supplies GH_TOKEN for any git credential request in subsequent steps.\n  WHY: Git operations against other GitHub hosts or repositories can unintentionally receive the GH_PAT credential, broadening the credential scope beyond what is intended.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "87f4cc73bc5ec7f96a3d1d57c304cb8efb3465051a6768c4da6f17ff4eb64422",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4602,
+    "run_id": "36295637771",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36295637771",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927050947_cc0c00d1f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4602,
+    "run_id": "36295637771"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T05:09:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
