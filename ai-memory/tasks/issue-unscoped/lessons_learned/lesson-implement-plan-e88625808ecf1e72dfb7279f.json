@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-27T08:10:45Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a script under test starts reading a workflow-exported variable (WORKSPACE_PATH, GIT_DIR, staged-support ledgers), add it to tests/conftest.py's session strip list in the same change, or tests that copy os.environ inherit the editor's live value.",
+  "phase": "implement_plan",
+  "pr_number": 4585,
+  "record_id": "lesson-implement-plan-e88625808ecf1e72dfb7279f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4580-review-sandbox-workspace-transfer",
+    "file:tests/conftest.py",
+    "file:scripts/workspace_init.sh"
+  ]
+}
