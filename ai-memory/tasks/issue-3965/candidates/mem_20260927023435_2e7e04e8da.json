@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; raw_status=harness_error; summary=Validation failed due to harness error; failure_summary=Validation harness error: Make pgrep available in the generated python-repo-checks validation image, for example through its owning Dockerfile template. Keep the guard's fail-closed process-group verification. Verify the rendered image contains pgrep and rerun tests/test_codex_stall_guard_scripts.py and the repo-check validation; update the template's golden fixture and regression checks as needed.",
+  "fingerprint": "86e486a21be76389f77ae4d4452ec991b283e8d084918a86ca0191e60c155945",
+  "lineage": {
+    "issue_number": 3965,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36288327878",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36288327878",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260927023435_2e7e04e8da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3965,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36288327878"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-09-27T02:34:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
