@@ -105,6 +105,30 @@ fi
 
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VALIDATE_SUPPORT_ROOT="${SUPPORT_ROOT_DIR:-$(cd "${_validate_script_dir}/.." && pwd)}"
+# Immutable-support locations. This branch's validate.yml exports them from
+# its support bundle; a caller that predates the bundle (main's validate.yml
+# runs this branch's checkout while the branch is being validated) does not,
+# and the Codex launcher (model_provider_broker_write_isolated_codex_launcher),
+# prompt resolution and self_heal_validation.sh then stop on the missing
+# variable before writing validation_status.json. Default them to the tree
+# this script runs from: the same trust as the script itself.
+validate_support_defaults_applied=""
+if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
+  SUPPORT_ROOT_DIR="${VALIDATE_SUPPORT_ROOT}"
+  validate_support_defaults_applied="${validate_support_defaults_applied} SUPPORT_ROOT_DIR"
+fi
+if [ -z "${SUPPORT_SCRIPTS_DIR:-}" ]; then
+  SUPPORT_SCRIPTS_DIR="${_validate_script_dir}"
+  validate_support_defaults_applied="${validate_support_defaults_applied} SUPPORT_SCRIPTS_DIR"
+fi
+if [ -z "${SUPPORT_PROMPTS_DIR:-}" ]; then
+  SUPPORT_PROMPTS_DIR="${VALIDATE_SUPPORT_ROOT}/prompts"
+  validate_support_defaults_applied="${validate_support_defaults_applied} SUPPORT_PROMPTS_DIR"
+fi
+export SUPPORT_ROOT_DIR SUPPORT_SCRIPTS_DIR SUPPORT_PROMPTS_DIR
+if [ -n "${validate_support_defaults_applied}" ]; then
+  echo "VALIDATE_SUPPORT_DEFAULTS applied=${validate_support_defaults_applied# } root=${SUPPORT_ROOT_DIR}"
+fi
 VALIDATION_TRUSTED_DRIVER="${_validate_script_dir}/validate_driver.sh"
 export VALIDATION_TRUSTED_DRIVER
 # shellcheck source=/dev/null
@@ -2090,52 +2114,6 @@ EOF
 	chmod +x validation/validate.sh
 }
 
-# The renderer runs through validate_run_isolated_python (python3 -I under
-# env -i), which ignores user site-packages. A validate.yml that installs
-# the renderer dependencies with `pip install --user` (main's, while it
-# validates this branch's scripts) therefore leaves them invisible, and the
-# renderer exits 14 with "Missing dependency 'PyYAML'". When the isolated
-# interpreter cannot import them, install them once per process into a
-# private venv outside RUNTIME_DIR (which is uploaded as the run artifact)
-# and record its bin directory in VALIDATION_RENDERER_DEPS_VENV_BIN for the
-# caller to prepend to PATH. Call it directly, not in $(...), so the venv
-# is reused by a later rerender. Leaves the variable empty when the
-# dependencies are already importable; returns 1 when the venv cannot be
-# prepared, leaving the renderer to fail with its own diagnostic.
-VALIDATION_RENDERER_DEPS_VENV_BIN=""
-ensure_validation_renderer_python_deps()
-{
-	local deps_venv_dir=""
-	local deps_pip_env_name=""
-	local -a deps_pip_env=()
-
-	if [ -n "${VALIDATION_RENDERER_DEPS_VENV_BIN}" ]; then
-		return 0
-	fi
-	if validate_run_isolated_python -- -c 'import yaml, jsonschema, jinja2' >/dev/null 2>&1; then
-		return 0
-	fi
-	deps_venv_dir="${RUNNER_TEMP:-/tmp}/validate-renderer-deps-venv-${GITHUB_RUN_ID:-local}-$$"
-	printf '%s\n' "Renderer dependencies (pyyaml, jsonschema, jinja2) are not importable by the isolated python3; installing them into ${deps_venv_dir}." >> "${GENERATE_LOG_FILE}"
-	rm -rf -- "${deps_venv_dir}"
-	# Only the package download needs the network: pass the runner's proxy,
-	# package-index and CA settings to pip, and nothing else.
-	for deps_pip_env_name in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy NO_PROXY no_proxy \
-		PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_TRUSTED_HOST PIP_CERT SSL_CERT_FILE REQUESTS_CA_BUNDLE; do
-		if [ -n "${!deps_pip_env_name:-}" ]; then
-			deps_pip_env+=("${deps_pip_env_name}=${!deps_pip_env_name}")
-		fi
-	done
-	if ! validate_run_isolated_python -- -m venv "${deps_venv_dir}" >> "${GENERATE_LOG_FILE}" 2>&1 \
-		|| ! env -i HOME="${HOME:-}" PATH="${PATH:-/usr/bin:/bin}" TMPDIR="${TMPDIR:-/tmp}" LANG="C.UTF-8" LC_ALL="C.UTF-8" PYTHONDONTWRITEBYTECODE="1" "${deps_pip_env[@]}" \
-			"${deps_venv_dir}/bin/python" -I -B -m pip install --disable-pip-version-check --quiet pyyaml jsonschema jinja2 >> "${GENERATE_LOG_FILE}" 2>&1 \
-		|| ! PATH="${deps_venv_dir}/bin:${PATH}" validate_run_isolated_python -- -c 'import yaml, jsonschema, jinja2' >> "${GENERATE_LOG_FILE}" 2>&1; then
-		printf '%s\n' "Could not prepare the renderer dependency venv at ${deps_venv_dir}." >> "${GENERATE_LOG_FILE}"
-		return 1
-	fi
-	VALIDATION_RENDERER_DEPS_VENV_BIN="${deps_venv_dir}/bin"
-}
-
 run_template_validation_harness_renderer()
 {
 	local manifest_path=".ai/validate.yml"
@@ -2143,7 +2121,10 @@ run_template_validation_harness_renderer()
 	local schema_path="${_validate_script_dir}/templates/slot_manifest.schema.json"
 	local templates_root="workflow-templates/validation-harness"
 	local renderer_summary=""
-	local renderer_path="${PATH}"
+	local python3_bin="python3"
+	local renderer_python="${RUNTIME_DIR:-}/renderer-venv/bin/python"
+	local renderer_empty_dir="${RUNTIME_DIR:-}/renderer-empty"
+	local renderer_workspace=""
 
 	HARNESS_GENERATOR_MODE="templates"
 
@@ -2165,38 +2146,66 @@ run_template_validation_harness_renderer()
 		return 15
 	fi
 
+	# Do not run even diagnostic Python probes from the credentialed workspace.
+	if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${renderer_empty_dir}" ]; then
+		printf '%s\n' 'Trusted renderer runtime is unavailable; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+	python3_bin="$(command -v python3 2>/dev/null || printf '%s' 'python3')"
+	if [ ! -f "${renderer_python}" ]; then
+		printf '%s\n' 'Isolated renderer Python is unavailable; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
 	{
 		printf '\n--- python3 environment probe ---\n'
-		printf 'command -v python3: %s\n' "$(command -v python3 2>&1 || echo 'not found')"
-		printf 'python3 -V: %s\n' "$(validate_run_isolated_python -- -V 2>&1 || echo 'failed')"
-		validate_run_isolated_python -- -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))' 2>&1 \
+		printf 'command -v python3: %s\n' "${python3_bin}"
+		printf 'renderer python3 -V: %s\n' "$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -V 2>&1 || echo 'failed')"
+		(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))') 2>&1 \
 			|| printf '(python3 -c probe failed)\n'
 		printf -- '--- end python3 environment probe ---\n'
 	} >> "${GENERATE_LOG_FILE}" 2>&1
-	if ! validate_run_isolated_python -- -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
-		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(validate_run_isolated_python -- -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
+	if ! (cd "${renderer_empty_dir}" && "${renderer_python}" -I -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)') >/dev/null 2>&1; then
+		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(cd "${renderer_empty_dir}" && "${renderer_python}" -I -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
 		return 17
 	fi
 	if [ "${VALIDATION_RENDERER_DEPENDENCIES_READY:-true}" != "true" ]; then
 		printf '%s\n' 'Template renderer dependency setup did not succeed; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
 		return 14
 	fi
-
-	ensure_validation_renderer_python_deps || true
-	if [ -n "${VALIDATION_RENDERER_DEPS_VENV_BIN}" ]; then
-		renderer_path="${VALIDATION_RENDERER_DEPS_VENV_BIN}:${PATH}"
-	fi
-	# Same interpreter and PATH the renderer runs with below.
-	if ! PATH="${renderer_path}" validate_run_isolated_python -- -c 'import yaml, jsonschema, jinja2' >/dev/null 2>&1; then
-		printf '%s\n' 'Template renderer dependencies (yaml, jsonschema, jinja2) are not importable by python3; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+	renderer_workspace="$(pwd -P)"
+	# Resolve all paths before leaving the workspace. -I removes both the script
+	# directory and PYTHON* / user-site paths from the renderer import search.
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c '
+import importlib.util
+import pathlib
+import sys
+import sysconfig
+environment = pathlib.Path(sys.argv[1]).resolve()
+if pathlib.Path(sys.prefix).resolve() != environment:
+    raise SystemExit("Renderer interpreter is not the isolated environment")
+roots = [pathlib.Path(sysconfig.get_path(key)).resolve() for key in ("purelib", "platlib")]
+if not all(root.is_relative_to(environment) for root in roots):
+    raise SystemExit("Renderer package paths are not in the isolated environment")
+for name in ("yaml", "jsonschema", "jinja2"):
+    spec = importlib.util.find_spec(name)
+    if spec is None or spec.origin is None or not any(pathlib.Path(spec.origin).resolve().is_relative_to(root) for root in roots):
+        raise SystemExit("Renderer dependency origin is not in the isolated environment: " + name)
+    if spec.submodule_search_locations and not all(any(pathlib.Path(location).resolve().is_relative_to(root) for root in roots) for location in spec.submodule_search_locations):
+        raise SystemExit("Renderer dependency search path is not in the isolated environment: " + name)
+import yaml, jsonschema, jinja2
+' "${RUNTIME_DIR}/renderer-venv" 2>&1)"; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+		printf '%s\n' 'Template renderer dependencies (yaml, jsonschema, jinja2) are unavailable in the isolated environment; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
 		return 14
 	fi
 
-	if ! renderer_summary="$(PATH="${renderer_path}" validate_run_isolated_python -- "${renderer_script}" \
-		--manifest "${manifest_path}" \
+	# renderer_script and schema_path are absolute paths into the immutable
+	# support bundle; only the workspace-relative inputs get the prefix.
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I "${renderer_script}" \
+		--manifest "${renderer_workspace}/${manifest_path}" \
 		--schema "${schema_path}" \
-		--templates-root "${templates_root}" \
-		--output-root validation 2>&1)"; then
+		--templates-root "${renderer_workspace}/${templates_root}" \
+		--output-root "${renderer_workspace}/validation" 2>&1)"; then
 		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
 		return 14
 	fi

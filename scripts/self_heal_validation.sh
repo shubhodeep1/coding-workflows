@@ -25,7 +25,9 @@
 #   SELF_HEAL_PROMPT_OVERRIDE_DIR — runner-owned prompt overlay used after patching
 #   SELF_HEAL_FAILURE_PHASE    — string tag ("generate"|"preflight"|"render"|"canary"|"diagnose"|"runtime"|"discover")
 #   MODEL_EDITOR               — OpenRouter model slug for the self-heal LLM call
-#   OPENROUTER_API_KEY         — for codex exec
+#   OPENROUTER_API_KEY         — for codex exec, only when no model provider
+#                                broker is running (MODEL_PROVIDER_BROKER_TOKEN
+#                                and MODEL_PROVIDER_BROKER_BASE_URL unset)
 # Optional:
 #   VALIDATION_RESULT_FILE, DIAGNOSE_RESULT_FILE, VALIDATION_LOG_TAIL_FILE,
 #   CONTAINER_LOG_TAIL_FILE, VALIDATE_HINTS_FILE, STATIC_CONTEXT_FILE,
@@ -41,7 +43,12 @@ set -euo pipefail
 : "${SUPPORT_PROMPTS_DIR:?SUPPORT_PROMPTS_DIR is required}"
 : "${SELF_HEAL_FAILURE_PHASE:=unknown}"
 : "${MODEL_EDITOR:?MODEL_EDITOR is required}"
-: "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
+# validate_process.sh starts the model-provider broker and then unsets
+# OPENROUTER_API_KEY, so a self-heal it launches reuses that broker and never
+# sees the key. The key is needed only to start a broker of our own below.
+if [ -z "${MODEL_PROVIDER_BROKER_TOKEN:-}" ] || [ -z "${MODEL_PROVIDER_BROKER_BASE_URL:-}" ]; then
+	: "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required when no model provider broker is running}"
+fi
 
 command -v jq >/dev/null 2>&1 || { echo "self-heal: jq is required" >&2; exit 2; }
 command -v patch >/dev/null 2>&1 || { echo "self-heal: patch is required" >&2; exit 2; }

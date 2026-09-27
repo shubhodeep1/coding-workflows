@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -123,6 +124,9 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
 		assert "pip install --no-cache-dir pyyaml jsonschema jinja2" in dockerfile_text
 		assert "flask" not in dockerfile_text
+		# scripts/codex_stall_guard.sh verifies isolated process groups with
+		# pgrep and fails closed without it; the repo checks run its tests.
+		assert re.search(r"apt-get install [^\n]*\bprocps\b", dockerfile_text)
 
 		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "python-repo-checks family for demo-project" in family_text
