@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01HuPy8SJxGNHdJhSC3PfGv4 (reused for every wait)   safety net and hand-back: the ids are in the final-merge review-round stage's report (armed after the push)
 - Last updated: 2026-09-27
-- Last note: final PR #4636 review round 1 (head 0d369e6): the one consensus NIT (renderer drift strands bound items) fixed per AD-9 with renderer docstrings and a golden test; the cancelled CI `lint` was its 45-minute timeout, re-run by the push
+- Last note: final PR #4636 review round 2 (head e4ae60d): 4 findings, 1 task gap, all from 1 of 6 reviewers; fixed the NIT that the intake's empty-body failure did not say which check failed, rejected the rest (the regex is already anchored, the NUL check runs before any write, trailing-whitespace tolerance carries no content, the test pins the scan factor)
 
 ## Phases
 1. [x] Phase 1 — bind queue items to their producing run and verify the binding at pickup   — PR #4639 merged 2026-09-27; review rounds: 1; interventions: 0
@@ -35,7 +35,7 @@
 ## Completion
 - Completion PR #4661 merged 2026-09-27 — doc moved to docs/completed/issue-4621-bind-claude-queue-payloads-plan.md
 - Merged PRs into the project branch: #4639 (phase 1/1, merged 2026-09-27), #4649 (conformance fix 1, merged 2026-09-27)
-- Final PR #4636 ready (marked ready 2026-09-27 in stage final-merge 1/1) — review rounds: 1
+- Final PR #4636 ready (marked ready 2026-09-27 in stage final-merge 1/1) — review rounds: 2
 
 ## Activation
 
@@ -68,3 +68,4 @@
 - Conformance 1/3 review round 1 (PR #4649, head af0676b9467c, ledgers 943acd8d… and df476940…): both review runs on the head reported the same single task gap (no fragment of its own, 6 of 6 reviewers); fixed per AD-8. Its evidence that editing the fragment "retroactively rewrites PR #4639's entry" does not hold: project-branch fragments reach `main` only through the final PR.
 - Validation 1/3 (2026-09-27, session_014PqWQykxyzqGwNVKkABfqV): read `validation_status.json` from artifact `ai-validation-36324854460-1` (status=pass) and confirmed from the run log that the checkout was the authorized project-branch head 163878f; no validation-fix PR, so no conformance re-run was due.
 - Final-merge review round 1 (PR #4636, head 0d369e647d4b, ledger 57b572b6…, session_01CoRrbdshiv3PpUoFracZgK): one consensus NIT, fixed per AD-9. The hand-off's failing `lint` check was CI run 36330726347 cancelled at the job's 45-minute `timeout-minutes` in "Orchestrate poll process unit tests"; the job runs 40–45 minutes on every branch (main's run for 6e00a6e was cancelled the same way), so it is not this project's code. The review-round push re-runs it.
+- Final-merge review round 2 (PR #4636, head e4ae60dc5e37, ledger 37e40789…, session_01JjCwn1U2uEYdZQH2tA51CJ): every finding came from one reviewer (5 of 6 reported none). Fixed: `scripts/claude_issue_intake.sh` now names which body check failed (missing, empty, or a NUL byte). Rejected: `RUN_URL_PARTS_RE` is already anchored with `^…$`; the NUL check rejects the body before the open-queue read or any write, so no half-written item exists; the `rstrip()` comparison tolerates only trailing whitespace, which carries no text to the pickup, and a strict match would risk `binding_mismatch` on whitespace normalisation; the starvation test asserts `QUEUE_BINDING_SCAN_FACTOR == 3`, so a change to the constant fails it loudly. CI on the head was green.

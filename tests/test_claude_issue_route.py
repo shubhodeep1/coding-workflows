@@ -424,15 +424,27 @@ def test_intake_binding_failure_marks_issue(stubs):
 	assert "labels[]=ai:claude-handoff-failed" in stubs["log"].read_text()
 
 
+@pytest.mark.parametrize(
+	("queue_body", "expected_state"),
+	[
+		("", "body is empty"),
+		(None, "body is missing (null)"),
+		("a\x00b", "body is text with a NUL byte"),
+	],
+)
 @pytest.mark.parametrize("reuse", [False, True])
-def test_intake_refuses_an_empty_queue_body_before_writing(stubs, reuse):
-	# A `$(jq ...)` inside a gh argument is exempt from `set -e`: an empty or
-	# missing body must fail here, never be written (review of PR #4639).
+def test_intake_refuses_an_empty_queue_body_before_writing(stubs, reuse, queue_body, expected_state):
+	# A `$(jq ...)` inside a gh argument is exempt from `set -e`: an empty,
+	# missing, or NUL-carrying body must fail here, never be written (review
+	# of PR #4639), and the failure names which check failed (review of #4636).
+	queue_item = {"title": "[claude-issue-queue] shubhodeep1/digital_pa#9", "label": "ai:claude-issue-queue"}
+	if queue_body is not None:
+		queue_item["body"] = queue_body
 	wrapper = stubs["tmp"] / "route_no_body.py"
 	wrapper.write_text(
 		"import json, runpy, sys\n"
 		"if sys.argv[1] == 'queue-issue':\n"
-		"    print(json.dumps({'title': '[claude-issue-queue] shubhodeep1/digital_pa#9', 'label': 'ai:claude-issue-queue', 'body': ''}))\n"
+		f"    print(json.dumps({queue_item!r}))\n"
 		"    sys.exit(0)\n"
 		f"sys.argv[0] = {str(ROOT / 'scripts' / 'claude_issue_route.py')!r}\n"
 		"runpy.run_path(sys.argv[0], run_name='__main__')\n"
@@ -441,7 +453,7 @@ def test_intake_refuses_an_empty_queue_body_before_writing(stubs, reuse):
 	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), CLAUDE_ISSUE_ROUTE_PY=str(wrapper), GH_STUB_QUEUE_JSON=json.dumps(existing))
 	result = _run("claude_issue_intake.sh", env)
 	assert result.returncode == 1
-	assert "reason=queue_failed" in result.stdout and "body is missing, empty" in result.stdout
+	assert "reason=queue_failed" in result.stdout and expected_state in result.stdout
 	calls = stubs["log"].read_text()
 	assert "-X PATCH" not in calls and "-f title=" not in calls
 	assert not (stubs["tmp"] / "binding").exists()

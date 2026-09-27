@@ -134,7 +134,9 @@ QUEUE_LABEL="$(jq -r '.label' "${QUEUE_FILE}")"
 # drops NUL bytes) would otherwise be written and then fail the pickup's
 # binding check with no trace in this run (issue #4621).
 if ! QUEUE_BODY="$(jq -er '.body | select(type == "string" and length > 0 and (contains("\u0000") | not))' "${QUEUE_FILE}" 2>/dev/null)"; then
-	fail "queue_failed" "the rendered queue issue body is missing, empty, or not writable text"
+	# Name the check that failed, so the operator can tell the cases apart.
+	QUEUE_BODY_STATE="$(jq -r '.body | if type != "string" then "missing (\(type))" elif length == 0 then "empty" elif contains("\u0000") then "text with a NUL byte" else "unreadable" end' "${QUEUE_FILE}" 2>/dev/null || true)"
+	fail "queue_failed" "the rendered queue issue body is ${QUEUE_BODY_STATE:-unreadable (queue-issue output is not JSON)}"
 fi
 
 # One read of the open queue (≤ 100 items; the pickup drains it hourly) to
