@@ -1206,8 +1206,14 @@ your own judgement.
    pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
    send a POST). Keep `gh api` calls out of loops, `$(...)`, `$VAR` paths,
    file redirects, and heredoc scripts, and edit a PR's title or body with
-   `mcp__github__update_pull_request`. Reads and §23.B routine writes are
-   approved without a prompt when the command holds only them plus the safe
+   `mcp__github__update_pull_request`. Post or edit an issue or PR comment
+   with `mcp__github__add_issue_comment` / `mcp__github__update_issue_comment`,
+   never with `gh api … --input <file>`, `-F body=@<file>`, or a heredoc that
+   builds the JSON body: file-backed fields always prompt under §23.H, a
+   heredoc holding `{"` trips Claude Code's own shell check, and an
+   unattended session then stalls at a prompt nobody answers. Reads and
+   §23.B routine writes are approved without a prompt when the command
+   holds only them plus the safe
    helpers §23.H lists (`cd`, `sleep`, `echo`, `2>&1`, pipes into `head`,
    `tail`, `wc -l`, `sort`); beside anything else the guard leaves the
    decision to the allow list or the Auto-mode classifier.
