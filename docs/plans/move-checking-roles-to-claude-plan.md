@@ -62,7 +62,32 @@ Decisions taken in the clarification round (2026-09-27):
 | Scheduler / PR-push entry points | Requests: each phase's existing triggers. `security-audit.yml` (cron `0 8 * * 0`, dispatch, `workflow_call`), the orchestrator poll (`orchestrate_poll.yml`, called by the `ai-orchestrate-poll.yml` cron wrapper), `validate.yml` (`workflow_call` from its existing callers), `check_failure_triage.yml` (`workflow_call` from the `check_run: completed` wrappers), `workflow-failure-heal-intake.yml` (`repository_dispatch`, `workflow_run`). Queue: `claude-issue-intake.yml` (`repository_dispatch`, new type `claude-check`) and the existing hourly Claude issue pickup session. Resume: new `claude_check_resume.yml`, called by `workflow-templates/ai-claude-check-resume.yml` (consumers) and `.github/workflows/internal-claude-check-resume.yml` (this repo), both on `issue_comment: created`, the internal one also on `workflow_dispatch`. Deadlines: the existing `claude-issue-queue-watchdog.yml` (cron `17 * * * *`). |
 | Long-running supervisor (§18.C) | None new. The existing Claude issue pickup (a `supervisor` in the registry) gains the `check` item type, and the existing watchdog gains deadline handling. The resume workflows are event-driven: each run verifies one result comment, resumes one phase run, and exits. A lost resume run is recovered by a `workflow_dispatch` replay with `comment_id` or, if none happens, by the watchdog's deadline, which fails the check closed. |
 | DB gate (§18.D) | Not applicable: no database operation. |
-| §18.F registry | One new entry in `docs/scripts-pending-removal.md` (P1). **Script path:** `.github/workflows/claude_check_resume.yml` + `.github/workflows/internal-claude-check-resume.yml` + `workflow-templates/ai-claude-check-resume.yml` + `scripts/claude_check.py` + `scripts/llm_external_seam.sh`. **Introduced in:** the P1 PR number and merge date. **Type:** `long-running`. **Removal trigger:** `permanent — review annually` (or, sooner, when every phase is back on `gpt` everywhere). **Removal preflight checks:** (1) for this repo and every repo in `.github/ai/consumer_repos.json`, `gh variable list --repo <repo>` shows `SECURITY_PASS_ENGINE`, `VALIDATION_ENGINE`, `CHECK_TRIAGE_ENGINE` and `WORKFLOW_HEAL_ENGINE` all explicitly `gpt`; (2) `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=open&per_page=100"` returns no issue whose title starts with `[claude-issue-queue] check `; (3) `rg -n 'llm_seam_run' scripts/` returns only the seam's own definition once the call sites are removed in the same PR; (4) `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.` **Owner:** @shubhodeep1. The same PR adds one preflight check to the existing `.claude/commands/claude-issue-pickup.md` entry: no open `claude_check.v1` queue item (check (2) above), because removing the pickup would strand pending checks. |
+| §18.F registry | One new entry in `docs/scripts-pending-removal.md` (P1), shown below in that file's per-entry block format, plus one added preflight check on the existing Claude issue pickup entry. |
+
+The P1 PR adds this entry to `docs/scripts-pending-removal.md`, filling in its
+PR number and merge date:
+
+```markdown
+### `.github/workflows/claude_check_resume.yml` + `.github/workflows/internal-claude-check-resume.yml` + `workflow-templates/ai-claude-check-resume.yml` + `scripts/claude_check.py` + `scripts/llm_external_seam.sh`
+
+- **Introduced in:** #<P1 PR> (<merge date>)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually (or sooner, once every phase is back on `gpt` in every repo)
+- **Removal preflight checks:**
+  - For this repo and every repo in `.github/ai/consumer_repos.json`, `gh variable list --repo <repo>` shows `SECURITY_PASS_ENGINE`, `VALIDATION_ENGINE`, `CHECK_TRIAGE_ENGINE` and `WORKFLOW_HEAL_ENGINE` all explicitly `gpt`.
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=open&per_page=100"` returns no issue whose title starts with `[claude-issue-queue] check `.
+  - `rg -n 'llm_seam_run' scripts/` returns only the seam's own definition, once the call sites are removed in the same PR.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
+- **Owner:** @shubhodeep1
+```
+
+The same PR adds one preflight check to the existing
+`.claude/commands/claude-issue-pickup.md` entry, because removing the pickup
+would strand pending checks:
+
+```markdown
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=open&per_page=100"` returns no issue whose title starts with `[claude-issue-queue] check ` (no pending `claude_check.v1` item).
+```
 
 ## Goals
 
