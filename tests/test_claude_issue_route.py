@@ -736,6 +736,60 @@ def test_cli_queue_pending_fetches_the_queue_and_its_bindings(tmp_path):
 	assert subprocess.run(cmd, capture_output=True, text=True, env=gh["env"]).returncode == 3
 
 
+@pytest.mark.parametrize(("stuck", "started"), [(2, True), (3, False)])
+def test_cli_stuck_unbound_items_do_not_starve_a_bound_item(tmp_path, stuck, started):
+	# Unbound items stay open for the watchdog. With --limit 1 the pickup reads
+	# the runs of the first QUEUE_BINDING_SCAN_FACTOR (3) targets, so up to two
+	# stuck targets cannot defer the bound one behind them; a third can.
+	assert route.QUEUE_BINDING_SCAN_FACTOR == 3
+	bin_dir = tmp_path / "ghbin"
+	bin_dir.mkdir()
+	items, runs, artifacts = [], [], []
+	for k in range(stuck + 1):
+		run_id = k + 1
+		item = _queue_item(10 + k, _validated(number=20 + k))
+		item["body"] = item["body"].replace("/runs/1", f"/runs/{run_id}")
+		items.append(item)
+		# Stuck runs never listed their item; the last run bound it.
+		listed = {10 + k: item} if k == stuck else {999: item}
+		(tmp_path / f"zip_{500 + run_id}").write_bytes(_binding_zip(listed, run_id=run_id))
+		runs.append(_producer_run(run_id=run_id))
+		artifacts.append({"id": 500 + run_id, "name": route.QUEUE_BINDING_ARTIFACT, "expired": False, "size_in_bytes": 400, "workflow_run": {"id": run_id}})
+	(tmp_path / "queue.json").write_text(json.dumps(items))
+	(tmp_path / "runs.json").write_text(json.dumps({"workflow_runs": runs}))
+	(tmp_path / "artifacts.json").write_text(json.dumps({"artifacts": artifacts}))
+	_write_stub(
+		bin_dir / "gh",
+		f"""case "$2" in
+  *"issues?labels=ai:claude-issue-queue"*) cat "{tmp_path}/queue.json" ;;
+  *"claude-issue-intake.yml/runs"*) cat "{tmp_path}/runs.json" ;;
+  *"review_autofix_sweep.yml/runs"*) echo '{{"workflow_runs": []}}' ;;
+  *"actions/artifacts?name="*) cat "{tmp_path}/artifacts.json" ;;
+  *"/compare/"*"...refs/heads/main?per_page=1") echo ahead ;;
+  *"/zip") id="${{2#*artifacts/}}"; cat "{tmp_path}/zip_${{id%/zip}}" ;;
+  "repos/shubhodeep1/coding-workflows") echo main ;;
+  *) echo "HTTP 404" >&2; exit 1 ;;
+esac
+""",
+	)
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	cmd = [sys.executable, str(ROOT / "scripts" / "claude_issue_route.py"), "queue-pending", "--fetch-repo", "shubhodeep1/coding-workflows", "--registry", str(registry), "--limit", "1"]
+	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "PYTHONDONTWRITEBYTECODE": "1"}
+	out = subprocess.run(cmd, capture_output=True, text=True, env=env)
+	assert out.returncode == 0, out.stderr
+	result = json.loads(out.stdout)
+	bound_target = 20 + stuck
+	stuck_reasons = [i["reason"] for i in result["ignored"]]
+	if started:
+		assert [e["issue_number"] for e in result["pending"]] == [bound_target]
+		assert stuck_reasons == [f"unbound: run {k + 1} did not queue this issue" for k in range(stuck)]
+		assert result["deferred"] == 0
+	else:
+		assert result["pending"] == [] and result["deferred"] == 1 and result["remaining"] == 1
+		assert len(stuck_reasons) == stuck
+
+
 # --- queue binding (issue #4621) -----------------------------------------------------------
 
 

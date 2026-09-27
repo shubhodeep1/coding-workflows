@@ -7,7 +7,7 @@ Before this fix, the pickup trusted a queue issue because `github-actions[bot]` 
 | --- | --- |
 | Producer workflows and events trusted | `claude-issue-intake.yml` (`repository_dispatch`, `workflow_dispatch`), `review_autofix_sweep.yml` (`schedule`, `workflow_dispatch`), default branch only |
 | Binding artifact | `claude-issue-queue-binding`, uploaded with `if: always()`, kept 30 days |
-| Pickup API reads per wake with items open | 1 queue read + 4 shared reads + 1 compare read and 1 artifact download per completed producer run (per-run fallbacks when a listing misses) |
+| Pickup API reads per wake with items open | 1 queue read + 4 shared reads + 1 compare read and 1 artifact download per completed producer run of the first 30 targets (per-run fallbacks when a listing misses) |
 | New env vars (with defaults) | `CLAUDE_ISSUE_QUEUE_BINDING_FILE`, `CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE` |
 
 What this means for operators: nothing to configure. Queue items opened before this change carry no binding, so the pickup refuses them and the watchdog flags them after `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (default 3). For an issue item, comment `/reclarify` on the target issue: the intake rewrites and re-binds the queue item. For a PR-fix item, close the stale queue issue, and the next hourly sweep queues a fresh, bound one. Consumer repos need no change.
