@@ -302,3 +302,23 @@ def test_verify_activation_documents_both_scopes(commands_dir: Path) -> None:
 	assert "## Scope" in text
 	for token in ("`conformance`", "`activation`", "CONFORMANT", "Scope: full / conformance / activation"):
 		assert token in text
+
+
+@pytest.mark.parametrize("commands_dir", COMMAND_COPIES)
+def test_verify_activation_documents_fix_check_scope(commands_dir: Path) -> None:
+	text = " ".join((commands_dir / "verify-activation.md").read_text(encoding="utf-8").split())
+	assert "`— scope fix-check #<PR>[, #<PR>…]`" in text
+	assert "| `fix-check` |" in text and "FIX-VERIFIED / FIX-DEFECTIVE | none |" in text
+	assert "this scope opens no fix PR, so it cannot start another audit round" in text
+	assert "Outside fix-check scope (fix-check scope only;" in text
+	assert "Scope: full / conformance / activation / fix-check <PR refs>" in text
+
+
+@pytest.mark.parametrize("commands_dir", COMMAND_COPIES)
+def test_verify_activation_audits_sibling_paths(commands_dir: Path) -> None:
+	text = " ".join((commands_dir / "verify-activation.md").read_text(encoding="utf-8").split())
+	assert "- **Sibling paths** —" in text
+	assert "every template, prompt, config, or variant the code selects between" in text
+	assert "every child process that inherits an environment variable" in text
+	# The audit list keeps plan conformance first and sibling paths right after it.
+	assert text.index("- **Plan conformance** —") < text.index("- **Sibling paths** —") < text.index("- **Security first")

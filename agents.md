@@ -786,7 +786,10 @@ to a session-local cron. Every stage (a
 phase, a review round, the conformance
 audit (`/verify-activation — scope conformance`, run after the last phase
 and before the security pass, and again after any Claude-written
-validation fix), a security or validation read, the completion PR, the
+validation fix; at most 3 runs, and when the third opens a fix PR that PR
+gets one narrower `/verify-activation — scope fix-check #<PR>` of its own
+diff instead of a fourth audit, blocking only when the fix itself is
+defective), a security or validation read, the completion PR, the
 final merge, a `/verify-activation — scope activation` cycle, the
 `/deploy-activate` hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
