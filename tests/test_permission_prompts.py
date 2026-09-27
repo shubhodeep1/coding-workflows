@@ -261,6 +261,12 @@ def test_new_pattern_opens_a_routed_issue_with_marker(tmp_path, issues):
 	assert "session `session_abc`" in body["body"] and "needs approval" in body["body"]
 
 
+def test_issue_guidance_works_without_the_gh_api_guard_and_warns_about_protected_paths():
+	body = pp.issue_body({"signature": "0" * 12, "event": "PermissionRequest", "tool_name": "Bash", "shape": "ls", "count": 1, "reasons": [], "first_ts": "t", "last_ts": "t", "example": "ls"}, 1, "s1")
+	assert "where the repository has one" in body and "when it exists" in body
+	assert "CLAUDE.md §28.C" in body and "Status: BLOCKED" in body
+
+
 def test_existing_issue_gets_a_comment_even_when_closed(tmp_path, issues):
 	directory = _log(tmp_path, [_payload("ls -la")])
 	sig = pp.group_patterns(pp.load_records(directory))[0]["signature"]

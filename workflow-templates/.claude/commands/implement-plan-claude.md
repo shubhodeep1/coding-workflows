@@ -139,7 +139,7 @@ If step 2 fails, archive the new session (`archive_session`) and treat the start
 
 ## Helpers
 
-Stage sessions run unattended, so every GitHub write this command needs has one allowlisted command (CLAUDE.md §23.H–§23.I). Do not replace a helper with a hand-built shell pipeline, loop, `$(...)`, or heredoc: those stop the session at a permission prompt or an Auto-mode denial.
+Stage sessions run unattended, so every GitHub write this command needs has one allowlisted command (CLAUDE.md §23.I). Do not replace a helper with a hand-built shell pipeline, loop, `$(...)`, or heredoc: those stop the session at a permission prompt or an Auto-mode denial.
 
 ### Dispatch helper
 

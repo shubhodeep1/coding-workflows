@@ -93,6 +93,52 @@ def test_times_out_without_a_new_run(fake):
 	assert sleeps == [dw.POLL_INTERVAL_SECONDS] * 3
 
 
+def test_poll_failure_after_the_post_reports_dispatched_true(fake, monkeypatch):
+	# The run exists once the POST succeeded: a failed read afterwards must never
+	# look like a failed dispatch, or the caller dispatches a duplicate run.
+	github = fake([[_run(1)]])
+	calls = {"n": 0}
+
+	def flaky_find(repo, workflow, known_ids):
+		calls["n"] += 1
+		raise dw.check_in_status.ReadError("proxy 502")
+
+	monkeypatch.setattr(dw, "find_new_run", flaky_find)
+	code, result = dw.dispatch("o/r", "security-audit.yml", "main", {}, 90, sleep=lambda _s: None)
+	assert code == 2
+	assert result["dispatched"] is True
+	assert "proxy 502" in result["error"] and "before dispatching again" in result["error"]
+	assert len(github.dispatches) == 1 and calls["n"] == 1
+
+
+def test_read_failure_before_the_post_reports_dispatched_false(monkeypatch, capsys):
+	def boom(path):
+		raise dw.check_in_status.ReadError("proxy 403")
+
+	posted = []
+	monkeypatch.setattr(dw.check_in_status, "gh_api", boom)
+	monkeypatch.setattr(dw, "_post_dispatch", lambda *args: posted.append(args))
+	assert dw.main(["--repo", "o/r", "--workflow", "security-audit.yml", "--ref", "main"]) == 2
+	assert json.loads(capsys.readouterr().out)["dispatched"] is False
+	assert posted == []
+
+
+def test_main_keeps_dispatched_true_on_a_failed_poll(fake, monkeypatch, capsys):
+	fake([[_run(1)]])
+
+	def flaky_find(repo, workflow, known_ids):
+		raise dw.check_in_status.ReadError("proxy 502")
+
+	monkeypatch.setattr(dw, "find_new_run", flaky_find)
+	monkeypatch.setattr(dw.time, "sleep", lambda _s: None)
+	assert dw.main(["--repo", "o/r", "--workflow", "security-audit.yml", "--ref", "main"]) == 2
+	assert json.loads(capsys.readouterr().out)["dispatched"] is True
+
+
+def test_payload_file_is_written_as_utf8():
+	assert 'NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")' in SCRIPT_PATH.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("workflow", ["release.yml", "../security-audit.yml", "security-audit.yml/../x", ""])
 def test_refuses_workflows_outside_the_allowlist(fake, workflow):
 	github = fake([[]])

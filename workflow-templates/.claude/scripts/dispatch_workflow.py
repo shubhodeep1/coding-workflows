@@ -31,8 +31,9 @@ API calls (CLAUDE.md §15), all REST:
 Prints one JSON line. Exit 0 with `run_id`, `html_url`, `status`,
 `created_at` when the new run was found; exit 1 when the workflow is not
 allowlisted or an argument is invalid; exit 2 when a call failed or no new
-run appeared before the timeout (the dispatch may still have happened, and
-`dispatched` says whether the POST succeeded).
+run appeared before the timeout. On exit 2, `dispatched` says whether the
+POST succeeded: once it is `true`, a failed or timed-out poll never means
+"dispatch again", because the run already exists.
 """
 
 from __future__ import annotations
@@ -98,7 +99,7 @@ def _post_dispatch(repo: str, workflow: str, ref: str, inputs: dict[str, str]) -
 	body: dict[str, object] = {"ref": ref}
 	if inputs:
 		body["inputs"] = inputs
-	with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as payload_file:
+	with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as payload_file:
 		json.dump(body, payload_file)
 		payload_path = payload_file.name
 	try:
@@ -144,10 +145,20 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 			raise check_in_status.ReadError(f"could not read the default branch of {repo}")
 	known_ids = recent_run_ids(repo, workflow)
 	_post_dispatch(repo, workflow, ref, inputs)
+	# From here on the run exists (or will), so every failure reports
+	# `dispatched: true`: a caller must look for the run, never dispatch again.
 	attempts = max(1, timeout_seconds // POLL_INTERVAL_SECONDS)
 	for attempt in range(attempts):
 		sleep(POLL_INTERVAL_SECONDS)
-		run = find_new_run(repo, workflow, known_ids)
+		try:
+			run = find_new_run(repo, workflow, known_ids)
+		except (check_in_status.ReadError, KeyError, TypeError) as exc:
+			return 2, {
+				"dispatched": True,
+				"workflow": workflow,
+				"ref": ref,
+				"error": f"dispatched, but reading the new {workflow} run failed ({exc}); check `gh run list --workflow={workflow}` before dispatching again",
+			}
 		if run is not None:
 			return 0, {
 				"dispatched": True,
