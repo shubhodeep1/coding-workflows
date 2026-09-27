@@ -127,6 +127,40 @@ def test_patch_sends_body_as_json(monkeypatch):
 	assert captured["body"] == {"body": "hello `x` $y"}
 
 
+def test_payload_file_is_removed_after_a_failed_patch(monkeypatch):
+	seen = []
+
+	class Proc:
+		returncode = 1
+		stdout = ""
+		stderr = "gh: Not Found (HTTP 404)"
+
+	def fake_run(argv, **kwargs):
+		seen.append(argv[argv.index("--input") + 1])
+		return Proc()
+
+	monkeypatch.setattr(ec.subprocess, "run", fake_run)
+	with pytest.raises(ec.check_in_status.ReadError):
+		ec._patch_comment("o/r", 5, "hello")
+	assert len(seen) == 1 and not Path(seen[0]).exists()
+
+
+def test_payload_file_is_removed_when_serialisation_fails(monkeypatch):
+	created = []
+	real = ec.tempfile.NamedTemporaryFile
+
+	def tracking(*args, **kwargs):
+		handle = real(*args, **kwargs)
+		created.append(handle.name)
+		return handle
+
+	monkeypatch.setattr(ec.tempfile, "NamedTemporaryFile", tracking)
+	monkeypatch.setattr(ec.subprocess, "run", lambda *a, **k: pytest.fail("gh must not run"))
+	with pytest.raises(ec.check_in_status.ReadError):
+		ec._patch_comment("o/r", 5, object())
+	assert len(created) == 1 and not Path(created[0]).exists()
+
+
 @pytest.mark.parametrize("path", SETTINGS_PATHS)
 def test_settings_allow_the_helper(path):
 	allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]

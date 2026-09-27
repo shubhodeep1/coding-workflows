@@ -32,8 +32,11 @@ Prints one JSON line. Exit 0 with `run_id`, `html_url`, `status`,
 `created_at` when the new run was found; exit 1 when the workflow is not
 allowlisted or an argument is invalid; exit 2 when a call failed or no new
 run appeared before the timeout. On exit 2, `dispatched` says whether the
-POST succeeded: once it is `true`, a failed or timed-out poll never means
-"dispatch again", because the run already exists.
+POST may have reached GitHub: once it is `true`, a failed or timed-out poll
+never means "dispatch again", because the run already exists or may exist.
+A POST that timed out, got a 5xx, or failed without an HTTP status counts as
+`true`, since GitHub can accept it before the failure; only a POST GitHub
+refused with a 4xx, or one `gh` could not start, reports `false`.
 """
 
 from __future__ import annotations
@@ -95,27 +98,44 @@ def find_new_run(repo: str, workflow: str, known_ids: set[int]) -> dict | None:
 	return max(new_runs, key=lambda run: run["id"])
 
 
+class DispatchUnconfirmed(check_in_status.ReadError):
+	"""The dispatch POST failed in a way GitHub may still have accepted it."""
+
+
+# `gh api` ends an HTTP error with `(HTTP <status>)`; a 4xx means GitHub
+# refused the request, so no run was created.
+_HTTP_CLIENT_ERROR_RE = re.compile(r"\(HTTP 4\d\d\)")
+
+
 def _post_dispatch(repo: str, workflow: str, ref: str, inputs: dict[str, str]) -> None:
+	"""POST the dispatch; raise ReadError when refused, DispatchUnconfirmed when it may have landed."""
 	body: dict[str, object] = {"ref": ref}
 	if inputs:
 		body["inputs"] = inputs
-	with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as payload_file:
-		json.dump(body, payload_file)
-		payload_path = payload_file.name
+	payload_file = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+	payload_path = payload_file.name
 	try:
+		with payload_file:
+			json.dump(body, payload_file)
 		proc = subprocess.run(
 			["gh", "api", "-X", "POST", f"repos/{repo}/actions/workflows/{workflow}/dispatches", "--input", payload_path],
 			capture_output=True,
 			text=True,
 			timeout=60,
 		)
-	except (OSError, subprocess.TimeoutExpired) as exc:
+	except subprocess.TimeoutExpired as exc:
+		raise DispatchUnconfirmed(f"dispatch of {workflow} timed out: {exc}") from exc
+	except (OSError, TypeError, ValueError) as exc:
 		raise check_in_status.ReadError(f"dispatch of {workflow} failed: {exc}") from exc
 	finally:
 		Path(payload_path).unlink(missing_ok=True)
 	if proc.returncode != 0:
-		detail = (proc.stderr or proc.stdout).strip().splitlines()
-		raise check_in_status.ReadError(f"dispatch of {workflow} failed: {detail[-1] if detail else f'exit {proc.returncode}'}")
+		output = (proc.stderr or proc.stdout).strip()
+		detail = output.splitlines()
+		message = f"dispatch of {workflow} failed: {detail[-1] if detail else f'exit {proc.returncode}'}"
+		if _HTTP_CLIENT_ERROR_RE.search(output):
+			raise check_in_status.ReadError(message)
+		raise DispatchUnconfirmed(message)
 
 
 def parse_inputs(pairs: list[str]) -> dict[str, str]:
@@ -144,7 +164,15 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 		if not ref:
 			raise check_in_status.ReadError(f"could not read the default branch of {repo}")
 	known_ids = recent_run_ids(repo, workflow)
-	_post_dispatch(repo, workflow, ref, inputs)
+	try:
+		_post_dispatch(repo, workflow, ref, inputs)
+	except DispatchUnconfirmed as exc:
+		return 2, {
+			"dispatched": True,
+			"workflow": workflow,
+			"ref": ref,
+			"error": f"the dispatch may have reached GitHub ({exc}); check `gh run list --workflow={workflow}` before dispatching again",
+		}
 	# From here on the run exists (or will), so every failure reports
 	# `dispatched: true`: a caller must look for the run, never dispatch again.
 	attempts = max(1, timeout_seconds // POLL_INTERVAL_SECONDS)

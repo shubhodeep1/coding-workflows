@@ -1000,7 +1000,11 @@ reviews, comments, and conflicts stay a direct §12 request.
     run that was not there before. Replaces `gh workflow run` +
     `gh run list -L 1`, which could return the previous run. Exit 0 with
     `run_id`, 1 on a refused workflow or bad argument, 2 on a failed call or
-    timeout.
+    timeout. On exit 2, `dispatched` is `false` only when GitHub refused the
+    POST with a 4xx or `gh` could not start; a POST that timed out, got a
+    5xx, or failed without an HTTP status reports `true`, like a failed or
+    timed-out poll, so the caller checks `gh run list` instead of
+    dispatching a duplicate.
   - `.claude/scripts/edit_comment.py --repo --comment-id (--replacements
     FILE | --body-file FILE) [--dry-run]`: one read and one PATCH; each
     `old` must occur exactly once or nothing is written.

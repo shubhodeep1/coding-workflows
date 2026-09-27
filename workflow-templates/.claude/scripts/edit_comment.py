@@ -81,17 +81,18 @@ def apply_replacements(body: str, pairs: list[tuple[str, str]]) -> str:
 
 
 def _patch_comment(repo: str, comment_id: int, body: str) -> dict:
-	with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as payload_file:
-		json.dump({"body": body}, payload_file)
-		payload_path = payload_file.name
+	payload_file = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+	payload_path = payload_file.name
 	try:
+		with payload_file:
+			json.dump({"body": body}, payload_file)
 		proc = subprocess.run(
 			["gh", "api", "-X", "PATCH", f"repos/{repo}/issues/comments/{comment_id}", "--input", payload_path],
 			capture_output=True,
 			text=True,
 			timeout=60,
 		)
-	except (OSError, subprocess.TimeoutExpired) as exc:
+	except (OSError, TypeError, ValueError, subprocess.TimeoutExpired) as exc:
 		raise check_in_status.ReadError(f"PATCH of comment {comment_id} failed: {exc}") from exc
 	finally:
 		Path(payload_path).unlink(missing_ok=True)

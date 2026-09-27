@@ -135,6 +135,72 @@ def test_main_keeps_dispatched_true_on_a_failed_poll(fake, monkeypatch, capsys):
 	assert json.loads(capsys.readouterr().out)["dispatched"] is True
 
 
+def _failing_post(monkeypatch, *, returncode=1, stderr="", raises=None):
+	"""Make `gh api -X POST` fail; return the list of payload paths it was handed."""
+	seen = []
+
+	class Proc:
+		stdout = ""
+
+	def fake_run(argv, **kwargs):
+		seen.append(argv[argv.index("--input") + 1])
+		if raises is not None:
+			raise raises
+		proc = Proc()
+		proc.returncode = returncode
+		proc.stderr = stderr
+		return proc
+
+	monkeypatch.setattr(dw.subprocess, "run", fake_run)
+	return seen
+
+
+@pytest.mark.parametrize(
+	"failure",
+	[
+		{"raises": dw.subprocess.TimeoutExpired(["gh"], 60)},
+		{"stderr": "gh: Server Error (HTTP 502)"},
+		{"stderr": "Post \"https://api.github.com/...\": connection reset by peer"},
+	],
+)
+def test_post_that_may_have_landed_reports_dispatched_true(monkeypatch, capsys, failure):
+	# GitHub can accept the POST before a timeout, a 5xx or a dropped
+	# connection, so the caller must look for the run, not dispatch again.
+	monkeypatch.setattr(dw.check_in_status, "gh_api", lambda path: {"workflow_runs": [_run(1)]})
+	seen = _failing_post(monkeypatch, **failure)
+	assert dw.main(["--repo", "o/r", "--workflow", "security-audit.yml", "--ref", "main"]) == 2
+	result = json.loads(capsys.readouterr().out)
+	assert result["dispatched"] is True
+	assert "may have reached GitHub" in result["error"] and "before dispatching again" in result["error"]
+	assert len(seen) == 1 and not Path(seen[0]).exists()
+
+
+@pytest.mark.parametrize("failure", [{"stderr": "gh: Unexpected inputs provided: [\"x\"] (HTTP 422)"}, {"raises": FileNotFoundError("gh")}])
+def test_post_github_refused_or_never_sent_reports_dispatched_false(monkeypatch, capsys, failure):
+	monkeypatch.setattr(dw.check_in_status, "gh_api", lambda path: {"workflow_runs": [_run(1)]})
+	seen = _failing_post(monkeypatch, **failure)
+	assert dw.main(["--repo", "o/r", "--workflow", "security-audit.yml", "--ref", "main"]) == 2
+	assert json.loads(capsys.readouterr().out)["dispatched"] is False
+	assert len(seen) == 1 and not Path(seen[0]).exists()
+
+
+def test_payload_file_is_removed_when_serialisation_fails(monkeypatch):
+	created = []
+	real = dw.tempfile.NamedTemporaryFile
+
+	def tracking(*args, **kwargs):
+		handle = real(*args, **kwargs)
+		created.append(handle.name)
+		return handle
+
+	monkeypatch.setattr(dw.tempfile, "NamedTemporaryFile", tracking)
+	monkeypatch.setattr(dw.subprocess, "run", lambda *a, **k: pytest.fail("gh must not run"))
+	with pytest.raises(dw.check_in_status.ReadError) as excinfo:
+		dw._post_dispatch("o/r", "security-audit.yml", "main", {"key": object()})
+	assert not isinstance(excinfo.value, dw.DispatchUnconfirmed)
+	assert len(created) == 1 and not Path(created[0]).exists()
+
+
 def test_payload_file_is_written_as_utf8():
 	assert 'NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")' in SCRIPT_PATH.read_text(encoding="utf-8")
 
