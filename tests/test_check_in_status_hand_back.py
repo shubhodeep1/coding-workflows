@@ -346,6 +346,7 @@ def test_a_collaborators_forged_claims_do_not_reach_the_cap(monkeypatch, capsys)
 def test_the_workflow_accounts_sweep_reservation_counts(monkeypatch, capsys):
 	reservation = _claim(kind="blocked", by="sweep-run-77", login="workflow-bot")
 	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, [reservation])
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "workflow-bot")
 	_, out = _run(capsys)
 	assert out["state"] == "claimed" and out["claim"]["by"] == "sweep-run-77" and out["hand_backs"] == 1
 
@@ -364,6 +365,7 @@ def test_without_a_pr_author_only_the_workflow_account_counts(monkeypatch, capsy
 	pr = _pr(labels=[{"name": "ai:review-blocked"}])
 	del pr["user"]
 	_stub(monkeypatch, {"repos/o/r/pulls/7": pr}, comments)
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "workflow-bot")
 	_, out = _run(capsys)
 	assert out["state"] == "claimed" and out["claim"]["by"] == "sweep-run-5"
 
