@@ -226,12 +226,26 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `ai:claude-issue-queue` issue in coding-workflows (title
     `[claude-issue-queue] <repo>#<N>`, body = marker + fixed-key payload, no
     issue prose), opened with the job's `GITHUB_TOKEN` so no workflow reacts;
-    an open item for the same target is reused. The **Claude issue pickup**
+    an open item for the same target is reused, its body rewritten with the
+    fresh payload and this run's URL. Each producer run (the intake, and the
+    `claude-pr-catch-all` sweep job) records every item it opens or rewrites
+    (number, exact title and payload) in `CLAUDE_ISSUE_QUEUE_BINDING_FILE` /
+    `CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE` (default under the run's temp dir)
+    and uploads it as the `claude-issue-queue-binding` artifact
+    (`if: always()`, 30 days); the pickup starts an item only when the run
+    named by its `Intake run:` / `Sweep run:` line is a completed
+    default-branch run of that producer workflow and event (a
+    `workflow_dispatch` head must be on the default branch) and its artifact
+    lists the item unchanged, and the body must be exactly the producer's
+    rendering of that payload and run, so an edited queue issue is refused (#4621;
+    fails closed: `unbound`, `binding_mismatch`, `binding_untrusted`,
+    `binding_pending`, `binding_unavailable` under `ignored`). The **Claude issue pickup**
     (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 3,
     woken hourly by the cron trigger `Claude issue pickup: hourly` bound to
     itself (no new session per wake, so no lineage-depth growth), reads the
     queue with
-    `claude_issue_route.py queue-pending --fetch-repo` (one REST read; only
+    `claude_issue_route.py queue-pending --fetch-repo` (one queue read plus
+    the batched binding reads `fetch_queue_bindings` documents; only bound
     items by `github-actions[bot]` for registered repos; ≤ 10 per wake),
     starts one Opus session per target issue via `claude-issue-dispatch.md`
     step 2, and closes the queue issues with a `Dispatched:` line (no
