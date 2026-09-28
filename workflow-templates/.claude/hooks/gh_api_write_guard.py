@@ -30,7 +30,8 @@ otherwise) and classifies the call:
              hook.
   write    — everything else, and any call the guard cannot read (unknown flag,
              missing or extra endpoint, a method-override header, or `gh api`
-             that could run hidden: inside a `$(...)` / backtick word, handed
+             that could run hidden: inside a backtick or double-quoted `$(...)`
+             substitution Bash would run (single-quoted text is data), handed
              to an executor such as `bash -c`, `sudo`, `xargs`, `python3`, or
              in a heredoc fed to one). Forces the permission prompt, in every
              permission mode. `gh api` text handed to any other command
@@ -341,11 +342,70 @@ def gh_api_invocations(segments: list[list[str]]) -> list[list[str]]:
 	return invocations
 
 
-def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool, str]]) -> bool:
+def substitution_bodies(command: str) -> list[str]:
+	"""Return the bodies of the command substitutions Bash would run inside one word.
+
+	Covers backtick substitutions anywhere outside single quotes and `$(...)`
+	inside double quotes; the tokenizer keeps both inside a single token, so
+	their commands never reach a segment of their own. An unquoted `$(...)` is
+	left out because the tokenizer already splits it into its own segments.
+	Single-quoted text is data: Bash expands nothing in it. An unterminated
+	substitution runs to the end of the command, so it still counts.
+	"""
+	bodies: list[str] = []
+	single_quoted = False
+	double_quoted = False
+	index = 0
+	length = len(command)
+	while index < length:
+		character = command[index]
+		if character == "\\" and not single_quoted:
+			index += 2
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+			index += 1
+			continue
+		if single_quoted:
+			index += 1
+			continue
+		if character == '"':
+			double_quoted = not double_quoted
+			index += 1
+			continue
+		if character == "`":
+			end = index + 1
+			while end < length and command[end] != "`":
+				end += 2 if command[end] == "\\" else 1
+			bodies.append(command[index + 1 : end])
+			index = end + 1
+			continue
+		if double_quoted and command.startswith("$(", index):
+			depth = 1
+			end = index + 2
+			while end < length and depth:
+				if command[end] == "\\":
+					end += 2
+					continue
+				if command[end] == "(":
+					depth += 1
+				elif command[end] == ")":
+					depth -= 1
+				end += 1
+			bodies.append(command[index + 2 : end - 1 if depth == 0 else length])
+			index = end
+			continue
+		index += 1
+	return bodies
+
+
+def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool, str]], command: str | None = None) -> bool:
 	"""True when a `gh api` call could run without being a direct invocation.
 
-	Counts as hidden: `gh api` inside a `$(...)` or backtick substitution
-	within one word; `gh api` text passed to an executor command (`bash -c`,
+	Counts as hidden: `gh api` inside a substitution Bash would run within one
+	word (`substitution_bodies(command)`; without `command`, any token holding
+	`$(` or a backtick next to `gh api`, the older reading that also flags
+	single-quoted text); `gh api` text passed to an executor command (`bash -c`,
 	`sudo`, `xargs`, `python3 -c`, ...) or to a command word that is itself an
 	expansion; `gh api` words behind any other prefix; and a heredoc body
 	that mentions `gh api` when it feeds an executor or, with an unquoted
@@ -359,6 +419,8 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 			return True
 		if not quoted and re.search(r"\$\(|`", body):
 			return True
+	if command is not None and any(_RAW_GH_API_RE.search(body) for body in substitution_bodies(command)):
+		return True
 	for tokens in segments:
 		index = _command_word_index(tokens)
 		if index >= len(tokens):
@@ -367,7 +429,8 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 		direct = index + 1 < len(tokens) and _is_gh(command_word) and tokens[index + 1] == "api"
 		executor = os.path.basename(command_word) in _EXECUTOR_COMMANDS or command_word.startswith("$")
 		for position, token in enumerate(tokens):
-			if _RAW_GH_API_RE.search(token) and ("$(" in token or "`" in token or executor):
+			substitution_word = command is None and ("$(" in token or "`" in token)
+			if _RAW_GH_API_RE.search(token) and (substitution_word or executor):
 				return True
 			if (
 				not direct
@@ -664,7 +727,7 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	except ValueError:
 		return DECISION_ASK, "gh api guard (CLAUDE.md §23.H): the command could not be parsed, so its gh api call is treated as a write."
 	invocations = gh_api_invocations(segments)
-	if has_hidden_gh_api(segments, heredocs):
+	if has_hidden_gh_api(segments, heredocs, stripped_command):
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): a gh api call could run hidden inside a $(...) or backtick word, "
 			"an executor (bash -c, sudo, xargs, python3, ...), or a heredoc fed to one, so it is treated as a "

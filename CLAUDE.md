@@ -1316,7 +1316,7 @@ and classifies it:
 |---|---|---|
 | read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion | not prompted by the hook |
 | routine | a §23.B write to the local checkout's repository (or `{owner}/{repo}`): create a PR; edit a PR's or issue's `title`/`body`; add or edit an issue or PR comment; reply to a review thread; add or remove one label; request reviewers; dispatch (`ref`, `inputs` only) one of the workflows `.claude/settings.json` already allows as `gh workflow run <file> *` (§23.C command-invoked carve-out) | not prompted by the hook |
-| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input`, a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a `$(...)` or backtick word, handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode |
+| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input`, a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a backtick or double-quoted `$(...)` substitution Bash would run — single-quoted text is data — handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode |
 
 The hook decides once for the whole Bash call: **ask** when any call is a
 write; **allow** when every call is a read or routine and the command

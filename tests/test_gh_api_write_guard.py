@@ -235,6 +235,11 @@ ASK_CALLS = {
 	"write in loop": "for n in 1 2; do gh api -X PATCH repos/shubhodeep1/coding-workflows/issues/$n -f state=closed; done",
 	"unquoted substitution": "echo $(gh api -X DELETE repos/shubhodeep1/coding-workflows/git/refs/heads/x)",
 	"quoted substitution": "echo \"$(gh api -X DELETE repos/a/b)\"",
+	"unquoted backtick": "echo `gh api -X DELETE repos/a/b`",
+	"backtick assignment": "x=`gh api -X DELETE repos/a/b`",
+	"double-quoted backtick": "echo \"`gh api -X DELETE repos/a/b`\"",
+	"backtick inside quoted substitution": "echo \"$(echo `gh api -X DELETE repos/a/b`)\"",
+	"unterminated backtick": "echo `gh api -X DELETE repos/a/b",
 	"substitution in field": "gh api repos/{owner}/{repo}/issues/1/comments -f body=\"$(gh api -X DELETE repos/a/b)\"",
 	"bash -c": "bash -c 'gh api -X DELETE repos/a/b'",
 	"sudo": "sudo gh api -X DELETE repos/a/b",
@@ -269,6 +274,12 @@ NO_DECISION_COMMANDS = [
 	"git commit -F- <<'EOF'\nmention gh api -X DELETE here\nEOF",
 	"git commit -m \"$(cat <<'EOF'\nDocument gh api -X DELETE\nEOF\n)\"",
 	"echo $(gh api repos/a/b --jq .id)",
+	# Single-quoted text is data: Bash runs no substitution inside it.
+	"sed -i 's|^- Last note: .*|- Last note: `gh api user` = me|' docs/log.md && git add docs/log.md",
+	"f=docs/log.md && sed -i 's|a|`gh api user`|' $f && git commit -q -m \"docs\" && git push -q origin b 2>&1 | tail -2",
+	"git commit -m 'uses `gh api user` to check auth'",
+	"echo 'later: $(gh api -X DELETE repos/a/b)'",
+	"git commit -m \"see \\`gh api user\\` in the docs\"",
 	"gh api repos/a/b/pulls/$n --jq .title",
 	"gh api -X PATCH repos/shubhodeep1/coding-workflows/pulls/1 -F body=@\"$F\"",
 	"gh api -X GET search/issues -f 'q=repo:a/b is:open' > /tmp/out.json",
@@ -564,3 +575,22 @@ def test_seed_repo_command_ships_the_hook():
 
 def test_ci_runs_this_file():
 	assert "tests/test_gh_api_write_guard.py" in CI_WORKFLOW.read_text(encoding="utf-8")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Substitution scanning (quote-aware)
+# ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("command, bodies", [
+	("echo `a b`", ["a b"]),
+	("echo '`a b`'", []),
+	("echo \"`a b`\"", ["a b"]),
+	("echo \"$(a (b) c)\" d", ["a (b) c"]),
+	("echo $(a b)", []),
+	("echo '$(a b)' \"$(c)\"", ["c"]),
+	("echo \\`a\\` b", []),
+	("echo `a", ["a"]),
+	("echo \"$(a", ["a"]),
+])
+def test_substitution_bodies_follow_bash_quoting(command, bodies):
+	assert guard.substitution_bodies(command) == bodies
