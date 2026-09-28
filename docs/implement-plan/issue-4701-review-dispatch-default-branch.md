@@ -3,26 +3,26 @@
 - Plan: docs/plans/issue-4701-review-dispatch-default-branch-plan.md
 - Source issue: shubhodeep1/coding-workflows#4701 (https://github.com/shubhodeep1/coding-workflows/issues/4701)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4618-sweep-dispatch-default-branch
-- Project branch: claude/implement-plan-issue-4701-review-dispatch-default-branch   Final PR: (opening)
+- Project branch: claude/implement-plan-issue-4701-review-dispatch-default-branch   Final PR: #4709 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (opened with this commit; number in the stage report and the checker's resume block)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: project branch opened from the #4618 project branch (AD-1)
+- Last note: phase 1 implemented and verified (unit + poller-harness tests, mutation checks, ShellCheck, actionlint, yamllint); phase PR opened
 
 ## Phases
-1. [ ] Phase 1 — default-branch dispatch at the remaining sites, plus PR-named run lookups
-   - [ ] `_dispatch_review_for_conflicts`, `_mt_dispatch_review`, and the forward-merge fallback dispatch without `--ref`, with a validated PR number
-   - [ ] `workflow-templates/ai-review.yml` names dispatched runs `AI Review [pr:<N>]`
-   - [ ] `_pr_named_review_dispatch_runs` helper; `_has_active_autofix_run` uses it
-   - [ ] stall-judge `workflow_outcomes` matches PR-named runs from the cached blob
-   - [ ] retrigger failed-autofix lookup: PR-named fallback (AD-6)
-   - [ ] empty-commit push guards see PR-named runs (AD-7)
-   - [ ] merge-train release sees `pr:<N>` keys (AD-9)
-   - [ ] tests, `agents.md`, `README.md`, `changelog.d/4701-review-dispatch-default-branch.md`
+1. [ ] Phase 1 — default-branch dispatch at the remaining sites, plus PR-named run lookups   — PR open (waiting); review rounds: 0; interventions: 0
+   - [x] `_dispatch_review_for_conflicts`, `_mt_dispatch_review`, and the forward-merge fallback dispatch without `--ref`, with a validated PR number
+   - [x] `workflow-templates/ai-review.yml` names dispatched runs `AI Review [pr:<N>]`
+   - [x] `_pr_named_review_dispatch_runs` helper; `_has_active_autofix_run` uses it
+   - [x] stall-judge `workflow_outcomes` matches PR-named runs from the cached blob
+   - [x] retrigger failed-autofix lookup: PR-named fallback (AD-6)
+   - [x] empty-commit push guards see PR-named runs (AD-7)
+   - [x] merge-train release sees `pr:<N>` keys (AD-9)
+   - [x] tests, `agents.md`, `README.md`, `changelog.d/4701-review-dispatch-default-branch.md`
 
 ## Conformance
 
@@ -47,7 +47,9 @@
 - AD-10 [plan, 2026-09-28] Add a PR `run-name` to `review_autofix.yml`? — Picked: A — no. Alternatives: B — yes. Why: it is the last-resort candidate, and the file is the 451 KB reusable workflow (§5, §27). Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] Moving a workflow dispatch off a head ref makes every head_branch-keyed run lookup blind to it; audit the empty-commit push guards and the stall judge along with the active-run dedupe, not only the lookups a finding names. (files: scripts/orchestrate_poll_process.sh, scripts/review_merge_train.sh)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #4701; start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
 - Security pass: `security_pass_skip.py` returned `skip: false` (no skip label), so the pass runs.
+- Local verification: this container lacks `gawk`; 40 tests in 5 unrelated modules (`test_review_issue_ledger`, `test_review_reject_verify`, `test_review_parse_consolidator`, `test_review_pipeline_integration`, `test_implement_post_codex_recovery`) fail here identically with and without this change. ShellCheck on the whole 1 MB poller is killed for memory here, so the changed functions were checked extracted.
