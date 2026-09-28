@@ -1,29 +1,33 @@
 # Implement-Plan Log — Bind review rejection votes to per-run finding IDs, so quoted REJECTED_FINDING text cannot demote a finding
 
-- Plan: docs/plans/issue-4688-bind-rejection-votes-to-finding-ids-plan.md
+- Plan: docs/completed/issue-4688-bind-rejection-votes-to-finding-ids-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4688
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason
 - Project branch: claude/implement-plan-issue-4688-bind-rejection-votes-to-finding-ids   Final PR: #4694 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1
-- Activation: not started
-- Waiting on: phase 1 PR (the PR that carries this log commit)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason)
+- Waiting on: completion PR (this PR)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_016skxAuXUH313JGNkv1KTVt (reused)   safety net and hand-back in the completion stage report
 - Last updated: 2026-09-28
-- Last note: phase 1 implemented and verified (CI pytest step 173 passed incl. changelog contract tests; ruff and shellcheck clean); phase PR opened against the project branch.
+- Last note: validation skipped (Q1: A, operator, 2026-09-28); plan moved to docs/completed/ in the completion PR; next: final-merge 1/1.
 
 ## Phases
-1. [ ] Phase 1 — ID-bound rejection votes (issuer, header, gate, resume persistence, docs, tests)   — PR open (waiting); review rounds: 0; interventions: 0
+1. [x] Phase 1 — ID-bound rejection votes (issuer, header, gate, resume persistence, docs, tests)   — PR #4699 merged 2026-09-28; review rounds: 0; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-28: CONFORMANT — no fixes (pre-security; security skipped). 114 footprint tests and 213 contract tests pass; tests/inventory_parity.py and tests/review_autofix_step_scripts.py pass; bash -n on the 4 edited shell scripts and ruff clean. The #4688 exploit demotes the finding on the base's gate and not on the new one.
 
 ## Security pass
 - Skipped: plan header `Security pass: skip (ai:security: automation-produced issue)`.
 
 ## Validation
+- Skipped — Q1: A (operator, 2026-09-28, on #4688): validate.yml binds target_ref only to a final PR into the default branch, and this issue-mode project's final PR #4694 targets claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason. The change reaches main only through #4586's final PR #4593, whose chain runs its own security pass and validation. Long-term fix tracked in #4734.
 
 ## Completion
+- Completion PR (this PR) — doc moved to docs/completed/issue-4688-bind-rejection-votes-to-finding-ids-plan.md
+- Final PR #4694 draft (into claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason)
 
 ## Activation
 
@@ -44,3 +48,4 @@
 - Issue mode (CLAUDE.md §28.A); started by the Claude issue dispatcher in session session_01REL9XiCRyzMYVeALbEuUdc.
 - Issue progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4688#issuecomment-5862298363
 - No phase touches `.claude/**`, so no protected-path approval is needed.
+- Blocked at validation 1/3 on 2026-09-28 (validate.yml cannot bind target_ref to a non-default-base final PR); operator answered Q1: A on #4688 the same day and the chain resumed from the pickup (session session_01KpcwqY8KZFhDwCstrkKtUt).
