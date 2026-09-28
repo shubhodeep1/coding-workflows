@@ -989,8 +989,8 @@ def _cmd_arm_check_in_request(args: argparse.Namespace) -> int:
 		return 2
 	try:
 		# load_allowed_repos already maps an unreadable or malformed registry
-		# to the self repo only; it sits inside the try so any future error
-		# still ends in the documented exit 2, never a traceback.
+		# to the self repo only, so the only error this block raises today is
+		# parse_arm_check_in_request's ValueError, which ends in exit 2.
 		allowed = load_allowed_repos(Path(args.registry), args.self_repo)
 		print(json.dumps(parse_arm_check_in_request(text, allowed)))
 	except ValueError as exc:
