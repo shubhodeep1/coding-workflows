@@ -99,6 +99,18 @@ def test_security_skip_labels_match_router(issue_cmd, plan_cmd):
 		assert f"`{label}`" in plan_cmd
 
 
+def test_security_skip_is_verified_not_label_only(issue_cmd, plan_cmd):
+	# Issue #4623: a label anyone can add must not switch the security pass off.
+	assert "A label alone never skips the security pass" in issue_cmd
+	assert "`PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/security_pass_skip.py --repo <owner>/<repo> --issue <N>`" in issue_cmd
+	assert "Only when it prints `\"skip\": true` write `Security pass: skip (<label>: automation-produced issue)`" in issue_cmd
+	assert "including a non-zero exit, keeps `Security pass: run`" in issue_cmd
+	assert "Never decide this from the labels yourself." in issue_cmd
+	assert "instead when the issue carries" not in issue_cmd
+	assert "that `.claude/scripts/security_pass_skip.py` verifies as automation-produced" in plan_cmd
+	assert "A label alone never sets it (issue #4623)." in plan_cmd
+
+
 def test_issue_command_resumes_before_writing(issue_cmd):
 	assert "4. **Resume, never duplicate.**" in issue_cmd
 	assert issue_cmd.index("Resume, never duplicate") < issue_cmd.index("Write the single-phase plan")

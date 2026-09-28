@@ -1268,7 +1268,21 @@ poller's standalone stall recovery skip issues that carry `ai:claude` without
 `STALL_SKIP … reason=claude_routed`). Orchestrator issues never reach the
 router. Automation-produced issues (`ai:security`, `ai:check-triage`,
 `ai:workflow-heal`) go to Claude too, but skip their own security pass so a
-security fix cannot spawn follow-ups of follow-ups.
+security fix cannot spawn follow-ups of follow-ups. The label alone is not
+enough, because anyone who can label an issue could add one (#4623):
+`/implement-issue-claude` runs `.claude/scripts/security_pass_skip.py`. It
+allows the skip only when all of the following hold:
+
+- the issue was created by `github-actions[bot]` or the repository `OWNER`
+  account the audit, triage and heal workflows post as;
+- that account applied the label within 120 seconds of creation;
+- the body carries the producer's marker (`<!-- ai:security-finding:… -->`,
+  `<!-- check-failure-triage:fp=… -->`, `<!-- workflow-failure-heal:fp=… -->`);
+- for `ai:security`, `Refs #<tracker>` names the `ai:security-audit` tracker
+  created by the same account.
+
+If any check or read fails, the security pass runs. The check costs at most
+three REST reads.
 
 **Switching.**
 
