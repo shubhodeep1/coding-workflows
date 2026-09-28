@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Validation-pipeline changes often span workflow bootstrap, validation scripts, and template rendering.",
   "timestamps": {
     "created_at": "2026-09-28T13:14:58Z",
