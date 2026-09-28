@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:~381-407 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `$(...)` scanner does not account for nested backtick substitutions, so a `)` inside a backtick substitution can prematurely terminate scanning of the outer substitution.\n  WHY: This can truncate the scanned body and miss a later `gh api` write; reviewers disagree on impact, with Google Gemini rating it BLOCKER and Minimax rating it NIT because the `_outside_single_quotes` backstop catches the described case.\n- tests/test_gh_api_write_guard.py:235-247 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `test_simple_read_or_routine_call_is_allowed` appears to include known hidden `gh api` calls (e.g., `echo `gh api ...``) that should be blocked, not allowed.\n  WHY: If the guard incorrectly allows these cases, hidden `gh api` commands will be permitted without a permission prompt.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/gh_api_write_guard.py: `substitution_bodies` function, inside `$(...)` scanning loop (lines ~381-397) | severity=BLOCKER | confidence=5\n  PROBLEM: The scanner for `$(...)` command substitutions does not account for nested command substitutions using backticks. When a backtick substitution is present inside a `$(...)` body, it can contain a `)` character, which the current scanner will treat as the end of the outer `$(...)` substitution.\n  WHY: An attacker or a complex command could prematurely terminate the `$(...)` body scanner, hiding subsequent `gh api` commands from the guard and bypassing the permission prompt.\n- tests/test_gh_api_write_guard.py: `test_simple_read_or_routine_call_is_allowed` (lines 235-247) | severity=MAJOR | confidence=4\n  PROBLEM: The test function `test_simple_read_or_routine_call_is_allowed` appears to include test cases that are known hidden `gh api` calls (e.g., `echo `gh api ...``), which should be blocked, not allowed.\n  WHY: If the guard incorrectly allows these cases (or if the test is incorrectly asserting they are allowed), then hidden `gh api` commands will be permitted without a permission prompt, circumventing the security guard.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/gh_api_write_guard.py: substitution_bodies() `$(...)` inner loop, lines 390-407 | severity=NIT | confidence=3\n  PROBLEM: A nested backtick substitution inside a `$(...)` body is not recognized. A `)` inside `\\``...`` (e.g. `echo \"$(echo \\`x)\\`; gh api)\"`) is treated as the closing `)` because the inner loop only tracks single/double quote state and parenthesis depth, not backtick state.\n  WHY: The body scanner returns an early-truncated body that misses a later `gh api` write. The `_outside_single_quotes` backstop on lines 469-473 catches the case whenever `gh api` appears outside single quotes and a real substitution exists, so the bypass is non-fatal, but it is a defensive completeness gap. This matches the deepseek_deepseek-v4-pro finding from cross-pollination (labelled \"defensive completeness rather than a demonstrated bypass\").\n- .claude/hooks/gh_api_write_guard.py: substitution_bodies() `$(...)` inner loop, lines 390-407 | severity=NIT | confidence=3\n  PROBLEM: When a `$(...)` substitution contains an unclosed single quote (e.g. `echo \"$(echo ')'; b)\"` at test_gh_api_write_guard.py:597), the inner_single state is toggled to True at the `'` but never toggled back. Subsequent `)` characters are then skipped by the `elif not inner_single and not inner_double:` branch (lines 399-403), so depth never decrements and the inner loop runs until `end >= length`.\n  WHY: With depth still equal to 1 at loop exit, the body formula on line 405 (`command[index + 2 : end - 1 if depth == 0 else length]`) takes the `else length` branch, yielding `command[8:20]` (12 characters `echo ')'; b\"`) for the test input, but the test parametrizes the expected body as `[\"echo ')'; b\"]` (10 characters, without the trailing `)\"`). Bash itself rejects this input as an unterminated single quote, so neither result is \"correct\" in a Bash-faithful sense, but the test asserts the 10-character body, so the parametrized case at tests/test_gh_api_write_guard.py:597 will fail unless the test is run with the legacy default that never reaches this branch, or unless there is additional logic not visible in the file.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2dfff9f8db939827bf89bf4cd862c2c2563728793a6b567ed2700c2d26a2eb0e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4704,
+    "run_id": "36388936106",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36388936106",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928075946_7cce184a4b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4704,
+    "run_id": "36388936106"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T07:59:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
