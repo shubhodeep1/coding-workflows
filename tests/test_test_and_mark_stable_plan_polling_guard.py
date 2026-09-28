@@ -3,15 +3,281 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import tempfile
 from pathlib import Path
+
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 
+ISSUE_NUMBER = "4712"
+ISSUE_TITLE = "[E2E Smoke Test] Update smoke-test canary (run 1)"
+CREATED_AFTER = "2026-09-28T03:46:08Z"
+
+# Stub `gh`: serves the issue labels, an empty comment list, and the
+# actions/runs pages from STUB_RUN_PAGES (a JSON list of pages); applies --jq
+# with the real jq; logs every call to STUB_GH_LOG.
+STUB_GH = r'''#!/usr/bin/env python3
+import json, os, re, subprocess, sys
+args = sys.argv[1:]
+with open(os.environ["STUB_GH_LOG"], "a", encoding="utf-8") as log:
+	log.write(json.dumps(args) + "\n")
+if not args or args[0] != "api":
+	sys.exit(1)
+path = args[1]
+jq_filter = args[args.index("--jq") + 1] if "--jq" in args else None
+issue_path = "repos/" + os.environ["TEST_REPO"] + "/issues/" + os.environ["ISSUE_NUMBER"]
+if path == issue_path:
+	# STUB_LABELS until STUB_LABELS_SWITCH_AFTER issue reads, then STUB_LABELS_LATER.
+	with open(os.environ["STUB_GH_LOG"], encoding="utf-8") as log:
+		issue_reads = sum(1 for line in log if json.loads(line)[1:2] == [issue_path])
+	labels = os.environ["STUB_LABELS"]
+	if os.environ.get("STUB_LABELS_SWITCH_AFTER") and issue_reads > int(os.environ["STUB_LABELS_SWITCH_AFTER"]):
+		labels = os.environ["STUB_LABELS_LATER"]
+	payload = {"labels": [{"name": name} for name in labels.split(",") if name]}
+elif path.startswith(issue_path + "/comments"):
+	payload = []
+elif "/actions/runs?" in path and os.environ.get("STUB_UNPAGED_RUNS_INVALID") and "&page=" not in path:
+	# The other-active check's page-1 read (fetch_plan_runs_json) is the only
+	# runs request without &page=; this makes just that read unreadable.
+	payload = {"workflow_runs": None}
+elif "/actions/runs?" in path:
+	pages = json.loads(open(os.environ["STUB_RUN_PAGES"], encoding="utf-8").read())
+	match = re.search(r"[?&]page=(\d+)", path)
+	page = int(match.group(1)) if match else 1
+	payload = {"workflow_runs": pages[page - 1] if page <= len(pages) else []}
+else:
+	sys.stderr.write("stub gh: unexpected path " + path + "\n")
+	sys.exit(1)
+text = json.dumps(payload)
+if jq_filter is not None:
+	text = subprocess.run(["jq", "-r", jq_filter], input=text, capture_output=True, text=True, check=True).stdout.rstrip("\n")
+sys.stdout.write(text)
+'''
+
 
 def _read_workflow() -> str:
 	return WORKFLOW.read_text(encoding="utf-8")
+
+
+def _wait_plan_script() -> str:
+	doc = yaml.safe_load(_read_workflow())
+	for step in doc["jobs"]["e2e-smoke-test"]["steps"]:
+		if step.get("id") == "wait-plan":
+			return step["run"].replace("${{ steps.create-issue.outputs.created_after }}", CREATED_AFTER)
+	raise AssertionError("wait-plan step not found")
+
+
+def _run(run_id: int, name: str = "Internal: AI Plan", title: str = ISSUE_TITLE, conclusion: str | None = "success", status: str = "completed", created_at: str = "2026-09-28T03:50:56Z") -> dict:
+	return {"id": run_id, "name": name, "display_title": title, "conclusion": conclusion, "status": status, "created_at": created_at}
+
+
+def _noise_page(first_id: int, count: int = 100) -> list[dict]:
+	# The shape that pushed the real Plan run off page 1: skipped issue_comment
+	# runs of every workflow, including skipped Plan runs for this very issue.
+	return [
+		_run(first_id + i, name="Internal: AI Plan" if i % 2 else "Internal: AI Orchestrate Clarify Respond", conclusion="skipped", created_at="2026-09-28T03:56:40Z")
+		for i in range(count)
+	]
+
+
+def _run_wait_plan(pages: list[list[dict]], labels: str, labels_later: str | None = None, switch_after: int = 0, plan_phase_timeout: str = "60", unpaged_runs_invalid: bool = False) -> tuple[int, dict[str, str], list[list[str]], str]:
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir()
+		gh = bin_dir / "gh"
+		gh.write_text(STUB_GH, encoding="utf-8")
+		gh.chmod(0o755)
+		sleep = bin_dir / "sleep"
+		sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+		sleep.chmod(0o755)
+		pages_file = tmp_path / "pages.json"
+		pages_file.write_text(json.dumps(pages), encoding="utf-8")
+		log_file = tmp_path / "gh.log"
+		log_file.touch()
+		output_file = tmp_path / "github_output"
+		output_file.touch()
+		env = dict(os.environ)
+		env.update({
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			"TEST_REPO": "owner/repo",
+			"ISSUE_NUMBER": ISSUE_NUMBER,
+			"ISSUE_TITLE": ISSUE_TITLE,
+			"PLAN_PHASE_TIMEOUT": plan_phase_timeout,
+			"POLL_INTERVAL": "0",
+			"GITHUB_OUTPUT": str(output_file),
+			"STUB_GH_LOG": str(log_file),
+			"STUB_RUN_PAGES": str(pages_file),
+			"STUB_LABELS": labels,
+		})
+		if unpaged_runs_invalid:
+			env["STUB_UNPAGED_RUNS_INVALID"] = "1"
+		if labels_later is not None:
+			env["STUB_LABELS_LATER"] = labels_later
+			env["STUB_LABELS_SWITCH_AFTER"] = str(switch_after)
+		proc = subprocess.run(["bash", "-c", _wait_plan_script()], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60)
+		outputs: dict[str, str] = {}
+		for line in output_file.read_text(encoding="utf-8").splitlines():
+			key, _, value = line.partition("=")
+			outputs[key] = value
+		calls = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+		return proc.returncode, outputs, calls, proc.stdout + proc.stderr
+
+
+def _run_pages_requested(calls: list[list[str]]) -> list[str]:
+	return [call[1] for call in calls if "/actions/runs?" in call[1]]
+
+
+def test_plan_label_without_a_captured_run_id_fails_at_plan_capture() -> None:
+	# Issue #4723: the Plan label is present but the lookup finds no run.
+	rc, outputs, calls, log = _run_wait_plan([[_run(1, name="Internal: AI Clarify")]], "ai:awaiting-approval")
+	assert rc == 1, log
+	assert outputs.get("status") == "run_id_missing", outputs
+	assert "run_id" not in outputs, outputs
+	assert "::error::Issue #4712 reached ai:awaiting-approval but no non-skipped Plan run" in log
+	# A short window may still be missing a not-yet-indexed run, so the
+	# capture keeps its 5 attempts there: one status poll plus 5 one-page reads.
+	assert len(_run_pages_requested(calls)) == 1 + 5, _run_pages_requested(calls)
+
+
+def test_auto_approved_plan_without_a_captured_run_id_fails_at_plan_capture() -> None:
+	rc, outputs, _calls, log = _run_wait_plan([[]], "ai:implementing")
+	assert rc == 1, log
+	assert outputs.get("status") == "run_id_missing", outputs
+	assert "run_id" not in outputs, outputs
+
+
+def test_plan_run_past_the_first_page_is_found_by_paging() -> None:
+	# Run 36374918973: the Plan run sat behind ~100 newer skipped runs.
+	pages = [_noise_page(1000), _noise_page(2000, count=40) + [_run(777)]]
+	rc, outputs, calls, log = _run_wait_plan(pages, "ai:awaiting-approval")
+	assert rc == 0, log
+	assert outputs.get("run_id") == "777", outputs
+	assert outputs.get("status") == "success", outputs
+	requested = _run_pages_requested(calls)
+	# The status poll reads page 1 once; the capture reads pages 1 and 2.
+	assert [("&page=1&" in path, "&page=2&" in path) for path in requested] == [(True, False), (True, False), (False, True)], requested
+	assert all(f"created=>{CREATED_AFTER}" in path for path in requested), requested
+
+
+def test_paging_stops_at_the_page_holding_a_match() -> None:
+	pages = [[_run(555)], [_run(999, created_at="2026-09-28T03:40:00Z")]]
+	rc, outputs, calls, log = _run_wait_plan(pages, "ai:awaiting-approval")
+	assert rc == 0, log
+	assert outputs.get("run_id") == "555", outputs
+	assert not any("&page=2&" in path for path in _run_pages_requested(calls))
+
+
+def test_plan_run_for_another_issue_is_never_accepted() -> None:
+	pages = [[_run(999, title="[E2E Smoke Test alt-model] update canary (run 1)"), _run(998, conclusion="skipped")]]
+	rc, outputs, _calls, log = _run_wait_plan(pages, "ai:awaiting-approval")
+	assert rc == 1, log
+	assert outputs.get("status") == "run_id_missing", outputs
+	assert "run_id" not in outputs, outputs
+
+
+def test_paging_is_bounded() -> None:
+	pages = [_noise_page(1000 + 100 * i) for i in range(12)]
+	rc, outputs, calls, log = _run_wait_plan(pages, "ai:awaiting-approval")
+	assert rc == 1, log
+	assert outputs.get("status") == "run_id_missing", outputs
+	requested = _run_pages_requested(calls)
+	assert any("&page=10&" in path for path in requested), requested
+	assert not any("&page=11&" in path for path in requested), requested
+	# One single-page status poll, then one 10-page capture walk: a walk that
+	# read every full page up to the cap is not retried (PR #4730 review), and
+	# the per-poll cost stays one call (CLAUDE.md §15).
+	assert len(requested) == 1 + 10, len(requested)
+	assert "&page=1&" in requested[0] and "&page=1&" in requested[1] and "&page=2&" in requested[2], requested[:3]
+
+
+def _completed_plan_page(noise_first_id: int = 3000, extra: list[dict] | None = None) -> list[dict]:
+	# A full page 1 whose newest non-skipped Plan run for the issue completed,
+	# which sends the step into its "other active Plan runs" check.
+	runs = [_run(900, created_at="2026-09-28T03:56:50Z")] + (extra or [])
+	return runs + _noise_page(noise_first_id, count=100 - len(runs))
+
+
+def _active_check_pages_requested(calls: list[list[str]]) -> list[str]:
+	# The other-active check reads page 1 without &page= (fetch_plan_runs_json)
+	# and later pages with it; the poll and the capture always pass &page=.
+	requested = _run_pages_requested(calls)
+	return [path for path in requested if "&page=" not in path or not path.split("&page=")[1].startswith("1&")]
+
+
+def test_other_active_plan_run_past_the_first_page_keeps_the_step_waiting() -> None:
+	# PR #4730 review round 2: the real Plan run is older, still active, and
+	# sits behind 100 newer runs; a newer non-skipped Plan run has completed.
+	pages = [_completed_plan_page(), _noise_page(4000, count=40) + [_run(777, conclusion=None, status="in_progress")]]
+	rc, outputs, calls, log = _run_wait_plan(pages, "", labels_later="ai:awaiting-approval", switch_after=2)
+	assert rc == 0, log
+	assert outputs.get("status") == "success", outputs
+	assert "Found 1 other active Plan run(s)" in log, log
+	assert "Plan workflow completed but issue lacks expected labels" not in log, log
+	assert any("&page=2&" in path for path in _active_check_pages_requested(calls)), _run_pages_requested(calls)
+
+
+def test_other_active_check_stops_at_a_short_page_and_fails() -> None:
+	pages = [_completed_plan_page(), _noise_page(4000, count=40)]
+	rc, outputs, calls, log = _run_wait_plan(pages, "")
+	assert rc == 1, log
+	assert outputs.get("status") == "plan_failed", outputs
+	active_check = _active_check_pages_requested(calls)
+	assert len(active_check) == 2, active_check
+	assert "&page=" not in active_check[0] and "&page=2&" in active_check[1], active_check
+
+
+def test_other_active_check_is_bounded_by_the_page_cap() -> None:
+	pages = [_completed_plan_page()] + [_noise_page(4000 + 100 * i) for i in range(12)]
+	rc, outputs, calls, log = _run_wait_plan(pages, "")
+	assert rc == 1, log
+	assert outputs.get("status") == "plan_failed", outputs
+	active_check = _active_check_pages_requested(calls)
+	assert len(active_check) == 10, active_check
+	assert "&page=10&" in active_check[-1], active_check
+
+
+def test_other_active_plan_run_on_page_one_reads_one_page() -> None:
+	pages = [_completed_plan_page(extra=[_run(901, conclusion=None, status="in_progress")]), _noise_page(4000)]
+	rc, outputs, calls, log = _run_wait_plan(pages, "", labels_later="ai:awaiting-approval", switch_after=2)
+	assert rc == 0, log
+	assert "Found 1 other active Plan run(s)" in log, log
+	assert not any("&page=2&" in path for path in _run_pages_requested(calls)), _run_pages_requested(calls)
+
+
+def test_unreadable_later_page_retries_instead_of_failing() -> None:
+	pages = [_completed_plan_page(), None]
+	rc, outputs, calls, log = _run_wait_plan(pages, "", labels_later="ai:awaiting-approval", switch_after=2)
+	assert rc == 0, log
+	assert "Unable to confirm concurrent Plan runs on page 2 yet — retrying" in log, log
+	assert "Plan workflow completed but issue lacks expected labels" not in log, log
+
+
+def test_unreadable_later_page_fails_as_a_stall_after_the_inactivity_limit() -> None:
+	# PR #4730 review round 3: the retry `continue`s before the loop's own
+	# inactivity check, so it applies the limit itself instead of polling
+	# until the job's timeout-minutes. PLAN_PHASE_TIMEOUT=0 makes it due at once.
+	pages = [_completed_plan_page(), None]
+	rc, outputs, _calls, log = _run_wait_plan(pages, "", plan_phase_timeout="0")
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "Unable to confirm concurrent Plan runs on page 2 yet" in log, log
+	assert "::error::Plan phase stalled — no activity for 0 minutes while concurrent Plan runs could not be confirmed" in log, log
+
+
+def test_unreadable_first_page_fails_as_a_stall_after_the_inactivity_limit() -> None:
+	pages = [_completed_plan_page()]
+	rc, outputs, _calls, log = _run_wait_plan(pages, "", plan_phase_timeout="0", unpaged_runs_invalid=True)
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "Unable to confirm concurrent Plan runs yet" in log, log
+	assert "::error::Plan phase stalled — no activity for 0 minutes while concurrent Plan runs could not be confirmed" in log, log
 
 
 def test_other_active_plan_runs_avoids_inline_fallback_substitution() -> None:

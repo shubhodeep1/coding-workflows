@@ -18,7 +18,7 @@ Security pass: skip (ai:workflow-heal: automation-produced issue)
 
 ## Goals
 
-- `latest_scoped_run_field` finds the newest issue-scoped, non-skipped Plan run when it is on a later page of the `created=>` window. It walks pages, stops at the first page holding a match or at a short page, and is bounded to 10 pages.
+- `latest_scoped_run_field` finds the newest issue-scoped, non-skipped Plan run when it is on a later page of the `created=>` window. It walks pages, stops at the first page holding a match or at a short page, and is bounded to 10 pages. The 10-second status poll keeps its one-page read (AD-5).
 - The lookup still accepts only runs whose name matches the regex, whose `display_title` equals the issue title, and whose conclusion is not `skipped`. No unrelated run is ever accepted.
 - Both success exits of `wait-plan` (`status=success`, `status=auto_approved`) require a numeric Plan run ID. Without one the step emits `::error::…`, writes `status=run_id_missing`, and exits 1, so the gate reports `Plan ....... FAILED (run_id_missing)` at the Plan line.
 - A behavioural regression test runs the real `wait-plan` script against a stubbed `gh`. It covers the three cases: label present and no matching run (must fail at capture), matching run only on page 2 (must succeed with that ID), and a same-name run with a different title on page 1 (must not be accepted).
@@ -26,13 +26,13 @@ Security pass: skip (ai:workflow-heal: automation-produced issue)
 ## Non-goals
 
 - Clarify (`wait-clarify`) and Implement (`wait-implement`) run-ID capture. They share the single-page pattern but did not fail here (AD-1).
-- The `OTHER_ACTIVE_PLAN_RUNS` check in the `completed` branch keeps reading page 1 via `fetch_plan_runs_json`. Its existing shape-validation guard and tests are unchanged.
+- ~~The `OTHER_ACTIVE_PLAN_RUNS` check in the `completed` branch keeps reading page 1 via `fetch_plan_runs_json`.~~ Changed by AD-6 (PR #4730 review round 2): when page 1 holds no active run, the check walks later pages of the same query under the same shape guard and page cap. Its page-1 read, shape-validation guard, and existing tests are unchanged.
 - Deep verification and the final gate logic are unchanged. A missing ID must still fail the release.
 
 ## Constraints
 
 - §5 minimal change set. Only the `wait-plan` step body, its regression test, and a changelog fragment.
-- §6 naming immutability. Existing functions (`fetch_plan_runs_json`, `latest_scoped_run_field`, `capture_run_id`), outputs (`run_id`, `status`), and status values are kept. New identifiers (`fetch_plan_runs_page_json`, `PLAN_RUN_LOOKUP_MAX_PAGES`, `require_plan_run_id`, the status value `run_id_missing`) were checked for collisions in the workflow file.
+- §6 naming immutability. Existing functions (`fetch_plan_runs_json`, `latest_scoped_run_field`, `capture_run_id`), outputs (`run_id`, `status`), and status values are kept. New identifiers (`fetch_plan_runs_page_json`, `PLAN_RUN_LOOKUP_MAX_PAGES`, `require_plan_run_id`, `fail_plan_confirm_retry_if_idle` (AD-7), the status value `run_id_missing`) were checked for collisions in the workflow file.
 - §15 API hygiene. The common case stays at one call per poll (a match on page 1). Extra pages are read only while page 1 is full and holds no match, capped at 10 pages, which is also the ceiling of GitHub's 1,000-result list window.
 - §9 YAML stays 2-space. The Python test uses tabs.
 - §20 changelog fragment, since the release gate's failure mode changes.
@@ -87,6 +87,9 @@ Lands on `stable` through the project's final PR (the heal issue's `Target branc
 - AD-2 [plan, 2026-09-28] How to narrow or paginate the lookup? — Picked: A — bounded page walk (≤10 pages) of the existing scoped query, stopping at the first page with a match or a short page. Alternatives: B — per-workflow run list (`actions/workflows/<file>/runs`); C — keep one page and only fail earlier. Why: B needs a repo-specific workflow file and still overflows on skipped `issue_comment` runs; C turns one false block into another. Applied in: phase 1 PR. Status: pending review
 - AD-3 [plan, 2026-09-28] What does `wait-plan` report when no ID is found? — Picked: A — new status value `run_id_missing`, `::error::`, exit 1. Alternatives: B — reuse `status=plan_failed`. Why: the gate prints the status verbatim, so a distinct value names the cause, and every non-success value already fails the Plan line. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-09-28] Make the page cap configurable? — Picked: A — a step-local constant `PLAN_RUN_LOOKUP_MAX_PAGES=10`, no new env var. Alternatives: B — a new env var with default 10. Why: §5. 10 pages is GitHub's 1,000-result ceiling for this list, so a larger value buys nothing. Applied in: phase 1 PR. Status: pending review
+- AD-5 [phase 1/1, 2026-09-28] Should the 10-second status poll page through runs too? — Picked: A — no, the poll keeps reading one page (`latest_scoped_run_field "Plan" "status" 1`), and only the run-ID capture at the success exits pages. Alternatives: B — the poll pages like the capture (up to 10 calls per poll while no run matches, about 3,600 calls an hour); C — the poll reads 2 pages. Why: §15, since the poll is an activity signal and its per-poll cost stays one call as before. Applied in: phase 1 PR. Status: pending review
+- AD-6 [phase 1/1 — review round 2, 2026-09-28] Should the "other active Plan runs" check in `wait-plan` page past the first 100 runs, although the plan listed it as a Non-goal? — Picked: A — yes: when page 1 finds no active run, walk later pages of the same query with the same shape guard and `PLAN_RUN_LOOKUP_MAX_PAGES` cap, stopping at the first page with an active run or a short page. Alternatives: B — reject the review finding as out of scope. Why: an older, still-active real Plan run behind 100 newer runs is the #4723 false release block in the same step; the branch is rare (Plan completed without labels), so the extra reads stay bounded. Applied in: phase 1 PR (review round 2). Status: pending review
+- AD-7 [phase 1/1 — review round 3, 2026-09-28] How should the "unable to confirm concurrent Plan runs" retries in `wait-plan` be bounded, since they `continue` before the loop's inactivity check? — Picked: A — apply the existing inactivity limit inside both retries (page 1 and later pages): once no activity was seen for `PLAN_PHASE_TIMEOUT` minutes, fail with `status=timeout`. Alternatives: B — a new consecutive-retry counter; C — add exponential backoff around the retry. Why: §5, it reuses the step's own stall rule, and `gh_api_safe` already backs off on rate limits; the page-1 retry had the same gap on the base branch. Applied in: phase 1 PR (review round 3). Status: pending review
 
 ## Notes
 
