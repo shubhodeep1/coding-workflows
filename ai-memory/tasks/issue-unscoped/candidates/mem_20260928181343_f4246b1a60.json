@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_claude_fixer_mode.py:test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test intended to verify fail-closed behavior for a failed comment lookup may not exercise the branch because the mock serializes `None` as JSON `null`.\n  WHY: `jq` processes `null` as an empty list, which the lookup interprets as a successful empty result, so the fail-closed guard is never entered.\n- .github/workflows/review_autofix.yml:817, 1487 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `gate_fetch_marker_comments` is called redundantly on the same execution path.\n  WHY: The extra call incurs latency and unnecessary logic execution during skip-eligible `workflow_dispatch` events.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update documentation to correctly describe the skip behavior including both `AUTOFIX_SKIP_MAX_ADDITIONS` and `AUTOFIX_SKIP_MAX_DELETIONS`.\n  expected_change_site: README.md (CLAUDE_FIXER_ENABLED row)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The row in README.md (line 86) omits `AUTOFIX_SKIP_MAX_DELETIONS` in the cross-reference to deterministic skip settings, while the rest of the PR documentation consistently mentions both bounds.\n- requirement: Improve documentation parseability in agents.md regarding the Claude-fixer mode.\n  expected_change_site: agents.md line 98-101\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The added text describing the Claude-fixer mode contains a run-on sentence (\"...and also runs it). [claude-intervention] and ...\") that makes it difficult for operators to parse.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_claude_fixer_mode.py | severity=BLOCKER | confidence=5\n  PROBLEM: The test intended to verify fail-closed behavior for a failed comment lookup crashes before the gate subprocess starts, or fails to exercise the branch due to mock implementation.\n  WHY: The test setup passes `None` for `comments`, but the mock serializes this as JSON `null`. `jq` processes this as `[]` (empty list), which `gate_fetch_marker_comments` interprets as a successful empty lookup. Consequently, the fail-closed guard at review_autofix.yml:1488 (gate_marker_fetch_state != \"ok\") is never entered.\n- .github/workflows/review_autofix.yml:817 and 1487 | severity=NIT | confidence=4\n  PROBLEM: Redundant API calls for `gate_fetch_marker_comments` on the same execution path.\n  WHY: While the function is memoized, it still incurs latency and unnecessary logic execution during skip-eligible `workflow_dispatch` events.\n- Requirement: Update documentation to correctly describe the skip behavior including both `AUTOFIX_SKIP_MAX_ADDITIONS` and `AUTOFIX_SKIP_MAX_DELETIONS`.\n  Expected change site: README.md (CLAUDE_FIXER_ENABLED row)\n  Evidence of absence: The row in README.md (line 86) omits `AUTOFIX_SKIP_MAX_DELETIONS` in the cross-reference to deterministic skip settings, while the rest of the PR documentation consistently mentions both bounds.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: Improve documentation parseability in agents.md regarding the Claude-fixer mode.\n  Expected change site: agents.md line 98-101\n  Evidence of absence: The added text describing the Claude-fixer mode contains a run-on sentence (\"...and also runs it). [claude-intervention] and ...\") that makes it difficult for operators to parse.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d3c01a53c6dc4c5eef93258ce17f3df8a7c41c2b06be4045a5c9958ac8607bd8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36459027695",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36459027695",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928181343_f4246b1a60",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36459027695"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T18:13:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
