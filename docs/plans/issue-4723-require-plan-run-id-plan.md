@@ -18,7 +18,7 @@ Security pass: skip (ai:workflow-heal: automation-produced issue)
 
 ## Goals
 
-- `latest_scoped_run_field` finds the newest issue-scoped, non-skipped Plan run when it is on a later page of the `created=>` window. It walks pages, stops at the first page holding a match or at a short page, and is bounded to 10 pages.
+- `latest_scoped_run_field` finds the newest issue-scoped, non-skipped Plan run when it is on a later page of the `created=>` window. It walks pages, stops at the first page holding a match or at a short page, and is bounded to 10 pages. The 10-second status poll keeps its one-page read (AD-5).
 - The lookup still accepts only runs whose name matches the regex, whose `display_title` equals the issue title, and whose conclusion is not `skipped`. No unrelated run is ever accepted.
 - Both success exits of `wait-plan` (`status=success`, `status=auto_approved`) require a numeric Plan run ID. Without one the step emits `::error::…`, writes `status=run_id_missing`, and exits 1, so the gate reports `Plan ....... FAILED (run_id_missing)` at the Plan line.
 - A behavioural regression test runs the real `wait-plan` script against a stubbed `gh`. It covers the three cases: label present and no matching run (must fail at capture), matching run only on page 2 (must succeed with that ID), and a same-name run with a different title on page 1 (must not be accepted).
@@ -87,6 +87,7 @@ Lands on `stable` through the project's final PR (the heal issue's `Target branc
 - AD-2 [plan, 2026-09-28] How to narrow or paginate the lookup? — Picked: A — bounded page walk (≤10 pages) of the existing scoped query, stopping at the first page with a match or a short page. Alternatives: B — per-workflow run list (`actions/workflows/<file>/runs`); C — keep one page and only fail earlier. Why: B needs a repo-specific workflow file and still overflows on skipped `issue_comment` runs; C turns one false block into another. Applied in: phase 1 PR. Status: pending review
 - AD-3 [plan, 2026-09-28] What does `wait-plan` report when no ID is found? — Picked: A — new status value `run_id_missing`, `::error::`, exit 1. Alternatives: B — reuse `status=plan_failed`. Why: the gate prints the status verbatim, so a distinct value names the cause, and every non-success value already fails the Plan line. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-09-28] Make the page cap configurable? — Picked: A — a step-local constant `PLAN_RUN_LOOKUP_MAX_PAGES=10`, no new env var. Alternatives: B — a new env var with default 10. Why: §5. 10 pages is GitHub's 1,000-result ceiling for this list, so a larger value buys nothing. Applied in: phase 1 PR. Status: pending review
+- AD-5 [phase 1/1, 2026-09-28] Should the 10-second status poll page through runs too? — Picked: A — no, the poll keeps reading one page (`latest_scoped_run_field "Plan" "status" 1`), and only the run-ID capture at the success exits pages. Alternatives: B — the poll pages like the capture (up to 10 calls per poll while no run matches, about 3,600 calls an hour); C — the poll reads 2 pages. Why: §15, since the poll is an activity signal and its per-poll cost stays one call as before. Applied in: phase 1 PR. Status: pending review
 
 ## Notes
 
