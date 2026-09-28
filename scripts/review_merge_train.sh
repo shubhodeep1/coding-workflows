@@ -461,7 +461,9 @@ _mt_release() {
 			continue
 		fi
 		examined=$((examined + 1))
-		if [ -n "${inflight_review_branches}" ] && printf '%s\n' "${inflight_review_branches}" | grep -Fxq -e "${head}" -e "pr:${num}"; then
+		# An empty head is never a pattern: grep -Fx with "" matches a blank
+		# line, and a run whose head_branch is "" prints one.
+		if [ -n "${inflight_review_branches}" ] && printf '%s\n' "${inflight_review_branches}" | grep -Fxq -e "pr:${num}" ${head:+-e "${head}"}; then
 			_mt_log "MERGE_TRAIN_RELEASE_ACTIVE pr=${num} head=${head} action=leave_queued"
 			continue
 		fi

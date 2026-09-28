@@ -508,6 +508,35 @@ def test_release_ignores_pr_named_runs_of_other_prs_and_other_events(tmp_path: P
 	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
 
 
+def test_release_empty_head_does_not_match_blank_run_branch(tmp_path: Path) -> None:
+	"""An empty PR head is never a grep pattern, so a run with head_branch "" does not hold the PR."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
+		{
+			"status": "in_progress",
+			"head_branch": "",
+			"event": "pull_request",
+			"display_title": "AI Review",
+			"path": ".github/workflows/ai-review.yml",
+		},
+		{
+			"status": "in_progress",
+			"head_branch": "ai/issue-9999",
+			"event": "pull_request",
+			"display_title": "AI Review",
+			"path": ".github/workflows/ai-review.yml",
+		},
+	]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
 def test_release_dispatch_claim_prevents_concurrent_release(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	(fixtures / "pulls.json").write_text(json.dumps([

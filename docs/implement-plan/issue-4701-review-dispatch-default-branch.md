@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4618-sweep-dispatch-default-branch
 - Project branch: claude/implement-plan-issue-4701-review-dispatch-default-branch   Final PR: #4709 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (opened with this commit; number in the stage report and the checker's resume block)
+- Waiting on: PR #4725
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01QCiBCQixd1i5mfLmmr5NUQ   safety net / hand-back: in the stage report
 - Last updated: 2026-09-28
-- Last note: phase 1 implemented and verified (unit + poller-harness tests, mutation checks, ShellCheck, actionlint, yamllint); phase PR opened
+- Last note: review round 1 on PR #4725: fixed the merge-train empty-head grep match and documented the PR-named lookup's page coverage; rejected 4 findings with reasons on the PR
 
 ## Phases
-1. [ ] Phase 1 — default-branch dispatch at the remaining sites, plus PR-named run lookups   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — default-branch dispatch at the remaining sites, plus PR-named run lookups   — PR #4725 open (waiting); review rounds: 1; interventions: 0
    - [x] `_dispatch_review_for_conflicts`, `_mt_dispatch_review`, and the forward-merge fallback dispatch without `--ref`, with a validated PR number
    - [x] `workflow-templates/ai-review.yml` names dispatched runs `AI Review [pr:<N>]`
    - [x] `_pr_named_review_dispatch_runs` helper; `_has_active_autofix_run` uses it
@@ -48,6 +48,7 @@
 
 ## Lessons
 - [source:plan-deviation] Moving a workflow dispatch off a head ref makes every head_branch-keyed run lookup blind to it; audit the empty-commit push guards and the stall judge along with the active-run dedupe, not only the lookups a finding names. (files: scripts/orchestrate_poll_process.sh, scripts/review_merge_train.sh)
+- [source:intervention] Never pass a possibly-empty value to `grep -Fx -e`: an empty pattern matches a blank line of the haystack; add it with `${var:+-e "${var}"}`. (files: scripts/review_merge_train.sh)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #4701; start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.

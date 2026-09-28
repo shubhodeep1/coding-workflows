@@ -17389,7 +17389,11 @@ _has_active_autofix_run()
 # API calls: exactly one `gh run list --event workflow_dispatch --limit 100`.
 #            It has no --workflow filter, so one call covers both wrapper
 #            names in either kind of repo (§15). Callers issue it only after
-#            their head-branch lookups found nothing.
+#            their head-branch lookups found nothing. The page holds the
+#            newest 100 workflow_dispatch runs of every workflow (about
+#            2-3 hours in coding-workflows, 2026-09-28); review runs finish
+#            well inside that, and an older run that fell off the page is
+#            treated as absent, the behaviour before PR-named runs existed.
 # Fail-open: a gh or jq failure prints [], so the caller behaves as it did
 #            before PR-named runs existed.
 #
