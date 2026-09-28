@@ -1541,8 +1541,12 @@ through `clarify → plan → implement → review`.
   and the run summary's `finalize_reason`), sets `AUTOFIX_REVIEWERS_FAILED=true`
   and writes evidence (`workflow_failure_heal.py reviewer-failure-evidence`:
   each slot's last exit code, the summariser's,
+  `summariser_empty_stdout prefix=<prefix>` when a summariser attempt exited 0
+  with no final message (counted as exit 0),
   `dominant_rc`, and up to 10 error lines a support script prefixed with its own
-  name), which every fingerprint call site and the heal report read. The retry
+  name), which every fingerprint call site and the heal report read. The
+  failure-log artifact carries `summariser_pass1.log` / `summariser_review.log`
+  with each summariser attempt's stderr tail (issue #4653). The retry
   handling is unchanged: the same no-output comment, `AUTOFIX_EDITOR_EMPTY_NOOP=true`,
   no immediate `ai:review-blocked`. On PR #4323 every reviewer slot and the
   summariser exited 226 and the run was reported as an empty editor.
