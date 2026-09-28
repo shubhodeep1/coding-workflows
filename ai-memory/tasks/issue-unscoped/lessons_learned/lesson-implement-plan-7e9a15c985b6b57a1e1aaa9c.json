@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T03:23:40Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A run-time token that binds reviewer output to a gate must never be reused across workflow runs: reviewer outputs are uploaded as log artifacts, so a reused token can reach later reviewer context. Issue fresh tokens per prompt build and let cached votes lapse (fail toward blocking).",
+  "phase": "implement_plan",
+  "pr_number": 4699,
+  "record_id": "lesson-implement-plan-7e9a15c985b6b57a1e1aaa9c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4688-bind-rejection-votes-to-finding-ids",
+    "file:scripts/review_claude_fixer_nonblocking.py",
+    "file:scripts/review_run_reviewers.sh"
+  ]
+}
