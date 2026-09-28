@@ -2299,6 +2299,7 @@ if args[0] == 'api':
 				'body': pr.get('body', ''),
 				'base': {
 					'ref': pr.get('baseRefName', ''),
+					'repo': {'default_branch': store.get('default_branch', 'main')},
 				},
 				'head': {
 					'sha': pr.get('headSha', f'mocksha{pr_num}'),
@@ -14654,7 +14655,10 @@ def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		issue_labels={10: ["ai:ready-to-merge"]},
+		# Real orchestrator children carry ai:orchestrator-managed; the
+		# sweep's target-branch rule (issue #4813) accepts their merge into
+		# orchestrator/project-192 because of it.
+		issue_labels={10: ["ai:ready-to-merge", "ai:orchestrator-managed"]},
 		issue_linked_prs={10: 901},
 		prs=[merged_pr],
 		mock_gh_issue_list_label_filter=True,
@@ -14776,6 +14780,98 @@ def test_close_merged_issues_sweep_accepts_closing_body_reference_pr():
 	assert "CLOSE_MERGED_SWEEP issue=10 pr=951 origin=merged_label status=closed" in result["stdout"], (
 		"Missing CLOSE_MERGED_SWEEP closure log line in poller stdout"
 	)
+
+
+def _sweep_standalone_closing_pr(pr_number: int, base_ref: str, head_ref: str) -> dict:
+	"""A merged PR whose body carries a closing-keyword reference to #10,
+	so _pr_json_is_issue_implementation_pr accepts it and only the sweep's
+	target-branch rule (issue #4813) decides whether it closes the issue."""
+	return {
+		"number": pr_number,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-09-28T10:40:21Z",
+		"baseRefName": base_ref,
+		"headRefName": head_ref,
+		"headRefFromApi": head_ref,
+		"body": "Completion PR. After the final merge, the chain closes #10 explicitly.\n\nRefs #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+
+
+def test_close_merged_issues_sweep_leaves_issue_open_when_pr_merged_into_other_project_branch():
+	"""Issue #4813 / #4688 incident: a closing-keyword PR that merged into a
+	`claude/implement-plan-*` branch which is neither the default branch nor
+	the issue's declared integration branch must not close the issue. The
+	sweep logs rejected=non_target_base and falls through to the
+	merged_label no_merged_pr_found policy."""
+	project_pr = _sweep_standalone_closing_pr(
+		960,
+		"claude/implement-plan-issue-10-own-project",
+		"claude/implement-plan-issue-10-own-project-complete",
+	)
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_bodies={10: "Security follow-up.\n\n- Integration branch: `claude/implement-plan-issue-9-parent`\n"},
+		issue_linked_prs={10: 960},
+		prs=[project_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), (
+		f"A merge into another project branch must not close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=960 rejected=non_target_base "
+		"base=claude/implement-plan-issue-10-own-project default_branch=main "
+		"issue_base=claude/implement-plan-issue-9-parent"
+	) in result["stdout"], "Missing non_target_base rejection log line in poller stdout"
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label no_merged_pr_found" in (result["stdout"] + result["stderr"]), (
+		"Rejected base must fall through to the merged_label no_merged_pr_found policy"
+	)
+
+
+def test_close_merged_issues_sweep_closes_on_default_branch_merge():
+	"""Issue #4813: the same closing-keyword PR merged into the repository's
+	default branch still closes a standalone issue."""
+	default_pr = _sweep_standalone_closing_pr(961, "main", "claude/standalone-final")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 961},
+		prs=[default_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", []), (
+		f"A default-branch merge must close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=961 origin=merged_label status=closed" in result["stdout"]
+
+
+def test_close_merged_issues_sweep_closes_on_declared_integration_branch_merge():
+	"""Issue #4813: a merge into the branch the issue names on its
+	`Integration branch:` line (a security follow-up built on its parent
+	project's branch) is the issue's target and still closes it."""
+	integration_pr = _sweep_standalone_closing_pr(962, "claude/implement-plan-parent", "ai/issue-10-fix")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_bodies={10: "Security follow-up.\n\n- Integration branch: `claude/implement-plan-parent`\n"},
+		issue_linked_prs={10: 962},
+		prs=[integration_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", []), (
+		f"A merge into the declared integration branch must close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=962 origin=merged_label status=closed" in result["stdout"]
 
 
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():

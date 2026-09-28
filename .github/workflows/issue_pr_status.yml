@@ -188,6 +188,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_DEFAULT_BRANCH: ${{ github.event.pull_request.base.repo.default_branch }}
           PR_MERGED: ${{ github.event.pull_request.merged }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
@@ -199,6 +200,38 @@ jobs:
           TRACKING_ISSUES=""
           MANAGED_ISSUES=""
           ORCHESTRATOR_CLASSIFICATION_COMPLETE="true"
+          # Issue #4813: a merged PR finishes an issue only on the issue's
+          # target branch — the default branch (from the event payload,
+          # falling back to the `main` this gate hardcoded before), the
+          # branch the issue body names on its `Integration branch:` /
+          # `Target branch:` line, or any base for an orchestrator-managed
+          # child. ISSUE_INTEGRATION_BRANCHES holds `<issue>\t<branch>`
+          # lines built from issue bodies this step already fetches (no
+          # extra API call, §15).
+          DEFAULT_BRANCH_NAME="${PR_BASE_DEFAULT_BRANCH:-main}"
+          ISSUE_INTEGRATION_BRANCHES=""
+          if ! type issue_body_integration_branch >/dev/null 2>&1; then
+            # Older gh_helpers.sh: no parser, so only default-branch and
+            # managed-child merges count (fail closed).
+            issue_body_integration_branch() { :; }
+          fi
+
+          record_issue_integration_branches() {
+            local payload="$1"
+            local jq_nodes="$2"
+            local _rib_num _rib_body _rib_branch
+            while IFS= read -r _rib_num; do
+              [[ "${_rib_num}" =~ ^[0-9]+$ ]] || continue
+              _rib_body="$(printf '%s' "${payload}" | jq -r --argjson n "${_rib_num}" "[${jq_nodes} | select(.number == \$n) | (.body // \"\")] | first // \"\"" 2>/dev/null || echo "")"
+              _rib_branch="$(issue_body_integration_branch "${_rib_body}")"
+              [ -n "${_rib_branch}" ] || continue
+              ISSUE_INTEGRATION_BRANCHES+="${_rib_num}"$'\t'"${_rib_branch}"$'\n'
+            done < <(printf '%s' "${payload}" | jq -r "${jq_nodes} | .number" 2>/dev/null || true)
+          }
+
+          issue_integration_branch_for() {
+            printf '%s' "${ISSUE_INTEGRATION_BRANCHES}" | awk -F '\t' -v n="$1" '$1 == n { print $2; exit }'
+          }
 
           export_orchestrator_issue_classification() {
             echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
@@ -266,6 +299,9 @@ jobs:
 
           CLOSING_ISSUE_NUMBERS="$(printf '%s' "${CLOSING_ISSUES_RESP}" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[]?.number' 2>/dev/null || true)"
           ISSUE_NUMBERS="${CLOSING_ISSUE_NUMBERS}"
+          if [ -n "${CLOSING_ISSUE_NUMBERS}" ]; then
+            record_issue_integration_branches "${CLOSING_ISSUES_RESP}" '.data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null)'
+          fi
 
           if [ -n "${CLOSING_ISSUE_NUMBERS}" ]; then
             LOOKUP_COUNT="$(printf '%s\n' "${CLOSING_ISSUE_NUMBERS}" | awk 'NF' | wc -l | tr -d '[:space:]')"
@@ -400,6 +436,7 @@ jobs:
               ' 2>/dev/null || echo '')"
               TRACKING_ISSUES="$(merge_issue_number_list "${TRACKING_ISSUES}" "${_tracking_issues}")"
               MANAGED_ISSUES="$(merge_issue_number_list "${MANAGED_ISSUES}" "${_managed_issues}")"
+              record_issue_integration_branches "${ORCH_RESP}" '.data.repository | to_entries[] | .value | select(. != null)'
               ORCH_BATCH_FAILED=false
             fi
             if [ "${ORCH_BATCH_FAILED}" = true ]; then
@@ -421,6 +458,10 @@ jobs:
                   ORCHESTRATOR_CLASSIFICATION_COMPLETE="false"
                   TRACKING_ISSUES+="${_orch_num}"$'\n'
                   continue
+                fi
+                _orch_meta_branch="$(issue_body_integration_branch "$(printf '%s' "${_orch_meta}" | jq -r '.body // ""' 2>/dev/null || echo "")")"
+                if [ -n "${_orch_meta_branch}" ]; then
+                  ISSUE_INTEGRATION_BRANCHES+="${_orch_num}"$'\t'"${_orch_meta_branch}"$'\n'
                 fi
                 if printf '%s' "${_orch_meta}" | jq -e '((.labels // []) | index("ai:orchestrator-tracking")) != null' >/dev/null 2>&1; then
                   TRACKING_ISSUES+="${_orch_num}"$'\n'
@@ -447,11 +488,19 @@ jobs:
               is_managed_child=true
             fi
 
+            if [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${DEFAULT_BRANCH_NAME}" ] && [ "${is_managed_child}" != "true" ]; then
+              issue_target_branch="$(issue_integration_branch_for "${issue_number}")"
+              if [ -z "${issue_target_branch}" ] || [ "${PR_BASE_REF}" != "${issue_target_branch}" ]; then
+                echo "PR merged into ${PR_BASE_REF}, which is not issue #${issue_number}'s target branch (default ${DEFAULT_BRANCH_NAME}, integration ${issue_target_branch:-none}); leaving its labels and state unchanged."
+                continue
+              fi
+            fi
+
             echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
             set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"
 
-            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ] || [ "${is_managed_child}" = "true" ]; then
-              if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "main" ]; then
+            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${DEFAULT_BRANCH_NAME}" ] || [ "${is_managed_child}" = "true" ]; then
+              if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${DEFAULT_BRANCH_NAME}" ]; then
                 echo "Closing orchestrator-managed child issue #${issue_number} after PR #${PR_NUMBER} merged into ${PR_BASE_REF} (integration branch)."
               else
                 echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
