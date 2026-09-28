@@ -5,7 +5,7 @@
 - How it runs: on demand. `/implement-issue-claude` step 6 (`.claude/commands/implement-issue-claude.md:35`) runs `.claude/scripts/security_pass_skip.py` in every issue-mode session. In coding-workflows those sessions check out `main` and are started by the hourly `Claude issue pickup` routine. Consumers get the script and the command through `workflow-templates/.claude/`, synced by `ai-update-workflows.yml` → `update_workflows.yml@stable` (daily cron `0 4 * * *` plus the `@stable` `repository_dispatch`).
 - Status: IN_PROGRESS
 - Last updated: 2026-09-28
-- Last note: 2026-09-28: step 1 done. Step 3 waits for docs/deploy-activation/pr-4443.md steps 9a/9 (pr-4443 is BLOCKED at step 8; `stable` is still `d58d7bc` / tag `fade4be9`).
+- Last note: 2026-09-28: step 3 checked on the operator Mac: `stable` branch and tag still `d58d7bc` (v1.29.12) / `fade4be9`, no `security_pass_skip.py` and no `workflow-templates/.claude/commands/implement-issue-claude.md` on either. Waiting on docs/deploy-activation/pr-4443.md steps 9a/9 (still BLOCKED at step 8).
 
 ## Runbook
 1. [x] Prereqs: Homebrew, git, gh, jq, `gh auth login` (repo scope), clone or refresh `~/src/coding-workflows`   — done 2026-09-28: git 2.55.0, gh 2.101.0, jq 1.8.2 already installed; `gh api user` = shubhodeep1; `~/src/coding-workflows` fast-forwarded to main `677e8f6`; both `security_pass_skip.py` paths present
