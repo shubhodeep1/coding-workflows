@@ -1234,7 +1234,14 @@ mode).
    `scripts/claude_issue_handoff.sh` sends a `claude-issue`
    `repository_dispatch` to coding-workflows with `GH_PAT`.
 3. `claude-issue-intake.yml` (coding-workflows only) validates the repo
-   against `.github/ai/consumer_repos.json` plus coding-workflows, then queues
+   against `.github/ai/consumer_repos.json` plus coding-workflows and
+   authorizes the dispatch against live GitHub data (issue #4620). Every
+   dispatcher login of the run (`github.actor`, and `github.triggering_actor`
+   when it differs) must have `admin` or `write` on the target repo. The
+   target must be an open issue (not a pull request) in that repo. Its author
+   must pass clarify's gate (a `User` with `OWNER` / `MEMBER` /
+   `COLLABORATOR` association, or `github-actions[bot]`), or a trusted `User`
+   must have commented `/reclarify` on it. The intake then queues
    the issue as one `ai:claude-issue-queue` issue in coding-workflows
    (`scripts/claude_issue_intake.sh`), opened with the job's `GITHUB_TOKEN`
    so no workflow reacts to it, and comments "queued" on the issue. A repo
@@ -1293,9 +1300,16 @@ three REST reads.
 | Send one issue to Claude in a `codex` repo | Add `ai:claude`, then comment `/reclarify` |
 | Retry a failed handoff or resume a blocked issue | Comment `/reclarify` |
 
-**Failure modes.** A rejected dispatch, an unregistered repo, or a failed
-queue read or write labels the issue `ai:claude-handoff-failed`, comments how
-to retry or switch, and sends a Telegram ERROR. A queue item still open after
+**Failure modes.** A failed dispatch from the handoff, or a failed queue read
+or write in the intake, labels the issue `ai:claude-handoff-failed`, comments
+how to retry or switch, and sends a Telegram ERROR. An invalid payload
+(`invalid_payload`, an unregistered repo included) or a dispatch that fails
+authorization (reasons `dispatcher_unknown`, `dispatcher_not_authorized`,
+`target_not_issue`, `target_repo_mismatch`, `issue_closed`,
+`untrusted_issue_author`, or `authorization_read_failed` when a read fails)
+queues nothing and writes nothing to the target issue. It logs
+`CLAUDE_ISSUE_INTAKE rejected reason=…`, fails the intake run, and sends a
+Telegram ERROR; comment `/reclarify` to retry a legitimate issue. A queue item still open after
 `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (repo variable, default 3) means the pickup
 stopped: `claude-issue-queue-watchdog.yml` labels it
 `ai:claude-issue-queue-stale` and sends a Telegram ERROR with the restart

@@ -222,7 +222,20 @@ Phases of the unattended pipeline (each is a separate workflow file under
     A Claude route skips Codex clarify, claims the issue with `ai:claude`, and
     sends a `claude-issue` `repository_dispatch` (`claude_issue.v1`, ≤ 10
     top-level keys) to coding-workflows. The intake validates the repo against
-    `.github/ai/consumer_repos.json` plus coding-workflows and queues it as one
+    `.github/ai/consumer_repos.json` plus coding-workflows, then authorizes
+    it (#4620, `claude_issue_route.py authorize-target`): every dispatcher
+    login of the run (env `CLAUDE_ISSUE_DISPATCHER` = `github.actor`,
+    `CLAUDE_ISSUE_TRIGGERING_ACTOR` = `github.triggering_actor`, default empty
+    = refused) must have `admin`/`write` on the target repo (one
+    `collaborators/<login>/permission` read each), the target must be an open
+    issue in that repo (one issue read; PRs and transferred issues refused),
+    and its author must pass clarify's gate or a trusted `User` must have
+    commented `/reclarify` (comments read only for an untrusted author). A
+    refusal (`CLAUDE_ISSUE_INTAKE rejected reason=<dispatcher_unknown |
+    dispatcher_not_authorized | target_not_issue | target_repo_mismatch |
+    issue_closed | untrusted_issue_author | authorization_read_failed>`)
+    queues nothing, writes nothing to the target issue, sends a Telegram
+    ERROR, and exits 1. Otherwise it queues it as one
     `ai:claude-issue-queue` issue in coding-workflows (title
     `[claude-issue-queue] <repo>#<N>`, body = marker + fixed-key payload, no
     issue prose), opened with the job's `GITHUB_TOKEN` so no workflow reacts;
