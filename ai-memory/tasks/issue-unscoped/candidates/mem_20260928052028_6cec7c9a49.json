@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:16 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The comment header says \"# 45, not 30:\" although the timeout is now 60 minutes.\n  WHY: The header can read as the current rationale before the later comment explains the 45-to-60-minute change; reviewers noted no runtime impact.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:16 | severity=NIT | confidence=5\n  PROBLEM: The first comment block says \"# 45, not 30:\" while the timeout on line 24 is 60.\n  WHY: The stale header sits immediately above the value and can read as the current rationale; the newer comment explains the 60-minute timeout, and there is no runtime failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/ci.yml:16 | severity=NIT | confidence=4\n  PROBLEM: The first comment line says \"45, not 30\" although the timeout is now 60.\n  WHY: A reader skimming the workflow sees \"45\" before reaching the later explanation of the 60-minute timeout.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/ci.yml:16\n  PROBLEM: The comment is stale, stating 45 instead of 60.\n  WHY: The reviewer noted that the comment was cleaned.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4f24c1f435afb2f19042339360b340f1c980d6e14cb2280381096b37728f1d1d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4706,
+    "run_id": "36380431458",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36380431458",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928052028_6cec7c9a49",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4706,
+    "run_id": "36380431458"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T05:20:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
