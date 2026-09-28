@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:116-118, 603-615 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: The sweep-dispatched review-run matcher depends on a hard-coded workflow path, exact run-name format, and default-branch assumption, so changes to those inputs can stop binding sweep runs to PRs.\n  WHY: A mismatch makes `_is_pr_dispatched_review_run` reject sweep runs and can reintroduce the #4618 stall; severity differed between NIT and MAJOR, with MAJOR used here.\n- .claude/scripts/check_in_status.py:278-287 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: The 404-path detection relies on matching `\"HTTP 404\"` in the `ReadError` message.\n  WHY: If the error wording changes or no longer includes the status, legitimate 404s can propagate as errors instead of returning 0, disrupting active-run counting for repositories without `internal-review.yml`; severity differed between NIT and MAJOR, with MAJOR used here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/check_in_status.py:278-283 | severity=NIT | confidence=[3]\n  PROBLEM: The use of \"HTTP 404\" in string matching (`if \"HTTP 404\" in str(exc):`) is fragile and potentially brittle if the underlying `gh` tool or `gh_api` implementation changes the error format.\n  WHY: If the error message changes, this will raise `ReadError` instead of returning 0, causing the sweep-dispatched run detection to fail for consumers without `internal-review.yml`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/check_in_status.py: line 287 (the `except ReadError as exc: if \"HTTP 404\" in str(exc):` clause) | severity=NIT | confidence=[3]\n  PROBLEM: The 404-path detection relies on a substring match against the `ReadError` message produced by `gh`.\n  WHY: If `gh` changes its error wording or the wrapping helper stops including the status, every \"repo without internal-review.yml\" call could raise instead of returning 0, and a consumer without `internal-review.yml` would never see a sweep-dispatched active count.\n- .claude/scripts/check_in_status.py: DISPATCHED_REVIEW_WORKFLOW / DISPATCHED_REVIEW_TITLE constants at lines 116-118 | severity=NIT | confidence=[3]\n  PROBLEM: The checker's identity test for a sweep-dispatched review run couples on the literal workflow path and exact `run-name` format.\n  WHY: If `internal-review.yml`'s `run-name` changes or a fork renames the file, the matcher silently stops binding sweep runs to PRs, with no diagnostic signal.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .claude/scripts/check_in_status.py (and workflow-templates twin): 116-118 (DISPATCHED_REVIEW_* constants), _is_pr_dispatched_review_run:603-615 | severity=MAJOR | confidence=[4]\n  PROBLEM: Hard-coded workflow path, exact run-name template, and default_branch assumption.\n  WHY: Workflow rename, title template change, or PR object shape drift breaks recognition of sweep-dispatched runs, reintroducing the original stall for claude/* PRs.\n- .claude/scripts/check_in_status.py (and twin): ~287 (_active_run_count ReadError handling) | severity=MAJOR | confidence=[3]\n  PROBLEM: `if \"HTTP 404\" in str(exc)` string match on exception message.\n  WHY: A `gh` CLI error format change turns legitimate 404s (consumer without internal-review.yml) into exceptions instead of 0, breaking active-run count for sweep runs.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ea22541463067a2541186cad63aae23bc929931e692f80697b4074451a8c0e8b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4703,
+    "run_id": "36374234220",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36374234220",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928035734_6dad494365",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4703,
+    "run_id": "36374234220"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T03:57:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
