@@ -113,3 +113,88 @@ The failure rate among **success-or-failure conclusions only** is **1/311 (0.32%
 | Serena queries / response bytes / tool calls / fallbacks | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0; **no per-tool breakdown available** | 0 / 0 / 0 observed; no target emitted |
 
 **Other MCP servers observed:** none in inspected structured lines. **GitHub API calls, endpoint hotspots, GitHub rate-limit events, cache hits, and API retry counts:** not collected at usable call-site granularity. The assembled context reports **115** runs with log telemetry, while the folder’s `summary.json` reports **16**; reconcile that coverage distinction before comparing wall-clock percentiles or treating zero-valued rows as full observations.
+
+## Deep Audit — Workflows & Scripts (2026-09-28)
+
+### Section 1: Bug & Correctness Sweep
+
+The audit covered 52 workflows and 159 scripts. All workflows parsed as YAML, and all 62 Python scripts parsed as Python. No confirmed issue-title or comment-body interpolation directly into a `run:` shell body was found. The findings below are source-level risks; they are not claims of observed incidents unless stated.
+
+- **BUG-001** — **File:** `.github/workflows/review_autofix_sweep.yml:163-214,254-301`. **Severity:** High. **Category:** `bug`. **Description:** Each active-run API failure is swallowed with `|| true`; an empty snapshot then means “no active run” to the dispatch loop. *Inference:* an API outage can queue redundant reviews for PRs already under review. Whether this occurred in the inspected runs is unknown. [NEEDS VERIFICATION] **Recommended fix:** Preserve a snapshot-success flag per workflow. If either read fails, skip dispatch for affected PRs or perform a bounded per-PR active-run fallback before dispatching.
+
+- **BUG-002** — **Files:** `scripts/claude_issue_route.py:1107-1127`; `scripts/claude_issue_intake.sh:260-278`; `scripts/claude_pr_sweep.py:146-156`; `scripts/claude_issue_queue_watchdog.sh:59-70`. **Severity:** High. **Category:** `bug`. **Description:** Four open-queue readers request only `per_page=100`, without pagination. Above 100 matching issues, intake and sweep deduplication can miss an existing item, while the watchdog omits older stale items. The observed backlog size is unknown. [NEEDS VERIFICATION] **Recommended fix:** Give the shared queue reader paginated, validated output; make the shell callers use `gh api --paginate` and merge page arrays as `claude_issue_intake.sh:223-226` already does. Add a greater-than-100-item contract test.
+
+- **BUG-003** — **File:** `scripts/claude_pr_sweep.py:159-183,247-263`. **Severity:** Medium. **Category:** `bug`. **Description:** A successful queue POST with malformed JSON or no numeric `number` returns `None`, but `sweep` still increments `queued`, records the PR as queued, and posts a claim. `bind_pr_fix` explicitly refuses the resulting unbound item. This requires an abnormal POST response; incidence is unknown. [NEEDS VERIFICATION] **Recommended fix:** Require a validated issue number before counting, binding, or claiming. On an indeterminate POST response, reconcile the open queue by the durable item identity rather than blindly posting again.
+
+- **BUG-004** — **File:** `scripts/tg_helpers.sh:330-374,399-445`. **Severity:** Medium. **Category:** `bug`. **Description:** Both cleanup loops delete tracking comments from page 1 *before* requesting page 2. When page 1 contains deletions, offset pagination can skip comments shifted from the next page. This requires a multi-page issue; occurrence is unknown. [NEEDS VERIFICATION] **Recommended fix:** Fetch and validate all comment pages before deleting any comment, then process the collected IDs.
+
+- **BUG-005** — **File:** `scripts/tg_helpers.sh:135-145,349-369,418-440`. **Severity:** Medium. **Category:** `bug`. **Description:** `tg_delete_msg` discards the response from a `curl -s` request, and cleanup then deletes the GitHub tracking comment regardless of whether Telegram accepted the deletion. *Inference:* a transient Telegram rejection can permanently remove the IDs needed for retry. [NEEDS VERIFICATION] **Recommended fix:** Check the Telegram response’s `ok` field and retain the tracking comment when deletion is transiently unsuccessful; distinguish permanent “already absent” responses.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are **per source-code execution path**, not measured production totals. The existing report already calls for endpoint telemetry; these are distinct call-site candidates.
+
+- **API-001** — **File:** `scripts/orchestrate_poll_process.sh:19435-19459` (returned fields at `14686-14720,14765-14777`). **Severity:** Medium. **Category:** `api-redundancy`. **Description:** Current-wave issues are passed to both `_fetch_candidate_issue_details_graphql` and `_fetch_issue_labels_batch_graphql`, although the details result already contains labels. **Current → proposed:** `2 × ceil(N/25)` → `ceil(N/25)` GraphQL calls when both batches succeed, plus miss fallbacks. **Recommended fix:** Derive `LABELS_JSON` from `_current_wave_details_json`; invoke the existing labels batch only for missing keys and retain per-issue REST fallback. This preserves the independently fail-open behavior documented at the call site.
+
+- **API-002** — **File:** `scripts/gh_helpers.sh:693-725` (contrast `439-465`). **Severity:** Medium. **Category:** `api-redundancy`. **Description:** `curl_gh_api` retries non-rate-limit HTTP 404 and 422 responses through its default five attempts, unlike `gh_retry`, which recognizes permanent failures. **Current → proposed:** five → one request for a permanent failure; default backoff also falls from 31 seconds to none. **Recommended fix:** Classify permanent HTTP statuses before the exponential-backoff branch, retaining the existing rate-limit handling. Extend the permanent-failure policy used by `gh_retry`, rather than adding another retry wrapper.
+
+- **BATCH-001** — **File:** `scripts/orchestrate_poll_process.sh:5385-5402,21436-21456`. **Severity:** Medium. **Category:** `api-batching`. **Description:** Two blocker-status loops make one issue GET per blocker. **Current → proposed:** `B` reads per loop → `ceil(B/25)` batched reads, with single-issue fallback for missing results. **Recommended fix:** Add a state-only alias batch modeled on `_fetch_candidate_issue_details_graphql`, cache blocker states for the tick, and retain the loops’ existing “unknown means defer” rule.
+
+- **BATCH-002** — **File:** `scripts/orchestrate_poll_process.sh:15707-15714`. **Severity:** Medium. **Category:** `api-batching`. **Description:** Standalone recovery runs seven `gh issue list --json number` queries, one for each phase label. **Current → proposed:** seven listing requests → one aliased GraphQL request for the first page of each label, plus necessary pagination. Query/filter parity with the current 1,000-item-per-label behavior needs confirmation. [NEEDS VERIFICATION] **Recommended fix:** Extend the poller’s alias-batching pattern with seven independently paginated label connections; fall back to the existing listing for a failed alias.
+
+- **BATCH-003** — **File:** `scripts/review_merge_train.sh:110-136`. **Severity:** Medium. **Category:** `api-batching`. **Description:** `_mt_pr_files_into` caches files per PR, but a cold scan still makes a paginated REST read for each distinct older PR. **Current → proposed:** one listing plus `K` file reads → one listing plus `ceil(K/10)` aliased queries for PRs whose files fit one page; at the documented maximum of 20 older PRs, approximately 21 → three requests. GraphQL file/rename and pagination parity is unverified. [NEEDS VERIFICATION] **Recommended fix:** Trial aliases using the poller’s batch-query pattern, populate `_MT_FILES_CACHE`, and retain REST for missing, renamed, or additional-page cases.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001** — **Files:** `.github/workflows/clarify.yml:61-130`; `.github/workflows/orchestrate_clarify_respond.yml:115-184`; `.github/workflows/implement.yml:445-514`; `.github/workflows/validate.yml:106-175`; `.github/workflows/plan.yml:124-196`. **Severity:** Medium. **Category:** `duplication`. **Description:** Four integration-ref resolver `run:` bodies match across roughly 3,594 characters; Plan’s variant is near-identical. **Recommended fix:** Put the shared staging/resolution logic in a trusted `scripts/integration_ref_bootstrap.sh` entrypoint, `resolve_integration_ref_bootstrap <issue_number> <repository> <workflow_ref>`. Update all five callers, retaining their existing trusted-checkout bootstrap and passing expressions through `env:`.
+
+- **DUP-002** — **Files:** `.github/workflows/mark-stable.yml:656-805`; `.github/workflows/test-and-mark-stable.yml:5641-5790`. **Severity:** Medium. **Category:** `duplication`. **Description:** The release tag-publication steps each contain approximately 7,656 characters of matching logic, including `publish_tag_with_remote_verification`. **Recommended fix:** Move that function and its tag-update sequence to a trusted `scripts/release_tag_helpers.sh` with `publish_tag_with_remote_verification <tag_ref> <immutable|moving>`; source it from both workflows without changing step gates or outputs.
+
+- **DUP-003** — **Files:** `scripts/validation_refresh_runner.py:114-163,701-723`; `scripts/audit_consumer_drift.py:64-113,142-164`. **Severity:** Low. **Category:** `duplication`. **Description:** `CommandExecutor.run` and `load_target_repositories` have matching implementations in both modules. **Recommended fix:** Move their shared behavior and `CommandFailure` contract to a new `scripts/validation_runner_helpers.py`; keep `run(command, *, cwd, check, env_overrides, input_text, timeout)` and `load_target_repositories(repos_file)` signatures, then update both callers.
+
+- **DUP-004** — **Files:** `scripts/cost_audit.py:283-295`; `scripts/collect_workflow_logs.py:96-108`; `scripts/analyze_workflow_logs.py:40-52`; `scripts/workflow_retro.py:50-62`. **Severity:** Low. **Category:** `duplication`. **Description:** Four copies of `_parse_iso8601` implement the same UTC normalization. **Recommended fix:** Provide `parse_iso8601(value: str | None) -> datetime | None` in a shared `scripts/workflow_time_helpers.py`, and migrate the four callers with parity tests.
+
+- **DUP-005** — **File:** `scripts/tg_helpers.sh:156-207,227-278`. **Severity:** Low. **Category:** `duplication`. **Description:** General and phase-specific Telegram ID storage duplicate the read/select/PATCH-or-POST sequence. This is separate from the cleanup defect in **BUG-004**. **Recommended fix:** Make `tg_helpers.sh` own `_tg_store_tracking_id <issue_number> <marker_kind> <message_id>` and update `tg_store_msg_id` and `tg_store_phase_msg_id` to call it while preserving their marker formats; incorporate checked mutation responses when addressing **BUG-005**.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+The counts are static `run:` body character counts **only where `${{ }}` occurs**. Runtime substitution can change the final length; reported headroom is therefore an estimate. No measured workflow exceeds 800 KB, and no large `if:` approaches 21,000 characters. This repository also documents a *stricter* 512,000-byte workflow load limit and a 480,000-byte CI guard (`CLAUDE.md:2102-2126`; `tests/test_workflow_file_size_limit.py:1-34`).
+
+- **EXPR-001** — **File:** `.github/workflows/implement.yml:986-1342`. **Severity:** High. **Category:** `expression-limit`. **Description:** “Stage workflow support files” has three interpolations in approximately **20,326** source characters—only **674** below 21,000 before runtime substitution. The exact expanded count is unknown. [NEEDS VERIFICATION] **Recommended fix:** Move the body to a staged, trusted script under `scripts/`; pass the three expression values through step `env:` and leave the workflow step’s gates intact.
+
+- **EXPR-002** — **File:** `.github/workflows/implement.yml:3223-3529`. **Severity:** Medium. **Category:** `expression-limit`. **Description:** “Preflight destructive-commit guard” has one interpolation in approximately **17,313** source characters, leaving **3,687** estimated characters. [NEEDS VERIFICATION] **Recommended fix:** Extract the preflight body to a trusted script under `scripts/` and pass `github.repository` through `env:`.
+
+The next-largest measured expression-bearing run is `.github/workflows/implement.yml:4181-4409` at 14,846 source characters, below the requested 15,000-character finding threshold. Runs without `${{ }}` were excluded.
+
+### Section 5: Cross-Cutting Concerns
+
+- **DEAD-001** — **File:** `scripts/orchestrate_poll_process.sh:19484-19512`. **Severity:** Low. **Category:** `dead-code`. **Description:** `LINKED_PR_NUM` is initialized and assigned during linked-PR selection but is not subsequently read in the script. **Recommended fix:** Remove those assignments if no output contract needs the value, or consume it in the selection telemetry if it was intended to identify the chosen PR.
+
+- **CONSIST-001** — **Files:** `scripts/review_rb_judge.sh:735-765,2366-2384`; `.github/ai/label_contract.v1.json:4-7,152-155`. **Severity:** Medium. **Category:** `consistency`. **Description:** If the canonical label helper cannot be loaded, the judge’s fallback creates labels other than `ai:ready-to-merge` and `ai:closed` with generic blue metadata. The judge can request `ai:clarification` and `ai:orchestrator-managed`, whose contract metadata differs. **Recommended fix:** Keep the verified-helper loading path, and make its last-resort fallback use the exact contract metadata for every label it can create; refuse unknown labels rather than silently assigning generic metadata.
+
+- **SHELL-001** — **File:** `scripts/stage_workflow_support.sh:138-145,198-208`. **Severity:** Low. **Category:** `shellcheck`. **Description:** Shellcheck reports `SC2043` for two literal single-item `for` loops. These are warning-level compliance findings, not demonstrated runtime failures. **Recommended fix:** Replace each singleton loop with a direct guarded install, preserving the existing optional-versus-required behavior.
+
+- **DEBT-001** — **File:** `.github/workflows/review_autofix.yml:1-7464`. **Severity:** Low. **Category:** `tech-debt`. **Description:** At **451,634 bytes**, the workflow is below both repository limits but has only **28,366 bytes** before the 480,000-byte CI guard—less than the documented 50,000-byte headroom aim. **Recommended fix:** Before the next substantial expansion, extract a large inline step using the existing `review_autofix_step_*.sh` staging and registry pattern; do not raise the guard or split the workflow.
+
+No `TODO`, `FIXME`, or `HACK` marker was found in the audited workflow and script files. The existing report already covers the prompt-budget gate, reviewer stalls, memory-step timing, and telemetry deduplication; they are not repeated as new findings here.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, BUG-002, EXPR-001 |
+| Medium | 12 | BUG-003, BUG-004, BUG-005, API-001, API-002, BATCH-001, BATCH-002, BATCH-003, DUP-001, DUP-002, EXPR-002, CONSIST-001 |
+| Low | 6 | DUP-003, DUP-004, DUP-005, DEAD-001, SHELL-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 5–7 | Medium |
+| API call optimization | 2–4 | Medium |
+| Code modularization | 10–15 | Large |
+| Expression size reduction | 2–3 | Medium |
+| Medium/Low fixes | 6–10 | Medium |
