@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:817, 1487 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Redundant calls to `gate_fetch_marker_comments` run on the same `workflow_dispatch` execution path.\n  WHY: The first call memoizes the result, so the second wastes GitHub API rate-limit budget and adds execution latency.\n- .github/workflows/review_autofix.yml:1500 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `CLAUDE_HANDOFF_SKIP_SUPPRESSED` flag is absent from the `AUTOFIX_GATE_DET_SKIP_EVAL` one-line audit summary.\n  WHY: Operators and log-scraping tools cannot distinguish a non-qualifying diff from a hand-off guard suppressing the skip when `skip=false` is logged.\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails` does not exercise the intended fail-closed code path.\n  WHY: `comments=None` is serialized as JSON `null`, which `jq` converts to an empty array; the workflow treats that as a successful empty lookup and bypasses the fail-closed guard.\n- README.md:86 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `CLAUDE_FIXER_ENABLED` description mentions `AUTOFIX_SKIP_DOC_ONLY` and `AUTOFIX_SKIP_MAX_ADDITIONS` but omits `AUTOFIX_SKIP_MAX_DELETIONS`.\n  WHY: Operators may incorrectly configure skip behavior because the deletion bound is part of the small-diff route requirement.\n- agents.md:98-101 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Documentation for Claude-fixer mode contains a run-on sentence (\"...and also runs it). [claude-intervention] and ...\").\n  WHY: The missing sentence break makes the new logic difficult for operators to parse.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Append `claude_handoff_suppressed=${CLAUDE_HANDOFF_SKIP_SUPPRESSED}` to the existing `AUTOFIX_GATE_DET_SKIP_EVAL` log line to maintain the audit contract.\n  expected_change_site: .github/workflows/review_autofix.yml line 1500\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The `AUTOFIX_GATE_DET_SKIP_EVAL` echo statement in .github/workflows/review_autofix.yml lacks the `claude_handoff_suppressed` flag, which is inconsistent with the audit contract of logging all suppression flags.\n- requirement: Test the fail-closed comment lookup so a failed comment lookup logs `reason=claude_fixer_handoff_unverified` and suppresses the skip.\n  expected_change_site: tests/test_review_autofix_claude_fixer_mode.py \u2014 `GATE_MOCK_GH` and `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test at lines 647-653 does not exercise the intended failure path because `comments=None` is treated as a successful empty lookup by the workflow's jq filter.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:817, 1487 | severity=low | confidence=[4]\n  PROBLEM: Redundant calls to `gate_fetch_marker_comments` on the same execution path for `workflow_dispatch` events.\n  WHY: The first call memoizes the result in the cached file, so the second call is redundant, wasting GitHub API rate-limit budget and adding unnecessary execution latency.\n- .github/workflows/review_autofix.yml:1500 | severity=low | confidence=[4]\n  PROBLEM: The `CLAUDE_HANDOFF_SKIP_SUPPRESSED` flag is absent from the `AUTOFIX_GATE_DET_SKIP_EVAL` one-line audit summary.\n  WHY: Operators and log-scraping tools relying on this summary to debug skip decisions cannot distinguish between \"diff didn't qualify for skip\" and \"handoff guard suppressed the skip\" when `skip=false` is logged.\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=high | confidence=[5]\n  PROBLEM: The test `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails` does not actually exercise the fail-closed code path as it intends.\n  WHY: The test passes `comments=None`, which the mock serializes as JSON `null`, and `jq` converts this to an empty array `[]` in the marker-comments file. The workflow treats `[]` as a successful (empty) lookup (gate_marker_fetch_state=\"ok\"), thus bypassing the intended fail-closed guard.\n- README.md:86 | severity=low | confidence=[4]\n  PROBLEM: The description for `CLAUDE_FIXER_ENABLED` mentions `AUTOFIX_SKIP_DOC_ONLY` and `AUTOFIX_SKIP_MAX_ADDITIONS` but omits `AUTOFIX_SKIP_MAX_DELETIONS`.\n  WHY: Operators may incorrectly configure skip behavior because the deletion bound is an essential part of the small-diff route requirement.\n- agents.md:98-101 | severity=low | confidence=[5]\n  PROBLEM: Documentation for Claude-fixer mode contains a run-on sentence (\"...and also runs it). [claude-intervention] and ...\").\n  WHY: The missing sentence break makes the new logic difficult for operators to parse.\n- TASK_GAP\n  Requirement: Append `claude_handoff_suppressed=${CLAUDE_HANDOFF_SKIP_SUPPRESSED}` to the existing `AUTOFIX_GATE_DET_SKIP_EVAL` log line to maintain the audit contract.\n  Expected change site: .github/workflows/review_autofix.yml line 1500\n  Evidence of absence: The `AUTOFIX_GATE_DET_SKIP_EVAL` echo statement in .github/workflows/review_autofix.yml lacks the `claude_handoff_suppressed` flag, which is inconsistent with the audit contract of logging all suppression flags.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: Test the fail-closed comment lookup so a failed comment lookup logs `reason=claude_fixer_handoff_unverified` and suppresses the skip.\n  Expected change site: tests/test_review_autofix_claude_fixer_mode.py \u2014 `GATE_MOCK_GH` and `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails`\n  Evidence of absence: The test at lines 647-653 does not exercise the intended failure path because `comments=None` is treated as a successful empty lookup by the workflow's jq filter.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3f4ad7cd7d96037a934e3eb80658ee70ba6af544e8f91723a3cc7b5c517068f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36424267181",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36424267181",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928130818_69fdec9e2e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36424267181"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T13:08:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
