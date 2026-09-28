@@ -190,24 +190,81 @@ jobs:
             exit 1
           fi
           # The integration issue lookup has no PR head/repository identity.
-          # One paginated pull listing supplies the independent binding.
+          # One paginated pull listing supplies the independent binding. It has
+          # no base filter: jq requires exactly one open PR for the head, then
+          # decides whether that PR's base is authorized:
+          #   - the default branch (no further read);
+          #   - a claude/implement-plan-* project branch whose own single open
+          #     PR goes into the default branch (one level of stacking; one
+          #     parent PR listing);
+          #   - stable, for a claude/implement-plan-issue-<n>-* head whose
+          #     issue <n> carries ai:workflow-heal (one issue read).
+          # GitHub reads (CLAUDE.md §15): the target listing, plus at most one
+          # more for the two non-default cases. No earlier call in this job
+          # returns PR head/base data or issue labels.
+          validate_pr_jq_defs='
+            def trusted_pr($repo):
+              type == "object" and .state == "open" and
+              .head.repo.full_name == $repo and .base.repo.full_name == $repo and
+              (.author_association == "OWNER" or .author_association == "MEMBER" or
+               .author_association == "COLLABORATOR");
+            def single_pr($what):
+              if type != "array" or any(.[]; type != "array") then error("invalid pull listing") else
+                [ .[][] ] |
+                if length != 1 then error("\($what) PR binding is missing or ambiguous") else .[0] end
+              end;'
           target_prs="$(gh api --method GET --paginate --slurp \
             -f state=open -f "head=${GITHUB_REPOSITORY%%/*}:${VALIDATE_TARGET_REF}" \
-            -f "base=${VALIDATE_DEFAULT_BRANCH}" -f per_page=100 \
+            -f per_page=100 \
             "repos/${GITHUB_REPOSITORY}/pulls")" || exit 1
-          authorized_sha="$(jq -er --arg repo "${GITHUB_REPOSITORY}" \
-            --arg branch "${VALIDATE_TARGET_REF}" --arg base "${VALIDATE_DEFAULT_BRANCH}" '
-            if type != "array" or any(.[]; type != "array") then error("invalid pull listing") else
-              [ .[][] ] |
-              if length != 1 then error("target PR binding is missing or ambiguous")
-              elif .[0] | (.state == "open" and .head.ref == $branch and
-                .base.ref == $base and .head.repo.full_name == $repo and
-                .base.repo.full_name == $repo and
-                (.author_association == "OWNER" or .author_association == "MEMBER" or
-                 .author_association == "COLLABORATOR") and
-                (.head.sha | type == "string" and test("^[0-9a-fA-F]{40}$")))
-              then .[0].head.sha else error("target PR is unauthorized") end
-            end' <<< "${target_prs}")" || { echo "::error::Explicit validation target is not authorized."; exit 1; }
+          target_binding="$(jq -er --arg repo "${GITHUB_REPOSITORY}" \
+            --arg branch "${VALIDATE_TARGET_REF}" --arg base "${VALIDATE_DEFAULT_BRANCH}" "${validate_pr_jq_defs}"'
+            single_pr("target") |
+            if trusted_pr($repo) and .head.ref == $branch and
+              (.head.sha | type == "string" and test("^[0-9a-fA-F]{40}$")) and
+              (.base.ref | type == "string")
+            then
+              if .base.ref == $base then "default \(.head.sha) -"
+              elif .base.ref | test("^claude/implement-plan-[A-Za-z0-9][A-Za-z0-9._-]*$") then
+                "project \(.head.sha) \(.base.ref)"
+              elif .base.ref == "stable" and ($branch | test("^claude/implement-plan-issue-[1-9][0-9]*-")) then
+                "stable \(.head.sha) \($branch | capture("^claude/implement-plan-issue-(?<n>[1-9][0-9]*)-").n)"
+              else error("target PR base is not authorized") end
+            else error("target PR is unauthorized") end' <<< "${target_prs}")" || { echo "::error::Explicit validation target is not authorized."; exit 1; }
+          read -r target_kind authorized_sha target_detail <<< "${target_binding}"
+          case "${target_kind}" in
+            default)
+              ;;
+            project)
+              # The target PR goes into another project branch: that branch must
+              # itself have exactly one open trusted same-repo PR, into the
+              # default branch.
+              git check-ref-format --branch "${target_detail}" >/dev/null 2>&1 ||
+                { echo "::error::Explicit validation target is not authorized."; exit 1; }
+              parent_prs="$(gh api --method GET --paginate --slurp \
+                -f state=open -f "head=${GITHUB_REPOSITORY%%/*}:${target_detail}" \
+                -f per_page=100 \
+                "repos/${GITHUB_REPOSITORY}/pulls")" || exit 1
+              jq -e --arg repo "${GITHUB_REPOSITORY}" --arg branch "${target_detail}" \
+                --arg base "${VALIDATE_DEFAULT_BRANCH}" "${validate_pr_jq_defs}"'
+                single_pr("parent") | trusted_pr($repo) and .head.ref == $branch and .base.ref == $base' \
+                <<< "${parent_prs}" >/dev/null ||
+                { echo "::error::Explicit validation target is not authorized."; exit 1; }
+              ;;
+            stable)
+              # A stable base is only for workflow-heal issue projects.
+              heal_issue_json="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${target_detail}")" || exit 1
+              jq -e 'type == "object" and (has("pull_request") | not) and
+                ((.labels // []) | type == "array" and
+                 any(.[]; type == "object" and .name == "ai:workflow-heal"))' \
+                <<< "${heal_issue_json}" >/dev/null ||
+                { echo "::error::Explicit validation target is not authorized."; exit 1; }
+              ;;
+            *)
+              echo "::error::Explicit validation target is not authorized."
+              exit 1
+              ;;
+          esac
           echo "sha=${authorized_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
