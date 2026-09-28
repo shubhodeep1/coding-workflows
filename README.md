@@ -1045,7 +1045,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
 > interactive session start a small low-effort Sonnet checker session for every
 > pull request it pushes; the checker runs `.claude/scripts/check_in_status.py`
-> every hour (re-armed with `send_later`) without waking the pushing session.
+> every hour (re-armed with `send_later`) without waking the pushing session,
+> and routes on the verdict's `action` field (`wait`, `retry`,
+> `hand_back_fixer`, `hand_back_all`) rather than interpreting `state`.
 > Once the PR merges or closes, the checker pulls forward a scheduled Routine
 > bound to the pushing session, which re-reads the PR state and, since it
 > holds the context, reports the next steps (or that it can be closed). The
@@ -1408,9 +1410,10 @@ Claude session fixes it instead (CLAUDE.md §26 and §26.H):
    `.claude/scripts/check_in_status.py --hand-back` every hour. When a fix is
    due (a block label, a review hand-off for the current head, a merge
    conflict, or a failed check with no workflow run queued, running, or
-   pending) it pulls the pushing session's hand-back Routine forward, and
-   that session follows `/fix-claude-pr` in place: it claims the head, fixes,
-   verifies, pushes, and registers a new hand-back with the same checker.
+   pending) the script reports `action: hand_back_fixer`, and the checker
+   pulls the pushing session's hand-back Routine forward. That session
+   follows `/fix-claude-pr` in place: it claims the head, fixes, verifies,
+   pushes, and registers a new hand-back with the same checker.
    A PR has one checker; other interested sessions register with it as
    subscribers.
 2. **A fresh fixer when the pushing session is gone.** The checker starts

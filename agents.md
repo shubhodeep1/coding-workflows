@@ -787,8 +787,13 @@ alone, then a one-shot `create_trigger` into it carrying the instructions,
 because `/effort low` is not applied when more text follows it in one prompt
 (CLAUDE.md §26.B). It runs `.claude/scripts/check_in_status.py`, re-arms
 itself with `send_later` every 60 minutes, and, when the wait is over, starts
-the next **stage session** on the model the operator picked. There is **one
-checker per project** (`implement-plan <slug> — checker`), created by the
+the next **stage session** on the model the operator picked. It routes on
+the verdict's `action` field alone, never on `state`: `wait`, `retry`,
+`hand_back` (a blocked, closed, or stuck PR), or `next_stage` with
+`next_stage` = `success`, `review`, or `block`. A review round or a
+conflict is always `next_stage` + `review`, never a hand-back (the
+PR #4596 checker misrouted one on 2026-09-27 while it still read
+`state`). There is **one checker per project** (`implement-plan <slug> — checker`), created by the
 first stage and reused for every wait: each later stage hands it the next
 wait through a one-shot trigger instead of creating a new checker, because
 claude-code-remote refuses `create_session`, `send_later`, and
@@ -884,9 +889,10 @@ its own id, `run_once_at` = now + 7 days, named `PR #<n> hand-back`, with
 the PR URL in its prompt). The checker runs
 `.claude/scripts/check_in_status.py --hand-back` (one REST read for a
 non-`claude/*` head; on a `claude/*` head also the comment and check-run
-pages and at most six further reads), renews every subscriber's
-hand-back 7 days ahead, and re-arms itself with `send_later` every 60
-minutes while nothing is due. A PR has one checker: a second interested
+pages and at most six further reads) and routes on its `action` field
+(`wait`, `retry`, `hand_back_fixer`, `hand_back_all`), renews every
+subscriber's hand-back 7 days ahead, and re-arms itself with `send_later`
+every 60 minutes while nothing is due. A PR has one checker: a second interested
 session registers with it (`PR #<n> status check-in: subscriber` one-shot
 trigger) as `fixer` (it pushed to the PR) or `notify`, instead of creating
 another. When a Claude fix is due on a `claude/*` head (block label,
@@ -987,7 +993,19 @@ reviews, comments, and conflicts stay a direct §12 request.
   `--terminal-only`, or `--hand-back` — / run / issue-list modes, REST only,
   one JSON line, exit 2 on a failed read), shared with the
   `/implement-plan-claude` checker; `workflow-templates/.claude/scripts/`
-  holds a byte-identical copy.
+  holds a byte-identical copy. Every verdict carries an additive `action`
+  field, derived by `route_verdict` from the data already read (no extra
+  API call), and the checkers route on it alone: plain PR mode →
+  `wait` / `hand_back` (blocked, closed, stuck) / `next_stage` with
+  `next_stage` `success` (merged) or `review` (review-round, conflict —
+  never `hand_back`); run and issue-list modes → `wait` / `next_stage`
+  with `success` (completed, resolved) or `block` (failed, blocked);
+  `--hand-back` → `wait` (open, claimed, held) / `hand_back_fixer`
+  (conflict, review-round, ci-failed, blocked) / `hand_back_all` (merged,
+  closed); exit 2 → `retry`. `done`, `state`, `reason`, the hand-back
+  fields, and the exit codes are unchanged, and `scripts/claude_pr_sweep.py`
+  (which calls `check_pr_hand_back` directly) sees no new field. An
+  unmapped done state exits 2 with `retry` rather than guessing.
 - Stale Routine sweep (CLAUDE.md §26.G): `.claude/scripts/stale_routines.py`
   reads a `list_triggers` result (`include_completed: true`) from a file (the
   harness usually saves that large result to a file itself) and
