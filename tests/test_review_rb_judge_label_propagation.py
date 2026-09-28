@@ -37,6 +37,7 @@ re-orphan the reissue lineage.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -1083,6 +1084,51 @@ def test_close_and_reissue_spot_fix_rejects_unsafe_new_output_paths() -> None:
 	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=8 added=1 skipped=7 total=2" in stdout
 	assert "../escape.json" not in stdout, "paths that fail the validator must never be echoed"
 	assert ".git/config" not in stdout
+
+
+def test_close_and_reissue_spot_fix_new_output_paths_reject_what_the_scope_guard_would_rewrite() -> None:
+	"""Conformance finding on #4665: files_touched_scope_guard.py trims each
+	entry and splits the body with str.splitlines(), so a padded path would
+	become an existing file or directory (" src" exempts all of src/), and a
+	Unicode line separator would inject an extra entry.  Only printable ASCII
+	with no leading or trailing space is kept, and such an entry is never
+	echoed."""
+	state = _run_new_output_rejection_case(
+		[
+			" src",
+			"README.md ",
+			"x     - src/app.py",
+			"tests/fixtures/new case.json",
+			"tests/fixtures/café.json",
+			"tests/fixtures/new case.json",
+		]
+	)
+	_assert_new_output_footer_and_skips(
+		state,
+		["tests/fixtures/new case.json"],
+		[
+			(1, "invalid_path"),
+			(2, "invalid_path"),
+			(3, "invalid_path"),
+			(4, "invalid_path"),
+			(5, "invalid_path"),
+		],
+	)
+	stdout = state["_stdout"]
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=6 added=1 skipped=5 total=2" in stdout
+	assert " " not in stdout, "a rejected path must never be echoed"
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	guard_spec = importlib.util.spec_from_file_location(
+		"files_touched_scope_guard_for_new_outputs",
+		REPO_ROOT / "scripts" / "files_touched_scope_guard.py",
+	)
+	scope_guard = importlib.util.module_from_spec(guard_spec)
+	guard_spec.loader.exec_module(scope_guard)
+	allow = scope_guard.extract_files_touched(body)
+	assert allow == ["src/app.py", "tests/fixtures/new case.json"], allow
+	for staged_path in ("src/other.py", "README.md"):
+		status, _allow, _oos = scope_guard.evaluate(body, [staged_path])
+		assert status == scope_guard.STATUS_OUT_OF_SCOPE, staged_path
 
 
 def test_close_and_reissue_spot_fix_new_output_paths_never_exempt_existing_paths_and_are_capped() -> None:
