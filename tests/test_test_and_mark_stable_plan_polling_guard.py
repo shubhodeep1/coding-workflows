@@ -33,7 +33,13 @@ path = args[1]
 jq_filter = args[args.index("--jq") + 1] if "--jq" in args else None
 issue_path = "repos/" + os.environ["TEST_REPO"] + "/issues/" + os.environ["ISSUE_NUMBER"]
 if path == issue_path:
-	payload = {"labels": [{"name": name} for name in os.environ["STUB_LABELS"].split(",") if name]}
+	# STUB_LABELS until STUB_LABELS_SWITCH_AFTER issue reads, then STUB_LABELS_LATER.
+	with open(os.environ["STUB_GH_LOG"], encoding="utf-8") as log:
+		issue_reads = sum(1 for line in log if json.loads(line)[1:2] == [issue_path])
+	labels = os.environ["STUB_LABELS"]
+	if os.environ.get("STUB_LABELS_SWITCH_AFTER") and issue_reads > int(os.environ["STUB_LABELS_SWITCH_AFTER"]):
+		labels = os.environ["STUB_LABELS_LATER"]
+	payload = {"labels": [{"name": name} for name in labels.split(",") if name]}
 elif path.startswith(issue_path + "/comments"):
 	payload = []
 elif "/actions/runs?" in path:
@@ -76,7 +82,7 @@ def _noise_page(first_id: int, count: int = 100) -> list[dict]:
 	]
 
 
-def _run_wait_plan(pages: list[list[dict]], labels: str) -> tuple[int, dict[str, str], list[list[str]], str]:
+def _run_wait_plan(pages: list[list[dict]], labels: str, labels_later: str | None = None, switch_after: int = 0) -> tuple[int, dict[str, str], list[list[str]], str]:
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		bin_dir = tmp_path / "bin"
@@ -106,6 +112,9 @@ def _run_wait_plan(pages: list[list[dict]], labels: str) -> tuple[int, dict[str,
 			"STUB_RUN_PAGES": str(pages_file),
 			"STUB_LABELS": labels,
 		})
+		if labels_later is not None:
+			env["STUB_LABELS_LATER"] = labels_later
+			env["STUB_LABELS_SWITCH_AFTER"] = str(switch_after)
 		proc = subprocess.run(["bash", "-c", _wait_plan_script()], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60)
 		outputs: dict[str, str] = {}
 		for line in output_file.read_text(encoding="utf-8").splitlines():
@@ -180,6 +189,68 @@ def test_paging_is_bounded() -> None:
 	# the per-poll cost stays one call (CLAUDE.md §15).
 	assert len(requested) == 1 + 10, len(requested)
 	assert "&page=1&" in requested[0] and "&page=1&" in requested[1] and "&page=2&" in requested[2], requested[:3]
+
+
+def _completed_plan_page(noise_first_id: int = 3000, extra: list[dict] | None = None) -> list[dict]:
+	# A full page 1 whose newest non-skipped Plan run for the issue completed,
+	# which sends the step into its "other active Plan runs" check.
+	runs = [_run(900, created_at="2026-09-28T03:56:50Z")] + (extra or [])
+	return runs + _noise_page(noise_first_id, count=100 - len(runs))
+
+
+def _active_check_pages_requested(calls: list[list[str]]) -> list[str]:
+	# The other-active check reads page 1 without &page= (fetch_plan_runs_json)
+	# and later pages with it; the poll and the capture always pass &page=.
+	requested = _run_pages_requested(calls)
+	return [path for path in requested if "&page=" not in path or not path.split("&page=")[1].startswith("1&")]
+
+
+def test_other_active_plan_run_past_the_first_page_keeps_the_step_waiting() -> None:
+	# PR #4730 review round 2: the real Plan run is older, still active, and
+	# sits behind 100 newer runs; a newer non-skipped Plan run has completed.
+	pages = [_completed_plan_page(), _noise_page(4000, count=40) + [_run(777, conclusion=None, status="in_progress")]]
+	rc, outputs, calls, log = _run_wait_plan(pages, "", labels_later="ai:awaiting-approval", switch_after=2)
+	assert rc == 0, log
+	assert outputs.get("status") == "success", outputs
+	assert "Found 1 other active Plan run(s)" in log, log
+	assert "Plan workflow completed but issue lacks expected labels" not in log, log
+	assert any("&page=2&" in path for path in _active_check_pages_requested(calls)), _run_pages_requested(calls)
+
+
+def test_other_active_check_stops_at_a_short_page_and_fails() -> None:
+	pages = [_completed_plan_page(), _noise_page(4000, count=40)]
+	rc, outputs, calls, log = _run_wait_plan(pages, "")
+	assert rc == 1, log
+	assert outputs.get("status") == "plan_failed", outputs
+	active_check = _active_check_pages_requested(calls)
+	assert len(active_check) == 2, active_check
+	assert "&page=" not in active_check[0] and "&page=2&" in active_check[1], active_check
+
+
+def test_other_active_check_is_bounded_by_the_page_cap() -> None:
+	pages = [_completed_plan_page()] + [_noise_page(4000 + 100 * i) for i in range(12)]
+	rc, outputs, calls, log = _run_wait_plan(pages, "")
+	assert rc == 1, log
+	assert outputs.get("status") == "plan_failed", outputs
+	active_check = _active_check_pages_requested(calls)
+	assert len(active_check) == 10, active_check
+	assert "&page=10&" in active_check[-1], active_check
+
+
+def test_other_active_plan_run_on_page_one_reads_one_page() -> None:
+	pages = [_completed_plan_page(extra=[_run(901, conclusion=None, status="in_progress")]), _noise_page(4000)]
+	rc, outputs, calls, log = _run_wait_plan(pages, "", labels_later="ai:awaiting-approval", switch_after=2)
+	assert rc == 0, log
+	assert "Found 1 other active Plan run(s)" in log, log
+	assert not any("&page=2&" in path for path in _run_pages_requested(calls)), _run_pages_requested(calls)
+
+
+def test_unreadable_later_page_retries_instead_of_failing() -> None:
+	pages = [_completed_plan_page(), None]
+	rc, outputs, calls, log = _run_wait_plan(pages, "", labels_later="ai:awaiting-approval", switch_after=2)
+	assert rc == 0, log
+	assert "Unable to confirm concurrent Plan runs on page 2 yet — retrying" in log, log
+	assert "Plan workflow completed but issue lacks expected labels" not in log, log
 
 
 def test_other_active_plan_runs_avoids_inline_fallback_substitution() -> None:

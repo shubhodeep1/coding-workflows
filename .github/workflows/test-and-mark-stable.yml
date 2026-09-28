@@ -941,6 +941,38 @@ jobs:
               if ! [[ "$OTHER_ACTIVE_PLAN_RUNS" =~ ^[0-9]+$ ]]; then
                 OTHER_ACTIVE_PLAN_RUNS=0
               fi
+              # Page 1 holds only the newest 100 runs of the window. An older
+              # real Plan run that is still active can sit past it while
+              # skipped issue_comment runs pile up (the issue #4723 shape,
+              # PR #4730 review), so walk later pages of the same query with
+              # the same shape guard and page cap as the run-ID capture,
+              # stopping at the first page with an active run or a short page.
+              if [ "$OTHER_ACTIVE_PLAN_RUNS" -eq 0 ]; then
+                ACTIVE_WALK_PAGE=1
+                ACTIVE_WALK_PAGE_LEN=$(printf '%s' "$PLAN_RUNS_JSON" | jq -r '.workflow_runs | length' 2>/dev/null || echo "0")
+                ACTIVE_WALK_UNCONFIRMED=0
+                while [[ "$ACTIVE_WALK_PAGE_LEN" =~ ^[0-9]+$ ]] && [ "$ACTIVE_WALK_PAGE_LEN" -ge 100 ] \
+                  && [ "$ACTIVE_WALK_PAGE" -lt "$PLAN_RUN_LOOKUP_MAX_PAGES" ]; do
+                  ACTIVE_WALK_PAGE=$((ACTIVE_WALK_PAGE + 1))
+                  ACTIVE_WALK_PAGE_JSON=$(fetch_plan_runs_page_json "$ACTIVE_WALK_PAGE" || echo "")
+                  if ! _plan_runs_json_valid "$ACTIVE_WALK_PAGE_JSON"; then
+                    ACTIVE_WALK_UNCONFIRMED=1
+                    break
+                  fi
+                  ACTIVE_WALK_PAGE_COUNT=$(printf '%s' "$ACTIVE_WALK_PAGE_JSON" \
+                    | jq -r --arg title "${ISSUE_TITLE}" '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.display_title == $title) | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo "0")
+                  if [[ "$ACTIVE_WALK_PAGE_COUNT" =~ ^[0-9]+$ ]] && [ "$ACTIVE_WALK_PAGE_COUNT" -gt 0 ]; then
+                    OTHER_ACTIVE_PLAN_RUNS="$ACTIVE_WALK_PAGE_COUNT"
+                    break
+                  fi
+                  ACTIVE_WALK_PAGE_LEN=$(printf '%s' "$ACTIVE_WALK_PAGE_JSON" | jq -r '.workflow_runs | length' 2>/dev/null || echo "0")
+                done
+                if [ "$ACTIVE_WALK_UNCONFIRMED" -eq 1 ]; then
+                  echo "  ⏳ Unable to confirm concurrent Plan runs on page ${ACTIVE_WALK_PAGE} yet — retrying"
+                  sleep "$POLL_INTERVAL"
+                  continue
+                fi
+              fi
               if [ "$OTHER_ACTIVE_PLAN_RUNS" -gt 0 ]; then
                 echo "  ⏳ Found ${OTHER_ACTIVE_PLAN_RUNS} other active Plan run(s) — waiting for the real run to finish"
                 continue

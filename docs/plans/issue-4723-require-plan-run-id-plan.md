@@ -26,7 +26,7 @@ Security pass: skip (ai:workflow-heal: automation-produced issue)
 ## Non-goals
 
 - Clarify (`wait-clarify`) and Implement (`wait-implement`) run-ID capture. They share the single-page pattern but did not fail here (AD-1).
-- The `OTHER_ACTIVE_PLAN_RUNS` check in the `completed` branch keeps reading page 1 via `fetch_plan_runs_json`. Its existing shape-validation guard and tests are unchanged.
+- ~~The `OTHER_ACTIVE_PLAN_RUNS` check in the `completed` branch keeps reading page 1 via `fetch_plan_runs_json`.~~ Changed by AD-6 (PR #4730 review round 2): when page 1 holds no active run, the check walks later pages of the same query under the same shape guard and page cap. Its page-1 read, shape-validation guard, and existing tests are unchanged.
 - Deep verification and the final gate logic are unchanged. A missing ID must still fail the release.
 
 ## Constraints
@@ -88,6 +88,7 @@ Lands on `stable` through the project's final PR (the heal issue's `Target branc
 - AD-3 [plan, 2026-09-28] What does `wait-plan` report when no ID is found? — Picked: A — new status value `run_id_missing`, `::error::`, exit 1. Alternatives: B — reuse `status=plan_failed`. Why: the gate prints the status verbatim, so a distinct value names the cause, and every non-success value already fails the Plan line. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-09-28] Make the page cap configurable? — Picked: A — a step-local constant `PLAN_RUN_LOOKUP_MAX_PAGES=10`, no new env var. Alternatives: B — a new env var with default 10. Why: §5. 10 pages is GitHub's 1,000-result ceiling for this list, so a larger value buys nothing. Applied in: phase 1 PR. Status: pending review
 - AD-5 [phase 1/1, 2026-09-28] Should the 10-second status poll page through runs too? — Picked: A — no, the poll keeps reading one page (`latest_scoped_run_field "Plan" "status" 1`), and only the run-ID capture at the success exits pages. Alternatives: B — the poll pages like the capture (up to 10 calls per poll while no run matches, about 3,600 calls an hour); C — the poll reads 2 pages. Why: §15, since the poll is an activity signal and its per-poll cost stays one call as before. Applied in: phase 1 PR. Status: pending review
+- AD-6 [phase 1/1 — review round 2, 2026-09-28] Should the "other active Plan runs" check in `wait-plan` page past the first 100 runs, although the plan listed it as a Non-goal? — Picked: A — yes: when page 1 finds no active run, walk later pages of the same query with the same shape guard and `PLAN_RUN_LOOKUP_MAX_PAGES` cap, stopping at the first page with an active run or a short page. Alternatives: B — reject the review finding as out of scope. Why: an older, still-active real Plan run behind 100 newer runs is the #4723 false release block in the same step; the branch is rare (Plan completed without labels), so the extra reads stay bounded. Applied in: phase 1 PR (review round 2). Status: pending review
 
 ## Notes
 
