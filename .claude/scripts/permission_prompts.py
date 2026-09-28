@@ -86,10 +86,13 @@ CLASSIFIER_OUTAGE_LABEL = "classifier outage"
 # The Auto-mode classifier refused without judging the call: an outage
 # (`Classifier unavailable`, the reason on every 2026-09-28 issue) or no
 # verdict. A real block carries the classifier's reason instead and is filed.
+# A no-verdict phrase counts only next to the word "classifier", so another
+# subsystem's "did not return a verdict" stays a fileable pattern.
 CLASSIFIER_OUTAGE_REASON_RE = re.compile(
 	r"\bclassifier\s+(?:is\s+)?(?:unavailable|error|timed\s+out|timeout|overloaded)\b"
-	r"|\b(?:no|without\s+a|did\s+not\s+return\s+a|could\s+not\s+reach\s+a)\s+verdict\b",
-	re.IGNORECASE,
+	r"|\bclassifier\b.*\b(?:no|without\s+a|did\s+not\s+return\s+a|could\s+not\s+reach\s+a)\s+verdict\b"
+	r"|\b(?:no|without\s+a|did\s+not\s+return\s+a|could\s+not\s+reach\s+a)\s+verdict\b.*\bclassifier\b",
+	re.IGNORECASE | re.DOTALL,
 )
 
 REDACTION_PATTERNS = (
@@ -352,7 +355,11 @@ def classifier_outage_summary(outages: list[dict]) -> dict:
 
 def report(log_dir: Path) -> dict:
 	records, outages = split_classifier_outages(load_records(log_dir))
-	patterns = group_patterns(records)
+	return summarize_permission_records(group_patterns(records), outages)
+
+
+def summarize_permission_records(patterns: list[dict], outages: list[dict]) -> dict:
+	"""The `report` summary for already grouped patterns and classifier-outage denials."""
 	return {
 		"total": sum(pattern["count"] for pattern in patterns),
 		"patterns": [{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons")} for pattern in patterns],
@@ -495,8 +502,9 @@ def existing_issues(slug: str) -> dict[str, dict]:
 def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | None = None) -> tuple[int, dict]:
 	"""File new patterns as issues or comments; see the module docstring."""
 	slug = local_repo_slug() if slug is None else slug
-	patterns = group_patterns(split_classifier_outages(load_records(log_dir))[0])
-	summary = report(log_dir)
+	records, outages = split_classifier_outages(load_records(log_dir))
+	patterns = group_patterns(records)
+	summary = summarize_permission_records(patterns, outages)
 	if slug.lower() != FILING_REPO:
 		summary.update({"filed": [], "commented": [], "errors": [], "skipped": f"filing is limited to {FILING_REPO}; this checkout is {slug or 'unknown'}"})
 		return 0, summary
