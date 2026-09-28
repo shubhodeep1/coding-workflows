@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-4798-run-skip-check-standalone-plan.md
 - Source issue: shubhodeep1/coding-workflows#4798
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4798-run-skip-check-standalone   Final PR: pending (draft)
+- Project branch: claude/implement-plan-issue-4798-run-skip-check-standalone   Final PR: #4810 draft
 - Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
