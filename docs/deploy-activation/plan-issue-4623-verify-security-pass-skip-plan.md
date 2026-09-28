@@ -5,10 +5,10 @@
 - How it runs: on demand. `/implement-issue-claude` step 6 (`.claude/commands/implement-issue-claude.md:35`) runs `.claude/scripts/security_pass_skip.py` in every issue-mode session. In coding-workflows those sessions check out `main` and are started by the hourly `Claude issue pickup` routine. Consumers get the script and the command through `workflow-templates/.claude/`, synced by `ai-update-workflows.yml` → `update_workflows.yml@stable` (daily cron `0 4 * * *` plus the `@stable` `repository_dispatch`).
 - Status: IN_PROGRESS
 - Last updated: 2026-09-28
-- Last note: 2026-09-28: log created. Live in coding-workflows (step 2). Consumers wait on the `@stable` promotion held by docs/deploy-activation/pr-4443.md step 8b; step 1 emitted.
+- Last note: 2026-09-28: step 1 done. Step 3 waits for docs/deploy-activation/pr-4443.md steps 9a/9 (pr-4443 is BLOCKED at step 8; `stable` is still `d58d7bc` / tag `fade4be9`).
 
 ## Runbook
-1. [ ] Prereqs: Homebrew, git, gh, jq, `gh auth login` (repo scope), clone or refresh `~/src/coding-workflows`
+1. [x] Prereqs: Homebrew, git, gh, jq, `gh auth login` (repo scope), clone or refresh `~/src/coding-workflows`   — done 2026-09-28: git 2.55.0, gh 2.101.0, jq 1.8.2 already installed; `gh api user` = shubhodeep1; `~/src/coding-workflows` fast-forwarded to main `677e8f6`; both `security_pass_skip.py` paths present
 2. [x] Verify live in coding-workflows (read-only, run in the session)   — done 2026-09-28: on `main` 5206437, `security_pass_skip.py --issue 4623` → `{"skip": true, "label": "ai:security", …}` exit 0; `--issue 3576` → `{"skip": false, "label": null, "reason": "no skip label"}` exit 0
 3. [ ] Wait for docs/deploy-activation/pr-4443.md steps 9a/9 (lift `PROMOTE_CYCLE_ENABLED=false`, promote main → `@stable`); no operator action for this project. Then verify on `stable` content, not ancestry: `workflow-templates/.claude/scripts/security_pass_skip.py` and the `security_pass_skip.py` reference in `workflow-templates/.claude/commands/implement-issue-claude.md`, on both the `stable` branch and the `stable` tag
 4. [ ] Verify the consumer sync: after the next `update_workflows` run in one consumer, its default branch carries `.claude/scripts/security_pass_skip.py`, the updated `.claude/commands/implement-issue-claude.md`, and the `security_pass_skip.py` allow entry in `.claude/settings.json`
