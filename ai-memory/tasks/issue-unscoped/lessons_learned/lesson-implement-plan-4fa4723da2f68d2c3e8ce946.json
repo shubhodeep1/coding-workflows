@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T23:43:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A reason regex that exempts records from filing must be anchored on the subsystem's own word (here `classifier`); a bare phrase like `did not return a verdict` would silently hide real denials from another source.",
+  "phase": "implement_plan",
+  "pr_number": 4821,
+  "record_id": "lesson-implement-plan-4fa4723da2f68d2c3e8ce946",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4750-classifier-outage-get-session",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}

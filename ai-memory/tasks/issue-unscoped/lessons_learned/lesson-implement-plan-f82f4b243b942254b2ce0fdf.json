@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T23:43:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a report-template line gains an optional clause, use the file's `[...]` optional-suffix convention and test the whole line, not just the new substring: a substring test passed while the line read `<error>><; \u2026>`.",
+  "phase": "implement_plan",
+  "pr_number": 4821,
+  "record_id": "lesson-implement-plan-f82f4b243b942254b2ce0fdf",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4750-classifier-outage-get-session",
+    "file:.claude/commands/implement-plan-claude.md",
+    "file:tests/test_permission_prompts.py"
+  ]
+}

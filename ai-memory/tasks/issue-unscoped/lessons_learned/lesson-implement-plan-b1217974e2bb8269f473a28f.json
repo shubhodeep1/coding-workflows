@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T23:43:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Do not compile a filing-exemption regex with `re.DOTALL`: `.*` between two anchor words then spans lines, so debug text on another line of a real denial can exempt it. Keep both anchors on one line.",
+  "phase": "implement_plan",
+  "pr_number": 4821,
+  "record_id": "lesson-implement-plan-b1217974e2bb8269f473a28f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4750-classifier-outage-get-session",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}
