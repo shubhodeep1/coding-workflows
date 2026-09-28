@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -259,6 +260,72 @@ def test_header_render_fails_without_staging() -> None:
 	result = _render_header(stage_header=False)
 	assert result.returncode != 0
 	assert "Prompt file not found: prompts/header.txt" in result.stderr
+
+
+def test_clarify_snapshot_isolates_checkout_imports_and_credentials(tmp_path: Path) -> None:
+	"""The tracked-file snapshot runs before Docker and must not import checkout Python."""
+	checkout = tmp_path / "checkout"
+	(checkout / "scripts/clarify_sandbox").mkdir(parents=True)
+	for name in ("clarify_openrouter_broker.py", "write_codex_config.sh", "codex_model_catalog.json"):
+		shutil.copyfile(REPO_ROOT / "scripts" / name, checkout / "scripts" / name)
+	shutil.copyfile(REPO_ROOT / "scripts/clarify_sandbox/Dockerfile", checkout / "scripts/clarify_sandbox/Dockerfile")
+	(checkout / "README.md").write_text("tracked source\n", encoding="utf-8")
+	marker = tmp_path / "imported"
+	malicious_import = 'import os\nopen(os.environ["HIJACK_MARKER"], "w").write(os.environ.get("OPENROUTER_API_KEY", ""))\n'
+	(checkout / "pathlib.py").write_text(malicious_import, encoding="utf-8")
+	(checkout / "sitecustomize.py").write_text(malicious_import, encoding="utf-8")
+	git_dir = tmp_path / "gitdir"
+	subprocess.run(["git", "init", "-q", "--separate-git-dir", str(git_dir), str(checkout)], check=True)
+	subprocess.run(["git", "add", "README.md", "pathlib.py", "sitecustomize.py"], cwd=checkout, check=True)
+	# Production's GIT_DIR/GIT_WORK_TREE pair can be the only way to resolve
+	# the checkout; the interpreter must not inherit them to make this work.
+	(checkout / ".git").unlink()
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	docker = bin_dir / "docker"
+	docker.write_text(
+		'#!/bin/sh\n'
+		'if [ "$1" = build ]; then\n'
+		'  [ -z "${OPENROUTER_API_KEY:-}" ] || exit 3\n'
+		'  for source in "$TMPDIR"/tmp.*/source/README.md; do\n'
+		'    if [ -f "$source" ] && [ "$(cat "$source")" = "tracked source" ]; then\n'
+		'      : > "$SNAPSHOT_OK"\n'
+		'      exit 1\n'
+		'    fi\n'
+		'  done\n'
+		'  exit 4\n'
+		'fi\n', encoding="utf-8",
+	)
+	docker.chmod(0o755)
+	prompt = tmp_path / "prompt"
+	prompt.write_text("clarify\n", encoding="utf-8")
+	snapshot_ok = tmp_path / "snapshot-ok"
+	env = os.environ.copy()
+	env.update({
+		"PATH": f"{bin_dir}:/usr/local/bin:/usr/bin:/bin",
+		"TMPDIR": str(tmp_path),
+		"SNAPSHOT_OK": str(snapshot_ok),
+		"PYTHONPATH": str(checkout),
+		"HIJACK_MARKER": str(marker),
+		"OPENROUTER_API_KEY": "test-only-credential",
+		"MODEL_EDITOR": "openai/gpt-6-sol",
+		"MODEL_REASONING_EFFORT": "high",
+		"GIT_DIR": str(git_dir),
+		"GIT_WORK_TREE": str(checkout),
+	})
+	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(key, None)
+	result = subprocess.run(
+		["bash", str(REPO_ROOT / "scripts/clarify_isolated_run.sh"), str(prompt), str(tmp_path / "output"), str(tmp_path / "log")],
+		cwd=checkout, env=env, capture_output=True, text=True,
+	)
+	assert result.returncode != 0, "fake Docker must stop before the broker starts"
+	assert snapshot_ok.exists(), (
+		"tracked benign source must be snapshotted before Docker: "
+		+ result.stderr.replace("test-only-credential", "<redacted>")
+	)
+	assert not marker.exists(), "host-side Python imported an untrusted module"
+	assert "test-only-credential" not in result.stdout + result.stderr
 
 
 def main() -> int:

@@ -114,7 +114,7 @@ write_guard_check()
 	write_guard_stderr_file="$(mktemp "${TMPDIR:-/tmp}/write-guard-stderr.XXXXXX")"
 
 	set +e
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${write_guard_phase}" "${write_guard_staged_files_list}" "${write_guard_config_path}" > "${write_guard_result_file}" 2> "${write_guard_stderr_file}" <<'PY'
+	python3 -I -B - "${write_guard_phase}" "${write_guard_staged_files_list}" "${write_guard_config_path}" > "${write_guard_result_file}" 2> "${write_guard_stderr_file}" <<'PY'
 import fnmatch
 import json
 import os

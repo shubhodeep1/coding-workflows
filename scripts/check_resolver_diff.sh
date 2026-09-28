@@ -128,13 +128,13 @@ while IFS= read -r touched; do
 			fi
 			;;
 		*.py)
-			if ! PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile "${touched}" 2>&1; then
+			if ! python3 -I -B -m py_compile "${touched}" 2>&1; then
 				echo "::error::py_compile failed for ${touched}" >&2
 				syntax_failed=$((syntax_failed + 1))
 			fi
 			;;
 		*.json)
-			if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "${touched}" 2>&1; then
+			if ! python3 -I -B -c "import json,sys; json.load(open(sys.argv[1]))" "${touched}" 2>&1; then
 				echo "::error::JSON parse failed for ${touched}" >&2
 				syntax_failed=$((syntax_failed + 1))
 			fi
@@ -169,7 +169,7 @@ if [ "${#workflow_files[@]}" -gt 0 ]; then
 		echo "::error::check_workflow_script_refs.py not found at ${checker}" >&2
 		exit 1
 	fi
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 "${checker}" \
+	if ! python3 -I -B "${checker}" \
 			--repo-root "${REPO_ROOT}" \
 			--files "${workflow_files[@]}"; then
 		echo "::error::Modified workflow file references nonexistent script(s). Aborting." >&2

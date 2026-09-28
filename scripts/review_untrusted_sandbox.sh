@@ -18,7 +18,23 @@ if [ "${action}" = prepare ]; then
 	trap 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${dep_container}" >/dev/null 2>&1 || true; rm -rf -- "${root}"' EXIT
 	mkdir -m 0700 "${root}/socket" "${root}/home"
 	mkdir -m 0755 "${root}/source"
-	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json"
+	# The editor step works in the per-PR workspace: review_autofix.yml's
+	# "Activate workspace shell context" cds every later step into
+	# WORKSPACE_PATH and points GIT_WORK_TREE at it, while GITHUB_WORKSPACE
+	# keeps only the Git database. Snapshot and transfer the tree the commit
+	# step reads, or every validated edit lands where nothing commits it
+	# (issue #4580). workspace_init.sh creates it only under
+	# ${RUNNER_TEMP}/workspaces; without one the checkout stays the target.
+	snapshot_git_dir=()
+	if [ -n "${WORKSPACE_PATH:-}" ]; then
+		workspace_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}/workspaces" 2>/dev/null || echo /invalid)"
+		workspace="$(realpath -e -- "${WORKSPACE_PATH}" 2>/dev/null || echo /invalid)"
+		checkout_git_dir="$(realpath -e -- "${GITHUB_WORKSPACE:-/invalid}/.git" 2>/dev/null || echo /invalid)"
+		[ -d "${workspace}" ] && [[ "${workspace}" != *$'\n'* ]] && [ "$(dirname -- "${workspace}")" = "${workspace_root}" ] && [ -d "${checkout_git_dir}" ] || { echo '::error::Review workspace path rejected' >&2; exit 1; }
+		snapshot_git_dir=("${checkout_git_dir}")
+	fi
+	printf '%s\n' "${workspace}" > "${root}/workspace"
+	env -i PATH=/usr/local/bin:/usr/bin:/bin python3 -I -B "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}"
 	version="${OPENCODE_VERSION:-1.18.23}"
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
 	image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
@@ -81,7 +97,7 @@ if [ "${action}" = prepare ]; then
 		' || { echo '::error::Review dependency isolation failed' >&2; exit 1; }
 	# PR build backends may write source files. Never publish their writes as
 	# editor output: restore the exact host snapshot before launching the model.
-	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" refresh "${workspace}" "${root}/source" "${root}/baseline.json"
+	env -i PATH=/usr/local/bin:/usr/bin:/bin python3 -I -B "${support}/review_untrusted_workspace.py" refresh "${workspace}" "${root}/source" "${root}/baseline.json"
 	printf 'REVIEW_SANDBOX_ROOT=%s\n' "${root}" >> "${GITHUB_ENV:?}"
 	trap - EXIT
 	exit 0
@@ -98,6 +114,10 @@ if [ "${action}" = cleanup ]; then
 	rm -rf -- "${root}"
 	exit 0
 fi
+# Transfer only into the workspace prepare validated and recorded.
+[ -f "${root}/workspace" ] || { echo '::error::Review sandbox not prepared' >&2; exit 1; }
+workspace="$(< "${root}/workspace")"
+[ -d "${workspace}" ] || { echo '::error::Review workspace path rejected' >&2; exit 1; }
 
 [ "$#" -eq 6 ] || exit 2
 prompt="$2"
@@ -109,7 +129,7 @@ config="$6"
 [ -n "${OPENROUTER_API_KEY:-}" ] && [ -s "${prompt}" ] || { echo '::error::Review relay preflight failed' >&2; exit 1; }
 
 # Never mount a host-generated config with other providers or host paths.
-if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${config}" "${root}/config.json" "${model}" <<'PY'
+if ! env -i PATH=/usr/local/bin:/usr/bin:/bin python3 -I -B - "${config}" "${root}/config.json" "${model}" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -146,8 +166,8 @@ for budget_var in MAX_REQUESTS MAX_OUTPUT_TOKENS MAX_TOTAL_OUTPUT_TOKENS MAX_INP
 	budget_var="MODEL_PROVIDER_BROKER_${budget_var}"
 	[ -z "${!budget_var:-}" ] || broker_budget_env+=("${budget_var}=${!budget_var}")
 done
-env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}" PYTHONDONTWRITEBYTECODE=1 "${broker_budget_env[@]}" \
-	python3 "${support}/clarify_openrouter_broker.py" review-broker "${root}/socket/provider.sock" &
+env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}" "${broker_budget_env[@]}" \
+	python3 -I -B "${support}/clarify_openrouter_broker.py" review-broker "${root}/socket/provider.sock" &
 broker_pid=$!
 for _ in $(seq 1 50); do
 	[ -S "${root}/socket/provider.sock" ] && break
@@ -183,7 +203,7 @@ env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}"
 		# The marker survives a killed/incomplete transfer. The editor wrapper
 		# fails the step instead of treating a partial host edit as a retry.
 		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"
-		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json"; then
+		if env -i PATH=/usr/local/bin:/usr/bin:/bin python3 -I -B "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json"; then
 			rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"
 		else
 			rc=1

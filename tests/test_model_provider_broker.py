@@ -8,6 +8,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -385,6 +386,207 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	assert "unshare --fork --pid --mount-proc --kill-child=KILL" in helpers_text
 	assert helpers_text.index('kill -TERM "${broker_pid}"') < helpers_text.index('setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}"')
 	assert 'setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || return 1' not in helpers_text
+
+
+def test_review_host_python_launches_are_isolated_and_broker_keeps_credential(tmp_path: Path) -> None:
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	isolated = 'env -i PATH=/usr/local/bin:/usr/bin:/bin python3 -I -B'
+	assert helper.count(isolated) == 4
+	assert f'{isolated} - "${{config}}"' in helper
+	assert 'OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}"' in helper
+
+	host = tmp_path / "host"
+	(host / "scripts").mkdir(parents=True)
+	(host / "scripts/app.py").write_text("before\n", encoding="utf-8")
+	(host / "README.md").write_text("review source\n", encoding="utf-8")
+	marker = tmp_path / "imported"
+	malicious_import = 'import os\nopen(os.environ["HIJACK_MARKER"], "w").write(os.environ.get("OPENROUTER_API_KEY", ""))\n'
+	(host / "pathlib.py").write_text(malicious_import, encoding="utf-8")
+	(host / "sitecustomize.py").write_text(malicious_import, encoding="utf-8")
+	subprocess.run(["git", "init", "-q", str(host)], check=True)
+	subprocess.run(["git", "add", "README.md", "scripts/app.py", "pathlib.py", "sitecustomize.py"], cwd=host, check=True)
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	docker = bin_dir / "docker"
+	docker.write_text(
+		"#!/bin/sh\n"
+		"case \"$1\" in\n"
+		"  build) printf 'sha256:%064d\\n' 0 ;;\n"
+		"  run) exit 0 ;;\n"
+		"  *) exit 0 ;;\n"
+		"esac\n", encoding="utf-8",
+	)
+	docker.chmod(0o755)
+	github_env = tmp_path / "github-env"
+	github_env.touch()
+	# Unix-domain socket paths are limited to ~108 bytes; pytest's tmp_path
+	# can be longer than the production RUNNER_TEMP path.
+	short_dir = tempfile.TemporaryDirectory(prefix="review-")
+	env = os.environ.copy()
+	env.update({
+		"PATH": f"{bin_dir}:/usr/local/bin:/usr/bin:/bin",
+		"PYTHONPATH": str(host),
+		"HIJACK_MARKER": str(marker),
+		"OPENROUTER_API_KEY": "test-only-credential",
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		"GITHUB_WORKSPACE": str(host),
+		"GITHUB_ENV": str(github_env),
+		"RUNNER_TEMP": short_dir.name,
+	})
+	script = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+	try:
+		prepared = subprocess.run(["bash", script, "prepare"], cwd=host, env=env, capture_output=True, text=True)
+		assert prepared.returncode == 0, prepared.stderr
+		root = Path(github_env.read_text(encoding="utf-8").strip().split("=", 1)[1])
+		assert (root / "source/README.md").read_text(encoding="utf-8") == "review source\n"
+		assert json.loads((root / "baseline.json").read_text(encoding="utf-8"))["scripts/app.py"]
+		assert not marker.exists()
+		# Refresh discards dependency-install writes; transfer copies only the editor's edit.
+		(root / "source/scripts/app.py").write_text("backend write\n", encoding="utf-8")
+		(root / "source/scripts/new.py").write_text("backend output\n", encoding="utf-8")
+		assert subprocess.run(
+			["env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin", "python3", "-I", "-B", str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
+			 "refresh", str(host), str(root / "source"), str(root / "baseline.json")], capture_output=True,
+		).returncode == 0
+		assert (root / "source/scripts/app.py").read_text(encoding="utf-8") == "before\n"
+		assert not (root / "source/scripts/new.py").exists()
+		prompt = tmp_path / "prompt"
+		prompt.write_text("review\n", encoding="utf-8")
+		config = tmp_path / "config.json"
+		config.write_text(json.dumps({"model": "openrouter/openai/test-model", "provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}}}), encoding="utf-8")
+		(root / "source/scripts/app.py").write_text("after\n", encoding="utf-8")
+		(root / "source/scripts/new.py").write_text("new\n", encoding="utf-8")
+		env.update({"REVIEW_SANDBOX_ROOT": str(root), "RUNTIME_DIR": short_dir.name})
+		ran = subprocess.run(["bash", script, "run", str(prompt), str(tmp_path / "output"), "openai/test-model", "high", str(config)], cwd=host, env=env, capture_output=True, text=True)
+		assert ran.returncode == 0, ran.stderr
+		assert (host / "scripts/app.py").read_text(encoding="utf-8") == "after\n"
+		assert (host / "scripts/new.py").read_text(encoding="utf-8") == "new\n"
+		assert not marker.exists(), "host Python imported an untrusted module"
+		assert "test-only-credential" not in prepared.stdout + prepared.stderr + ran.stdout + ran.stderr
+	finally:
+		if "root" in locals():
+			subprocess.run(["bash", script, "cleanup"], cwd=host, env=env, capture_output=True)
+		short_dir.cleanup()
+
+
+def _review_sandbox_fixture(tmp_path: Path, runner_temp: Path) -> tuple[Path, Path, dict[str, str]]:
+	"""Checkout + per-PR workspace laid out as review_autofix.yml lays them out."""
+	checkout = tmp_path / "checkout"
+	(checkout / "scripts").mkdir(parents=True)
+	(checkout / "scripts/app.py").write_text("before\n", encoding="utf-8")
+	(checkout / "README.md").write_text("review source\n", encoding="utf-8")
+	git_env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(tmp_path), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+	subprocess.run(["git", "init", "-q", str(checkout)], env=git_env, check=True)
+	subprocess.run(["git", "add", "README.md", "scripts/app.py"], cwd=checkout, env=git_env, check=True)
+	subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@invalid", "commit", "-qm", "init"], cwd=checkout, env=git_env, check=True)
+	# workspace_init.sh materializes the checkout (without .git) under
+	# ${RUNNER_TEMP}/workspaces/<key>; an untracked, non-ignored file rides along.
+	workspace = runner_temp / "workspaces" / "4572-1"
+	(workspace / "scripts").mkdir(parents=True)
+	(workspace / "scripts/app.py").write_text("before\n", encoding="utf-8")
+	(workspace / "README.md").write_text("review source\n", encoding="utf-8")
+	(workspace / "scripts/untracked.py").write_text("untracked\n", encoding="utf-8")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	docker = bin_dir / "docker"
+	docker.write_text("#!/bin/sh\ncase \"$1\" in\n  build) printf 'sha256:%064d\\n' 0 ;;\n  *) exit 0 ;;\nesac\n", encoding="utf-8")
+	docker.chmod(0o755)
+	github_env = tmp_path / "github-env"
+	github_env.touch()
+	env = {
+		"PATH": f"{bin_dir}:/usr/local/bin:/usr/bin:/bin",
+		"HOME": str(tmp_path),
+		"OPENROUTER_API_KEY": "test-only-credential",
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		"GITHUB_WORKSPACE": str(checkout),
+		"GITHUB_ENV": str(github_env),
+		"RUNNER_TEMP": str(runner_temp),
+		"RUNTIME_DIR": str(runner_temp),
+		"WORKSPACE_PATH": str(workspace),
+		"GIT_DIR": str(checkout / ".git"),
+		"GIT_WORK_TREE": str(workspace),
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_CONFIG_GLOBAL": os.devnull,
+	}
+	return checkout, workspace, env
+
+
+def test_review_sandbox_transfers_into_active_workspace(tmp_path: Path) -> None:
+	# Issue #4580: with the workflow's workspace shell context active, the
+	# commit step reads WORKSPACE_PATH (GIT_WORK_TREE); edits transferred into
+	# GITHUB_WORKSPACE were silently lost on every review run.
+	short_dir = tempfile.TemporaryDirectory(prefix="review-")
+	runner_temp = Path(short_dir.name)
+	checkout, workspace, env = _review_sandbox_fixture(tmp_path, runner_temp)
+	script = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+	try:
+		prepared = subprocess.run(["bash", script, "prepare"], cwd=workspace, env=env, capture_output=True, text=True)
+		assert prepared.returncode == 0, prepared.stderr
+		root = Path(Path(env["GITHUB_ENV"]).read_text(encoding="utf-8").strip().split("=", 1)[1])
+		assert (root / "workspace").read_text(encoding="utf-8").strip() == str(workspace.resolve())
+		assert (root / "source/scripts/untracked.py").read_text(encoding="utf-8") == "untracked\n"
+		(root / "source/scripts/app.py").write_text("after\n", encoding="utf-8")
+		(root / "source/scripts/new.py").write_text("new\n", encoding="utf-8")
+		prompt = tmp_path / "prompt"
+		prompt.write_text("review\n", encoding="utf-8")
+		config = tmp_path / "config.json"
+		config.write_text(json.dumps({"model": "openrouter/openai/test-model", "provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}}}), encoding="utf-8")
+		run_env = {**env, "REVIEW_SANDBOX_ROOT": str(root)}
+		ran = subprocess.run(["bash", script, "run", str(prompt), str(tmp_path / "output"), "openai/test-model", "high", str(config)], cwd=workspace, env=run_env, capture_output=True, text=True)
+		assert ran.returncode == 0, ran.stderr
+		assert (workspace / "scripts/app.py").read_text(encoding="utf-8") == "after\n"
+		assert (workspace / "scripts/new.py").read_text(encoding="utf-8") == "new\n"
+		assert (checkout / "scripts/app.py").read_text(encoding="utf-8") == "before\n"
+		assert not (checkout / "scripts/new.py").exists()
+		# What review_apply_fixes.sh's EDITOR_CHANGES_LOST gate checks.
+		diff = subprocess.run(["git", "diff", "--name-only", "HEAD"], cwd=workspace, env=env, capture_output=True, text=True, check=True)
+		assert diff.stdout.split() == ["scripts/app.py"]
+		# A root whose workspace record is gone is not a prepared sandbox.
+		(root / "workspace").unlink()
+		refused = subprocess.run(["bash", script, "run", str(prompt), str(tmp_path / "output"), "openai/test-model", "high", str(config)], cwd=workspace, env=run_env, capture_output=True, text=True)
+		assert refused.returncode != 0
+		assert "Review sandbox not prepared" in refused.stderr
+	finally:
+		if "root" in locals():
+			subprocess.run(["bash", script, "cleanup"], cwd=workspace, env={**env, "REVIEW_SANDBOX_ROOT": str(root)}, capture_output=True)
+		short_dir.cleanup()
+
+
+def test_review_sandbox_rejects_workspace_outside_runner_workspaces(tmp_path: Path) -> None:
+	short_dir = tempfile.TemporaryDirectory(prefix="review-")
+	runner_temp = Path(short_dir.name)
+	checkout, workspace, env = _review_sandbox_fixture(tmp_path, runner_temp)
+	elsewhere = tmp_path / "elsewhere"
+	elsewhere.mkdir()
+	script = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+	try:
+		for bad in (str(elsewhere), str(tmp_path / "missing"), str(runner_temp / "workspaces")):
+			prepared = subprocess.run(["bash", script, "prepare"], cwd=workspace, env={**env, "WORKSPACE_PATH": bad}, capture_output=True, text=True)
+			assert prepared.returncode != 0, bad
+			assert "Review workspace path rejected" in prepared.stderr
+			assert Path(env["GITHUB_ENV"]).read_text(encoding="utf-8") == ""
+		assert not list(runner_temp.glob("review-isolated-*"))
+	finally:
+		short_dir.cleanup()
+
+
+def test_review_workspace_snapshot_lists_through_host_git_dir(tmp_path: Path) -> None:
+	checkout, workspace, _env = _review_sandbox_fixture(tmp_path, tmp_path / "rt")
+	helper = str(REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	base = ["env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin", "python3", "-I", "-B", helper, "snapshot", str(workspace)]
+	source = tmp_path / "source"
+	source.mkdir()
+	# Without the Git dir a work tree that has no .git cannot be listed.
+	assert subprocess.run(base + [str(source), str(tmp_path / "m0.json")], capture_output=True).returncode != 0
+	source2 = tmp_path / "source2"
+	source2.mkdir()
+	assert subprocess.run(base + [str(source2), str(tmp_path / "m1.json"), str(checkout / ".git")], capture_output=True).returncode == 0
+	assert sorted(json.loads((tmp_path / "m1.json").read_text(encoding="utf-8"))) == ["README.md", "scripts/app.py", "scripts/untracked.py"]
+	source3 = tmp_path / "source3"
+	source3.mkdir()
+	assert subprocess.run(base + [str(source3), str(tmp_path / "m2.json"), str(tmp_path / "no-such-git")], capture_output=True).returncode != 0
+	# Only snapshot takes the optional fifth argument.
+	assert subprocess.run(["env", "-i", "PATH=/usr/bin:/bin", "python3", "-I", "-B", helper, "refresh", str(workspace), str(source), str(tmp_path / "m1.json"), str(checkout / ".git")], capture_output=True).returncode == 2
 
 
 def test_model_facing_workflows_export_broker_price_policy() -> None:
