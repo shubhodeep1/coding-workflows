@@ -238,16 +238,17 @@ jobs:
             project)
               # The target PR goes into another project branch: that branch must
               # itself have exactly one open trusted same-repo PR, into the
-              # default branch.
+              # default branch. The base name is not echoed: it is API data.
               git check-ref-format --branch "${target_detail}" >/dev/null 2>&1 ||
-                { echo "::error::Explicit validation target is not authorized."; exit 1; }
+                { echo "::error::Explicit validation target is not authorized: its PR base is not a valid branch name."; exit 1; }
               parent_prs="$(gh api --method GET --paginate --slurp \
                 -f state=open -f "head=${GITHUB_REPOSITORY%%/*}:${target_detail}" \
                 -f per_page=100 \
                 "repos/${GITHUB_REPOSITORY}/pulls")" || exit 1
               jq -e --arg repo "${GITHUB_REPOSITORY}" --arg branch "${target_detail}" \
                 --arg base "${VALIDATE_DEFAULT_BRANCH}" "${validate_pr_jq_defs}"'
-                single_pr("parent") | trusted_pr($repo) and .head.ref == $branch and .base.ref == $base' \
+                single_pr("parent") | trusted_pr($repo) and .head.ref == $branch and
+                  (.head.sha | type == "string" and test("^[0-9a-fA-F]{40}$")) and .base.ref == $base' \
                 <<< "${parent_prs}" >/dev/null ||
                 { echo "::error::Explicit validation target is not authorized."; exit 1; }
               ;;

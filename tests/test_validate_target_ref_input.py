@@ -113,9 +113,11 @@ def _make_invoke(tmp_path: Path):
 		})
 		result = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
 		invoke.calls = [line for line in calls.read_text(encoding="utf-8").splitlines() if line]
+		invoke.stdout = result.stdout
 		return result.returncode, output.read_text(encoding="utf-8")
 
 	invoke.calls = []
+	invoke.stdout = ""
 	return invoke
 
 
@@ -176,10 +178,19 @@ def test_project_branch_base_requires_one_parent_pr_into_default(tmp_path: Path)
 		{"head": {**parent["head"], "repo": {"full_name": "fork/repo"}}},
 		{"base": {**parent["base"], "repo": {"full_name": "fork/repo"}}},
 		{"head": {**parent["head"], "ref": "claude/implement-plan-other"}},
+		{"head": {**parent["head"], "sha": "short"}},
+		{"head": {key: value for key, value in parent["head"].items() if key != "sha"}},
 		{"state": "closed"},
 		{"author_association": "CONTRIBUTOR"},
 	):
 		assert invoke([pr], target=branch, parent=[{**parent, **edit}]) == (1, ""), edit
+	# A base the jq pattern accepts but git rejects stops before the parent read,
+	# with its own error.
+	for bad_base in ("claude/implement-plan-a..b", "claude/implement-plan-a.lock", "claude/implement-plan-a."):
+		assert invoke([_pr(branch, bad_base, sha)], target=branch, parent=[parent]) == (1, ""), bad_base
+		assert len(invoke.calls) == 1, bad_base
+		assert "its PR base is not a valid branch name" in invoke.stdout, bad_base
+		assert bad_base not in invoke.stdout, bad_base
 	# The target PR itself still needs a trusted, same-repo binding.
 	assert invoke([{**pr, "author_association": "NONE"}], target=branch, parent=[parent]) == (1, "")
 	assert invoke([pr, pr], target=branch, parent=[parent]) == (1, "")
