@@ -20,7 +20,11 @@
 #   * nothing at all (no finding in any ledger block, fresh ready check snapshot)
 #       -> no comment; CLAUDE_FIXER_ZERO_FINDINGS=true is exported so the
 #          workflow's own auto-merge step runs, as it does when the editor
-#          finds nothing to commit.
+#          finds nothing to commit. A reviewer slot that failed (retry limit
+#          reached, killed, timed out) is a missing vote, not a finding: the
+#          ledger is still clean when at least CLAUDE_FIXER_MIN_CLEAN_REVIEWERS
+#          (default 5) reviewers completed clean, logged as
+#          CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS (see the clean-ledger check).
 #
 # The hand-off marker is
 #   <!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->
@@ -34,7 +38,9 @@
 # AUTOFIX_PRE_REVIEW_RESOLVE,
 # AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED, REVIEWER_CONSENSUS_FILE,
 # PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR, GITHUB_RUN_ID,
-# GITHUB_SERVER_URL, RUNTIME_DIR.
+# GITHUB_SERVER_URL, RUNTIME_DIR, PREVIOUS_REVIEWS_DIR (the reviewer
+# runner's status_review_<slug>.txt files), CLAUDE_FIXER_MIN_CLEAN_REVIEWERS
+# (default 5).
 # API calls: on a clean candidate, the existing check-run collector refreshes
 # its paginated check-runs GET; on findings, the ledger chunks from
 # post_review_comment.sh and one hand-off comment are posted.
@@ -114,17 +120,103 @@ if [ -s "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ]; then
   claude_fixer_failed_checks="$(sed -n 's/^failed\[[0-9]*\]\.name: //p' "${PR_CHECK_RUNS_CONTEXT_FILE}" | paste -sd, - || true)"
 fi
 
+# Clean-ledger check. Both consensus blocks must be exactly their empty line,
+# and each "=== FINDINGS FROM <slug> ===" block is classified by its single
+# line:
+#   clean   - "(No findings reported.)";
+#   failed  - the terminal retry-exhaustion line scripts/review_run_reviewers.sh
+#             writes for a slot that failed (retry limit reached, killed, timed
+#             out), naming the block's own model (slug = model with '/', '.'
+#             and ':' mapped to '_', the runner's safe_name);
+#   finding - anything else.
+# A failed slot is a missing vote: never a finding and never a clean vote
+# (issue #4835). Without a failed block the rule is unchanged (every block
+# clean). With one, the ledger is clean only when no block is a finding, the
+# runner's status file ${PREVIOUS_REVIEWS_DIR}/status_review_<slug>.txt reads
+# "failed" for every failed block and "success" for every clean one, no slug
+# repeats, and at least CLAUDE_FIXER_MIN_CLEAN_REVIEWERS (default 5) clean
+# reviewers remain. The ledger is model output over reviewer output, so its
+# text alone never proves a failure; the status files are written by the
+# runner only.
 claude_fixer_clean_ledger="false"
+claude_fixer_failed_slots=""
+claude_fixer_clean_reviewers=0
+claude_fixer_min_clean_reviewers="${CLAUDE_FIXER_MIN_CLEAN_REVIEWERS:-5}"
+if ! [[ "${claude_fixer_min_clean_reviewers}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::warning::Invalid CLAUDE_FIXER_MIN_CLEAN_REVIEWERS='${claude_fixer_min_clean_reviewers}' (need an integer of at least 1); using 5."
+  claude_fixer_min_clean_reviewers=5
+fi
+claude_fixer_ledger_blocks=""
 if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}" -eq 0 ] \
-  && awk '
-    /^=== CONSENSUS FINDINGS ===$/ { expected = "(No findings reported.)"; block = 1; entries = 0; next }
-    /^=== CONSENSUS TASK GAPS ===$/ { expected = "(No task gaps reported.)"; block = 1; entries = 0; next }
-    /^=== FINDINGS FROM .+ ===$/ { expected = "(No findings reported.)"; block = 1; entries = 0; next }
-    /^=== END / { if (block) { if (entries != 1) invalid = 1; blocks++; block = 0 }; next }
-    block && NF { entries++; if ($0 != expected) invalid = 1 }
+  && claude_fixer_ledger_blocks="$(awk '
+    function close_block(  model)
+    {
+      if (entries != 1) {
+        invalid = 1
+      } else if (kind == "consensus") {
+        if (first != expected) invalid = 1
+      } else if (first == "(No findings reported.)") {
+        print "clean " slug
+      } else if (first ~ /^Reviewer [^ ]+ failed after (reaching the slot retryable-failure limit \([0-9]+\)|retryable failure recovery was exhausted|[0-9]+ attempts)\.$/) {
+        model = first
+        sub(/^Reviewer /, "", model)
+        sub(/ failed after .*$/, "", model)
+        gsub(/[\/.:]/, "_", model)
+        if (model == slug) print "failed " slug
+        else invalid = 1
+      } else {
+        invalid = 1
+      }
+      blocks++
+      block = 0
+    }
+    /^=== CONSENSUS FINDINGS ===$/ { kind = "consensus"; expected = "(No findings reported.)"; block = 1; entries = 0; next }
+    /^=== CONSENSUS TASK GAPS ===$/ { kind = "consensus"; expected = "(No task gaps reported.)"; block = 1; entries = 0; next }
+    /^=== FINDINGS FROM .+ ===$/ {
+      kind = "reviewer"
+      slug = $0
+      sub(/^=== FINDINGS FROM /, "", slug)
+      sub(/ ===$/, "", slug)
+      block = 1
+      entries = 0
+      next
+    }
+    /^=== END / { if (block) close_block(); next }
+    block && NF { entries++; if (entries == 1) first = $0 }
     END { if (invalid || block || blocks < 3) exit 1 }
-  ' "${REVIEWER_CONSENSUS_FILE}"; then
-  claude_fixer_clean_ledger="true"
+  ' "${REVIEWER_CONSENSUS_FILE}")"; then
+  # Pattern matches, not `printf | grep -q`: under pipefail an early grep exit
+  # can SIGPIPE the writer and read as "no failed block", which fails open.
+  if [[ $'\n'"${claude_fixer_ledger_blocks}" != *$'\n'"failed "* ]]; then
+    claude_fixer_clean_ledger="true"
+  else
+    claude_fixer_failed_slots_verified="true"
+    if [ -n "$(printf '%s\n' "${claude_fixer_ledger_blocks}" | sed -n 's/^[a-z]* //p' | sort | uniq -d)" ]; then
+      echo "::warning::Claude-fixer ledger repeats a reviewer block; the ledger is not clean."
+      claude_fixer_failed_slots_verified="false"
+    fi
+    while read -r claude_fixer_block_kind claude_fixer_block_slug; do
+      [ -n "${claude_fixer_block_kind}" ] || continue
+      claude_fixer_block_status=""
+      if [[ "${claude_fixer_block_slug}" =~ ^[A-Za-z0-9_-]+$ ]] && [ -n "${PREVIOUS_REVIEWS_DIR:-}" ] \
+        && [ -f "${PREVIOUS_REVIEWS_DIR}/status_review_${claude_fixer_block_slug}.txt" ]; then
+        claude_fixer_block_status="$(cat "${PREVIOUS_REVIEWS_DIR}/status_review_${claude_fixer_block_slug}.txt" 2>/dev/null || true)"
+      fi
+      case "${claude_fixer_block_kind}:${claude_fixer_block_status}" in
+        clean:success) claude_fixer_clean_reviewers="$((claude_fixer_clean_reviewers + 1))" ;;
+        failed:failed) claude_fixer_failed_slots="${claude_fixer_failed_slots:+${claude_fixer_failed_slots},}${claude_fixer_block_slug}" ;;
+        *)
+          echo "::warning::Claude-fixer ledger block '${claude_fixer_block_slug}' reads ${claude_fixer_block_kind} but its reviewer status is '${claude_fixer_block_status:-missing}'; the ledger is not clean."
+          claude_fixer_failed_slots_verified="false"
+          ;;
+      esac
+    done <<< "${claude_fixer_ledger_blocks}"
+    if [ "${claude_fixer_failed_slots_verified}" = "true" ] \
+      && [ "${claude_fixer_clean_reviewers}" -ge "${claude_fixer_min_clean_reviewers}" ]; then
+      claude_fixer_clean_ledger="true"
+      echo "CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} failed_slots=${claude_fixer_failed_slots} clean_reviewers=${claude_fixer_clean_reviewers} min=${claude_fixer_min_clean_reviewers}"
+    fi
+  fi
 fi
 
 if [ "${claude_fixer_clean_ledger}" = "true" ] && [ -z "${claude_fixer_failed_checks}" ]; then
@@ -171,6 +263,9 @@ fi
     echo "Reviewer ledger entries: ${claude_fixer_finding_count} (posted above)."
   else
     echo "The consensus ledger was not produced; the per-reviewer outputs are in the run's \`reviewer-logs-*\` artifact."
+  fi
+  if [ -n "${claude_fixer_failed_slots}" ]; then
+    echo "Reviewer slots that failed (missing votes, not findings): \`${claude_fixer_failed_slots//,/\`, \`}\`. Completed clean reviewers: ${claude_fixer_clean_reviewers} (\`CLAUDE_FIXER_MIN_CLEAN_REVIEWERS\` requires ${claude_fixer_min_clean_reviewers})."
   fi
   if [ -n "${claude_fixer_failed_checks}" ]; then
     echo "Failing check runs on this head: \`${claude_fixer_failed_checks//,/\`, \`}\`."

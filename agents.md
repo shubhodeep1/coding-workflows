@@ -88,7 +88,21 @@ Phases of the unattended pipeline (each is a separate workflow file under
    The bot's comment keeps `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`
    alongside the v2 digest marker; the session dispatches
    `claude_fixer_converged_head=<sha>` for verification. Zero ledger entries
-   with a clean check snapshot auto-merge in the run; at the cap the PR itself
+   with a clean check snapshot auto-merge in the run. A reviewer slot that
+   failed (retry limit reached, killed, timed out) is a missing vote, not a
+   finding (issue #4835): its block counts as failed only when its single line
+   is `scripts/review_run_reviewers.sh`'s retry-exhaustion line for that
+   block's own model and the runner's `status_review_<slug>.txt` reads
+   `failed`. Such a ledger is clean when the consensus blocks are empty, no
+   completed reviewer reported anything, and at least
+   `CLAUDE_FIXER_MIN_CLEAN_REVIEWERS` (repo var, default 5) blocks read
+   `(No findings reported.)` from slots whose status file reads `success`; it
+   then takes the same clean path and logs
+   `CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS pr=… head=… round=… failed_slots=… clean_reviewers=… min=…`.
+   Fewer clean reviewers, any other text, or a status that does not match
+   hands the round off, and the hand-off names the failed slots. A ledger with
+   no failed slot keeps the every-block-clean rule, with no minimum. At the
+   cap the PR itself
    is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
    (`claude_fixer_awaiting_session`). `[claude-intervention]` and

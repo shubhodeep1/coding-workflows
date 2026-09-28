@@ -4506,6 +4506,9 @@ jobs:
           HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
           HEAD_REF: ${{ env.TARGET_BRANCH }}
           CLAUDE_FIXER_ROUND_INDEX: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          # Clean reviewers a ledger needs when a reviewer slot failed (a
+          # failed slot is a missing vote, not a finding; issue #4835).
+          CLAUDE_FIXER_MIN_CLEAN_REVIEWERS: ${{ vars.CLAUDE_FIXER_MIN_CLEAN_REVIEWERS || '5' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_fixer_handoff.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_fixer_handoff.sh"
