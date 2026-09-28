@@ -174,6 +174,55 @@ implementing chain must not re-open them.
   #4601's fixer, and this project's phase 2 for about 50 minutes) until a
   human happened to look.
 
+### D13 — Issue-mode projects start from the default branch
+
+- **Chosen:** an issue-mode project uses the default branch as its base
+  unless the code it fixes exists only on the branch the issue names.
+  `ai:security` follow-ups keep the project branch they name, because the
+  audited code lives there. Another named base (a heal issue's PR head,
+  `stable`) is used only when a file the plan changes, as opposed to
+  creates, is missing on the default branch. When a project still runs on a
+  non-default base and that base's pull request closes without merging, the
+  chain rebuilds the project on the default branch by itself when the
+  project's diff applies cleanly, and records an auto-decision (§28.D). It
+  stops at `Status: BLOCKED` only when the diff does not apply. Added to
+  Phase 3 on 2026-09-28.
+- **Alternatives considered:** always the default branch, with no
+  exception; keep today's named-base rule and ask each time.
+- **Why:** #4653's project was built on `ai/issue-4605` (AD-1), the head of
+  PR #4607, because the heal issue named it. PR #4607 was then closed without
+  merging, so validation could never be authorised and the recommended "wait"
+  answer would have waited forever. Retargeting the final PR to `main` would
+  have carried 203 unrelated commits. The project's 8-file diff applied
+  cleanly to `main`, which the operator chose on 2026-09-28.
+
+### D14 — The GPT resolver takes conflicts in protected `.claude/**` paths
+
+- **Chosen:** on a `claude/*` head in Claude-fixer mode, a merge conflict
+  whose unmerged paths include any `.claude/**` path goes to the existing
+  GPT conflict resolver (`review_conflict_prepare.sh` and the codex-agent
+  resolver steps) instead of a Claude hand-off. The resolver resolves every
+  unmerged path of that conflict. Its push starts a normal Claude-fixer
+  review round, so the reviewer panel and the Claude session still see the
+  result. A conflict that touches no `.claude/**` path is handed to Claude
+  as today. If the resolver fails or escalates (`RESOLVER_ESCALATED`), the
+  workflow posts today's `kind=conflict` hand-off. A kill switch,
+  `CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED` (default `true`, D5),
+  restores today's behaviour when set to `false`. Added to Phase 3 on
+  2026-09-28.
+- **Alternatives considered:** a deterministic keep-both-sides merge only
+  for pure-addition hunks (JSON allow lists), with every other `.claude/**`
+  conflict going to the operator; keep today's behaviour and send each one
+  to the operator.
+- **Why:** Claude Code never auto-approves an edit under `.claude/**`, so an
+  unattended fixer cannot resolve such a conflict. PR #4610 stopped on
+  2026-09-28 because auto mode blocked its merge of `main` into
+  `.claude/settings.json` and `.claude/commands/claude-issue-pickup.md`, and
+  the operator had to resolve it in a watched session. `settings.json` is a
+  hotspot, since most PRs add allow entries. The resolver runs in Actions,
+  where no auto-mode block applies, and it already resolves conflicts for
+  every non-`claude/*` PR.
+
 ## Context
 
 Observed on 2026-09-27 in `shubhodeep1/coding-workflows`: 11 open `claude/*`
@@ -499,6 +548,63 @@ Workflow side:
   stage the progress log already records as started by another live session
   (`Stage:` plus the stage session id the checker records) reports that and
   ends without acting, so two resumes never both run.
+- `implement-issue-claude.md` and `implement-plan-claude.md` issue mode
+  (D13):
+  - Step 3's base rule: resolve `<issue base>` as today, then, when it is not
+    the default branch and the issue is not an `ai:security` follow-up, use
+    the default branch unless a file the plan changes (not one it creates)
+    is missing there (`git cat-file -e origin/<default>:<path>`). The check
+    runs once the plan's file list exists and before the project branch is
+    created. Record the choice as an `AD-<n>` (`Base: <default> instead of
+    <named> (D13)`, or the reverse with the missing paths).
+  - Every issue-mode stage start (step 0), and every project check-in while
+    the log's base is not the default branch, spends one REST read
+    (`GET pulls?head=<owner>:<base>&state=all&per_page=5`) and treats the
+    base as dead when no listed PR is open and the newest is closed with
+    `merged_at` null, or when the base branch is gone (`git ls-remote`
+    empty).
+  - On a dead base, the checker starts the next stage with
+    `Waiting on was: base <base> closed unmerged`. That stage rebuilds the
+    project:
+    1. Create `<project branch>-main` from `origin/<default>` (append `-2`,
+       `-3`, … when taken).
+    2. Apply `git diff origin/<base>...origin/<project branch>` after a clean
+       `git apply --3way --check`.
+    3. Update the progress log's project-branch and base lines, commit the
+       uncommitted log entries, and push.
+    4. Close the old final PR without merging, as superseded. The chain
+       opened it, so this is not a §23.C ask.
+    5. Open the final PR from the new branch into the default branch.
+    6. Re-run the last conformance audit's checks on the new base, then
+       resume at the stage it was on.
+  - The old project branch is never deleted, rewritten, or force-pushed.
+    The rebuild is an `AD-<n>`. When `--check` fails, the stage stops at
+    `Status: BLOCKED` with the conflicting paths, as a failure escalation
+    (§28.C).
+
+- `review_autofix.yml` and `scripts/review_autofix_step_claude_fixer_handoff.sh`
+  (D14):
+  - After "Detect merge conflicts" sets `MERGE_CONFLICT=true` on a Claude-fixer
+    head, a small step lists the unmerged paths once (the same
+    `git diff --name-only --diff-filter=U` the resolver and the hand-off
+    already use). It exports `CLAUDE_FIXER_PROTECTED_CONFLICT=true` when any
+    path starts with `.claude/` and the kill switch is not `false`.
+  - The resolver steps' `env.CLAUDE_FIXER_MODE != 'true'` guard becomes
+    `(env.CLAUDE_FIXER_MODE != 'true' || env.CLAUDE_FIXER_PROTECTED_CONFLICT == 'true')`.
+    This covers the resolve step, its push and re-trigger tail, and the
+    `CONFLICT_RESOLVED` follow-ups. The editor, the review-blocked judge and
+    auto-merge keep their Claude-fixer guards.
+  - The hand-off script skips its `kind=conflict` comment while
+    `CLAUDE_FIXER_PROTECTED_CONFLICT=true`, unless the resolver failed or
+    escalated. In that case it posts today's hand-off, adding one line that
+    names the protected paths so the Claude session stops at once.
+  - Log key `AUTOFIX_GATE_CLAUDE_FIXER_PROTECTED_CONFLICT pr=<n> head=<sha>
+    paths=<k> resolver=<ran|skipped_switch_off>` (stable prefix, agents.md).
+  - New variable `CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED`, default
+    `true` (README variables table).
+  - The workflow stays under the plan's per-phase byte cap. The new step
+    body is an externalised `review_autofix_step_<slug>.sh` (§27 pattern),
+    and each touched `if:` gains one clause.
 
 ### Phase 4: session janitor
 
@@ -587,10 +693,17 @@ stages already do (#4597), so prompts a fixer answered late are filed too.
    Rollback: `CLAUDE_FIXER_JUDGE_ENABLED=false` (fixers fall back to the hold
    when the run reports the switch off), or revert the PR.
 3. **Checkers never ask; reasoning before holds; held backoff.** Files:
-   `CLAUDE.md` §26.B/§26.C, `.claude/commands/implement-plan-claude.md`,
-   `.claude/commands/fix-claude-pr.md`, `.claude/scripts/check_in_status.py`
-   (+ twins), `agents.md` (check-in section), `README.md` (new variable),
-   tests (`tests/test_check_in_status_hand_back.py`, template parity),
+   `CLAUDE.md` §26.B/§26.C/§26.H, `.claude/commands/implement-plan-claude.md`,
+   `.claude/commands/fix-claude-pr.md`,
+   `.claude/commands/implement-issue-claude.md`,
+   `.claude/scripts/check_in_status.py`
+   (+ twins), `.github/workflows/review_autofix.yml`,
+   `scripts/review_autofix_step_claude_fixer_handoff.sh`,
+   `scripts/review_autofix_step_claude_fixer_protected_conflict.sh` [new],
+   `scripts/stage_workflow_support.sh`, `tests/review_autofix_step_scripts.py`,
+   `docs/INVENTORY.md`, `agents.md` (check-in section, log prefixes),
+   `README.md` (new variables), tests (`tests/test_check_in_status_hand_back.py`,
+   `tests/test_review_autofix_claude_fixer_mode.py`, template parity),
    `changelog.d/`.
    Done when: `check_in_status.py --hand-back` emits `retry_after_minutes` 180
    for `held` and 60 otherwise (env override and clamp tested); the docs carry
@@ -598,7 +711,14 @@ stages already do (#4597), so prompts a fixer answered late are filed too.
    `implement-plan-claude.md` (+ twin) makes every BLOCKED stop on a held PR
    arm the project checker's wait on that PR, and says how a stage started by
    both `/reclarify` and the checker ends the duplicate (D11), with the
-   command-doc tests asserting both.
+   command-doc tests asserting both. D13: the command docs carry the base
+   rule and the rebuild procedure, and the command-doc tests assert the
+   default-branch choice, the `ai:security` exception, the dead-base read,
+   and the BLOCKED stop on a failed `--check`. D14: contract tests show a
+   Claude-fixer conflict with a `.claude/` path runs the resolver and posts no
+   hand-off, one without runs no resolver and posts the hand-off, a failed
+   resolver posts the hand-off naming the protected paths, and the switch set
+   to `false` restores today's path; the workflow stays under the byte cap.
    Rollback: revert the PR (checkers default to 60 when the field is absent).
 4. **Session janitor.** Files: `.claude/scripts/stale_sessions.py` [new],
    `tests/test_stale_sessions.py` [new], `.claude/commands/claude-issue-pickup.md`,
@@ -677,7 +797,12 @@ default to 60 minutes without the new field; Phase 4 touches only the pickup.
    `Status: BLOCKED` with a held PR (step 7 Blocked rule, step 7a no-valid-
    finding branch, the cap stops) first arms the wait per the Check-in Loop's
    "Arming the wait", then stops; add the duplicate-resume guard to step 0.
-4. Tests + agents.md + README + changelog fragment.
+4. D13: the base rule in `implement-issue-claude.md` step 3 and the dead-base
+   check and rebuild in `implement-plan-claude.md` issue mode and its checker
+   prompt (+ twins).
+5. D14: the protected-conflict step (externalised), the resolver `if:`
+   clauses, the hand-off skip and fallback line, the variable and log key.
+6. Tests + agents.md + README + changelog fragment.
 
 ### Phase 4
 
@@ -698,14 +823,16 @@ default to 60 minutes without the new field; Phase 4 touches only the pickup.
 - `scripts/review_autofix_step_claude_fixer_handoff.sh`
 - `scripts/review_autofix_step_claude_fixer_merge_check.sh` [new]
 - `scripts/review_autofix_step_claude_fixer_judge.sh` [new]
+- `scripts/review_autofix_step_claude_fixer_protected_conflict.sh` [new]
 - `scripts/review_claude_fixer_evidence.py` [new]
 - `scripts/review_rb_judge.sh`
 - `scripts/stage_workflow_support.sh`
 - `prompts/mode-judge-review-blocked.txt` (+ `prompts/_templates/` twin if present)
 - `.claude/scripts/check_in_status.py` (+ `workflow-templates/.claude/scripts/` twin)
 - `.claude/scripts/stale_sessions.py` [new]
-- `.claude/commands/fix-claude-pr.md`, `.claude/commands/implement-plan-claude.md`
-  (+ twins), `.claude/commands/claude-issue-pickup.md`
+- `.claude/commands/fix-claude-pr.md`, `.claude/commands/implement-plan-claude.md`,
+  `.claude/commands/implement-issue-claude.md` (+ twins),
+  `.claude/commands/claude-issue-pickup.md`
 - `.claude/settings.json`
 - `CLAUDE.md`, `README.md`, `agents.md`, `docs/INVENTORY.md`
 - `tests/test_review_autofix_claude_fixer_mode.py`,
@@ -759,6 +886,17 @@ default to 60 minutes without the new field; Phase 4 touches only the pickup.
 - **`list_sessions` output size in the pickup.** Mitigation: the harness saves
   large results to a file which is passed to the script as is; the pickup's
   report stays one line.
+- **The GPT resolver edits protected `.claude/**` files unattended (D14).**
+  Those files steer every Claude session: settings allow lists, hooks,
+  commands. Mitigation: the resolver only merges the two sides of an
+  existing conflict, within its unmerged-path allowlist. Its push is
+  reviewed by the panel and the Claude session like any head. `.claude/**`
+  changes reach consumers only through the `@stable` release. The switch
+  turns it off. ACCEPTED (operator Q12 B, 2026-09-28).
+- **A rebuild on the default branch validates a change against different
+  code (D13).** Mitigation: it happens only after a clean `git apply
+  --3way --check`, the conformance checks re-run on the new base, and the
+  final PR gets a full review. The old branch is kept.
 - **Bootstrap: this project's PRs may hit today's hold.** ACCEPTED (planning
   Q8 A): the supervising session reviews and asks the operator for a one-line
   merge approval.
@@ -776,7 +914,8 @@ their fixers through the judge (the supervising session re-dispatches them).
 ## References
 
 - Held PRs: #4582, #4554, #4599, #4601, #4602, #4594, #4609, #4611, #4638,
-  #4596, #4610; projects #4586, #4618.
+  #4596, #4610 (protected-path conflict, D14); projects #4586, #4618, #4653
+  (dead base, D13).
 - Run 36295340728 (PR #4554 zero-finding hand-off).
 - Overlapping PRs: #4596 / #4593 (issue #4586), #4609; related #4618.
 - CLAUDE.md §4, §6, §14, §15, §18, §19, §20, §23.A, §25, §26, §27, §28.
