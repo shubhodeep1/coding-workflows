@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Allowlist the two read-only git context reads (Bash(git remote -v), Bash(git branch --show-current)) by adding exact no-wildcard rules to both settings files byte-identical, plus a parametrized test asserting every subcommand of the #4760 example matches an allow rule and that guard.evaluate does not ask for it, an agents.md Permissions bullet update around line 1027, and a new changelog fragment changelog.d/4760-allow-git-context-reads.md. From docs/plans/issue-4760-allow-git-context-reads-plan.md Goals and Implementation Steps.\n  expected_change_site: .claude/settings.json, workflow-templates/.claude/settings.json, tests/test_gh_api_write_guard.py, agents.md, changelog.d/4760-allow-git-context-reads.md\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  EVIDENCE: The PR diff contains only the two planning documents docs/implement-plan/issue-4760-allow-git-context-reads.md and docs/plans/issue-4760-allow-git-context-reads-plan.md. None of the four phase-1 implementation sites are touched by the diff. The progress log explicitly sets Status: BLOCKED with the note Phase 1 edits .claude/settings.json (a protected path) and the log has no \"Protected-path approval: phase 1\" line, so the phase did not start. The PR diff contains only the plan and progress-log documents; the implementation phase has not started (log Status: BLOCKED, phase checkbox `[ ]` unchecked). The two settings files, the test, the `agents.md` note, and the changelog fragment are all absent from the diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: Allowlist the two read-only git context reads (Bash(git remote -v), Bash(git branch --show-current)) by adding exact no-wildcard rules to both settings files byte-identical, plus a parametrized test asserting every subcommand of the #4760 example matches an allow rule and that guard.evaluate does not ask for it, an agents.md Permissions bullet update around line 1027, and a new changelog fragment changelog.d/4760-allow-git-context-reads.md. From docs/plans/issue-4760-allow-git-context-reads-plan.md Goals and Implementation Steps.\nExpected change site: .claude/settings.json and workflow-templates/.claude/settings.json (settings additions); tests/test_gh_api_write_guard.py (new test); agents.md around line 1027 (Permissions bullet); changelog.d/4760-allow-git-context-reads.md (new fragment).\nEvidence of absence: The PR diff contains only the two planning documents docs/implement-plan/issue-4760-allow-git-context-reads.md and docs/plans/issue-4760-allow-git-context-reads-plan.md. None of the four phase-1 implementation sites are touched by the diff. The progress log explicitly sets Status: BLOCKED with the note Phase 1 edits .claude/settings.json (a protected path) and the log has no \"Protected-path approval: phase 1\" line, so the phase did not start. Asked on #4760 (CLAUDE.md \u00a728.C). This matches the documented /implement-issue-claude issue-mode pattern for protected-path edits (per CLAUDE.md \u00a728.C and agents.md \"Claude issue implementer\"), so the absence is the architecture's expected deferral rather than a missed commit. Downstream consumers (editor, aggregator, autofix) MUST NOT auto-add the settings/test/agents.md/changelog changes \u2014 the phase is intentionally blocked until a \"Protected-path approval: phase 1\" line is recorded in the progress log.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\nRequirement: Phase 1 deliverables \u2014 allow the two read-only git context reads (`Bash(git remote -v)`, `Bash(git branch --show-current)`), test, docs, changelog fragment (from the implement-plan log `docs/implement-plan/issue-4760-allow-git-context-reads.md:13-18`).\nExpected change site: `.claude/settings.json`, `workflow-templates/.claude/settings.json`, `tests/test_gh_api_write_guard.py`, `agents.md`, `changelog.d/4760-allow-git-context-reads.md`.\nEvidence of absence: No diff hunk touches any of these files. The PR diff contains only the plan and progress-log documents; the implementation phase has not started (log Status: BLOCKED, phase checkbox `[ ]` unchecked). The two settings files, the test, the `agents.md` note, and the changelog fragment are all absent from the diff.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n\nNote: The TASK_GAP above documents the expected-but-absent implementation. This is consistent with the project's own BLOCKED status \u2014 phase 1 is intentionally paused awaiting the protected-path approval (CLAUDE.md \u00a728.C) before editing `.claude/settings.json`. No code-level defect exists to fix in this PR as it stands; the reviewer surfaces the gap for record-keeping only.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5b817090910878f77925b55df5aab9dca80033e9d28a64157a3d14f420e78db6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36399347510",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36399347510",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928085832_8c0988f1bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36399347510"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T08:58:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
