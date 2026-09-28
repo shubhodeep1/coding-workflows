@@ -242,6 +242,7 @@ ASK_CALLS = {
 	"unterminated backtick": "echo `gh api -X DELETE repos/a/b",
 	"quoted paren inside quoted substitution": "echo \"$(echo \")\"; gh api -X DELETE repos/a/b; echo \"(\")\"",
 	"single-quoted paren inside quoted substitution": "echo \"$(echo ')'; gh api -X DELETE repos/a/b)\"",
+	"backtick paren inside quoted substitution": "echo \"$(echo `echo )`; gh api -X DELETE repos/a/b)\"",
 	"substitution in field": "gh api repos/{owner}/{repo}/issues/1/comments -f body=\"$(gh api -X DELETE repos/a/b)\"",
 	"bash -c": "bash -c 'gh api -X DELETE repos/a/b'",
 	"sudo": "sudo gh api -X DELETE repos/a/b",
@@ -596,6 +597,8 @@ def test_ci_runs_this_file():
 	("echo \"$(echo \")\"; b)\"", ["echo \")\"; b"]),
 	("echo \"$(echo ')'; b)\"", ["echo ')'; b"]),
 	("echo \"$(echo \\) b)\"", ["echo \\) b"]),
+	("echo \"$(echo `echo )` b)\"", ["echo `echo )` b"]),
+	("echo \"$(echo `echo \"` b)\"", ["echo `echo \"` b"]),
 ])
 def test_substitution_bodies_follow_bash_quoting(command, bodies):
 	assert guard.substitution_bodies(command) == bodies

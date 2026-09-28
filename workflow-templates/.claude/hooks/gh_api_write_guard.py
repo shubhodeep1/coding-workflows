@@ -392,6 +392,14 @@ def substitution_bodies(command: str) -> list[str]:
 				if inner == "\\" and not inner_single:
 					end += 2
 					continue
+				if inner == "`" and not inner_single:
+					# A nested backtick substitution is its own command: a
+					# ")" or quote inside it does not touch the outer body.
+					end += 1
+					while end < length and command[end] != "`":
+						end += 2 if command[end] == "\\" else 1
+					end += 1
+					continue
 				if inner == "'" and not inner_double:
 					inner_single = not inner_single
 				elif inner == '"' and not inner_single:
