@@ -60,7 +60,13 @@ repository root's `.claude/**` is protected.
   so it prompts in every permission mode. It cites issue #4678.
 - The §23.I triage clause names the protected path precisely: the repository
   root's `.claude/**`, not `workflow-templates/.claude/**`.
-- A test in `tests/test_permission_prompts.py` fails if either sentence is
+- CLAUDE.md §23.I says that once an Edit or Write to the repository root's
+  `.claude/**` is blocked or denied, a session never retries that write
+  through Bash, `python3`, `sed`, `tee`, `cp`, a heredoc, or any other tool.
+  It stops at `Status: BLOCKED`, naming each file and its exact edit, and the
+  operator's watched session applies it. This goal was added by the operator
+  (decision Q15: A, 2026-09-28; AD-6).
+- Tests in `tests/test_permission_prompts.py` fail if any of these rules is
   removed.
 - `agents.md` ("Unattended helpers and permission prompt reports") and a
   `changelog.d/` fragment record the rule.
@@ -70,8 +76,8 @@ repository root's `.claude/**` is protected.
 - No edit to `.claude/**` (commands, hooks, scripts, `settings.json`) or its
   `workflow-templates/.claude/**` twins, and no new allow rule or helper.
 - No change to `permission_prompts.py` pattern grouping or filing.
-- Issue #4677 (`python3 * << *`, same session) is not folded in. It is its
-  own issue-mode project, and this rule may cover it.
+- Issue #4677 (`python3 * << *`, same session) is not folded in as its own
+  scope. The operator closed it as a duplicate of #4678 on 2026-09-28.
 - No change to the `claude-fixer-unattended-convergence` project or its
   branches.
 
@@ -136,6 +142,9 @@ fragment, and it cannot be split usefully.
    §23.I slice of CLAUDE.md contains the file-edit rule, the inline
    interpreter examples, `issue #4678`, and the root-only protected-path
    wording.
+2a. Phase 1 (AD-6) — `CLAUDE.md` §23.I: add the "A blocked `.claude/**`
+   edit is never retried another way" paragraph after the file-edit rule,
+   and pin it with `test_claude_md_never_retries_a_blocked_claude_dir_edit`.
 3. Phase 1 — `agents.md` "Unattended helpers and permission prompt reports":
    add one bullet that file edits use the Edit and Write tools, never inline
    interpreters, and that only the root `.claude/**` is a protected path.
@@ -180,6 +189,7 @@ CLAUDE.md. Nothing to activate.
 - AD-3 [plan, 2026-09-28] Clarify §23.I's "protected-path edit (`.claude/**`)" clause? — Picked: A — yes, name the repository root's `.claude/**` and say `workflow-templates/.claude/**` is not protected. Alternatives: B — leave the clause as is. Why: the loose reading would have closed this fixable issue as not planned. The clause is the triage rule for every future `ai:permission-prompt` issue. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-09-28] Fold sibling issue #4677 (`python3 * << *`, same session) into this project? — Picked: A — no, it keeps its own issue-mode project. Alternatives: B — fold it in. Why: `/implement-issue-claude` runs one issue per chain, and #4677's heredoc body is unknown, so it may not be a file edit. Applied in: no code change. Status: pending review
 - AD-5 [plan, 2026-09-28] Does the change need a `changelog.d/` fragment? — Picked: A — yes, `changed`. Alternatives: B — none (docs only). Why: §20.A requires one for anything that changes what a consumer repo receives on the next `@stable` sync, and CLAUDE.md is synced. Applied in: phase 1 PR. Status: pending review
+- AD-6 [phase 1/1, 2026-09-28] Add a rule that a blocked or denied write to the root `.claude/**` is never retried through another tool? — Picked: A — yes, in CLAUDE.md §23.I in this phase, with a contract test: the session stops at `Status: BLOCKED` naming each file and its exact edit, and the operator's watched session applies it. Alternatives: B — leave it out of scope. Why: operator decision Q15: A (2026-09-28), relayed by the supervising session `session_01VwSvLnEGmUoaQD42DKapiU` and confirmed by the owner's closing comment on #4677. It is the flow `claude-fixer-unattended-convergence` phase 2 used (commit 6b8a1a3), and it lives in CLAUDE.md, so the phase still needs no protected-path stop. Applied in: phase 1 PR. Status: pending review
 
 ## Notes
 
