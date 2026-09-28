@@ -1102,19 +1102,27 @@ reviews, comments, and conflicts stay a direct §12 request.
   2,000 characters. In consumer repos it only reports.
 - `/implement-plan-claude` step 0 now refuses to run outside Auto mode
   (except issue mode, which records the mode), and a phase touching
-  `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
-  §28.C) until a `Protected-path approval: phase <n>` line is recorded.
+  `.claude/**` or its `workflow-templates/.claude/**` twins stops at
+  `Status: BLOCKED` before it starts (CLAUDE.md §28.C) until a
+  `Protected-path approval: phase <n>` line is recorded.
 - File edits go through the Edit and Write tools, never an inline
   interpreter (`python3 - <<'EOF'`, `python3 -c`, `node -e`, `perl -e`, a
   heredoc fed to a shell), which no allow rule can approve (issue #4678).
-  Only the repository root's `.claude/**` is a protected path;
-  `workflow-templates/.claude/**` twins are edited like any other file, so
-  an `ai:permission-prompt` issue about them is fixed, not closed as by
-  design (CLAUDE.md §23.I). Once an Edit or Write to the root `.claude/**`
-  is blocked or denied, the session never retries it through Bash,
-  `python3`, `sed`, `tee`, `cp`, a heredoc, or any other tool: it stops at
-  `Status: BLOCKED` naming each file and its exact edit, and the operator's
-  watched session applies it.
+  Only the repository root's `.claude/**` is a Claude Code protected path,
+  so an Edit or Write to the `workflow-templates/.claude/**` twins does not
+  prompt and an `ai:permission-prompt` issue about them is fixed, not closed
+  as by design (CLAUDE.md §23.I). The twins are still protected-equivalent
+  for authorization (issue #4775): the `@stable` sync copies them into every
+  consumer's `.claude/`, so they take the §28.C stop above, and
+  `tests/test_claude_template_parity.py` (in the §23.I `ci.yml` step) fails
+  CI when a template file has no root twin, differs from it, is a symlink,
+  or is one of the five listed consumer-variant commands
+  (`TEMPLATE_DIVERGENCE`) whose pinned SHA-256 no longer matches. Updating
+  that list is a protected-equivalent change too. Once an Edit or Write to
+  the root `.claude/**` is blocked or denied, the session never retries it
+  through Bash, `python3`, `sed`, `tee`, `cp`, a heredoc, or any other
+  tool: it stops at `Status: BLOCKED` naming each file and its exact edit,
+  and the operator's watched session applies it.
 - The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
   and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
   three scripts live under `workflow-templates/.claude/`. Tests:

@@ -437,7 +437,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_dispatch_workflow.py \
             tests/test_edit_comment.py \
-            tests/test_permission_prompts.py
+            tests/test_permission_prompts.py \
+            tests/test_claude_template_parity.py
 
       - name: Claude-fixer hand-back, claim and catch-all sweep tests (CLAUDE.md §26.C, §26.H)
         run: |
