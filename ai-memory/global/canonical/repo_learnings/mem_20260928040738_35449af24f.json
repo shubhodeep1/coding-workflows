@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Validation behavior spans workflow bootstrap, template rendering, and process scripts.",
   "timestamps": {
     "created_at": "2026-09-28T04:07:38Z",
