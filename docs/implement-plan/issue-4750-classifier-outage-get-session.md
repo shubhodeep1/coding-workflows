@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#4750
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4750-classifier-outage-get-session   Final PR: #4770 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
 - Waiting on: none
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: phase 1 blocked before start — protected paths need a Protected-path approval (asked on #4750, comment 5866547151)
+- Last note: resumed on /reclarify with operator decisions Q1 A, Q39 A, Q40 A (comment 5868311173); plan updated to the Q39 scope; phase 1 implemented twin-first
 
 ## Phases
-1. [ ] Phase 1 — outage-tolerant step 0 and outage-aware permission-prompt filing — protected paths: .claude/commands/implement-plan-claude.md, .claude/scripts/permission_prompts.py (and their workflow-templates/.claude/ mirrors)
+1. [ ] Phase 1 — classifier-outage handling: filer split, CLAUDE.md §23.J retry rule, and outage-tolerant step 0 — protected paths: .claude/commands/implement-plan-claude.md, .claude/scripts/permission_prompts.py (edited only in their workflow-templates/.claude/ twins, Q40)
 
 ## Conformance
 
@@ -29,12 +29,18 @@
 ## Auto-decisions
 - AD-1 [plan, 2026-09-28] How should #4750 be fixed, given the call was already allowlisted and the reason was `Classifier unavailable`? — Picked: A — treat it as a classifier outage: remove the resume stage's self `get_session` from step 0, cap `get_session` retries at one, and stop filing outage denials. Alternatives: B — only the command-file change; C — only the filer change; D — add an allow rule (already present at `.claude/settings.json:104`). Why: the command change removes the ten observed denials; the filer change stops one outage from starting N Opus projects. Applied in: phase 1 PR. Status: pending review
 - AD-2 [plan, 2026-09-28] What should the filer do with classifier-outage denials? — Picked: A — report them as a count under a new `outage_denials` key and never file them. Alternatives: B — one shared outage issue with a comment per outage; C — keep filing per pattern. Why: no repository change can fix an outage, and every filed issue is routed to a Claude project. Applied in: phase 1 PR. Status: pending review
-- AD-3 [plan, 2026-09-28] How is an outage denial recognised? — Picked: A — a `PermissionDenied` record whose reason matches `classifier unavailable` (case-insensitive). Alternatives: B — any `PermissionDenied` whose reason mentions "classifier"; C — any `PermissionDenied`. Why: the exact text in all eight issues; anything wider could hide real gaps. Applied in: phase 1 PR. Status: pending review
+- AD-3 [plan, 2026-09-28] How is an outage denial recognised? — Picked: A — a `PermissionDenied` record whose reason matches `classifier unavailable` (case-insensitive). Alternatives: B — any `PermissionDenied` whose reason mentions "classifier"; C — any `PermissionDenied`. Why: the exact text in all eight issues; anything wider could hide real gaps. Applied in: phase 1 PR. Status: superseded by AD-5 (operator Q39 item 1 names no-verdict or outage errors, wider than A)
 - AD-4 [plan, 2026-09-28] Which command files change? — Picked: A — only `/implement-plan-claude` step 0 and its template mirror, where every observed denial came from. Alternatives: B — also `implement-issue-claude.md` and `claude-issue-pickup.md`. Why: §5 minimal change set. Applied in: phase 1 PR. Status: pending review
+- AD-5 [phase 1/1, 2026-09-28] Which reasons count as a classifier no-verdict or outage error (Q39 item 1)? — Picked: A — `PermissionDenied` only, reason matching `classifier` followed by `unavailable`, `error`, `timed out`, `timeout`, or `overloaded` (optional `is`), or a no-verdict phrase (`no verdict`, `without a verdict`, `did not return a verdict`, `could not reach a verdict`). Alternatives: B — only `classifier unavailable` (AD-3); C — any `PermissionDenied` that mentions "classifier". Why: covers the wording Q39 names while a real block, which carries the classifier's reason, still files. Applied in: phase 1 PR. Status: pending review
+- AD-6 [phase 1/1, 2026-09-28] Where does the retry-then-wait rule (Q39 item 2) live? — Picked: A — new CLAUDE.md §23.J next to §23.I, plus `/implement-plan-claude` step 0 for its `get_session` reads. Alternatives: B — a new top-level §29; C — every command file that calls a tool. Why: §23.I already governs permission prompts, CLAUDE.md reaches every interactive session, and nothing is renumbered (§6). Applied in: phase 1 PR. Status: pending review
+- AD-7 [phase 1/1, 2026-09-28] How long does a session wait after a second refusal, and is there a cap? — Picked: A — one `send_later` with `delay_minutes: 30` per refusal, no cap; if `send_later` is refused too, end the turn and name the refused step. Alternatives: B — back off 30/60/120 minutes; C — stop BLOCKED after the fourth outage wake. Why: Q39 item 2 says about 30 minutes and never BLOCKED; C contradicts it and B adds state a stage does not keep. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
 
 ## Notes
 - Issue mode: started by `/implement-issue-claude` (session session_0153HZR3zNiEzJdUt3bfrVtz, dispatcher trigger trig_01MnhEevbsHWJSKe9KgXQRAJ).
 - Security pass: run (`security_pass_skip.py`: no skip label).
-- Sibling outage issues #4749, #4751, #4759–#4762, #4767 have the same root cause. They are left open for a human to decide (closing them is §23.C).
+- Sibling outage issues #4749, #4751, #4759–#4762, #4767 have the same root cause (plan stage); the operator later closed them as duplicates of #4750 (see Q39 below).
+- Protected-path approval: phase 1 — A (2026-09-28), as the interim twin-first rule (Q40 A) until #4785 lands: `.claude/**` changes are made only in their `workflow-templates/.claude/**` twins; the supervising session copies them as `[claude-twin-sync]` (operator comment 5868311173).
+- Operator Q39 A (2026-09-28): #4750 is the single fix for the classifier-outage cluster; #4749, #4751, #4759, #4760, #4761, #4762, #4767, #4779, #4780 closed as duplicates by the operator. #4808 (same reason) was filed after Q39 and is still open; closing it is the operator's call (§23.C).
+- Local test run: python3 here is 3.11, so `tests/test_workflow_retro.py` cannot be collected (an f-string with a backslash in `scripts/workflow_retro.py`, fine on CI's newer Python); unrelated to this project.

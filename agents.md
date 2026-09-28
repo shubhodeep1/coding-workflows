@@ -1100,6 +1100,18 @@ reviews, comments, and conflicts stay a direct §12 request.
   from filing the same occurrences again. No cap on open issues. Issue text
   masks token-like strings, removes heredoc bodies, and truncates commands to
   2,000 characters. In consumer repos it only reports.
+- Classifier-outage denials (CLAUDE.md §23.J, issue #4750): a
+  `PermissionDenied` whose reason says the Auto-mode classifier gave no
+  verdict or was unavailable (`CLASSIFIER_OUTAGE_REASON_RE`, for example
+  `Classifier unavailable`) is left out of `patterns`, `total`,
+  `filed-state.json`, and filing. `report` and `file` count it under
+  `outage_denials` (`label: "classifier outage"`, `count`, `tools`,
+  `first_ts`, `last_ts`), and a log holding only such denials makes no API
+  call. A session whose call is refused this way retries once, then arms one
+  30-minute `send_later` and ends the turn instead of asking or stopping
+  BLOCKED. `/implement-plan-claude` resume stages take their session id from
+  `CLAUDE_CODE_REMOTE_SESSION_ID` and their permission mode from the log, so
+  step 0 makes no self `get_session` call.
 - `/implement-plan-claude` step 0 now refuses to run outside Auto mode
   (except issue mode, which records the mode), and a phase touching
   `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
