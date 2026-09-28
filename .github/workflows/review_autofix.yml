@@ -72,6 +72,11 @@ on:
         required: false
         default: ""
         type: string
+      claude_fixer_judge_head:
+        description: "Claude-fixer mode: head SHA whose findings the Claude session rejected. The gate verifies the latest findings hand-off for it and runs only the GPT judge (vars.CLAUDE_FIXER_JUDGE_ENABLED)."
+        required: false
+        default: ""
+        type: string
     secrets:
       GH_PAT:
         required: true
@@ -97,6 +102,11 @@ on:
         type: boolean
       claude_fixer_converged_head:
         description: "Claude-fixer mode: head SHA the /implement-plan-claude session found nothing left to fix on (enables auto-merge after verification)"
+        required: false
+        default: ""
+        type: string
+      claude_fixer_judge_head:
+        description: "Claude-fixer mode: head SHA whose findings the Claude session rejected (runs only the GPT judge after verification)"
         required: false
         default: ""
         type: string
@@ -276,6 +286,10 @@ jobs:
       claude_fixer_verify: ${{ steps.evaluate.outputs.claude_fixer_verify }}
       claude_fixer_merge_check: ${{ steps.evaluate.outputs.claude_fixer_merge_check }}
       claude_fixer_merge_check_run: ${{ steps.evaluate.outputs.claude_fixer_merge_check_run }}
+      claude_fixer_judge: ${{ steps.evaluate.outputs.claude_fixer_judge }}
+      claude_fixer_judge_run: ${{ steps.evaluate.outputs.claude_fixer_judge_run }}
+      claude_fixer_judge_round: ${{ steps.evaluate.outputs.claude_fixer_judge_round }}
+      claude_fixer_judge_ledger: ${{ steps.evaluate.outputs.claude_fixer_judge_ledger }}
       force_full_review_tier: ${{ steps.evaluate.outputs.force_full_review_tier }}
       head_ref: ${{ steps.evaluate.outputs.head_ref }}
       head_sha: ${{ steps.evaluate.outputs.head_sha }}
@@ -456,6 +470,10 @@ jobs:
           # Claude-fixer checks pending (default on; false restores the
           # zero-finding hand-off for clean reviews whose checks still run).
           CLAUDE_FIXER_CHECKS_PENDING_ENABLED: ${{ vars.CLAUDE_FIXER_CHECKS_PENDING_ENABLED || 'true' }}
+          # Claude-fixer GPT judge (default on; false rejects every
+          # claude_fixer_judge_head dispatch, so fixers fall back to the hold).
+          CLAUDE_FIXER_JUDGE_HEAD: ${{ inputs.claude_fixer_judge_head || github.event.inputs.claude_fixer_judge_head || '' }}
+          CLAUDE_FIXER_JUDGE_ENABLED: ${{ vars.CLAUDE_FIXER_JUDGE_ENABLED || 'true' }}
           # Identical-failure fingerprint cap (see the block below the
           # terminal same-head skip). Default on, three identical failures on
           # one head; set REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false to stop
@@ -741,6 +759,15 @@ jobs:
           #     verifies the named run's evidence artifact and re-reads the
           #     checks. Needs vars.CLAUDE_FIXER_CHECKS_PENDING_ENABLED != false
           #     and a PR not reported as conflicted.
+          #   * claude_fixer_judge_head dispatch (the session rejected every
+          #     finding): accepted only for the current head whose newest
+          #     workflow hand-off is kind=findings with a v2 ledger digest and
+          #     no ai:claude-fixer-judge:v1 verdict after it. Reviewers are
+          #     skipped; the review-blocked judge rules on the findings in its
+          #     Claude mode after "Prepare Claude-fixer judge" verifies the
+          #     hand-off run's evidence artifact (the run id comes from the
+          #     hand-off's run link, a pointer only). Needs
+          #     vars.CLAUDE_FIXER_JUDGE_ENABLED != false.
           # force_rb_judge dispatches and the force-review label / title
           # marker bypass the last two rules. vars.CLAUDE_FIXER_ENABLED=false
           # turns the mode off (such PRs then take the GPT editor path).
@@ -752,6 +779,10 @@ jobs:
           CLAUDE_FIXER_VERIFY="false"
           CLAUDE_FIXER_MERGE_CHECK="false"
           CLAUDE_FIXER_MERGE_CHECK_RUN=""
+          CLAUDE_FIXER_JUDGE="false"
+          CLAUDE_FIXER_JUDGE_RUN=""
+          CLAUDE_FIXER_JUDGE_ROUND=""
+          CLAUDE_FIXER_JUDGE_LEDGER=""
           if [ "${CLAUDE_FIXER_ENABLED:-true}" != "false" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             case "${pr_head_ref}" in
               claude/*) CLAUDE_FIXER="true" ;;
@@ -807,6 +838,50 @@ jobs:
               fi
             fi
             echo "AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} requested=${CLAUDE_FIXER_CONVERGED_HEAD:-} accepted=${CLAUDE_FIXER_CONVERGED} detail=${claude_fixer_converged_detail:-verified}"
+          elif [ "${SHOULD_RUN}" = "true" ] && [ -n "${CLAUDE_FIXER_JUDGE_HEAD:-}" ]; then
+            SHOULD_RUN="false"
+            SKIP_REASON="claude_fixer_judge_unverified"
+            claude_fixer_judge_detail=""
+            if [ "${CLAUDE_FIXER_JUDGE_ENABLED:-true}" = "false" ]; then
+              claude_fixer_judge_detail="disabled"
+            elif [ "${CLAUDE_FIXER}" != "true" ]; then
+              claude_fixer_judge_detail="not_claude_fixer_pr"
+            elif ! [[ "${CLAUDE_FIXER_JUDGE_HEAD:-}" =~ ^[0-9a-f]{40}$ ]] || [ "${CLAUDE_FIXER_JUDGE_HEAD:-}" != "${pr_head_sha_gate}" ]; then
+              claude_fixer_judge_detail="stale_or_invalid_head current=${pr_head_sha_gate:-unknown}"
+            else
+              gate_fetch_marker_comments
+              if [ "${gate_marker_fetch_state}" != "ok" ]; then
+                claude_fixer_judge_detail="comments_${gate_marker_fetch_state}"
+              else
+                # Prints "ok <round> <ledger> <run>" or a rejection reason.
+                claude_fixer_judge_detail="$(jq -r --arg head "${pr_head_sha_gate}" --arg login "${gate_marker_author_login}" '
+                    def lines: (.body // "") | split("\n") | map(gsub("\r$"; ""));
+                    ([.[] | select((.id | type) == "number" and .author_login == $login and
+                      ((.body // "") | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\n")) and
+                      any(lines[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->$")))] | max_by(.id)) as $h
+                    | if $h == null then "no_handoff" else
+                      ([$h | lines[] | capture("^<!-- ai:claude-fixer-handoff:v1 kind=findings head=" + $head + " round=(?<r>[0-9]+) -->$").r] | first) as $round
+                      | if $round == null then "latest_handoff_not_findings" else
+                        ([$h | lines[] | capture("^<!-- ai:claude-fixer-handoff:v2 head=" + $head + " round=" + $round + " ledger=(?<d>[0-9a-f]{64}) -->$").d] | first) as $ledger
+                        | ([$h.body | scan("/actions/runs/([0-9]+)\\)") | .[0]] | first) as $run
+                        | if $ledger == null then "no_ledger_digest"
+                          elif $run == null then "no_handoff_run"
+                          elif any(.[]; (.id | type) == "number" and .id > $h.id and .author_login == $login and
+                            any(lines[]; startswith("<!-- ai:claude-fixer-judge:v1 head=" + $head + " round=" + $round + " "))) then "already_judged"
+                          else "ok \($round) \($ledger) \($run)" end end end
+                  ' "${gate_marker_comments_file}" 2>/dev/null || echo "jq_error")"
+                if [[ "${claude_fixer_judge_detail}" =~ ^ok\ ([1-9][0-9]*)\ ([0-9a-f]{64})\ ([1-9][0-9]*)$ ]]; then
+                  CLAUDE_FIXER_JUDGE="true"
+                  CLAUDE_FIXER_JUDGE_ROUND="${BASH_REMATCH[1]}"
+                  CLAUDE_FIXER_JUDGE_LEDGER="${BASH_REMATCH[2]}"
+                  CLAUDE_FIXER_JUDGE_RUN="${BASH_REMATCH[3]}"
+                  claude_fixer_judge_detail="handoff_run=${CLAUDE_FIXER_JUDGE_RUN} round=${CLAUDE_FIXER_JUDGE_ROUND}"
+                  SHOULD_RUN="true"
+                  SKIP_REASON=""
+                fi
+              fi
+            fi
+            echo "AUTOFIX_GATE_CLAUDE_FIXER_JUDGE pr=${PR_NUMBER} head=${pr_head_sha_gate:-unknown} requested=${CLAUDE_FIXER_JUDGE_HEAD:-} accepted=${CLAUDE_FIXER_JUDGE} detail=${claude_fixer_judge_detail:-none}"
           elif [ "${SHOULD_RUN}" = "true" ] && [ "${CLAUDE_FIXER}" = "true" ] \
             && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
             && [ "${FORCE_RB_JUDGE:-false}" != "true" ] \
@@ -867,9 +942,9 @@ jobs:
           #     reusable workflow retains its caller's `github` context, so
           #     the sweep's internal-review.yml dispatch reaches this block
           #     with EVENT_NAME=workflow_dispatch.
-          #   * force_rb_judge dispatches (stall poller) and Claude-fixer merge
-          #     checks (they run no reviewers and are retried by the sweep)
-          #     bypass the skip.
+          #   * force_rb_judge dispatches (stall poller), Claude-fixer merge
+          #     checks (they run no reviewers and are retried by the sweep) and
+          #     accepted Claude-fixer judge dispatches bypass the skip.
           #   * `[force-review]` in the title or the `force-review` label
           #     bypasses the skip, mirroring the deterministic-skip override.
           #   * Only a PR GitHub reports as mergeable=true is skipped: a
@@ -888,6 +963,7 @@ jobs:
             && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
             && [ "${CLAUDE_FIXER_VERIFY}" != "true" ] \
             && [ "${CLAUDE_FIXER_MERGE_CHECK}" != "true" ] \
+            && [ "${CLAUDE_FIXER_JUDGE}" != "true" ] \
             && [ "${AUTOFIX_SKIP_TERMINAL_SAME_HEAD:-true}" != "false" ] \
             && [ "${FORCE_RB_JUDGE:-false}" != "true" ] \
             && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -1523,6 +1599,10 @@ jobs:
           echo "claude_fixer_verify=${CLAUDE_FIXER_VERIFY}" >> "${GITHUB_OUTPUT}"
           echo "claude_fixer_merge_check=${CLAUDE_FIXER_MERGE_CHECK}" >> "${GITHUB_OUTPUT}"
           echo "claude_fixer_merge_check_run=${CLAUDE_FIXER_MERGE_CHECK_RUN}" >> "${GITHUB_OUTPUT}"
+          echo "claude_fixer_judge=${CLAUDE_FIXER_JUDGE}" >> "${GITHUB_OUTPUT}"
+          echo "claude_fixer_judge_run=${CLAUDE_FIXER_JUDGE_RUN}" >> "${GITHUB_OUTPUT}"
+          echo "claude_fixer_judge_round=${CLAUDE_FIXER_JUDGE_ROUND}" >> "${GITHUB_OUTPUT}"
+          echo "claude_fixer_judge_ledger=${CLAUDE_FIXER_JUDGE_LEDGER}" >> "${GITHUB_OUTPUT}"
           echo "force_full_review_tier=${FORCE_FULL_REVIEW_TIER}" >> "${GITHUB_OUTPUT}"
           # Propagate head ref so downstream jobs (deterministic-skip-merge)
           # can apply the same head-ref-keyed auto-merge suppressors without
@@ -2388,6 +2468,13 @@ jobs:
       # merge check (no reviewers) for the checks-pending evidence run below.
       CLAUDE_FIXER_MERGE_CHECK: ${{ needs.gate.outputs.claude_fixer_merge_check }}
       CLAUDE_FIXER_MERGE_CHECK_RUN_ID: ${{ needs.gate.outputs.claude_fixer_merge_check_run }}
+      # Claude-fixer GPT judge: the gate accepted a claude_fixer_judge_head
+      # dispatch; reviewers are skipped and the review-blocked judge rules on
+      # the hand-off's findings in its Claude mode (see the gate).
+      CLAUDE_FIXER_JUDGE: ${{ needs.gate.outputs.claude_fixer_judge }}
+      CLAUDE_FIXER_JUDGE_RUN_ID: ${{ needs.gate.outputs.claude_fixer_judge_run }}
+      CLAUDE_FIXER_JUDGE_ROUND: ${{ needs.gate.outputs.claude_fixer_judge_round }}
+      CLAUDE_FIXER_JUDGE_LEDGER_SHA256: ${{ needs.gate.outputs.claude_fixer_judge_ledger }}
       # No-PR claude-branch-review path overrides (push events on claude/**
       # without an open PR).  Read by "Collect PR metadata" and
       # "Checkout PR head branch" to synthesize PR_META_FILE / TARGET_BRANCH
@@ -3789,6 +3876,9 @@ jobs:
           # existing PR state.
           if [ "${CLAUDE_FIXER_MERGE_CHECK:-false}" = "true" ]; then
             :
+          elif [ "${CLAUDE_FIXER_JUDGE:-false}" = "true" ]; then
+            echo "claude_fixer_judge=true — forcing max_iterations_reached=true to run only the review-blocked judge in Claude mode."
+            echo "max_iterations_reached=true" >> "$GITHUB_OUTPUT"
           elif [ "${FORCE_RB_JUDGE}" = "true" ]; then
             echo "force_rb_judge=true — forcing max_iterations_reached=true to run only the review-blocked judge."
             echo "max_iterations_reached=true" >> "$GITHUB_OUTPUT"
@@ -4559,6 +4649,8 @@ jobs:
           HEAD_REF: ${{ env.TARGET_BRANCH }}
           CLAUDE_FIXER_ROUND_INDEX: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           CLAUDE_FIXER_CHECKS_PENDING_ENABLED: ${{ vars.CLAUDE_FIXER_CHECKS_PENDING_ENABLED || 'true' }}
+          CLAUDE_FIXER_JUDGE_ENABLED: ${{ vars.CLAUDE_FIXER_JUDGE_ENABLED || 'true' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_fixer_handoff.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_fixer_handoff.sh"
@@ -4596,7 +4688,7 @@ jobs:
       # the ledger); later runs trust only this artifact, read back through
       # scripts/review_claude_fixer_evidence.py verify, never a comment.
       - name: Upload Claude-fixer evidence
-        if: always() && env.CLAUDE_FIXER_MODE == 'true'
+        if: always() && env.CLAUDE_FIXER_MODE == 'true' && env.CLAUDE_FIXER_JUDGE != 'true'
         continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
@@ -5859,12 +5951,39 @@ jobs:
               print(f"REVIEW_BREAK_GLASS_COMMENTER={matches[-1][2]}")
           PY
 
+      # Claude-fixer GPT judge (gate input claude_fixer_judge_head): verify the
+      # hand-off run's evidence and collect the ledger, the session's
+      # rejection comment and prior judge rulings for the Claude mode of the
+      # judge below. Body: scripts/review_autofix_step_claude_fixer_judge.sh.
+      - name: Prepare Claude-fixer judge
+        if: success() && env.CLAUDE_FIXER_JUDGE == 'true' && env.CLAUDE_FIXER_MODE == 'true' && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
+          HEAD_REF: ${{ env.TARGET_BRANCH }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_fixer_judge.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_fixer_judge.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_claude_fixer_judge.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Prepare Claude-fixer judge'."
+            exit 1
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
       - name: Review-blocked judge decision
         id: rb_judge
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.CLAUDE_FIXER_MODE != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.CLAUDE_FIXER_MODE != 'true' || env.CLAUDE_FIXER_JUDGE == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
+          # Claude mode (CLAUDE_FIXER_JUDGE=true): judge-fix cap per PR,
+          # counted on the PR's own commits and never reset; the merge path
+          # enables auto-merge bound to the judged head itself.
+          CLAUDE_FIXER_JUDGE_FIX_CAP: ${{ vars.CLAUDE_FIXER_JUDGE_FIX_CAP || '2' }}
+          CLAUDE_FIXER_CHECKS_PENDING_ENABLED: ${{ vars.CLAUDE_FIXER_CHECKS_PENDING_ENABLED || 'true' }}
+          FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           JUDGE_FIX_COUNT: ${{ steps.retrigger_guard.outputs.judge_fix_count }}
@@ -5901,6 +6020,18 @@ jobs:
           else
             echo "rb_judge_status=ok" >> "$GITHUB_OUTPUT"
           fi
+      # The Claude-mode judge's evidence (its rulings, and the checks-pending
+      # outcome the sweep's merge check verifies). Same artifact name as the
+      # upload above, which a judge run skips.
+      - name: Upload Claude-fixer judge evidence
+        if: always() && env.CLAUDE_FIXER_JUDGE == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: claude-fixer-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RUNTIME_DIR }}/claude_fixer_evidence/
+          retention-days: 30
+          if-no-files-found: ignore
       - name: Mark linked issues review-blocked (autofix exhaustion)
         if: "(success() || steps.rb_judge.outputs.rb_judge_status == 'failed') && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
@@ -6017,9 +6148,11 @@ jobs:
       # Claude-fixer mode skips the review-blocked judge (it would have GPT
       # edit the PR). Label the PR itself instead: /implement-plan-claude PRs
       # rarely link issues, and .claude/scripts/check_in_status.py routes a
-      # PR labelled ai:review-blocked to the command's blocked-PR stage.
+      # PR labelled ai:review-blocked to the command's blocked-PR stage. A
+      # Claude-mode judge run (claude_fixer_judge_head) is labelled only when
+      # the judge decided nothing.
       - name: Label Claude-fixer PR review-blocked (autofix exhaustion)
-        if: success() && (steps.retrigger_guard.outputs.max_iterations_reached == 'true' || env.CLAUDE_FIXER_VERIFICATION_FAILED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_FIXER_MODE == 'true' && env.CLAUDE_FIXER_MERGE_CHECK != 'true'
+        if: success() && (steps.retrigger_guard.outputs.max_iterations_reached == 'true' || env.CLAUDE_FIXER_VERIFICATION_FAILED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_FIXER_MODE == 'true' && env.CLAUDE_FIXER_MERGE_CHECK != 'true' && (env.CLAUDE_FIXER_JUDGE != 'true' || steps.rb_judge.outputs.judge_handled != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -6086,6 +6219,10 @@ jobs:
             mergeability_pending)
               BODY_HEADING="AI review/autofix — mergeability still computing"
               BODY_DETAIL="The review-blocked judge could not act because GitHub was still computing the PR's mergeability state when the gate ran. Stall recovery will re-fire the judge shortly; no action is required unless the state remains unknown for an extended period."
+              ;;
+            claude_fixer_*)
+              BODY_HEADING="AI review/autofix — the Claude-fixer judge did not decide"
+              BODY_DETAIL="The GPT judge for the Claude session's rejected findings did not reach a decision (\`${JUDGE_SKIP_REASON}\`). The PR is labelled \`ai:review-blocked\` for the blocked-PR intervention; the Claude session's rejection comment and the reviewer ledger above are the context."
               ;;
             followup_issue_create_failed)
               BODY_HEADING="AI review/autofix — merge landed but follow-up issue creation failed"

@@ -23,7 +23,10 @@ scripts/review_autofix_step_claude_fixer_merge_check.sh) writes
 	"failed_checks": ["ci / lint"], "judge": null}
 
 and, with ``--ledger-file``, copies the ledger next to it as
-``reviewer_consensus.txt``. No API calls.
+``reviewer_consensus.txt``. ``--judge-file`` (a JSON object
+``{"decision": ..., "rulings": [...]}`` written by the review-blocked judge's
+Claude mode, scripts/review_claude_fixer_judge.py) fills ``judge``. No API
+calls.
 
 ``verify --repo --pr --head --run-id [--expect-outcome] [--round]
 [--pr-head-ref] [--default-branch] [--changed-files-file]`` prints one JSON
@@ -47,6 +50,13 @@ of these hold:
     expired and holds an ``evidence.json`` whose ``pr``, ``head_sha`` (and
     ``outcome`` / ``round`` when asked) match.
 
+Optional stricter checks: ``--expect-ledger <sha256>`` requires the
+evidence's ``ledger_sha256`` to equal it; ``--ledger-out <path>`` requires the
+artifact's ``reviewer_consensus.txt`` to hash to ``ledger_sha256`` and writes
+it to ``<path>`` (the GPT judge reads the ledger from here, never from a
+comment); ``--require-judge`` requires ``judge`` to hold a ``rulings`` list
+(the sticky-ruling loader reads prior judge rulings this way).
+
 API budget (CLAUDE.md §15): ``GET /actions/runs/{id}``, ``GET
 /actions/runs/{id}/artifacts``, and the artifact download; plus one
 paginated ``GET /pulls/{n}/files`` when the run came from the PR head branch
@@ -59,6 +69,7 @@ process. Any API failure, missing artifact, or malformed evidence returns
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -120,6 +131,7 @@ def build_evidence(
 	ledger_sha256: str,
 	finding_count: int,
 	failed_checks: list[str],
+	judge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
 	if outcome not in EVIDENCE_OUTCOMES:
 		raise ValueError(f"unknown outcome {outcome!r}")
@@ -127,6 +139,8 @@ def build_evidence(
 		raise ValueError("head_sha must be 40 hex characters")
 	if ledger_sha256 and not HEX64_RE.match(ledger_sha256):
 		raise ValueError("ledger_sha256 must be empty or 64 hex characters")
+	if judge is not None and (not isinstance(judge, dict) or not isinstance(judge.get("rulings"), list)):
+		raise ValueError("judge must be an object with a rulings list")
 	return {
 		"schema": EVIDENCE_SCHEMA,
 		"pr": pr,
@@ -136,7 +150,7 @@ def build_evidence(
 		"ledger_sha256": ledger_sha256,
 		"finding_count": finding_count,
 		"failed_checks": [name for name in failed_checks if name],
-		"judge": None,
+		"judge": judge,
 	}
 
 
@@ -188,6 +202,12 @@ def _latest_evidence_artifact(artifacts: Any, run_id: str) -> dict[str, Any] | N
 
 
 def _read_evidence_zip(raw: bytes) -> dict[str, Any] | None:
+	result = _read_evidence_zip_with_ledger(raw)
+	return None if result is None else result[0]
+
+
+def _read_evidence_zip_with_ledger(raw: bytes) -> tuple[dict[str, Any], bytes | None] | None:
+	"""Return (evidence, ledger bytes or None); None when the zip is unusable."""
 	if len(raw) > MAX_ARTIFACT_BYTES:
 		return None
 	try:
@@ -199,9 +219,13 @@ def _read_evidence_zip(raw: bytes) -> dict[str, Any] | None:
 			if info.file_size > MAX_EVIDENCE_BYTES:
 				return None
 			payload = json.loads(archive.read(names[0]).decode("utf-8"))
+			ledger_names = [name for name in archive.namelist() if name.rsplit("/", 1)[-1] == LEDGER_FILE_NAME]
+			ledger: bytes | None = None
+			if len(ledger_names) == 1 and archive.getinfo(ledger_names[0]).file_size <= MAX_ARTIFACT_BYTES:
+				ledger = archive.read(ledger_names[0])
 	except (zipfile.BadZipFile, KeyError, UnicodeDecodeError, ValueError, OSError):
 		return None
-	return payload if isinstance(payload, dict) else None
+	return (payload, ledger) if isinstance(payload, dict) else None
 
 
 def _changed_files(repo: str, pr: int, changed_files_file: str, api: ApiCall) -> set[str] | None:
@@ -238,6 +262,9 @@ def verify_evidence(
 	pr_head_ref: str = "",
 	default_branch: str = "",
 	changed_files_file: str = "",
+	expect_ledger: str = "",
+	ledger_out: str = "",
+	require_judge: bool = False,
 	api: ApiCall = _gh_api,
 ) -> dict[str, Any]:
 	def reject(reason: str) -> dict[str, Any]:
@@ -286,9 +313,10 @@ def verify_evidence(
 	raw = api(f"repos/{repo}/actions/artifacts/{artifact['id']}/zip", False)
 	if raw is None:
 		return reject("artifact_download_failed")
-	evidence = _read_evidence_zip(raw)
-	if evidence is None:
+	unpacked = _read_evidence_zip_with_ledger(raw)
+	if unpacked is None:
 		return reject("evidence_malformed")
+	evidence, ledger_bytes = unpacked
 	if evidence.get("schema") != EVIDENCE_SCHEMA or evidence.get("outcome") not in EVIDENCE_OUTCOMES:
 		return reject("evidence_malformed")
 	if evidence.get("pr") != pr or evidence.get("head_sha") != head_sha:
@@ -297,11 +325,25 @@ def verify_evidence(
 		return reject("evidence_outcome_mismatch")
 	if expect_round is not None and evidence.get("round") != expect_round:
 		return reject("evidence_round_mismatch")
+	if expect_ledger and evidence.get("ledger_sha256") != expect_ledger:
+		return reject("evidence_ledger_mismatch")
+	if require_judge and not (isinstance(evidence.get("judge"), dict) and isinstance(evidence["judge"].get("rulings"), list)):
+		return reject("evidence_judge_missing")
+	if ledger_out:
+		digest = str(evidence.get("ledger_sha256") or "")
+		if ledger_bytes is None or not HEX64_RE.match(digest):
+			return reject("evidence_ledger_missing")
+		if hashlib.sha256(ledger_bytes).hexdigest() != digest:
+			return reject("evidence_ledger_digest_mismatch")
+		Path(ledger_out).write_bytes(ledger_bytes)
 	return {"verified": True, "reason": "ok", "evidence": evidence}
 
 
 def _cmd_write(args: argparse.Namespace) -> int:
 	failed = [name.strip() for name in (args.failed_checks or "").split(",") if name.strip()]
+	judge = None
+	if args.judge_file:
+		judge = json.loads(Path(args.judge_file).read_text(encoding="utf-8"))
 	evidence = build_evidence(
 		pr=args.pr,
 		head_sha=args.head,
@@ -310,6 +352,7 @@ def _cmd_write(args: argparse.Namespace) -> int:
 		ledger_sha256=args.ledger_sha256 or "",
 		finding_count=args.finding_count,
 		failed_checks=failed,
+		judge=judge,
 	)
 	ledger = Path(args.ledger_file) if args.ledger_file else None
 	print(write_evidence(Path(args.out_dir), evidence, ledger))
@@ -328,6 +371,9 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 			pr_head_ref=args.pr_head_ref or "",
 			default_branch=args.default_branch or "",
 			changed_files_file=args.changed_files_file or "",
+			expect_ledger=args.expect_ledger or "",
+			ledger_out=args.ledger_out or "",
+			require_judge=bool(args.require_judge),
 		)
 	except Exception as exc:  # noqa: BLE001 - verify must never fail open or crash the caller
 		result = {"verified": False, "reason": f"internal_error:{type(exc).__name__}", "evidence": None}
@@ -348,6 +394,7 @@ def main(argv: list[str] | None = None) -> int:
 	write.add_argument("--ledger-file", default="")
 	write.add_argument("--finding-count", type=int, default=0)
 	write.add_argument("--failed-checks", default="")
+	write.add_argument("--judge-file", default="")
 	verify = sub.add_parser("verify")
 	verify.add_argument("--repo", required=True)
 	verify.add_argument("--pr", type=int, required=True)
@@ -358,11 +405,14 @@ def main(argv: list[str] | None = None) -> int:
 	verify.add_argument("--pr-head-ref", default="")
 	verify.add_argument("--default-branch", default=os.environ.get("DEFAULT_BRANCH", ""))
 	verify.add_argument("--changed-files-file", default="")
+	verify.add_argument("--expect-ledger", default="")
+	verify.add_argument("--ledger-out", default="")
+	verify.add_argument("--require-judge", action="store_true")
 	args = parser.parse_args(argv)
 	if args.command == "write":
 		try:
 			return _cmd_write(args)
-		except ValueError as exc:
+		except (ValueError, OSError) as exc:
 			print(f"::error::review_claude_fixer_evidence write: {exc}", file=sys.stderr)
 			return 2
 	return _cmd_verify(args)
