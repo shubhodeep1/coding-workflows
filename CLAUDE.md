@@ -1378,9 +1378,25 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   Opening these issues is approved by this section; it is not a §23.C
   operation. There is no limit on open `ai:permission-prompt` issues. A fix
   never widens a permission for a destructive or administrative action; an
-  `ai:permission-prompt` issue for a protected-path edit (`.claude/**`) or an
-  ask-first operation is closed as not planned, because that prompt is by
+  `ai:permission-prompt` issue for a protected-path edit (the repository
+  root's `.claude/**`; `workflow-templates/.claude/**` is not protected) or
+  an ask-first operation is closed as not planned, because that prompt is by
   design.
+
+**File edits use the Edit and Write tools.** Edit repository files with the
+Edit and Write tools, including the byte-identical `workflow-templates/`
+twins, which get the same edit in each copy. Never edit a file with an inline
+interpreter (`python3 - <<'EOF'`, `python3 -c`, `node -e`, `perl -e`, or a
+heredoc fed to a shell). Claude Code cannot parse the script, so no allow
+rule approves it, and an unattended session stops at a permission prompt
+(issue #4678).
+
+**A blocked `.claude/**` edit is never retried another way.** Once an Edit
+or Write to the repository root's `.claude/**` is blocked or denied, a
+session never retries that write through Bash, `python3`, `sed`, `tee`,
+`cp`, a heredoc, or any other tool. It stops at `Status: BLOCKED`, naming
+each file and its exact edit, and the operator's watched session applies it
+(the §28.C protected-path stop).
 
 `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`, and
 `tests/test_permission_prompts.py` cover the helpers, the hook, the filing

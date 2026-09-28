@@ -1051,6 +1051,17 @@ reviews, comments, and conflicts stay a direct §12 request.
   (except issue mode, which records the mode), and a phase touching
   `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
   §28.C) until a `Protected-path approval: phase <n>` line is recorded.
+- File edits go through the Edit and Write tools, never an inline
+  interpreter (`python3 - <<'EOF'`, `python3 -c`, `node -e`, `perl -e`, a
+  heredoc fed to a shell), which no allow rule can approve (issue #4678).
+  Only the repository root's `.claude/**` is a protected path;
+  `workflow-templates/.claude/**` twins are edited like any other file, so
+  an `ai:permission-prompt` issue about them is fixed, not closed as by
+  design (CLAUDE.md §23.I). Once an Edit or Write to the root `.claude/**`
+  is blocked or denied, the session never retries it through Bash,
+  `python3`, `sed`, `tee`, `cp`, a heredoc, or any other tool: it stops at
+  `Status: BLOCKED` naming each file and its exact edit, and the operator's
+  watched session applies it.
 - The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
   and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
   three scripts live under `workflow-templates/.claude/`. Tests:
