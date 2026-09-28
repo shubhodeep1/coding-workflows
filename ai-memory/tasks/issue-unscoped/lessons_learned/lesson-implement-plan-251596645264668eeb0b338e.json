@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T03:42:16Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Push-event branch reviews start when a claude/* branch has no PR yet, so pushing a branch just before opening its PR puts a second review run on the same head; the Claude-fixer ready-snapshot check waits only 300s and counts that run as incomplete, which withholds auto-merge from a clean review.",
+  "phase": "implement_plan",
+  "pr_number": 4633,
+  "record_id": "lesson-implement-plan-251596645264668eeb0b338e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4620-intake-authorize-target-issue",
+    "file:.github/workflows/internal-review.yml",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}

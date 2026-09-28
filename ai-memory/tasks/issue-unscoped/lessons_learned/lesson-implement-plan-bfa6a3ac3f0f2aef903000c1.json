@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T03:42:16Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A \"writes nothing to an unverified target\" rule has to cover every failure path that runs before authorization, not only the new refusals: an earlier validation failure that reuses the old label-and-comment reporter reopens the same confused deputy.",
+  "phase": "implement_plan",
+  "pr_number": 4633,
+  "record_id": "lesson-implement-plan-bfa6a3ac3f0f2aef903000c1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4620-intake-authorize-target-issue",
+    "file:scripts/claude_issue_intake.sh"
+  ]
+}
