@@ -386,6 +386,20 @@ def test_claude_md_documents_the_reports():
 	assert "tests/test_permission_prompts.py" in text
 
 
+def test_claude_md_routes_file_edits_through_edit_tools():
+	# Issue #4678: a stage rewrote the workflow-templates/.claude twins with an
+	# inline python3 heredoc, which no allow rule can approve.
+	text = CLAUDE_MD.read_text(encoding="utf-8")
+	start = text.index("### I) Permission Prompt Reports")
+	section = " ".join(text[start:text.index("\n## §24.", start)].split())
+	assert "**File edits use the Edit and Write tools.**" in section
+	for shape in ("`python3 - <<'EOF'`", "`python3 -c`", "`node -e`", "`perl -e`"):
+		assert shape in section
+	assert "issue #4678" in section
+	assert "the repository root's `.claude/**`" in section
+	assert "`workflow-templates/.claude/**` is not protected" in section
+
+
 def test_plan_command_runs_the_report_every_stage():
 	text = PLAN_COMMAND.read_text(encoding="utf-8")
 	assert "14. **Report.** First run the [permission prompt report](#permission-prompt-report)." in text
