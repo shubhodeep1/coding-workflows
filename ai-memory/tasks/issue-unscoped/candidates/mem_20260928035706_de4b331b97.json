@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:383-400 | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `$(...)` scanner does not track quotes inside the substitution body, so a quoted `)` can terminate scanning early and hide a later `gh api` write from the guard.\n  WHY: The truncated body omits the executable `gh api` call, allowing the write to bypass the permission prompt.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/gh_api_write_guard.py:385-400 | severity=high | confidence=[4]\n  PROBLEM: The function tracks parenthesis depth to find the matching `)` for `$(...)` substitutions, but doesn't track quotes inside the substitution. A `)` inside a string literal incorrectly decrements the depth and closes the substitution early.\n  WHY: A command like `echo \"$(echo \")\"; gh api -X DELETE repos/a/b; echo \"(\")\"` would be parsed incorrectly. The guard would extract `echo \"` as the substitution body (stopping at the first `)` inside the string) instead of the full body `echo \")\"; gh api -X DELETE repos/a/b; echo \"(\"`. The `gh api` call inside the substitution would be missed, allowing a hidden write to bypass the permission prompt. This is a security bypass of the guard mechanism.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/gh_api_write_guard.py:383-397 | severity=high | confidence=[4]\n  PROBLEM: The `$(...)` scanner tracks parenthesis depth and backslashes but does NOT track quotes inside the substitution body. A `)` character inside single or double quotes at the outermost depth of a `$(...)` prematurely ends the scan, causing a `gh api` command that appears later in the substitution body to be missed.\n  WHY: A `gh api` write hidden behind a quoted `)` inside a `$(...)` substitution bypasses the guard entirely, which is the exact class of hidden call the guard exists to catch.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "47e1085ea6ccb3ef1d10c173e41f5693ba245884396c79c98b1260754a8d6333",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4704,
+    "run_id": "36374288983",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36374288983",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928035706_de4b331b97",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4704,
+    "run_id": "36374288983"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T03:57:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
