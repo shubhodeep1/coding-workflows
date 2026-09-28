@@ -401,19 +401,37 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # ---------------------------------------------------------------------------
 # The open-PR list cannot report active workflow runs. One cycle-local Actions
 # lookup covers every queued PR and avoids a per-PR API call inside the loop.
+# Each active review run prints its head branch. A review run dispatched from
+# the default branch (issues #4618, #4701) has the default branch as its
+# head, so a workflow_dispatch run named for its PR
+# ("Internal: AI Review & Autofix [pr:<N>]" / "AI Review [pr:<N>]") also
+# prints "pr:<N>". Git refs cannot contain ":", so the two kinds of key never
+# collide, and _mt_release checks both.
 _mt_inflight_review_branches()
 {
 	gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?per_page=100" \
-		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | .head_branch // empty' 2>/dev/null | sort -u
+		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | ((.head_branch // empty), (if (.event // "") == "workflow_dispatch" then ((.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)") else empty end))' 2>/dev/null | sort -u
 }
 
+# Dispatch ref (security, issue #4701): the dispatch always runs the default
+# branch's workflow file and passes only a validated PR number. Dispatching
+# `--ref <PR head branch>` ran that branch's unmerged copy of the review
+# workflow with `secrets: inherit` and write permissions (the finding issue
+# #4618 fixed in review_autofix_sweep.yml). review_autofix.yml checks out the
+# PR head from the PR's metadata either way. The review wrappers name the
+# dispatched run for its PR, which _mt_inflight_review_branches keys as
+# "pr:<N>". MERGE_TRAIN_DISPATCHED keeps its ref= field, now "default".
 _mt_dispatch_review() {
 	local pr="$1" head="$2" wf
 	local allow_edits="${MERGE_TRAIN_ALLOW_WORKFLOW_EDITS:-true}"
+	if ! [[ "${pr}" =~ ^[1-9][0-9]*$ ]]; then
+		_mt_warn "merge-train release: invalid PR number '${pr}' for head ${head}; not dispatching."
+		return 1
+	fi
 	for wf in ${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}; do
-		if gh_retry gh workflow run "${wf}" --repo "${MT_REPO}" --ref "${head}" \
+		if gh_retry gh workflow run "${wf}" --repo "${MT_REPO}" \
 			-f pr_number="${pr}" -f allow_workflow_edits="${allow_edits}" >/dev/null 2>&1; then
-			_mt_log "MERGE_TRAIN_DISPATCHED pr=${pr} workflow=${wf} ref=${head}"
+			_mt_log "MERGE_TRAIN_DISPATCHED pr=${pr} workflow=${wf} ref=default head=${head}"
 			return 0
 		fi
 	done
@@ -443,7 +461,9 @@ _mt_release() {
 			continue
 		fi
 		examined=$((examined + 1))
-		if [ -n "${inflight_review_branches}" ] && printf '%s\n' "${inflight_review_branches}" | grep -Fxq -- "${head}"; then
+		# An empty head is never a pattern: grep -Fx with "" matches a blank
+		# line, and a run whose head_branch is "" prints one.
+		if [ -n "${inflight_review_branches}" ] && printf '%s\n' "${inflight_review_branches}" | grep -Fxq -e "pr:${num}" ${head:+-e "${head}"}; then
 			_mt_log "MERGE_TRAIN_RELEASE_ACTIVE pr=${num} head=${head} action=leave_queued"
 			continue
 		fi
@@ -481,7 +501,7 @@ _mt_release() {
 		fi
 		if _mt_dispatch_review "${num}" "${head}"; then
 			release_comment_body="${MT_RELEASED_MARKER}
-**Merge train released.** Every older PR that edited the same files has merged or closed; the review/autofix run was re-dispatched on \`${head}\`."
+**Merge train released.** Every older PR that edited the same files has merged or closed; the review/autofix run was re-dispatched for \`${head}\`."
 			_mt_upsert_comment "${num}" "${MT_RELEASED_MARKER}" "${release_comment_body}" \
 				|| _mt_warn "merge-train release: could not upsert the released comment for PR #${num}; continuing."
 			released=$((released + 1))
