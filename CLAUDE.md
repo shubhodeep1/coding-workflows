@@ -1727,7 +1727,44 @@ terminal report (§26.D):
    subscriber rules of your instructions.` Report the checker's id and
    both trigger ids, and skip steps 2–3. A session that pushed to the PR
    registers as `fixer`; one that only waits for the outcome as `notify`.
-2. Otherwise call `create_session` with `source_url` = the repository,
+1c. **Depth check** before creating a checker. The claude-code-remote
+   tools refuse `create_session`, `create_trigger`, `update_trigger`, and
+   `send_later` from a session 8 parent links below its root (`caller
+   session is at lineage depth 8 (limit 8)`), even when a session re-arms
+   itself. A checker this session creates sits one link below it, and it
+   must sit at depth 6 or less, so that a fresh fixer it starts (§26.C step
+   5) lands at depth 7 or less, where it can still register and re-arm.
+   Follow `parent_session_id` upward with `get_session`, starting from this
+   session, until a session has none, and count the links (at most 8
+   calls). If a `get_session` call fails, retry it once; if it fails
+   again, the count is unknown and would only err low, so treat *d* as 6.
+   Call that count *d*:
+   - *d* ≤ 5 → step 2.
+   - *d* is 6 or 7 → **ask the Claude issue pickup to create the checker**.
+     The pickup is one long-lived session at depth 1 or less
+     (`.claude/commands/claude-issue-pickup.md`), so its checker sits at
+     depth 2 or less. `list_triggers` (`enabled: true`) and take the
+     `persistent_session_id` of the trigger named `Claude issue pickup:
+     hourly`. Then `create_trigger` with `persistent_session_id` = that
+     session, `run_once_at` = two minutes from now, `name` = `PR #<n> status
+     check-in: arm request`, `initiation: own_followup`, and `prompt` =
+     `Read .claude/commands/claude-issue-pickup.md in full and follow it
+     with these arguments:` then a new line and `— arm-check-in
+     <owner>/<repo>#<n> for <this session's id>`. Report the request
+     trigger id and end the turn. The pickup creates the checker as in step
+     2 and wakes this session with a one-shot trigger named `PR #<n> status
+     check-in: checker ready`, which names the checker's id. On that wake,
+     do steps 3–4 with that checker.
+   - *d* ≥ 8, no pickup trigger exists, or any claude-code-remote call in
+     this section is refused with `lineage depth` → skip steps 2–3. Keep
+     the hand-back Routine if step 1 created it: its 7-day fire runs this
+     check again from §26.D. Send one `PushNotification` (`PR #<n>: no §26
+     checker — session depth <d>; the §26.H sweep still covers claude/*
+     fixes`), and say so in the report. Never fall back to `CronCreate` or
+     another session-local loop: it dies with this session's container.
+     Incident: on 2026-09-27 the PR #4601 checker was created at depth 8
+     and could not re-arm itself even once.
+2. Otherwise (*d* ≤ 5) call `create_session` with `source_url` = the repository,
    `model: claude-sonnet-5`, `permission_mode` = this session's mode,
    `title` = `PR #<n> status check-in`, and the prompt `/effort low` **and
    nothing else**. `create_session` takes no effort parameter, and
@@ -1803,33 +1840,44 @@ hand-back trigger id, a session id, and a role. There is at most one
 1. Run `PYTHONDONTWRITEBYTECODE=1 CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=<login>
    CLAUDE_FIXER_VERDICT_BOT_LOGIN=<bot login or empty> python3
    .claude/scripts/check_in_status.py --repo <owner>/<repo> --pr <n>
-   --hand-back`. It prints one JSON line: `done`, `state`, `reason`, and on
-   a `claude/*` head `kind`, `head_sha`, `claim`, and the hand-back counts
-   (§26.H). The script decides; the model does not interpret the PR. It
-   uses REST only (§15): one PR read, plus on a `claude/*` head the
-   comment and check-run pages and at most six further reads.
-2. **Not done** (`open`, `claimed`, `held`, or waiting on a run) → renew
-   the dead-man's switch on every subscriber's Routine (`update_trigger`
-   with only `run_once_at` = now + 7 days), call `send_later` with
-   `delay_minutes: 60`, `initiation: own_followup`, and `name` = `PR #<n>
-   status check-in` into the checker session, and end the turn. No
-   message to the user, no PR comment, no CI, review, comment, conflict,
-   or branch work: the checker never fixes anything.
-3. **Read failed** (exit 2) → call `send_later` the same way but do not
-   renew any Routine. A read that keeps failing therefore lets the
-   dead-man's switch fire within 7 days, and the pushing session looks
-   into it (§26.D).
-4. **Due fix** (`state` is `conflict`, `review-round`, `ci-failed`, or
-   `blocked`) → if this same `head_sha` and `state` were already handed
-   back, treat it as step 2 (the §26.H sweep covers a fixer that did not
-   act). Otherwise **hand back to the fixer only**: `update_trigger` on the
-   fixer's Routine with only `run_once_at` = now + 1 minute (never the
-   prompt), note the time, `head_sha`, and `state`, call `send_later` with
-   `delay_minutes: 10` and `name` = `PR #<n> status check-in: hand-back
-   check`, and end the turn.
-   **Terminal** (`merged` / `closed`) → stop re-arming and pull **every**
-   subscriber's Routine forward the same way, then arm the same 10-minute
-   check. The checker writes no report and sends no notification.
+   --hand-back`. It prints one JSON line: `done`, `state`, `reason`,
+   `action`, and on a `claude/*` head `kind`, `head_sha`, `claim`, and the
+   hand-back counts (§26.H). The script decides; the model does not
+   interpret the PR. It uses REST only (§15): one PR read, plus on a
+   `claude/*` head the comment and check-run pages and at most six
+   further reads. **Route on `action` only, never on `state`** (the
+   script maps it, `route_verdict`):
+
+   | `state`                                            | `action`          | step |
+   |----------------------------------------------------|-------------------|------|
+   | `open`, `claimed`, `held`, or waiting on a run     | `wait`            | 2    |
+   | read failed (exit 2)                               | `retry`           | 3    |
+   | `conflict`, `review-round`, `ci-failed`, `blocked` | `hand_back_fixer` | 4    |
+   | `merged`, `closed`                                 | `hand_back_all`   | 4    |
+
+2. **`action` is `wait`** (`open`, `claimed`, `held`, or waiting on a
+   run) → renew the dead-man's switch on every subscriber's Routine
+   (`update_trigger` with only `run_once_at` = now + 7 days), call
+   `send_later` with `delay_minutes: 60`, `initiation: own_followup`, and
+   `name` = `PR #<n> status check-in` into the checker session, and end
+   the turn. No message to the user, no PR comment, no CI, review,
+   comment, conflict, or branch work: the checker never fixes anything.
+3. **`action` is `retry`** (the read failed, exit 2) → call `send_later`
+   the same way but do not renew any Routine. A read that keeps failing
+   therefore lets the dead-man's switch fire within 7 days, and the
+   pushing session looks into it (§26.D).
+4. **`action` is `hand_back_fixer`** (a due fix: `state` is `conflict`,
+   `review-round`, `ci-failed`, or `blocked`) → if this same `head_sha`
+   and `state` were already handed back, treat it as step 2 (the §26.H
+   sweep covers a fixer that did not act). Otherwise **hand back to the
+   fixer only**: `update_trigger` on the fixer's Routine with only
+   `run_once_at` = now + 1 minute (never the prompt), note the time,
+   `head_sha`, and `state`, call `send_later` with `delay_minutes: 10` and
+   `name` = `PR #<n> status check-in: hand-back check`, and end the turn.
+   **`action` is `hand_back_all`** (terminal: `merged` / `closed`) → stop
+   re-arming and pull **every** subscriber's Routine forward the same way,
+   then arm the same 10-minute check. The checker writes no report and
+   sends no notification.
 5. **Hand-back check** (the 10-minute wake) → `get_trigger` on each
    Routine you pulled forward:
    - `last_run.status` is `ROUTINE_RUN_STATUS_SUCCEEDED`, `last_run.fired_at`
@@ -1854,7 +1902,12 @@ hand-back trigger id, a session id, and a role. There is at most one
        `name` = `PR #<n> status check-in: fixer start`, `initiation:
        own_followup`, and `prompt` = `/fix-claude-pr <PR URL> — kind
        <kind> — head <head_sha>`. Resume step 2; the fresh session claims
-       the head and registers as the fixer.
+       the head and registers as the fixer. §26.B step 1c keeps every
+       checker it creates at depth 6 or less, so this `create_session` is
+       refused with `lineage depth` only for a checker armed before step
+       1c existed. There is no pickup routing here: send one `PushNotification` (`PR #<n>: fix due but
+       checker too deep to start a fixer; the §26.H sweep takes it`) and
+       resume step 2. The sweep starts the fixer from the pickup.
      - **Terminal, fixer gone** → **fall back**: write the §26.D report in
        this session from the fallback next steps in the prompt, delete the
        fixer's hand-back Routine (`delete_trigger`, ignoring not-found),
@@ -1867,20 +1920,22 @@ hand-back trigger id, a session id, and a role. There is at most one
 When the hand-back wakes the pushing session, it first runs
 `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py
 --repo <owner>/<repo> --pr <n> --hand-back` itself (the Routine carries no
-verdict; a woken `notify` subscriber does the same). Then, by `state`:
+verdict; a woken `notify` subscriber does the same). Then, by `action`
+(§26.C step 1):
 
-- **Due fix** (`conflict`, `review-round`, `ci-failed`, `blocked`, or a
-  claim of its own) and this session is the fixer → follow
+- **Due fix** (`hand_back_fixer`: `conflict`, `review-round`, `ci-failed`,
+  `blocked`; or `wait` with `state` `claimed` by a claim of its own) and
+  this session is the fixer → follow
   `.claude/commands/fix-claude-pr.md` **in this session** with the PR URL:
   it checks the §26.H cap, claims the head, fixes, verifies, pushes, then
   creates a new hand-back Routine (step 1) and registers it with the same
   checker as `fixer` (step 1b). The checker stays; never create a second
   one. A `notify` subscriber woken for a due fix (it should not be) only
   re-registers.
-- **Terminal** → write the report below. A `notify` subscriber writes it
-  for its own purpose and stops; the fixer finishes as described after
-  it. First, in this order, the fixer renames the checker (its id is in
-  this session's arming report) to
+- **Terminal** (`hand_back_all`) → write the report below. A `notify`
+  subscriber writes it for its own purpose and stops; the fixer finishes
+  as described after it. First, in this order, the fixer renames the
+  checker (its id is in this session's arming report) to
   `PR #<n> <state> — handed to <this session's id>` and archives it
   (`archive_session`), and only then deletes the fired Routine
   (`delete_trigger`, ignoring not-found). The order matters: the checker's
@@ -1888,12 +1943,12 @@ verdict; a woken `notify` subscriber does the same). Then, by `state`:
   hand-back, so the checker must be gone before the Routine is. The wake
   itself proves the hand-back arrived, so that check is no longer needed;
   its leftover reminder is removed by the sweep.
-- **Still open, claimed, or held** → the checker stopped renewing the
-  Routine for 7 days, or the fix is already owned: re-arm from §26.B step
-  1 (a new hand-back Routine, registered with the checker, or a fresh
-  checker when the old one is gone).
-- **Read failed** → say so in one line and re-arm the same way, so the
-  next wake retries.
+- **Still open, claimed, or held** (any other `wait`) → the checker
+  stopped renewing the Routine for 7 days, or the fix is already owned:
+  re-arm from §26.B step 1 (a new hand-back Routine, registered with the
+  checker, or a fresh checker when the old one is gone).
+- **Read failed** (`retry`) → say so in one line and re-arm the same
+  way, so the next wake retries.
 
 The pushing session writes the report (the checker writes it only in the
 §26.C step 5 fallback) for a terminal PR, in that session, where the user
@@ -1997,8 +2052,11 @@ sweep runs in the sessions that create them, never in Actions:
   PR's current head with `.claude/scripts/claude_fix_claim.py post` (one
   comment ending in `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict
   | ci | review | blocked | hold> by=<session id | sweep-run-<id>> -->`).
-  Only claims by an owner, member, or collaborator count, timed by the
-  comment's own `created_at`. A claim on the current head is live for
+  Only claims by an owner, member, or collaborator count, and only when
+  posted as the PR's author or as `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` (the
+  sweep's `GH_PAT` account), so no other collaborator can forge a claim or
+  a hold (issue #4622). A claim is timed by the comment's own
+  `created_at`. A claim on the current head is live for
   `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3); a push moves the head and
   ends it. While a live claim or a hold exists, `check_in_status.py
   --hand-back` reports `claimed` / `held`, so neither the checker nor the

@@ -2,7 +2,7 @@ Run the **Claude issue pickup**: start the Opus implementation session for every
 
 **Why a pickup session and not the routine.** A claude.ai routine run, fired by the API or by hand, starts a fresh session with no claude-code-remote tools (`create_session`, `send_later`, `get_session`, `add_repo`), so it cannot start the implementation session or any stage of the chain (issue #4525). A session started from the app or with `create_session` has those tools, and a trigger bound to it wakes it with the tools intact.
 
-**Why one session, woken by a trigger bound to itself.** The claude-code-remote tools refuse `create_session`, `send_later`, and `create_trigger` in a session 8 parent links below its root (`/implement-plan-claude` → Check-in Loop). A trigger bound to an existing session adds no parent link, so the pickup stays at the depth it started at for its whole life. A pickup that created a new session for every wake would go one link deeper each hour, stop after a few hours, and push every implementation chain it starts toward the limit. The issue-mode chain needs three more links below the implementation session (checker, stages, `/deploy-activate`), and the implementation session sits one link below the pickup. So the pickup must sit **at depth 3 or less**; start it from a session you opened yourself in the app (depth 0).
+**Why one session, woken by a trigger bound to itself.** The claude-code-remote tools refuse `create_session`, `send_later`, and `create_trigger` in a session 8 parent links below its root (`/implement-plan-claude` → Check-in Loop). A trigger bound to an existing session adds no parent link, so the pickup stays at the depth it started at for its whole life. A pickup that created a new session for every wake would go one link deeper each hour, stop after a few hours, and push every implementation chain it starts toward the limit. The issue-mode chain needs three more links below the implementation session (checker, stages, `/deploy-activate`), and the implementation session sits one link below the pickup. Any session in that chain can also open a pull request and arm a CLAUDE.md §26 checker one link below itself, and that checker's fresh fixer sits one link further down. With the pickup at depth 1, the deepest of these is a fixer at depth 7, the last depth that can still register and re-arm. The pickup also creates §26 checkers for sessions too deep to create their own (`— arm-check-in`, step 5). So the pickup must sit **at depth 1 or less**; start it from a session you opened yourself in the app (depth 0). Incident: on 2026-09-27 a pickup at depth 3 started a chain whose PR #4601 checker landed at depth 8 and could not re-arm.
 
 $ARGUMENTS
 
@@ -10,6 +10,7 @@ $ARGUMENTS
 - **`start`** (or empty): make **this** session the pickup. Add `— restart` to take over from a pickup that exists but has stopped.
 - **`— wake.`**: an hourly wake of the pickup. Only the pickup's own trigger sends this.
 - **`stop`**: stop the pickup.
+- **`— arm-check-in <owner>/<repo>#<n> for <session id>`**: create the §26 checker for a session too deep to create its own (CLAUDE.md §26.B step 1c). Only a session's `PR #<n> status check-in: arm request` trigger sends this.
 
 ## Procedure
 
@@ -22,9 +23,10 @@ $ARGUMENTS
      > - **A** — Switch this session to Auto mode in the app, then reply `Q1: A` and I continue (RECOMMENDED)
      > - **B** — Stop; start the pickup later from a session in Auto mode
 
-     In `— wake.` mode a non-Auto mode means the pickup was started wrong: reply `claude-issue-pickup: blocked (<mode> mode)` and end the turn; the watchdog alerts once queue items age.
-   - **Depth** (`start` mode only). Follow `parent_session_id` upward with `get_session` until a session has none, counting the links (at most 8 calls). More than 3 → reply `claude-issue-pickup: blocked (this session is <n> links below its root; start the pickup from a session you open in the app)` and end the turn.
-   - **Fresh code** (`— wake.` mode). When `git status --porcelain` is empty, run `git fetch origin main` and `git checkout -B main origin/main`, so the wake reads the current command file and scripts.
+     In `— wake.` and `— arm-check-in` mode a non-Auto mode means the pickup was started wrong: reply `claude-issue-pickup: blocked (<mode> mode)` and end the turn; the watchdog alerts once queue items age.
+   - **Depth** (`start` mode only). Follow `parent_session_id` upward with `get_session` until a session has none, counting the links (at most 8 calls). A `get_session` call that fails twice leaves the depth unknown: reply `claude-issue-pickup: blocked (cannot read session lineage: <error>)` and end the turn, since a short count would pass a pickup that sits too deep. More than 1 → reply `claude-issue-pickup: blocked (this session is <n> links below its root; start the pickup from a session you open in the app)` and end the turn.
+   - **Fresh code** (`— wake.` and `— arm-check-in` mode). When `git status --porcelain` is empty, run `git fetch origin main` and `git checkout -B main origin/main`, so the wake reads the current command file and scripts.
+   - **Mode `— arm-check-in`** → skip steps 1–4 and go to step 5.
 
 1. **Keep exactly one pickup.** Call `list_triggers` (`enabled: true`). The pickup's trigger is named `Claude issue pickup: hourly`.
    - **`start`**: if one exists whose `persistent_session_id` is not this session and `$ARGUMENTS` has no `— restart`, report `already running: trigger <id> → session <persistent_session_id>` and end the turn. If one already targets this session, report `already running here` and end the turn. With `— restart`, `delete_trigger` each one bound to another session and `archive_session` that session unless `get_session` shows it `blocked` or waiting on the user. Then create this session's trigger: `create_trigger` with `persistent_session_id` = your session id, `cron_expression` `0 * * * *` (hourly; the server anchors it to the creation minute), `name` `Claude issue pickup: hourly`, `initiation` `human_request`, and the prompt:
@@ -56,16 +58,26 @@ $ARGUMENTS
 
 4. **Report.** Keep the reply to one line so the pickup's history stays small: `claude-issue-pickup: started <n> (<repo>#<N> → <session id>, …); ignored <k>; remaining <r>; failed <f>`. When `n` > 0 or `f` > 0, `set_session_title` on your own session to `Claude issue pickup — last wake <HH:MM> UTC: <n> started, <f> failed`. End the turn. Never archive yourself.
 
+5. **Arm a check-in** (`— arm-check-in` mode only). The session that asked sits too deep to create its own §26 checker. The pickup creates the checker one link below itself and hands its id back; the asking session writes the checker's instructions itself (CLAUDE.md §26.B step 3), so no free text passes through the pickup.
+   1. Write the arguments line (the text after `these arguments:`, exactly as received) to a file in your scratchpad with the file tool, never through the shell, and run:
+      ```
+      PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py arm-check-in-request --arguments-file <that file> --registry .github/ai/consumer_repos.json
+      ```
+      The script decides. Exit 2 (an unreadable arguments file, malformed arguments, an unregistered repository, or a bad session id) → reply `claude-issue-pickup: arm-check-in refused (<its stderr line>)` and end the turn. Run it without redirecting or piping its output, so the Bash result shows the stderr line. Do not wake the asking session: its hand-back Routine fires within 7 days and asks again (CLAUDE.md §26.D).
+   2. `create_session` with `source_url` = the script's `source_url`, `model` `claude-sonnet-5`, `permission_mode` `auto` (the pickup's own mode, which step 0 requires; CLAUDE.md §26.B step 2 says "this session's mode"), `title` = the script's `checker_title`, and the prompt `/effort low` and nothing else (CLAUDE.md §26.B step 2). If it fails twice, reply `claude-issue-pickup: arm-check-in failed (<error>)` and end the turn. A `lineage depth` refusal means this pickup sits too deep: also send one `PushNotification` (`Claude issue pickup: session depth limit — run /claude-issue-pickup start — restart from a new app session`).
+   3. `create_trigger` with `persistent_session_id` = the script's `requester`, `run_once_at` = two minutes from now, `name` = the script's `ready_trigger_name`, `initiation` `own_followup`, and `prompt` = the script's `ready_prompt` with `<checker id>` replaced by the new session's id. If it fails twice, `archive_session` the new checker (nobody would give it instructions) and reply `claude-issue-pickup: arm-check-in failed (<error>)`.
+   4. Reply in one line: `claude-issue-pickup: arm-check-in <repo>#<n> → checker <id>, ready trigger <id>` and end the turn. Do not change your title.
+
 ## Rules
 
-- **Only start sessions.** The pickup never reads target issues or pull requests, edits code, comments, labels them, or implements or fixes anything; each target's own session does that under `/implement-issue-claude` or `/fix-claude-pr`.
+- **Only start sessions.** The pickup never reads target issues or pull requests, edits code, comments, labels them, or implements or fixes anything; each target's own session does that under `/implement-issue-claude` or `/fix-claude-pr`. A checker it creates in `— arm-check-in` mode gets its instructions from the session that asked for it, never from the pickup.
 - **One pickup, never deeper.** Step 1 keeps a single `Claude issue pickup: hourly` trigger, bound to the pickup session itself. The pickup never creates a session for its own next wake. Stop it with `/claude-issue-pickup stop`; move it to a new session with `/claude-issue-pickup start — restart` from that session. Never delete its trigger or archive the pickup session by hand without restarting it, or queued issues wait until the watchdog alerts.
-- **Stay lean.** Each wake is one script call plus one `create_session` and one `issue_write` per item. Long conversations are summarized automatically, so the pickup can run for weeks; restart it from a fresh app session if its wakes grow expensive.
+- **Stay lean.** Each wake is one script call plus one `create_session` and one `issue_write` per item. An `— arm-check-in` request is one script call, one `create_session`, and one `create_trigger`. Long conversations are summarized automatically, so the pickup can run for weeks; restart it from a fresh app session if its wakes grow expensive.
 - **No PR watching, no polling** (CLAUDE.md §25). One wake per hour, from the trigger.
 - **Failures are visible.** `.github/workflows/claude-issue-queue-watchdog.yml` labels queue items open longer than `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (default 3) `ai:claude-issue-queue-stale` and sends a Telegram ERROR with the restart command.
 
 ## Tool Access
 
 - **claude-code-remote MCP tools** (`mcp__Claude_Code_Remote__*`, or the generated server name in a `create_session` child): `get_session`, `create_session`, `create_trigger`, `list_triggers`, `delete_trigger`, `archive_session`, `set_session_title`; `PushNotification` for the depth-limit alert. `.claude/settings.json` pre-approves them; outside Auto mode the write tools still ask, which is why the pickup runs in Auto mode.
-- **`scripts/claude_issue_route.py queue-pending --fetch-repo`** reads the queue and the producer-run bindings with `gh api` REST calls (batched, see step 2) and parses them (pre-approved). `git fetch` / `git checkout` refresh the checkout (pre-approved).
+- **`scripts/claude_issue_route.py queue-pending --fetch-repo`** reads the queue and the producer-run bindings with `gh api` REST calls (batched, see step 2) and parses them (pre-approved). **`arm-check-in-request`** parses an `— arm-check-in` request offline (no API call; pre-approved). `git fetch` / `git checkout` refresh the checkout (pre-approved).
 - **`mcp__github__issue_write`** to close queue issues (pre-approved). `gh api` writes are ask-listed and would stall the pickup.

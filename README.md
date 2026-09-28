@@ -84,7 +84,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `FORWARD_MERGE_FALLBACK_AUTO_MERGE` | No | `true` | review_autofix | Controls how forward-merge fallback PRs (head ref `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml`) are merged when review passes with no changes needed. When `true` (default), `review_autofix.yml` enables auto-merge with a **real merge commit** (`gh pr merge --merge --auto`) so `stable`'s commits stay reachable from `main` and `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check keeps passing. Requires "Allow merge commits" **and** "Allow auto-merge" in repo settings; if either is off the enable call logs a `::warning::` and the PR is left for a manual "Create a merge commit". Applies to **both** flavours of fallback PR — conflict-resolved (body: "failed due to merge conflicts", resolved unattended by `[ai-merge-resolve]`) and branch-protection (body: "could not push directly"). Set to any non-`true` value to restore the previous behaviour of leaving every forward-merge fallback PR for a manual merge commit. Independent of `ENABLE_AUTO_MERGE`, but `ENABLE_AUTO_MERGE=false` still disables all auto-merge including this path. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `5` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and hands control to the per-PR review-blocked judge. The judge then decides `merge`, `fix` (push a `[judge-fix]` commit which resets the autofix counter — capped at `MAX_REVIEW_BLOCKED_RETRIES`), `merge_with_followup` (merge as-is and open a follow-up issue tracking the deferred gap — preferred over `close_and_reissue` at IS_FINAL when the PR is shippable), or `close_and_reissue`. If the judge step is skipped or fails to handle the PR (`judge_handled != 'true'`), the linked issues are labelled `ai:review-blocked` and a review-blocked comment is posted on the PR. Applies uniformly to every PR mode (orchestrator intermediate, orchestrator final, non-orchestrator). The retrigger guard's PR mode classifier (`orch_intermediate` / `orch_final` / `other`, gated by `ORCH_PR_AUTOFIX_FLOW_ENABLED`) is now used only for observability and the orchestrator-level judge cap bypass on `orch_final`; it no longer overrides the per-PR autofix cap. See [Orchestrator PR autofix flow](#orchestrator-pr-autofix-flow). |
 | `CLAUDE_FIXER_ENABLED` | No | `true` | review_autofix | Claude-fixer mode for every PR-backed `claude/*` PR (`/implement-plan-claude` stages and any Claude session's PR, CLAUDE.md §26.H): the reviewer panel hands findings and conflicts to the Claude session instead of the GPT editor or resolver. A zero-findings run auto-merges only with a fresh `ready`, same-head check-run snapshot; other rounds require a `[claude-autofix]` push or a dedicated bot's ledger-bound verdict. At the iteration cap or when independent verification still finds issues, the PR is labelled `ai:review-blocked`. Set to `false` to use the GPT editor path. |
-| `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` | No | (empty) | checker / `claude-pr-catch-all` | Exact account login that posts review workflow hand-off comments using `GH_PAT`. Supply it in the `/implement-plan-claude` and §26 checker environments from trusted configuration; the `claude-pr-catch-all` sweep job reads this repo variable and, when it is empty, uses the `GH_PAT` account's own login, not from PR comments or the checker's own `gh` identity (which may differ). Empty disables comment-based hand-offs; the checker still detects an unhandled merge conflict with no active run. The checker requires an exact issued head/round/ledger (for findings), a successfully completed review run on the PR branch whose triggering commit is the reviewed head or an earlier push to it (one compare read when they differ), and no queued or active branch run before waking a review round. |
+| `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` | No | (empty) | checker / `claude-pr-catch-all` | Exact account login that posts review workflow hand-off comments using `GH_PAT`. Supply it in the `/implement-plan-claude` and §26 checker environments from trusted configuration; the `claude-pr-catch-all` sweep job reads this repo variable and, when it is empty, uses the `GH_PAT` account's own login, not from PR comments or the checker's own `gh` identity (which may differ). Empty disables comment-based hand-offs; the checker still detects an unhandled merge conflict with no active run. The checker requires an exact issued head/round/ledger (for findings), a successfully completed review run on the PR branch whose triggering commit is the reviewed head or an earlier push to it (one compare read when they differ), and no queued or active branch run before waking a review round. It is also the one account besides a PR's author whose `ai:claude-fix-claim` comments count (the sweep's reservations), so set it when the `GH_PAT` account differs from the users whose Claude sessions open `claude/*` PRs. |
 | `CLAUDE_FIXER_VERDICT_BOT_LOGIN` | No | (empty) | review_autofix / checker | Dedicated GitHub App bot login (e.g. `fixer[bot]`), distinct from the GH_PAT account. Empty disables verdict-based convergence. The bot must post with privately provisioned Issues or Pull requests write credentials; a Claude Code Web session's `gh` authorization header may be replaced by its proxy, so verify bot authorship before dispatch. A v1 head-only verdict never authorizes merge: the workflow matches the bot's v2 verdict to the latest workflow-owned v2 hand-off's head, round and SHA-256 ledger digest, then re-runs reviewers on that head. Only a clean result and fresh `ready`, same-head check snapshot enable auto-merge. Configure the same login in the Sonnet checker environment so forged human verdicts cannot dismiss its hand-off. |
 | `CLAUDE_PR_SWEEP_MIN_AGE_HOURS` | No | `2` | `claude-pr-catch-all` | How long a Claude fix on a `claude/*` PR (conflict, failed check, review hand-off, block label) must have been due, with no live claim, before the hourly catch-all sweep in `review_autofix_sweep.yml` starts a fresh `/fix-claude-pr` session for it. See [Claude fixes every claude/* PR](#claude-fixes-every-claude-pr). |
 | `CLAUDE_FIX_CLAIM_LEASE_HOURS` | No | `3` | `claude-pr-catch-all` / sessions | How long an `ai:claude-fix-claim` comment on a PR's current head keeps other fixers (the §26 checker's hand-back and the sweep) away. A push moves the head and ends the claim early. Sessions read the same variable from their environment and default to `3`. |
@@ -1045,7 +1045,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
 > interactive session start a small low-effort Sonnet checker session for every
 > pull request it pushes; the checker runs `.claude/scripts/check_in_status.py`
-> every hour (re-armed with `send_later`) without waking the pushing session.
+> every hour (re-armed with `send_later`) without waking the pushing session,
+> and routes on the verdict's `action` field (`wait`, `retry`,
+> `hand_back_fixer`, `hand_back_all`) rather than interpreting `state`.
 > Once the PR merges or closes, the checker pulls forward a scheduled Routine
 > bound to the pushing session, which re-reads the PR state and, since it
 > holds the context, reports the next steps (or that it can be closed). The
@@ -1234,7 +1236,14 @@ mode).
    `scripts/claude_issue_handoff.sh` sends a `claude-issue`
    `repository_dispatch` to coding-workflows with `GH_PAT`.
 3. `claude-issue-intake.yml` (coding-workflows only) validates the repo
-   against `.github/ai/consumer_repos.json` plus coding-workflows, then queues
+   against `.github/ai/consumer_repos.json` plus coding-workflows and
+   authorizes the dispatch against live GitHub data (issue #4620). Every
+   dispatcher login of the run (`github.actor`, and `github.triggering_actor`
+   when it differs) must have `admin` or `write` on the target repo. The
+   target must be an open issue (not a pull request) in that repo. Its author
+   must pass clarify's gate (a `User` with `OWNER` / `MEMBER` /
+   `COLLABORATOR` association, or `github-actions[bot]`), or a trusted `User`
+   must have commented `/reclarify` on it. The intake then queues
    the issue as one `ai:claude-issue-queue` issue in coding-workflows
    (`scripts/claude_issue_intake.sh`), opened with the job's `GITHUB_TOKEN`
    so no workflow reacts to it, and comments "queued" on the issue. A repo
@@ -1293,9 +1302,16 @@ three REST reads.
 | Send one issue to Claude in a `codex` repo | Add `ai:claude`, then comment `/reclarify` |
 | Retry a failed handoff or resume a blocked issue | Comment `/reclarify` |
 
-**Failure modes.** A rejected dispatch, an unregistered repo, or a failed
-queue read or write labels the issue `ai:claude-handoff-failed`, comments how
-to retry or switch, and sends a Telegram ERROR. A queue item still open after
+**Failure modes.** A failed dispatch from the handoff, or a failed queue read
+or write in the intake, labels the issue `ai:claude-handoff-failed`, comments
+how to retry or switch, and sends a Telegram ERROR. An invalid payload
+(`invalid_payload`, an unregistered repo included) or a dispatch that fails
+authorization (reasons `dispatcher_unknown`, `dispatcher_not_authorized`,
+`target_not_issue`, `target_repo_mismatch`, `issue_closed`,
+`untrusted_issue_author`, or `authorization_read_failed` when a read fails)
+queues nothing and writes nothing to the target issue. It logs
+`CLAUDE_ISSUE_INTAKE rejected reason=…`, fails the intake run, and sends a
+Telegram ERROR; comment `/reclarify` to retry a legitimate issue. A queue item still open after
 `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (repo variable, default 3) means the pickup
 stopped: `claude-issue-queue-watchdog.yml` labels it
 `ai:claude-issue-queue-stale` and sends a Telegram ERROR with the restart
@@ -1394,13 +1410,18 @@ Claude session fixes it instead (CLAUDE.md §26 and §26.H):
    `.claude/scripts/check_in_status.py --hand-back` every hour. When a fix is
    due (a block label, a review hand-off for the current head, a merge
    conflict, or a failed check with no workflow run queued, running, or
-   pending) it pulls the pushing session's hand-back Routine forward, and
-   that session follows `/fix-claude-pr` in place: it claims the head, fixes,
-   verifies, pushes, and registers a new hand-back with the same checker.
+   pending) the script reports `action: hand_back_fixer`, and the checker
+   pulls the pushing session's hand-back Routine forward. That session
+   follows `/fix-claude-pr` in place: it claims the head, fixes, verifies,
+   pushes, and registers a new hand-back with the same checker.
    A PR has one checker; other interested sessions register with it as
    subscribers.
 2. **A fresh fixer when the pushing session is gone.** The checker starts
    an Opus 5.5 session at high effort running `/fix-claude-pr <url>`.
+   A session too deep in the session lineage to create its own checker
+   (depth 6 or 7 of the 8-link limit) asks the Claude issue pickup to create
+   it instead (CLAUDE.md §26.B step 1c), so every checker can still start a
+   fixer.
 3. **The hourly catch-all.** The `claude-pr-catch-all` job of
    `review_autofix_sweep.yml` (cron `17 * * * *`) checks this repo and every
    repo in `.github/ai/consumer_repos.json`. A fix that has been due for
@@ -1415,7 +1436,9 @@ Claude session fixes it instead (CLAUDE.md §26 and §26.H):
 **Claims** (`.claude/scripts/claude_fix_claim.py`) stop two fixers racing:
 one PR comment ending in
 `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`,
-counted only from owners, members, and collaborators, live for
+counted only from owners, members, and collaborators posting as the PR's
+author or as `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` (so no other collaborator
+can forge a claim or a hold), live for
 `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3) on the current head. After
 `CLAUDE_FIX_HAND_BACK_CAP` (default 3) conflict, CI, and block fixes on one
 PR, the fixer posts a `hold` claim, sends one push notification, and asks;
@@ -1541,8 +1564,12 @@ through `clarify → plan → implement → review`.
   and the run summary's `finalize_reason`), sets `AUTOFIX_REVIEWERS_FAILED=true`
   and writes evidence (`workflow_failure_heal.py reviewer-failure-evidence`:
   each slot's last exit code, the summariser's,
+  `summariser_empty_stdout prefix=<prefix>` when a summariser attempt exited 0
+  with no final message (counted as exit 0),
   `dominant_rc`, and up to 10 error lines a support script prefixed with its own
-  name), which every fingerprint call site and the heal report read. The retry
+  name), which every fingerprint call site and the heal report read. The
+  failure-log artifact carries `summariser_pass1.log` / `summariser_review.log`
+  with each summariser attempt's stderr tail (issue #4653). The retry
   handling is unchanged: the same no-output comment, `AUTOFIX_EDITOR_EMPTY_NOOP=true`,
   no immediate `ai:review-blocked`. On PR #4323 every reviewer slot and the
   summariser exited 226 and the run was reported as an empty editor.
