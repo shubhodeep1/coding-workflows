@@ -30,6 +30,20 @@ Shell drivers:
     parses that request with ``arm-check-in-request`` (CLAUDE.md §26.B step
     1c).
 
+Queue binding (issue #4621): the creator of a queue issue says nothing about
+its current title and body, which anyone who can edit the issue can change.
+So every producer run (the intake, and the ``claude-pr-catch-all`` sweep job)
+records each queue issue it opens or rewrites, with its exact title and
+payload, in a ``claude-issue-queue-binding`` artifact of that run
+(``add-queue-binding`` / ``append_queue_binding``). The pickup follows the
+item's ``Intake run:`` / ``Sweep run:`` line, checks that the run is a
+completed default-branch run of that producer's workflow and event, and
+starts nothing unless the run's artifact lists the item unchanged and the
+body is exactly the producer's rendering of that payload and run
+(``fetch_queue_bindings`` and the ``bindings`` argument of ``queue_pending``).
+An artifact can only be uploaded from inside its own run, so an edited item
+cannot carry a binding it did not get from its producer.
+
 Routing order (first match wins):
 
   1. orchestrator-managed issue (``ai:orchestrator-managed`` label or the
@@ -42,18 +56,23 @@ Routing order (first match wins):
   6. repository variable ``AI_ISSUE_IMPLEMENTER``: ``codex`` -> codex;
      empty or ``claude`` -> claude; anything else -> claude with a warning
 
-All functions are pure except ``fetch_open_queue`` (one ``gh api`` read) and
-the CLI entrypoints, which read only the files they are given (or that one
-read) and write JSON or text to stdout.
+All functions are pure except ``fetch_open_queue`` (one ``gh api`` read),
+``fetch_queue_bindings`` (the batched binding reads it documents),
+``append_queue_binding`` (writes the binding file it is given), and the CLI
+entrypoints, which read only the files they are given (or those reads) and
+write JSON or text to stdout.
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import os
 import re
 import subprocess
 import sys
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -93,7 +112,12 @@ CODEX_ONLY_LABELS: tuple[str, ...] = (
 
 # Labels whose issues skip their own security pass in the Claude project
 # sequence (they are produced by automation; a security-finding project that
-# ran its own audit could open follow-ups of follow-ups).
+# ran its own audit could open follow-ups of follow-ups). The
+# `skip_security_pass` value route_issue derives from them is advisory: it is
+# logged and carried in the dispatch payload and queue item, but a label can be
+# added by anyone, so `/implement-issue-claude` decides with
+# `.claude/scripts/security_pass_skip.py`, which verifies the issue was created
+# and labelled by the issue automation (issue #4623).
 SECURITY_PASS_SKIP_LABELS: tuple[str, ...] = (
 	"ai:security",
 	"ai:check-triage",
@@ -117,6 +141,32 @@ PR_FIX_TEXT_KEYS: tuple[str, ...] = ("repo", "pr", "url", "head", "kind", "claim
 PR_FIX_KINDS: tuple[str, ...] = ("conflict", "ci", "review", "blocked")
 PR_FIX_CLAIM_RE = re.compile(r"^sweep-run-(?:[0-9]{1,20}|local)$")
 PR_FIX_HEAD_RE = re.compile(r"^[0-9a-f]{40}$")
+
+# Queue binding (issue #4621): the artifact each producer run uploads, and the
+# workflow, events, and run-URL line that identify a producer per item type.
+QUEUE_BINDING_ARTIFACT = "claude-issue-queue-binding"
+QUEUE_BINDING_SCHEMA_VERSION = "claude_issue_queue_binding.v1"
+QUEUE_BINDING_FILENAME = "claude_issue_queue_binding.json"
+QUEUE_BINDING_MAX_BYTES = 1_000_000
+QUEUE_PRODUCERS: dict[str, dict[str, Any]] = {
+	"issue": {
+		"workflow": "claude-issue-intake.yml",
+		"events": ("repository_dispatch", "workflow_dispatch"),
+		"run_line": "Intake run",
+	},
+	"pr_fix": {
+		"workflow": "review_autofix_sweep.yml",
+		"events": ("schedule", "workflow_dispatch"),
+		"run_line": "Sweep run",
+	},
+}
+QUEUE_BINDING_DEFERRED = "deferred"
+# The pickup reads the producer runs of this many times its start limit of
+# targets. Items that fail the binding stay open for the watchdog, so with a
+# window of only `limit` targets, `limit` stuck ones would take every read of
+# every wake and defer the bound items behind them forever.
+QUEUE_BINDING_SCAN_FACTOR = 3
+RUN_URL_PARTS_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/([0-9]{1,20})$")
 
 
 def _label_names(issue: dict[str, Any]) -> list[str]:
@@ -382,7 +432,15 @@ def parse_pr_fix_text(text: str) -> dict[str, Any]:
 
 
 def build_pr_fix_queue_issue(repo: str, pr_number: int, head: str, kind: str, claim: str, run_url: str = "") -> dict[str, Any]:
-	"""Render the queue issue for one pull-request fix (fixed keys and the sweep run URL only)."""
+	"""Render the queue issue for one pull-request fix (fixed keys and the sweep run URL only).
+
+	The rendering is part of the pickup's binding check: ``queue_binding_verdict``
+	re-renders the body and requires an exact match, so any change here makes
+	every open item queued by the previous version ``binding_mismatch``: the
+	pickup never starts it, the watchdog flags it, and the sweep does not queue
+	that pull request again while the item is open. ``tests/test_claude_issue_route.py``
+	pins the exact output; change both together, on purpose.
+	"""
 	text = build_pr_fix_text(repo, pr_number, head, kind, claim)
 	lines = [
 		QUEUE_MARKER,
@@ -406,6 +464,13 @@ def build_queue_issue(validated: dict[str, Any], run_url: str = "") -> dict[str,
 
 	Only fixed keys and the intake run URL are written: no issue prose, so a
 	queue issue can never carry instructions to the pickup session.
+
+	The rendering is part of the pickup's binding check: ``queue_binding_verdict``
+	re-renders the body and requires an exact match, so any change here makes
+	every open item queued by the previous version ``binding_mismatch`` until
+	``/reclarify`` rewrites it (the watchdog flags it meanwhile).
+	``tests/test_claude_issue_route.py`` pins the exact output; change both
+	together, on purpose.
 	"""
 	text = build_fire_text(validated)
 	lines = [
@@ -444,16 +509,105 @@ def _is_queue_issue(issue: dict[str, Any]) -> bool:
 	)
 
 
+def queue_payload_text(body: str) -> str:
+	"""The fixed-key payload block of a queue issue body; raise ValueError when absent."""
+	match = QUEUE_PAYLOAD_BLOCK_RE.search((body or "").replace("\r\n", "\n"))
+	if QUEUE_MARKER not in (body or "") or not match:
+		raise ValueError("queue issue body has no payload block")
+	return match.group(1)
+
+
+def queue_run_id(body: str, item_type: str, queue_repo: str) -> tuple[str, str]:
+	"""Return ``(run_id, "")`` for the item's producer run line, or ``("", reason)``.
+
+	The line is ``Intake run: <url>`` for an issue item and ``Sweep run: <url>``
+	for a pull-request fix, written by ``build_queue_issue`` /
+	``build_pr_fix_queue_issue``. Exactly one such line naming a run of
+	``queue_repo`` is required.
+	"""
+	label = QUEUE_PRODUCERS[item_type]["run_line"]
+	lines = re.findall(rf"(?m)^{re.escape(label)}:[ \t]*(\S*)[ \t]*$", (body or "").replace("\r\n", "\n"))
+	if not lines:
+		return "", f"no {label} line"
+	if len(lines) > 1:
+		return "", f"several {label} lines"
+	parts = RUN_URL_PARTS_RE.match(lines[0])
+	if not parts:
+		return "", f"malformed {label} line"
+	if parts.group(1).lower() != (queue_repo or "").lower():
+		return "", f"{label} line names another repository"
+	return parts.group(2), ""
+
+
+def queue_binding_verdict(
+	bindings: dict[str, Any],
+	item_type: str,
+	queue_issue: int,
+	title: str,
+	body: str,
+	payload: str,
+) -> str:
+	"""Check one queue issue against the producer-run bindings.
+
+	Returns ``""`` when the item is bound unchanged, ``QUEUE_BINDING_DEFERRED``
+	when its run was not fetched this wake, and otherwise the ``ignored``
+	reason: ``unbound: …``, ``binding_mismatch``, ``binding_pending: …``,
+	``binding_untrusted: …``, or ``binding_unavailable: …``.
+	"""
+	repo = bindings.get("repo") if isinstance(bindings, dict) else None
+	runs = bindings.get("runs") if isinstance(bindings, dict) else None
+	if not isinstance(repo, str) or not isinstance(runs, dict):
+		return "unbound: no binding data"
+	run_id, reason = queue_run_id(body, item_type, repo)
+	if reason:
+		return f"unbound: {reason}"
+	# The whole body must be the producer's own rendering of this payload and
+	# run, so no added text reaches the pickup through `queue_issues[].body`.
+	try:
+		if item_type == "pr_fix":
+			fields = parse_pr_fix_text(payload)
+			canonical = build_pr_fix_queue_issue(fields["repo"], fields["pr_number"], fields["head"], fields["kind"], fields["claim"], f"https://github.com/{repo}/actions/runs/{run_id}")
+		else:
+			canonical = build_queue_issue(parse_fire_text(payload), f"https://github.com/{repo}/actions/runs/{run_id}")
+	except ValueError:
+		return "binding_mismatch"
+	if (body or "").replace("\r\n", "\n").rstrip() != canonical["body"].rstrip():
+		return "binding_mismatch"
+	record = runs.get(run_id)
+	if record is None:
+		return QUEUE_BINDING_DEFERRED
+	state = record.get("state") if isinstance(record, dict) else None
+	detail = record.get("reason", "") if isinstance(record, dict) else ""
+	if state == "pending":
+		return f"binding_pending: {detail}"
+	if state == "unavailable":
+		return f"binding_unavailable: {detail}"
+	if state == "missing":
+		return f"unbound: {detail}"
+	if state != "ok":
+		return f"binding_untrusted: {detail or 'unknown run state'}"
+	if record.get("item_type") != item_type:
+		return f"binding_untrusted: run {run_id} does not queue {item_type} items"
+	items = record.get("items") if isinstance(record.get("items"), dict) else {}
+	entry = items.get(str(queue_issue))
+	if not isinstance(entry, dict):
+		return f"unbound: run {run_id} did not queue this issue"
+	if entry.get("title") != title or str(entry.get("payload") or "").strip() != (payload or "").strip():
+		return "binding_mismatch"
+	return ""
+
+
 def queue_pending(
 	issues: list[Any],
 	allowed_repos: list[str],
 	trusted_author: str = QUEUE_TRUSTED_AUTHOR,
 	limit: int = QUEUE_PICKUP_LIMIT,
+	bindings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
 	"""Turn the open queue issues into the pickup's work list.
 
 	Input: the JSON array from one ``GET repos/<self>/issues?labels=ai:claude-issue-queue&state=open``.
-	Output: ``{"pending": [...], "ignored": [...], "remaining": int}``. Each
+	Output: ``{"pending": [...], "ignored": [...], "remaining": int, "deferred": int}``. Each
 	pending entry is one target issue (duplicates from ``/reclarify`` are
 	grouped, oldest queue issue first) with its fire text and the queue issues
 	to close, and ``item_type`` ``issue``; or one pull request to fix
@@ -462,12 +616,28 @@ def queue_pending(
 	payload, a mismatched title, or an unregistered repo are listed under
 	``ignored`` and never acted on. At most ``limit`` entries are returned;
 	``remaining`` counts the rest for the next wake.
+
+	``bindings`` (issue #4621) is the ``fetch_queue_bindings`` result. When
+	given, an item is kept only when ``queue_binding_verdict`` finds it bound
+	unchanged; every other item is ``ignored`` with that reason, except one
+	whose run was not fetched, which counts in ``deferred`` (and
+	``remaining``) for the next wake. ``None`` skips the check: only the
+	sweep's "already queued" dedupe uses that, because it must count every
+	open trusted item. The pickup CLI always passes bindings.
 	"""
 	allowed = {slug.lower() for slug in allowed_repos if isinstance(slug, str)}
 	candidates = [issue for issue in issues if _is_queue_issue(issue)]
 	candidates.sort(key=lambda item: item.get("number") if isinstance(item.get("number"), int) else 0)
 	groups: dict[tuple[Any, ...], dict[str, Any]] = {}
 	ignored: list[dict[str, Any]] = []
+	deferred = 0
+
+	def _unbound(item_type: str, number: Any, title: Any, body: str, payload: str) -> str:
+		"""``""`` when the binding check passes (or is skipped), else the verdict."""
+		if bindings is None:
+			return ""
+		return queue_binding_verdict(bindings, item_type, number, title if isinstance(title, str) else "", body, payload)
+
 	for issue in candidates:
 		number = issue.get("number")
 		if _queue_author(issue) != trusted_author:
@@ -490,6 +660,13 @@ def queue_pending(
 			if issue.get("title") != pr_fix_queue_title(pr_fix["repo"], pr_fix["pr_number"]):
 				ignored.append({"queue_issue": number, "reason": "title_mismatch"})
 				continue
+			verdict = _unbound("pr_fix", number, issue.get("title"), body, match.group(1))
+			if verdict == QUEUE_BINDING_DEFERRED:
+				deferred += 1
+				continue
+			if verdict:
+				ignored.append({"queue_issue": number, "reason": verdict})
+				continue
 			key = (pr_fix["repo"].lower(), "pr", pr_fix["pr_number"])
 			queued = groups.get(key, {}).get("queue_issues", [])
 			groups[key] = {
@@ -510,6 +687,13 @@ def queue_pending(
 		if issue.get("title") != queue_title(validated["repo"], validated["issue_number"]):
 			ignored.append({"queue_issue": number, "reason": "title_mismatch"})
 			continue
+		verdict = _unbound("issue", number, issue.get("title"), body, match.group(1))
+		if verdict == QUEUE_BINDING_DEFERRED:
+			deferred += 1
+			continue
+		if verdict:
+			ignored.append({"queue_issue": number, "reason": verdict})
+			continue
 		key = (validated["repo"].lower(), validated["issue_number"])
 		entry = groups.get(key)
 		if entry is None:
@@ -518,7 +702,136 @@ def queue_pending(
 		entry["queue_issues"].append({"number": number, "body": body})
 	ordered = list(groups.values())
 	limit = max(int(limit), 0)
-	return {"pending": ordered[:limit], "ignored": ignored, "remaining": max(len(ordered) - limit, 0)}
+	return {
+		"pending": ordered[:limit],
+		"ignored": ignored,
+		"remaining": max(len(ordered) - limit, 0) + deferred,
+		"deferred": deferred,
+	}
+
+
+def queue_binding_run_ids(
+	issues: list[Any],
+	allowed_repos: list[str],
+	queue_repo: str,
+	trusted_author: str = QUEUE_TRUSTED_AUTHOR,
+	limit: int = QUEUE_PICKUP_LIMIT,
+) -> list[str]:
+	"""Producer run ids the pickup must fetch bindings for this wake.
+
+	Only the runs named by the queue issues of the first ``limit`` targets
+	(before the binding check) are returned, deduplicated in queue order, so
+	the reads per wake stay bounded. The pickup CLI passes
+	``QUEUE_BINDING_SCAN_FACTOR`` times its start limit, so a few items that
+	stay unbound cannot hold back a bound item behind them. Items of a later
+	target whose run is not fetched are deferred to the next wake.
+	"""
+	result = queue_pending(issues, allowed_repos, trusted_author, limit)
+	run_ids: list[str] = []
+	for entry in result["pending"]:
+		for queued in entry.get("queue_issues", []):
+			run_id, _ = queue_run_id(queued.get("body") or "", entry["item_type"], queue_repo)
+			if run_id and run_id not in run_ids:
+				run_ids.append(run_id)
+	return run_ids
+
+
+def append_queue_binding(
+	path: str | Path,
+	repository: str,
+	run_id: str | int,
+	queue_issue: int,
+	title: str,
+	payload: str,
+) -> dict[str, Any]:
+	"""Record one queue issue in this run's binding file; return the document.
+
+	Creates the file (and its directory) on first use. A file left by another
+	run or repository is refused (ValueError), never merged. A second entry
+	for the same queue issue replaces the first, because it is what the run
+	wrote last. The write is atomic (temp file + rename).
+	"""
+	if not REPO_SLUG_RE.match(repository or ""):
+		raise ValueError(f"invalid repository: {repository!r}")
+	run_text = str(run_id)
+	if not re.fullmatch(r"[1-9][0-9]{0,19}", run_text):
+		raise ValueError(f"invalid run id: {run_id!r}")
+	if isinstance(queue_issue, bool) or not isinstance(queue_issue, int) or queue_issue <= 0:
+		raise ValueError(f"invalid queue issue: {queue_issue!r}")
+	if not isinstance(title, str) or not title or not isinstance(payload, str) or not payload.strip():
+		raise ValueError("title and payload are required")
+	target = Path(path)
+	if target.exists():
+		doc = json.loads(target.read_text(encoding="utf-8"))
+		load_queue_binding(doc, repository, run_text)
+	else:
+		doc = {"schema_version": QUEUE_BINDING_SCHEMA_VERSION, "repository": repository, "run_id": int(run_text), "items": []}
+	doc["items"] = [item for item in doc["items"] if item.get("queue_issue") != queue_issue]
+	doc["items"].append({"queue_issue": queue_issue, "title": title, "payload": payload})
+	target.parent.mkdir(parents=True, exist_ok=True)
+	tmp = target.with_name(target.name + ".tmp")
+	tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+	os.replace(tmp, target)
+	return doc
+
+
+def load_queue_binding(doc: Any, repository: str, run_id: str | int) -> dict[str, dict[str, str]]:
+	"""Validate one binding document; return ``{"<queue issue>": {"title", "payload"}}``.
+
+	Raises ValueError unless the schema, repository (case-insensitive), and
+	run id match and every item is well formed.
+	"""
+	if not isinstance(doc, dict) or doc.get("schema_version") != QUEUE_BINDING_SCHEMA_VERSION:
+		raise ValueError("unsupported binding schema")
+	if not isinstance(doc.get("repository"), str) or doc["repository"].lower() != (repository or "").lower():
+		raise ValueError("binding names another repository")
+	if str(doc.get("run_id")) != str(run_id):
+		raise ValueError("binding names another run")
+	items = doc.get("items")
+	if not isinstance(items, list):
+		raise ValueError("binding items is not a list")
+	result: dict[str, dict[str, str]] = {}
+	for item in items:
+		if not isinstance(item, dict):
+			raise ValueError("binding item is not an object")
+		number = item.get("queue_issue")
+		if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+			raise ValueError("binding item has no valid queue_issue")
+		if not isinstance(item.get("title"), str) or not isinstance(item.get("payload"), str):
+			raise ValueError("binding item has no title or payload")
+		result[str(number)] = {"title": item["title"], "payload": item["payload"]}
+	return result
+
+
+def evaluate_producer_run(run: Any, repo: str, default_branch: str) -> tuple[str, str]:
+	"""Return ``(item_type, "")`` for a trusted producer run, else ``("", reason)``.
+
+	Trusted means: a run of this repository, not from a fork, of the intake or
+	sweep workflow file, triggered by one of that producer's events, on the
+	default branch. The run's head commit must also be on the default branch;
+	``fetch_queue_bindings`` checks that separately for every event, because
+	``head_branch`` is only a name and a tag can carry the default branch's.
+	"""
+	if not isinstance(run, dict):
+		return "", "run record missing"
+	repository = (run.get("repository") or {}).get("full_name") if isinstance(run.get("repository"), dict) else None
+	head_repository = (run.get("head_repository") or {}).get("full_name") if isinstance(run.get("head_repository"), dict) else None
+	if not isinstance(repository, str) or repository.lower() != (repo or "").lower():
+		return "", "run belongs to another repository"
+	if not isinstance(head_repository, str) or head_repository.lower() != (repo or "").lower():
+		return "", "run head is another repository"
+	path = run.get("path")
+	item_type = next(
+		(name for name, producer in QUEUE_PRODUCERS.items() if path == f".github/workflows/{producer['workflow']}"),
+		"",
+	)
+	if not item_type:
+		return "", f"run is not a queue producer ({path!r})"
+	if run.get("event") not in QUEUE_PRODUCERS[item_type]["events"]:
+		return "", f"event {run.get('event')!r} cannot queue items"
+	if not default_branch or run.get("head_branch") != default_branch:
+		return "", "run is not on the default branch"
+	return item_type, ""
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -709,7 +1022,177 @@ def fetch_open_queue(repo: str) -> list[Any]:
 	return data
 
 
+def _gh_api_read(path: str, binary: bool = False, jq: str = "") -> Any:
+	"""One ``gh api`` GET; returns bytes (``binary``), the ``--jq`` text, or parsed JSON.
+
+	Raises RuntimeError on a failed call or invalid JSON.
+	"""
+	cmd = ["gh", "api", path]
+	if jq:
+		cmd += ["--jq", jq]
+	try:
+		proc = subprocess.run(cmd, capture_output=True, timeout=120)
+	except (OSError, subprocess.TimeoutExpired) as exc:
+		raise RuntimeError(f"gh api failed: {exc}") from exc
+	if proc.returncode != 0:
+		detail = proc.stderr.decode("utf-8", "replace").strip()[:300]
+		raise RuntimeError(f"gh api {path.split('?')[0]} exited {proc.returncode}: {detail}")
+	if binary:
+		return proc.stdout
+	text = proc.stdout.decode("utf-8", "replace")
+	if jq:
+		return text.strip()
+	try:
+		return json.loads(text)
+	except ValueError as exc:
+		raise RuntimeError(f"gh api {path.split('?')[0]} returned invalid JSON: {exc}") from exc
+
+
+def _read_binding_zip(data: bytes, repo: str, run_id: str) -> dict[str, dict[str, str]]:
+	"""Parse a downloaded binding artifact zip; raise ValueError when unusable."""
+	try:
+		archive = zipfile.ZipFile(io.BytesIO(data))
+	except zipfile.BadZipFile as exc:
+		raise ValueError(f"artifact is not a zip: {exc}") from exc
+	with archive:
+		members = [info for info in archive.infolist() if info.filename == QUEUE_BINDING_FILENAME]
+		if len(members) != 1:
+			raise ValueError(f"artifact has no single {QUEUE_BINDING_FILENAME}")
+		if members[0].file_size > QUEUE_BINDING_MAX_BYTES:
+			raise ValueError("binding file too large")
+		try:
+			doc = json.loads(archive.read(members[0]).decode("utf-8"))
+		except (UnicodeDecodeError, ValueError) as exc:
+			raise ValueError(f"binding file is not JSON: {exc}") from exc
+	return load_queue_binding(doc, repo, run_id)
+
+
+def fetch_queue_bindings(
+	repo: str,
+	run_ids: list[str],
+	default_branch: str = "",
+	gh_read: Any = None,
+) -> dict[str, Any]:
+	"""Read and check the producer-run binding for each run id (issue #4621).
+
+	Input: the queue repository and the run ids from ``queue_binding_run_ids``
+	(the runs named by the first ``QUEUE_BINDING_SCAN_FACTOR`` × limit
+	targets, 30 by default). Output:
+	``{"repo": repo, "runs": {"<run id>": record}}`` for ``queue_pending``,
+	where a record is ``{"state": "ok", "item_type", "items"}`` or
+	``{"state": "pending" | "missing" | "untrusted" | "unavailable", "reason"}``.
+
+	Calls (CLAUDE.md §15), all REST GETs through ``gh``; none when
+	``run_ids`` is empty. 1 ``repos/<repo>`` for the default branch, unless
+	``default_branch`` is given. 2 run listings,
+	``actions/workflows/<producer workflow>/runs`` (100 newest runs each), and
+	1 ``actions/artifacts?name=<binding artifact>`` listing (100 newest),
+	shared by every run id. Per run id: 1 ``actions/runs/<id>`` read only when
+	the listings missed it, 1 ``actions/runs/<id>/artifacts`` read only when
+	the artifact listing missed it, 1
+	``compare/<head sha>...refs/heads/<default>`` read, and 1 artifact zip
+	download.
+	Fail-open per call: a failed listing falls back to the per-run reads, and
+	a failed per-run read marks only that run ``unavailable``, so its items
+	are ignored this wake and retried on the next. Nothing is retried in a
+	loop, and no failure ever makes an item pending.
+	"""
+	read = gh_read or _gh_api_read
+	runs: dict[str, Any] = {}
+	wanted = [str(run_id) for run_id in run_ids if re.fullmatch(r"[0-9]{1,20}", str(run_id))]
+	if not wanted:
+		return {"repo": repo, "runs": runs}
+	if not REPO_SLUG_RE.match(repo or ""):
+		return {"repo": repo, "runs": {run_id: {"state": "unavailable", "reason": "invalid repository"} for run_id in wanted}}
+	branch = default_branch
+	if not branch:
+		try:
+			branch = read(f"repos/{repo}", jq=".default_branch")
+		except RuntimeError as exc:
+			return {"repo": repo, "runs": {run_id: {"state": "unavailable", "reason": f"default branch: {exc}"} for run_id in wanted}}
+	run_meta: dict[str, Any] = {}
+	for producer in QUEUE_PRODUCERS.values():
+		try:
+			listing = read(f"repos/{repo}/actions/workflows/{producer['workflow']}/runs?per_page=100")
+		except RuntimeError:
+			continue
+		for run in (listing.get("workflow_runs") if isinstance(listing, dict) else None) or []:
+			if isinstance(run, dict) and run.get("id") is not None:
+				run_meta.setdefault(str(run["id"]), run)
+	artifacts: dict[str, Any] = {}
+	try:
+		listing = read(f"repos/{repo}/actions/artifacts?name={QUEUE_BINDING_ARTIFACT}&per_page=100")
+	except RuntimeError:
+		listing = {}
+	for artifact in (listing.get("artifacts") if isinstance(listing, dict) else None) or []:
+		workflow_run = artifact.get("workflow_run") if isinstance(artifact, dict) else None
+		if isinstance(workflow_run, dict) and workflow_run.get("id") is not None and artifact.get("name") == QUEUE_BINDING_ARTIFACT:
+			artifacts.setdefault(str(workflow_run["id"]), artifact)
+	for run_id in wanted:
+		runs[run_id] = _fetch_one_binding(read, repo, branch, run_id, run_meta.get(run_id), artifacts.get(run_id))
+	return {"repo": repo, "runs": runs}
+
+
+def _fetch_one_binding(read: Any, repo: str, branch: str, run_id: str, run: Any, artifact: Any) -> dict[str, Any]:
+	"""The binding record for one run (see ``fetch_queue_bindings``)."""
+	if run is None:
+		try:
+			run = read(f"repos/{repo}/actions/runs/{run_id}")
+		except RuntimeError as exc:
+			return {"state": "unavailable", "reason": f"run {run_id}: {exc}"}
+	item_type, reason = evaluate_producer_run(run, repo, branch)
+	if reason:
+		return {"state": "untrusted", "reason": f"run {run_id}: {reason}"}
+	if run.get("status") != "completed":
+		return {"state": "pending", "reason": f"run {run_id} is {run.get('status')}"}
+	# Every producer event, not only workflow_dispatch: head_branch is a name,
+	# so the head commit itself must be reachable from the default branch. The
+	# fully qualified ref keeps a tag of the same name out of the comparison.
+	head_sha = run.get("head_sha") or ""
+	if not PR_FIX_HEAD_RE.match(head_sha):
+		return {"state": "untrusted", "reason": f"run {run_id}: head sha missing"}
+	try:
+		status = read(f"repos/{repo}/compare/{head_sha}...refs/heads/{branch}?per_page=1", jq=".status")
+	except RuntimeError as exc:
+		return {"state": "unavailable", "reason": f"run {run_id} compare: {exc}"}
+	if status not in ("identical", "ahead"):
+		return {"state": "untrusted", "reason": f"run {run_id}: {run.get('event')} head is not on {branch}"}
+	if artifact is None:
+		try:
+			listing = read(f"repos/{repo}/actions/runs/{run_id}/artifacts?name={QUEUE_BINDING_ARTIFACT}&per_page=100")
+		except RuntimeError as exc:
+			return {"state": "unavailable", "reason": f"run {run_id} artifacts: {exc}"}
+		named = [
+			item for item in ((listing.get("artifacts") if isinstance(listing, dict) else None) or [])
+			if isinstance(item, dict) and item.get("name") == QUEUE_BINDING_ARTIFACT
+		]
+		artifact = named[0] if named else None
+	if artifact is None:
+		return {"state": "missing", "reason": f"run {run_id} has no {QUEUE_BINDING_ARTIFACT} artifact"}
+	workflow_run = artifact.get("workflow_run") if isinstance(artifact.get("workflow_run"), dict) else {}
+	if workflow_run.get("id") is not None and str(workflow_run.get("id")) != run_id:
+		return {"state": "untrusted", "reason": f"run {run_id}: artifact belongs to another run"}
+	if artifact.get("expired"):
+		return {"state": "missing", "reason": f"run {run_id} binding artifact expired"}
+	size = artifact.get("size_in_bytes")
+	if not isinstance(size, int) or size > QUEUE_BINDING_MAX_BYTES:
+		return {"state": "untrusted", "reason": f"run {run_id}: binding artifact size {size!r}"}
+	artifact_id = artifact.get("id")
+	if isinstance(artifact_id, bool) or not isinstance(artifact_id, int):
+		return {"state": "untrusted", "reason": f"run {run_id}: binding artifact has no id"}
+	try:
+		data = read(f"repos/{repo}/actions/artifacts/{artifact_id}/zip", binary=True)
+	except RuntimeError as exc:
+		return {"state": "unavailable", "reason": f"run {run_id} download: {exc}"}
+	try:
+		items = _read_binding_zip(data, repo, run_id)
+	except ValueError as exc:
+		return {"state": "untrusted", "reason": f"run {run_id}: {exc}"}
+	return {"state": "ok", "item_type": item_type, "items": items}
+
+
 def _cmd_queue_pending(args: argparse.Namespace) -> int:
+	queue_repo = args.fetch_repo or args.self_repo
 	if args.fetch_repo:
 		try:
 			issues = fetch_open_queue(args.fetch_repo)
@@ -725,7 +1208,42 @@ def _cmd_queue_pending(args: argparse.Namespace) -> int:
 		print("issues JSON is not an array", file=sys.stderr)
 		return 2
 	allowed = load_allowed_repos(Path(args.registry), args.self_repo)
-	print(json.dumps(queue_pending(issues, allowed, args.trusted_author, args.limit)))
+	# The binding check always runs (issue #4621): fetched for --fetch-repo,
+	# read from --bindings-json otherwise. Without either, no run is known and
+	# every item is deferred, so nothing unverified is ever started. The run
+	# window is wider than the start limit (QUEUE_BINDING_SCAN_FACTOR), so
+	# stuck unbound items cannot defer every bound item behind them.
+	if args.fetch_repo:
+		scan_limit = max(args.limit, 0) * QUEUE_BINDING_SCAN_FACTOR
+		run_ids = queue_binding_run_ids(issues, allowed, queue_repo, args.trusted_author, scan_limit)
+		bindings = fetch_queue_bindings(queue_repo, run_ids, args.default_branch)
+	elif args.bindings_json:
+		bindings = _read_json(args.bindings_json)
+		if not isinstance(bindings, dict):
+			print("bindings JSON is not an object", file=sys.stderr)
+			return 2
+	else:
+		bindings = {"repo": queue_repo, "runs": {}}
+	print(json.dumps(queue_pending(issues, allowed, args.trusted_author, args.limit, bindings=bindings)))
+	return 0
+
+
+def _cmd_add_queue_binding(args: argparse.Namespace) -> int:
+	try:
+		item = _read_json(args.queue_issue_json)
+		if not isinstance(item, dict):
+			raise ValueError("queue issue JSON is not an object")
+		append_queue_binding(
+			args.binding_file,
+			args.repository,
+			args.run_id,
+			args.queue_issue,
+			item.get("title") if isinstance(item.get("title"), str) else "",
+			queue_payload_text(item.get("body") if isinstance(item.get("body"), str) else ""),
+		)
+	except (OSError, ValueError) as exc:
+		print(str(exc), file=sys.stderr)
+		return 2
 	return 0
 
 
@@ -790,7 +1308,17 @@ def main(argv: list[str] | None = None) -> int:
 	p_pending.add_argument("--self-repo", default=DEFAULT_UPSTREAM_REPO)
 	p_pending.add_argument("--trusted-author", default=QUEUE_TRUSTED_AUTHOR)
 	p_pending.add_argument("--limit", type=int, default=QUEUE_PICKUP_LIMIT)
+	p_pending.add_argument("--bindings-json", default="", help="binding records (fetch_queue_bindings output) for --issues-json mode")
+	p_pending.add_argument("--default-branch", default="", help="skip the default-branch read of --fetch-repo")
 	p_pending.set_defaults(func=_cmd_queue_pending)
+
+	p_bind = sub.add_parser("add-queue-binding", help="record a queue issue in this run's binding file (issue #4621)")
+	p_bind.add_argument("--binding-file", required=True)
+	p_bind.add_argument("--repository", required=True)
+	p_bind.add_argument("--run-id", required=True)
+	p_bind.add_argument("--queue-issue", type=int, required=True)
+	p_bind.add_argument("--queue-issue-json", required=True, help="the queue-issue output (title and body as written to the issue)")
+	p_bind.set_defaults(func=_cmd_add_queue_binding)
 
 	p_stale = sub.add_parser("queue-stale", help="list queue issues nobody picked up in time")
 	p_stale.add_argument("--issues-json", required=True)

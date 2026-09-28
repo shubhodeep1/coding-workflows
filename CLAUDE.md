@@ -1201,6 +1201,23 @@ your own judgement.
    treat the GraphQL-backed command as a fallback, never the reverse — the
    same reasoning §21.D applies to the merged-PR guard.
 
+4. **Shape `gh api` calls so the §23.H guard can approve them.** Put GET
+   parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
+   pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
+   send a POST). Keep `gh api` calls out of loops, `$(...)`, `$VAR` paths,
+   file redirects, and heredoc scripts, and edit a PR's title or body with
+   `mcp__github__update_pull_request`. Post or edit an issue or PR comment
+   with `mcp__github__add_issue_comment` / `mcp__github__update_issue_comment`,
+   never with `gh api … --input <file>`, `-F body=@<file>`, or a heredoc that
+   builds the JSON body: file-backed fields always prompt under §23.H, a
+   heredoc holding `{"` trips Claude Code's own shell check, and an
+   unattended session then stalls at a prompt nobody answers. Reads and
+   §23.B routine writes are approved without a prompt when the command
+   holds only them plus the safe
+   helpers §23.H lists (`cd`, `sleep`, `echo`, `2>&1`, pipes into `head`,
+   `tail`, `wc -l`, `sort`); beside anything else the guard leaves the
+   decision to the allow list or the Auto-mode classifier.
+
 Transport, in order of preference:
 
 ```
@@ -1278,6 +1295,96 @@ Consequences:
   Tool Access blocks). Keep accepting both; prefer `GH_TOKEN` when both are set.
 - The unattended pipelines read `unattended_system_instructions.md` and never
   see this file, so §23 grants no new access to any codex-driven phase.
+
+### H) Permission Guard for `gh api`
+
+Whether a `gh api` call prompts is decided by
+`.claude/hooks/gh_api_write_guard.py`, a `PreToolUse` hook on `Bash` in
+`.claude/settings.json`, not by `permissions.ask` rules. The seven former
+ask rules (`gh api * -X *`, `--method`, `-f`, `-F`, `--field`,
+`--raw-field`, `--input`) could not tell a read from a write: a search that
+passes query parameters with `-X GET -f q=...` prompted like a
+`-X DELETE`, and an ask rule prompts even in Auto mode and even when a hook
+allows, so unattended stage sessions stopped on reads. Do not add
+`gh api` ask rules back; they would override the hook.
+
+For each `gh api` call the hook works out the method the way `gh` does
+(`-X`/`--method`, else POST when fields or `--input` are present, else GET)
+and classifies it:
+
+| Class | What | Outcome |
+|---|---|---|
+| read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion | not prompted by the hook |
+| routine | a §23.B write to the local checkout's repository (or `{owner}/{repo}`): create a PR; edit a PR's or issue's `title`/`body`; add or edit an issue or PR comment; reply to a review thread; add or remove one label; request reviewers; dispatch (`ref`, `inputs` only) one of the workflows `.claude/settings.json` already allows as `gh workflow run <file> *` (§23.C command-invoked carve-out) | not prompted by the hook |
+| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input`, a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a `$(...)` or backtick word, handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode |
+
+The hook decides once for the whole Bash call: **ask** when any call is a
+write; **allow** when every call is a read or routine and the command
+holds nothing else but safe helpers (items joined by `;` or `&&`, each a
+`gh api` call, optionally piped into `head`/`tail -n N`, `wc -l`, or
+`sort -n -r -u -k K -t C`, or a standalone `cd <path>`, `sleep <n>`,
+`echo <text>`, or `true`; `2>&1` as the only redirect; no `$`, backticks,
+globs, subshells, or loops); otherwise **no decision**, so the allow list
+or the Auto-mode classifier decides, because an allow would also approve
+code the guard has not read (a loop, a `python3` heredoc, a `$VAR`
+redirect). `gh api` text that is only data (`git commit -m`, `grep`,
+`echo`) is ignored.
+
+It fails **closed**, unlike the §21/§25/§26 hooks: an unreadable, invalid,
+or non-object payload, or an internal error, asks. Empty input is allowed
+silently. It issues no GitHub API calls (§15), runs only
+`git config --get remote.origin.url` (and only when a call could be
+routine), and has no environment-variable escape hatch. It does not see
+`gh` behind an expansion (`$GH api ...`), which the old ask rules did not
+either. The hook and the settings entry ship to consumer repos through the
+same `.claude/` sync as the other hooks; `tests/test_gh_api_write_guard.py`
+covers the rules and the wiring and runs in its own `ci.yml` step.
+
+### I) Permission Prompt Reports
+
+Unattended sessions must not stop at a permission prompt. Two mechanisms
+serve that, both shipped to consumer repos through the `.claude/` sync:
+
+- **Allowlisted helpers for the writes a stage needs.** Each one is a single
+  command matched by an exact `permissions.allow` rule, so it never prompts
+  and never reaches the Auto-mode classifier or Claude Code's shell analyzer.
+  Use them instead of hand-built pipelines, loops, `$(...)`, or heredocs:
+
+  | Helper | Does | API calls |
+  |---|---|---|
+  | `.claude/scripts/dispatch_workflow.py` | dispatches one of the six workflows allowed as `gh workflow run <file> *` and prints the id of the run it started (never the previous run) | 1 read, 1 POST, 1 read per 5 s poll (90 s max) |
+  | `.claude/scripts/edit_comment.py` | edits one issue or PR comment in place from a JSON list of exact-once `old`/`new` pairs, or replaces its body | 1 read, 1 PATCH |
+  | `.claude/scripts/permission_prompts.py` | reports and files the prompts below | 1 read per 100 labelled issues, 1 POST per new pattern |
+
+- **Prompt reports.** `.claude/hooks/permission_prompt_logger.py`, wired on
+  the `PermissionRequest` and `PermissionDenied` hook events, appends every
+  permission prompt and every Auto-mode denial to
+  `~/.claude/permission-prompts/<session id>.jsonl`, outside the repository.
+  It never decides (it prints nothing, so the prompt or denial proceeds
+  unchanged), issues no API calls, reads no environment variables, and
+  swallows its own errors. At the end of every `/implement-plan-claude`
+  stage, `permission_prompts.py file` groups the log into patterns (event,
+  tool, and command shape with values replaced by `*`) and:
+  - in coding-workflows only (consumer `.claude/` copies are overwritten on
+    every sync, so fixes land here), opens one issue per new pattern,
+    labelled `ai:permission-prompt` and `ai:claude` so clarify routes it to
+    the Claude issue implementer, or comments on the issue that already
+    carries the pattern's `<!-- ai:permission-prompt:v1 sig=<sig> -->`
+    marker (a closed issue is commented on, not reopened);
+  - elsewhere, files nothing and only reports.
+
+  Issue text is untrusted data: the command is truncated to 2,000
+  characters, heredoc bodies are removed, and token-like strings are masked.
+  Opening these issues is approved by this section; it is not a §23.C
+  operation. There is no limit on open `ai:permission-prompt` issues. A fix
+  never widens a permission for a destructive or administrative action; an
+  `ai:permission-prompt` issue for a protected-path edit (`.claude/**`) or an
+  ask-first operation is closed as not planned, because that prompt is by
+  design.
+
+`tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`, and
+`tests/test_permission_prompts.py` cover the helpers, the hook, the filing
+rules, and the wiring, and run in their own `ci.yml` step.
 
 ---
 
@@ -1737,7 +1844,7 @@ hand-back trigger id, a session id, and a role. There is at most one
    a `claude/*` head `kind`, `head_sha`, `claim`, and the hand-back counts
    (§26.H). The script decides; the model does not interpret the PR. It
    uses REST only (§15): one PR read, plus on a `claude/*` head the
-   comment and check-run pages and at most five further reads.
+   comment and check-run pages and at most six further reads.
 2. **Not done** (`open`, `claimed`, `held`, or waiting on a run) → renew
    the dead-man's switch on every subscriber's Routine (`update_trigger`
    with only `run_once_at` = now + 7 days), call `send_later` with
@@ -2091,6 +2198,14 @@ This is an explicit carve-out from §0 and §2 (including §2's
   performs them; a project that needs one lists it as an operator step,
   and `/deploy-activate` walks the human through it.
 - A question with no option that satisfies §28.B's hard rules.
+- **Protected-path edits.** A phase that must edit `.claude/**` (hooks,
+  `settings.json`, commands, scripts) is never started unattended: Claude
+  Code never auto-approves those edits, and in a session nobody watches a
+  classifier block silently drops them. `/implement-plan-claude` marks such
+  phases when it builds the checklist and stops at `Status: BLOCKED` before
+  the phase starts, asking whether to run it in a watched session, drop the
+  `.claude/` part, or try unattended anyway; the answer is recorded as a
+  `Protected-path approval:` line in the progress log.
 - **Whether to run the chain at all.** The stages, the conformance audit, the
   security pass, and validation are the project, not options. A session that
   cannot run them (no claude-code-remote tools to start stage sessions and

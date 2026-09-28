@@ -226,12 +226,26 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `ai:claude-issue-queue` issue in coding-workflows (title
     `[claude-issue-queue] <repo>#<N>`, body = marker + fixed-key payload, no
     issue prose), opened with the job's `GITHUB_TOKEN` so no workflow reacts;
-    an open item for the same target is reused. The **Claude issue pickup**
+    an open item for the same target is reused, its body rewritten with the
+    fresh payload and this run's URL. Each producer run (the intake, and the
+    `claude-pr-catch-all` sweep job) records every item it opens or rewrites
+    (number, exact title and payload) in `CLAUDE_ISSUE_QUEUE_BINDING_FILE` /
+    `CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE` (default under the run's temp dir)
+    and uploads it as the `claude-issue-queue-binding` artifact
+    (`if: always()`, 30 days); the pickup starts an item only when the run
+    named by its `Intake run:` / `Sweep run:` line is a completed
+    default-branch run of that producer workflow and event (for every event,
+    its head commit must be on `refs/heads/<default branch>`) and its artifact
+    lists the item unchanged, and the body must be exactly the producer's
+    rendering of that payload and run, so an edited queue issue is refused (#4621;
+    fails closed: `unbound`, `binding_mismatch`, `binding_untrusted`,
+    `binding_pending`, `binding_unavailable` under `ignored`). The **Claude issue pickup**
     (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 1,
     woken hourly by the cron trigger `Claude issue pickup: hourly` bound to
     itself (no new session per wake, so no lineage-depth growth), reads the
     queue with
-    `claude_issue_route.py queue-pending --fetch-repo` (one REST read; only
+    `claude_issue_route.py queue-pending --fetch-repo` (one queue read plus
+    the batched binding reads `fetch_queue_bindings` documents; only bound
     items by `github-actions[bot]` for registered repos; ≤ 10 per wake),
     starts one Opus session per target issue via `claude-issue-dispatch.md`
     step 2, and closes the queue issues with a `Dispatched:` line (no
@@ -245,7 +259,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `/implement-issue-claude`: a single-phase plan
     `docs/plans/issue-<N>-<topic>-plan.md` (header `Source issue:`,
     `Base branch:` from the issue's `Integration branch:` / `Target branch:`
-    line else the default branch, `Security pass: run|skip`), then continues
+    line else the default branch, `Security pass: run|skip`; `skip` only when
+    `.claude/scripts/security_pass_skip.py` verifies the issue was created and
+    labelled at creation by the issue automation — `github-actions[bot]` or
+    the `OWNER` account — and carries its marker/tracker link; a label alone
+    or any read failure keeps `run`; see #4623), then continues
     as `/implement-plan-claude` issue mode: project branch
     `claude/implement-plan-<slug>` forked from the base branch, final PR into
     it with `Fixes #N` (default base) or an explicit close + `ai:merged` after
@@ -772,7 +790,10 @@ to a session-local cron. Every stage (a
 phase, a review round, the conformance
 audit (`/verify-activation — scope conformance`, run after the last phase
 and before the security pass, and again after any Claude-written
-validation fix), a security or validation read, the completion PR, the
+validation fix; at most 3 runs, and when the third opens a fix PR that PR
+gets one narrower `/verify-activation — scope fix-check #<PR>` of its own
+diff instead of a fourth audit, blocking only when the fix itself is
+defective), a security or validation read, the completion PR, the
 final merge, a `/verify-activation — scope activation` cycle, the
 `/deploy-activate` hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
@@ -850,7 +871,7 @@ its own id, `run_once_at` = now + 7 days, named `PR #<n> hand-back`, with
 the PR URL in its prompt). The checker runs
 `.claude/scripts/check_in_status.py --hand-back` (one REST read for a
 non-`claude/*` head; on a `claude/*` head also the comment and check-run
-pages and at most five further reads), renews every subscriber's
+pages and at most six further reads), renews every subscriber's
 hand-back 7 days ahead, and re-arms itself with `send_later` every 60
 minutes while nothing is due. A PR has one checker: a second interested
 session registers with it (`PR #<n> status check-in: subscriber` one-shot
@@ -972,9 +993,21 @@ reviews, comments, and conflicts stay a direct §12 request.
 - Permissions: `.claude/settings.json` `permissions.allow` pre-approves the
   tools the check-in and `/implement-plan-claude` call (file edits,
   `claude/*` pushes, `gh` REST and run reads, the security-audit / validate
-  dispatches, GitHub MCP and claude-code-remote tools, the helper), and
-  `permissions.ask` keeps `gh api` writes (`-X`, `--method`, `-f`/`-F`,
-  `--field`, `--raw-field`, `--input`) behind a prompt. Sessions started by
+  dispatches, GitHub MCP and claude-code-remote tools, the helper). There
+  are no `gh api` ask rules any more: `.claude/hooks/gh_api_write_guard.py`
+  (CLAUDE.md §23.H, a `PreToolUse` hook on `Bash`) forces the prompt for
+  every `gh api` write that is not a §23.B routine write to the local
+  repository (routine includes dispatching the six workflows allowed as
+  `gh workflow run <file> *`, kept equal by a test), allows reads and
+  routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
+  `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
+  to the allow list or the Auto-mode classifier beside anything else (loops,
+  `python3`, `$VAR`, file redirects). It fails closed (asks) on an unreadable payload or an
+  internal error; `tests/test_gh_api_write_guard.py` has its own `ci.yml`
+  step and `workflow-templates/.claude/hooks/` holds a byte-identical copy.
+  Do not re-add `gh api` ask rules: an ask rule prompts even when a hook
+  allows and even in Auto mode, which is what stopped unattended stage
+  sessions on `-X GET -f q=...` searches. Sessions started by
   `create_session` see the claude-code-remote tools under a generated server
   name; the one observed in this account's cloud environment,
   `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a`, is allowlisted as a whole
@@ -994,6 +1027,54 @@ reviews, comments, and conflicts stay a direct §12 request.
 - Consumers receive the hook, the settings entry, and the §26 prose through
   the existing `.claude/` and root `CLAUDE.md` syncs and the `/seed-repo`
   asset set.
+
+## Unattended helpers and permission prompt reports (CLAUDE.md §23.I)
+
+- Helpers, each allowlisted in `.claude/settings.json` (plain and
+  `PYTHONDONTWRITEBYTECODE=1` forms) and used by `/implement-plan-claude`
+  ([Helpers](.claude/commands/implement-plan-claude.md#helpers)):
+  - `.claude/scripts/dispatch_workflow.py --repo --workflow [--ref] [--input
+    K=V …]`: dispatches one of `DISPATCHABLE_WORKFLOWS` (kept equal to the
+    `gh workflow run <file> *` allow rules by a test), records the recent
+    `workflow_dispatch` run ids first, and polls every 5 s (90 s max) for a
+    run that was not there before. Replaces `gh workflow run` +
+    `gh run list -L 1`, which could return the previous run. Exit 0 with
+    `run_id`, 1 on a refused workflow or bad argument, 2 on a failed call or
+    timeout. On exit 2, `dispatched` is `false` only when GitHub refused the
+    POST with a 4xx or `gh` could not start; a POST that timed out, got a
+    5xx, or failed without an HTTP status reports `true`, like a failed or
+    timed-out poll, so the caller checks `gh run list` instead of
+    dispatching a duplicate.
+  - `.claude/scripts/edit_comment.py --repo --comment-id (--replacements
+    FILE | --body-file FILE) [--dry-run]`: one read and one PATCH; each
+    `old` must occur exactly once or nothing is written.
+  - `.claude/scripts/permission_prompts.py report | file`: see below.
+- `.claude/hooks/permission_prompt_logger.py` on `PermissionRequest` and
+  `PermissionDenied`: appends one JSON line per event to
+  `~/.claude/permission-prompts/<session id>.jsonl` (string values over
+  8,000 characters truncated). Prints nothing, so it never changes a
+  decision; no API calls, no environment reads; every error is swallowed.
+- `permission_prompts.py file --session-label <id>` runs at the end of each
+  stage (step 14). It groups the log by event, tool, and command shape
+  (signature = 12 hex of SHA-1), and only when the local checkout is
+  `shubhodeep1/coding-workflows` reads the `ai:permission-prompt` issues
+  (one REST call per 100) and opens one issue per new pattern with labels
+  `ai:permission-prompt` + `ai:claude` (clarify routes it to the Claude issue
+  implementer) or comments on the issue carrying its
+  `<!-- ai:permission-prompt:v1 sig=… -->` marker, open or closed.
+  `filed-state.json` next to the logs keeps a later run in the same session
+  from filing the same occurrences again. No cap on open issues. Issue text
+  masks token-like strings, removes heredoc bodies, and truncates commands to
+  2,000 characters. In consumer repos it only reports.
+- `/implement-plan-claude` step 0 now refuses to run outside Auto mode
+  (except issue mode, which records the mode), and a phase touching
+  `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
+  §28.C) until a `Protected-path approval: phase <n>` line is recorded.
+- The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
+  and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
+  three scripts live under `workflow-templates/.claude/`. Tests:
+  `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`,
+  `tests/test_permission_prompts.py` (one `ci.yml` step).
 
 ---
 

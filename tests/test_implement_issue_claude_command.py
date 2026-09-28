@@ -73,7 +73,7 @@ def test_plan_command_issue_mode_contract(plan_cmd):
 def test_plan_command_keeps_startup_asks_outside_issue_mode(plan_cmd):
 	# #4440 behaviour: the invoking user still answers the start-up checks.
 	assert "Steps 0, 1, and 3 still ask: you are at the keyboard for them." in plan_cmd
-	assert "In [Issue Mode](#issue-mode) it is not asked either" in plan_cmd
+	assert "In [Issue Mode](#issue-mode) the check does not stop the project either" in plan_cmd
 
 
 def test_issue_command_hands_off_to_plan_chain(issue_cmd):
@@ -97,6 +97,18 @@ def test_security_skip_labels_match_router(issue_cmd, plan_cmd):
 	for label in route.SECURITY_PASS_SKIP_LABELS:
 		assert f"`{label}`" in issue_cmd
 		assert f"`{label}`" in plan_cmd
+
+
+def test_security_skip_is_verified_not_label_only(issue_cmd, plan_cmd):
+	# Issue #4623: a label anyone can add must not switch the security pass off.
+	assert "A label alone never skips the security pass" in issue_cmd
+	assert "`PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/security_pass_skip.py --repo <owner>/<repo> --issue <N>`" in issue_cmd
+	assert "Only when it prints `\"skip\": true` write `Security pass: skip (<label>: automation-produced issue)`" in issue_cmd
+	assert "including a non-zero exit, keeps `Security pass: run`" in issue_cmd
+	assert "Never decide this from the labels yourself." in issue_cmd
+	assert "instead when the issue carries" not in issue_cmd
+	assert "that `.claude/scripts/security_pass_skip.py` verifies as automation-produced" in plan_cmd
+	assert "A label alone never sets it (issue #4623)." in plan_cmd
 
 
 def test_issue_command_resumes_before_writing(issue_cmd):
