@@ -495,3 +495,130 @@ def test_ignoring_one_claimant_still_respects_another(monkeypatch, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, comments)
 	_, out = _run(capsys, "--ignore-claim-by", "sweep-run-77")
 	assert out["state"] == "claimed" and out["claim"]["by"] == "session_01other"
+
+
+# --- Routing: `action` for the CLAUDE.md §26 checker ---------------------------
+# The §26 checker branches on `action` only: `wait`, `hand_back_fixer` (a due
+# Claude fix goes to the fixer subscriber), `hand_back_all` (terminal, every
+# subscriber), or `retry` (exit 2).
+
+def test_merged_hands_back_to_all(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(merged=True, merged_at="t", merge_commit_sha="m")})
+	_, out = _run(capsys)
+	assert out["action"] == "hand_back_all" and "next_stage" not in out
+
+
+def test_closed_hands_back_to_all(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(state="closed", closed_at="t")})
+	_, out = _run(capsys)
+	assert out["state"] == "closed" and out["action"] == "hand_back_all"
+
+
+def test_ci_failed_hands_back_to_the_fixer(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_check_runs(_failed()), **_runs()})
+	_, out = _run(capsys)
+	assert out["state"] == "ci-failed" and out["action"] == "hand_back_fixer"
+	# Additive: every existing field is still present.
+	for key in ("done", "state", "reason", "kind", "head_sha", "claim", "hand_backs", "cap", "cap_reached", "since"):
+		assert key in out, key
+
+
+def test_block_label_hands_back_to_the_fixer(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:needs-human"}])})
+	_, out = _run(capsys)
+	assert out["state"] == "blocked" and out["action"] == "hand_back_fixer"
+
+
+def test_review_handoff_hands_back_to_the_fixer(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs()}, [_handoff()])
+	_, out = _run(capsys)
+	assert out["state"] == "review-round" and out["action"] == "hand_back_fixer"
+
+
+def test_conflict_hands_back_to_the_fixer(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(mergeable_state="dirty"), **_runs(), **_commit("2026-09-25T12:00:00Z")})
+	_, out = _run(capsys)
+	assert out["state"] == "conflict" and out["action"] == "hand_back_fixer"
+
+
+@pytest.mark.parametrize("pr, comments, state", [
+	(_pr(), (), "open"),
+	(_pr(labels=[{"name": "ai:review-blocked"}]), (_claim(created_at="2026-09-26T10:30:00Z"),), "claimed"),
+	(_pr(labels=[{"name": "ai:review-blocked"}]), (_claim(kind="hold", created_at="2026-09-01T00:00:00Z"),), "held"),
+])
+def test_open_claimed_and_held_wait(monkeypatch, capsys, pr, comments, state):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": pr, **_check_runs()}, comments)
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == state and out["action"] == "wait"
+
+
+def test_non_claude_head_waits(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(ref="ai/issue-9", mergeable_state="dirty")})
+	_, out = _run(capsys)
+	assert out["action"] == "wait"
+
+
+def test_a_young_due_fix_under_min_age_waits(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_check_runs(_failed(completed_at="2026-09-26T11:00:00Z")), **_runs()})
+	_, out = _run(capsys, "--min-age-hours", "2")
+	assert out["due_state"] == "ci-failed" and out["action"] == "wait"
+
+
+def test_read_failure_is_retry(monkeypatch, capsys):
+	def boom(path):
+		raise checker.ReadError("HTTP 503")
+
+	_stub(monkeypatch, {})
+	monkeypatch.setattr(checker, "gh_api", boom)
+	code, out = _run(capsys)
+	assert code == 2 and out == {"done": False, "error": "HTTP 503", "action": "retry"}
+
+
+def test_hand_back_without_pr_is_retry(capsys):
+	code = checker.main(["--repo", REPO, "--run", "5", "--hand-back"], now=NOW)
+	assert code == 2 and json.loads(capsys.readouterr().out)["action"] == "retry"
+
+
+def test_direct_callers_get_the_verdict_unchanged(monkeypatch):
+	# scripts/claude_pr_sweep.py calls check_pr_hand_back directly; routing is
+	# added only by main(), so that caller's verdict shape does not change.
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])})
+	verdict = checker.check_pr_hand_back(REPO, 7, checker.DEFAULT_STUCK_HOURS, 0.0, NOW)
+	assert verdict["state"] == "blocked" and "action" not in verdict
+
+
+def _flat_text(path):
+	return " ".join(path.read_text(encoding="utf-8").split())
+
+
+def test_claude_md_26c_routes_on_action():
+	text = _flat_text(ROOT / "CLAUDE.md")
+	section = text[text.index("### C) What each check-in does"):text.index("### D) What the pushing session does")]
+	assert "**Route on `action` only, never on `state`**" in section
+	for row in (
+		"| `open`, `claimed`, `held`, or waiting on a run | `wait` | 2 |",
+		"| read failed (exit 2) | `retry` | 3 |",
+		"| `conflict`, `review-round`, `ci-failed`, `blocked` | `hand_back_fixer` | 4 |",
+		"| `merged`, `closed` | `hand_back_all` | 4 |",
+	):
+		assert row in section, row
+	assert "2. **`action` is `wait`**" in section
+	assert "3. **`action` is `retry`**" in section
+	assert "4. **`action` is `hand_back_fixer`**" in section
+	assert "**`action` is `hand_back_all`** (terminal: `merged` / `closed`)" in section
+	assert "**Due fix** (`state` is" not in section
+	pushing = text[text.index("### D) What the pushing session does"):text.index("### E) Enforcement")]
+	assert "Then, by `action` (§26.C step 1):" in pushing
+
+
+def test_fix_claude_pr_routes_on_action():
+	for path in (ROOT / ".claude" / "commands" / "fix-claude-pr.md",
+		ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md"):
+		text = _flat_text(path)
+		assert "2. **Route on `action`**" in text
+		assert "- `hand_back_fixer` (`conflict`, `review-round`, `ci-failed`, `blocked`) → continue." in text
+		assert "- `hand_back_all` (`merged` / `closed`) → nothing to fix." in text
+		assert "- `retry` (exit 2) → the read failed" in text
+		assert "2. **Route on `state`.**" not in text
+	assert ((ROOT / ".claude" / "commands" / "fix-claude-pr.md").read_bytes()
+		== (ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md").read_bytes())

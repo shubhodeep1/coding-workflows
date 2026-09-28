@@ -19,12 +19,14 @@ $ARGUMENTS
    `--ignore-claim-by` looks past your own earlier claim and the sweep's reservation for you, so they never stop you; anyone else's live claim still does.
    `<login>` is the account that posts the review workflow's hand-offs: the value the hand-back or checker prompt names, else `gh api user --jq .login` (in this setup the workflow's `GH_PAT` and the session act as the same owner account). A wrong login only hides review hand-offs from the script (it fails closed); the sweep then finds them. The script decides; the model does not re-interpret the PR.
 
-2. **Route on `state`.**
-   - `merged` / `closed` → nothing to fix. Report, and, if you are the pushing session, continue with CLAUDE.md §26.D instead.
-   - `held` → a human decision is pending (see step 3). Report the hold and end the turn.
-   - `claimed` → another fixer owns this head (your own claim and your sweep reservation were ignored in step 1). Report and end the turn; never fix alongside it.
-   - `open` → nothing is due. If you are a fresh session, make sure the PR has a §26 check-in (step 7) and end the turn.
-   - `conflict`, `review-round`, `ci-failed`, `blocked` → continue. `kind` is the claim kind: `conflict`, `review`, `ci`, `blocked`.
+2. **Route on `action`** (the script maps `state` to it; CLAUDE.md §26.C step 1). `state` only names the detail for your report.
+   - `hand_back_all` (`merged` / `closed`) → nothing to fix. Report, and, if you are the pushing session, continue with CLAUDE.md §26.D instead.
+   - `wait` → nothing for you to fix now; by `state`:
+     - `held` → a human decision is pending (see step 3). Report the hold and end the turn.
+     - `claimed` → another fixer owns this head (your own claim and your sweep reservation were ignored in step 1). Report and end the turn; never fix alongside it.
+     - `open` → nothing is due. If you are a fresh session, make sure the PR has a §26 check-in (step 7) and end the turn.
+   - `retry` (exit 2) → the read failed: run step 1 once more; if it fails again, report the error and end the turn.
+   - `hand_back_fixer` (`conflict`, `review-round`, `ci-failed`, `blocked`) → continue. `kind` is the claim kind: `conflict`, `review`, `ci`, `blocked`.
 
 3. **Cap.** For `kind` other than `review`, when `cap_reached` is true (`hand_backs` ≥ `cap`, default 3: CLAUDE.md §26.H), do not fix. Post a hold claim (step 4 with `--kind hold`), send one `PushNotification` (`<repo>#<N>: Claude fix cap reached (<kind>) — decision needed in "<session title>"`), and ask in the CLAUDE.md §2 Q/A format:
    > **Q1: PR `<repo>#<N>` has had `<hand_backs>` Claude conflict/CI/block fixes and is `<state>` again (`<reason>`). How should I continue?**

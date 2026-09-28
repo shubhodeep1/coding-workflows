@@ -7480,7 +7480,9 @@ jobs:
             # was the upstream cause of an empty editor turn.
             # pr_check_runs_context.txt and reviewer_consensus.txt let
             # us reconstruct what context the editor saw without re-
-            # fetching from the API.
+            # fetching from the API. summariser_{pass1,review}.log hold
+            # each consensus-summariser attempt's stderr tail (issue
+            # #4653: exit 0 with empty stdout had no uploaded trace).
             for f in editor_summary.txt editor_prompt.txt editor_prompt_body.txt \
                      pr_editor_comment.txt reviewer_consensus.txt \
                      reviewer_prompt.txt reviewer_prompt_body.txt \
@@ -7497,7 +7499,8 @@ jobs:
                      last_run_diff_stat.txt \
                      symbol_diff_summary.txt \
                      floor_tags.txt review_issues.txt ledger_status.txt \
-                     consolidator_raw.txt parser_stats.txt; do
+                     consolidator_raw.txt parser_stats.txt \
+                     summariser_pass1.log summariser_review.log; do
               [ -f "${RUNTIME_DIR}/${f}" ] && \
                 cp -f "${RUNTIME_DIR}/${f}" "${STAGE_DIR}/runtime/${f}" || true
             done
