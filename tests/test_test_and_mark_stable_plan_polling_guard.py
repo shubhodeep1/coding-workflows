@@ -42,6 +42,10 @@ if path == issue_path:
 	payload = {"labels": [{"name": name} for name in labels.split(",") if name]}
 elif path.startswith(issue_path + "/comments"):
 	payload = []
+elif "/actions/runs?" in path and os.environ.get("STUB_UNPAGED_RUNS_INVALID") and "&page=" not in path:
+	# The other-active check's page-1 read (fetch_plan_runs_json) is the only
+	# runs request without &page=; this makes just that read unreadable.
+	payload = {"workflow_runs": None}
 elif "/actions/runs?" in path:
 	pages = json.loads(open(os.environ["STUB_RUN_PAGES"], encoding="utf-8").read())
 	match = re.search(r"[?&]page=(\d+)", path)
@@ -82,7 +86,7 @@ def _noise_page(first_id: int, count: int = 100) -> list[dict]:
 	]
 
 
-def _run_wait_plan(pages: list[list[dict]], labels: str, labels_later: str | None = None, switch_after: int = 0) -> tuple[int, dict[str, str], list[list[str]], str]:
+def _run_wait_plan(pages: list[list[dict]], labels: str, labels_later: str | None = None, switch_after: int = 0, plan_phase_timeout: str = "60", unpaged_runs_invalid: bool = False) -> tuple[int, dict[str, str], list[list[str]], str]:
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		bin_dir = tmp_path / "bin"
@@ -105,13 +109,15 @@ def _run_wait_plan(pages: list[list[dict]], labels: str, labels_later: str | Non
 			"TEST_REPO": "owner/repo",
 			"ISSUE_NUMBER": ISSUE_NUMBER,
 			"ISSUE_TITLE": ISSUE_TITLE,
-			"PLAN_PHASE_TIMEOUT": "60",
+			"PLAN_PHASE_TIMEOUT": plan_phase_timeout,
 			"POLL_INTERVAL": "0",
 			"GITHUB_OUTPUT": str(output_file),
 			"STUB_GH_LOG": str(log_file),
 			"STUB_RUN_PAGES": str(pages_file),
 			"STUB_LABELS": labels,
 		})
+		if unpaged_runs_invalid:
+			env["STUB_UNPAGED_RUNS_INVALID"] = "1"
 		if labels_later is not None:
 			env["STUB_LABELS_LATER"] = labels_later
 			env["STUB_LABELS_SWITCH_AFTER"] = str(switch_after)
@@ -251,6 +257,27 @@ def test_unreadable_later_page_retries_instead_of_failing() -> None:
 	assert rc == 0, log
 	assert "Unable to confirm concurrent Plan runs on page 2 yet — retrying" in log, log
 	assert "Plan workflow completed but issue lacks expected labels" not in log, log
+
+
+def test_unreadable_later_page_fails_as_a_stall_after_the_inactivity_limit() -> None:
+	# PR #4730 review round 3: the retry `continue`s before the loop's own
+	# inactivity check, so it applies the limit itself instead of polling
+	# until the job's timeout-minutes. PLAN_PHASE_TIMEOUT=0 makes it due at once.
+	pages = [_completed_plan_page(), None]
+	rc, outputs, _calls, log = _run_wait_plan(pages, "", plan_phase_timeout="0")
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "Unable to confirm concurrent Plan runs on page 2 yet" in log, log
+	assert "::error::Plan phase stalled — no activity for 0 minutes while concurrent Plan runs could not be confirmed" in log, log
+
+
+def test_unreadable_first_page_fails_as_a_stall_after_the_inactivity_limit() -> None:
+	pages = [_completed_plan_page()]
+	rc, outputs, _calls, log = _run_wait_plan(pages, "", plan_phase_timeout="0", unpaged_runs_invalid=True)
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "Unable to confirm concurrent Plan runs yet" in log, log
+	assert "::error::Plan phase stalled — no activity for 0 minutes while concurrent Plan runs could not be confirmed" in log, log
 
 
 def test_other_active_plan_runs_avoids_inline_fallback_substitution() -> None:

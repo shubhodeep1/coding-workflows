@@ -808,6 +808,21 @@ jobs:
             exit 1
           }
 
+          # The "unable to confirm concurrent Plan runs" retries `continue`
+          # before the loop's inactivity check, so they apply the limit
+          # themselves: a runs page that stays unreadable fails the step as a
+          # stall after PLAN_PHASE_TIMEOUT minutes instead of polling until the
+          # job's timeout-minutes (PR #4730 review). Rate limits already back
+          # off inside gh_api_safe.
+          fail_plan_confirm_retry_if_idle() {
+            local plan_confirm_idle=$(( $(date +%s) - LAST_ACTIVITY ))
+            if [ "$plan_confirm_idle" -ge "$INACTIVITY_LIMIT" ]; then
+              echo "::error::Plan phase stalled — no activity for ${PLAN_PHASE_TIMEOUT} minutes while concurrent Plan runs could not be confirmed"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          }
+
           # Robust workflow run-ID capture — retries on empty results to ride out
           # the brief race window where the matching run isn't yet indexed by the
           # API, and widens pagination to per_page=100 in case of high concurrent
@@ -929,6 +944,7 @@ jobs:
               PLAN_RUNS_JSON=$(fetch_plan_runs_json || echo "")
               if ! _plan_runs_json_valid "$PLAN_RUNS_JSON"; then
                 echo "  ⏳ Unable to confirm concurrent Plan runs yet — retrying"
+                fail_plan_confirm_retry_if_idle
                 sleep "$POLL_INTERVAL"
                 continue
               fi
@@ -969,6 +985,7 @@ jobs:
                 done
                 if [ "$ACTIVE_WALK_UNCONFIRMED" -eq 1 ]; then
                   echo "  ⏳ Unable to confirm concurrent Plan runs on page ${ACTIVE_WALK_PAGE} yet — retrying"
+                  fail_plan_confirm_retry_if_idle
                   sleep "$POLL_INTERVAL"
                   continue
                 fi
