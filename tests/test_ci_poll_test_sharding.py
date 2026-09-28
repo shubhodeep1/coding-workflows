@@ -183,7 +183,7 @@ class PollStepContractTest(unittest.TestCase):
 
 class JobBudgetTest(unittest.TestCase):
 	def test_lint_job_has_headroom_over_the_sharded_runtime(self) -> None:
-		self.assertEqual(load_lint_job()["timeout-minutes"], 45)
+		self.assertEqual(load_lint_job()["timeout-minutes"], 60)
 
 	def test_e2e_smoke_job_has_headroom_for_all_phase_budgets(self) -> None:
 		e2e_smoke_job = yaml.safe_load(
