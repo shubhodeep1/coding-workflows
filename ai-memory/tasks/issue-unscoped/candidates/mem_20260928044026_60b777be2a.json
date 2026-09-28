@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  expected_change_site: tests/e2e_smoke_canary.txt (the entire PR must touch this file alone)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The PR diff modifies .ai/.workspace_source_manifest.txt, adding entries for various files unrelated to the task, which violates the explicit negative constraint to only modify the smoke-test canary file; The PR HEAD still carries a 14-hunk (~148-line) modification to .ai/.workspace_source_manifest.txt that predates this autofix run (added by an earlier commit in the same PR; see the additions of .claude/commands/claude-issue-pickup.md, .claude/scripts/claude_fix_claim.py, .github/workflows/claude-issue-queue-watchdog.yml, the changelog.d/4507..4655 fragments, scripts/claude_pr_sweep.py, tests/test_claude_pr_sweep.py, workflow-templates/.claude/commands/fix-claude-pr.md, and the removed changelog.d/4481 / docs/plans/heal-deterministic-autofix-failures-plan.md lines); The PR diff includes 14 hunks (~148 lines) of changes to .ai/.workspace_source_manifest.txt, adding entries for files introduced in other PRs (e.g., .claude/commands/claude-issue-pickup.md, .claude/scripts/claude_fix_claim.py, changelog.d/4507-wire-overlay-core-test-into-ci.md, and many others).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR diff modifies .ai/.workspace_source_manifest.txt, adding entries for various files unrelated to the task, which violates the explicit negative constraint to only modify the smoke-test canary file.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\" (linked issue #4712, Constraints)\n  Expected change site: tests/e2e_smoke_canary.txt (the entire PR must touch this file alone)\n  Evidence of absence: The PR HEAD still carries a 14-hunk (~148-line) modification to .ai/.workspace_source_manifest.txt that predates this autofix run (added by an earlier commit in the same PR; see the additions of .claude/commands/claude-issue-pickup.md, .claude/scripts/claude_fix_claim.py, .github/workflows/claude-issue-queue-watchdog.yml, the changelog.d/4507..4655 fragments, scripts/claude_pr_sweep.py, tests/test_claude_pr_sweep.py, workflow-templates/.claude/commands/fix-claude-pr.md, and the removed changelog.d/4481 / docs/plans/heal-deterministic-autofix-failures-plan.md lines). The ai-autofix editor acknowledged the reviewer finding but explicitly declined to revert the manifest (\"The manifest changes predate this review edit. Changing .ai/.workspace_source_manifest.txt would violate the issue's single-file scope\") \u2014 that reasoning is inverted: the single-file scope is already violated by the earlier commit, so reverting the manifest would FIX the violation, not add to it. Net result: the canary file content is now correct (LAST RUN DIFF lines 1-3: status: ok / run_id: 36374918973 / updated-by: ai-pipeline with a trailing newline), but the explicit \"do not touch any other file\" constraint remains violated by .ai/.workspace_source_manifest.txt in the PR HEAD.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  Expected change site: tests/e2e_smoke_canary.txt (only)\n  Evidence of absence: The PR diff includes 14 hunks (~148 lines) of changes to .ai/.workspace_source_manifest.txt, adding entries for files introduced in other PRs (e.g., .claude/commands/claude-issue-pickup.md, .claude/scripts/claude_fix_claim.py, changelog.d/4507-wire-overlay-core-test-into-ci.md, and many others). These manifest updates are unrelated to the smoke-test canary task and directly violate the explicit single-file constraint stated in the linked issue. The canary file itself is correctly updated to the exact three-line specification, but the PR scope exceeds what the issue authorized.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ac29d5e9ac50ad8f0c65477a1946c84303a2a6ca692aa4c6a0cf418f4944fb8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4719,
+    "run_id": "36376673742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36376673742",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928044026_60b777be2a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4719,
+    "run_id": "36376673742"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T04:40:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
