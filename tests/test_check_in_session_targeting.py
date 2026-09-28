@@ -85,7 +85,7 @@ def test_fresh_fixer_rechecks_the_pr_first(step_5):
 def test_instructions_prompt_restates_the_session_rules(claude_md):
 	step_3 = _section(claude_md, "3. Call `create_trigger` with `persistent_session_id` = the checker's", "4. Report the checker's session id")
 	assert "The prompt also restates the session rules of §26.C step 5" in step_3
-	assert "a missing Routine alone is not a gone subscriber" in step_3
+	assert "a missing Routine alone is not a gone subscriber (it calls `get_session` on the subscriber, and only an archived or not-found session is gone)" in step_3
 	assert "it never archives itself (the fixer archives it, §26.D)" in step_3
 	assert "is delivered, even when the fixer has not claimed the head yet" in step_3
 	assert "starts one only when `action` is still `hand_back_fixer`" in step_3
@@ -123,7 +123,11 @@ def test_implement_plan_claude_checks_before_archiving_the_checker(prefix):
 def test_implement_plan_checker_prompt_targets_no_session(prefix):
 	text = _flat(_command(prefix, "implement-plan-claude.md"))
 	prompt = _section(text, "### Checker prompt", "### Hand-back")
-	assert "You rename and archive no session, yourself included: never call set_session_title or archive_session" in prompt
+	assert "You rename and archive no existing session, yourself included: never call set_session_title, and call archive_session only in step 5, on the session you just created there when its create_trigger failed." in prompt
+	assert "never call set_session_title or archive_session" not in prompt
+	# The one archive_session call the intro allows is step 5's cleanup.
+	step_5 = prompt[prompt.index("5. `action` is `next_stage`"):]
+	assert "create_trigger fails (then archive_session the new session first)" in step_5
 	assert "Do **not** archive yourself" in prompt
 	step_4b = _section(prompt, "4b. Hand-back check", "5. `action` is `next_stage`")
 	assert "a missing Routine alone is not a gone stage session" in step_4b

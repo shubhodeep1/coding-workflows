@@ -1798,9 +1798,10 @@ terminal report (§26.D):
    (the fixer archives it, §26.D); a hand-back whose Routine run
    `SUCCEEDED` in the subscriber's session is delivered, even when the
    fixer has not claimed the head yet; a missing Routine alone is not a
-   gone subscriber; and before starting a fresh fixer it re-runs step 1's
-   command and starts one only when `action` is still
-   `hand_back_fixer`. The one-shot trigger disables itself after it
+   gone subscriber (it calls `get_session` on the subscriber, and only an
+   archived or not-found session is gone); and before starting a fresh
+   fixer it re-runs step 1's command and starts one only when `action` is
+   still `hand_back_fixer`. The one-shot trigger disables itself after it
    fires.
 4. Report the checker's session id, the instructions trigger id, and the
    hand-back trigger id in this session's reply.

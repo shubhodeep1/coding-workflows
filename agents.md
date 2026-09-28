@@ -942,7 +942,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   only after `archive_session` returned success. `/implement-plan-claude`
   applies the same check (title `implement-plan <slug> — checker`) before
   it archives its project checker, and its checker renames and archives no
-  session.
+  existing session (its one `archive_session` call is the cleanup of a
+  stage session it just created whose start trigger failed).
 - Delivered or gone (CLAUDE.md §26.C step 5): a `SUCCEEDED` hand-back
   whose `last_run.session_id` is the subscriber's counts as delivered even
   before the fixer claims the head. A missing Routine alone is not a gone
