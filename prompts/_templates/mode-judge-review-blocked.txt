@@ -240,7 +240,8 @@ Output contract:
 - new_output_paths: optional; omit this field or use `[]` unless
   action=`close_and_reissue` with `reissue_mode: "spot-fix"` and the new issue
   body requires creating files that do not exist at the closed PR head. Exact
-  file paths only; the workflow drops directories, globs, existing paths, and
+  file paths only, printable ASCII with no leading or trailing space; the
+  workflow drops directories, globs, existing paths, any other entry, and
   entries beyond the first 10.
 - lessons_learned: optional; omit this field or use `[]` when there is no
   grounded plan-divergence lesson to carry forward. When present,

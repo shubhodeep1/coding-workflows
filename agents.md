@@ -827,7 +827,9 @@ ID. The validated block is placed ahead of the review-blocked footer
 changed files that still exist at its head (`REISSUE_FILES_TOUCHED_UNION`,
 fail-open on a failed `pulls/<n>/files` listing), then with the new files the
 judge declares in `new_output_paths` (`REISSUE_FILES_TOUCHED_NEW_OUTPUTS`).
-A declared path is kept only when it passes the path validator, carries no
+A declared path is kept only when it passes the path validator, is
+printable ASCII with no leading or trailing space (the scope guard trims
+entries and splits lines on Unicode separators), carries no
 glob character or trailing `/`, is not `.git`, and does not exist at the
 closed head (a failed lookup there skips it too); at most 10 are read,
 and a rejected one is skipped, never a fallback to `redo`. Incident: #4664's

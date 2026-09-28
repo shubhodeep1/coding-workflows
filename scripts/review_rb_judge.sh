@@ -2675,7 +2675,11 @@ print(m.group(1) if m else "")
       # the first 10 declarations are read.  A rejected entry is skipped with
       # its reason (the path is echoed only once it passed the validator),
       # never a reason to fall back to redo.  A field that is present but not
-      # an array declares nothing and logs one notice.  No API call.
+      # an array declares nothing and logs one notice.  No API call.  Only
+      # printable ASCII with no leading or trailing space is read: the scope
+      # guard trims each entry and splits the body with str.splitlines(), so
+      # " src" would exempt all of src/ and a U+2028 inside a path would
+      # inject an extra entry (conformance finding on #4665).
       if [ "${RB_EFFECTIVE_REISSUE_MODE}" = "spot-fix" ] && [ -n "${RB_BASELINE_BRANCH}" ] && [ "${#RB_REISSUE_FILES[@]}" -gt 0 ]; then
         RB_NEW_OUTPUT_MAX=10
         RB_NEW_OUTPUT_FIELD_TYPE="$(printf '%s' "${JUDGE_JSON}" | jq -r '.new_output_paths | type' 2>/dev/null || true)"
@@ -2690,7 +2694,7 @@ print(m.group(1) if m else "")
           printf '%s' "${JUDGE_JSON}" | jq -r '
             if (.new_output_paths | type) == "array" then
               .new_output_paths[]
-              | if type == "string" and (test("[\\n\\r]") | not) and (contains("\u0000") | not) then . else "" end
+              | if type == "string" and (test("[\\n\\r]") | not) and (contains("\u0000") | not) and test("^[!-~]([ -~]*[!-~])?$") then . else "" end
             else
               empty
             end
