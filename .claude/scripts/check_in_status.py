@@ -273,7 +273,7 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 	if age_hours < stuck_hours:
 		return {"done": False, "state": "open", "reason": f"PR #{number} has {problem}, head is {age_hours:.1f}h old (< {stuck_hours:g}h)"}
 
-	active = _active_run_count(repo, head_ref)
+	active = _active_run_count(repo, head_ref, pr_number=number)
 	if active:
 		return {"done": False, "state": "open", "reason": f"PR #{number} has {problem}, but {active} workflow run(s) on {head_ref} are still queued or running"}
 	return {"done": True, "state": "stuck", "reason": f"PR #{number} stuck: {problem}, head {age_hours:.1f}h old, no workflow run active on {head_ref}"}
