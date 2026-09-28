@@ -5,17 +5,17 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4723-require-plan-run-id   Final PR: #4729 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (the PR carrying this log update)
+- Waiting on: PR #4730
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01SN9XdEWdK9hLtuWFjcG31M (hand-back and safety net re-armed each stage)
 - Last updated: 2026-09-28
-- Last note: phase 1 implemented and verified (9 plan-polling tests incl. 6 new behavioural ones; yamllint -s, actionlint 1.7.12, ruff clean); phase 1 PR opened against the project branch
+- Last note: review round 1 on PR #4730: 1 consensus finding (capture retries repeated the 10-page walk, up to 50 reads) fixed; a walk that reaches the page cap without a match is no longer retried
 
 ## Phases
 1. [ ] Phase 1 — paginate the scoped Plan run lookup and require the ID before success (`.github/workflows/test-and-mark-stable.yml` `wait-plan` step, `tests/test_test_and_mark_stable_plan_polling_guard.py`, `changelog.d/4723-require-plan-run-id.md`)
-   - PR open (waiting); review rounds: 0; interventions: 0
+   - PR #4730 open (waiting); review rounds: 1; interventions: 0
    - Done when: new behavioural tests (missing ID fails at capture with `status=run_id_missing`; page-2 match succeeds; unrelated title rejected) and existing guard tests pass; workflow YAML parses.
 
 ## Conformance
@@ -38,6 +38,7 @@
 
 ## Lessons
 - [source:plan-deviation] A poll loop that shares a lookup helper with a one-shot capture must not inherit the capture's pagination: pass a page cap so the per-poll API cost stays one call (files: .github/workflows/test-and-mark-stable.yml)
+- [source:intervention] A retry loop around a paginated lookup must not retry a walk that already read every page up to the cap: the result cannot change and each retry repeats the full page cost (files: .github/workflows/test-and-mark-stable.yml)
 
 ## Notes
 - Issue progress comment: 5864145856.

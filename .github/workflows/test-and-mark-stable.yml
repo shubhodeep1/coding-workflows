@@ -765,7 +765,8 @@ jobs:
           # matching run from the first page that holds a match, so the common
           # case stays one API call. Stops at a short page (end of the window)
           # or after the optional third argument's page count (default
-          # PLAN_RUN_LOOKUP_MAX_PAGES). Returns 1 when a page cannot be read.
+          # PLAN_RUN_LOOKUP_MAX_PAGES). Returns 1 when a page cannot be read,
+          # and 2 when every page up to the cap was full and none matched.
           latest_scoped_run_field() {
             local name_re="$1"
             local field="$2"
@@ -789,7 +790,7 @@ jobs:
               fi
               lookup_page=$((lookup_page + 1))
             done
-            return 0
+            return 2
           }
 
           # Both success exits need the issue-scoped Plan run ID: without it
@@ -817,12 +818,20 @@ jobs:
           capture_run_id() {
             local name_re="$1"
             local result=""
+            local plan_lookup_rc=0
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(latest_scoped_run_field "$name_re" "id" || echo "")
+              plan_lookup_rc=0
+              result=$(latest_scoped_run_field "$name_re" "id") || plan_lookup_rc=$?
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
                 return 0
+              fi
+              # Every page GitHub serves for this list was full and none held
+              # our run: a retry would repeat the same 10 reads (PR #4730
+              # review), so only a short or unreadable window is retried.
+              if [ "$plan_lookup_rc" -eq 2 ]; then
+                break
               fi
               sleep 2
             done

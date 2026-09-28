@@ -121,11 +121,14 @@ def _run_pages_requested(calls: list[list[str]]) -> list[str]:
 
 def test_plan_label_without_a_captured_run_id_fails_at_plan_capture() -> None:
 	# Issue #4723: the Plan label is present but the lookup finds no run.
-	rc, outputs, _calls, log = _run_wait_plan([[_run(1, name="Internal: AI Clarify")]], "ai:awaiting-approval")
+	rc, outputs, calls, log = _run_wait_plan([[_run(1, name="Internal: AI Clarify")]], "ai:awaiting-approval")
 	assert rc == 1, log
 	assert outputs.get("status") == "run_id_missing", outputs
 	assert "run_id" not in outputs, outputs
 	assert "::error::Issue #4712 reached ai:awaiting-approval but no non-skipped Plan run" in log
+	# A short window may still be missing a not-yet-indexed run, so the
+	# capture keeps its 5 attempts there: one status poll plus 5 one-page reads.
+	assert len(_run_pages_requested(calls)) == 1 + 5, _run_pages_requested(calls)
 
 
 def test_auto_approved_plan_without_a_captured_run_id_fails_at_plan_capture() -> None:
@@ -172,9 +175,10 @@ def test_paging_is_bounded() -> None:
 	requested = _run_pages_requested(calls)
 	assert any("&page=10&" in path for path in requested), requested
 	assert not any("&page=11&" in path for path in requested), requested
-	# One single-page status poll, then 5 capture attempts of 10 pages each:
+	# One single-page status poll, then one 10-page capture walk: a walk that
+	# read every full page up to the cap is not retried (PR #4730 review), and
 	# the per-poll cost stays one call (CLAUDE.md §15).
-	assert len(requested) == 1 + 5 * 10, len(requested)
+	assert len(requested) == 1 + 10, len(requested)
 	assert "&page=1&" in requested[0] and "&page=1&" in requested[1] and "&page=2&" in requested[2], requested[:3]
 
 

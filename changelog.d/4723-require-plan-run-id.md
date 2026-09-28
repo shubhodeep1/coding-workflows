@@ -5,7 +5,7 @@ Run 36374918973 blocked the stable release at `Internals .. FAILED` even though 
 
 | The numbers that matter | Value |
 | --- | --- |
-| Pages read by the Plan run-ID capture | 1 normally, at most 10 (GitHub's 1,000-result ceiling) |
+| Pages read by the Plan run-ID capture | 1 normally, at most 10 per attempt (GitHub's 1,000-result ceiling); a walk that reads all 10 full pages without a match is not retried |
 | Pages read by each 10-second status poll | 1 (unchanged) |
 | New `wait-plan` status value | `run_id_missing` |
 | Runs created in the failed window (03:46–03:57 UTC) | 166 |
