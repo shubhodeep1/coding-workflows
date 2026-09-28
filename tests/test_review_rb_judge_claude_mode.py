@@ -127,6 +127,24 @@ def test_unruled_findings_count_as_upheld_and_no_rulings_decide_nothing():
 	assert judge.decide({"action": "merge"}, [], 0, 2)["decision"] == "merge"
 
 
+def test_duplicate_rulings_keep_the_most_cautious_one():
+	def rulings(*entries: tuple[str, str, str]) -> dict:
+		return {"action": "merge", "rulings": [{"finding": fid, "ruling": ruling, "category": category, "reason": f"{fid} {ruling}"} for fid, ruling, category in entries]}
+
+	invalid_rest = (("F2", "invalid", "other"), ("F3", "invalid", "other"))
+	# upheld beats invalid, whichever comes first
+	for order in ((("F1", "invalid", "other"), ("F1", "upheld", "correctness")), (("F1", "upheld", "correctness"), ("F1", "invalid", "other"))):
+		result = judge.decide(rulings(*order, *invalid_rest), _findings(), 0, 2)
+		assert result["decision"] == "fix", order
+		assert [(r["finding"], r["category"]) for r in result["upheld"]] == [("F1", "correctness")]
+	# among upheld rulings a hold category wins, so the cap still holds
+	result = judge.decide(rulings(("F1", "upheld", "other"), ("F1", "upheld", "security"), *invalid_rest), _findings(), 2, 2)
+	assert result["decision"] == "hold" and result["upheld"][0]["category"] == "security"
+	# identical invalid duplicates still merge
+	result = judge.decide(rulings(("F1", "invalid", "other"), ("F1", "invalid", "other"), *invalid_rest), _findings(), 0, 2)
+	assert result["decision"] == "merge"
+
+
 # ---- sticky rulings ----
 
 def _sticky(line: int, file_name: str = "scripts/a.sh") -> tuple[str, int]:
@@ -196,6 +214,10 @@ def test_verdict_body_carries_the_marker_and_every_ruling():
 		assert f"| {fid} |" in body
 	followup = judge.followup(judge.decide(_model("fix", {"F1": ("upheld", "correctness")}), _findings(), 2, 2), pr=42, head=HEAD, run_url="u")
 	assert "Refs #42" in followup["body"] and "`scripts/a.sh:10`" in followup["body"]
+	# It is opened before the merge lands, so it never claims the PR merged.
+	assert "merged" not in followup["body"] and "set it to merge" in followup["body"]
+	# The verdict's decision line never claims auto-merge; the note says what happened.
+	assert "auto-merge is enabled" not in body
 	assert not re.search(r"(?i)\b(fix(es|ed)?|close[sd]?|resolve[sd]?) #", followup["body"])
 
 
@@ -234,7 +256,7 @@ def _count(tmp: Path, *, base_ref: str, gh_messages: str | None = None) -> str:
 		(tmp / "messages.txt").write_text(gh_messages + "\n", encoding="utf-8")
 		gh.write_text(f"#!/usr/bin/env bash\ncat {tmp / 'messages.txt'}\n", encoding="utf-8")
 	gh.chmod(0o755)
-	script = "set -euo pipefail\ngh_retry() { \"$@\"; }\n" + _functions_block() + f'\nclaude_fixer_judge_fix_count "{base_ref}" 2\n'
+	script = "set -euo pipefail\ngh_retry() { \"$@\"; }\n" + _functions_block() + f'\nclaude_fixer_judge_fix_count "{base_ref}"\n'
 	env = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")}, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "REPOSITORY": "o/r", "PR_NUMBER": "42"}
 	proc = subprocess.run(["bash", "-c", script], cwd=repo, env=env, capture_output=True, text=True)
 	assert proc.returncode == 0, proc.stderr
@@ -246,11 +268,12 @@ def test_judge_fix_count_counts_only_merge_base_to_head():
 		assert _count(Path(td), base_ref="main") == "1"
 
 
-def test_judge_fix_count_falls_back_to_the_pr_commits_then_to_the_cap():
+def test_judge_fix_count_falls_back_to_the_pr_commits_then_to_unknown():
 	with tempfile.TemporaryDirectory() as td:
 		assert _count(Path(td), base_ref="missing-base", gh_messages="[judge-fix] a\n[judge-fix] b\nother") == "2"
 	with tempfile.TemporaryDirectory() as td:
-		assert _count(Path(td), base_ref="missing-base") == "2"  # unknown -> the cap
+		# Neither readable: unknown, never the cap (the judge then decides nothing).
+		assert _count(Path(td), base_ref="missing-base") == "unknown"
 
 
 # ---- executed paths (real helpers, stubbed gh / collector / auto-merge) ----
@@ -274,7 +297,7 @@ if any(a == "repos/o/r/issues" for a in args):
 '''
 
 
-def _execute(tmp: Path, *, model: dict, fix_count: int = 0, context: str | None = "green", extra_env: dict | None = None) -> dict:
+def _execute(tmp: Path, *, model: dict, fix_count: int = 0, context: str | None = "green", extra_env: dict | None = None, findings_text: str | None = None) -> dict:
 	support = tmp / "support"
 	support.mkdir()
 	for helper in (JUDGE_HELPER, EVIDENCE_HELPER):
@@ -301,7 +324,7 @@ def _execute(tmp: Path, *, model: dict, fix_count: int = 0, context: str | None 
 	inputs = tmp / "inputs"
 	inputs.mkdir()
 	(inputs / "ledger.txt").write_text(LEDGER, encoding="utf-8")
-	(inputs / "findings.json").write_text(json.dumps(_findings()), encoding="utf-8")
+	(inputs / "findings.json").write_text(json.dumps(_findings()) if findings_text is None else findings_text, encoding="utf-8")
 	(inputs / "model.json").write_text(json.dumps(model), encoding="utf-8")
 	output = tmp / "github_output"
 	output.write_text("", encoding="utf-8")
@@ -420,6 +443,37 @@ def test_cap_reached_merges_with_a_followup_issue():
 	assert result["auto_merge"] == f"{HEAD} o/r 42"
 	body = _comment_bodies(result)[0]
 	assert "decision=merge_with_followup -->" in body and "https://github.com/o/r/issues/77" in body
+	assert "so this run enables auto-merge bound to this head" in body
+
+
+UPHELD_AT_CAP = _model("fix", {"F1": ("upheld", "correctness"), "F2": ("invalid", "other"), "F3": ("invalid", "other")})
+
+
+def test_cap_reached_with_failing_or_unreadable_checks_opens_no_followup():
+	for context in ("failed", "disabled"):
+		with tempfile.TemporaryDirectory() as td:
+			result = _execute(Path(td), model=UPHELD_AT_CAP, fix_count=2, context=context)
+		assert result["proc"].returncode == 0, result["proc"].stderr
+		assert result["auto_merge"] is None, context
+		assert not [c for c in result["calls"] if "repos/o/r/issues" in c["args"]], context
+		bodies = _comment_bodies(result)
+		assert len(bodies) == 2, context
+		assert "decision=merge_with_followup -->" in bodies[0]
+		assert "No follow-up issue was opened because the PR does not merge on this run" in bodies[0]
+		assert "the PR does not merge on this run" in bodies[0].split("No follow-up issue was opened", 1)[1]
+		assert "ai:claude-fixer-handoff:v1 kind=findings" in bodies[1], context
+
+
+def test_cap_reached_with_running_checks_opens_the_followup_and_waits():
+	with tempfile.TemporaryDirectory() as td:
+		result = _execute(Path(td), model=UPHELD_AT_CAP, fix_count=2, context="running")
+	assert result["proc"].returncode == 0, result["proc"].stderr
+	assert result["auto_merge"] is None
+	assert len([c for c in result["calls"] if "repos/o/r/issues" in c["args"]]) == 1
+	bodies = _comment_bodies(result)
+	assert "https://github.com/o/r/issues/77" in bodies[0]
+	assert f"<!-- ai:claude-fixer-checks-pending:v1 head={HEAD} round=2 run=700 -->" in bodies[1]
+	assert result["evidence"]["outcome"] == "checks-pending"
 
 
 def test_cap_reached_without_a_followup_issue_holds():
@@ -461,6 +515,16 @@ def test_no_usable_ruling_decides_nothing():
 	assert "judge_skip_reason=claude_fixer_no_rulings" in result["outputs"]
 
 
+def test_a_failed_decide_helper_is_reported_apart_from_no_rulings():
+	with tempfile.TemporaryDirectory() as td:
+		result = _execute(Path(td), model=ALL_INVALID, findings_text="not json")
+	assert result["proc"].returncode == 0, result["proc"].stderr
+	assert result["calls"] == [] and result["auto_merge"] is None
+	assert "judge_handled=true" not in result["outputs"]
+	assert "judge_skip_reason=claude_fixer_decide_failed" in result["outputs"]
+	assert "action=no_decision reason=decide_failed" in result["proc"].stdout
+
+
 # ---- wiring inside review_rb_judge.sh and the prompt ----
 
 def test_rb_judge_claude_mode_hooks():
@@ -475,7 +539,10 @@ def test_rb_judge_claude_mode_hooks():
 	assert "post_review_blocked_assessment() { :; }" in text
 	# Its own cap, counted on the PR's commits.
 	assert 'MAX_REVIEW_BLOCKED_RETRIES="${CLAUDE_FIXER_JUDGE_FIX_CAP:-2}"' in text
-	assert 'RETRY_COUNT="$(claude_fixer_judge_fix_count "${PR_BASE_REF:-}" "${MAX_REVIEW_BLOCKED_RETRIES}")"' in text
+	assert 'RETRY_COUNT="$(claude_fixer_judge_fix_count "${PR_BASE_REF:-}")"' in text
+	# An unreadable count decides nothing (never the cap, never 0).
+	budget = text.split('RETRY_COUNT="$(claude_fixer_judge_fix_count "${PR_BASE_REF:-}")"', 1)[1].split("IS_FINAL=", 1)[0]
+	assert 'echo "judge_skip_reason=claude_fixer_fix_count_unreadable"' in budget and "exit 0" in budget
 	# Unready inputs decide nothing (review-blocked fallback), never merge.
 	assert 'echo "judge_skip_reason=claude_fixer_${CLAUDE_FIXER_JUDGE_SKIP_REASON:-inputs_missing}"' in text
 	assert "=== CLAUDE-FIXER JUDGE TASK ===" in text

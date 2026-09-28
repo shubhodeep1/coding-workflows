@@ -22,7 +22,9 @@ everything that decides what happens to the PR lives here so it can be tested:
 	``fix``; at the cap -> ``merge_with_followup``, or ``hold`` when an upheld
 	finding is ``security`` or ``data-loss``. A model ``hold`` or
 	``close_and_reissue`` (never allowed for ``claude/*`` PRs) is ``hold``. A
-	finding the model did not rule on counts as upheld; a model output with no
+	finding the model did not rule on counts as upheld, and a finding it ruled
+	on more than once keeps the most cautious ruling (``upheld`` over
+	``invalid``, then a ``security`` / ``data-loss`` category); a model output with no
 	usable ruling at all is ``error`` (the workflow then labels the PR
 	``ai:review-blocked``). Prints the decision; writes the full result JSON.
 
@@ -157,6 +159,12 @@ def _load_json(path: str) -> Any:
 		return None
 
 
+def _ruling_caution(entry: dict[str, Any]) -> tuple[bool, bool]:
+	"""Orders duplicate rulings for one finding: upheld beats invalid, then a hold category wins."""
+	upheld = str(entry.get("ruling") or "").strip().lower() == "upheld"
+	return upheld, upheld and str(entry.get("category") or "").strip().lower() in HOLD_CATEGORIES
+
+
 def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int) -> dict[str, Any]:
 	model = model if isinstance(model, dict) else {}
 	model_action = str(model.get("action") or "").strip()
@@ -167,7 +175,11 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 			continue
 		finding_id = str(entry.get("finding") or entry.get("id") or "").strip()
 		ruling = str(entry.get("ruling") or "").strip().lower()
-		if finding_id and ruling in RULINGS and finding_id not in by_id:
+		if not finding_id or ruling not in RULINGS:
+			continue
+		# A repeated ruling never clears a finding or skips the hold gate:
+		# the most cautious one for the finding is kept.
+		if finding_id not in by_id or _ruling_caution(entry) > _ruling_caution(by_id[finding_id]):
 			by_id[finding_id] = entry
 	rulings: list[dict[str, Any]] = []
 	for finding in findings:
@@ -315,9 +327,9 @@ def verdict_body(result: dict[str, Any], *, head: str, round_number: int, run_id
 		lines.append(f"| {ruling['finding']} | `{location}` | {ruling['ruling']} | {ruling['category']} | {reason} |")
 	lines.append("")
 	lines.append({
-		"merge": "No finding was upheld: auto-merge is enabled for this head once its checks are green.",
+		"merge": "No finding was upheld, so nothing is left to fix on this head. Whether the PR merges on this run depends on its checks (below).",
 		"fix": f"Upheld findings are fixed by the judge in a `[judge-fix]` commit (judge fix {result['fix_count'] + 1} of {result['cap']}); the push starts a normal review round.",
-		"merge_with_followup": "The judge-fix cap is reached: the PR merges and the upheld findings are tracked in a follow-up issue.",
+		"merge_with_followup": "The judge-fix cap is reached, so the upheld findings are not fixed on this PR. Whether it merges on this run, with a follow-up issue for them, depends on its checks (below).",
 		"hold": "The PR is held for a human (`ai:needs-human`).",
 	}.get(decision, ""))
 	if note:
@@ -331,7 +343,7 @@ def verdict_body(result: dict[str, Any], *, head: str, round_number: int, run_id
 def followup(result: dict[str, Any], *, pr: int, head: str, run_url: str) -> dict[str, str]:
 	title = f"Follow-up to PR #{pr}: {len(result['upheld'])} upheld review finding(s) left open at the judge-fix cap"
 	body = [
-		f"PR #{pr} merged at head `{head}` after the Claude-fixer GPT judge reached its judge-fix cap ({result['cap']}) ([judge run]({run_url})).",
+		f"The Claude-fixer GPT judge reached its judge-fix cap ({result['cap']}) on PR #{pr} and set it to merge at head `{head}` once that head's checks are green ([judge run]({run_url})).",
 		"These findings were upheld and are not fixed yet:",
 		"",
 	]

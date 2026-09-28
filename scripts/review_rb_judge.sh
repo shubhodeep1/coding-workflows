@@ -884,12 +884,16 @@ fi
 #   merge / merge_with_followup -> re-read the checks: green -> auto-merge
 #     bound to the judged head (review_enable_auto_merge.sh); still running
 #     -> the checks-pending comment the sweep's merge check verifies against
-#     this run's evidence; failing -> a findings hand-off naming them;
+#     this run's evidence; failing -> a findings hand-off naming them. The
+#     follow-up issue of merge_with_followup is opened only on the first two
+#     (the PR is set to merge); a hand-off opens none, so no issue claims a
+#     merge that did not happen and the next round's judge rules again;
 #   fix -> the existing writer below, committed as
 #     `[judge-fix] claude-fixer round <r>: <summary>` and pushed (a normal
 #     review round follows); at most CLAUDE_FIXER_JUDGE_FIX_CAP (default 2)
 #     per PR, counted on the PR's own commits (merge-base..HEAD), never reset;
 #   hold -> the PR is labelled ai:needs-human.
+# An unreadable judge-fix count decides nothing, like unready inputs.
 # Every decision posts one verdict comment ending
 #   <!-- ai:claude-fixer-judge:v1 head=<sha> round=<r> run=<id> decision=<d> -->
 # and writes the rulings into this run's claude-fixer-evidence artifact, where
@@ -910,11 +914,14 @@ claude_fixer_judge_log()
 
 # Prints how many [judge-fix] commits are among the PR's own commits:
 # `git log <merge-base>..HEAD` against the fetched base branch, else one
-# paginated GET /pulls/{n}/commits. Prints the cap when neither is readable,
-# so an unknown count ends in the final decision instead of another fix.
+# paginated GET /pulls/{n}/commits. Prints `unknown` when neither is
+# readable: the caller then decides nothing (the PR is labelled
+# ai:review-blocked and a later dispatch retries), because treating it as 0
+# could pass the cap and treating it as the cap could merge upheld findings
+# on a transient read failure.
 claude_fixer_judge_fix_count()
 {
-	local base_ref="$1" cap="$2" merge_base="" subjects=""
+	local base_ref="$1" merge_base="" subjects=""
 	if [ -n "${base_ref}" ]; then
 		git fetch --no-tags --quiet origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" >/dev/null 2>&1 || true
 		merge_base="$(git merge-base HEAD "refs/remotes/origin/${base_ref}" 2>/dev/null || true)"
@@ -924,7 +931,7 @@ claude_fixer_judge_fix_count()
 	elif subjects="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/commits?per_page=100" --jq '.[].commit.message | split("\n")[0]' 2>/dev/null)"; then
 		:
 	else
-		printf '%s\n' "${cap}"
+		printf 'unknown\n'
 		return 0
 	fi
 	printf '%s\n' "${subjects}" | grep -c '^\[judge-fix\]' || true
@@ -997,12 +1004,30 @@ claude_fixer_judge_hold()
 	claude_fixer_judge_record hold findings "" "$1"
 }
 
-# claude_fixer_judge_merge_path <merge|merge_with_followup> <note>
+# claude_fixer_judge_create_followup
+# Opens the follow-up issue for the upheld findings of merge_with_followup and
+# prints its URL (empty when it could not be created).
+claude_fixer_judge_create_followup()
+{
+	local followup_json followup_title followup_body
+	followup_json="$(claude_fixer_judge_helper followup --decision "${CLAUDE_FIXER_JUDGE_DECISION_FILE}" --pr "${PR_NUMBER}" --head "${RB_JUDGED_HEAD_SHA}" --run-url "${CLAUDE_FIXER_JUDGE_RUN_URL}" || true)"
+	followup_title="$(printf '%s' "${followup_json}" | jq -r '.title // empty' 2>/dev/null || true)"
+	followup_body="$(printf '%s' "${followup_json}" | jq -r '.body // empty' 2>/dev/null || true)"
+	if [ -n "${followup_title}" ] && [ -n "${followup_body}" ]; then
+		gh_retry gh api -X POST "repos/${REPOSITORY}/issues" -f title="${followup_title}" -f body="${followup_body}" --jq '.html_url // ""' 2>/dev/null || true
+	fi
+}
+
+# claude_fixer_judge_merge_path <merge|merge_with_followup>
 # Re-reads the head's check runs (this run's own jobs excluded) and enables
 # auto-merge bound to the judged head only on a fresh, ready, green snapshot.
+# The verdict names what actually happens on this run. merge_with_followup
+# opens its follow-up issue only when the PR is set to merge (green, or
+# checks pending for the sweep's merge check); a failing or unreadable
+# snapshot hands off without one.
 claude_fixer_judge_merge_path()
 {
-	local decision="$1" note="$2" status="unavailable" failed=""
+	local decision="$1" note="" status="unavailable" failed="" outcome="unavailable" followup_url=""
 	if [ -f "${SUPPORT_SCRIPTS_DIR}/collect_pr_check_runs_context.py" ]; then
 		SELF_RUN_ID="${GITHUB_RUN_ID:-}" CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT=true PYTHONDONTWRITEBYTECODE=1 \
 			python3 "${SUPPORT_SCRIPTS_DIR}/collect_pr_check_runs_context.py" || true
@@ -1014,47 +1039,73 @@ claude_fixer_judge_merge_path()
 		fi
 	fi
 	if [ -n "${failed}" ]; then
-		claude_fixer_judge_record "${decision}" findings "${failed}" "${note}Failing check runs on this head are handed to the Claude session: \`${failed//,/\`, \`}\`."
-		claude_fixer_judge_hand_off "Failing check runs on this head: \`${failed//,/\`, \`}\`."
-		claude_fixer_judge_log "action=handoff_ci failed_checks=${failed}"
+		outcome="failed"
 	elif [ "${status}" = "ready" ] \
 		&& grep -Eq '^total_check_runs: [1-9][0-9]*$' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
 		&& grep -Fxq 'failed_count: 0' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
 		&& grep -Fxq 'incomplete_count: 0' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
 		&& ! grep -Eq '^(failed|incomplete)\[[0-9]+\]\.' "${PR_CHECK_RUNS_CONTEXT_FILE}"; then
-		claude_fixer_judge_record "${decision}" findings "" "${note}Every check run on this head is green."
-		INITIAL_HEAD_SHA="${RB_JUDGED_HEAD_SHA}" GITHUB_REPOSITORY="${REPOSITORY}" \
-			FORWARD_MERGE_FALLBACK_AUTO_MERGE="${FORWARD_MERGE_FALLBACK_AUTO_MERGE:-true}" \
-			ORCH_INTEGRATION_BRANCH_PATTERN="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
-			bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh" \
-			|| echo "::warning::review_enable_auto_merge.sh failed for PR #${PR_NUMBER}; the verdict stands and the sweep's next run retries nothing, so merge by hand if needed."
-		claude_fixer_judge_log "action=auto_merge"
+		outcome="green"
 	elif [ "${CLAUDE_FIXER_CHECKS_PENDING_ENABLED:-true}" != "false" ] \
 		&& [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] \
 		&& { [ "${status}" = "ready" ] || [ "${status}" = "timeout" ] || [ "${status}" = "api_error" ]; }; then
-		claude_fixer_judge_record "${decision}" checks-pending "" "${note}Not every check run on this head has completed; the review sweep's merge check enables auto-merge once they are green."
-		{
-			echo "## Review round ${CLAUDE_FIXER_JUDGE_ROUND}: clean, waiting for checks"
-			echo
-			echo "The GPT judge left nothing to fix on head \`${RB_JUDGED_HEAD_SHA}\` ([judge run](${CLAUDE_FIXER_JUDGE_RUN_URL})), but not every check run on it has completed, so auto-merge is not enabled yet and nothing is handed to the Claude session."
-			echo "The review sweep re-dispatches this workflow about every 30 minutes, and each of those runs is a merge check without reviewers: green checks enable auto-merge bound to this head, a failing check is handed to the Claude session, and checks that are still running wait for the next sweep."
-			echo
-			echo "<!-- ai:claude-fixer-checks-pending:v1 head=${RB_JUDGED_HEAD_SHA} round=${CLAUDE_FIXER_JUDGE_ROUND} run=${GITHUB_RUN_ID} -->"
-		} > "${CLAUDE_FIXER_JUDGE_INPUTS_DIR}/checks_pending.md"
-		claude_fixer_judge_post_body "${CLAUDE_FIXER_JUDGE_INPUTS_DIR}/checks_pending.md"
-		claude_fixer_judge_log "action=checks_pending collection_status=${status}"
-	else
-		claude_fixer_judge_record "${decision}" findings "" "${note}The check-run snapshot for this head is unavailable (collection status \`${status:-unknown}\`)."
-		claude_fixer_judge_hand_off "The check-run snapshot for this head is unavailable (collection status \`${status:-unknown}\`), so the judge could not enable auto-merge. No reviewer finding is open: push a new commit, or add the \`force-review\` label to re-run the reviewers on this head."
-		claude_fixer_judge_log "action=snapshot_unavailable collection_status=${status:-unknown}"
+		outcome="pending"
 	fi
+	if [ "${decision}" = "merge_with_followup" ]; then
+		if [ "${outcome}" = "green" ] || [ "${outcome}" = "pending" ]; then
+			followup_url="$(claude_fixer_judge_create_followup)"
+			if [ -z "${followup_url}" ]; then
+				claude_fixer_judge_hold "The judge-fix cap is reached and the follow-up issue for the upheld findings could not be created, so the PR is not merged without tracking them."
+				return 0
+			fi
+			claude_fixer_judge_log "action=followup_created url=${followup_url}"
+			note="Follow-up issue for the upheld findings: ${followup_url}. "
+		else
+			note="No follow-up issue was opened because the PR does not merge on this run; the upheld findings stay listed above and are ruled on again in the next review round. "
+			claude_fixer_judge_log "action=followup_deferred outcome=${outcome}"
+		fi
+	fi
+	case "${outcome}" in
+		failed)
+			claude_fixer_judge_record "${decision}" findings "${failed}" "${note}Failing check runs on this head are handed to the Claude session, so the PR does not merge on this run: \`${failed//,/\`, \`}\`."
+			claude_fixer_judge_hand_off "Failing check runs on this head: \`${failed//,/\`, \`}\`."
+			claude_fixer_judge_log "action=handoff_ci failed_checks=${failed}"
+			;;
+		green)
+			claude_fixer_judge_record "${decision}" findings "" "${note}Every check run on this head is green, so this run enables auto-merge bound to this head."
+			INITIAL_HEAD_SHA="${RB_JUDGED_HEAD_SHA}" GITHUB_REPOSITORY="${REPOSITORY}" \
+				FORWARD_MERGE_FALLBACK_AUTO_MERGE="${FORWARD_MERGE_FALLBACK_AUTO_MERGE:-true}" \
+				ORCH_INTEGRATION_BRANCH_PATTERN="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
+				bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh" \
+				|| echo "::warning::review_enable_auto_merge.sh failed for PR #${PR_NUMBER}; the verdict stands and the sweep's next run retries nothing, so merge by hand if needed."
+			claude_fixer_judge_log "action=auto_merge"
+			;;
+		pending)
+			claude_fixer_judge_record "${decision}" checks-pending "" "${note}Not every check run on this head has completed; the review sweep's merge check enables auto-merge once they are green."
+			{
+				echo "## Review round ${CLAUDE_FIXER_JUDGE_ROUND}: clean, waiting for checks"
+				echo
+				echo "The GPT judge left nothing to fix on head \`${RB_JUDGED_HEAD_SHA}\` ([judge run](${CLAUDE_FIXER_JUDGE_RUN_URL})), but not every check run on it has completed, so auto-merge is not enabled yet and nothing is handed to the Claude session."
+				echo "The review sweep re-dispatches this workflow about every 30 minutes, and each of those runs is a merge check without reviewers: green checks enable auto-merge bound to this head, a failing check is handed to the Claude session, and checks that are still running wait for the next sweep."
+				echo
+				echo "<!-- ai:claude-fixer-checks-pending:v1 head=${RB_JUDGED_HEAD_SHA} round=${CLAUDE_FIXER_JUDGE_ROUND} run=${GITHUB_RUN_ID} -->"
+			} > "${CLAUDE_FIXER_JUDGE_INPUTS_DIR}/checks_pending.md"
+			claude_fixer_judge_post_body "${CLAUDE_FIXER_JUDGE_INPUTS_DIR}/checks_pending.md"
+			claude_fixer_judge_log "action=checks_pending collection_status=${status}"
+			;;
+		*)
+			claude_fixer_judge_record "${decision}" findings "" "${note}The check-run snapshot for this head is unavailable (collection status \`${status:-unknown}\`), so the PR does not merge on this run."
+			claude_fixer_judge_hand_off "The check-run snapshot for this head is unavailable (collection status \`${status:-unknown}\`), so the judge could not enable auto-merge. No reviewer finding is left for the Claude session to fix: push a new commit, or add the \`force-review\` label to re-run the reviewers on this head."
+			claude_fixer_judge_log "action=snapshot_unavailable collection_status=${status:-unknown}"
+			;;
+	esac
 }
 
 # Runs the decision for every action but fix, which continues into the
 # existing writer below. Returns 0 when the run is finished.
 claude_fixer_judge_execute()
 {
-	local decision followup_json followup_title followup_body followup_url=""
+	local decision skip_reason
 	decision="$(claude_fixer_judge_helper decide \
 		--model-json "${CLAUDE_FIXER_JUDGE_INPUTS_DIR}/model.json" \
 		--findings "${CLAUDE_FIXER_JUDGE_INPUTS_DIR}/findings.json" \
@@ -1063,22 +1114,8 @@ claude_fixer_judge_execute()
 		--out "${CLAUDE_FIXER_JUDGE_DECISION_FILE}" || echo error)"
 	claude_fixer_judge_log "action=decided decision=${decision} model_action=$(jq -r '.model_action // ""' "${CLAUDE_FIXER_JUDGE_DECISION_FILE}" 2>/dev/null || true) reason=$(jq -r '.reason // ""' "${CLAUDE_FIXER_JUDGE_DECISION_FILE}" 2>/dev/null || true) judge_fix=${RETRY_COUNT}/${MAX_REVIEW_BLOCKED_RETRIES}"
 	case "${decision}" in
-		merge)
-			claude_fixer_judge_merge_path merge ""
-			;;
-		merge_with_followup)
-			followup_json="$(claude_fixer_judge_helper followup --decision "${CLAUDE_FIXER_JUDGE_DECISION_FILE}" --pr "${PR_NUMBER}" --head "${RB_JUDGED_HEAD_SHA}" --run-url "${CLAUDE_FIXER_JUDGE_RUN_URL}" || true)"
-			followup_title="$(printf '%s' "${followup_json}" | jq -r '.title // empty' 2>/dev/null || true)"
-			followup_body="$(printf '%s' "${followup_json}" | jq -r '.body // empty' 2>/dev/null || true)"
-			if [ -n "${followup_title}" ] && [ -n "${followup_body}" ]; then
-				followup_url="$(gh_retry gh api -X POST "repos/${REPOSITORY}/issues" -f title="${followup_title}" -f body="${followup_body}" --jq '.html_url // ""' 2>/dev/null || true)"
-			fi
-			if [ -n "${followup_url}" ]; then
-				claude_fixer_judge_log "action=followup_created url=${followup_url}"
-				claude_fixer_judge_merge_path merge_with_followup "Follow-up issue for the upheld findings: ${followup_url}. "
-			else
-				claude_fixer_judge_hold "The judge-fix cap is reached and the follow-up issue for the upheld findings could not be created, so the PR is not merged without tracking them."
-			fi
+		merge|merge_with_followup)
+			claude_fixer_judge_merge_path "${decision}"
 			;;
 		hold)
 			claude_fixer_judge_hold ""
@@ -1087,8 +1124,15 @@ claude_fixer_judge_execute()
 			return 1
 			;;
 		*)
-			claude_fixer_judge_log "action=no_decision reason=$(jq -r '.reason // "decide_failed"' "${CLAUDE_FIXER_JUDGE_DECISION_FILE}" 2>/dev/null || echo decide_failed)"
-			echo "judge_skip_reason=claude_fixer_no_rulings" >> "$GITHUB_OUTPUT"
+			# decide wrote no decision file when the helper itself failed;
+			# keep that apart from a model output with no usable ruling.
+			skip_reason="$(jq -r '.reason // "decide_failed"' "${CLAUDE_FIXER_JUDGE_DECISION_FILE}" 2>/dev/null || echo decide_failed)"
+			claude_fixer_judge_log "action=no_decision reason=${skip_reason}"
+			if [ "${skip_reason}" = "no_usable_rulings" ]; then
+				echo "judge_skip_reason=claude_fixer_no_rulings" >> "$GITHUB_OUTPUT"
+			else
+				echo "judge_skip_reason=claude_fixer_decide_failed" >> "$GITHUB_OUTPUT"
+			fi
 			;;
 	esac
 	return 0
@@ -1278,8 +1322,13 @@ if [ "${CLAUDE_FIXER_JUDGE_MODE:-false}" = "true" ]; then
 	# Claude mode: its own cap, counted on this PR's commits only.
 	MAX_REVIEW_BLOCKED_RETRIES="${CLAUDE_FIXER_JUDGE_FIX_CAP:-2}"
 	[[ "${MAX_REVIEW_BLOCKED_RETRIES}" =~ ^[0-9]+$ ]] || MAX_REVIEW_BLOCKED_RETRIES=2
-	RETRY_COUNT="$(claude_fixer_judge_fix_count "${PR_BASE_REF:-}" "${MAX_REVIEW_BLOCKED_RETRIES}")"
-	[[ "${RETRY_COUNT}" =~ ^[0-9]+$ ]] || RETRY_COUNT="${MAX_REVIEW_BLOCKED_RETRIES}"
+	RETRY_COUNT="$(claude_fixer_judge_fix_count "${PR_BASE_REF:-}")"
+	if ! [[ "${RETRY_COUNT}" =~ ^[0-9]+$ ]]; then
+		echo "::warning::The Claude-fixer judge-fix count for PR #${PR_NUMBER} is unreadable (git merge-base and the PR commits API both failed); the judge decides nothing and the PR is labelled ai:review-blocked."
+		claude_fixer_judge_log "action=skip reason=fix_count_unreadable"
+		echo "judge_skip_reason=claude_fixer_fix_count_unreadable" >> "$GITHUB_OUTPUT"
+		exit 0
+	fi
 	IS_FINAL="false"
 	[ "${RETRY_COUNT}" -lt "${MAX_REVIEW_BLOCKED_RETRIES}" ] || IS_FINAL="true"
 	claude_fixer_judge_log "action=budget judge_fix=${RETRY_COUNT}/${MAX_REVIEW_BLOCKED_RETRIES} final=${IS_FINAL}"

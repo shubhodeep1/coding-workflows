@@ -103,7 +103,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
    fail; upheld below `CLAUDE_FIXER_JUDGE_FIX_CAP`, default 2, counted on
    `merge-base..HEAD` → `[judge-fix] claude-fixer round <r>: …` commit; at the
    cap → merge with a follow-up issue, or `ai:needs-human` for an upheld
-   security / data-loss finding; `close_and_reissue` → hold), and one verdict
+   security / data-loss finding; `close_and_reissue` → hold; a finding ruled
+   on twice keeps the most cautious ruling). The follow-up issue is opened
+   only when the PR is set to merge on that run (green checks, or checks
+   pending); a failing or unreadable snapshot hands off without one, and the
+   next round's judge rules again. An unreadable judge-fix count (git
+   merge-base and the PR commits API both failing) decides nothing
+   (`judge_skip_reason=claude_fixer_fix_count_unreadable`), as does a
+   failed decide helper (`claude_fixer_decide_failed`, apart from
+   `claude_fixer_no_rulings`). One verdict
    comment ending `<!-- ai:claude-fixer-judge:v1 head=<sha> round=<r>
    run=<id> decision=<d> -->` is posted. The rulings ride in that run's
    evidence artifact (uploaded by "Upload Claude-fixer judge evidence"); the
