@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T13:06:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Never pass a possibly-empty value to `grep -Fx -e`: an empty pattern matches a blank line of the haystack; add it with `${var:+-e \"${var}\"}`.",
+  "phase": "implement_plan",
+  "pr_number": 4725,
+  "record_id": "lesson-implement-plan-f1adeac438082476ed2ffdf3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4701-review-dispatch-default-branch",
+    "file:scripts/review_merge_train.sh"
+  ]
+}

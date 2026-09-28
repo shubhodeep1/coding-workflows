@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T13:06:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Moving a workflow dispatch off a head ref makes every head_branch-keyed run lookup blind to it; audit the empty-commit push guards and the stall judge along with the active-run dedupe, not only the lookups a finding names.",
+  "phase": "implement_plan",
+  "pr_number": 4725,
+  "record_id": "lesson-implement-plan-a1007024ceeb850790e0e678",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4701-review-dispatch-default-branch",
+    "file:scripts/orchestrate_poll_process.sh",
+    "file:scripts/review_merge_train.sh"
+  ]
+}
