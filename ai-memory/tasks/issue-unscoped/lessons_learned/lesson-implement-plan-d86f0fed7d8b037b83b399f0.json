@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T14:01:17Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A tree-parity or allow-list walker must check symlinks before any name-based skip, and may skip `.gitignore`d runtime output (`__pycache__/`, `*.pyc`) only while git does not track it, because the `.claude/` sync copies every regular file (`find -type f`).",
+  "phase": "implement_plan",
+  "pr_number": 4819,
+  "record_id": "lesson-implement-plan-d86f0fed7d8b037b83b399f0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4775-template-claude-protected-equivalent",
+    "file:tests/test_claude_template_parity.py",
+    "file:.github/workflows/update_workflows.yml"
+  ]
+}
