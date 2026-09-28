@@ -253,7 +253,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     rendering of that payload and run, so an edited queue issue is refused (#4621;
     fails closed: `unbound`, `binding_mismatch`, `binding_untrusted`,
     `binding_pending`, `binding_unavailable` under `ignored`). The **Claude issue pickup**
-    (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 3,
+    (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 1,
     woken hourly by the cron trigger `Claude issue pickup: hourly` bound to
     itself (no new session per wake, so no lineage-depth growth), reads the
     queue with
@@ -787,8 +787,13 @@ alone, then a one-shot `create_trigger` into it carrying the instructions,
 because `/effort low` is not applied when more text follows it in one prompt
 (CLAUDE.md §26.B). It runs `.claude/scripts/check_in_status.py`, re-arms
 itself with `send_later` every 60 minutes, and, when the wait is over, starts
-the next **stage session** on the model the operator picked. There is **one
-checker per project** (`implement-plan <slug> — checker`), created by the
+the next **stage session** on the model the operator picked. It routes on
+the verdict's `action` field alone, never on `state`: `wait`, `retry`,
+`hand_back` (a blocked, closed, or stuck PR), or `next_stage` with
+`next_stage` = `success`, `review`, or `block`. A review round or a
+conflict is always `next_stage` + `review`, never a hand-back (the
+PR #4596 checker misrouted one on 2026-09-27 while it still read
+`state`). There is **one checker per project** (`implement-plan <slug> — checker`), created by the
 first stage and reused for every wait: each later stage hands it the next
 wait through a one-shot trigger instead of creating a new checker, because
 claude-code-remote refuses `create_session`, `send_later`, and
@@ -884,9 +889,10 @@ its own id, `run_once_at` = now + 7 days, named `PR #<n> hand-back`, with
 the PR URL in its prompt). The checker runs
 `.claude/scripts/check_in_status.py --hand-back` (one REST read for a
 non-`claude/*` head; on a `claude/*` head also the comment and check-run
-pages and at most six further reads), renews every subscriber's
-hand-back 7 days ahead, and re-arms itself with `send_later` every 60
-minutes while nothing is due. A PR has one checker: a second interested
+pages and at most six further reads) and routes on its `action` field
+(`wait`, `retry`, `hand_back_fixer`, `hand_back_all`), renews every
+subscriber's hand-back 7 days ahead, and re-arms itself with `send_later`
+every 60 minutes while nothing is due. A PR has one checker: a second interested
 session registers with it (`PR #<n> status check-in: subscriber` one-shot
 trigger) as `fixer` (it pushed to the PR) or `notify`, instead of creating
 another. When a Claude fix is due on a `claude/*` head (block label,
@@ -921,6 +927,25 @@ by that command's own checker. Without `create_session` the session falls
 back to a `send_later` self check-in with a Sonnet subagent doing the read.
 The checker itself never fixes anything; outside `claude/*` PRs, CI,
 reviews, comments, and conflicts stay a direct §12 request.
+- Session depth (CLAUDE.md §26.B step 1c): the claude-code-remote tools
+  refuse `create_session`, `create_trigger`, `update_trigger`, and
+  `send_later` from a session 8 parent links below its root (`caller
+  session is at lineage depth 8 (limit 8)`), so a checker must sit at depth
+  6 or less for its fresh fixer to still work. Before creating a checker the
+  session counts its depth *d* with `get_session` along `parent_session_id`
+  (at most 8 calls; a walk that cannot finish counts as depth 6). At *d* ≤ 5 it creates the checker itself. At *d* 6 or 7
+  it sends the Claude issue pickup a one-shot `PR #<n> status check-in: arm
+  request` trigger with arguments `— arm-check-in <owner>/<repo>#<n> for
+  <session id>`. The pickup parses them offline with `claude_issue_route.py
+  arm-check-in-request` (registered repos only), creates the checker one
+  link below itself, and wakes the requester with `PR #<n> status check-in:
+  checker ready`, which names the checker; the requester then sends the
+  instructions itself. At *d* ≥ 8, with no pickup, or on any `lineage
+  depth` refusal, no checker is armed: the session keeps its hand-back
+  Routine (the 7-day dead-man's switch), relies on the §26.H sweep, and
+  sends one `PushNotification`. A checker whose fresh fixer is refused for
+  depth notifies and leaves the fix to the sweep. Incident: the PR #4601
+  checker was created at depth 8 on 2026-09-27 and could not re-arm.
 - Claude-fixer claims and the catch-all (CLAUDE.md §26.H): a fixer claims
   the PR's current head with one comment ending in
   `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`
@@ -968,7 +993,19 @@ reviews, comments, and conflicts stay a direct §12 request.
   `--terminal-only`, or `--hand-back` — / run / issue-list modes, REST only,
   one JSON line, exit 2 on a failed read), shared with the
   `/implement-plan-claude` checker; `workflow-templates/.claude/scripts/`
-  holds a byte-identical copy.
+  holds a byte-identical copy. Every verdict carries an additive `action`
+  field, derived by `route_verdict` from the data already read (no extra
+  API call), and the checkers route on it alone: plain PR mode →
+  `wait` / `hand_back` (blocked, closed, stuck) / `next_stage` with
+  `next_stage` `success` (merged) or `review` (review-round, conflict —
+  never `hand_back`); run and issue-list modes → `wait` / `next_stage`
+  with `success` (completed, resolved) or `block` (failed, blocked);
+  `--hand-back` → `wait` (open, claimed, held) / `hand_back_fixer`
+  (conflict, review-round, ci-failed, blocked) / `hand_back_all` (merged,
+  closed); exit 2 → `retry`. `done`, `state`, `reason`, the hand-back
+  fields, and the exit codes are unchanged, and `scripts/claude_pr_sweep.py`
+  (which calls `check_pr_hand_back` directly) sees no new field. An
+  unmapped done state exits 2 with `retry` rather than guessing.
 - Stale Routine sweep (CLAUDE.md §26.G): `.claude/scripts/stale_routines.py`
   reads a `list_triggers` result (`include_completed: true`) from a file (the
   harness usually saves that large result to a file itself) and

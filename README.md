@@ -1045,7 +1045,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reminder (`hooks/pr_check_in_reminder.py`, §26). The last one makes an
 > interactive session start a small low-effort Sonnet checker session for every
 > pull request it pushes; the checker runs `.claude/scripts/check_in_status.py`
-> every hour (re-armed with `send_later`) without waking the pushing session.
+> every hour (re-armed with `send_later`) without waking the pushing session,
+> and routes on the verdict's `action` field (`wait`, `retry`,
+> `hand_back_fixer`, `hand_back_all`) rather than interpreting `state`.
 > Once the PR merges or closes, the checker pulls forward a scheduled Routine
 > bound to the pushing session, which re-reads the PR state and, since it
 > holds the context, reports the next steps (or that it can be closed). The
@@ -1408,13 +1410,18 @@ Claude session fixes it instead (CLAUDE.md §26 and §26.H):
    `.claude/scripts/check_in_status.py --hand-back` every hour. When a fix is
    due (a block label, a review hand-off for the current head, a merge
    conflict, or a failed check with no workflow run queued, running, or
-   pending) it pulls the pushing session's hand-back Routine forward, and
-   that session follows `/fix-claude-pr` in place: it claims the head, fixes,
-   verifies, pushes, and registers a new hand-back with the same checker.
+   pending) the script reports `action: hand_back_fixer`, and the checker
+   pulls the pushing session's hand-back Routine forward. That session
+   follows `/fix-claude-pr` in place: it claims the head, fixes, verifies,
+   pushes, and registers a new hand-back with the same checker.
    A PR has one checker; other interested sessions register with it as
    subscribers.
 2. **A fresh fixer when the pushing session is gone.** The checker starts
    an Opus 5.5 session at high effort running `/fix-claude-pr <url>`.
+   A session too deep in the session lineage to create its own checker
+   (depth 6 or 7 of the 8-link limit) asks the Claude issue pickup to create
+   it instead (CLAUDE.md §26.B step 1c), so every checker can still start a
+   fixer.
 3. **The hourly catch-all.** The `claude-pr-catch-all` job of
    `review_autofix_sweep.yml` (cron `17 * * * *`) checks this repo and every
    repo in `.github/ai/consumer_repos.json`. A fix that has been due for
@@ -1557,8 +1564,12 @@ through `clarify → plan → implement → review`.
   and the run summary's `finalize_reason`), sets `AUTOFIX_REVIEWERS_FAILED=true`
   and writes evidence (`workflow_failure_heal.py reviewer-failure-evidence`:
   each slot's last exit code, the summariser's,
+  `summariser_empty_stdout prefix=<prefix>` when a summariser attempt exited 0
+  with no final message (counted as exit 0),
   `dominant_rc`, and up to 10 error lines a support script prefixed with its own
-  name), which every fingerprint call site and the heal report read. The retry
+  name), which every fingerprint call site and the heal report read. The
+  failure-log artifact carries `summariser_pass1.log` / `summariser_review.log`
+  with each summariser attempt's stderr tail (issue #4653). The retry
   handling is unchanged: the same no-output comment, `AUTOFIX_EDITOR_EMPTY_NOOP=true`,
   no immediate `ai:review-blocked`. On PR #4323 every reviewer slot and the
   summariser exited 226 and the run was reported as an empty editor.
