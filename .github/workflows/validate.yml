@@ -198,10 +198,12 @@ jobs:
           #     PR goes into the default branch (one level of stacking; one
           #     parent PR listing);
           #   - stable, for a claude/implement-plan-issue-<n>-* head whose
-          #     issue <n> carries ai:workflow-heal (one issue read).
-          # GitHub reads (CLAUDE.md §15): the target listing, plus at most one
-          # more for the two non-default cases. No earlier call in this job
-          # returns PR head/base data or issue labels.
+          #     issue <n> the heal automation filed and whose author opened the
+          #     target PR (one issue read, one issue-events read; issue #4791).
+          # GitHub reads (CLAUDE.md §15): the target listing, plus one parent
+          # listing for a project-branch base or two issue reads for a stable
+          # base. No earlier call in this job returns PR head/base data, issue
+          # authorship, or label history.
           validate_pr_jq_defs='
             def trusted_pr($repo):
               type == "object" and .state == "open" and
@@ -227,11 +229,12 @@ jobs:
               if .base.ref == $base then "default \(.head.sha) -"
               elif .base.ref | test("^claude/implement-plan-[A-Za-z0-9][A-Za-z0-9._-]*$") then
                 "project \(.head.sha) \(.base.ref)"
-              elif .base.ref == "stable" and ($branch | test("^claude/implement-plan-issue-[1-9][0-9]*-")) then
-                "stable \(.head.sha) \($branch | capture("^claude/implement-plan-issue-(?<n>[1-9][0-9]*)-").n)"
+              elif .base.ref == "stable" and ($branch | test("^claude/implement-plan-issue-[1-9][0-9]*-")) and
+                (.user | type == "object" and (.login | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$"))) then
+                "stable \(.head.sha) \($branch | capture("^claude/implement-plan-issue-(?<n>[1-9][0-9]*)-").n) \(.user.login)"
               else error("target PR base is not authorized") end
             else error("target PR is unauthorized") end' <<< "${target_prs}")" || { echo "::error::Explicit validation target is not authorized."; exit 1; }
-          read -r target_kind authorized_sha target_detail <<< "${target_binding}"
+          read -r target_kind authorized_sha target_detail target_author <<< "${target_binding}"
           case "${target_kind}" in
             default)
               ;;
@@ -253,12 +256,50 @@ jobs:
                 { echo "::error::Explicit validation target is not authorized."; exit 1; }
               ;;
             stable)
-              # A stable base is only for workflow-heal issue projects.
+              # A stable base is only for a workflow-heal issue project, and a
+              # label or branch name alone proves nothing (issue #4791). Issue
+              # <n> must carry the heal automation's provenance, the same rules
+              # as .claude/scripts/security_pass_skip.py (issue #4623): authored
+              # by an OWNER User (the GH_PAT account) or github-actions[bot],
+              # the workflow-failure-heal fp marker line, `stable` as its
+              # Integration/Target branch line (resolve_integration_ref.sh
+              # patterns), and ai:workflow-heal applied only by its author, the
+              # first time within 120 s of creation. The target PR's author must
+              # be the issue's author, so nobody else can open a stable target
+              # for it; the head stays pinned to the listing's SHA.
               heal_issue_json="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${target_detail}")" || exit 1
-              jq -e 'type == "object" and (has("pull_request") | not) and
-                ((.labels // []) | type == "array" and
-                 any(.[]; type == "object" and .name == "ai:workflow-heal"))' \
-                <<< "${heal_issue_json}" >/dev/null ||
+              heal_issue_created="$(jq -er --arg author "${target_author}" '
+                def body_lines: (.body // "") | if type == "string" then split("\n") | map(rtrimstr("\r")) else [] end;
+                def first_capture($re): [ .[] | capture($re)? ] | first;
+                body_lines as $lines |
+                ($lines | first_capture("^\\s*(?:-\\s*)?(?:\\*\\*Integration branch:\\*\\*|Integration branch:)\\s*`?\\s*(?<b>[^`]+?)\\s*`?\\s*$")) as $integration |
+                ($lines | first_capture("^\\s*(?:-\\s*)?(?:\\*\\*Target branch:\\*\\*|Target branch:)\\s*(?:`\\s*(?<a>[^`]+?)\\s*`(?:\\s.*)?|(?<b>[^`\\s]+))\\s*$")) as $target |
+                if type == "object" and (has("pull_request") | not) and
+                  ((.labels // []) | type == "array" and
+                   any(.[]; type == "object" and .name == "ai:workflow-heal")) and
+                  (.user | type == "object") and
+                  ((.user.type == "User" and .author_association == "OWNER") or
+                   (.user.type == "Bot" and .user.login == "github-actions[bot]")) and
+                  .user.login == $author and
+                  any($lines[]; test("^<!-- workflow-failure-heal:fp=\\S+ -->[ \\t]*$")) and
+                  (if $integration != null then $integration.b else ($target // {}) | (.a // .b) end) == "stable" and
+                  (.created_at | type == "string")
+                then .created_at | fromdateiso8601
+                else error("heal issue provenance is not verified") end' <<< "${heal_issue_json}")" ||
+                { echo "::error::Explicit validation target is not authorized."; exit 1; }
+              # One 100-item page, not paginated: a full page means the label
+              # history cannot be verified in one read, so it fails closed.
+              heal_events_json="$(gh api --method GET -f per_page=100 \
+                "repos/${GITHUB_REPOSITORY}/issues/${target_detail}/events")" || exit 1
+              jq -e --arg author "${target_author}" --argjson created "${heal_issue_created}" '
+                type == "array" and length < 100 and
+                ([ .[] | select(type == "object" and .event == "labeled" and
+                   (.label | type == "object") and .label.name == "ai:workflow-heal") ] as $applied |
+                 ($applied | length) > 0 and
+                 all($applied[]; (.actor | type == "object") and .actor.login == $author) and
+                 ([ $applied[] | .created_at | fromdateiso8601 ] | min) as $first |
+                 ($first - $created) >= 0 and ($first - $created) <= 120)' \
+                <<< "${heal_events_json}" >/dev/null ||
                 { echo "::error::Explicit validation target is not authorized."; exit 1; }
               ;;
             *)
