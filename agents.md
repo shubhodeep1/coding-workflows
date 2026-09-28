@@ -85,6 +85,34 @@ Phases of the unattended pipeline (each is a separate workflow file under
    panel on the same head; only zero findings plus a fresh `ready`, same-head
    check-run snapshot can enable head-bound auto-merge. Remaining findings
    block the PR for intervention rather than another same-head verdict cycle.
+   The normal path when every finding is rejected is the **GPT judge**
+   (`CLAUDE_FIXER_JUDGE_ENABLED`, default on): the session posts one comment
+   ending `<!-- ai:claude-fixer-rejection:v1 head=<sha> round=<r> -->` and
+   dispatches `claude_fixer_judge_head=<sha>`. The gate accepts it only when
+   the head's newest workflow hand-off is `kind=findings` with a v2 ledger
+   digest, a run link, and no later `ai:claude-fixer-judge:v1` verdict
+   (outputs `claude_fixer_judge`, `_run`, `_round`, `_ledger`; log
+   `AUTOFIX_GATE_CLAUDE_FIXER_JUDGE`); the retrigger guard forces
+   `max_iterations_reached=true`, "Prepare Claude-fixer judge"
+   (`scripts/review_autofix_step_claude_fixer_judge.sh`) verifies the hand-off
+   run's evidence with the ledger digest and extracts the ledger, and
+   `scripts/review_rb_judge.sh` runs in its Claude mode: the model rules on
+   each finding, `scripts/review_claude_fixer_judge.py decide` maps the
+   rulings (nothing upheld → merge path: head-bound auto-merge on green
+   checks, the checks-pending comment while they run, a hand-off when they
+   fail; upheld below `CLAUDE_FIXER_JUDGE_FIX_CAP`, default 2, counted on
+   `merge-base..HEAD` → `[judge-fix] claude-fixer round <r>: …` commit; at the
+   cap → merge with a follow-up issue, or `ai:needs-human` for an upheld
+   security / data-loss finding; `close_and_reissue` → hold), and one verdict
+   comment ending `<!-- ai:claude-fixer-judge:v1 head=<sha> round=<r>
+   run=<id> decision=<d> -->` is posted. The rulings ride in that run's
+   evidence artifact (uploaded by "Upload Claude-fixer judge evidence"); the
+   hand-off step reads the newest 3 verified judge runs and moves findings
+   within 3 lines of an `invalid` ruling in the same file into a
+   `=== NON-BLOCKING FINDINGS ===` block (sticky rulings, log
+   `CLAUDE_FIXER_JUDGE … action=sticky_demoted`). A judge that decides
+   nothing leaves `judge_handled=false`, so the PR is labelled
+   `ai:review-blocked`.
    The bot's comment keeps `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`
    alongside the v2 digest marker; the session dispatches
    `claude_fixer_converged_head=<sha>` for verification. Zero ledger entries
@@ -1666,8 +1694,10 @@ and shipped:
 - `AUTOFIX_GATE_CLAUDE_FIXER`
 - `AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED`
 - `AUTOFIX_GATE_CLAUDE_FIXER_MERGE_CHECK`
+- `AUTOFIX_GATE_CLAUDE_FIXER_JUDGE`
 - `CLAUDE_FIXER_HANDOFF`
 - `CLAUDE_FIXER_CHECKS_PENDING`
+- `CLAUDE_FIXER_JUDGE`
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
@@ -1860,8 +1890,10 @@ LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_MERGE_CHECK
+LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_JUDGE
 LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
 LOG_PREFIX.name=CLAUDE_FIXER_CHECKS_PENDING
+LOG_PREFIX.name=CLAUDE_FIXER_JUDGE
 LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET

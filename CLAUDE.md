@@ -1989,7 +1989,13 @@ sweep runs in the sessions that create them, never in Actions:
   panel still reviews, but the GPT editor, conflict resolver, and
   review-blocked judge never run. The workflow posts a hand-off comment
   for findings, failing checks, or a pre-review conflict, and auto-merges
-  only after a clean review with fresh, ready checks. So a Claude session
+  only after a clean review with fresh, ready checks. When the fixing
+  session rejects every finding, it posts its reasons and dispatches the
+  workflow with `claude_fixer_judge_head`; the review-blocked judge then
+  runs in its Claude mode (`vars.CLAUDE_FIXER_JUDGE_ENABLED`, default on),
+  rules on each finding, and merges, fixes what it upholds in a
+  `[judge-fix]` commit (at most `CLAUDE_FIXER_JUDGE_FIX_CAP`, default 2 per
+  PR), or labels the PR `ai:needs-human`. So a Claude session
   must fix these PRs: the pushing session through its §26 hand-back, a
   fresh `/fix-claude-pr` session when that session is gone, the
   `/implement-plan-claude` chain for its own PRs, or the sweep below.
