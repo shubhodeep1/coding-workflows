@@ -92,10 +92,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
    raised by exactly one reviewer and rejected by a strict majority (at least
    two) of the other successful pass-2 reviewers into a visible
    `NON-BLOCKING FINDINGS` ledger block (issue #4586). Rejections are the
-   `REJECTED_FINDING: <file>:<line> | flagged_by: <slug> | reason: …` lines
-   the cross-pollination header asks for, read from the raw
-   `review_<slug>.txt` outputs of reviewers whose status is `success` and
-   matched by file, a 3-line window, and the flagger; task gaps and
+   `REJECTED_FINDING: <consensus_id> | <file>:<line> | flagged_by: <slug> |
+   reason: …` lines the cross-pollination header asks for, read from the raw
+   `review_<slug>.txt` outputs of reviewers whose status is `success`. Since
+   issue #4687 they are bound by the `consensus_id` (`p1-` + 12 hex digits of
+   the SHA-256 of the pass-1 entry, added to the summary by `--annotate` and
+   recomputed from the unchanged `consensus_pass1.txt`), never by proximity:
+   the pass-2 entry must carry the same id, cited by the flagger's own output,
+   at an overlapping range; id-less lines are ignored; and an entry stays
+   blocking when another consensus entry of either pass is within 3 lines or
+   the id is duplicated (`CLAUDE_FIXER_NONBLOCKING_KEPT … reason=…`); task gaps and
    multi-reviewer findings never move, and a missing or failing filter keeps
    the original ledger. The filtered copy is what the step counts, digests,
    and posts. Zero ledger entries
