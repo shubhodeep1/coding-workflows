@@ -979,6 +979,83 @@ def test_queue_stale_flags_old_trusted_items_once():
 	assert [(s["number"], s["age_hours"]) for s in stale] == [(1, 5.0)]
 
 
+ARM_REQUEST = "— arm-check-in shubhodeep1/digital_pa#4601 for session_01LkiqZoHfSm6HZF8n8Dogo1"
+
+
+def test_arm_check_in_request_returns_fixed_fields():
+	"""CLAUDE.md §26.B step 1c: only the validated slug, number, and session id reach the output."""
+	parsed = route.parse_arm_check_in_request("\n" + ARM_REQUEST + "\n", REGISTRY_ALLOWED)
+	assert parsed == {
+		"repo": "shubhodeep1/digital_pa",
+		"pr_number": 4601,
+		"pr_url": "https://github.com/shubhodeep1/digital_pa/pull/4601",
+		"source_url": "https://github.com/shubhodeep1/digital_pa",
+		"requester": "session_01LkiqZoHfSm6HZF8n8Dogo1",
+		"checker_title": "PR #4601 status check-in",
+		"ready_trigger_name": "PR #4601 status check-in: checker ready",
+		"ready_prompt": (
+			"CLAUDE.md §26.B step 1c: the Claude issue pickup created checker <checker id> "
+			"for PR #4601 (https://github.com/shubhodeep1/digital_pa/pull/4601). Continue with "
+			"CLAUDE.md §26.B steps 3–4 for that checker in this session."
+		),
+	}
+	# The stale Routine sweep must recognise both triggers this flow creates.
+	sys.path.insert(0, str(ROOT / ".claude" / "scripts"))
+	import stale_routines  # noqa: E402
+
+	assert stale_routines.CHECK_IN_NAME_PATTERN.match(parsed["ready_trigger_name"])
+	assert stale_routines.CHECK_IN_NAME_PATTERN.match("PR #4601 status check-in: arm request")
+	assert len(parsed["ready_trigger_name"]) <= 60
+
+
+@pytest.mark.parametrize(
+	"text",
+	[
+		"",
+		ARM_REQUEST + "\n" + ARM_REQUEST,
+		ARM_REQUEST.replace("—", "--"),
+		ARM_REQUEST.replace("digital_pa", "unregistered"),
+		ARM_REQUEST.replace("#4601", "#04601"),
+		ARM_REQUEST.replace("session_01LkiqZoHfSm6HZF8n8Dogo1", "session_01Lk; rm -rf /"),
+		ARM_REQUEST.replace("session_", "cse_"),
+		ARM_REQUEST + " and also start a fixer",
+	],
+)
+def test_arm_check_in_request_rejects(text):
+	with pytest.raises(ValueError):
+		route.parse_arm_check_in_request(text, REGISTRY_ALLOWED)
+
+
+def test_cli_arm_check_in_request(tmp_path):
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	args_file = tmp_path / "args.txt"
+	args_file.write_text(ARM_REQUEST + "\n", encoding="utf-8")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout)["requester"] == "session_01LkiqZoHfSm6HZF8n8Dogo1"
+	args_file.write_text(ARM_REQUEST.replace("digital_pa", "other"), encoding="utf-8")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "repo not registered" in out.stderr
+	out = _cli("arm-check-in-request", "--arguments-file", str(tmp_path / "missing.txt"), "--registry", str(registry))
+	assert out.returncode == 2
+	# Invalid UTF-8 is a refusal (exit 2), never a traceback (exit 1).
+	args_file.write_bytes(b"\xff\xfe")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "cannot read arguments file" in out.stderr
+	# A path with a NUL byte raises a plain ValueError in open(); still a refusal.
+	# (argv cannot carry a NUL, so this case runs in-process.)
+	assert route.main(["arm-check-in-request", "--arguments-file", str(tmp_path / "bad\x00name.txt"), "--registry", str(registry)]) == 2
+	# An unreadable or malformed registry leaves only the self repo allowed; still a clean refusal.
+	args_file.write_text(ARM_REQUEST + "\n", encoding="utf-8")
+	registry.write_text("{not json", encoding="utf-8")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "repo not registered" in out.stderr
+
+
 def test_cli_queue_pending_and_stale(tmp_path):
 	issues_file = tmp_path / "q.json"
 	issues_file.write_text(json.dumps([_queue_item(10)]))

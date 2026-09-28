@@ -1415,6 +1415,10 @@ Claude session fixes it instead (CLAUDE.md §26 and §26.H):
    subscribers.
 2. **A fresh fixer when the pushing session is gone.** The checker starts
    an Opus 5.5 session at high effort running `/fix-claude-pr <url>`.
+   A session too deep in the session lineage to create its own checker
+   (depth 6 or 7 of the 8-link limit) asks the Claude issue pickup to create
+   it instead (CLAUDE.md §26.B step 1c), so every checker can still start a
+   fixer.
 3. **The hourly catch-all.** The `claude-pr-catch-all` job of
    `review_autofix_sweep.yml` (cron `17 * * * *`) checks this repo and every
    repo in `.github/ai/consumer_repos.json`. A fix that has been due for
