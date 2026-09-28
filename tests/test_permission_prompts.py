@@ -345,6 +345,89 @@ def test_no_new_occurrences_means_no_api_calls(tmp_path, issues):
 	assert code == 0 and summary["total"] == 0 and fake.reads == 0
 
 
+OUTAGE_REASON = "Classifier unavailable"
+
+
+@pytest.mark.parametrize(
+	"reason",
+	[
+		"Classifier unavailable",
+		"classifier is unavailable, try again",
+		"Auto-mode classifier error",
+		"classifier timed out",
+		"The classifier returned no verdict",
+		"Classifier did not return a verdict",
+	],
+)
+def test_classifier_outage_reasons_are_recognised(reason):
+	assert pp.is_classifier_outage({"event": "PermissionDenied", "reason": reason})
+
+
+@pytest.mark.parametrize(
+	"record",
+	[
+		{"event": "PermissionDenied", "reason": "[Self-Modification] edits .claude/settings.json"},
+		{"event": "PermissionDenied", "reason": "The classifier blocked a force push to main"},
+		{"event": "PermissionDenied", "reason": ""},
+		{"event": "PermissionRequest", "reason": "Classifier unavailable"},
+	],
+)
+def test_real_denials_and_prompts_are_not_outages(record):
+	assert not pp.is_classifier_outage(record)
+
+
+def test_outage_only_log_files_nothing_and_calls_no_api(tmp_path, issues):
+	fake = issues()
+	payloads = [
+		_payload(event="PermissionDenied", tool="mcp__srv__get_session", tool_input={}, reason=OUTAGE_REASON),
+		_payload("git status", event="PermissionDenied", reason=OUTAGE_REASON),
+	]
+	directory = _log(tmp_path, payloads)
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and summary["total"] == 0 and summary["patterns"] == []
+	assert summary["filed"] == [] and summary["commented"] == []
+	assert summary["outage_denials"] == {
+		"label": "classifier outage",
+		"count": 2,
+		"tools": ["mcp__srv__get_session", "Bash"],
+		"first_ts": "2026-09-27T03:00:00Z",
+		"last_ts": "2026-09-27T03:00:00Z",
+	}
+	assert fake.reads == 0 and fake.posts == []
+	assert not (directory / pp.STATE_FILE).exists()
+
+
+def test_mixed_log_files_only_the_real_pattern(tmp_path, issues):
+	fake = issues()
+	payloads = [
+		_payload("git fetch origin main", event="PermissionDenied", reason=OUTAGE_REASON),
+		_payload("rm -rf build", event="PermissionDenied", reason="destructive command"),
+	]
+	directory = _log(tmp_path, payloads)
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and summary["total"] == 1 and len(summary["filed"]) == 1
+	assert len(fake.posts) == 1 and "rm" in fake.posts[0][1]["title"]
+	assert summary["outage_denials"]["count"] == 1
+	state = json.loads((directory / pp.STATE_FILE).read_text())
+	assert list(state) == [summary["filed"][0]["signature"]]
+
+
+def test_report_shows_outage_denials(tmp_path):
+	directory = _log(tmp_path, [_payload("ls"), _payload("ls", event="PermissionDenied", reason=OUTAGE_REASON)])
+	result = pp.report(directory)
+	assert result["total"] == 1 and len(result["patterns"]) == 1
+	assert result["outage_denials"]["count"] == 1 and result["outage_denials"]["label"] == "classifier outage"
+	empty = pp.report(tmp_path / "none")
+	assert empty["outage_denials"] == {"label": "classifier outage", "count": 0, "tools": [], "first_ts": None, "last_ts": None}
+
+
+def test_outage_outside_coding_workflows_is_reported(tmp_path, issues):
+	issues()
+	directory = _log(tmp_path, [_payload("ls", event="PermissionDenied", reason=OUTAGE_REASON)])
+	code, summary = pp.file_patterns(directory, "s1", False, slug="someone/consumer")
+	assert code == 0 and summary["total"] == 0 and summary["outage_denials"]["count"] == 1
+
+
 def test_main_rejects_bad_session_label(capsys):
 	assert pp.main(["file", "--session-label", "bad label"]) == 1
 
@@ -384,6 +467,22 @@ def test_claude_md_documents_the_reports():
 	assert "### I) Permission Prompt Reports" in text
 	assert ".claude/hooks/permission_prompt_logger.py" in text
 	assert "tests/test_permission_prompts.py" in text
+
+
+def test_claude_md_documents_classifier_outages():
+	text = " ".join(CLAUDE_MD.read_text(encoding="utf-8").split())
+	assert "### J) Auto-mode Classifier Outages" in text
+	assert "**Retry once.** Repeat the refused call once, unchanged." in text
+	assert "Do not ask, do not file an issue, do not stop at `Status: BLOCKED`" in text
+	assert "(`delay_minutes: 30`, `initiation: own_followup`)" in text
+	assert "**No allow rules for it.**" in text
+	assert "reports them once as `classifier outage`" in text
+
+
+def test_plan_command_reports_classifier_outages():
+	text = " ".join(PLAN_COMMAND.read_text(encoding="utf-8").split())
+	assert "classifier outage: <n> (not filed)" in text
+	assert "never files them" in text
 
 
 def test_plan_command_runs_the_report_every_stage():
