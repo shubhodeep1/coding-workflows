@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T03:23:13Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a test relies on an env var its shared fixture sets, also set it in the test itself if the assertion depends on it; the reviewer panel reads tests in isolation and flags the fixture-set value as missing.",
+  "phase": "implement_plan",
+  "pr_number": 4632,
+  "record_id": "lesson-implement-plan-a5f67b8fc2ba75a8217e9113",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4622-trusted-fix-claim-authors",
+    "file:tests/test_check_in_status_hand_back.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T03:23:13Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In Claude-fixer mode a clean review auto-merges only when every check on the head is already complete; a CI run longer than `CHECK_RUNS_WAIT_TIMEOUT_SECS` (300 s) turns a zero-finding review into a findings hand-off that only the dedicated verdict bot or a new head can close.",
+  "phase": "implement_plan",
+  "pr_number": 4632,
+  "record_id": "lesson-implement-plan-604843b548e75c43cf4ae22b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4622-trusted-fix-claim-authors",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}
