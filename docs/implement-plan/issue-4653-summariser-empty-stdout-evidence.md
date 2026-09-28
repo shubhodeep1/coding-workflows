@@ -1,17 +1,17 @@
 # Implement-Plan Log — Name the summariser's empty-stdout failure in reviewer heal evidence
 
-- Plan: docs/plans/issue-4653-summariser-empty-stdout-evidence-plan.md
+- Plan: docs/completed/issue-4653-summariser-empty-stdout-evidence-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4653
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main (was ai/issue-4605, whose PR #4607 closed unmerged; rebuilt on main 2026-09-28, operator answer Q1: D)
 - Project branch: claude/implement-plan-issue-4653-summariser-empty-stdout-evidence-main   Final PR: #4685 draft (supersedes #4657, closed unmerged 2026-09-28)
-- Status: IN_PROGRESS
-- Stage: validation 1/3
-- Activation: not started
-- Waiting on: none (validation is dispatched once the final PR into main is open)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (the number is in the completion 1/1 stage report)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_011RQxHtFb2paXDZ6p1MrPYf (reused)   safety net and hand-back in the validation 1/3 stage report
+- Check-in: checker session_011RQxHtFb2paXDZ6p1MrPYf (reused)   safety net and hand-back in the validation 1/3 read-result stage report
 - Last updated: 2026-09-28
-- Last note: rebuilt the project on main per the operator's Q1: D answer on #4653: the project diff applied cleanly, the conformance checks pass on main, AD-1 changed to B.
+- Last note: validation 1/3 passed (run 36367059872, 10/10 tests, project branch head f10bc78); plan moved to docs/completed/ in the completion PR; next: final-merge 1/1.
 
 ## Phases
 1. [x] Phase 1 — summariser empty-stdout evidence and log upload   — PR #4658 merged 2026-09-27 (into the superseded branch claude/implement-plan-issue-4653-summariser-empty-stdout-evidence; its diff re-applied on main 2026-09-28); review rounds: 1; interventions: 0
@@ -24,8 +24,10 @@
 - Skipped (ai:workflow-heal: automation-produced issue; re-verified with .claude/scripts/security_pass_skip.py on 2026-09-28: skip true)
 
 ## Validation
+- Cycle 1 — run 36367059872 2026-09-28 (target_ref: claude/implement-plan-issue-4653-summariser-empty-stdout-evidence-main, authorized SHA f10bc78): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 297s). No fix PR.
 
 ## Completion
+- Completion PR (claude/implement-plan-issue-4653-summariser-empty-stdout-evidence-complete) open 2026-09-28 — doc moved to docs/completed/issue-4653-summariser-empty-stdout-evidence-plan.md
 - Final PR #4685 draft (into main; #4657 into ai/issue-4605 closed as superseded 2026-09-28)
 
 ## Activation
@@ -49,3 +51,4 @@
 - 2026-09-27 (validation 1/3): blocked. Validation could not authorize a final PR into ai/issue-4605 (`validate.yml@main` accepts only an open PR into main; the `source_issue` input of PR #4600 is not on main). Asked Q1 on #4653.
 - 2026-09-28: operator answer Q1: D (not a listed option): PR #4607 (head ai/issue-4605) closed unmerged on 2026-09-27, so the base will never merge. Rebuild on main: new project branch claude/implement-plan-issue-4653-summariser-empty-stdout-evidence-main from origin/main, the project diff (`git diff origin/ai/issue-4605 origin/claude/implement-plan-issue-4653-summariser-empty-stdout-evidence`, 8 files, +263/−9) applied cleanly with `git apply --3way`; final PR #4657 (into ai/issue-4605) closed as superseded and a new draft final PR opened into main, carrying `Fixes #4653`; continue at validation 1/3 with the new branch as `target_ref`. The superseded branch claude/implement-plan-issue-4653-summariser-empty-stdout-evidence is left as it is (not deleted, not force-pushed); its copy of this log stops at phase 1 and is stale.
 - 2026-09-28: the project branch name no longer equals `claude/implement-plan-<slug>`: every later stage reads the `Project branch:` line of this log and of its `— resume.` block, never the derived name.
+- 2026-09-28 (validation 1/3 — read result): synced the project branch with main (clean merge of docs/analysis-only commits, ee078d3, after the validated head f10bc78); validation_status.json from artifact ai-validation-36367059872-1: status=pass. No validation-fix PR, so no conformance re-run (cap count stays at 1).
