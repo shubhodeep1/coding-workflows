@@ -24,11 +24,14 @@ Exit status: 0 when a verdict was reached (done or not), 2 when a read
 failed (the JSON then carries `error`, `done` is false and `action` is
 `retry`).
 
-Every verdict also carries `action` (and, for `next_stage`, `next_stage`):
-the routing decision the checker follows, so no checker model interprets
-`state` itself. `route_verdict` holds the full state → action table. In
-short: plain PR mode → `wait` / `hand_back` / `next_stage` (`success`,
-`review`, `block`), and a review round or conflict is never `hand_back`;
+Every JSON line `main` prints also carries `action` (and, for
+`next_stage`, `next_stage`): the routing decision the checker follows, so no
+checker model interprets `state` itself. `main` adds it with `route_verdict`;
+the `check_*` functions return the verdict without it, so a direct caller
+(`scripts/claude_pr_sweep.py`) that needs it calls `route_verdict` itself.
+`route_verdict` holds the full state → action table. In short: plain PR
+mode → `wait` / `hand_back` / `next_stage` (`success`, `review`, `block`),
+and a review round or conflict is never `hand_back`;
 run and issue-list modes → `wait` / `next_stage`; --hand-back mode →
 `wait` / `hand_back_fixer` / `hand_back_all`.
 
