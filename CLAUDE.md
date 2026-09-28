@@ -1379,9 +1379,15 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   operation. There is no limit on open `ai:permission-prompt` issues. A fix
   never widens a permission for a destructive or administrative action; an
   `ai:permission-prompt` issue for a protected-path edit (the repository
-  root's `.claude/**`; `workflow-templates/.claude/**` is not protected) or
-  an ask-first operation is closed as not planned, because that prompt is by
-  design.
+  root's `.claude/**`, which Claude Code itself protects) or an ask-first
+  operation is closed as not planned, because that prompt is by design.
+  `workflow-templates/.claude/**` is not a Claude Code protected path, so an
+  Edit or Write there does not prompt and a prompt issue about it is fixed.
+  It is still **protected-equivalent** for authorization: the `@stable` sync
+  copies it into every consumer's `.claude/`, so the §28.C protected-path
+  stop covers it exactly as it covers the root `.claude/**`, and
+  `tests/test_claude_template_parity.py` fails CI on a template-only change
+  (issue #4775).
 
 **File edits use the Edit and Write tools.** Edit repository files with the
 Edit and Write tools, including the byte-identical `workflow-templates/`
@@ -2230,14 +2236,19 @@ This is an explicit carve-out from §0 and §2 (including §2's
   performs them; a project that needs one lists it as an operator step,
   and `/deploy-activate` walks the human through it.
 - A question with no option that satisfies §28.B's hard rules.
-- **Protected-path edits.** A phase that must edit `.claude/**` (hooks,
-  `settings.json`, commands, scripts) is never started unattended: Claude
-  Code never auto-approves those edits, and in a session nobody watches a
-  classifier block silently drops them. `/implement-plan-claude` marks such
-  phases when it builds the checklist and stops at `Status: BLOCKED` before
-  the phase starts, asking whether to run it in a watched session, drop the
-  `.claude/` part, or try unattended anyway; the answer is recorded as a
-  `Protected-path approval:` line in the progress log.
+- **Protected-path edits.** A phase that must edit `.claude/**` or its
+  `workflow-templates/.claude/**` twins (hooks, `settings.json`, commands,
+  scripts) is never started unattended: Claude Code never auto-approves the
+  root `.claude/**` edits, and in a session nobody watches a classifier
+  block silently drops them. The template twins are protected-equivalent
+  (§23.I, issue #4775): Claude Code does not block them, but the `@stable`
+  sync copies them into every consumer's `.claude/`, so an unattended edit
+  there would reach consumer sessions with no approval at all.
+  `/implement-plan-claude` marks such phases when it builds the checklist
+  and stops at `Status: BLOCKED` before the phase starts, asking whether
+  to run it in a watched session, drop the `.claude/` part, or try
+  unattended anyway; the answer is recorded as a `Protected-path approval:`
+  line in the progress log.
 - **Whether to run the chain at all.** The stages, the conformance audit, the
   security pass, and validation are the project, not options. A session that
   cannot run them (no claude-code-remote tools to start stage sessions and

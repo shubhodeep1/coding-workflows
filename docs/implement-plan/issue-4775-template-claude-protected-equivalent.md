@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4775-template-claude-protected-equivalent-plan.md
 - Source issue: shubhodeep1/coding-workflows#4775
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4678-edit-files-without-python-heredocs
-- Project branch: claude/implement-plan-issue-4775-template-claude-protected-equivalent   Final PR: (opened after this commit) draft
+- Project branch: claude/implement-plan-issue-4775-template-claude-protected-equivalent   Final PR: #4783 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #4819
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker, safety net, and hand-back ids are in the stage report and the next `— resume.` block
 - Last updated: 2026-09-28
-- Last note: project branch opened from the #4678 project branch; phase 1 starting.
+- Last note: review round 1 on PR #4819: fixed the `.pyc`-named symlink bypass (and committed bytecode, which the sync copies) in tests/test_claude_template_parity.py; rejected the pinned-digest finding (intended design).
 
 ## Phases
-1. [ ] Phase 1 — protected-equivalent template tree: CLAUDE.md §23.I/§28.C and the template parity contract test (CLAUDE.md, tests/test_claude_template_parity.py [new], tests/test_permission_prompts.py, .github/workflows/ci.yml, agents.md, changelog.d/4775-template-claude-protected-equivalent.md [new]); protected paths: none
+1. [ ] Phase 1 — protected-equivalent template tree: CLAUDE.md §23.I/§28.C and the template parity contract test (CLAUDE.md, tests/test_claude_template_parity.py [new], tests/test_permission_prompts.py, .github/workflows/ci.yml, agents.md, changelog.d/4775-template-claude-protected-equivalent.md [new]); protected paths: none   — PR #4819 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -34,6 +34,7 @@
 - AD-4 [plan, 2026-09-28] How is the change recorded in the changelog? — Picked: A — a new `security` fragment `changelog.d/4775-template-claude-protected-equivalent.md` that qualifies the #4678 entry; the #4678 fragment stays as is. Alternatives: B — also rewrite the #4678 fragment. Why: the #4678 statement stays true for Claude Code's own protection, one fragment per PR (§20.B), and B edits another project's entry. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] A tree-parity or allow-list walker must check symlinks before any name-based skip, and may skip `.gitignore`d runtime output (`__pycache__/`, `*.pyc`) only while git does not track it, because the `.claude/` sync copies every regular file (`find -type f`). (files: tests/test_claude_template_parity.py, .github/workflows/update_workflows.yml)
 
 ## Notes
 - Invoking session: session_013fp3SZXJQE3XBJt3SiWYkw (started by the Claude issue dispatcher routine trig_018FzWWEXvLsvqk8uNUGDReS, permission mode auto).
