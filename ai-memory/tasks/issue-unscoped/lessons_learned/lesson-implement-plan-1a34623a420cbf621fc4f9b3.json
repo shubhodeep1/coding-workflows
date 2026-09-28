@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T10:06:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A retry loop around a paginated lookup must not retry a walk that already read every page up to the cap: the result cannot change and each retry repeats the full page cost",
+  "phase": "implement_plan",
+  "pr_number": 4730,
+  "record_id": "lesson-implement-plan-1a34623a420cbf621fc4f9b3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4723-require-plan-run-id",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

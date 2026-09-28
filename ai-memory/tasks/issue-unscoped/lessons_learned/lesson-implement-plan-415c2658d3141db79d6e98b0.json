@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T10:06:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A retry branch that `continue`s a poll loop before the loop's inactivity-timeout check must apply that timeout itself, or a persistent read failure polls until the job's timeout-minutes",
+  "phase": "implement_plan",
+  "pr_number": 4730,
+  "record_id": "lesson-implement-plan-415c2658d3141db79d6e98b0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4723-require-plan-run-id",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

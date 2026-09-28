@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T10:06:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a lookup is fixed to page past the first 100 runs, every other check in the same step that reads the same run window needs the same paging, or the fix leaves the same false failure one branch away",
+  "phase": "implement_plan",
+  "pr_number": 4730,
+  "record_id": "lesson-implement-plan-fe790e8724caadba282681fa",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4723-require-plan-run-id",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

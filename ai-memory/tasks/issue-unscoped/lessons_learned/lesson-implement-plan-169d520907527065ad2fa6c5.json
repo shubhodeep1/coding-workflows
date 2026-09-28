@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T10:06:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A poll loop that shares a lookup helper with a one-shot capture must not inherit the capture's pagination: pass a page cap so the per-poll API cost stays one call",
+  "phase": "implement_plan",
+  "pr_number": 4730,
+  "record_id": "lesson-implement-plan-169d520907527065ad2fa6c5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4723-require-plan-run-id",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}
