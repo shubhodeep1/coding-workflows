@@ -357,6 +357,7 @@ OUTAGE_REASON = "Classifier unavailable"
 		"classifier timed out",
 		"The classifier returned no verdict",
 		"Classifier did not return a verdict",
+		"No verdict from the Auto-mode classifier",
 	],
 )
 def test_classifier_outage_reasons_are_recognised(reason):
@@ -370,6 +371,10 @@ def test_classifier_outage_reasons_are_recognised(reason):
 		{"event": "PermissionDenied", "reason": "The classifier blocked a force push to main"},
 		{"event": "PermissionDenied", "reason": ""},
 		{"event": "PermissionRequest", "reason": "Classifier unavailable"},
+		# A no-verdict phrase without the word "classifier" is a real denial (PR #4821 review round 1).
+		{"event": "PermissionDenied", "reason": "The policy did not return a verdict"},
+		{"event": "PermissionDenied", "reason": "The reviewer could not reach a verdict due to policy restrictions"},
+		{"event": "PermissionDenied", "reason": "no verdict"},
 	],
 )
 def test_real_denials_and_prompts_are_not_outages(record):
@@ -410,6 +415,23 @@ def test_mixed_log_files_only_the_real_pattern(tmp_path, issues):
 	assert summary["outage_denials"]["count"] == 1
 	state = json.loads((directory / pp.STATE_FILE).read_text())
 	assert list(state) == [summary["filed"][0]["signature"]]
+
+
+def test_file_patterns_loads_the_log_once(tmp_path, issues, monkeypatch):
+	issues()
+	directory = _log(tmp_path, [_payload("ls"), _payload("ls", event="PermissionDenied", reason=OUTAGE_REASON)])
+	calls = []
+	real = pp.load_records
+
+	def counting(log_dir):
+		calls.append(log_dir)
+		return real(log_dir)
+
+	monkeypatch.setattr(pp, "load_records", counting)
+	code, summary = pp.file_patterns(directory, "s1", True, slug="someone/consumer")
+	assert code == 0 and len(calls) == 1
+	assert summary["total"] == 1 and summary["outage_denials"]["count"] == 1
+	assert {key: summary[key] for key in ("total", "patterns", "outage_denials")} == pp.report(directory)
 
 
 def test_report_shows_outage_denials(tmp_path):
@@ -483,6 +505,12 @@ def test_plan_command_reports_classifier_outages():
 	text = " ".join(PLAN_COMMAND.read_text(encoding="utf-8").split())
 	assert "classifier outage: <n> (not filed)" in text
 	assert "never files them" in text
+	assert (
+		"Permission prompts: <none | <n> in <p> patterns — filed #a, commented #b | reported only (not coding-workflows)"
+		" | report failed: <error>>[; classifier outage: <n> (not filed)]"
+	) in text
+	assert "append them to that line as `; classifier outage: <n> (not filed)`, with `<n>` = `outage_denials.count`" in text
+	assert "<error>><" not in text
 
 
 def test_plan_command_runs_the_report_every_stage():
