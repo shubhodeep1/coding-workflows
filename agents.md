@@ -279,7 +279,20 @@ Phases of the unattended pipeline (each is a separate workflow file under
     A Claude route skips Codex clarify, claims the issue with `ai:claude`, and
     sends a `claude-issue` `repository_dispatch` (`claude_issue.v1`, ≤ 10
     top-level keys) to coding-workflows. The intake validates the repo against
-    `.github/ai/consumer_repos.json` plus coding-workflows and queues it as one
+    `.github/ai/consumer_repos.json` plus coding-workflows, then authorizes
+    it (#4620, `claude_issue_route.py authorize-target`): every dispatcher
+    login of the run (env `CLAUDE_ISSUE_DISPATCHER` = `github.actor`,
+    `CLAUDE_ISSUE_TRIGGERING_ACTOR` = `github.triggering_actor`, default empty
+    = refused) must have `admin`/`write` on the target repo (one
+    `collaborators/<login>/permission` read each), the target must be an open
+    issue in that repo (one issue read; PRs and transferred issues refused),
+    and its author must pass clarify's gate or a trusted `User` must have
+    commented `/reclarify` (comments read only for an untrusted author). A
+    refusal (`CLAUDE_ISSUE_INTAKE rejected reason=<dispatcher_unknown |
+    dispatcher_not_authorized | target_not_issue | target_repo_mismatch |
+    issue_closed | untrusted_issue_author | authorization_read_failed>`)
+    queues nothing, writes nothing to the target issue, sends a Telegram
+    ERROR, and exits 1. Otherwise it queues it as one
     `ai:claude-issue-queue` issue in coding-workflows (title
     `[claude-issue-queue] <repo>#<N>`, body = marker + fixed-key payload, no
     issue prose), opened with the job's `GITHUB_TOKEN` so no workflow reacts;
@@ -297,7 +310,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     rendering of that payload and run, so an edited queue issue is refused (#4621;
     fails closed: `unbound`, `binding_mismatch`, `binding_untrusted`,
     `binding_pending`, `binding_unavailable` under `ignored`). The **Claude issue pickup**
-    (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 3,
+    (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 1,
     woken hourly by the cron trigger `Claude issue pickup: hourly` bound to
     itself (no new session per wake, so no lineage-depth growth), reads the
     queue with
@@ -316,7 +329,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `/implement-issue-claude`: a single-phase plan
     `docs/plans/issue-<N>-<topic>-plan.md` (header `Source issue:`,
     `Base branch:` from the issue's `Integration branch:` / `Target branch:`
-    line else the default branch, `Security pass: run|skip`), then continues
+    line else the default branch, `Security pass: run|skip`; `skip` only when
+    `.claude/scripts/security_pass_skip.py` verifies the issue was created and
+    labelled at creation by the issue automation — `github-actions[bot]` or
+    the `OWNER` account — and carries its marker/tracker link; a label alone
+    or any read failure keeps `run`; see #4623), then continues
     as `/implement-plan-claude` issue mode: project branch
     `claude/implement-plan-<slug>` forked from the base branch, final PR into
     it with `Fixes #N` (default base) or an explicit close + `ai:merged` after
@@ -961,14 +978,36 @@ by that command's own checker. Without `create_session` the session falls
 back to a `send_later` self check-in with a Sonnet subagent doing the read.
 The checker itself never fixes anything; outside `claude/*` PRs, CI,
 reviews, comments, and conflicts stay a direct §12 request.
+- Session depth (CLAUDE.md §26.B step 1c): the claude-code-remote tools
+  refuse `create_session`, `create_trigger`, `update_trigger`, and
+  `send_later` from a session 8 parent links below its root (`caller
+  session is at lineage depth 8 (limit 8)`), so a checker must sit at depth
+  6 or less for its fresh fixer to still work. Before creating a checker the
+  session counts its depth *d* with `get_session` along `parent_session_id`
+  (at most 8 calls; a walk that cannot finish counts as depth 6). At *d* ≤ 5 it creates the checker itself. At *d* 6 or 7
+  it sends the Claude issue pickup a one-shot `PR #<n> status check-in: arm
+  request` trigger with arguments `— arm-check-in <owner>/<repo>#<n> for
+  <session id>`. The pickup parses them offline with `claude_issue_route.py
+  arm-check-in-request` (registered repos only), creates the checker one
+  link below itself, and wakes the requester with `PR #<n> status check-in:
+  checker ready`, which names the checker; the requester then sends the
+  instructions itself. At *d* ≥ 8, with no pickup, or on any `lineage
+  depth` refusal, no checker is armed: the session keeps its hand-back
+  Routine (the 7-day dead-man's switch), relies on the §26.H sweep, and
+  sends one `PushNotification`. A checker whose fresh fixer is refused for
+  depth notifies and leaves the fix to the sweep. Incident: the PR #4601
+  checker was created at depth 8 on 2026-09-27 and could not re-arm.
 - Claude-fixer claims and the catch-all (CLAUDE.md §26.H): a fixer claims
   the PR's current head with one comment ending in
   `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`
   (`.claude/scripts/claude_fix_claim.py post`: one PR read to refuse a moved
   head, one comment POST). `check_in_status.py --hand-back`
-  (`read_fix_claims`) counts only owner / member / collaborator claims,
-  times them by the comment's `created_at`, treats a claim on the current
-  head as live for `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3) and a `hold`
+  (`read_fix_claims`) counts only owner / member / collaborator claims
+  posted as the PR's author or as `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`
+  (`_fix_claim_trusted_logins`, case-insensitive; neither known → no claim
+  counts; issue #4622), times them by the comment's `created_at`, treats
+  a claim on the current head as live for `CLAUDE_FIX_CLAIM_LEASE_HOURS`
+  (default 3) and a `hold`
   as live until the head moves, and reports `hand_backs` (distinct
   head/kind pairs of conflict, ci, and blocked claims) against
   `CLAUDE_FIX_HAND_BACK_CAP` (default 3). The `claude-pr-catch-all` job of

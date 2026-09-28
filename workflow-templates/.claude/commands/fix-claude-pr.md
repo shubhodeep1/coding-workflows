@@ -39,7 +39,7 @@ $ARGUMENTS
    ```
    PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/claude_fix_claim.py post --repo <owner>/<repo> --pr <N> --head <head_sha> --kind <kind> --by <session id>
    ```
-   Exit 1 with "head moved" → go back to step 1. Exit 2 → retry once, then report the error and end the turn. The claim is live for `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3); your push moves the head and ends it.
+   Exit 1 with "head moved" → go back to step 1. Exit 2 → retry once, then report the error and end the turn. The claim is live for `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3); your push moves the head and ends it. A claim or hold counts only when it is posted as the PR's author or as `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` (CLAUDE.md §26.H); posted under any other account it is ignored, and the checker or the sweep may start a second fixer on the same head.
 
 5. **Fix it.** `git fetch origin <head ref> <base ref>` and `git checkout -B <head ref> origin/<head ref>`; confirm `HEAD` is `<head_sha>` (otherwise step 1 again). Work under CLAUDE.md §12 (PR Review Mode), with §5, §6, §9, §10, §19, §20, §21 and §27 still binding. Never force-push, rebase, merge the PR, close it, or disable, skip or weaken a test or a check.
    - **`claude/implement-plan-*` head** → this PR belongs to an `/implement-plan-claude` project: follow that command's **step 7a** for `review` and `conflict`, and its step 7 **Blocked** rule for `blocked` and `ci`, on this PR only (commit subjects, the finding-by-finding judgement, the verdict-bot rule, removing `ai:review-blocked`). Record the fix in the project log only if you are one of the project's stage sessions. Never start a stage session or arm the project's checker: the project's own checker sees the pushed head.
