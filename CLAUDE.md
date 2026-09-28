@@ -1391,6 +1391,13 @@ heredoc fed to a shell). Claude Code cannot parse the script, so no allow
 rule approves it, and an unattended session stops at a permission prompt
 (issue #4678).
 
+**A blocked `.claude/**` edit is never retried another way.** Once an Edit
+or Write to the repository root's `.claude/**` is blocked or denied, a
+session never retries that write through Bash, `python3`, `sed`, `tee`,
+`cp`, a heredoc, or any other tool. It stops at `Status: BLOCKED`, naming
+each file and its exact edit, and the operator's watched session applies it
+(the §28.C protected-path stop).
+
 `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`, and
 `tests/test_permission_prompts.py` cover the helpers, the hook, the filing
 rules, and the wiring, and run in their own `ci.yml` step.
