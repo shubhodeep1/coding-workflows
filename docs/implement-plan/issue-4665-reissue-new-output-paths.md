@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: stable
 - Project branch: claude/implement-plan-issue-4665-reissue-new-output-paths   Final PR: #4667 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 1/3 — review round
 - Activation: not started
-- Waiting on: the conformance-1 fix PR from `claude/implement-plan-issue-4665-reissue-new-output-paths-conformance-fix-1`
+- Waiting on: PR #4686 (review round 2 after the round-1 fix)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01TM4SVVtTqLwEfcyXidUoE9 (hand-back and safety net re-armed after each push; ids in the stage report)
 - Last updated: 2026-09-28
-- Last note: conformance run 1: INCOMPLETE (Correctness FAIL). A padded or U+2028 `new_output_paths` entry passed validation and the scope guard then read it as an existing path or an extra entry. The conformance-fix PR keeps only printable ASCII with no leading or trailing space (AD-7).
+- Last note: review round 1 on PR #4686: one finding ("`assert "\n" not in stdout` will fail"). The assertion checks U+2028, and the test passes; the reviewer read a raw U+2028 in the source as a line break. The raw U+2028 / U+00A0 literals in the test are now `\u` escapes (AST-identical), so the source reads as intended.
 
 ## Phases
 1. [x] Phase 1 — declare and union new output paths (`new_output_paths` in the judge contract, validated union into the spot-fix `files_touched` allowlist, tests, docs, changelog fragment)   — PR #4668 merged 2026-09-28 (merged by the owner after the Q1: A answer on #4665); review rounds: 2; interventions: 0
@@ -22,7 +22,7 @@
    - Done: new tests pass, existing reissue / scope-guard / prompt / contract suites pass, and a reissue without the field is byte-identical.
 
 ## Conformance
-- Run 1 — 2026-09-28: INCOMPLETE (Correctness FAIL: one EVIDENCE-BASED BLOCKER, `new_output_paths` entries the scope guard rewrites) — fix PR from `claude/implement-plan-issue-4665-reissue-new-output-paths-conformance-fix-1` (pre-security)
+- Run 1 — 2026-09-28: INCOMPLETE (Correctness FAIL: one EVIDENCE-BASED BLOCKER, `new_output_paths` entries the scope guard rewrites) — fix PR #4686 (pre-security); review rounds: 1
 
 ## Security pass
 - Skipped (ai:workflow-heal: automation-produced issue)
@@ -45,6 +45,7 @@
 ## Lessons
 - [source:intervention] An existence check that gates an allowlist must tell "absent" from "lookup failed": `git cat-file -e <sha>:<path>` exits non-zero for both, so use `git --literal-pathspecs ls-tree --full-tree --name-only <sha> -- <path>` (exit 0 with empty output is the only proof of absence) and skip the entry on any other result. (files: scripts/review_rb_judge.sh)
 - [source:conformance] Validate an allowlist entry as the consumer will read it, not as written: `files_touched_scope_guard.py` trims each entry and splits the issue body with `str.splitlines()`, so a padded or Unicode-separator path can turn into an existing directory or an extra entry. Restrict generated entries to printable ASCII with no edge spaces. (files: scripts/review_rb_judge.sh, scripts/files_touched_scope_guard.py)
+- [source:intervention] Write invisible or line-breaking characters in test source as `\u` escapes, never raw: a raw U+2028 renders as a line break for any tool that splits with `str.splitlines()`, so reviewers read the wrong code and cite shifted line numbers. (files: tests/test_review_rb_judge_label_propagation.py)
 
 ## Notes
 - Issue mode: base `stable` from the issue's `Target branch:` line; no merged PR has `stable` as its head, so the base did not move. Security pass skipped per the plan header. Activation n/a for a non-default base: the project ends after the final merge, which closes #4665 explicitly with `ai:merged`.

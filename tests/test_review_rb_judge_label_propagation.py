@@ -1097,8 +1097,8 @@ def test_close_and_reissue_spot_fix_new_output_paths_reject_what_the_scope_guard
 		[
 			" src",
 			"README.md ",
-			"x     - src/app.py",
-			"tests/fixtures/new case.json",
+			"x\u2028    - src/app.py",
+			"tests/fixtures/new\u00a0case.json",
 			"tests/fixtures/café.json",
 			"tests/fixtures/new case.json",
 		]
@@ -1116,7 +1116,7 @@ def test_close_and_reissue_spot_fix_new_output_paths_reject_what_the_scope_guard
 	)
 	stdout = state["_stdout"]
 	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=6 added=1 skipped=5 total=2" in stdout
-	assert " " not in stdout, "a rejected path must never be echoed"
+	assert "\u2028" not in stdout, "a rejected path must never be echoed"
 	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
 	guard_spec = importlib.util.spec_from_file_location(
 		"files_touched_scope_guard_for_new_outputs",
