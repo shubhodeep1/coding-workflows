@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:8-12 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The \"Last note\" does not reflect that steps 1 and 2 are marked complete, understating the runbook's progress.\n  WHY: Because the log is intended to support resumability, a stale progress note could mislead the next session into re-verifying completed work.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:11-12 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Step 1 records main SHA `677e8f6` while step 2 records `5206437`, without reconciling the sequence.\n  WHY: The evidence leaves unclear which main SHA is authoritative for reproducing the verification; the two SHAs could reflect different checkout times, but the log does not explain that.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The runbook states there are 13 consumers in `.github/ai/consumer_repos.json`.\n  expected_change_site: docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md line 4\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: `.github/ai/consumer_repos.json` is reported to contain 14 entries, rendering the documentation inaccurate.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:10 vs 12 | severity=low | confidence=[4]\n  PROBLEM: The \"Last note\" understates the runbook progress as it lists steps as \"waiting\" while steps 1 and 2 are marked as completed `[x]`.\n  WHY: The deploy-activation log is intended to be resumable; this stale note misleads operators about which steps remain, risking redundant verification or skipped steps.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:12 vs 13 | severity=low | confidence=[3]\n  PROBLEM: Step 1 records main SHA `677e8f6`, while step 2 records main SHA `5206437`.\n  WHY: This inconsistent SHA sequence for the same `main` branch complicates operator verification and reconciliation if re-running steps is necessary.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:line 8 (\"Last note\") vs lines 11-12 (steps 1 and 2) | severity=low | confidence=[4]\n  PROBLEM: The \"Last note\" line states \"step 1 done. Step 3 waits for docs/deploy-activation/pr-4443.md steps 9a/9\" but omits step 2's completion.\n  WHY: The deploy-activation log is the resume contract for the runbook; a stale \"Last note\" that ignores a completed step can mislead the next session into believing step 2 still needs to be re-verified, wasting an operator cycle.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:line 11 (step 1) vs line 12 (step 2) | severity=low | confidence=[3]\n  PROBLEM: Step 1 records \"fast-forwarded to main `677e8f6`\" and step 2 records \"on `main` 5206437\"; the two SHA prefixes differ, and step 2's prefix `5206437` is numerically smaller than step 1's `677e8f6`.\n  WHY: An operator cross-checking the evidence to reproduce step 2 would find the SHAs irreconcilable against the runbook's step order and have to re-derive which SHA was authoritative, or re-run the verification against the current main.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:line 8 | severity=low | confidence=[4]\n  PROBLEM: The \"Last note\" field says \"step 3 checked on the operator Mac\" while step 3 is marked incomplete (`[ ]`) and steps 1 and 2 are both marked complete (`[x]`).\n  WHY: The deploy-activation log's resumability contract depends on the \"Last note\" reflecting the most recent completed work; a stale note misleads the next session about which steps remain.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:line 11 (\"fast-forwarded to main `677e8f6`\") vs line 12 (\"on `main` 5206437\") | severity=low | confidence=[3]\n  PROBLEM: Step 1 records main SHA `677e8f6` and step 2 (performed later) records the older SHA `5206437` without reconciling the sequence.\n  WHY: Operators attempting to reproduce the verification would find an impossible-to-replay sequence and must re-derive which SHA was authoritative for each step.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:line 4 | severity=low | confidence=[5]\n  PROBLEM: The stated count of \"13 consumers\" is incorrect; `.github/ai/consumer_repos.json` contains 14 entries.\n  WHY: Operators cross-referencing the consumer list would find a mismatch, undermining confidence in the runbook's accuracy.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:line 8 (\"Last note: 2026-09-28: step 1 done. Step 3 waits for \u2026\") vs lines 11\u201312 (both step 1 and step 2 marked `[x]`) | severity=low | confidence=[4]\n  PROBLEM: The \"Last note\" field only records step 1 as done, but step 2 is also marked completed in the runbook.\n  WHY: No runtime failure; this is a docs-consistency defect in a working log whose purpose is to let a later session resume accurately. A resuming operator reads the \"Last note\" as the current state and may redo step 2 unnecessarily or misjudge how far the runbook has progressed.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:line 11 (\"fast-forwarded to main `677e8f6`\") vs line 12 (\"on `main` 5206437\") | severity=low | confidence=[3]\n  PROBLEM: Step 1 records main SHA `677e8f6` (the fast-forward target) while step 2 records the older main SHA `5206437` for its script run, with no reconciliation of the sequence.\n  WHY: No runtime failure; a docs-evidence consistency nit. The two SHAs are both plausible main tips at different moments, but the log does not note that step 2 ran against an earlier checkout than step 1's fast-forward, leaving the evidence chain ambiguous.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "073de1fba245f15816a672115bf4af78012e0faec1e6785ae9f5a21231003ff1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4693,
+    "run_id": "36373294145",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36373294145",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928033556_e41f3d5c12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4693,
+    "run_id": "36373294145"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T03:35:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
