@@ -1077,8 +1077,11 @@ not delete wrappers that are already present in `.github/workflows/`.
 > `permission_prompts.py file` lists them in the report and, in
 > coding-workflows only, files each new pattern as an `ai:permission-prompt`
 > issue routed to the Claude issue implementer. `/implement-plan-claude` now
-> requires Auto mode, and stops before any phase that must edit `.claude/**`
-> to ask how to run it.
+> requires Auto mode. In coding-workflows, unattended sessions edit only the
+> `workflow-templates/.claude/**` twin, and `claude-twin-sync.yml` copies it
+> into `.claude/**` through a sync PR after merge (hooks and settings wait for
+> the repository owner); it stops before a phase only when it must edit a
+> `.claude/` file that has no twin, to ask how to run it (CLAUDE.md §28.C).
 
 > **Audit identity and regeneration:**
 > `scripts/security/check-npm-audit.js` matches findings on
@@ -1192,6 +1195,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `check_failure_triage.yml` | `check_run.completed` (failure) | LLM diagnoses a failing PR check and opens an `ai:check-triage` issue for the pipeline to fix. On by default; disable via `CHECK_FAILURE_TRIAGE_ENABLED=false`; see "Check Failure Triage Phase" below |
 | `claude-issue-intake.yml` | coding-workflows only: `repository_dispatch` (`claude-issue`), `workflow_dispatch` | Queues a standalone issue routed to Claude by `clarify.yml` as an `ai:claude-issue-queue` issue for the Claude issue pickup; see "Claude issue implementer" |
 | `claude-issue-queue-watchdog.yml` | coding-workflows only: `schedule` (hourly, :17), `workflow_dispatch` | Labels queue items nobody picked up within `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (default 3) `ai:claude-issue-queue-stale` and sends a Telegram ERROR; see "Claude issue implementer" |
+| `claude-twin-sync.yml` | coding-workflows only: `push` to `main` touching `workflow-templates/.claude/**`, `schedule` (hourly, :41), `workflow_dispatch`, `workflow_run` (`CI` completed on `claude/claude-twin-sync-*`), `pull_request_review` | Copies changed `workflow-templates/.claude/**` twins into `.claude/**` through one `claude/claude-twin-sync-<sha>` PR (`[skip ai]`). Merges it itself once every check passed when only commands/scripts change; labels it `ai:claude-sync-approval`, alerts on Telegram, and leaves it to the repository owner when hooks, settings, or a conflict are involved (CLAUDE.md §28.C; see agents.md "Claude twin sync") |
 | `workflow_failure_heal.yml` | `issues.labeled`, `pull_request.labeled` (human-needed escalation labels) | Reports an `ai:needs-human` / terminal-latch escalation to coding-workflows, whose `workflow-failure-heal-intake.yml` diagnoses the failed runs and opens an `ai:workflow-heal` issue for the pipeline to fix (in coding-workflows for workflow defects, in the consumer for consumer defects). On by default; disable via `WORKFLOW_HEAL_ENABLED=false`; see "Workflow Failure Heal" below |
 
 <!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
