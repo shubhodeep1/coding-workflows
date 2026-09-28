@@ -3,23 +3,23 @@
 - Plan: docs/plans/issue-4618-sweep-dispatch-default-branch-plan.md
 - Source issue: shubhodeep1/coding-workflows#4618 (https://github.com/shubhodeep1/coding-workflows/issues/4618)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4618-sweep-dispatch-default-branch   Final PR: pending
+- Project branch: claude/implement-plan-issue-4618-sweep-dispatch-default-branch   Final PR: #4634 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (opened with this commit; number in the stage report and the checker's resume block)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-27
-- Last note: project branch opened; implementing phase 1
+- Last note: phase 1 implemented and verified (tests, actionlint, ShellCheck, local sweep and guard simulations); phase PR opened
 
 ## Phases
-1. [ ] Phase 1 — default-branch sweep dispatch with PR-keyed dedupe
-   - [ ] `internal-review.yml` names `workflow_dispatch` runs `Internal: AI Review & Autofix [pr:<N>]`
-   - [ ] `review_autofix_sweep.yml` dispatches without `--ref`, validates `pr_number`, keys dispatch runs by `pr:<N>`
-   - [ ] `_has_active_autofix_run` sees active PR-named dispatch runs
-   - [ ] tests: `test_conflict_dispatch_active_run_visibility.py`, `test_review_autofix_sweep_stale_queued.py`
-   - [ ] `agents.md` and `changelog.d/4618-sweep-dispatch-default-branch.md`
+1. [ ] Phase 1 — default-branch sweep dispatch with PR-keyed dedupe   — PR open (waiting); review rounds: 0; interventions: 0
+   - [x] `internal-review.yml` names `workflow_dispatch` runs `Internal: AI Review & Autofix [pr:<N>]`
+   - [x] `review_autofix_sweep.yml` dispatches without `--ref`, validates `pr_number`, keys dispatch runs by `pr:<N>`
+   - [x] `_has_active_autofix_run` sees active PR-named dispatch runs
+   - [x] tests: `test_conflict_dispatch_active_run_visibility.py`, `test_review_autofix_sweep_stale_queued.py`
+   - [x] `agents.md` and `changelog.d/4618-sweep-dispatch-default-branch.md`
 
 ## Conformance
 
