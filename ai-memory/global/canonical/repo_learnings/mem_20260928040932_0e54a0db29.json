@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Keep root command/script implementations aligned with their workflow-template copies.",
   "timestamps": {
     "created_at": "2026-09-28T04:09:32Z",
