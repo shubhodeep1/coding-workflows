@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:170-180 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Classification of failed slots depends on exact first-line regex match for reviewer failure messages + status file.\n  WHY: Reviewer output format change breaks detection (misclassifies as finding or clean); status file missing silently skips increment without explicit failure.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:153-157 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Invalid CLAUDE_FIXER_MIN_CLEAN_REVIEWERS warns but falls back silently; no step failure.\n  WHY: Misconfigured threshold leads to unexpected hand-off without clear operator signal.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:200-210 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Non-matching clean/failed status emits warning but continues; no hard failure for clean block without success status when failed slots present.\n  WHY: Ledger with malformed status files can be treated as clean when it should hand off.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:170-180 (awk failure-line regex) | severity=MAJOR | confidence=4\n  PROBLEM: Classification of failed slots depends on exact first-line regex match for reviewer failure messages + status file.\n  WHY: Reviewer output format change breaks detection (misclassifies as finding or clean); status file missing silently skips increment without explicit failure.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:153-157 (invalid min handling) | severity=NIT | confidence=3\n  PROBLEM: Invalid CLAUDE_FIXER_MIN_CLEAN_REVIEWERS warns but falls back silently; no step failure.\n  WHY: Misconfigured threshold leads to unexpected hand-off without clear operator signal.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:200-210 (case on block_kind:status) | severity=MAJOR | confidence=4\n  PROBLEM: Non-matching clean/failed status emits warning but continues; no hard failure for clean block without success status when failed slots present.\n  WHY: Ledger with malformed status files can be treated as clean when it should hand off.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "05ad0dcdfa796fa8b2f7174c9393b5674fc4fcb491b552fe17589163f74cf6ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4848,
+    "run_id": "36432064632",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36432064632",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928145658_d877391954",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4848,
+    "run_id": "36432064632"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T14:56:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
