@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-4653-summariser-empty-stdout-evidence-plan.md
 - Source issue: shubhodeep1/coding-workflows#4653
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main (was ai/issue-4605, whose PR #4607 closed unmerged; rebuilt on main 2026-09-28, operator answer Q1: D)
-- Project branch: claude/implement-plan-issue-4653-summariser-empty-stdout-evidence-main   Final PR: pending (opened after this commit)
+- Project branch: claude/implement-plan-issue-4653-summariser-empty-stdout-evidence-main   Final PR: #4685 draft (supersedes #4657, closed unmerged 2026-09-28)
 - Status: IN_PROGRESS
 - Stage: validation 1/3
 - Activation: not started
@@ -26,6 +26,7 @@
 ## Validation
 
 ## Completion
+- Final PR #4685 draft (into main; #4657 into ai/issue-4605 closed as superseded 2026-09-28)
 
 ## Activation
 
