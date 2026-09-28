@@ -1,20 +1,20 @@
 # Implement-Plan Log — Bind reviewer rejections to pass-1 consensus ids so a nearby rejection cannot demote a distinct finding
 
-- Plan: docs/plans/issue-4687-bind-rejections-to-consensus-ids-plan.md
+- Plan: docs/completed/issue-4687-bind-rejections-to-consensus-ids-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4687
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason
 - Project branch: claude/implement-plan-issue-4687-bind-rejections-to-consensus-ids   Final PR: #4695 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1
-- Activation: not started
-- Waiting on: the phase 1 PR into the project branch (opened with this commit; its number is in the stage report and the checker's resume block)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason)
+- Waiting on: the completion PR into the project branch (opened with this commit; its number is in the stage report and the checker's resume block)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_0117txgg28BLvgvA4ZjrRbV3 (reused for every wait)   safety net and hand-back: the ids are in the completion stage's report
 - Last updated: 2026-09-28
-- Last note: phase 1 implemented and verified (102 Claude-fixer/demoter tests, related contract suites, ruff, bash -n); phase PR opened, waiting on the review workflow.
+- Last note: operator answered Q1: A on #4687 (skip validation, non-default base); completion PR opened, moving the plan to docs/completed/.
 
 ## Phases
-1. [ ] Phase 1 — bind rejections to consensus ids and keep ambiguous matches blocking   — PR open (waiting); review rounds: 0; interventions: 0
+1. [x] Phase 1 — bind rejections to consensus ids and keep ambiguous matches blocking   — PR #4698 merged 2026-09-28; review rounds: 0 (the first reviewer run reported no findings); interventions: 0
    - [x] `scripts/review_claude_fixer_nonblocking.py`: consensus ids, `--annotate`, id-bound rejections, ambiguity rules, id-gated bullet moves, diagnostics
    - [x] `scripts/review_run_reviewers.sh` `build_cross_pollination_summary`: annotated ledger and the new rejection instructions
    - [x] `scripts/summarize_reviewer_consensus.sh`: `consensus_id:` copy rule
@@ -24,13 +24,18 @@
    - Done when: the extended tests, the step-script contract, and the workflow-size suites pass; `bash -n` passes on the edited shell scripts.
 
 ## Conformance
+- Run 1 — 2026-09-28: CONFORMANT — no fix PR (pre-security). Every plan criterion traces to `scripts/review_claude_fixer_nonblocking.py`, `build_cross_pollination_summary` in `scripts/review_run_reviewers.sh`, and `scripts/summarize_reviewer_consensus.sh`; 251 tests passed across the Claude-fixer, nonblocking, step-contract, workflow-size, and reviewer-pipeline suites, and `bash -n` and ruff were clean. Before it, the base branch was merged into the project branch (20d6127).
 
 ## Security pass
 - Skipped: ai:security: automation-produced issue (`security_pass_skip.py` verified it)
 
 ## Validation
+- Skipped (non-default base): `validate.yml` binds `target_ref` only to an open PR into the default branch, and final PR #4695 targets the #4586 project branch, so a dispatch could not validate this code. Asked as Q1 on #4687 (a failure escalation, CLAUDE.md §28.C); the operator answered `Q1: A` on 2026-09-28: skip here, because the change reaches `main` only through #4586's final PR #4593, and #4586's chain runs its own security pass and runtime validation on a project branch that will contain this fix.
 
 ## Completion
+- Completion PR (this log update) — doc moved to docs/completed/issue-4687-bind-rejections-to-consensus-ids-plan.md
+- Merged PRs into the project branch: #4698 (phase 1/1, merged 2026-09-28)
+- Final PR #4695 draft (marked ready in stage final-merge 1/1)
 
 ## Activation
 - Not applicable: the base branch is `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason`, not the default branch.
@@ -49,3 +54,5 @@
 ## Notes
 - Issue mode: the plan was written by `/implement-issue-claude` for #4687 (security-audit follow-up, tracker #3576). This plan supersedes #4586's AD-7 (the 3-line rejection window) for binding.
 - Protected paths: none (no `.claude/**` edits).
+- Conformance run 1 noted one HYPOTHESIS concern, not fixed: the flagger-citation guard checks whether the id appears anywhere in the flagger's raw pass-2 text, so a flagger that mentions the id while withdrawing a finding, combined with a summariser that copies it onto a new flaw at an overlapping range, would still bind. The plan specifies exactly this check, and its Risks section accepts the related same-lines case.
+- Validation 1/3 stopped at `Status: BLOCKED` (2026-09-28, session_01XU5G93fyGxoT3k9Ehe3LS5) and asked Q1 on #4687. Operator decision `Q1: A` (issue comment, 2026-09-28): `Validation: skipped (non-default base)`. The long-term fix is tracked in #4734 (let `validate.yml` authorize a final PR into a project branch whose own PR into `main` is open).
