@@ -198,3 +198,53 @@ No `TODO`, `FIXME`, or `HACK` marker was found in the audited workflow and scrip
 | Code modularization | 10–15 | Large |
 | Expression size reduction | 2–3 | Medium |
 | Medium/Low fixes | 6–10 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-28)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for implementation without further review. `NEEDS_VERIFICATION` requires the stated checks first. `RISKY_SKIP` must not be auto-implemented; the identified call protects pagination, retry, or race-sensitive behavior.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — `RISKY_SKIP`.** **Calls:** `scripts/orchestrate_poll_process.sh:10441` and `scripts/orchestrate_poll_process.sh:10442`, in `finalize_integration_merge_if_needed` (`:10352`). **Current → proposed:** two successful-path REST requests → one, only when the existing final-PR snapshot does not match. **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{final_pr}`. **Evidence:** adjacent reads fetch `.state` and `.merged_at` from the same PR, with no mutation between them:
+  ```sh
+  existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+  **Proposed fix:** Have the snapshot-miss branch fetch one PR JSON object and derive both fields locally; retain the current matching-snapshot branch and its fields. **Safety rationale:** This is a race-sensitive poller finalization path, and two independently failing retries do not have the same failure semantics as one shared read. **Downstream signal:** Do not auto-implement. Manually review PR-state changes between reads and test either read failing independently before changing the final-merge decision.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — `RISKY_SKIP`.** **Calls:** `scripts/review_merge_train.sh:260-261` (`_mt_find_marker_comment_id`) and `scripts/review_merge_train.sh:275-287` (`_mt_upsert_comment`); the no-ID caller is at `:483-486`. **Current → proposed:** `P + 1` successful-path requests → `P` when a marker exists and no comment ID was supplied, where `P` is the number of comment-list pages. **Endpoints:** `GET /repos/{owner}/{repo}/issues/{pr}/comments?per_page=100` and `GET /repos/{owner}/{repo}/issues/comments/{id}`. **Evidence:** the paginated listing receives comment bodies but retains only the selected ID; the upsert then fetches that comment’s body.
+  ```sh
+  --jq ".[] | select(.body | startswith(\"${marker}\")) | .id"
+  existing_body="$(gh_retry gh api "repos/${MT_REPO}/issues/comments/${existing_id}" --jq '.body' 2>/dev/null || true)"
+  ```
+  **Proposed fix:** Extend `_mt_find_marker_comment_id` with a separately named result that carries the selected `{id, body}` while preserving its ID-only callers. Let `_mt_upsert_comment` use that body only on its no-ID path; retain the individual GET when an ID is supplied or the listed body is unusable. **Safety rationale:** The listing is paginated, and replacing the later GET could discard a comment edit made after the list response. **Downstream signal:** Do not auto-implement. Manually verify latest-marker selection across pages, concurrent comment edits, and the upsert’s behavior when the list succeeds but the individual GET would fail.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — Poller cache consolidation needs manual review of independent GraphQL failure and per-issue fallback behavior.
+- API-002: `RISKY_SKIP` — Changing `curl_gh_api` request counts changes a retry loop’s permanent-error handling; review it separately.
+- BATCH-001: `RISKY_SKIP` — Blocker reads are in the race-sensitive poller; preserve its unknown-state deferral.
+- BATCH-002: `RISKY_SKIP` — Standalone stall recovery and per-label pagination both require manual filter and page-boundary review.
+- BATCH-003: `RISKY_SKIP` — The existing PR-file reads are paginated; GraphQL file and rename parity remains unverified.
+
+### Summary Counts
+
+Net-new findings only; Deep Audit cross-references are excluded.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 2 | MERGE-001, REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
