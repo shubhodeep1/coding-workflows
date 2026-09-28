@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-4678-edit-files-without-python-heredocs-plan.md
 - Source issue: shubhodeep1/coding-workflows#4678
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
-- Project branch: claude/implement-plan-issue-4678-edit-files-without-python-heredocs   Final PR: (opened after this commit)
+- Project branch: claude/implement-plan-issue-4678-edit-files-without-python-heredocs   Final PR: #4684 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: project branch opened with the plan and this log; phase 1 starts next in the same session.
+- Last note: phase 1 implemented and verified locally (new contract test fails on the old CLAUDE.md, passes on the new one); phase PR opened, waiting on its review.
 
 ## Phases
-1. [ ] Phase 1 — file-edit rule and protected-path precision in CLAUDE.md §23.I (CLAUDE.md, tests/test_permission_prompts.py, agents.md, changelog.d/4678-edit-files-without-python-heredocs.md)
+1. [ ] Phase 1 — file-edit rule and protected-path precision in CLAUDE.md §23.I (CLAUDE.md, tests/test_permission_prompts.py, agents.md, changelog.d/4678-edit-files-without-python-heredocs.md)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -39,4 +39,5 @@
 - Invoking session: session_01Fq1huPgbwLwakWQAhyse3J (started by the Claude issue dispatcher routine trig_01P61QC1Yzt48puVZajbAWG9, permission mode auto).
 - Security pass: `security_pass_skip.py` printed `{"skip": false, "label": null, "reason": "no skip label"}`, so the pass runs.
 - Issue progress comment id: 5861812192.
+- Phase 1 verification (2026-09-28): `tests/test_workflow_retro.py` fails collection on Python 3.11 (f-string backslash in `scripts/workflow_retro.py:794`) on main too; unrelated to this project, excluded from the local full-suite run.
 - Stale Routine sweep (2026-09-28): deleted 1 ended Routine (`implement-plan issue-4620-intake-authorize-target-issue: checker instructions`); none for this slug.
