@@ -180,3 +180,43 @@ No literal `TODO`, `FIXME`, or `HACK` markers were found in the scoped workflow 
 | Code modularization | 4–6: release workflows, Telegram helper, analysis workflow, new helpers | Medium |
 | Expression size reduction | 2–3: implement workflow, staged script, contract tests | Medium |
 | Medium/Low fixes | 6–9: queue readers, cleanup helper, poller, CI gate, tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-28)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is ready for implementation without further review. `NEEDS_VERIFICATION` requires the stated checks first. `RISKY_SKIP` identifies a possible saving in a protected path and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — `RISKY_SKIP`** — `scripts/orchestrate_poll_process.sh:13934-13936` (`execute_stall_recovery_action`) and `scripts/orchestrate_poll_process.sh:21610-21612` (implementation-failed reissue loop). **Current → proposed:** two reads → one successful read per reissue path. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}`. **Evidence:** each path reads the same issue twice, once for `.title` and once for `.body`, with no mutation between those reads. **Proposed fix:** capture one full issue response in each path, then extract both fields locally; retain a per-field fallback if preserving the present independent fail-open results requires it. **Safety rationale:** both paths perform recovery or reissue work inside `orchestrate_poll_process.sh`, an explicit `RISKY_SKIP` trigger; a single failed read could otherwise erase a field that the second read would have recovered. **Downstream signal:** Do not auto-implement. Manually review reissue behavior under independently failed title/body reads and concurrent issue edits before changing either path.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — `RISKY_SKIP`** — `scripts/review_merge_train.sh:257-261,275-287`; the no-prelooked-ID caller is at `scripts/review_merge_train.sh:482-486`. **Current → proposed:** two reads → one successful paginated read when `_mt_upsert_comment` performs its own lookup; calls that supply only an ID retain their existing behavior. **Endpoints:** `GET /repos/{owner}/{repo}/issues/{pr}/comments` and `GET /repos/{owner}/{repo}/issues/comments/{comment_id}`. **Evidence:** `_mt_find_marker_comment_id` filters comment `.body` to return its ID, after which `_mt_upsert_comment` fetches that comment’s `.body` again to decide whether a PATCH is needed. **Proposed fix:** extend `_mt_find_marker_comment_id` to return the selected ID *and body* from its existing response, and let `_mt_upsert_comment` use the body when available; preserve the point GET for ID-only callers. **Safety rationale:** the first read uses `--paginate`, an explicit `RISKY_SKIP` trigger, and replacing the later read also changes the freshness of the body comparison. **Downstream signal:** Do not auto-implement. Manually verify page-boundary selection, multiline-body transport, lookup-failure behavior, and concurrent comment edits before reusing the listed body.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — The proposed saving changes retry/backoff behavior, not overlapping data reads; review permanent-error classification manually.
+- API-002: `NEEDS_VERIFICATION` — Confirm snapshot freshness and preserve the peer check’s fail-open versus budget check’s fail-closed decisions.
+- BATCH-001: `RISKY_SKIP` — The file reads use `--paginate`; manually establish complete file-list and rename parity before replacing them.
+- BATCH-002: `NEEDS_VERIFICATION` — Keep the paginated issue list intact; verify batched head-repository and base-ref matching against each REST lookup.
+- BATCH-003: `NEEDS_VERIFICATION` — Verify permissions and per-alias partial-failure handling before replacing individual label writes.
+
+### Summary Counts
+
+Counts cover **net-new findings only**, not Deep Audit cross-references.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 2 | MERGE-001, REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
