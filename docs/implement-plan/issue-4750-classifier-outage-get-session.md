@@ -3,15 +3,15 @@
 - Plan: docs/plans/issue-4750-classifier-outage-get-session-plan.md
 - Source issue: shubhodeep1/coding-workflows#4750
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4750-classifier-outage-get-session   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-4750-classifier-outage-get-session   Final PR: #4770 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
 - Waiting on: none
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: project branch opened; phase 1 touches protected paths and needs a Protected-path approval before it starts
+- Last note: phase 1 blocked before start — protected paths need a Protected-path approval (asked on #4750, comment 5866547151)
 
 ## Phases
 1. [ ] Phase 1 — outage-tolerant step 0 and outage-aware permission-prompt filing — protected paths: .claude/commands/implement-plan-claude.md, .claude/scripts/permission_prompts.py (and their workflow-templates/.claude/ mirrors)
