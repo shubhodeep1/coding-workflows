@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/issue-4762-report-classifier-outages-plan.md:213-222 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The plan duplicates the six `AD-<n>` auto-decision records from the implement-plan log and uses that log-specific format instead of the documented standalone-plan `## Decisions` schema.\n  WHY: The advisory lint is fail-open and the `AD-` format is canonical for `/implement-plan-claude` logs, so this is a documentation-schema concern, but duplicating the records creates a maintenance burden.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/plans/issue-4762-report-classifier-outages-plan.md:213-222 | severity=NIT | confidence=2\n  PROBLEM: The plan uses `## Auto-decisions` with the `- AD-<n> [<stage>, <YYYY-MM-DD>] <question> \u2014 Picked: <letter> \u2014 <option>. Alternatives: <letter> \u2014 <option>; <letter> \u2014 <option>. Why: <one line>. Applied in: <PR #N | no code change>. Status: pending review` line format (per CLAUDE.md \u00a728.D for `/implement-plan-claude` logs) rather than the documented standalone-plan schema `## Decisions` containing `### D<n> \u2014 <title>` records with `Chosen`, `Alternatives considered`, and `Why` bullets (per `agents.md` \"Plan Decisions advisory lint\"). The same six `AD-<n>` entries also appear in the log's `## Auto-decisions` section (lines 22-27 of `docs/implement-plan/issue-4762-report-classifier-outages.md`).\n  WHY: Not a runtime defect; this is a documentation schema concern. The advisory lint `scripts/lint_plan_decisions.py` is fail-open and would emit a warning at most. The AD- format is the canonical `/implement-plan-claude` log convention, so the deviation is a known cross-convention overlap rather than an error. The mirrored AD- list in the plan duplicates the log content and creates a maintenance burden, since any later update to the auto-decisions must be made in both files.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "dcd7018cc932d02363d76c9a7963ced3cf2abd547bc60fb9f6e680bf170d92ac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36399631920",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36399631920",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928090824_0231ce933a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36399631920"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T09:08:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
