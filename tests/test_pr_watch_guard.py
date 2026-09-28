@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -55,7 +56,7 @@ ALLOWED_TOOLS = [
 
 
 def _load_guard():
-	spec = importlib.util.spec_from_file_location("pr_watch_guard", GUARD_PATH)
+	spec = importlib.util.spec_from_file_location("pr_watch_guard", TEMPLATE_GUARD_PATH)
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
@@ -69,7 +70,7 @@ def _run_hook(stdin_text: str) -> subprocess.CompletedProcess:
 	env = dict(os.environ)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	return subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(TEMPLATE_GUARD_PATH)],
 		input=stdin_text,
 		capture_output=True,
 		text=True,
@@ -145,7 +146,7 @@ def test_hook_has_no_environment_escape_hatch():
 	env["CLAUDE_PR_MERGE_GUARD"] = "off"
 	env["CLAUDE_PR_WATCH_GUARD"] = "off"
 	result = subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(TEMPLATE_GUARD_PATH)],
 		input=json.dumps({"tool_name": "mcp__github__subscribe_pr_activity", "tool_input": {}}),
 		capture_output=True,
 		text=True,
@@ -153,7 +154,7 @@ def test_hook_has_no_environment_escape_hatch():
 		check=False,
 	)
 	assert result.returncode == 2
-	source = GUARD_PATH.read_text(encoding="utf-8")
+	source = TEMPLATE_GUARD_PATH.read_text(encoding="utf-8")
 	assert "os.environ" not in source
 	assert "getenv" not in source
 
@@ -205,7 +206,7 @@ def _watch_guard_entries(path: Path) -> list[dict]:
 	]
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_settings_wire_the_guard_once_under_the_documented_matcher(path):
 	entries = _watch_guard_entries(path)
 	assert len(entries) == 1
@@ -234,7 +235,7 @@ def test_settings_matcher_skips_unsubscribe_and_unrelated_mcp_tools(tool_name):
 
 
 def test_existing_merged_pr_guard_wiring_is_untouched():
-	for path in (SETTINGS_PATH, TEMPLATE_SETTINGS_PATH):
+	for path in (TEMPLATE_SETTINGS_PATH,):
 		settings = json.loads(path.read_text(encoding="utf-8"))
 		matchers = [entry.get("matcher") for entry in settings["hooks"]["PreToolUse"]]
 		assert "Bash" in matchers
@@ -242,8 +243,9 @@ def test_existing_merged_pr_guard_wiring_is_untouched():
 
 
 def test_template_parity():
-	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
-	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("hooks/pr_watch_guard.py")
+	assert_claude_not_ahead("settings.json")
 
 
 def test_claude_md_documents_the_rule():
@@ -269,7 +271,7 @@ def test_claude_md_documents_the_rule():
 
 
 def test_seed_repo_command_ships_the_hook():
-	assert "hooks/pr_watch_guard.py" in SEED_REPO_COMMAND.read_text(encoding="utf-8")
+	assert "hooks/pr_watch_guard.py" in (REPO_ROOT / "workflow-templates" / ".claude" / "commands" / "seed-repo.md").read_text(encoding="utf-8")
 
 
 def test_ci_runs_this_file():

@@ -26,6 +26,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from claude_twin_state import claude_ahead_reason  # noqa: E402
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOOK = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
@@ -190,25 +193,18 @@ printf '%s' "${SESSION_START_TEST_ANON_STATUS:-000}"
 def main() -> int:
     failures: list[str] = []
 
-    # Both hooks must be byte-identical so consumer auto-sync produces the
-    # same probe behaviour everywhere.
-    if HOOK.read_bytes() != TEMPLATE_HOOK.read_bytes():
-        failures.append(
-            f"{TEMPLATE_HOOK.relative_to(REPO_ROOT)} must be byte-identical to "
-            f"{HOOK.relative_to(REPO_ROOT)}; consumer auto-sync would otherwise "
-            f"propagate stale behaviour."
-        )
+    # .claude/ is never ahead of its twin (CLAUDE.md §28.C): unattended
+    # sessions edit workflow-templates/.claude/, and claude-twin-sync.yml
+    # copies it into .claude/ after merge, so the twin may be ahead here.
+    # Consumers receive the twin, so it is the copy the probes below run.
+    for rel in ("hooks/session-start.sh", "settings.json"):
+        status, message = claude_ahead_reason(rel)
+        if status == "ahead":
+            failures.append(message)
+        elif status == "skip":
+            print(f"SKIP: {message}")
 
-    # settings.json must also be byte-identical — it registers the SessionStart
-    # hook in consumer repos and is mirrored by the same claude_sync step.
-    if SETTINGS.read_bytes() != TEMPLATE_SETTINGS.read_bytes():
-        failures.append(
-            f"{TEMPLATE_SETTINGS.relative_to(REPO_ROOT)} must be byte-identical to "
-            f"{SETTINGS.relative_to(REPO_ROOT)}; consumer auto-sync would otherwise "
-            f"propagate stale SessionStart registration."
-        )
-
-    for hook in (HOOK, TEMPLATE_HOOK):
+    for hook in (TEMPLATE_HOOK,):
         for url, expected in CASES:
             got = extract(hook, url)
             if got != expected:
@@ -268,7 +264,7 @@ def main() -> int:
         ),
     ]
     for probe_case_name, probe_arguments, required_fragments, forbidden_fragments in probe_cases:
-        probe_output = run_verify_token_probe(HOOK, **probe_arguments)
+        probe_output = run_verify_token_probe(TEMPLATE_HOOK, **probe_arguments)
         for required_fragment in required_fragments:
             if required_fragment not in probe_output:
                 failures.append(
@@ -287,9 +283,9 @@ def main() -> int:
 
     print(
         f"PASS: extract_repo_slug across {len(CASES)} URL shapes in "
-        f"{HOOK.relative_to(REPO_ROOT)} and {TEMPLATE_HOOK.relative_to(REPO_ROOT)}; "
+        f"{TEMPLATE_HOOK.relative_to(REPO_ROOT)}; "
         f"verify_token across {len(probe_cases)} auth outcomes; "
-        f"hook and settings.json parity checks passed"
+        f"hook and settings.json sync-state checks passed"
     )
     return 0
 

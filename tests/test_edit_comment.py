@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +20,7 @@ BODY = "<!-- ai:claude-issue-progress:v1 -->\n**Stage:** security-pass 1/5\n**Wa
 
 
 def _load():
-	spec = importlib.util.spec_from_file_location("edit_comment", SCRIPT_PATH)
+	spec = importlib.util.spec_from_file_location("edit_comment", TEMPLATE_SCRIPT_PATH)
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return module
@@ -161,11 +162,12 @@ def test_payload_file_is_removed_when_serialisation_fails(monkeypatch):
 	assert len(created) == 1 and not Path(created[0]).exists()
 
 
-@pytest.mark.parametrize("path", SETTINGS_PATHS)
+@pytest.mark.parametrize("path", SETTINGS_PATHS[1:])  # the twin; .claude/ follows via the sync PR
 def test_settings_allow_the_helper(path):
 	allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]
 	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/edit_comment.py *)" in allow
 
 
 def test_template_parity():
-	assert TEMPLATE_SCRIPT_PATH.read_text(encoding="utf-8") == SCRIPT_PATH.read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("scripts/edit_comment.py")

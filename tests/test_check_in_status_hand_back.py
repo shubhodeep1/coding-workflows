@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / ".claude" / "scripts"
@@ -17,7 +18,7 @@ TEMPLATE_SCRIPTS = ROOT / "workflow-templates" / ".claude" / "scripts"
 
 
 def _load(name):
-	spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
+	spec = importlib.util.spec_from_file_location(name, TEMPLATE_SCRIPTS / f"{name}.py")
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return module
@@ -478,8 +479,9 @@ def test_post_reports_a_read_failure(monkeypatch, capsys):
 
 
 def test_template_copies_match():
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
 	for name in ("check_in_status.py", "claude_fix_claim.py"):
-		assert (SCRIPTS / name).read_bytes() == (TEMPLATE_SCRIPTS / name).read_bytes(), name
+		assert_claude_not_ahead(f"scripts/{name}")
 
 
 def test_a_fixer_looks_past_its_own_and_its_sweep_reservation(monkeypatch, capsys):
@@ -612,13 +614,11 @@ def test_claude_md_26c_routes_on_action():
 
 
 def test_fix_claude_pr_routes_on_action():
-	for path in (ROOT / ".claude" / "commands" / "fix-claude-pr.md",
-		ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md"):
+	for path in (ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md",):
 		text = _flat_text(path)
 		assert "2. **Route on `action`**" in text
 		assert "- `hand_back_fixer` (`conflict`, `review-round`, `ci-failed`, `blocked`) → continue." in text
 		assert "- `hand_back_all` (`merged` / `closed`) → nothing to fix." in text
 		assert "- `retry` (exit 2) → the read failed" in text
 		assert "2. **Route on `state`.**" not in text
-	assert ((ROOT / ".claude" / "commands" / "fix-claude-pr.md").read_bytes()
-		== (ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md").read_bytes())
+	assert_claude_not_ahead("commands/fix-claude-pr.md")

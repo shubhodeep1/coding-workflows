@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -40,8 +41,8 @@ def _load(name, path):
 	return module
 
 
-logger = _load("permission_prompt_logger", HOOK_PATH)
-pp = _load("permission_prompts", SCRIPT_PATH)
+logger = _load("permission_prompt_logger", TEMPLATE_HOOK_PATH)
+pp = _load("permission_prompts", TEMPLATE_SCRIPT_PATH)
 
 NOW = datetime(2026, 9, 27, 3, 0, 0, tzinfo=timezone.utc)
 
@@ -74,7 +75,7 @@ def _log(tmp_path, payloads):
 def test_hook_logs_a_prompt_and_prints_nothing(tmp_path):
 	env = dict(os.environ, HOME=str(tmp_path), PYTHONDONTWRITEBYTECODE="1")
 	payload = _payload("gh api -X GET search/issues -f q=x | sort -n", reason="Bash command")
-	result = subprocess.run([sys.executable, str(HOOK_PATH)], input=json.dumps(payload), capture_output=True, text=True, env=env, check=False)
+	result = subprocess.run([sys.executable, str(TEMPLATE_HOOK_PATH)], input=json.dumps(payload), capture_output=True, text=True, env=env, check=False)
 	assert result.returncode == 0
 	assert result.stdout == "" and result.stderr == ""
 	lines = (tmp_path / ".claude" / "permission-prompts" / "sess-1.jsonl").read_text().splitlines()
@@ -103,7 +104,7 @@ def test_hook_truncates_long_values():
 @pytest.mark.parametrize("stdin_text", ["", "   ", "not json", "[1]", '{"hook_event_name": 5}'])
 def test_hook_never_fails_or_decides(tmp_path, stdin_text):
 	env = dict(os.environ, HOME=str(tmp_path), PYTHONDONTWRITEBYTECODE="1")
-	result = subprocess.run([sys.executable, str(HOOK_PATH)], input=stdin_text, capture_output=True, text=True, env=env, check=False)
+	result = subprocess.run([sys.executable, str(TEMPLATE_HOOK_PATH)], input=stdin_text, capture_output=True, text=True, env=env, check=False)
 	assert result.returncode == 0 and result.stdout == ""
 
 
@@ -111,7 +112,7 @@ def test_hook_swallows_write_errors(tmp_path):
 	blocker = tmp_path / ".claude"
 	blocker.write_text("not a directory")
 	env = dict(os.environ, HOME=str(tmp_path), PYTHONDONTWRITEBYTECODE="1")
-	result = subprocess.run([sys.executable, str(HOOK_PATH)], input=json.dumps(_payload("ls")), capture_output=True, text=True, env=env, check=False)
+	result = subprocess.run([sys.executable, str(TEMPLATE_HOOK_PATH)], input=json.dumps(_payload("ls")), capture_output=True, text=True, env=env, check=False)
 	assert result.returncode == 0 and result.stdout == "" and result.stderr == ""
 
 
@@ -121,7 +122,7 @@ def test_hook_session_id_cannot_escape_the_log_dir(tmp_path):
 
 
 def test_hook_has_no_api_calls_or_env_reads():
-	source = HOOK_PATH.read_text(encoding="utf-8")
+	source = TEMPLATE_HOOK_PATH.read_text(encoding="utf-8")
 	for forbidden in ("os.environ", "getenv", "subprocess", "urllib", "api.github.com"):
 		assert forbidden not in source
 
@@ -359,7 +360,7 @@ def test_extract_repo_slug():
 # ──────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("path", SETTINGS_PATHS)
+@pytest.mark.parametrize("path", SETTINGS_PATHS[1:])  # the twin; .claude/ follows via the sync PR
 def test_settings_wire_the_logger_on_both_events(path):
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	for event in logger.SETTINGS_EVENTS:
@@ -370,8 +371,9 @@ def test_settings_wire_the_logger_on_both_events(path):
 
 
 def test_template_parity():
-	assert TEMPLATE_HOOK_PATH.read_text(encoding="utf-8") == HOOK_PATH.read_text(encoding="utf-8")
-	assert TEMPLATE_SCRIPT_PATH.read_text(encoding="utf-8") == SCRIPT_PATH.read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("hooks/permission_prompt_logger.py")
+	assert_claude_not_ahead("scripts/permission_prompts.py")
 
 
 def test_label_is_in_the_contract():
@@ -387,7 +389,7 @@ def test_claude_md_documents_the_reports():
 
 
 def test_plan_command_runs_the_report_every_stage():
-	text = PLAN_COMMAND.read_text(encoding="utf-8")
+	text = (REPO_ROOT / "workflow-templates" / ".claude" / "commands" / "implement-plan-claude.md").read_text(encoding="utf-8")
 	assert "14. **Report.** First run the [permission prompt report](#permission-prompt-report)." in text
 	assert "permission_prompts.py file --session-label <your session id>" in text
 

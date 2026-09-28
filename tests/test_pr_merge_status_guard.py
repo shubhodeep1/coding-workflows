@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -29,7 +30,7 @@ TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
 
 
 def _load_guard():
-	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", GUARD_PATH)
+	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", TEMPLATE_GUARD_PATH)
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
@@ -218,7 +219,7 @@ def test_slug_extraction_matches_the_bash_implementation_it_mirrors() -> None:
 	and the whitelist is what stops a lookalike host from aiming `gh -R` at an
 	unrelated github.com repo.
 	"""
-	session_start = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
+	session_start = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "session-start.sh"
 	urls = [
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
@@ -588,7 +589,7 @@ def test_cached_allow_issues_no_api_call(monkeypatch, tmp_path: Path) -> None:
 @pytest.mark.parametrize("payload", ["", "not json", "[]", "null"])
 def test_malformed_stdin_exits_zero(payload: str) -> None:
 	proc = subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(TEMPLATE_GUARD_PATH)],
 		input=payload,
 		capture_output=True,
 		text=True,
@@ -599,7 +600,7 @@ def test_malformed_stdin_exits_zero(payload: str) -> None:
 
 def test_unguarded_command_exits_zero_without_touching_git() -> None:
 	proc = subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(TEMPLATE_GUARD_PATH)],
 		input=json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls -la"}}),
 		capture_output=True,
 		text=True,
@@ -684,7 +685,7 @@ def _run_hook(repo: Path, stub_bin: Path, command: str) -> subprocess.CompletedP
 	env["TMPDIR"] = str(repo.parent / "cache")
 	(repo.parent / "cache").mkdir(exist_ok=True)
 	return subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(TEMPLATE_GUARD_PATH)],
 		input=json.dumps(
 			{"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(repo)}
 		),
@@ -736,7 +737,7 @@ def test_e2e_guards_push_as_well_as_commit(merged_branch_repo) -> None:
 # ──────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_api_write_allowlist_disables_implicit_curl_config(path: Path) -> None:
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	allow = settings["permissions"]["allow"]
@@ -753,7 +754,7 @@ def test_api_write_allowlist_disables_implicit_curl_config(path: Path) -> None:
 	assert curl_rules == allow[:6]
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_guard_is_wired_as_a_pretooluse_bash_hook(path: Path) -> None:
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	entries = settings["hooks"]["PreToolUse"]
@@ -771,7 +772,7 @@ def test_guard_is_wired_as_a_pretooluse_bash_hook(path: Path) -> None:
 	)
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_session_start_hook_is_preserved(path: Path) -> None:
 	"""§6 — adding PreToolUse must not displace the existing SessionStart hook."""
 	settings = json.loads(path.read_text(encoding="utf-8"))
@@ -784,11 +785,13 @@ def test_session_start_hook_is_preserved(path: Path) -> None:
 
 
 def test_template_copies_are_identical() -> None:
-	"""Consumer repos receive the guard via the workflow-templates/.claude mirror."""
-	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
-	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
-		encoding="utf-8"
-	)
+	"""Consumer repos receive the guard via the workflow-templates/.claude mirror.
+
+	`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await
+	its claude-twin-sync.yml PR). CLAUDE.md is one file behind a symlink.
+	"""
+	assert_claude_not_ahead("hooks/pr_merge_status_guard.py")
+	assert_claude_not_ahead("settings.json")
 	assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
 
 
@@ -843,7 +846,7 @@ def _run_hook_payload(repo: Path, stub_bin: Path, payload: dict) -> subprocess.C
 	(repo.parent / "cache").mkdir(exist_ok=True)
 	payload = {**payload, "cwd": str(repo)}
 	return subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(TEMPLATE_GUARD_PATH)],
 		input=json.dumps(payload),
 		capture_output=True,
 		text=True,
@@ -1170,7 +1173,7 @@ def test_mcp_push_escape_hatch(monkeypatch) -> None:
 	assert guard.evaluate(_mcp_payload()) == (0, "")
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_guard_is_wired_for_the_mcp_push_tools(path: Path) -> None:
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	entries = settings["hooks"]["PreToolUse"]

@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = ROOT / ".claude" / "scripts" / "stale_routines.py"
@@ -17,7 +18,7 @@ TEMPLATE_SCRIPT_PATH = ROOT / "workflow-templates" / ".claude" / "scripts" / "st
 CLAUDE_MD = ROOT / "CLAUDE.md"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
-_spec = importlib.util.spec_from_file_location("stale_routines", SCRIPT_PATH)
+_spec = importlib.util.spec_from_file_location("stale_routines", TEMPLATE_SCRIPT_PATH)
 sweep = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sweep)
 
@@ -214,16 +215,17 @@ def test_missing_input_exits_2(tmp_path, capsys):
 
 
 def test_only_rest_reads_through_gh_api():
-	text = SCRIPT_PATH.read_text(encoding="utf-8")
+	text = TEMPLATE_SCRIPT_PATH.read_text(encoding="utf-8")
 	assert '"graphql"' not in text.lower()
 	assert '["gh", "api", path]' in text
 
 
 def test_template_parity():
-	assert TEMPLATE_SCRIPT_PATH.read_text(encoding="utf-8") == SCRIPT_PATH.read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("scripts/stale_routines.py")
 
 
-@pytest.mark.parametrize("path", [ROOT / ".claude" / "settings.json", ROOT / "workflow-templates" / ".claude" / "settings.json"])
+@pytest.mark.parametrize("path", [ROOT / "workflow-templates" / ".claude" / "settings.json"])
 def test_settings_preapprove_the_sweep(path):
 	allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]
 	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/stale_routines.py *)" in allow
