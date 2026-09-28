@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T03:13:24Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An issue-mode project whose `Target branch:` is another pull request's head is stranded when that pull request closes unmerged; check the base PR's state before building on it, and rebuild on the default branch when it is closed.",
+  "phase": "implement_plan",
+  "pr_number": 4697,
+  "record_id": "lesson-implement-plan-e222c4e47955c56375b63cf1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4653-summariser-empty-stdout-evidence",
+    "file:.claude/commands/implement-issue-claude.md"
+  ]
+}
