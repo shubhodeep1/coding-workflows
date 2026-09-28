@@ -1,0 +1,26 @@
+# Deploy-Activation Log — Verified security-pass skip for issue-mode projects (`security_pass_skip.py`)
+
+- Reference: docs/completed/issue-4623-verify-security-pass-skip-plan.md   (+ source issue #4623; final PR #4635, merged 2026-09-28 01:13 UTC as `d82b8d1e`; phase PR #4645, conformance fix #4663, completion #4673; progress log docs/implement-plan/issue-4623-verify-security-pass-skip.md)
+- Deploy target: shubhodeep1/coding-workflows (+ the 13 consumers in `.github/ai/consumer_repos.json` via `@stable`)
+- How it runs: on demand. `/implement-issue-claude` step 6 (`.claude/commands/implement-issue-claude.md:35`) runs `.claude/scripts/security_pass_skip.py` in every issue-mode session. In coding-workflows those sessions check out `main` and are started by the hourly `Claude issue pickup` routine. Consumers get the script and the command through `workflow-templates/.claude/`, synced by `ai-update-workflows.yml` → `update_workflows.yml@stable` (daily cron `0 4 * * *` plus the `@stable` `repository_dispatch`).
+- Status: IN_PROGRESS
+- Last updated: 2026-09-28
+- Last note: 2026-09-28: steps 1, 2, 3a and 3b done (promote run 36374849981 succeeded, `stable` branch = `d199454` and carries `security_pass_skip.py`). Step 3 is next and waits for release run 36374918973 (in progress at 03:45 UTC) to tag `stable` / v1.30.0.
+
+## Runbook
+1. [x] Prereqs: Homebrew, git, gh, jq, `gh auth login` (repo scope), clone or refresh `~/src/coding-workflows`   — done 2026-09-28: git 2.55.0, gh 2.101.0, jq 1.8.2 already installed; `gh api user` = shubhodeep1; `~/src/coding-workflows` fast-forwarded to main `677e8f6`; both `security_pass_skip.py` paths present
+2. [x] Verify live in coding-workflows (read-only, run in the session)   — done 2026-09-28: on `main` 5206437 (the session's checkout, taken before step 1's operator-Mac clone was fast-forwarded to `677e8f6`; `677e8f6` descends from `5206437` and neither `security_pass_skip.py` path changed between them), `security_pass_skip.py --issue 4623` → `{"skip": true, "label": "ai:security", …}` exit 0; `--issue 3576` → `{"skip": false, "label": null, "reason": "no skip label"}` exit 0
+3a. [x] Re-enable the daily promotion cycle: `gh variable set PROMOTE_CYCLE_ENABLED --body true -R shubhodeep1/coding-workflows` (read at `promote-main-to-stable.yml:138`, default `true`; pr-4443 step 9a; operator Q2: A)   — done 2026-09-28: `✓ Updated variable PROMOTE_CYCLE_ENABLED`; `gh variable get` returns `true`
+3b. [x] Dispatch `promote-main-to-stable.yml` on `main` (pr-4443 step 9; operator Q3: A) and watch the promote run and the `test-and-mark-stable.yml` release it dispatches   — done 2026-09-28: promote run 36374849981 (03:43 UTC) succeeded; `stable` fast-forwarded to main `d199454`; it dispatched release run 36374918973 (`test-and-mark-stable.yml` on `stable`, in progress at 03:45 UTC)
+3. [ ] Verify on `stable` content, not ancestry: `workflow-templates/.claude/scripts/security_pass_skip.py` and the `security_pass_skip.py` reference in `workflow-templates/.claude/commands/implement-issue-claude.md`, on both the `stable` branch and the `stable` tag
+4. [ ] Verify the consumer sync: after the next `update_workflows` run in one consumer, its default branch carries `.claude/scripts/security_pass_skip.py`, the updated `.claude/commands/implement-issue-claude.md`, and the `security_pass_skip.py` allow entry in `.claude/settings.json`
+5. [ ] Verify LIVE; mark auto-decisions AD-1…AD-7 `confirmed` in the progress log
+
+## Notes
+- 2026-09-28: verify-activation 1/3 (activation scope) = DORMANT, no fix PR, no new auto-decisions (issue #4623 progress comment). Live on `main`; the 13 consumers pin `@stable` v1.29.12 (`d58d7bc`, tag `stable` = `fade4be9`), which has no `security_pass_skip.py` on the branch or the tag (checked 2026-09-28).
+- No repo variable, secret, or supervisor gates this project (plan "Rollout": no flag, the failure mode is running the audit). The only gate is `@stable` promotion (§14).
+- Promotion was paused on purpose: `PROMOTE_CYCLE_ENABLED=false` (read at `promote-main-to-stable.yml:138`, default `true`) was set at docs/deploy-activation/pr-4443.md step 8b (operator Q6: A), to be lifted at its step 9a. The pause ended 2026-09-28 (operator Q1–Q4: A): pr-4443 step 8 passed, step 3a of this runbook (pr-4443 step 9a) set the variable back to `true`, and step 3b (pr-4443 step 9) dispatched the promotion.
+- Consumers are on Codex until the same promotion carries #4443 (pr-4443 step 6: `AI_ISSUE_IMPLEMENTER` unset → `claude` after promotion), so no consumer runs `/implement-issue-claude` before it has this script.
+- `stable` is not a descendant of main (promotions are non-ancestral), so step 3 checks file content.
+- Auto-decisions AD-1…AD-7 (progress log `## Auto-decisions`) are all `pending review`; they are listed in the opening message and confirmed at LIVE unless changed.
+- 2026-09-28: the first step 3 check on the operator Mac showed `stable` still at `d58d7bc` / tag `fade4be9`. The operator then chose to promote now (Q1–Q4: A). #4550, the pr-4443 step 8 re-run, had finished: clean security pass (run 36288353113), validation pass (run 36288707267), final PR #4554 merged. So steps 3a/3b are pr-4443 steps 9a/9, run from this runbook, and pr-4443.md records them too.
