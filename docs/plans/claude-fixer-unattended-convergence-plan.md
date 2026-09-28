@@ -174,6 +174,28 @@ implementing chain must not re-open them.
   #4601's fixer, and this project's phase 2 for about 50 minutes) until a
   human happened to look.
 
+### D13 — Issue-mode projects start from the default branch
+
+- **Chosen:** an issue-mode project uses the default branch as its base
+  unless the code it fixes exists only on the branch the issue names.
+  `ai:security` follow-ups keep the project branch they name, because the
+  audited code lives there. Another named base (a heal issue's PR head,
+  `stable`) is used only when a file the plan changes, as opposed to
+  creates, is missing on the default branch. When a project still runs on a
+  non-default base and that base's pull request closes without merging, the
+  chain rebuilds the project on the default branch by itself when the
+  project's diff applies cleanly, and records an auto-decision (§28.D). It
+  stops at `Status: BLOCKED` only when the diff does not apply. Added to
+  Phase 3 on 2026-09-28.
+- **Alternatives considered:** always the default branch, with no
+  exception; keep today's named-base rule and ask each time.
+- **Why:** #4653's project was built on `ai/issue-4605` (AD-1), the head of
+  PR #4607, because the heal issue named it. PR #4607 was then closed without
+  merging, so validation could never be authorised and the recommended "wait"
+  answer would have waited forever. Retargeting the final PR to `main` would
+  have carried 203 unrelated commits. The project's 8-file diff applied
+  cleanly to `main`, which the operator chose on 2026-09-28.
+
 ## Context
 
 Observed on 2026-09-27 in `shubhodeep1/coding-workflows`: 11 open `claude/*`
@@ -499,6 +521,39 @@ Workflow side:
   stage the progress log already records as started by another live session
   (`Stage:` plus the stage session id the checker records) reports that and
   ends without acting, so two resumes never both run.
+- `implement-issue-claude.md` and `implement-plan-claude.md` issue mode
+  (D13):
+  - Step 3's base rule: resolve `<issue base>` as today, then, when it is not
+    the default branch and the issue is not an `ai:security` follow-up, use
+    the default branch unless a file the plan changes (not one it creates)
+    is missing there (`git cat-file -e origin/<default>:<path>`). The check
+    runs once the plan's file list exists and before the project branch is
+    created. Record the choice as an `AD-<n>` (`Base: <default> instead of
+    <named> (D13)`, or the reverse with the missing paths).
+  - Every issue-mode stage start (step 0), and every project check-in while
+    the log's base is not the default branch, spends one REST read
+    (`GET pulls?head=<owner>:<base>&state=all&per_page=5`) and treats the
+    base as dead when no listed PR is open and the newest is closed with
+    `merged_at` null, or when the base branch is gone (`git ls-remote`
+    empty).
+  - On a dead base, the checker starts the next stage with
+    `Waiting on was: base <base> closed unmerged`. That stage rebuilds the
+    project:
+    1. Create `<project branch>-main` from `origin/<default>` (append `-2`,
+       `-3`, … when taken).
+    2. Apply `git diff origin/<base>...origin/<project branch>` after a clean
+       `git apply --3way --check`.
+    3. Update the progress log's project-branch and base lines, commit the
+       uncommitted log entries, and push.
+    4. Close the old final PR without merging, as superseded. The chain
+       opened it, so this is not a §23.C ask.
+    5. Open the final PR from the new branch into the default branch.
+    6. Re-run the last conformance audit's checks on the new base, then
+       resume at the stage it was on.
+  - The old project branch is never deleted, rewritten, or force-pushed.
+    The rebuild is an `AD-<n>`. When `--check` fails, the stage stops at
+    `Status: BLOCKED` with the conflicting paths, as a failure escalation
+    (§28.C).
 
 ### Phase 4: session janitor
 
@@ -588,7 +643,9 @@ stages already do (#4597), so prompts a fixer answered late are filed too.
    when the run reports the switch off), or revert the PR.
 3. **Checkers never ask; reasoning before holds; held backoff.** Files:
    `CLAUDE.md` §26.B/§26.C, `.claude/commands/implement-plan-claude.md`,
-   `.claude/commands/fix-claude-pr.md`, `.claude/scripts/check_in_status.py`
+   `.claude/commands/fix-claude-pr.md`,
+   `.claude/commands/implement-issue-claude.md`,
+   `.claude/scripts/check_in_status.py`
    (+ twins), `agents.md` (check-in section), `README.md` (new variable),
    tests (`tests/test_check_in_status_hand_back.py`, template parity),
    `changelog.d/`.
@@ -598,7 +655,10 @@ stages already do (#4597), so prompts a fixer answered late are filed too.
    `implement-plan-claude.md` (+ twin) makes every BLOCKED stop on a held PR
    arm the project checker's wait on that PR, and says how a stage started by
    both `/reclarify` and the checker ends the duplicate (D11), with the
-   command-doc tests asserting both.
+   command-doc tests asserting both. D13: the command docs carry the base
+   rule and the rebuild procedure, and the command-doc tests assert the
+   default-branch choice, the `ai:security` exception, the dead-base read,
+   and the BLOCKED stop on a failed `--check`.
    Rollback: revert the PR (checkers default to 60 when the field is absent).
 4. **Session janitor.** Files: `.claude/scripts/stale_sessions.py` [new],
    `tests/test_stale_sessions.py` [new], `.claude/commands/claude-issue-pickup.md`,
@@ -677,7 +737,10 @@ default to 60 minutes without the new field; Phase 4 touches only the pickup.
    `Status: BLOCKED` with a held PR (step 7 Blocked rule, step 7a no-valid-
    finding branch, the cap stops) first arms the wait per the Check-in Loop's
    "Arming the wait", then stops; add the duplicate-resume guard to step 0.
-4. Tests + agents.md + README + changelog fragment.
+4. D13: the base rule in `implement-issue-claude.md` step 3 and the dead-base
+   check and rebuild in `implement-plan-claude.md` issue mode and its checker
+   prompt (+ twins).
+5. Tests + agents.md + README + changelog fragment.
 
 ### Phase 4
 
@@ -704,8 +767,9 @@ default to 60 minutes without the new field; Phase 4 touches only the pickup.
 - `prompts/mode-judge-review-blocked.txt` (+ `prompts/_templates/` twin if present)
 - `.claude/scripts/check_in_status.py` (+ `workflow-templates/.claude/scripts/` twin)
 - `.claude/scripts/stale_sessions.py` [new]
-- `.claude/commands/fix-claude-pr.md`, `.claude/commands/implement-plan-claude.md`
-  (+ twins), `.claude/commands/claude-issue-pickup.md`
+- `.claude/commands/fix-claude-pr.md`, `.claude/commands/implement-plan-claude.md`,
+  `.claude/commands/implement-issue-claude.md` (+ twins),
+  `.claude/commands/claude-issue-pickup.md`
 - `.claude/settings.json`
 - `CLAUDE.md`, `README.md`, `agents.md`, `docs/INVENTORY.md`
 - `tests/test_review_autofix_claude_fixer_mode.py`,
@@ -759,6 +823,10 @@ default to 60 minutes without the new field; Phase 4 touches only the pickup.
 - **`list_sessions` output size in the pickup.** Mitigation: the harness saves
   large results to a file which is passed to the script as is; the pickup's
   report stays one line.
+- **A rebuild on the default branch validates a change against different
+  code (D13).** Mitigation: it happens only after a clean `git apply
+  --3way --check`, the conformance checks re-run on the new base, and the
+  final PR gets a full review. The old branch is kept.
 - **Bootstrap: this project's PRs may hit today's hold.** ACCEPTED (planning
   Q8 A): the supervising session reviews and asks the operator for a one-line
   merge approval.
@@ -776,7 +844,7 @@ their fixers through the judge (the supervising session re-dispatches them).
 ## References
 
 - Held PRs: #4582, #4554, #4599, #4601, #4602, #4594, #4609, #4611, #4638,
-  #4596, #4610; projects #4586, #4618.
+  #4596, #4610; projects #4586, #4618, #4653 (dead base, D13).
 - Run 36295340728 (PR #4554 zero-finding hand-off).
 - Overlapping PRs: #4596 / #4593 (issue #4586), #4609; related #4618.
 - CLAUDE.md §4, §6, §14, §15, §18, §19, §20, §23.A, §25, §26, §27, §28.
