@@ -380,6 +380,9 @@ jobs:
           CLAUDE_FIX_CLAIM_LEASE_HOURS: ${{ vars.CLAUDE_FIX_CLAIM_LEASE_HOURS || '3' }}
           CLAUDE_FIX_HAND_BACK_CAP: ${{ vars.CLAUDE_FIX_HAND_BACK_CAP || '3' }}
           CLAUDE_PR_SWEEP_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          # Every queue item this run opens is recorded here and uploaded
+          # below; the pickup starts nothing the artifact does not list (#4621).
+          CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
         run: |
           set -euo pipefail
           # The review workflow posts hand-offs with GH_PAT, so its account is
@@ -390,3 +393,14 @@ jobs:
           fi
           echo "CLAUDE_PR_SWEEP handoff_author=${CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN:-<unset: hand-offs ignored>}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_pr_sweep.py
+
+      # Runs even when the sweep step failed, so a queue item it opened is
+      # never left without its binding (issue #4621).
+      - name: Upload the queue binding for the Claude issue pickup
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: claude-issue-queue-binding
+          path: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
+          if-no-files-found: ignore
+          retention-days: 30
