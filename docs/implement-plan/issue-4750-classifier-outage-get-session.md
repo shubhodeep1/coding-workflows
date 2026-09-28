@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#4750
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4750-classifier-outage-get-session   Final PR: #4770 draft
-- Status: IN_PROGRESS
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #4821 (phase 1) — twin sync by the supervising session, then /reclarify
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: resumed on /reclarify with operator decisions Q1 A, Q39 A, Q40 A (comment 5868311173); plan updated to the Q39 scope; phase 1 implemented twin-first
+- Last note: phase 1 implemented twin-first (Q40 A) in PR #4821; hold claim posted on its head; BLOCKED until the supervising session copies the two workflow-templates/.claude twins into .claude/ as [claude-twin-sync] and comments /reclarify. On resume, arm the wait on PR #4821 — do not re-implement phase 1.
 
 ## Phases
-1. [ ] Phase 1 — classifier-outage handling: filer split, CLAUDE.md §23.J retry rule, and outage-tolerant step 0 — protected paths: .claude/commands/implement-plan-claude.md, .claude/scripts/permission_prompts.py (edited only in their workflow-templates/.claude/ twins, Q40)
+1. [ ] Phase 1 — classifier-outage handling: filer split, CLAUDE.md §23.J retry rule, and outage-tolerant step 0 — protected paths: .claude/commands/implement-plan-claude.md, .claude/scripts/permission_prompts.py (edited only in their workflow-templates/.claude/ twins, Q40) — PR #4821 open (hold: awaiting [claude-twin-sync]); review rounds: 0; interventions: 0
 
 ## Conformance
 
