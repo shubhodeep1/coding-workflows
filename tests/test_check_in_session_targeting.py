@@ -86,6 +86,9 @@ def test_instructions_prompt_restates_the_session_rules(claude_md):
 	step_3 = _section(claude_md, "3. Call `create_trigger` with `persistent_session_id` = the checker's", "4. Report the checker's session id")
 	assert "The prompt also restates the session rules of §26.C step 5" in step_3
 	assert "a missing Routine alone is not a gone subscriber" in step_3
+	assert "it never archives itself (the fixer archives it, §26.D)" in step_3
+	assert "is delivered, even when the fixer has not claimed the head yet" in step_3
+	assert "starts one only when `action` is still `hand_back_fixer`" in step_3
 
 
 def test_fixer_checks_the_checker_before_renaming_or_archiving(section_d):

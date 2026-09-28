@@ -1794,8 +1794,13 @@ terminal report (§26.D):
    fails (§26.C step 5). The prompt also restates the session rules of
    §26.C step 5: the checker's own id comes from Bash, never from the
    prompt; it never passes a subscriber's session id to
-   `set_session_title` or `archive_session`; and a missing Routine alone
-   is not a gone subscriber. The one-shot trigger disables itself after it
+   `set_session_title` or `archive_session`; it never archives itself
+   (the fixer archives it, §26.D); a hand-back whose Routine run
+   `SUCCEEDED` in the subscriber's session is delivered, even when the
+   fixer has not claimed the head yet; a missing Routine alone is not a
+   gone subscriber; and before starting a fresh fixer it re-runs step 1's
+   command and starts one only when `action` is still
+   `hand_back_fixer`. The one-shot trigger disables itself after it
    fires.
 4. Report the checker's session id, the instructions trigger id, and the
    hand-back trigger id in this session's reply.
