@@ -1181,8 +1181,12 @@ committing the corresponding file:
   trusted-author same-repo project PR targeting the default branch, a
   `claude/implement-plan-*` project branch whose own single open trusted
   same-repo PR targets the default branch (one level of stacking), or `stable`
-  for a `claude/implement-plan-issue-<n>-*` head whose issue `<n>` carries
-  `ai:workflow-heal`; any other base is refused. Checkout
+  for a `claude/implement-plan-issue-<n>-*` head whose issue `<n>` is a
+  verified workflow-heal issue: `ai:workflow-heal`, authored by an `OWNER` User
+  or `github-actions[bot]`, the `workflow-failure-heal:fp=` marker line,
+  `stable` as its Integration/Target branch line, the label applied only by the
+  author within 120 s of creation (one 100-item events page), and the same
+  author as the target PR (issue #4791); any other base is refused. Checkout
   pins and verifies that PR's SHA without persisting checkout credentials.
   Empty `target_ref` retains integration/default selection.
 

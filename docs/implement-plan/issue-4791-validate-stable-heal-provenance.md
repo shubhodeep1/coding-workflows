@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4791-validate-stable-heal-provenance-plan.md
 - Source issue: shubhodeep1/coding-workflows#4791
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4734-validate-stacked-stable-targets
-- Project branch: claude/implement-plan-issue-4791-validate-stable-heal-provenance   Final PR: pending
+- Project branch: claude/implement-plan-issue-4791-validate-stable-heal-provenance   Final PR: #4793 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (opened with this commit; number in the stage report and the checker's resume block)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: project branch opened from the #4734 project branch; phase 1 starting.
+- Last note: phase 1 implemented — stable targets now need a verified heal issue (automation author, fp marker, `stable` branch line, label applied by the author within 120 s) opened by the target PR's author; tests/test_validate_target_ref_input.py 12 passed, 262 related tests passed, actionlint adds no finding, validate.yml 72,527 bytes; live check: #4667 (stable) and this project's branch still authorized.
 
 ## Phases
-1. [ ] Phase 1 — verify heal provenance and PR binding for stable targets in validate.yml
+1. [ ] Phase 1 — verify heal provenance and PR binding for stable targets in validate.yml   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
