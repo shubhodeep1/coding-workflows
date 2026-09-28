@@ -129,6 +129,7 @@ def test_security_pass_recovery_log_prefixes_are_registered() -> None:
 	agents_text = AGENTS_MD.read_text(encoding="utf-8")
 	for prefix in (
 		"REISSUE_FILES_TOUCHED_UNION",
+		"REISSUE_FILES_TOUCHED_NEW_OUTPUTS",
 		"REISSUE_ORCHESTRATOR_METADATA_CARRIED",
 		"REISSUE_ORCHESTRATOR_METADATA_ABSENT",
 		"SECURITY_PASS_AUTO_RESET",
