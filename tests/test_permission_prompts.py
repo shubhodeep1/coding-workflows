@@ -396,8 +396,13 @@ def test_claude_md_routes_file_edits_through_edit_tools():
 	for shape in ("`python3 - <<'EOF'`", "`python3 -c`", "`node -e`", "`perl -e`"):
 		assert shape in section
 	assert "issue #4678" in section
-	assert "the repository root's `.claude/**`" in section
-	assert "`workflow-templates/.claude/**` is not protected" in section
+	# Pin the triage clause itself: the no-retry paragraph below also names
+	# "the repository root's `.claude/**`", so a bare match would not catch
+	# the clause losing its root-only wording.
+	assert (
+		"a protected-path edit (the repository root's `.claude/**`; "
+		"`workflow-templates/.claude/**` is not protected)"
+	) in section
 
 
 def test_claude_md_never_retries_a_blocked_claude_dir_edit():
