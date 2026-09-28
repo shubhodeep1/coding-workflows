@@ -169,6 +169,7 @@ OUTPUT FORMAT (sentinel-delimited, in this exact order, nothing before or after)
   PROBLEM: one-sentence statement of the bug
   WHY: one-sentence justification; on severity disagreement use the HIGHEST
        and note the disagreement
+  rejected_by: [<reviewer_slug>, ...]   (only when some reviewer rejected this entry; see below)
 - ...
 === END CONSENSUS FINDINGS ===
 
@@ -193,6 +194,11 @@ How to bucket reviewer entries:
 - Entries that follow the standard reviewer issue shape (File:/Line or code reference:/Problem:/Why it fails at runtime:/ISSUE_CONFIDENCE:) belong in CONSENSUS FINDINGS.
 - Entries emitted under a reviewer's "TASK COMPLETENESS / INTENT GAPS" checklist heading, or that follow the TASK_GAP shape (Requirement:/Expected change site:/Evidence of absence:/ISSUE_CONFIDENCE:), belong in CONSENSUS TASK GAPS. Do NOT shoehorn a TASK_GAP into CONSENSUS FINDINGS just because it lacks a file:line.
 - Always emit BOTH blocks even when one is empty; the empty body is the single line "(No findings reported.)" or "(No task gaps reported.)".
+- Lines of the form "REJECTED_FINDING: <file>:<line> | flagged_by: <slug> | reason: ..." are a reviewer's
+  verdict that another reviewer's earlier finding is not a defect. They are NOT findings: never emit them
+  as bullets in any block. Instead, add that reviewer's slug to the "rejected_by: [...]" line of the matching
+  CONSENSUS FINDINGS entry (same file, nearby line, same flagged_by slug); omit the line when no one rejected
+  the entry. The line is informational; keep the entry itself unchanged.
 
 Deduplication rules for the CONSENSUS FINDINGS block:
 1. Two findings are duplicates when they refer to the same file AND their line

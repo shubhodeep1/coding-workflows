@@ -22,6 +22,17 @@
 #          workflow's own auto-merge step runs, as it does when the editor
 #          finds nothing to commit.
 #
+# Rejected single-reviewer findings (issue #4586): before counting, a
+# well-formed ledger goes through scripts/review_claude_fixer_nonblocking.py,
+# which moves every consensus finding raised by exactly one reviewer and
+# rejected (REJECTED_FINDING lines in the raw pass-2 outputs under
+# PREVIOUS_REVIEWS_DIR) by a strict majority of the other successful
+# reviewers, at least two, into a NON-BLOCKING FINDINGS block. The filtered
+# copy is what this step counts, digests, and posts; a round whose only
+# entries are non-blocking still posts the ledger, then takes the
+# zero-findings path. A missing or failing filter keeps the original ledger,
+# so every finding stays blocking.
+#
 # The hand-off marker is
 #   <!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->
 # and .claude/scripts/check_in_status.py reads it (plus the session's
@@ -33,11 +44,12 @@
 # [claude-autofix] commits on the head; round = index + 1),
 # AUTOFIX_PRE_REVIEW_RESOLVE,
 # AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED, REVIEWER_CONSENSUS_FILE,
-# PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR, GITHUB_RUN_ID,
-# GITHUB_SERVER_URL, RUNTIME_DIR.
+# PREVIOUS_REVIEWS_DIR, PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR,
+# GITHUB_RUN_ID, GITHUB_SERVER_URL, RUNTIME_DIR.
 # API calls: on a clean candidate, the existing check-run collector refreshes
 # its paginated check-runs GET; on findings, the ledger chunks from
-# post_review_comment.sh and one hand-off comment are posted.
+# post_review_comment.sh and one hand-off comment are posted; on a clean
+# round with non-blocking entries, only the ledger chunks are posted.
 set -euo pipefail
 
 # shellcheck source=/dev/null
@@ -90,24 +102,52 @@ fi
 # Count ledger entries: every "- " bullet inside a CONSENSUS FINDINGS,
 # CONSENSUS TASK GAPS or FINDINGS FROM <slug> block. A missing or empty
 # ledger fails closed (the round is handed off, never auto-merged).
+claude_fixer_ledger_well_formed()
+{
+  [ -s "$1" ] \
+    && grep -Fxq '=== CONSENSUS FINDINGS ===' "$1" \
+    && grep -Fxq '=== END CONSENSUS FINDINGS ===' "$1" \
+    && grep -Fxq '=== CONSENSUS TASK GAPS ===' "$1" \
+    && grep -Fxq '=== END CONSENSUS TASK GAPS ===' "$1" \
+    && grep -Eq '^=== FINDINGS FROM .+ ===$' "$1"
+}
+
 claude_fixer_ledger_state="missing"
 claude_fixer_finding_count=0
 claude_fixer_ledger_digest=""
+claude_fixer_ledger_file="${REVIEWER_CONSENSUS_FILE:-}"
+claude_fixer_nonblocking_count=0
 if [[ "${REVIEWERS_SUCCESSFUL:-}" =~ ^[1-9][0-9]*$ ]] \
-  && [ -s "${REVIEWER_CONSENSUS_FILE:-}" ] \
-  && grep -Fxq '=== CONSENSUS FINDINGS ===' "${REVIEWER_CONSENSUS_FILE}" \
-  && grep -Fxq '=== END CONSENSUS FINDINGS ===' "${REVIEWER_CONSENSUS_FILE}" \
-  && grep -Fxq '=== CONSENSUS TASK GAPS ===' "${REVIEWER_CONSENSUS_FILE}" \
-  && grep -Fxq '=== END CONSENSUS TASK GAPS ===' "${REVIEWER_CONSENSUS_FILE}" \
-  && grep -Eq '^=== FINDINGS FROM .+ ===$' "${REVIEWER_CONSENSUS_FILE}"; then
+  && claude_fixer_ledger_well_formed "${REVIEWER_CONSENSUS_FILE:-}"; then
   claude_fixer_ledger_state="ok"
-  claude_fixer_ledger_digest="$(sha256sum "${REVIEWER_CONSENSUS_FILE}" | cut -d ' ' -f 1)"
+  # Demote rejected single-reviewer findings (issue #4586). Any failure keeps
+  # the original ledger, so every finding stays blocking.
+  claude_fixer_nonblocking_script="${SUPPORT_SCRIPTS_DIR}/review_claude_fixer_nonblocking.py"
+  [ -f "${claude_fixer_nonblocking_script}" ] || claude_fixer_nonblocking_script="${GITHUB_WORKSPACE:-}/.codex-workflow-src/scripts/review_claude_fixer_nonblocking.py"
+  claude_fixer_filtered_ledger="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/reviewer_consensus_claude_fixer.txt"
+  rm -f "${claude_fixer_filtered_ledger}"
+  if [ ! -f "${claude_fixer_nonblocking_script}" ]; then
+    echo "::warning::review_claude_fixer_nonblocking.py not found; every ledger entry stays blocking."
+  elif [ -z "${PREVIOUS_REVIEWS_DIR:-}" ] || [ ! -d "${PREVIOUS_REVIEWS_DIR}" ]; then
+    echo "::warning::PREVIOUS_REVIEWS_DIR is unset or missing; every ledger entry stays blocking."
+  elif claude_fixer_nonblocking_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${claude_fixer_nonblocking_script}" \
+      --ledger "${REVIEWER_CONSENSUS_FILE}" --reviews-dir "${PREVIOUS_REVIEWS_DIR}" --output "${claude_fixer_filtered_ledger}")" \
+    && claude_fixer_ledger_well_formed "${claude_fixer_filtered_ledger}"; then
+    printf '%s\n' "${claude_fixer_nonblocking_out}"
+    claude_fixer_nonblocking_count="$(printf '%s\n' "${claude_fixer_nonblocking_out}" | sed -n 's/^CLAUDE_FIXER_NONBLOCKING demoted=\([0-9][0-9]*\) .*/\1/p' | head -n 1)"
+    [[ "${claude_fixer_nonblocking_count}" =~ ^[0-9]+$ ]] || claude_fixer_nonblocking_count=0
+    claude_fixer_ledger_file="${claude_fixer_filtered_ledger}"
+  else
+    echo "::warning::review_claude_fixer_nonblocking.py failed; every ledger entry stays blocking."
+    claude_fixer_nonblocking_count=0
+  fi
+  claude_fixer_ledger_digest="$(sha256sum "${claude_fixer_ledger_file}" | cut -d ' ' -f 1)"
   claude_fixer_finding_count="$(awk '
     /^=== (CONSENSUS FINDINGS|CONSENSUS TASK GAPS|FINDINGS FROM .*) ===$/ { in_block = 1; next }
     /^=== END / { in_block = 0; next }
     in_block && /^- / { total++ }
     END { printf "%d\n", total + 0 }
-  ' "${REVIEWER_CONSENSUS_FILE}")"
+  ' "${claude_fixer_ledger_file}")"
 fi
 claude_fixer_failed_checks=""
 if [ -s "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ]; then
@@ -123,7 +163,7 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
     /^=== END / { if (block) { if (entries != 1) invalid = 1; blocks++; block = 0 }; next }
     block && NF { entries++; if ($0 != expected) invalid = 1 }
     END { if (invalid || block || blocks < 3) exit 1 }
-  ' "${REVIEWER_CONSENSUS_FILE}"; then
+  ' "${claude_fixer_ledger_file}"; then
   claude_fixer_clean_ledger="true"
 fi
 
@@ -146,7 +186,14 @@ if [ "${claude_fixer_clean_ledger}" = "true" ] && [ -z "${claude_fixer_failed_ch
     && grep -Fxq 'failed_count: 0' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
     && grep -Fxq 'incomplete_count: 0' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
     && ! grep -Eq '^(failed|incomplete)\[[0-9]+\]\.' "${PR_CHECK_RUNS_CONTEXT_FILE}"; then
-    echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=none findings=0 failed_checks=0 action=auto_merge"
+    if [ "${claude_fixer_nonblocking_count}" -gt 0 ]; then
+      # Keep the non-blocking entries visible on the PR (issue #4586). The
+      # post is best-effort: the run log carries them either way.
+      REVIEWER_CONSENSUS_FILE="${claude_fixer_ledger_file}" REPOSITORY="${GITHUB_REPOSITORY}" \
+        bash "${SUPPORT_SCRIPTS_DIR}/post_review_comment.sh" \
+        || echo "::warning::Could not post the ledger with ${claude_fixer_nonblocking_count} non-blocking entries; see the CLAUDE_FIXER_NONBLOCKING lines above."
+    fi
+    echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=none findings=0 failed_checks=0 action=auto_merge nonblocking=${claude_fixer_nonblocking_count}"
     echo "CLAUDE_FIXER_ZERO_FINDINGS=true" >> "$GITHUB_ENV"
     exit 0
   fi
@@ -160,7 +207,7 @@ if [ "${CLAUDE_FIXER_VERIFICATION:-false}" = "true" ]; then
 fi
 
 if [ "${claude_fixer_ledger_state}" = "ok" ]; then
-  REPOSITORY="${GITHUB_REPOSITORY}" bash "${SUPPORT_SCRIPTS_DIR}/post_review_comment.sh"
+  REVIEWER_CONSENSUS_FILE="${claude_fixer_ledger_file}" REPOSITORY="${GITHUB_REPOSITORY}" bash "${SUPPORT_SCRIPTS_DIR}/post_review_comment.sh"
 fi
 
 {
@@ -169,6 +216,9 @@ fi
   echo "Reviewed head: \`${HEAD_SHA}\` ([workflow run](${claude_fixer_run_url}))."
   if [ "${claude_fixer_ledger_state}" = "ok" ]; then
     echo "Reviewer ledger entries: ${claude_fixer_finding_count} (posted above)."
+    if [ "${claude_fixer_nonblocking_count}" -gt 0 ]; then
+      echo "Non-blocking entries: ${claude_fixer_nonblocking_count} (the ledger's NON-BLOCKING FINDINGS block: each was raised by one reviewer and rejected by a majority of the others; no fix or verdict is needed for them)."
+    fi
   else
     echo "The consensus ledger was not produced; the per-reviewer outputs are in the run's \`reviewer-logs-*\` artifact."
   fi
@@ -192,4 +242,4 @@ fi
   fi
 } > "${claude_fixer_body_file}"
 claude_fixer_post_marker_comment
-echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=findings findings=${claude_fixer_finding_count} ledger=${claude_fixer_ledger_state} failed_checks=${claude_fixer_failed_checks:-none}"
+echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=findings findings=${claude_fixer_finding_count} ledger=${claude_fixer_ledger_state} failed_checks=${claude_fixer_failed_checks:-none} nonblocking=${claude_fixer_nonblocking_count}"

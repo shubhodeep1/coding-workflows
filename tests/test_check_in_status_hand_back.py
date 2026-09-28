@@ -291,6 +291,46 @@ def test_claim_body_rejects_bad_input(head, kind, by):
 		claimer.claim_body(head, kind, by)
 
 
+def test_hold_cites_the_cap_only_when_the_cap_was_reached():
+	"""Issue #4586: the hold text names the real reason; the marker never changes."""
+	marker = f"<!-- ai:claude-fix-claim:v1 head={HEAD} kind=hold by=session_01x -->"
+	capped = claimer.claim_body(HEAD, "hold", "session_01x", reason="cap")
+	assert "reached the cap of 3 Claude hand-backs" in capped
+	for reason in [None, *(name for name in claimer.HOLD_REASONS if name != "cap")]:
+		body = claimer.claim_body(HEAD, "hold", "session_01x", reason=reason)
+		assert "cap" not in body.lower().replace("claude_fixer", ""), reason
+		assert [line for line in body.splitlines() if checker.FIX_CLAIM_RE.fullmatch(line)] == [marker]
+	assert "no dedicated fixer-verdict bot" in claimer.claim_body(HEAD, "hold", "session_01x", reason="review-no-verdict-bot")
+	assert "cannot make alone" in claimer.claim_body(HEAD, "hold", "session_01x")
+
+
+def test_hold_cap_text_follows_the_configured_cap(monkeypatch):
+	monkeypatch.setenv("CLAUDE_FIX_HAND_BACK_CAP", "5")
+	assert "cap of 5 Claude hand-backs" in claimer.claim_body(HEAD, "hold", "session_01x", reason="cap")
+
+
+@pytest.mark.parametrize("kind, reason", [("review", "cap"), ("ci", "ci-outside-pr"), ("hold", "bogus")])
+def test_claim_body_rejects_a_misused_reason(kind, reason):
+	with pytest.raises(ValueError):
+		claimer.claim_body(HEAD, kind, "session_01x", reason=reason)
+
+
+def test_cli_passes_the_hold_reason_through(monkeypatch, capsys):
+	monkeypatch.setattr(claimer.check_in_status, "gh_api", lambda path: {"state": "open", "head": {"sha": HEAD}})
+	bodies = []
+
+	def fake_gh(args):
+		bodies.append(json.loads(Path(args[-1]).read_text())["body"])
+		return json.dumps({"id": 7})
+
+	monkeypatch.setattr(claimer, "_gh", fake_gh)
+	code = claimer.main(["post", "--repo", REPO, "--pr", "7", "--head", HEAD, "--kind", "hold", "--by", "session_01x", "--reason", "review-no-verdict-bot"])
+	assert code == 0 and "no dedicated fixer-verdict bot" in bodies[0] and "cap of" not in bodies[0]
+	assert claimer.main(["body", "--head", HEAD, "--kind", "review", "--by", "s", "--reason", "cap"]) == 1
+	with pytest.raises(SystemExit):
+		claimer.main(["body", "--head", HEAD, "--kind", "hold", "--by", "s", "--reason", "bogus"])
+
+
 def test_post_refuses_a_moved_head(monkeypatch, capsys):
 	monkeypatch.setattr(claimer.check_in_status, "gh_api", lambda path: {"state": "open", "head": {"sha": OTHER_HEAD}})
 	monkeypatch.setattr(claimer, "_gh", lambda args: pytest.fail("must not post"))

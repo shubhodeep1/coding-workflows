@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4586-rejected-singleton-findings-hold-reason-plan.md
 - Source issue: shubhodeep1/coding-workflows#4586
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason   Final PR: pending
+- Project branch: claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason   Final PR: #4593 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #4596 (review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_013w7TE4NrijNvNF8nmizwLx (trigger ids in the stage report)
 - Last updated: 2026-09-27
-- Last note: project branch opened from main; plan and log committed
+- Last note: review round 1 (re-run on ebab2df7ff04): added the missing docs/INVENTORY.md entry for scripts/review_claude_fixer_nonblocking.py, rejected the `_range()` finding; project branch synced with main
 
 ## Phases
-1. [ ] Phase 1 — non-blocking rejected singletons, and truthful hold reasons
+1. [ ] Phase 1 — non-blocking rejected singletons, and truthful hold reasons   — PR #4596 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -36,6 +36,9 @@
 - AD-7 [plan, 2026-09-27] How close must a rejection's line be to the finding? — Picked: A — same file, range overlapping or within 3 lines, and naming the same flagger. Alternatives: B — the summariser's 5-line dedupe window without the flagger match; C — exact line only. Why: #4575's rejections cited line 1262 for a 1261 finding; the flagger match keeps a nearby different finding from being swept up. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:intervention] A new tracked file under scripts/ that README.md or agents.md names must also get a docs/INVENTORY.md "Scripts" entry; run `python3 tests/inventory_parity.py` (a plain-python CI step, not a pytest suite) before pushing. (files: docs/INVENTORY.md, tests/inventory_parity.py)
 
 ## Notes
+- Review round 1 on ebab2df7ff04 (run 36290586400, attempt 1) had no valid finding; with no `CLAUDE_FIXER_VERDICT_BOT_LOGIN` configured the head went on hold and Q1 was asked on #4586. A human answered `Q1: B`: the review run was re-run on the same head (attempt 2), which found the INVENTORY.md gap fixed in round 1's `[claude-autofix]` commit.
+- Final PR #4593 (draft) opened 2026-09-27 into `main` with `Fixes #4586`.
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher in session session_018qDgVu4VtaQEnTp4n3MekE (permission mode auto). Base branch `main` (the issue names no integration or target branch), so the final PR carries `Fixes #4586`.
