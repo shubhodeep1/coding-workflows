@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4787-checker-renames-only-itself-plan.md
 - Source issue: shubhodeep1/coding-workflows#4787
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4787-checker-renames-only-itself   Final PR: draft (opened right after this commit; number in the issue progress comment)
+- Project branch: claude/implement-plan-issue-4787-checker-renames-only-itself   Final PR: #4797 draft
 - Status: BLOCKED
-- Stage: phase 1/1
+- Stage: phase 1/1 — twin sync
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #4828 twin sync into `.claude/commands/**` by the supervising session, then `/reclarify`
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: phase 1 must edit `.claude/commands/**` and has no `Protected-path approval: phase 1` line; stopped before the phase started (CLAUDE.md §28.C) and asked on issue #4787.
+- Last note: phase 1 implemented twin-first (operator Q1: A): `workflow-templates/.claude/commands/**` twins, CLAUDE.md §26, agents.md, test, changelog; PR #4828 carries a hold claim and waits for the supervising session to copy the twins into `.claude/commands/**` and apply the `claude-issue-pickup.md` edit.
 
 ## Phases
-1. [ ] Phase 1 — session-targeting rules for §26 checkers and fixers   — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/claude-issue-pickup.md`, `workflow-templates/.claude/commands/implement-plan-claude.md`, `workflow-templates/.claude/commands/fix-claude-pr.md`
+1. [ ] Phase 1 — session-targeting rules for §26 checkers and fixers   — PR #4828 open (held for twin sync); review rounds: 0; interventions: 0 — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/claude-issue-pickup.md`, `workflow-templates/.claude/commands/implement-plan-claude.md`, `workflow-templates/.claude/commands/fix-claude-pr.md`
    - CLAUDE.md §26.B step 3, §26.C step 5, §26.D: own-id line, never target a subscriber, §26.D title check via `get_session`, archive reported only on success, delivered/gone rule, re-check before a fresh fixer
    - `/implement-plan-claude` (+ twin): checker prompt step 4b not-found rule, checker renames/archives no session, title check before archiving the project checker
    - `/fix-claude-pr` (+ twin): step 2, step 8, Rules bullet
@@ -41,10 +41,15 @@
 - AD-6 [plan, 2026-09-28] Should `scripts/claude_issue_route.py`'s `ready_prompt` repeat the rule? — Picked: A — no; it points to §26.B steps 3–4, which will carry it. Alternatives: B — append the rule text. Why: §5 minimal change. Applied in: no code change. Status: pending review
 - AD-7 [plan, 2026-09-28] Should `.claude/commands/claude-issue-dispatch.md` change too? — Picked: A — no. Alternatives: B — add the same wording. Why: it already archives only the session it just created; the issue names three other commands. Applied in: no code change. Status: pending review
 - AD-8 [plan, 2026-09-28] Where does the new test run in CI? — Picked: A — a new file in the existing `ci.yml` step "Claude-fixer hand-back, claim and catch-all sweep tests (CLAUDE.md §26.C, §26.H)". Alternatives: B — extend `tests/test_implement_plan_claude_command.py` only; C — a new step. Why: the rules span CLAUDE.md and three commands, and that step covers §26.C. Applied in: phase 1 PR. Status: pending review
+- AD-9 [phase 1/1, 2026-09-28] Where does `/implement-plan-claude` put the title check before it archives the project checker? — Picked: A — one new subsection, "Archiving the project checker", linked from Arming the wait step 1, step 12 LIVE, and step 13, with the existing sentences kept word for word. Alternatives: B — repeat the full check inline at all three points. Why: one rule in one place, and `tests/test_implement_plan_claude_command.py` pins the existing sentences. Applied in: PR #4828. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] When an instruction file's existing sentences are pinned by a contract test, add a new rule as a linked subsection or an appended sentence instead of rewording the pinned sentence. (files: .claude/commands/implement-plan-claude.md, tests/test_implement_plan_claude_command.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher (trigger `dispatch shubhodeep1/coding-workflows#4787: start`) in session session_01SDx7S3Hw7kHnJLkiWzrJ9z; permission mode auto.
 - Security pass: run (`security_pass_skip.py`: no skip label).
 - Blocked before phase 1 (CLAUDE.md §28.C protected paths): no `Protected-path approval: phase 1` line. The question is posted on issue #4787 (`<!-- ai:claude-blocked:v1 -->`). The next session records the answer here as `Protected-path approval: phase 1 — <letter> (<date>)` and resumes.
+- Protected-path approval: phase 1 — A (twin-first, 2026-09-28). Operator decision on issue #4787 (the operator's standing Q40: A), until #4785 lands: the phase edits only the `workflow-templates/.claude/commands/**` twins, never `.claude/**`; the `claude-issue-pickup.md` edit (no twin) is listed in the blocked comment; the phase PR gets a hold claim; the supervising session copies the twins into `.claude/commands/**` as `[claude-twin-sync]`, runs the tests, pushes (lifting the hold), and posts `/reclarify`.
+- Resumed 2026-09-28 by session session_01C6qsveeGqNgUq9H16mCNUC (trigger `dispatch shubhodeep1/coding-workflows#4787: start`); permission mode auto. Project branch synced with `main` (706e1b7).
+- Expected red until the twin sync: `tests/test_check_in_session_targeting.py` (the `.claude/commands` cases and twin parity), `tests/test_implement_plan_claude_command.py::test_template_parity`, and any other twin-parity check. With the twins copied and the pickup edit applied, the related suites pass locally (409 passed).
