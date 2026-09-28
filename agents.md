@@ -93,12 +93,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
    re-runs on a head that already has a hand-off are skipped
    (`claude_fixer_awaiting_session`). Doc-only and small-diff `claude/*`
    PRs take the gate's deterministic skip (`deterministic-skip-merge`, no
-   reviewer panel, no hand-off) like any other PR; only an accepted
-   `claude_fixer_converged_head` verification run (`CLAUDE_FIXER_VERIFY`)
-   is excluded, so a verdict is always followed by a fresh review, and a
-   head with a pending hand-off runs the review instead of skipping
-   (`reason=claude_fixer_pending_handoff`; a failed comment lookup logs
-   `reason=claude_fixer_handoff_unverified` and also runs it).
+   reviewer panel, no hand-off) like any other PR, with two exceptions.
+   An accepted `claude_fixer_converged_head` verification run
+   (`CLAUDE_FIXER_VERIFY`) never skips, so a verdict is always followed by
+   a fresh review. A head with a pending hand-off runs the review instead
+   of skipping (`reason=claude_fixer_pending_handoff`); when the hand-off
+   lookup fails, the gate logs `reason=claude_fixer_handoff_unverified`
+   and runs the review too.
    `[claude-intervention]` and `[claude-merge-resolve]` commits end the
    counted run, like `[judge-fix]`
    and `[ai-merge-resolve]`. The consolidator / floor stages live inside the
