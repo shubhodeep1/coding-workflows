@@ -431,6 +431,14 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stale_routines.py
 
+      - name: Unattended helper and permission prompt report tests (CLAUDE.md §23.I)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_dispatch_workflow.py \
+            tests/test_edit_comment.py \
+            tests/test_permission_prompts.py
+
       - name: Claude-fixer hand-back, claim and catch-all sweep tests (CLAUDE.md §26.C, §26.H)
         run: |
           set -euo pipefail
@@ -444,7 +452,7 @@ jobs:
       - name: Claude issue implementer tests (routing, handoff, intake, §28 command contract)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_issue_route.py tests/test_implement_issue_claude_command.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_issue_route.py tests/test_implement_issue_claude_command.py tests/test_security_pass_skip.py
 
       - name: CLAUDE.md section numbering guard (§6 identifiers)
         run: |

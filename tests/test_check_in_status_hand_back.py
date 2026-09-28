@@ -77,25 +77,31 @@ def _claim(head=HEAD, kind="ci", by="session_01x", created_at="2026-09-26T11:00:
 	return comment
 
 
-def _handoff(kind="findings", created_at="2026-09-26T09:30:00Z"):
+def _handoff(kind="findings", created_at="2026-09-26T09:30:00Z", head=HEAD):
 	if kind == "findings":
 		intro = ("## Review round 1: findings handed to the Claude session\n\n"
-			f"Reviewed head: `{HEAD}` ([workflow run]({RUN_URL})).")
-		ledger = f"\n<!-- ai:claude-fixer-handoff:v2 head={HEAD} round=1 ledger={'a' * 64} -->"
+			f"Reviewed head: `{head}` ([workflow run]({RUN_URL})).")
+		ledger = f"\n<!-- ai:claude-fixer-handoff:v2 head={head} round=1 ledger={'a' * 64} -->"
 	else:
 		intro = ("## Review round 1: merge conflict, handed to the Claude session\n\n"
-			f"The head `{HEAD}` conflicts with its base branch, so the reviewer panel did not run ([workflow run]({RUN_URL})).")
+			f"The head `{head}` conflicts with its base branch, so the reviewer panel did not run ([workflow run]({RUN_URL})).")
 		ledger = ""
-	body = f"{intro}\n<!-- ai:claude-fixer-handoff:v1 kind={kind} head={HEAD} round=1 -->{ledger}"
+	body = f"{intro}\n<!-- ai:claude-fixer-handoff:v1 kind={kind} head={head} round=1 -->{ledger}"
 	return {"body": body, "author_association": "OWNER", "created_at": created_at, "user": {"login": "workflow-bot", "type": "User"}}
 
 
-def _review_run(ref=REF):
-	return {f"repos/o/r/actions/runs/{RUN_ID}": {
+def _review_run(ref=REF, **overrides):
+	run = {
 		"id": RUN_ID, "html_url": RUN_URL, "repository": {"full_name": REPO},
 		"path": ".github/workflows/ai-review.yml@stable", "head_sha": HEAD, "head_branch": ref,
 		"status": "completed", "conclusion": "success",
-	}}
+	}
+	run.update(overrides)
+	return {f"repos/o/r/actions/runs/{RUN_ID}": run}
+
+
+def _compare(run_head, status):
+	return {f"repos/o/r/compare/{run_head}...{HEAD}?per_page=1": {"status": status}}
 
 
 def _stub(monkeypatch, responses, comments=()):
@@ -189,6 +195,77 @@ def test_review_handoff_is_due_with_the_comment_time(monkeypatch, capsys):
 	_, out = _run(capsys)
 	assert out["done"] is True and out["state"] == "review-round" and out["kind"] == "review"
 	assert out["since"] == "2026-09-26T09:30:00Z"
+
+
+def test_review_handoff_on_the_run_head_needs_no_compare_read(monkeypatch, capsys):
+	calls = _stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs()}, [_handoff()])
+	_, out = _run(capsys)
+	assert out["state"] == "review-round"
+	assert not any("/compare/" in call for call in calls)
+
+
+def test_review_handoff_from_a_run_triggered_by_an_older_push_is_due(monkeypatch, capsys):
+	# PR #4594: pushes a59fc87 then d1c6f92; run 36290049170 was triggered by
+	# a59fc87 (its head_sha) but reviewed d1c6f92, the head its hand-off names.
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_compare(OTHER_HEAD, "ahead"), **_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	code, out = _run(capsys)
+	assert code == 0 and out["done"] is True and out["state"] == "review-round" and out["kind"] == "review"
+	assert out["head_sha"] == HEAD and out["since"] == "2026-09-26T09:30:00Z"
+	assert calls[:4] == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments", f"repos/o/r/actions/runs/{RUN_ID}",
+		f"repos/o/r/compare/{OTHER_HEAD}...{HEAD}?per_page=1"]
+
+
+def test_conflict_handoff_from_a_run_triggered_by_an_older_push_is_due(monkeypatch, capsys):
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_compare(OTHER_HEAD, "ahead"), **_runs()}
+	_stub(monkeypatch, responses, [_handoff(kind="conflict")])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "conflict" and out["kind"] == "conflict"
+
+
+@pytest.mark.parametrize("run_change", [
+	{"head_branch": "claude/other-branch"},
+	{"status": "in_progress", "conclusion": None},
+	{"status": "queued", "conclusion": None},
+	{"conclusion": "failure"},
+	{"conclusion": "cancelled"},
+	{"path": ".github/workflows/unrelated.yml@main"},
+	{"repository": {"full_name": "other/repo"}},
+	{"head_sha": "not-a-sha"},
+])
+def test_review_handoff_with_an_unverified_run_fails_closed(monkeypatch, capsys, run_change):
+	# The run is triggered by an older push, so only the other checks decide;
+	# every one of them still fails closed before any compare read.
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(**{"head_sha": OTHER_HEAD, **run_change}),
+		**_compare(OTHER_HEAD, "ahead"), **_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "waiting for verified completed review run" in out["reason"]
+	assert calls[-1] == f"repos/o/r/actions/runs/{RUN_ID}"
+
+
+@pytest.mark.parametrize("status", ["diverged", "behind"])
+def test_review_handoff_from_a_run_off_the_head_history_fails_closed(monkeypatch, capsys, status):
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_compare(OTHER_HEAD, status), **_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "waiting for verified completed review run" in out["reason"]
+	assert calls[-1] == f"repos/o/r/compare/{OTHER_HEAD}...{HEAD}?per_page=1"
+
+
+@pytest.mark.parametrize("reviewed_head", [None, "", "not-a-sha", HEAD.upper(), HEAD[:39]])
+def test_run_head_helper_rejects_a_malformed_reviewed_head_without_a_read(monkeypatch, reviewed_head):
+	monkeypatch.setattr(checker, "gh_api", lambda path: pytest.fail(f"unexpected read: {path}"))
+	assert checker._review_run_head_on_branch_history(REPO, OTHER_HEAD, reviewed_head) is False
+
+
+def test_review_handoff_for_a_head_that_is_not_the_pr_head_is_ignored(monkeypatch, capsys):
+	# The hand-off reviewed OTHER_HEAD, but the PR has moved on to HEAD.
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_check_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff(head=OTHER_HEAD)])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open"
+	assert f"repos/o/r/actions/runs/{RUN_ID}" not in calls and not any("/compare/" in call for call in calls)
 
 
 def test_conflict_without_handoff_uses_the_head_commit_time(monkeypatch, capsys):
