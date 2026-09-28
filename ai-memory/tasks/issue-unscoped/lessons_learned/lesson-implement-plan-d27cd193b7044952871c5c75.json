@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T23:43:37Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When an instruction file's existing sentences are pinned by a contract test, add a new rule as a linked subsection or an appended sentence instead of rewording the pinned sentence.",
+  "phase": "implement_plan",
+  "pr_number": 4828,
+  "record_id": "lesson-implement-plan-d27cd193b7044952871c5c75",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4787-checker-renames-only-itself",
+    "file:.claude/commands/implement-plan-claude.md",
+    "file:tests/test_implement_plan_claude_command.py"
+  ]
+}

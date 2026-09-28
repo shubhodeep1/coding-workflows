@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T23:43:37Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a paragraph says it restates another section's rules for a context-free session (a checker prompt), list every rule and pin each one in the contract test, because a partial restatement reads as the complete rule set.",
+  "phase": "implement_plan",
+  "pr_number": 4828,
+  "record_id": "lesson-implement-plan-0a6e1277918edf55429a0b98",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4787-checker-renames-only-itself",
+    "file:CLAUDE.md",
+    "file:tests/test_check_in_session_targeting.py"
+  ]
+}

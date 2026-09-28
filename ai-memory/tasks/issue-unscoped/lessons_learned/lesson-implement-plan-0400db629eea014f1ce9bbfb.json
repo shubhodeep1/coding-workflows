@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T23:43:37Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a prompt opens with a blanket \"never call X\", name the exceptions its own later steps need (a cleanup call), because a low-effort session follows the blanket rule and skips the cleanup.",
+  "phase": "implement_plan",
+  "pr_number": 4828,
+  "record_id": "lesson-implement-plan-0400db629eea014f1ce9bbfb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4787-checker-renames-only-itself",
+    "file:.claude/commands/implement-plan-claude.md",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md"
+  ]
+}
