@@ -749,14 +749,62 @@ jobs:
             gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}"
           }
 
+          # Page-aware variant of fetch_plan_runs_json. Every issue_comment in
+          # the repo creates a (mostly skipped) run, so by the time Plan labels
+          # the issue our Plan run can sit past the first 100 runs of the
+          # created=> window: run 36374918973 found it at index 96, then lost
+          # it seconds later and reported Plan success with an empty run ID
+          # (issue #4723). Capped at 10 pages, GitHub's 1,000-result ceiling
+          # for this list.
+          PLAN_RUN_LOOKUP_MAX_PAGES=10
+          fetch_plan_runs_page_json() {
+            gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=$1&created=>${{ steps.create-issue.outputs.created_after }}"
+          }
+
+          # Walks pages newest-first and returns the field of the newest
+          # matching run from the first page that holds a match, so the common
+          # case stays one API call. Stops at a short page (end of the window)
+          # or after the optional third argument's page count (default
+          # PLAN_RUN_LOOKUP_MAX_PAGES). Returns 1 when a page cannot be read.
           latest_scoped_run_field() {
             local name_re="$1"
             local field="$2"
+            local lookup_max_pages="${3:-$PLAN_RUN_LOOKUP_MAX_PAGES}"
             local runs_json=""
-            runs_json=$(fetch_plan_runs_json || echo "")
-            [ -n "$runs_json" ] || return 1
-            printf '%s' "$runs_json" \
-              | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" --arg field "$field" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .[$field] // empty' 2>/dev/null
+            local lookup_page=1
+            local page_value=""
+            local page_count=""
+            while [ "$lookup_page" -le "$lookup_max_pages" ]; do
+              runs_json=$(fetch_plan_runs_page_json "$lookup_page" || echo "")
+              [ -n "$runs_json" ] || return 1
+              page_value=$(printf '%s' "$runs_json" \
+                | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" --arg field "$field" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .[$field] // empty' 2>/dev/null || echo "")
+              if [ -n "$page_value" ] && [ "$page_value" != "null" ]; then
+                printf '%s' "$page_value"
+                return 0
+              fi
+              page_count=$(printf '%s' "$runs_json" | jq -r '.workflow_runs | length' 2>/dev/null || echo "")
+              if ! [[ "$page_count" =~ ^[0-9]+$ ]] || [ "$page_count" -lt 100 ]; then
+                return 0
+              fi
+              lookup_page=$((lookup_page + 1))
+            done
+            return 0
+          }
+
+          # Both success exits need the issue-scoped Plan run ID: without it
+          # the soft-error analyser is skipped and deep verification fails the
+          # release later with zero failed steps. Fail here instead, where the
+          # cause is visible.
+          require_plan_run_id() {
+            local captured_plan_run_id="$1"
+            local plan_label="$2"
+            if [[ "$captured_plan_run_id" =~ ^[0-9]+$ ]]; then
+              return 0
+            fi
+            echo "::error::Issue #${ISSUE_NUMBER} reached ${plan_label} but no non-skipped Plan run titled '${ISSUE_TITLE}' was found in the first ${PLAN_RUN_LOOKUP_MAX_PAGES} pages of runs — failing at Plan capture instead of reporting success without a run ID"
+            echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
+            exit 1
           }
 
           # Robust workflow run-ID capture — retries on empty results to ride out
@@ -807,7 +855,10 @@ jobs:
             # high workflow-run volume; v1.13.5's smoke test broke when our
             # Plan run fell to position 51 in the unfiltered list and was
             # truncated off the per_page=50 response.
-            PLAN_RUN_STATUS=$(latest_scoped_run_field "Plan" "status" || echo "")
+            # One page only: this runs every POLL_INTERVAL and is an activity
+            # signal, so it keeps its single-call cost; the run-ID capture
+            # at the success exits pages further (issue #4723).
+            PLAN_RUN_STATUS=$(latest_scoped_run_field "Plan" "status" 1 || echo "")
             if [ -z "$PLAN_RUN_STATUS" ] || [ "$PLAN_RUN_STATUS" = "null" ]; then
               PLAN_RUN_STATUS="unknown"
             fi
@@ -827,6 +878,7 @@ jobs:
             if echo "$LABELS" | grep -q 'ai:awaiting-approval'; then
               echo "✓ Plan phase completed — awaiting approval"
               PLAN_RUN_ID=$(capture_run_id "Plan")
+              require_plan_run_id "$PLAN_RUN_ID" "ai:awaiting-approval"
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
@@ -836,6 +888,7 @@ jobs:
             if echo "$LABELS" | grep -q 'ai:implementing'; then
               echo "✓ Plan phase completed with auto-approval — already implementing"
               PLAN_RUN_ID=$(capture_run_id "Plan")
+              require_plan_run_id "$PLAN_RUN_ID" "ai:implementing"
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=auto_approved" >> "$GITHUB_OUTPUT"
               exit 0
