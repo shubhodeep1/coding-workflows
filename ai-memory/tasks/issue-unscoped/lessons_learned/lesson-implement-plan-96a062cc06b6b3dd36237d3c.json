@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-28T23:43:49Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A twin-first phase breaks every parity test over the edited command files until `[claude-twin-sync]`, not only the one the plan names; grep `tests/` for each filename and list all of them in the hold.",
+  "phase": "implement_plan",
+  "pr_number": 4823,
+  "record_id": "lesson-implement-plan-96a062cc06b6b3dd36237d3c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4798-run-skip-check-standalone",
+    "file:tests/test_implement_issue_claude_command.py",
+    "file:tests/test_implement_plan_claude_command.py",
+    "file:tests/test_ingest_implement_plan_lessons.py"
+  ]
+}
