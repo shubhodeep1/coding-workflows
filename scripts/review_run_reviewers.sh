@@ -4876,9 +4876,31 @@ run_reviewer_pass() {
 # with the cross-pollination header pass-2 reviewers see. The ledger already
 # carries its own === CONSENSUS FINDINGS === / === CONSENSUS TASK GAPS ===
 # sentinels plus per-reviewer blocks.
+#
+# Each CONSENSUS FINDINGS entry is shown with a `consensus_id: p1-<12 hex>`
+# line (review_claude_fixer_nonblocking.py --annotate, issue #4687), which
+# REJECTED_FINDING lines must cite: the Claude-fixer hand-off binds a rejection
+# to the entry by that id, never by file and line proximity. The ledger file
+# itself is left unchanged so the hand-off step recomputes the same ids from
+# it. If annotation fails, the plain ledger is shown; no rejection can then
+# cite an id, so nothing is demoted.
 build_cross_pollination_summary() {
   local ledger_file="$1"
   local summary_file="${RUNTIME_DIR}/cross_pollination_summary.txt"
+  local annotated_ledger_file="${RUNTIME_DIR}/cross_pollination_ledger_annotated.txt"
+  local consensus_id_script="${SUPPORT_SCRIPTS_DIR:-scripts}/review_claude_fixer_nonblocking.py"
+  local ledger_shown_file="${ledger_file}"
+  rm -f "${annotated_ledger_file}"
+  if [ -s "${ledger_file}" ]; then
+    if [ -f "${consensus_id_script}" ] \
+      && PYTHONDONTWRITEBYTECODE=1 python3 "${consensus_id_script}" --annotate \
+        --ledger "${ledger_file}" --output "${annotated_ledger_file}" >&2 \
+      && [ -s "${annotated_ledger_file}" ]; then
+      ledger_shown_file="${annotated_ledger_file}"
+    else
+      echo "::warning::Could not add consensus_id lines to the pass-1 ledger; REJECTED_FINDING lines cannot be bound this run, so no finding is demoted." >&2
+    fi
+  fi
   {
     echo "=== CROSS-POLLINATION SUMMARY (from pass 1 reviewers) ==="
     echo "The following issues were identified by other reviewer models in a preliminary pass."
@@ -4888,10 +4910,16 @@ build_cross_pollination_summary() {
     echo "- Discover additional issues that the preliminary pass may have missed"
     echo "- Provide your own independent assessment — do not blindly adopt pass 1 findings"
     echo ""
+    echo "Each CONSENSUS FINDINGS entry below carries a consensus_id line (p1-<12 hex digits>)."
     echo "When you verified a CONSENSUS FINDINGS entry below against the code and it is NOT a real defect,"
-    echo "say so with one plain-text line per entry, copying the entry's file, line and flagged_by slug verbatim:"
-    echo "  REJECTED_FINDING: <file>:<line or start-end> | flagged_by: <slug> | reason: <one sentence>"
+    echo "say so with one plain-text line per entry, copying the entry's consensus_id, file, line and flagged_by slug verbatim:"
+    echo "  REJECTED_FINDING: <consensus_id> | <file>:<line or start-end> | flagged_by: <slug> | reason: <one sentence>"
     echo "Only reject an entry you checked in the code. Do not write a REJECTED_FINDING line for an entry you did not verify."
+    echo "A REJECTED_FINDING line without the entry's consensus_id is ignored. A rejection covers only the entry whose id it cites,"
+    echo "never another finding on a nearby line."
+    echo "When you report a finding that is the same defect as a CONSENSUS FINDINGS entry, add the line"
+    echo "  consensus_id: <consensus_id>"
+    echo "to that finding. Never add an entry's consensus_id to a different defect, even one on the same or a nearby line."
     echo "A finding raised by one reviewer and rejected this way by a majority of the others is not handed to the fixer."
     echo ""
     echo "The consolidated ledger below was produced by ${XPOLL_SUMMARISER_MODEL:-openai/gpt-6-luna}"
@@ -4901,7 +4929,7 @@ build_cross_pollination_summary() {
     echo "Read a raw file only if a ledger entry is ambiguous or lacks detail."
     echo ""
     if [ -s "${ledger_file}" ]; then
-      cat "${ledger_file}"
+      cat "${ledger_shown_file}"
     else
       echo "(No pass-1 ledger was produced.)"
     fi

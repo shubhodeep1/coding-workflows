@@ -295,7 +295,7 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 
 
 def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False,
-		reviews: dict[str, str] | None = None, nonblocking_filter: str | None = None):
+		reviews: dict[str, str] | None = None, nonblocking_filter: str | None = None, pass1_ledger: str | None = None):
 	support = tmp / "support"
 	support.mkdir()
 	if nonblocking_filter == "real":
@@ -307,6 +307,8 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 	for slug, output in (reviews or {}).items():
 		(reviews_dir / f"status_review_{slug}.txt").write_text("success\n", encoding="utf-8")
 		(reviews_dir / f"review_{slug}.txt").write_text(output, encoding="utf-8")
+	if pass1_ledger is not None:
+		(reviews_dir / "consensus_pass1.txt").write_text(pass1_ledger, encoding="utf-8")
 	calls = tmp / "calls.jsonl"
 	(support / "post_review_comment.sh").write_text(
 		f"#!/usr/bin/env bash\necho post_review_comment \"$REVIEWER_CONSENSUS_FILE\" \"$PR_NUMBER\" >> {tmp / 'posts.log'}\n",
@@ -421,8 +423,24 @@ def test_verification_with_remaining_findings_blocks_instead_of_merging():
 	assert f"<!-- ai:claude-fixer-verification:v1 head={HEAD} result=unresolved -->" in calls[0]["payload"]["body"]
 
 
-LEDGER_REJECTED_SINGLETON = """=== CONSENSUS FINDINGS ===
+# The pass-1 entry the pass-2 reviewers saw, and its consensus id (issue #4687:
+# rejections and the pass-2 entry are bound to it by this id).
+PASS1_SINGLETON_ENTRY = """- README.md:1261 | severity=critical | confidence=[5]
+  flagged_by: [gemini]
+  PROBLEM: lost its leading backtick
+  WHY: rewrap"""
+SINGLETON_ID = "p1-" + hashlib.sha256(PASS1_SINGLETON_ENTRY.encode()).hexdigest()[:12]
+PASS1_LEDGER = f"""=== CONSENSUS FINDINGS ===
+{PASS1_SINGLETON_ENTRY}
+=== END CONSENSUS FINDINGS ===
+
+=== CONSENSUS TASK GAPS ===
+(No task gaps reported.)
+=== END CONSENSUS TASK GAPS ===
+"""
+LEDGER_REJECTED_SINGLETON = f"""=== CONSENSUS FINDINGS ===
 - README.md:1261 | severity=critical | confidence=[5]
+  consensus_id: {SINGLETON_ID}
   flagged_by: [gemini]
   PROBLEM: lost its leading backtick
   WHY: the others found the backtick on README.md:1262
@@ -434,6 +452,7 @@ LEDGER_REJECTED_SINGLETON = """=== CONSENSUS FINDINGS ===
 
 === FINDINGS FROM gemini ===
 - README.md:1261 | severity=critical
+  consensus_id: {SINGLETON_ID}
   PROBLEM: lost its leading backtick
 === END FINDINGS FROM gemini ===
 
@@ -446,9 +465,9 @@ LEDGER_REJECTED_SINGLETON = """=== CONSENSUS FINDINGS ===
 === END FINDINGS FROM glm ===
 """
 REJECTING_REVIEWS = {
-	"gemini": "File: README.md\nProblem: lost its leading backtick\n",
-	"minimax": "REJECTED_FINDING: README.md:1262 | flagged_by: gemini | reason: the backtick is present\n",
-	"glm": "REJECTED_FINDING: README.md:1261 | flagged_by: gemini | reason: false positive\n",
+	"gemini": f"File: README.md\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
+	"minimax": f"REJECTED_FINDING: {SINGLETON_ID} | README.md:1261 | flagged_by: gemini | reason: the backtick is present\n",
+	"glm": f"REJECTED_FINDING: {SINGLETON_ID} | README.md:1261 | flagged_by: gemini | reason: false positive\n",
 }
 
 
@@ -456,7 +475,7 @@ def test_handoff_rejected_singleton_auto_merges_and_stays_visible():
 	"""Issue #4586: the #4575 shape posts the ledger, no hand-off, and merges."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, nonblocking_filter="real")
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, pass1_ledger=PASS1_LEDGER, nonblocking_filter="real")
 		filtered = (tmp / "reviewer_consensus_claude_fixer.txt").read_text()
 	assert proc.returncode == 0, proc.stderr
 	assert calls == []
@@ -467,6 +486,26 @@ def test_handoff_rejected_singleton_auto_merges_and_stays_visible():
 	assert "action=auto_merge nonblocking=1" in proc.stdout
 
 
+def test_handoff_id_less_rejections_hand_the_round_off():
+	"""Issue #4687: a rejection bound only by file and line no longer demotes anything."""
+	legacy_reviews = {
+		"gemini": REJECTING_REVIEWS["gemini"],
+		"minimax": "REJECTED_FINDING: README.md:1262 | flagged_by: gemini | reason: the backtick is present\n",
+		"glm": "REJECTED_FINDING: README.md:1261 | flagged_by: gemini | reason: false positive\n",
+	}
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=legacy_reviews,
+			pass1_ledger=PASS1_LEDGER, nonblocking_filter="real")
+	assert proc.returncode == 0, proc.stderr
+	assert "CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=3" in proc.stdout
+	assert "CLAUDE_FIXER_NONBLOCKING_KEPT file=README.md:1261 flagged_by=gemini reason=too_few_rejecters" in proc.stdout
+	assert "CLAUDE_FIXER_NONBLOCKING_LEGACY_REJECTIONS count=2" in proc.stdout
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "kind=findings findings=2 ledger=ok failed_checks=none nonblocking=0" in proc.stdout
+	assert "<!-- ai:claude-fixer-handoff:v1 kind=findings" in calls[0]["payload"]["body"]
+
+
 def test_handoff_mixed_round_hands_off_the_filtered_ledger():
 	ledger = LEDGER_REJECTED_SINGLETON.replace("=== END CONSENSUS FINDINGS ===", """- scripts/a.sh:10-12 | severity=high | confidence=4
   flagged_by: [minimax, glm]
@@ -475,7 +514,7 @@ def test_handoff_mixed_round_hands_off_the_filtered_ledger():
 === END CONSENSUS FINDINGS ===""")
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		proc, calls, posts, github_env = _run_handoff(tmp, ledger=ledger, reviews=REJECTING_REVIEWS, nonblocking_filter="real")
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=ledger, reviews=REJECTING_REVIEWS, pass1_ledger=PASS1_LEDGER, nonblocking_filter="real")
 		filtered_path = tmp / "reviewer_consensus_claude_fixer.txt"
 		digest = hashlib.sha256(filtered_path.read_bytes()).hexdigest()
 	assert proc.returncode == 0, proc.stderr
@@ -496,7 +535,7 @@ def test_handoff_without_a_working_filter_keeps_every_finding_blocking(nonblocki
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		(tmp / "reviewer_consensus_claude_fixer.txt").write_text(LEDGER_EMPTY, encoding="utf-8")
-		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, nonblocking_filter=nonblocking_filter)
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, pass1_ledger=PASS1_LEDGER, nonblocking_filter=nonblocking_filter)
 	assert proc.returncode == 0, proc.stderr
 	assert "every ledger entry stays blocking" in proc.stdout
 	assert f"post_review_comment {tmp / 'reviewer_consensus.txt'} 42" in posts

@@ -3,24 +3,24 @@
 - Plan: docs/plans/issue-4687-bind-rejections-to-consensus-ids-plan.md
 - Source issue: shubhodeep1/coding-workflows#4687
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason
-- Project branch: claude/implement-plan-issue-4687-bind-rejections-to-consensus-ids   Final PR: pending
+- Project branch: claude/implement-plan-issue-4687-bind-rejections-to-consensus-ids   Final PR: #4695 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: the phase 1 PR into the project branch (opened with this commit; its number is in the stage report and the checker's resume block)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: project branch opened from the #4586 project branch; phase 1 in progress.
+- Last note: phase 1 implemented and verified (102 Claude-fixer/demoter tests, related contract suites, ruff, bash -n); phase PR opened, waiting on the review workflow.
 
 ## Phases
-1. [ ] Phase 1 — bind rejections to consensus ids and keep ambiguous matches blocking
-   - [ ] `scripts/review_claude_fixer_nonblocking.py`: consensus ids, `--annotate`, id-bound rejections, ambiguity rules, id-gated bullet moves, diagnostics
-   - [ ] `scripts/review_run_reviewers.sh` `build_cross_pollination_summary`: annotated ledger and the new rejection instructions
-   - [ ] `scripts/summarize_reviewer_consensus.sh`: `consensus_id:` copy rule
-   - [ ] `scripts/review_autofix_step_claude_fixer_handoff.sh`: header comment
-   - [ ] Tests: `tests/test_review_claude_fixer_nonblocking.py`, `tests/test_review_autofix_claude_fixer_mode.py`
-   - [ ] Docs: `README.md`, `agents.md`, `docs/INVENTORY.md`, `changelog.d/4687-bind-rejections-to-consensus-ids.md`
+1. [ ] Phase 1 — bind rejections to consensus ids and keep ambiguous matches blocking   — PR open (waiting); review rounds: 0; interventions: 0
+   - [x] `scripts/review_claude_fixer_nonblocking.py`: consensus ids, `--annotate`, id-bound rejections, ambiguity rules, id-gated bullet moves, diagnostics
+   - [x] `scripts/review_run_reviewers.sh` `build_cross_pollination_summary`: annotated ledger and the new rejection instructions
+   - [x] `scripts/summarize_reviewer_consensus.sh`: `consensus_id:` copy rule
+   - [x] `scripts/review_autofix_step_claude_fixer_handoff.sh`: header comment
+   - [x] Tests: `tests/test_review_claude_fixer_nonblocking.py`, `tests/test_review_autofix_claude_fixer_mode.py`
+   - [x] Docs: `README.md`, `agents.md`, `docs/INVENTORY.md`, `changelog.d/4687-bind-rejections-to-consensus-ids.md`
    - Done when: the extended tests, the step-script contract, and the workflow-size suites pass; `bash -n` passes on the edited shell scripts.
 
 ## Conformance
@@ -44,6 +44,7 @@
 - AD-6 [plan, 2026-09-28] What is the new ledger field called, and what happens to the identifiers the proximity match used? — Picked: A — `consensus_id`, and `REJECTED_FINDING_RE`, `LINE_TOLERANCE`, `_near`, and `reviewer_rejections` stay with their meaning (location parsing, the ambiguity window, and the legacy-line count). Alternatives: B — `finding_id`, and delete the proximity helpers. Why: `finding_id` already names security-audit findings, and §6 forbids removing identifiers. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:security] A reviewer verdict about another reviewer's finding must be bound to that finding by an identifier both sides can see (here a content-hash consensus_id), never by file and line proximity, and any ambiguous binding must keep the finding blocking. (files: scripts/review_claude_fixer_nonblocking.py, scripts/review_run_reviewers.sh)
 
 ## Notes
 - Issue mode: the plan was written by `/implement-issue-claude` for #4687 (security-audit follow-up, tracker #3576). This plan supersedes #4586's AD-7 (the 3-line rejection window) for binding.
