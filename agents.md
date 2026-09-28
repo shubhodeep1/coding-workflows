@@ -285,7 +285,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     stall recovery (`STALL_SKIP … reason=claude_routed`) ignore issues with
     `ai:claude` and no `ai:codex`. Failures label `ai:claude-handoff-failed`
     (handoff / intake) or `ai:claude-blocked` (a CLAUDE.md §28.C stop, asked
-    on the issue). Issue-mode sessions auto-decide every question, start-up
+    on the issue; the comment's `<!-- ai:claude-blocked-session:v1 id=… -->`
+    line names the stopping session, which the pickup archives with
+    `claude_issue_route.py replaced-sessions` once `/reclarify` has started
+    its replacement: same repo, a title of that issue, `SESSION_STATUS_IDLE`,
+    never a checker, `/deploy-activate`, pickup, or poller session; #4817). Issue-mode sessions auto-decide every question, start-up
     checks included (CLAUDE.md §28.A), but never whether to run the chain: a
     session without claude-code-remote tools stops with `ai:claude-blocked`
     (§28.C).
