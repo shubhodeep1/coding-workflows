@@ -264,6 +264,12 @@ def test_issue_mode_archives_stopped_stage_sessions(text):
 	assert "If that read fails, archive nothing: treat the label as still present" in text
 	# The stop title must not collide with a stage title that is still working.
 	assert "blocked on issue" not in text.replace("— blocked on issue", "")
+	# The cleanup needs the plan header, so step 1 (not step 0) triggers it on
+	# an issue-mode resume, and the cleanup section says so.
+	step1 = text[text.index("1. **Resolve the plan doc.**"):text.index("2. **Pick the mode")]
+	assert "**Issue-mode resume cleanup:** when the plan header carries a `Source issue:` line and `$ARGUMENTS` has no `— resume.` block (the step 0 bullet), run the [Zombie-checker cleanup](#zombie-checker-cleanup) now, right after this read and before step 2." in step1
+	cleanup = text[text.index("### Zombie-checker cleanup"):text.index("### Checker prompt")]
+	assert "An issue-mode resume without a `— resume.` block runs it at the end of step 1 instead" in cleanup
 
 
 def test_checker_routes_on_action_not_state(text):
