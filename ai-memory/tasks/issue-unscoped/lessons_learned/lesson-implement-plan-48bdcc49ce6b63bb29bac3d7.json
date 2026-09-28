@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T03:16:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A reviewer verdict about another reviewer's finding must be bound to that finding by an identifier both sides can see (here a content-hash consensus_id), never by file and line proximity, and any ambiguous binding must keep the finding blocking.",
+  "phase": "implement_plan",
+  "pr_number": 4698,
+  "record_id": "lesson-implement-plan-48bdcc49ce6b63bb29bac3d7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-4687-bind-rejections-to-consensus-ids",
+    "file:scripts/review_claude_fixer_nonblocking.py",
+    "file:scripts/review_run_reviewers.sh"
+  ]
+}
