@@ -158,6 +158,22 @@ implementing chain must not re-open them.
   supervising session started phase 2 by hand. Holds remain possible after the
   judge ships (security or data-loss at the cap, conflict decisions).
 
+### D12 — Report sessions stuck on a permission prompt
+
+- **Chosen:** the Phase 4 janitor also lists sessions blocked on a
+  permission prompt for more than 20 minutes; the hourly pickup sends one
+  push notification per stall and files it as an `ai:permission-prompt`
+  issue, and `/fix-claude-pr` runs the prompt report before it ends. Added
+  to Phase 4 on 2026-09-28.
+- **Alternatives considered:** a separate PR now; relying on the
+  supervising session's check-ins.
+- **Why:** #4597's prompt report runs only at the end of an
+  `/implement-plan-claude` stage, so a session stuck on a prompt never
+  reports it, and fixer sessions never report at all. On 2026-09-27 three
+  sessions stalled this way (the #4619 implement session for hours, PR
+  #4601's fixer, and this project's phase 2 for about 50 minutes) until a
+  human happened to look.
+
 ## Context
 
 Observed on 2026-09-27 in `shubhodeep1/coding-workflows`: 11 open `claude/*`
@@ -510,6 +526,21 @@ PR/issue (cached); a failed read keeps the session (`errors`). The pickup
 `list_triggers` `include_completed: false`, run the script, `archive_session`
 each id (ignore not-found), and append `archived <k>` to its one-line report.
 
+Stuck permission prompts (D12): `stale_sessions.py` also returns a
+`stalled_on_prompt` list: every session (any title, including operator
+sessions) whose `status_bucket` is `…BLOCKED` and whose
+`post_turn_summary.needs_action` starts with `Approve or deny`, with
+`updated_at` more than 20 minutes ago (`--prompt-stall-minutes`, default 20).
+For each new entry (the pickup keeps the reported `id` + `updated_at` pairs in
+its session so a stall is reported once) the pickup sends one
+`PushNotification` (`<session title>: waiting on a permission prompt since
+<HH:MM> UTC`) and, in coding-workflows, opens or comments on an
+`ai:permission-prompt` issue through `.claude/scripts/permission_prompts.py`
+with the session title and its `task_summary` as the evidence (the command
+itself is not visible from outside the session). `/fix-claude-pr` runs
+`permission_prompts.py file` before its report, as `/implement-plan-claude`
+stages already do (#4597), so prompts a fixer answered late are filed too.
+
 ## Phases & Merge Strategy
 
 1. **Checks-pending, not a hand-off.** Files:
@@ -578,7 +609,10 @@ each id (ignore not-found), and append `archived <k>` to its one-line report.
    Done when: tests cover every archive/keep rule (running, enabled Routine,
    not-ours title, need_input on open PR kept, need_input on PR merged 25 h ago
    archived, superseded fixer archived, failed read kept), input shapes, exit
-   codes; the pickup doc runs it only on `— wake.`.
+   codes; the pickup doc runs it only on `— wake.`; `stalled_on_prompt`
+   lists a BLOCKED `Approve or deny` session older than 20 minutes and not a
+   younger or non-prompt one, and the pickup reports each stall once (D12);
+   `fix-claude-pr.md` (+ twin) runs the prompt report before its report.
    Rollback: revert the PR; archived sessions can be unarchived.
 
 Phases are delivered in this order but each is safe alone: Phase 2 creates the
@@ -649,7 +683,11 @@ default to 60 minutes without the new field; Phase 4 touches only the pickup.
 
 1. `stale_sessions.py` + tests + CI step.
 2. Pickup doc step, Tool Access (`list_sessions`, `list_triggers`,
-   `archive_session`), settings allowlist, docs, changelog fragment.
+   `archive_session`, `PushNotification`), settings allowlist, docs, changelog
+   fragment.
+3. D12: `stalled_on_prompt` in `stale_sessions.py` (+ tests), the pickup's
+   once-per-stall notification and `ai:permission-prompt` filing, and the
+   `permission_prompts.py file` step in `fix-claude-pr.md` (+ twin).
 
 ## Files & Modules
 
