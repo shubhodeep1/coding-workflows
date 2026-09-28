@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4713-rerun-cancelled-ci-plan.md
 - Source issue: shubhodeep1/coding-workflows#4713
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4713-rerun-cancelled-ci   Final PR: (pending) draft
+- Project branch: claude/implement-plan-issue-4713-rerun-cancelled-ci   Final PR: #4721 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (head claude/implement-plan-issue-4713-rerun-cancelled-ci-phase-1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: project branch opened; implementing phase 1.
+- Last note: phase 1 implemented and verified (41 new tests, sweep/CI contract tests, yamllint, actionlint, ruff, inventory parity, live dry run); phase PR opened.
 
 ## Phases
-1. [ ] Phase 1 — cancelled-CI re-run in the review sweep (`scripts/ci_cancelled_rerun.py`, `review_autofix_sweep.yml`, tests, docs, changelog)
+1. [ ] Phase 1 — cancelled-CI re-run in the review sweep (`scripts/ci_cancelled_rerun.py`, `review_autofix_sweep.yml`, tests, docs, changelog)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -40,4 +40,6 @@
 ## Lessons
 
 ## Notes
+- Live dry run (2026-09-28, read-only): 15 open non-draft PRs, 1 runs listing; would re-run the cancelled attempt-1 CI of #4704, #4693, #4611.
+- The inventory gate (`tests/inventory_parity.py`) needs every new `scripts/` file in `docs/INVENTORY.md`.
 - Security pass: `security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}`, so `Security pass: run`.
