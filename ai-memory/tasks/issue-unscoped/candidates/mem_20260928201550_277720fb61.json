@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fail-closed test setup crashes and fails to exercise the intended logic.\n  WHY: The test passes `comments=None` to `_run_gate`, but the state-file builder calls `enumerate(comments, 1)` unconditionally, causing a `TypeError: 'NoneType' object is not iterable` during test setup, preventing the gate subprocess from starting. Furthermore, the mock `GATE_MOCK_GH` always emits successful JSON (or `null` which `jq` converts to `[]`), meaning `gate_marker_fetch_state` always resolves to `\"ok\"` instead of `\"api_error\"`. The fail-closed branch at `review_autofix.yml:1488` is never reached.\n- .github/workflows/review_autofix.yml:817, 1487 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Redundant API lookups occur on the same execution path for `workflow_dispatch` events.\n  WHY: Both the `claude_fixer_awaiting_session` check and the `CLAUDE_HANDOFF_SKIP_SUPPRESSED` check trigger identical comment-fetching API calls. While memoization prevents redundant network requests, the repeated shell-function execution and parsing logic add unnecessary latency and complexity to the workflow execution.\n- README.md:86 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `CLAUDE_FIXER_ENABLED` documentation row omits `AUTOFIX_SKIP_MAX_DELETIONS`.\n  WHY: The small-diff skip route requires both `AUTOFIX_SKIP_MAX_ADDITIONS` AND `AUTOFIX_SKIP_MAX_DELETIONS` to be satisfied. An operator reading only this row would be misled regarding the required skip configuration, potentially leading to incorrect skip behavior.\n- agents.md:98-101 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A run-on sentence makes the Claude-fixer mode documentation difficult to parse.\n  WHY: The sentence \"A `claude/*` PR that qualifies for the deterministic doc-only or small-diff skip takes it like any other PR ... So a Claude session must fix these PRs...\" runs on and lacks the necessary sentence break, confusing operators attempting to understand the fix requirements.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Test the fail-closed comment lookup\"\n  expected_change_site: tests/test_review_autofix_claude_fixer_mode.py \u2014 `GATE_MOCK_GH` `/comments` branch (lines 467-494) and `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails` (lines 647-653)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test at lines 647-653 is named to verify the fail-closed comment lookup, but it crashes in setup (`TypeError`) and the mock cannot simulate a failed API lookup (`api_error`). The fail-closed branch at `review_autofix.yml:1488` is not exercised despite claims of coverage in the PR description, changelog, and agents.md.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=critical | confidence=5\n  PROBLEM: The fail-closed test setup crashes and fails to exercise the intended logic.\n  WHY: The test passes `comments=None` to `_run_gate`, but the state-file builder calls `enumerate(comments, 1)` unconditionally, causing a `TypeError: 'NoneType' object is not iterable` during test setup, preventing the gate subprocess from starting. Furthermore, the mock `GATE_MOCK_GH` always emits successful JSON (or `null` which `jq` converts to `[]`), meaning `gate_marker_fetch_state` always resolves to `\"ok\"` instead of `\"api_error\"`. The fail-closed branch at `review_autofix.yml:1488` is never reached.\n- .github/workflows/review_autofix.yml:817, 1487 | severity=low | confidence=4\n  PROBLEM: Redundant API lookups occur on the same execution path for `workflow_dispatch` events.\n  WHY: Both the `claude_fixer_awaiting_session` check and the `CLAUDE_HANDOFF_SKIP_SUPPRESSED` check trigger identical comment-fetching API calls. While memoization prevents redundant network requests, the repeated shell-function execution and parsing logic add unnecessary latency and complexity to the workflow execution.\n- README.md:86 | severity=low | confidence=4\n  PROBLEM: The `CLAUDE_FIXER_ENABLED` documentation row omits `AUTOFIX_SKIP_MAX_DELETIONS`.\n  WHY: The small-diff skip route requires both `AUTOFIX_SKIP_MAX_ADDITIONS` AND `AUTOFIX_SKIP_MAX_DELETIONS` to be satisfied. An operator reading only this row would be misled regarding the required skip configuration, potentially leading to incorrect skip behavior.\n- agents.md:98-101 | severity=low | confidence=5\n  PROBLEM: A run-on sentence makes the Claude-fixer mode documentation difficult to parse.\n  WHY: The sentence \"A `claude/*` PR that qualifies for the deterministic doc-only or small-diff skip takes it like any other PR ... So a Claude session must fix these PRs...\" runs on and lacks the necessary sentence break, confusing operators attempting to understand the fix requirements.\n- Requirement: \"Test the fail-closed comment lookup\"\n  Expected change site: tests/test_review_autofix_claude_fixer_mode.py \u2014 `GATE_MOCK_GH` `/comments` branch (lines 467-494) and `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails` (lines 647-653)\n  Evidence of absence: The test at lines 647-653 is named to verify the fail-closed comment lookup, but it crashes in setup (`TypeError`) and the mock cannot simulate a failed API lookup (`api_error`). The fail-closed branch at `review_autofix.yml:1488` is not exercised despite claims of coverage in the PR description, changelog, and agents.md.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6a4141205111ac72e1b456c4de7454ff627cb8050e579700c70f238cf2ba9d8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36472967508",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36472967508",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928201550_277720fb61",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36472967508"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T20:15:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
