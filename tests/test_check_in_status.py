@@ -37,6 +37,9 @@ def _pr(**overrides):
 	return pr
 
 
+DISPATCH_RUNS = "repos/o/r/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=100"
+
+
 def _stub(monkeypatch, responses):
 	"""Serve `gh_api(path)` from a {path: payload} map and record the calls."""
 	calls = []
@@ -66,6 +69,7 @@ def _stuck_responses(pr, committed_at, queued=0, in_progress=0, check_runs=None)
 		"repos/o/r/commits/abc": {"commit": {"committer": {"date": committed_at}}},
 		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1": {"total_count": queued},
 		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1": {"total_count": in_progress},
+		DISPATCH_RUNS: {"workflow_runs": []},
 	}
 
 
@@ -225,6 +229,7 @@ def _fixer_responses(pr=None, **run_overrides):
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1": {"total_count": 0},
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1": {"total_count": 0},
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1": {"total_count": 0},
+		DISPATCH_RUNS: {"workflow_runs": []},
 	}
 
 
@@ -256,7 +261,8 @@ def test_fixer_findings_handoff_for_current_head_is_a_review_round(monkeypatch, 
 		f"repos/o/r/actions/runs/{FIXER_RUN_ID}",
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1",
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1",
-		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1"]
+		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1",
+		DISPATCH_RUNS]
 
 
 def test_fixer_conflict_handoff_is_a_conflict_round(monkeypatch, capsys):
