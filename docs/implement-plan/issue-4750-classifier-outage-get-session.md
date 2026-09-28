@@ -7,14 +7,14 @@
 - Status: BLOCKED
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #4821 (phase 1, review round 1 fix) — twin sync by the supervising session, then /reclarify
+- Waiting on: PR #4821 (phase 1, review round 2 fix) — twin sync by the supervising session, then /reclarify
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (project checker session_01SDx9eEYSDcok29Jq6jwD3m kept idle for reuse)
+- Check-in: none (project checker session_01SDx9eEYSDcok29Jq6jwD3m kept idle for reuse; set IN_PROGRESS with it when the wait is re-armed)
 - Last updated: 2026-09-28
-- Last note: review round 1 (head e740614) fixed twin-first in PR #4821: report-line template, classifier regex anchor, single log load, step-0 fallback wording; `total` and step-0 reminder findings rejected with reasons. Hold claim posted; BLOCKED until the supervising session copies the two workflow-templates/.claude twins into .claude/ as [claude-twin-sync] and comments /reclarify. On resume, arm the wait on PR #4821 — do not re-fix round 1.
+- Last note: review round on head 198cd19 (hand-off round 1, ledger 7bf13dbb…) fixed twin-first in PR #4821: outage regex drops re.DOTALL (no-verdict phrase and `classifier` must share a line), step 0 says how a resume stage reads `Permission mode:` before step 2, plan lists `summarize_permission_records`; the report-line template finding rejected (already fixed in a6a8a96). Hold claim posted; BLOCKED until the supervising session copies the two workflow-templates/.claude twins into .claude/ as [claude-twin-sync] and comments /reclarify. On resume, arm the wait on PR #4821 — do not re-fix this round.
 
 ## Phases
-1. [ ] Phase 1 — classifier-outage handling: filer split, CLAUDE.md §23.J retry rule, and outage-tolerant step 0 — protected paths: .claude/commands/implement-plan-claude.md, .claude/scripts/permission_prompts.py (edited only in their workflow-templates/.claude/ twins, Q40) — PR #4821 open (hold: awaiting [claude-twin-sync] of the round-1 fix); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — classifier-outage handling: filer split, CLAUDE.md §23.J retry rule, and outage-tolerant step 0 — protected paths: .claude/commands/implement-plan-claude.md, .claude/scripts/permission_prompts.py (edited only in their workflow-templates/.claude/ twins, Q40) — PR #4821 open (hold: awaiting [claude-twin-sync] of the round-2 fix); review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -34,10 +34,12 @@
 - AD-5 [phase 1/1, 2026-09-28] Which reasons count as a classifier no-verdict or outage error (Q39 item 1)? — Picked: A — `PermissionDenied` only, reason matching `classifier` followed by `unavailable`, `error`, `timed out`, `timeout`, or `overloaded` (optional `is`), or a no-verdict phrase (`no verdict`, `without a verdict`, `did not return a verdict`, `could not reach a verdict`). Alternatives: B — only `classifier unavailable` (AD-3); C — any `PermissionDenied` that mentions "classifier". Why: covers the wording Q39 names while a real block, which carries the classifier's reason, still files. Applied in: phase 1 PR. Status: pending review
 - AD-6 [phase 1/1, 2026-09-28] Where does the retry-then-wait rule (Q39 item 2) live? — Picked: A — new CLAUDE.md §23.J next to §23.I, plus `/implement-plan-claude` step 0 for its `get_session` reads. Alternatives: B — a new top-level §29; C — every command file that calls a tool. Why: §23.I already governs permission prompts, CLAUDE.md reaches every interactive session, and nothing is renumbered (§6). Applied in: phase 1 PR. Status: pending review
 - AD-7 [phase 1/1, 2026-09-28] How long does a session wait after a second refusal, and is there a cap? — Picked: A — one `send_later` with `delay_minutes: 30` per refusal, no cap; if `send_later` is refused too, end the turn and name the refused step. Alternatives: B — back off 30/60/120 minutes; C — stop BLOCKED after the fourth outage wake. Why: Q39 item 2 says about 30 minutes and never BLOCKED; C contradicts it and B adds state a stage does not keep. Applied in: phase 1 PR. Status: pending review
+- AD-8 [phase 1/1 — review round, 2026-09-28] Does a no-verdict phrase count as a classifier outage on its own? — Picked: A — only when the reason also names `classifier` (narrows AD-5). Alternatives: B — keep AD-5's unanchored phrase. Why: an unrelated "no verdict" denial must stay fileable. Applied in: PR #4821 (a6a8a96). Status: confirmed (2026-09-28, operator comment 5872650993 on #4750)
 
 ## Lessons
 - [source:intervention] When a report-template line gains an optional clause, use the file's `[...]` optional-suffix convention and test the whole line, not just the new substring: a substring test passed while the line read `<error>><; …>`. (files: .claude/commands/implement-plan-claude.md, tests/test_permission_prompts.py)
 - [source:intervention] A reason regex that exempts records from filing must be anchored on the subsystem's own word (here `classifier`); a bare phrase like `did not return a verdict` would silently hide real denials from another source. (files: .claude/scripts/permission_prompts.py)
+- [source:intervention] Do not compile a filing-exemption regex with `re.DOTALL`: `.*` between two anchor words then spans lines, so debug text on another line of a real denial can exempt it. Keep both anchors on one line. (files: .claude/scripts/permission_prompts.py)
 
 ## Notes
 - Issue mode: started by `/implement-issue-claude` (session session_0153HZR3zNiEzJdUt3bfrVtz, dispatcher trigger trig_01MnhEevbsHWJSKe9KgXQRAJ).
@@ -47,3 +49,4 @@
 - Operator Q39 A (2026-09-28): #4750 is the single fix for the classifier-outage cluster; #4749, #4751, #4759, #4760, #4761, #4762, #4767, #4779, #4780 closed as duplicates by the operator. #4808 (same reason) was filed after Q39 and is still open; closing it is the operator's call (§23.C).
 - Local test run: python3 here is 3.11, so `tests/test_workflow_retro.py` cannot be collected (an f-string with a backslash in `scripts/workflow_retro.py`, fine on CI's newer Python); unrelated to this project.
 - Review round 1 (2026-09-28, session session_01VpEWZrNVBtCNysdGtCgmJV): project branch already up to date with main (f92848d); fixes pushed twin-only per Q40 A.
+- Review round on 198cd19 (2026-09-28, session session_01J9Q8KLpY6Y7SwhKV1Y3Qpy): project branch already up to date with main; 3 of 4 findings fixed twin-only per Q40 A, 1 rejected (verdict on #4821). Tests: 147 passed in a scratch tree with the twins copied (permission-prompts, command, changelog-fragment, lessons-ingest); in this checkout only the parity checks and the new assertions that read `.claude/**` fail until the twin sync.

@@ -375,6 +375,9 @@ def test_classifier_outage_reasons_are_recognised(reason):
 		{"event": "PermissionDenied", "reason": "The policy did not return a verdict"},
 		{"event": "PermissionDenied", "reason": "The reviewer could not reach a verdict due to policy restrictions"},
 		{"event": "PermissionDenied", "reason": "no verdict"},
+		# The no-verdict phrase and "classifier" must share a line (PR #4821 review round 1 on 198cd19).
+		{"event": "PermissionDenied", "reason": "Rule 12 denies this push; no verdict needed.\nclassifier: skipped"},
+		{"event": "PermissionDenied", "reason": "classifier debug: rule loaded\nThe policy did not return a verdict"},
 	],
 )
 def test_real_denials_and_prompts_are_not_outages(record):

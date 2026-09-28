@@ -125,7 +125,8 @@ for the whole classifier-outage cluster (decision Q39, issue comment
   section numbers are not renumbered (§23.J is new). New identifiers
   (`CLASSIFIER_OUTAGE_REASON_RE`, `CLASSIFIER_OUTAGE_LABEL`,
   `is_classifier_outage`, `split_classifier_outages`,
-  `classifier_outage_summary`, summary key `outage_denials`) must not collide
+  `classifier_outage_summary`, `summarize_permission_records`, summary key
+  `outage_denials`) must not collide
   with anything in `permission_prompts.py` or the `check_in_status` module it
   loads.
 - §7 / §23.I: CLAUDE.md §23.I, `agents.md` (permission prompts section), and
@@ -144,13 +145,15 @@ for the whole classifier-outage cluster (decision Q39, issue comment
 1. Filer (twin only): add `CLASSIFIER_OUTAGE_REASON_RE`,
    `is_classifier_outage(record)`, `split_classifier_outages(records)`, and
    `classifier_outage_summary(outages)`. `report()` and `file_patterns()`
-   group only the records that are not outages, and `report()` adds
-   `outage_denials`.
+   load and split the log once and share
+   `summarize_permission_records(patterns, outages)`, so they group only the
+   records that are not outages, and the summary adds `outage_denials`.
    The regex matches, case-insensitively, `classifier` followed by
    `unavailable`, `error`, `timed out`, `timeout`, or `overloaded` (with an
    optional `is`), or a no-verdict phrase (`no verdict`, `without a verdict`,
-   `did not return a verdict`, `could not reach a verdict`). It matches only
-   on `PermissionDenied`, never on a `PermissionRequest` (AD-5).
+   `did not return a verdict`, `could not reach a verdict`) with the word
+   `classifier` on the same line (AD-8). It matches only on
+   `PermissionDenied`, never on a `PermissionRequest` (AD-5).
 2. CLAUDE.md §23.J (both copies), and a one-line pointer in §23.I.
 3. Command file (twin only): step 0 resume stages take their id from the
    environment and their mode from the log; a `get_session` refused without a

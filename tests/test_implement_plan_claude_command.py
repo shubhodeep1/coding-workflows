@@ -311,6 +311,7 @@ def test_resume_stage_makes_no_self_get_session_and_rides_out_classifier_outages
 	assert "Take the id from Bash (`echo \"session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}\"`)" in text
 	assert "A `— resume.` stage session reads its mode from the log's `Stage model: … Permission mode: <mode>` line instead" in text
 	assert "a resume stage makes no self lookup (issue #4750)" in text
+	assert "reading that line in this step, before step 2 (`git fetch origin claude/implement-plan-<slug>`, then `git show origin/claude/implement-plan-<slug>:docs/implement-plan/<slug>.md`" in text
 	assert "(that fallback call follows the **Classifier outage** rule below like any other)" in text
 	assert "**Classifier outage** (CLAUDE.md §23.J)" in text
 	assert "is retried once. Refused again, it is not a blocker: do not ask, do not stop at `Status: BLOCKED`" in text
