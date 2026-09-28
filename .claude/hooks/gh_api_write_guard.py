@@ -381,16 +381,26 @@ def substitution_bodies(command: str) -> list[str]:
 			index = end + 1
 			continue
 		if double_quoted and command.startswith("$(", index):
+			# Bash parses the body as a fresh command, so quotes inside it
+			# are its own: a quoted ")" does not close the substitution.
 			depth = 1
 			end = index + 2
+			inner_single = False
+			inner_double = False
 			while end < length and depth:
-				if command[end] == "\\":
+				inner = command[end]
+				if inner == "\\" and not inner_single:
 					end += 2
 					continue
-				if command[end] == "(":
-					depth += 1
-				elif command[end] == ")":
-					depth -= 1
+				if inner == "'" and not inner_double:
+					inner_single = not inner_single
+				elif inner == '"' and not inner_single:
+					inner_double = not inner_double
+				elif not inner_single and not inner_double:
+					if inner == "(":
+						depth += 1
+					elif inner == ")":
+						depth -= 1
 				end += 1
 			bodies.append(command[index + 2 : end - 1 if depth == 0 else length])
 			index = end
@@ -399,13 +409,44 @@ def substitution_bodies(command: str) -> list[str]:
 	return bodies
 
 
+def _outside_single_quotes(command: str) -> tuple[str, bool]:
+	"""Split out what Bash reads outside single quotes.
+
+	Returns the command with every single-quoted span removed, and whether an
+	unescaped backtick or `$(` (a substitution Bash would run) appears outside
+	single quotes. An escaped backtick or `\\$(` is text, not a substitution.
+	"""
+	kept: list[str] = []
+	has_substitution = False
+	single_quoted = False
+	double_quoted = False
+	index = 0
+	while index < len(command):
+		character = command[index]
+		if character == "\\" and not single_quoted:
+			kept.append(command[index : index + 2])
+			index += 2
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif character == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		elif not single_quoted and (character == "`" or command.startswith("$(", index)):
+			has_substitution = True
+		if not single_quoted and character != "'":
+			kept.append(character)
+		index += 1
+	return "".join(kept), has_substitution
+
+
 def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool, str]], command: str | None = None) -> bool:
 	"""True when a `gh api` call could run without being a direct invocation.
 
 	Counts as hidden: `gh api` inside a substitution Bash would run within one
-	word (`substitution_bodies(command)`; without `command`, any token holding
-	`$(` or a backtick next to `gh api`, the older reading that also flags
-	single-quoted text); `gh api` text passed to an executor command (`bash -c`,
+	word (`substitution_bodies(command)`), and, as a backstop, any token
+	holding `$(` or a backtick next to `gh api` when `command` has a real
+	substitution and a `gh api` outside single quotes (without `command`,
+	that token reading always applies); `gh api` text passed to an executor command (`bash -c`,
 	`sudo`, `xargs`, `python3 -c`, ...) or to a command word that is itself an
 	expansion; `gh api` words behind any other prefix; and a heredoc body
 	that mentions `gh api` when it feeds an executor or, with an unquoted
@@ -421,6 +462,15 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 			return True
 	if command is not None and any(_RAW_GH_API_RE.search(body) for body in substitution_bodies(command)):
 		return True
+	# Backstop for the body scanner: the older token reading still applies
+	# whenever the command holds a real substitution (an unescaped backtick
+	# or `$(` outside single quotes) and a `gh api` outside single quotes,
+	# where Bash could run it. A scanner miss therefore still asks.
+	if command is None:
+		token_substitution_check = True
+	else:
+		outside_text, has_real_substitution = _outside_single_quotes(command)
+		token_substitution_check = has_real_substitution and bool(_RAW_GH_API_RE.search(outside_text))
 	for tokens in segments:
 		index = _command_word_index(tokens)
 		if index >= len(tokens):
@@ -429,7 +479,7 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 		direct = index + 1 < len(tokens) and _is_gh(command_word) and tokens[index + 1] == "api"
 		executor = os.path.basename(command_word) in _EXECUTOR_COMMANDS or command_word.startswith("$")
 		for position, token in enumerate(tokens):
-			substitution_word = command is None and ("$(" in token or "`" in token)
+			substitution_word = token_substitution_check and ("$(" in token or "`" in token)
 			if _RAW_GH_API_RE.search(token) and (substitution_word or executor):
 				return True
 			if (
