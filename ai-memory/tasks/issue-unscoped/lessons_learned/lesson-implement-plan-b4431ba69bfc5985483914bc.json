@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T07:04:51Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "a change to how a workflow is dispatched must be checked against every reader that identifies its runs by head_branch/head_sha",
+  "phase": "implement_plan",
+  "pr_number": 4703,
+  "record_id": "lesson-implement-plan-b4431ba69bfc5985483914bc",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4618-sweep-dispatch-default-branch",
+    "file:.claude/scripts/check_in_status.py",
+    "file:.github/workflows/review_autofix_sweep.yml"
+  ]
+}
