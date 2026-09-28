@@ -355,7 +355,10 @@ def test_release_dispatches_only_unblocked_queued_prs(tmp_path: Path) -> None:
 	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
 	assert "MERGE_TRAIN_STILL_QUEUED pr=4081 blockers=#4077" in result.stdout
 	assert "pr=4085" not in result.stdout, "BASE_BRANCH filter must skip other bases"
-	assert "gh workflow run ai-review.yml --repo acme/consumer --ref ai/issue-4064 -f pr_number=4077" in log_text
+	# Issue #4701: dispatched from the default branch, never --ref the head.
+	assert "gh workflow run ai-review.yml --repo acme/consumer -f pr_number=4077" in log_text
+	assert "--ref" not in log_text
+	assert "MERGE_TRAIN_DISPATCHED pr=4077 workflow=ai-review.yml ref=default head=ai/issue-4064" in result.stdout
 	assert "PATCH repos/acme/consumer/issues/comments/97" in log_text
 	assert "merge-train:queue-retired" in log_text
 	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
@@ -402,7 +405,8 @@ def test_release_without_base_filter_covers_every_base(tmp_path: Path) -> None:
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RELEASED pr=4085 source=release" in result.stdout
-	assert "--ref ai/issue-4069 -f pr_number=4085" in log_text
+	assert "gh workflow run ai-review.yml --repo acme/consumer -f pr_number=4085" in log_text
+	assert "--ref" not in log_text
 
 
 def test_release_keeps_label_when_dispatch_fails(tmp_path: Path) -> None:
@@ -453,6 +457,55 @@ def test_release_leaves_active_review_queued_without_dispatch(tmp_path: Path) ->
 	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def test_release_leaves_pr_named_dispatch_run_queued_without_dispatch(tmp_path: Path) -> None:
+	"""Issue #4701: a default-branch dispatch run is keyed by the PR its name carries."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [{
+		"status": "queued",
+		"head_branch": "main",
+		"event": "workflow_dispatch",
+		"display_title": "AI Review [pr:4077]",
+		"path": ".github/workflows/ai-review.yml",
+	}]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_ignores_pr_named_runs_of_other_prs_and_other_events(tmp_path: Path) -> None:
+	"""Only a workflow_dispatch run named exactly for this PR suppresses it."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
+		{
+			"status": "in_progress",
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": "Internal: AI Review & Autofix [pr:40771]",
+			"path": ".github/workflows/internal-review.yml",
+		},
+		{
+			"status": "in_progress",
+			"head_branch": "ai/issue-9999",
+			"event": "pull_request",
+			"display_title": "AI Review [pr:4077]",
+			"path": ".github/workflows/ai-review.yml",
+		},
+	]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
 
 
 def test_release_dispatch_claim_prevents_concurrent_release(tmp_path: Path) -> None:

@@ -12560,9 +12560,18 @@ prime_phase_concurrency_snapshot() {
 # path-based match still covers that case whenever the cache itself hits (in
 # which case this fallback is never reached).  Fails open (echoes nothing) on any
 # gh/jq/date error so a transient API failure never blocks recovery.
+#
+# Optional $2 = PR number (issue #4701).  A review run dispatched from the
+# default branch has the default branch as its head, so the branch listing
+# never returns it.  When the listing matched no fresh review run and $2 is
+# a valid PR number, one more call (_pr_named_review_dispatch_runs) checks
+# the workflow_dispatch runs named for that PR, with the same status and
+# freshness filters, and echoes the freshest match's databaseId.  One-argument
+# callers keep the branch-only behaviour and make no extra call.
 _direct_inflight_review_run_on_branch()
 {
 	local _di_branch="$1"
+	local _di_pr="${2:-}"
 	local _di_now_epoch _di_stall_secs _di_runs_json
 	[ -n "${_di_branch}" ] || return 0
 	_di_now_epoch="$(date +%s 2>/dev/null || echo "")"
@@ -12612,6 +12621,24 @@ _direct_inflight_review_run_on_branch()
 			| select(($now - $start_epoch) < $threshold)
 		  ] | (.[0].databaseId // empty)
 	' 2>/dev/null || echo "")"
+	if [ -z "${_di_match}" ] && [[ "${_di_pr}" =~ ^[1-9][0-9]*$ ]]; then
+		_di_match="$(_pr_named_review_dispatch_runs "${_di_pr}" 2>/dev/null | jq -r \
+			--argjson now "${_di_now_epoch}" \
+			--argjson threshold "${_di_stall_secs}" '
+			(if type == "array" then . else [] end)
+			| [ .[]?
+				| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+				| ([.startedAt, .createdAt] | map(select(type == "string" and . != ""))[0] // "") as $ts
+				| (if $ts != ""
+				   then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
+				   else $now end) as $start_epoch
+				| select(($now - $start_epoch) < $threshold)
+			  ] | (.[0].databaseId // empty)
+		' 2>/dev/null || echo "")"
+		if [ -n "${_di_match}" ]; then
+			echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} pr=${_di_pr} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=1 outcome=pr_named_review_run" >&2
+		fi
+	fi
 	if [ -z "${_di_match}" ]; then
 		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=no_fresh_review_run" >&2
 		return 0
@@ -13717,15 +13744,29 @@ STALL_EOF
           # already-dispatched/active (rc=2) as success.
           local _rtr_failed_conclusion=""
           local _rtr_failed_wf=""
+          # Newest createdAt among the completed head-branch runs seen, so a
+          # PR-named failure (below) that a later head-branch run already
+          # superseded is not acted on.
+          local _rtr_newest_completed_at=""
           for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
-            local _rtr_wf_conclusion
-            _rtr_wf_conclusion="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+            local _rtr_wf_row _rtr_wf_conclusion _rtr_wf_created_at
+            _rtr_wf_row="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
               --workflow "${wf_candidate}" \
               --branch "${head_ref}" \
               --limit 1 \
-              --json status,conclusion \
-              --jq '[.[] | select(.status == "completed")] | .[0].conclusion // empty' \
+              --json status,conclusion,createdAt \
+              --jq '[.[] | select(.status == "completed")] | .[0] // empty | "\(.conclusion // "")\t\(.createdAt // "")"' \
               2>/dev/null || echo "")"
+            if [[ "${_rtr_wf_row}" == *$'\t'* ]]; then
+              _rtr_wf_conclusion="${_rtr_wf_row%%$'\t'*}"
+              _rtr_wf_created_at="${_rtr_wf_row#*$'\t'}"
+            else
+              _rtr_wf_conclusion="${_rtr_wf_row}"
+              _rtr_wf_created_at=""
+            fi
+            if [ -n "${_rtr_wf_created_at}" ] && [[ "${_rtr_wf_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+              _rtr_newest_completed_at="${_rtr_wf_created_at}"
+            fi
             case "${_rtr_wf_conclusion}" in
               failure|cancelled|timed_out)
                 _rtr_failed_conclusion="${_rtr_wf_conclusion}"
@@ -13734,6 +13775,33 @@ STALL_EOF
                 ;;
             esac
           done
+          # Default-branch dispatches (issue #4701): a review run that
+          # _dispatch_review_for_conflicts or the sweep dispatched is named
+          # for the PR and has the default branch as its head, so the
+          # branch lookups above never see it. When they found no failed
+          # run, look at the newest PR-named dispatch run (one call, §15):
+          # it counts when it completed with a failure and is newer than
+          # every completed head-branch run seen. A missing createdAt counts
+          # as older, so this path only adds a redispatch when the failure
+          # is definitely the newest run.
+          if [ -z "${_rtr_failed_conclusion}" ]; then
+            local _rtr_pr_named_row _rtr_pr_named_conclusion _rtr_pr_named_created_at
+            _rtr_pr_named_row="$(_pr_named_review_dispatch_runs "${pr_num}" \
+              | jq -r '.[0] // empty | select(.status == "completed") | "\(.conclusion // "")\t\(.createdAt // "")"' \
+              2>/dev/null || echo "")"
+            if [[ "${_rtr_pr_named_row}" == *$'\t'* ]]; then
+              _rtr_pr_named_conclusion="${_rtr_pr_named_row%%$'\t'*}"
+              _rtr_pr_named_created_at="${_rtr_pr_named_row#*$'\t'}"
+              case "${_rtr_pr_named_conclusion}" in
+                failure|cancelled|timed_out)
+                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+                    _rtr_failed_conclusion="${_rtr_pr_named_conclusion}"
+                    _rtr_failed_wf="review run dispatched for PR #${pr_num}"
+                  fi
+                  ;;
+              esac
+            fi
+          fi
           if [ -n "${_rtr_failed_conclusion}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} last ${_rtr_failed_wf} run concluded '${_rtr_failed_conclusion}' — dispatching review workflow directly instead of pushing an empty commit."
             local _rtr_dispatch_rc=0
@@ -13805,6 +13873,7 @@ STALL_EOF
             _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
               --arg br "${head_ref}" \
               --arg sha "${_rtr_head_sha}" \
+              --arg pr "${pr_num}" \
               --argjson now "${_rtr_now_epoch}" \
               --argjson threshold "${_rtr_stall_secs}" '
               [.workflow_runs[]?
@@ -13812,6 +13881,11 @@ STALL_EOF
                | select(
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                   # A default-branch dispatch (issues #4618, #4701) is named
+                   # for its PR; its head_branch is the default branch.
+                   or ($pr != "" and (.event // "") == "workflow_dispatch"
+                       and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                            or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
                  )
                | select(
                    (.name // "") == "AI Review"
@@ -13846,7 +13920,7 @@ STALL_EOF
           # Before the destructive empty-commit push, confirm against an
           # authoritative branch-scoped run listing; a false negative here
           # discards a full in-flight review pass (RC1 of the #11/#12 incident).
-          _rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
+          _rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
           if [ -n "${_rtr_direct_inflight_id}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
@@ -14243,7 +14317,12 @@ invoke_stall_judge() {
   local workflows_json
   local workflow_outcomes
   workflows_json="$(_load_actions_runs_cached)"
-  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" '
+  # A review run dispatched from the default branch (issues #4618, #4701)
+  # has the default branch as head_branch/head_sha, so it is matched by
+  # the run name the review wrappers give a workflow_dispatch run for its
+  # PR instead. The cached blob carries event and display_title, so this
+  # adds no API call (§15).
+  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" --arg pr "${target_pr}" '
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"
                or (.name // "") == "Internal Review"
@@ -14253,7 +14332,11 @@ invoke_stall_judge() {
                or (.path // "" | endswith("ai-review.yml"))
                or (.path // "" | endswith("internal-review.yml"))
                or (.path // "" | endswith("review_autofix.yml")))
-      | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha))
+      | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
+               or ($pr != ""
+                   and (.event // "") == "workflow_dispatch"
+                   and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                        or (.display_title // "") == ("AI Review [pr:" + $pr + "]"))))
       | {id: .id, workflow: (.name // ""), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.head_branch // ""), created_at: (.created_at // "")}
     ]
     | sort_by(.created_at)
@@ -16444,6 +16527,7 @@ STALL_EOF
 			  _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
 			    --arg br "${head_ref}" \
                 --arg sha "${head_sha}" \
+                --arg pr "${pr_num}" \
                 --argjson now "${_std_rtr_now_epoch}" \
                 --argjson threshold "${_std_rtr_stall_secs}" '
                 [.workflow_runs[]?
@@ -16451,6 +16535,11 @@ STALL_EOF
                  | select(
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                     # A default-branch dispatch (issues #4618, #4701) is named
+                     # for its PR; its head_branch is the default branch.
+                     or ($pr != "" and (.event // "") == "workflow_dispatch"
+                         and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                              or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
                    )
                  | select(
                      (.name // "") == "AI Review"
@@ -16481,7 +16570,7 @@ STALL_EOF
             # cache-miss path so the steady state adds zero API calls.
             _std_rtr_direct_inflight_id=""
             if [ -z "${_std_rtr_inflight_id}" ]; then
-              _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
+              _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
             fi
 			if [ -n "${_std_rtr_inflight_id}" ]; then
 			  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${REVIEW_RUN_MAX_RUNTIME_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
@@ -17231,11 +17320,11 @@ _CONFLICT_DISPATCH_TRACKER="${TMPDIR:-/tmp}/.conflict_dispatch_$$"
 # dispatch, so every poll cycle re-dispatched — each new run replaced
 # the pending predecessor and re-fired the conflict Telegram warning.
 #
-# Default-branch dispatches: review_autofix_sweep.yml dispatches from the
-# default branch (issue #4618), so the guard also counts active
-# internal-review.yml workflow_dispatch runs named
-# "Internal: AI Review & Autofix [pr:<pr_number>]" (one extra call, only
-# when the head-branch lookups found nothing).
+# Default-branch dispatches: review_autofix_sweep.yml (issue #4618),
+# _dispatch_review_for_conflicts and the merge train (issue #4701) dispatch
+# from the default branch, so the guard also counts active workflow_dispatch
+# runs named for the PR (_pr_named_review_dispatch_runs: one extra call,
+# only when the head-branch lookups found nothing).
 #
 # Usage: _has_active_autofix_run <pr_number> <head_ref>
 # Returns 0 if an active run exists (skip dispatch), 1 otherwise.
@@ -17260,30 +17349,79 @@ _has_active_autofix_run()
 		fi
 	done
 
-	# review_autofix_sweep.yml dispatches internal-review.yml from the
-	# default branch (issue #4618), so its runs never match the
-	# head-branch lookups above. internal-review.yml names each dispatched
-	# run "Internal: AI Review & Autofix [pr:<N>]"; match that exact name
-	# on workflow_dispatch runs. One extra call, issued only when the
-	# head-branch lookups found nothing (§15: they filter by --branch and
-	# cannot return a default-branch run). A repo without
-	# internal-review.yml gets a non-retryable error and counts 0.
+	# Review runs dispatched from the default branch (the sweep since issue
+	# #4618, _dispatch_review_for_conflicts and the merge train since issue
+	# #4701) never match the head-branch lookups above: they filter by
+	# --branch and cannot return a default-branch run. The review wrappers
+	# name each dispatched run for its PR; _pr_named_review_dispatch_runs
+	# matches those names in this repo and in consumer repos. One extra
+	# call, issued only when the head-branch lookups found nothing (§15).
 	if [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
 		local pr_named_active
-		pr_named_active="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
-			--workflow internal-review.yml \
-			--event workflow_dispatch \
-			--limit 100 \
-			--json status,displayTitle \
-			--jq "[.[] | select(.status == \"in_progress\" or .status == \"queued\" or .status == \"pending\") | select(.displayTitle == \"Internal: AI Review & Autofix [pr:${pr_number}]\")] | length" \
+		pr_named_active="$(_pr_named_review_dispatch_runs "${pr_number}" \
+			| jq -r '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
 			2>/dev/null || echo "0")"
 		if [ "${pr_named_active:-0}" -gt 0 ] 2>/dev/null; then
-			echo "  ${log_prefix} Active autofix run found (workflow=internal-review.yml, dispatched for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."
+			echo "  ${log_prefix} Active autofix run found (workflow_dispatch run named for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."
 			return 0
 		fi
 	fi
 
 	return 1
+}
+
+# ---------------------------------------------------------------
+# Helper: list the review dispatch runs named for one PR
+# ---------------------------------------------------------------
+# A review run dispatched from the default branch has head_branch (and
+# head_sha) of the default branch, so no head-branch lookup can see it.
+# The review wrappers name every workflow_dispatch run for its PR:
+#   internal-review.yml (this repo):  "Internal: AI Review & Autofix [pr:<N>]"
+#   ai-review.yml (consumer repos):   "AI Review [pr:<N>]"
+# A workflow_dispatch run's name is evaluated from the dispatched ref's
+# workflow file, which is always the default branch now (issues #4618,
+# #4701), never from PR text, so an exact match on the name identifies
+# the PR.
+#
+# Input:     $1 = PR number. Anything but ^[1-9][0-9]*$ prints [] with no call.
+# Output:    one JSON array on stdout, newest first, of the matching runs:
+#            [{databaseId, event, status, conclusion, displayTitle, createdAt, startedAt}]
+# API calls: exactly one `gh run list --event workflow_dispatch --limit 100`.
+#            It has no --workflow filter, so one call covers both wrapper
+#            names in either kind of repo (§15). Callers issue it only after
+#            their head-branch lookups found nothing.
+# Fail-open: a gh or jq failure prints [], so the caller behaves as it did
+#            before PR-named runs existed.
+#
+# Usage: _pr_named_review_dispatch_runs <pr_number>
+_pr_named_review_dispatch_runs()
+{
+	local pr_number="$1"
+	local runs_json=""
+	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+		printf '[]\n'
+		return 0
+	fi
+	runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+		--event workflow_dispatch \
+		--limit 100 \
+		--json databaseId,event,status,conclusion,displayTitle,createdAt,startedAt \
+		2>/dev/null)" || runs_json=""
+	if [ -z "${runs_json}" ]; then
+		printf '[]\n'
+		return 0
+	fi
+	printf '%s' "${runs_json}" | jq -c --arg pr "${pr_number}" '
+		(if type == "array" then . else [] end)
+		| [ .[]?
+			| select(type == "object")
+			| select((.event // "workflow_dispatch") == "workflow_dispatch")
+			| select((.displayTitle // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+				or (.displayTitle // "") == ("AI Review [pr:" + $pr + "]"))
+		  ]
+		| sort_by(.createdAt // "")
+		| reverse
+	' 2>/dev/null || printf '[]\n'
 }
 
 # Helper: Dispatch review workflow for merge conflict resolution
@@ -17294,17 +17432,33 @@ _has_active_autofix_run()
 # runner with a clean checkout — more reliable than the shared
 # orchestrator environment.
 #
-# workflow_dispatch resolves from the target ref (the PR branch),
-# which always exists, bypassing the unbuildable merge-ref problem
-# that affects pull_request synchronize events.
+# workflow_dispatch needs no merge ref, bypassing the unbuildable
+# merge-ref problem that affects pull_request synchronize events.
+#
+# Dispatch ref (security, issue #4701): the dispatch always runs the
+# default branch's workflow file and passes only a validated PR number.
+# Dispatching `--ref <head_ref>` ran the PR branch's own unmerged copy of
+# the review workflow with `secrets: inherit` and write permissions, the
+# same finding issue #4618 fixed in review_autofix_sweep.yml.
+# review_autofix.yml checks out the PR head from the PR's metadata either
+# way, and its concurrency group is keyed by PR number, not by ref. The
+# dispatched run is named for its PR, which is how _has_active_autofix_run
+# still sees it (the PR #3895 duplicate-dispatch loop stays closed).
 #
 # Usage: _dispatch_review_for_conflicts <pr_number> <head_ref>
-# Returns: 0 = dispatched, 1 = dispatch failed, 2 = skipped (active run exists).
+# Returns: 0 = dispatched, 1 = dispatch failed or invalid PR number,
+#          2 = skipped (active run exists).
 _dispatch_review_for_conflicts()
 {
 	local pr_number="$1"
 	local head_ref="$2"
 	local log_prefix="[conflict-dispatch] PR #${pr_number}"
+
+	# The PR number is the only PR data the dispatch carries (issue #4701).
+	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+		echo "::warning::${log_prefix} invalid pr_number; skipping review dispatch (head_ref=${head_ref})."
+		return 1
+	fi
 
 	# Guard 1: skip if already dispatched in this poll cycle.
 	# Multiple code paths (ready-to-merge loop, in-progress loop,
@@ -17335,13 +17489,15 @@ _dispatch_review_for_conflicts()
 	# edits even when the repo variable allows them. See
 	# review_autofix.yml:51 and internal-review.yml:15.
 	local allow_workflow_edits_flag="${ALLOW_WORKFLOW_EDITS:-true}"
+	# No --ref: the run executes the default branch's workflow file (issue
+	# #4701). review_autofix.yml is the last resort and has no PR run name,
+	# so only the wrapper dispatches are visible to the PR-named lookups.
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
 		if gh_retry gh workflow run "${wf_candidate}" \
 			--repo "${GITHUB_REPOSITORY}" \
-			--ref "${head_ref}" \
 			-f pr_number="${pr_number}" \
 			-f allow_workflow_edits="${allow_workflow_edits_flag}" 2>/dev/null; then
-			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
+			echo "  ${log_prefix} Dispatched ${wf_candidate} from the default branch for head ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
 			# Record in cycle-local tracker to prevent duplicate dispatches
 			echo "${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 			return 0
