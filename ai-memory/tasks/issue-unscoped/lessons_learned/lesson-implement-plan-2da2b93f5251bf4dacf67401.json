@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T03:09:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A project that edits reusable workflows is live in coding-workflows on merge (internal wrappers call @main) but reaches consumers only through @stable promotion; check the promotion kill switch PROMOTE_CYCLE_ENABLED and stable's file content, not commit ancestry, because promotions are non-ancestral.",
+  "phase": "implement_plan",
+  "pr_number": 4696,
+  "record_id": "lesson-implement-plan-2da2b93f5251bf4dacf67401",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:activation",
+    "plan:heal-deterministic-autofix-failures",
+    "file:.github/workflows/promote-main-to-stable.yml",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}
