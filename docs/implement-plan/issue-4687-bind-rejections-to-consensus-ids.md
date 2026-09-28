@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4687-bind-rejections-to-consensus-ids-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4687
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason
-- Project branch: claude/implement-plan-issue-4687-bind-rejections-to-consensus-ids   Final PR: #4695 draft
+- Project branch: claude/implement-plan-issue-4687-bind-rejections-to-consensus-ids   Final PR: #4695 ready — review rounds: 1
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason)
-- Waiting on: the completion PR into the project branch (opened with this commit; its number is in the stage report and the checker's resume block)
+- Waiting on: PR #4695 (final PR into the base branch; review round 2 on the head this commit creates)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_0117txgg28BLvgvA4ZjrRbV3 (reused for every wait)   safety net and hand-back: the ids are in the completion stage's report
+- Check-in: checker session_0117txgg28BLvgvA4ZjrRbV3 (reused for every wait)   safety net and hand-back: the ids are in the final-merge stage's report
 - Last updated: 2026-09-28
-- Last note: operator answered Q1: A on #4687 (skip validation, non-default base); completion PR opened, moving the plan to docs/completed/.
+- Last note: final-merge review round 1 on #4695 (head 175b9d78d309) reported 0 findings from 5 reviewers, but the minimax/minimax-m3 slot stalled on all 3 attempts, so the round was handed off instead of auto-merged; operator answered Q3: A on #4687, and this log commit gives the final PR a new head for a full-panel review.
 
 ## Phases
 1. [x] Phase 1 — bind rejections to consensus ids and keep ambiguous matches blocking   — PR #4698 merged 2026-09-28; review rounds: 0 (the first reviewer run reported no findings); interventions: 0
@@ -33,9 +33,9 @@
 - Skipped (non-default base): `validate.yml` binds `target_ref` only to an open PR into the default branch, and final PR #4695 targets the #4586 project branch, so a dispatch could not validate this code. Asked as Q1 on #4687 (a failure escalation, CLAUDE.md §28.C); the operator answered `Q1: A` on 2026-09-28: skip here, because the change reaches `main` only through #4586's final PR #4593, and #4586's chain runs its own security pass and runtime validation on a project branch that will contain this fix.
 
 ## Completion
-- Completion PR (this log update) — doc moved to docs/completed/issue-4687-bind-rejections-to-consensus-ids-plan.md
-- Merged PRs into the project branch: #4698 (phase 1/1, merged 2026-09-28)
-- Final PR #4695 draft (marked ready in stage final-merge 1/1)
+- PR #4747 merged 2026-09-28 (squash 175b9d7, merged by the operator per `Q2: C`) — doc moved to docs/completed/issue-4687-bind-rejections-to-consensus-ids-plan.md
+- Merged PRs into the project branch: #4698 (phase 1/1, merged 2026-09-28), #4747 (completion, merged 2026-09-28)
+- Final PR #4695 ready — review rounds: 1 (round 1 on 175b9d78d309: 0 findings from 5 of 6 reviewers, minimax/minimax-m3 slot stalled 3 times, handed off; operator `Q3: A` → this log commit for a new head)
 
 ## Activation
 - Not applicable: the base branch is `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason`, not the default branch.
@@ -50,9 +50,12 @@
 
 ## Lessons
 - [source:security] A reviewer verdict about another reviewer's finding must be bound to that finding by an identifier both sides can see (here a content-hash consensus_id), never by file and line proximity, and any ambiguous binding must keep the finding blocking. (files: scripts/review_claude_fixer_nonblocking.py, scripts/review_run_reviewers.sh)
+- [source:intervention] In Claude-fixer mode, a review with zero findings still hands off instead of auto-merging when any reviewer slot fails or another review run on the same head is still active at the pre-merge check refresh; without a configured verdict bot, only a new head or a human merge clears it. (files: scripts/review_autofix_step_claude_fixer_handoff.sh)
 
 ## Notes
 - Issue mode: the plan was written by `/implement-issue-claude` for #4687 (security-audit follow-up, tracker #3576). This plan supersedes #4586's AD-7 (the 3-line rejection window) for binding.
 - Protected paths: none (no `.claude/**` edits).
 - Conformance run 1 noted one HYPOTHESIS concern, not fixed: the flagger-citation guard checks whether the id appears anywhere in the flagger's raw pass-2 text, so a flagger that mentions the id while withdrawing a finding, combined with a summariser that copies it onto a new flaw at an overlapping range, would still bind. The plan specifies exactly this check, and its Risks section accepts the related same-lines case.
 - Validation 1/3 stopped at `Status: BLOCKED` (2026-09-28, session_01XU5G93fyGxoT3k9Ehe3LS5) and asked Q1 on #4687. Operator decision `Q1: A` (issue comment, 2026-09-28): `Validation: skipped (non-default base)`. The long-term fix is tracked in #4734 (let `validate.yml` authorize a final PR into a project branch whose own PR into `main` is open).
+- Completion review round 1 on #4747 (head 5ea3be8b3403) was clean, but a push-leg `review-claude-branch-push` run still active on the same head made the pre-merge check refresh fail closed, so the workflow posted a 0-finding hand-off. With no `CLAUDE_FIXER_VERDICT_BOT_LOGIN` configured, the stage stopped and asked Q2 on #4687. Operator decision `Q2: C` (2026-09-28): the operator merged #4747 by hand (squash 175b9d7).
+- Final-merge review round 1 on #4695 (head 175b9d78d309, run 36416865588) reported 0 findings and 0 task gaps from 5 reviewers; the `minimax/minimax-m3` slot was killed by the stall guard on all 3 attempts, so the clean-ledger check failed closed and handed the round off. The stage posted a `hold` claim and asked Q3 on #4687. Operator decision `Q3: A` (2026-09-28): commit this log update to the project branch so the final PR gets a new head and a full-panel review. The stalled-slot problem is filed as #4835; if the slot stalls again before #4835 lands, the stage stops BLOCKED and cites #4835 instead of asking again.
