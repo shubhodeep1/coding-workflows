@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"paginate the scoped Plan run lookup and require the ID before success\"\n  expected_change_site: `.github/workflows/test-and-mark-stable.yml` (`wait-plan` step, ~lines 722-901)\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No diff hunk in `.github/workflows/test-and-mark-stable.yml` exists in the PR DIFF; the file is not in `pr_changed_files.txt`. The plan and log describe the change but no implementation has been committed.\n- requirement: \"add `require_plan_run_id <id> <label>`, which returns when the ID is numeric, and otherwise emits `::error::`, writes `status=run_id_missing`, and exits 1. Call it after `capture_run_id \"Plan\"` in both the `ai:awaiting-approval` and `ai:implementing` branches\"\n  expected_change_site: `.github/workflows/test-and-mark-stable.yml` (`wait-plan` step, the `ai:awaiting-approval` and `ai:implementing` branches)\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No diff hunk in `.github/workflows/test-and-mark-stable.yml` exists in the PR DIFF. The `require_plan_run_id` function and its call sites are not implemented.\n- requirement: \"add a harness that extracts the `wait-plan` `run:` body from the YAML \u2026 and reads `GITHUB_OUTPUT`. Add the three behavioural cases from Goals\"\n  expected_change_site: `tests/test_test_and_mark_stable_plan_polling_guard.py`\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No diff hunk in `tests/test_test_and_mark_stable_plan_polling_guard.py` exists in the PR DIFF; the file is not in `pr_changed_files.txt`. The three behavioural test cases (missing ID fails at capture, page-2 match succeeds, unrelated title rejected) are not present.\n- requirement: \"`changelog.d/4723-require-plan-run-id.md` with `<!-- changelog: fixed -->`\"\n  expected_change_site: `changelog.d/4723-require-plan-run-id.md` [new file]\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No `changelog.d/4723-require-plan-run-id.md` in the PR DIFF; the file is not in `pr_changed_files.txt`. The changelog fragment mandated by \u00a720 is missing.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: \"paginate the scoped Plan run lookup and require the ID before success\" \u2014 Phase 1 deliverable per docs/plans/issue-4723-require-plan-run-id-plan.md \"Implementation Steps\" step 1: add `PLAN_RUN_LOOKUP_MAX_PAGES=10` and `fetch_plan_runs_page_json <page>` to the `wait-plan` step in `.github/workflows/test-and-mark-stable.yml`, rewriting `latest_scoped_run_field` to walk pages.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml` (`wait-plan` step, ~lines 722-901)\n  Evidence of absence: No diff hunk in `.github/workflows/test-and-mark-stable.yml` exists in the PR DIFF; the file is not in `pr_changed_files.txt`. The plan and log describe the change but no implementation has been committed.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"add `require_plan_run_id <id> <label>`, which returns when the ID is numeric, and otherwise emits `::error::`, writes `status=run_id_missing`, and exits 1. Call it after `capture_run_id \"Plan\"` in both the `ai:awaiting-approval` and `ai:implementing` branches\" \u2014 Implementation Steps step 2.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml` (`wait-plan` step, the `ai:awaiting-approval` and `ai:implementing` branches)\n  Evidence of absence: No diff hunk in `.github/workflows/test-and-mark-stable.yml` exists in the PR DIFF. The `require_plan_run_id` function and its call sites are not implemented.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"add a harness that extracts the `wait-plan` `run:` body from the YAML \u2026 and reads `GITHUB_OUTPUT`. Add the three behavioural cases from Goals\" \u2014 Implementation Steps step 3.\n  Expected change site: `tests/test_test_and_mark_stable_plan_polling_guard.py`\n  Evidence of absence: No diff hunk in `tests/test_test_and_mark_stable_plan_polling_guard.py` exists in the PR DIFF; the file is not in `pr_changed_files.txt`. The three behavioural test cases (missing ID fails at capture, page-2 match succeeds, unrelated title rejected) are not present.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"`changelog.d/4723-require-plan-run-id.md` with `<!-- changelog: fixed -->`\" \u2014 Implementation Steps step 4 and \u00a720 (changelog fragment required since the release gate's failure mode changes).\n  Expected change site: `changelog.d/4723-require-plan-run-id.md` [new file]\n  Evidence of absence: No `changelog.d/4723-require-plan-run-id.md` in the PR DIFF; the file is not in `pr_changed_files.txt`. The changelog fragment mandated by \u00a720 is missing.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4029579d731ea47b90340c61b7c0ccef26a138892f73fb0a8dec930f7913f29f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36382903025",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36382903025",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928055510_8000caa2a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36382903025"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T05:55:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
