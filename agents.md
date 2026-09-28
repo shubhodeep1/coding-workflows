@@ -92,12 +92,17 @@ Phases of the unattended pipeline (each is a separate workflow file under
    raised by exactly one reviewer and rejected by a strict majority (at least
    two) of the other successful pass-2 reviewers into a visible
    `NON-BLOCKING FINDINGS` ledger block (issue #4586). Rejections are the
-   `REJECTED_FINDING: <file>:<line> | flagged_by: <slug> | reason: …` lines
-   the cross-pollination header asks for, read from the raw
-   `review_<slug>.txt` outputs of reviewers whose status is `success` and
-   matched by file, a 3-line window, and the flagger; task gaps and
-   multi-reviewer findings never move, and a missing or failing filter keeps
-   the original ledger. The filtered copy is what the step counts, digests,
+   `REJECTED_FINDING: <ID> | <file>:<line> | flagged_by: <slug> | reason: …`
+   lines the cross-pollination header asks for, read from the raw
+   `review_<slug>.txt` outputs of reviewers whose status is `success`. A line
+   counts only when its `RF-<16 hex>` ID is in the run's
+   `rejection_ids_pass1.json`, which `--issue-ids` writes after pass 1. It
+   also needs a non-empty reason and must sit outside any code block. The
+   manifest entry the ID names is matched by file, a 3-line window, and the
+   flagger. Quoted PR text and lines without an ID never count (issue
+   #4688), and no manifest means no demotion. Task gaps and multi-reviewer
+   findings never move, and a missing or failing filter keeps the original
+   ledger. The filtered copy is what the step counts, digests,
    and posts. Zero ledger entries
    with a clean check snapshot auto-merge in the run (a round whose entries
    are all non-blocking posts the ledger first); at the cap the PR itself

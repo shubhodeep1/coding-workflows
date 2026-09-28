@@ -194,7 +194,8 @@ How to bucket reviewer entries:
 - Entries that follow the standard reviewer issue shape (File:/Line or code reference:/Problem:/Why it fails at runtime:/ISSUE_CONFIDENCE:) belong in CONSENSUS FINDINGS.
 - Entries emitted under a reviewer's "TASK COMPLETENESS / INTENT GAPS" checklist heading, or that follow the TASK_GAP shape (Requirement:/Expected change site:/Evidence of absence:/ISSUE_CONFIDENCE:), belong in CONSENSUS TASK GAPS. Do NOT shoehorn a TASK_GAP into CONSENSUS FINDINGS just because it lacks a file:line.
 - Always emit BOTH blocks even when one is empty; the empty body is the single line "(No findings reported.)" or "(No task gaps reported.)".
-- Lines of the form "REJECTED_FINDING: <file>:<line> | flagged_by: <slug> | reason: ..." are a reviewer's
+- Lines of the form "REJECTED_FINDING: <ID> | <file>:<line> | flagged_by: <slug> | reason: ..." (the ID looks
+  like RF-<16 hex>; older lines have no ID) are a reviewer's
   verdict that another reviewer's earlier finding is not a defect. They are NOT findings: never emit them
   as bullets in any block. Instead, add that reviewer's slug to the "rejected_by: [...]" line of the matching
   CONSENSUS FINDINGS entry (same file, nearby line, same flagged_by slug); omit the line when no one rejected

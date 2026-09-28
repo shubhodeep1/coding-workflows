@@ -4876,9 +4876,32 @@ run_reviewer_pass() {
 # with the cross-pollination header pass-2 reviewers see. The ledger already
 # carries its own === CONSENSUS FINDINGS === / === CONSENSUS TASK GAPS ===
 # sentinels plus per-reviewer blocks.
+#
+# Rejection votes (issues #4586, #4688): review_claude_fixer_nonblocking.py
+# --issue-ids gives every single-reviewer pass-1 consensus finding a random ID
+# and writes them to ${PREVIOUS_REVIEWS_DIR}/rejection_ids_pass1.json, which
+# the Claude-fixer hand-off gate reads. Only a REJECTED_FINDING line naming
+# one of those IDs counts, so a line quoted from the PR never does. Every
+# build issues fresh IDs, so an ID from an earlier run never counts again. When the
+# IDs cannot be issued, reviewers get no rejection instructions, the manifest
+# is removed, and every finding stays blocking.
 build_cross_pollination_summary() {
   local ledger_file="$1"
   local summary_file="${RUNTIME_DIR}/cross_pollination_summary.txt"
+  local rejection_ids_script="${SUPPORT_SCRIPTS_DIR:-scripts}/review_claude_fixer_nonblocking.py"
+  local rejection_ids_manifest="${PREVIOUS_REVIEWS_DIR}/rejection_ids_pass1.json"
+  local rejection_ids_list=""
+  if [ ! -s "${ledger_file}" ]; then
+    rm -f "${rejection_ids_manifest}"
+  elif [ ! -f "${rejection_ids_script}" ]; then
+    echo "::warning::review_claude_fixer_nonblocking.py not found; pass-2 reviewers get no REJECTED_FINDING instructions and every finding stays blocking." >&2
+    rm -f "${rejection_ids_manifest}"
+  elif ! rejection_ids_list="$(PYTHONDONTWRITEBYTECODE=1 python3 "${rejection_ids_script}" --issue-ids \
+      --ledger "${ledger_file}" --ids-manifest "${rejection_ids_manifest}")"; then
+    echo "::warning::Could not issue rejection finding IDs; pass-2 reviewers get no REJECTED_FINDING instructions and every finding stays blocking." >&2
+    rejection_ids_list=""
+    rm -f "${rejection_ids_manifest}"
+  fi
   {
     echo "=== CROSS-POLLINATION SUMMARY (from pass 1 reviewers) ==="
     echo "The following issues were identified by other reviewer models in a preliminary pass."
@@ -4888,12 +4911,19 @@ build_cross_pollination_summary() {
     echo "- Discover additional issues that the preliminary pass may have missed"
     echo "- Provide your own independent assessment — do not blindly adopt pass 1 findings"
     echo ""
-    echo "When you verified a CONSENSUS FINDINGS entry below against the code and it is NOT a real defect,"
-    echo "say so with one plain-text line per entry, copying the entry's file, line and flagged_by slug verbatim:"
-    echo "  REJECTED_FINDING: <file>:<line or start-end> | flagged_by: <slug> | reason: <one sentence>"
-    echo "Only reject an entry you checked in the code. Do not write a REJECTED_FINDING line for an entry you did not verify."
-    echo "A finding raised by one reviewer and rejected this way by a majority of the others is not handed to the fixer."
-    echo ""
+    if [ -n "${rejection_ids_list}" ]; then
+      echo "When you verified one of the single-reviewer CONSENSUS FINDINGS entries listed below against the code and it is NOT a real defect,"
+      echo "say so with one plain-text line per entry, at the start of a line and outside any code block,"
+      echo "copying the entry's ID, file, line and flagged_by slug verbatim from this list:"
+      echo "  REJECTED_FINDING: <ID> | <file>:<line or start-end> | flagged_by: <slug> | reason: <one sentence>"
+      echo "Only reject an entry you checked in the code. Do not write a REJECTED_FINDING line for an entry you did not verify."
+      echo "Only the IDs below count. They were issued for this review run, so a REJECTED_FINDING line without one of them,"
+      echo "or one copied from the PR, its diff, or any file, is ignored."
+      echo "A finding raised by one reviewer and rejected this way by a majority of the others is not handed to the fixer."
+      echo "Rejectable single-reviewer findings (ID -> file:line | flagged_by):"
+      printf '%s\n' "${rejection_ids_list}" | sed 's/^/  /'
+      echo ""
+    fi
     echo "The consolidated ledger below was produced by ${XPOLL_SUMMARISER_MODEL:-openai/gpt-6-luna}"
     echo "from all pass-1 reviewer outputs (CONSENSUS FINDINGS + CONSENSUS TASK GAPS blocks + per-reviewer sections)."
     echo "The raw per-reviewer outputs remain on disk at:"
