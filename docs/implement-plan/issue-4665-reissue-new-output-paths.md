@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: stable
 - Project branch: claude/implement-plan-issue-4665-reissue-new-output-paths   Final PR: #4667 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #4668 (review round 2 after the round-1 fix)
+- Waiting on: the conformance-1 fix PR from `claude/implement-plan-issue-4665-reissue-new-output-paths-conformance-fix-1`
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01TM4SVVtTqLwEfcyXidUoE9 (hand-back and safety net re-armed after each push; ids in the stage report)
-- Last updated: 2026-09-27
-- Last note: review round 1 on PR #4668: fixed the fail-open existence check (a failed lookup at the closed head now skips the entry as `lookup_failed`, via a literal-pathspec `git ls-tree`) and added a notice for a present non-array `new_output_paths`; rejected the redundant-gate finding.
+- Last updated: 2026-09-28
+- Last note: conformance run 1: INCOMPLETE (Correctness FAIL). A padded or U+2028 `new_output_paths` entry passed validation and the scope guard then read it as an existing path or an extra entry. The conformance-fix PR keeps only printable ASCII with no leading or trailing space (AD-7).
 
 ## Phases
-1. [ ] Phase 1 — declare and union new output paths (`new_output_paths` in the judge contract, validated union into the spot-fix `files_touched` allowlist, tests, docs, changelog fragment)   — PR #4668 open (waiting); review rounds: 1; interventions: 0
+1. [x] Phase 1 — declare and union new output paths (`new_output_paths` in the judge contract, validated union into the spot-fix `files_touched` allowlist, tests, docs, changelog fragment)   — PR #4668 merged 2026-09-28 (merged by the owner after the Q1: A answer on #4665); review rounds: 2; interventions: 0
    - [x] Prompt schema + rules in `prompts/mode-judge-review-blocked.txt` and `prompts/_templates/mode-judge-review-blocked.txt`
    - [x] Validated third union source in `scripts/review_rb_judge.sh` with `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`
    - [x] Tests: `tests/test_review_rb_judge_label_propagation.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_orchestrate_poll_workflow_contract.py`
@@ -22,6 +22,7 @@
    - Done: new tests pass, existing reissue / scope-guard / prompt / contract suites pass, and a reissue without the field is byte-identical.
 
 ## Conformance
+- Run 1 — 2026-09-28: INCOMPLETE (Correctness FAIL: one EVIDENCE-BASED BLOCKER, `new_output_paths` entries the scope guard rewrites) — fix PR from `claude/implement-plan-issue-4665-reissue-new-output-paths-conformance-fix-1` (pre-security)
 
 ## Security pass
 - Skipped (ai:workflow-heal: automation-produced issue)
@@ -39,11 +40,15 @@
 - AD-4 [plan, 2026-09-27] May a declared path already exist at the closed head? — Picked: A — no; it must be absent (neither file nor directory), and globs and trailing `/` are rejected. Alternatives: B — allow existing files too. Why: existing files belong in `remaining_issues[]` with line anchors, and absence rules out any existing-directory exemption. Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-09-27] Cap the number of declared paths? — Picked: A — a fixed cap of 10, excess entries skipped as `over_cap`. Alternatives: B — no cap; C — a new repo var. Why: bounds a runaway judge without a new configuration surface (§4, §5). Applied in: phase 1 PR. Status: pending review
 - AD-6 [phase 1/1, 2026-09-27] Which hand-off author login should the checker use? — Picked: A — shubhodeep1, the GH_PAT account whose workflow comments appear on #4665; verdict bot empty. Alternatives: B — leave both empty (fail closed, review hand-offs then reach the chain only through the §26.H sweep). Why: the review workflow posts hand-offs as the GH_PAT account and review_autofix_sweep.yml defaults to the same login; sibling project issue-4621 uses it. Applied in: no code change. Status: pending review
+- AD-7 [conformance 1/3, 2026-09-28] How should `new_output_paths` reject entries that `files_touched_scope_guard.py` would rewrite (trimmed edge whitespace, Unicode line separators)? — Picked: A — keep only printable ASCII (0x21–0x7E at both ends, spaces allowed inside); skip anything else as `invalid_path` without echoing it. Alternatives: B — reject only edge whitespace and the characters `str.splitlines()` splits on, keeping other non-ASCII names; C — change the guard to stop trimming. Why: A closes every normalisation variant at once and a skipped entry only falls back to today's behaviour (AD-3); B must track Python's Unicode whitespace tables, and C changes the guard, a non-goal. Applied in: conformance-1 fix PR. Status: pending review
 
 ## Lessons
 - [source:intervention] An existence check that gates an allowlist must tell "absent" from "lookup failed": `git cat-file -e <sha>:<path>` exits non-zero for both, so use `git --literal-pathspecs ls-tree --full-tree --name-only <sha> -- <path>` (exit 0 with empty output is the only proof of absence) and skip the entry on any other result. (files: scripts/review_rb_judge.sh)
+- [source:conformance] Validate an allowlist entry as the consumer will read it, not as written: `files_touched_scope_guard.py` trims each entry and splits the issue body with `str.splitlines()`, so a padded or Unicode-separator path can turn into an existing directory or an extra entry. Restrict generated entries to printable ASCII with no edge spaces. (files: scripts/review_rb_judge.sh, scripts/files_touched_scope_guard.py)
 
 ## Notes
 - Issue mode: base `stable` from the issue's `Target branch:` line; no merged PR has `stable` as its head, so the base did not move. Security pass skipped per the plan header. Activation n/a for a non-default base: the project ends after the final merge, which closes #4665 explicitly with `ai:merged`.
 - Permission mode auto (no start-up question needed).
 - `.github/workflows/review_autofix.yml` is 505,498 bytes on `stable`, above the §27 480,000-byte guard but under GitHub's 512,000 limit. `stable` predates `tests/test_workflow_file_size_limit.py`, and `main` has already split the file (451,394 bytes), so the next promotion fixes it. This project does not touch the file (§5).
+- 2026-09-28: round 2 on PR #4668 had one finding, which was rejected. Convergence needs the dedicated verdict bot, which is not configured, so the project blocked (Q1 on #4665). The owner answered `Q1: A`, merged #4668 into the project branch (squash b6d6666), and commented `/reclarify`. The progress-log lines from the blocked comment were never pushed; this entry records them.
+- 2026-09-28: the resumed issue session found checker session_01TM4SVVtTqLwEfcyXidUoE9 idle with no pending check-in and the log's `Status: IN_PROGRESS` lagging the unpushed BLOCKED state. It resumed at conformance 1/3 as the owner asked, instead of reporting `already in progress`. The project branch already contained `origin/stable`, so no sync push was needed.
