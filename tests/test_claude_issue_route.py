@@ -257,6 +257,29 @@ if [[ "$*" == *"coding-workflows/issues -f title="* ]]; then
   printf '%s\\n' "${{GH_STUB_QUEUE_NUMBER:-77}}"
   exit 0
 fi
+if [[ "$*" == *"/collaborators/"*"/permission"* ]]; then
+  [ -z "${{GH_STUB_FAIL_PERMISSION:-}}" ] || {{ echo "HTTP 502" >&2; exit 1; }}
+  if [ -n "${{GH_STUB_DENY_LOGIN:-}}" ] && [[ "$*" == *"/collaborators/${{GH_STUB_DENY_LOGIN}}/permission"* ]]; then
+    printf 'read\\n'
+  else
+    printf '%s\\n' "${{GH_STUB_PERMISSION:-admin}}"
+  fi
+  exit 0
+fi
+if [[ "$*" == "api --paginate "*"/comments?per_page=100" ]]; then
+  [ -z "${{GH_STUB_FAIL_COMMENTS:-}}" ] || {{ echo "HTTP 500" >&2; exit 1; }}
+  printf '%s' "${{GH_STUB_COMMENTS_JSON:-[]}}"
+  exit 0
+fi
+if [[ "$*" =~ ^api\\ repos/([^/]+/[^/]+)/issues/([0-9]+)$ ]]; then
+  [ -z "${{GH_STUB_FAIL_ISSUE_READ:-}}" ] || {{ echo "HTTP 404: Not Found" >&2; exit 1; }}
+  if [ -n "${{GH_STUB_ISSUE_JSON:-}}" ]; then
+    printf '%s' "${{GH_STUB_ISSUE_JSON}}"
+  else
+    printf '{{"number":%s,"state":"open","repository_url":"https://api.github.com/repos/%s","author_association":"OWNER","user":{{"login":"owner","type":"User"}}}}' "${{BASH_REMATCH[2]}}" "${{BASH_REMATCH[1]}}"
+  fi
+  exit 0
+fi
 exit 0
 """,
 	)
@@ -342,6 +365,8 @@ def _intake_env(stubs, payload, **extra):
 		"GH_TOKEN": "pat-token",
 		"CLAUDE_ISSUE_PAYLOAD_FILE": str(payload_file),
 		"CLAUDE_ISSUE_QUEUE_TOKEN": "gha-token",
+		"CLAUDE_ISSUE_DISPATCHER": "shubhodeep1",
+		"CLAUDE_ISSUE_TRIGGERING_ACTOR": "shubhodeep1",
 		"RUN_URL": "https://github.com/shubhodeep1/coding-workflows/actions/runs/123",
 		"GITHUB_RUN_ID": "123",
 		"CLAUDE_ISSUE_QUEUE_BINDING_FILE": str(stubs["tmp"] / "binding" / route.QUEUE_BINDING_FILENAME),
@@ -473,6 +498,34 @@ def test_intake_rejects_unregistered_repo(stubs):
 	assert result.returncode == 1
 	assert "reason=invalid_payload" in result.stdout
 	assert "-f title=" not in (stubs["log"].read_text() if stubs["log"].exists() else "")
+	# The payload's repo + issue are unverified: nothing is written to them.
+	assert "rejected reason=invalid_payload" in result.stdout
+	assert _target_writes(stubs, repo="stranger/repo", number=3) == []
+
+
+def test_intake_invalid_payload_for_registered_repo_writes_nothing(stubs):
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="bogus"))
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "rejected reason=invalid_payload" in result.stdout
+	assert _target_writes(stubs) == []
+	assert "/permission" not in (stubs["log"].read_text() if stubs["log"].exists() else "")
+
+
+@pytest.mark.parametrize("run_url", ["", "https://github.com/shubhodeep1/coding-workflows/actions/runs/123"])
+def test_intake_failure_alert_names_the_run_only_when_known(stubs, run_url):
+	# fail() after authorization: a hand-driven run has no RUN_URL, so no bare "Run: " line.
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), CLAUDE_ISSUE_QUEUE_TOKEN="", RUN_URL=run_url, TG_BOT_SECRET="tg-secret", TG_CHAT_ID="42")
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "reason=queue_not_configured" in result.stdout
+	sent = (stubs["tmp"] / "curl_args.log").read_text()
+	assert "Claude issue intake FAILED (queue_not_configured) for shubhodeep1/digital_pa#9" in sent
+	if run_url:
+		assert f"Run: {run_url}" in sent
+	else:
+		assert "Run:" not in sent
+	assert "labels[]=ai:claude-handoff-failed" in stubs["log"].read_text()
 
 
 def test_intake_without_queue_token_marks_issue(stubs):
@@ -499,6 +552,280 @@ def test_intake_logs_deprecated_routine_id_without_firing(stubs):
 	assert "notice routine_deprecated" in result.stdout
 	assert "sk-test-secret" not in result.stdout + result.stderr
 	assert not (stubs["tmp"] / "curl_args.log").exists()
+
+
+# --- intake authorization (issue #4620) ------------------------------------------------------
+
+
+def _target(number=9, repo="shubhodeep1/digital_pa", state="open", association="OWNER", user_type="User", login="owner", **extra):
+	issue = {
+		"number": number,
+		"state": state,
+		"repository_url": f"https://api.github.com/repos/{repo}",
+		"author_association": association,
+		"user": {"login": login, "type": user_type},
+	}
+	issue.update(extra)
+	return issue
+
+
+def _comment(body="/reclarify", association="COLLABORATOR", user_type="User", login="helper"):
+	return {"body": body, "author_association": association, "user": {"login": login, "type": user_type}}
+
+
+_AUTHORIZED_DISPATCHER = {"shubhodeep1": "admin"}
+
+
+@pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR"])
+def test_authorize_target_accepts_trusted_author(association):
+	result = route.authorize_target(_validated(), _target(association=association), {"shubhodeep1": "write"})
+	assert result == {"authorized": True, "reason": "trusted_author", "needs_comments": False}
+
+
+def test_authorize_target_accepts_github_actions_bot_author():
+	issue = _target(association="NONE", user_type="Bot", login="github-actions[bot]")
+	assert route.authorize_target(_validated(), issue, _AUTHORIZED_DISPATCHER)["reason"] == "trusted_author"
+
+
+def test_authorize_target_matches_repo_case_insensitively():
+	issue = _target(repository_url="https://api.github.com/repos/Shubhodeep1/Digital_PA")
+	assert route.authorize_target(_validated(), issue, _AUTHORIZED_DISPATCHER)["authorized"] is True
+
+
+@pytest.mark.parametrize(
+	("permissions", "reason"),
+	[
+		({}, "dispatcher_unknown"),
+		(None, "dispatcher_unknown"),
+		({"": "admin"}, "dispatcher_unknown"),
+		({"mallory": "read"}, "dispatcher_not_authorized"),
+		({"mallory": "none"}, "dispatcher_not_authorized"),
+		({"mallory": "triage"}, "dispatcher_not_authorized"),
+		({"mallory": ""}, "dispatcher_not_authorized"),
+		({"shubhodeep1": "admin", "mallory": "read"}, "dispatcher_not_authorized"),
+	],
+)
+def test_authorize_target_requires_every_dispatcher_to_write(permissions, reason):
+	result = route.authorize_target(_validated(), _target(), permissions)
+	assert result == {"authorized": False, "reason": reason, "needs_comments": False}
+
+
+@pytest.mark.parametrize(
+	("issue", "reason"),
+	[
+		(None, "target_not_issue"),
+		([], "target_not_issue"),
+		(_target(pull_request={"url": "x"}), "target_not_issue"),
+		(_target(number=10), "target_not_issue"),
+		(_target(repo="someone/else"), "target_repo_mismatch"),
+		(_target(repository_url=None), "target_repo_mismatch"),
+		(_target(state="closed"), "issue_closed"),
+	],
+)
+def test_authorize_target_verifies_the_live_issue(issue, reason):
+	result = route.authorize_target(_validated(), issue, _AUTHORIZED_DISPATCHER)
+	assert result == {"authorized": False, "reason": reason, "needs_comments": False}
+
+
+@pytest.mark.parametrize(
+	("association", "user_type", "login"),
+	[
+		("NONE", "User", "stranger"),
+		("CONTRIBUTOR", "User", "stranger"),
+		("FIRST_TIME_CONTRIBUTOR", "User", "stranger"),
+		("OWNER", "Bot", "some-app[bot]"),
+		("NONE", "Bot", "dependabot[bot]"),
+	],
+)
+def test_authorize_target_asks_for_comments_for_untrusted_author(association, user_type, login):
+	issue = _target(association=association, user_type=user_type, login=login)
+	result = route.authorize_target(_validated(), issue, _AUTHORIZED_DISPATCHER)
+	assert result == {"authorized": False, "reason": "untrusted_issue_author", "needs_comments": True}
+
+
+def test_authorize_target_accepts_untrusted_author_vouched_by_trusted_reclarify():
+	issue = _target(association="NONE", login="stranger")
+	comments = [_comment(body="thanks", association="OWNER"), _comment(body="/reclarify please", association="MEMBER")]
+	result = route.authorize_target(_validated(), issue, _AUTHORIZED_DISPATCHER, comments)
+	assert result == {"authorized": True, "reason": "trusted_reclarify", "needs_comments": False}
+
+
+@pytest.mark.parametrize(
+	"comments",
+	[
+		[],
+		[_comment(association="NONE", login="stranger")],
+		[_comment(association="CONTRIBUTOR")],
+		[_comment(user_type="Bot", login="github-actions[bot]", association="NONE")],
+		[_comment(user_type="Bot", login="some-app[bot]", association="MEMBER")],
+		[_comment(body="please /reclarify", association="OWNER")],
+		[_comment(body=None, association="OWNER")],
+		["/reclarify"],
+	],
+)
+def test_authorize_target_refuses_untrusted_author_without_trusted_reclarify(comments):
+	issue = _target(association="NONE", login="stranger")
+	result = route.authorize_target(_validated(), issue, _AUTHORIZED_DISPATCHER, comments)
+	assert result == {"authorized": False, "reason": "untrusted_issue_author", "needs_comments": False}
+
+
+def test_authorize_target_checks_dispatcher_before_reading_comments():
+	issue = _target(association="NONE", login="stranger")
+	result = route.authorize_target(_validated(), issue, {"mallory": "read"}, [_comment()])
+	assert result["reason"] == "dispatcher_not_authorized"
+
+
+def test_cli_authorize_target(tmp_path):
+	validated = tmp_path / "validated.json"
+	validated.write_text(json.dumps(_validated()))
+	issue = tmp_path / "issue.json"
+	issue.write_text(json.dumps(_target(association="NONE", login="stranger")))
+	perms = tmp_path / "perms.json"
+	perms.write_text(json.dumps(_AUTHORIZED_DISPATCHER))
+	base = ["authorize-target", "--validated-json", str(validated), "--issue-json", str(issue), "--permissions-json", str(perms)]
+	out = _cli(*base)
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout) == {"authorized": False, "reason": "untrusted_issue_author", "needs_comments": True}
+	comments = tmp_path / "comments.json"
+	comments.write_text(json.dumps([_comment()]))
+	out = _cli(*base, "--comments-json", str(comments))
+	assert json.loads(out.stdout)["reason"] == "trusted_reclarify"
+	comments.write_text(json.dumps({"not": "a list"}))
+	assert _cli(*base, "--comments-json", str(comments)).returncode == 2
+
+
+def _target_writes(stubs, repo="shubhodeep1/digital_pa", number=9):
+	"""gh calls that would write to the target issue (label or comment)."""
+	calls = stubs["log"].read_text().splitlines() if stubs["log"].exists() else []
+	return [
+		line
+		for line in calls
+		if f"repos/{repo}/issues/{number}/" in line and ("-f " in line or "-X POST" in line)
+	]
+
+
+def test_intake_reads_permission_and_issue_before_queueing(stubs):
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9))
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "authorized repo=shubhodeep1/digital_pa issue=9 reason=trusted_author dispatchers=shubhodeep1" in result.stdout
+	calls = stubs["log"].read_text().splitlines()
+	permission_reads = [line for line in calls if "/collaborators/" in line]
+	# One permission read for the one distinct dispatcher login; the target
+	# repo is the payload's, the login is GitHub's.
+	assert permission_reads == ["api repos/shubhodeep1/digital_pa/collaborators/shubhodeep1/permission --jq .permission"]
+	assert "api repos/shubhodeep1/digital_pa/issues/9" in calls
+	# A trusted author needs no comments read.
+	assert not any("--paginate" in line for line in calls)
+	# Authorization runs before the queue is touched.
+	issue_read = calls.index("api repos/shubhodeep1/digital_pa/issues/9")
+	queue_read = next(i for i, line in enumerate(calls) if "issues?labels=ai:claude-issue-queue" in line)
+	assert issue_read < queue_read
+	# Reads go through GH_PAT, which can see the target repo.
+	tokens = (stubs["tmp"] / "gh_tokens.log").read_text().splitlines()
+	reads = [line for line in tokens if "|api repos/shubhodeep1/digital_pa/collaborators/" in line or line.endswith("|api repos/shubhodeep1/digital_pa/issues/9")]
+	assert reads == [
+		"pat-token|api repos/shubhodeep1/digital_pa/collaborators/shubhodeep1/permission --jq .permission",
+		"pat-token|api repos/shubhodeep1/digital_pa/issues/9",
+	]
+
+
+def test_intake_checks_a_distinct_triggering_actor_too(stubs):
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), CLAUDE_ISSUE_TRIGGERING_ACTOR="mallory", GH_STUB_DENY_LOGIN="mallory")
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "rejected reason=dispatcher_not_authorized repo=shubhodeep1/digital_pa issue=9" in result.stdout
+	calls = stubs["log"].read_text()
+	assert "collaborators/shubhodeep1/permission" in calls and "collaborators/mallory/permission" in calls
+	assert "-f title=" not in calls
+	assert _target_writes(stubs) == []
+
+
+@pytest.mark.parametrize(
+	("extra", "reason"),
+	[
+		({"CLAUDE_ISSUE_DISPATCHER": "", "CLAUDE_ISSUE_TRIGGERING_ACTOR": ""}, "dispatcher_unknown"),
+		({"GH_STUB_PERMISSION": "read"}, "dispatcher_not_authorized"),
+		({"CLAUDE_ISSUE_DISPATCHER": "bad login;rm", "CLAUDE_ISSUE_TRIGGERING_ACTOR": ""}, "dispatcher_not_authorized"),
+		({"GH_STUB_FAIL_PERMISSION": "1"}, "authorization_read_failed"),
+		({"GH_STUB_FAIL_ISSUE_READ": "1"}, "authorization_read_failed"),
+		({"GH_STUB_ISSUE_JSON": json.dumps(_target(state="closed"))}, "issue_closed"),
+		({"GH_STUB_ISSUE_JSON": json.dumps(_target(pull_request={}))}, "target_not_issue"),
+		({"GH_STUB_ISSUE_JSON": json.dumps(_target(repo="shubhodeep1/elsewhere"))}, "target_repo_mismatch"),
+		({"GH_STUB_ISSUE_JSON": json.dumps(_target(association="NONE", login="stranger"))}, "untrusted_issue_author"),
+		(
+			{
+				"GH_STUB_ISSUE_JSON": json.dumps(_target(association="NONE", login="stranger")),
+				"GH_STUB_FAIL_COMMENTS": "1",
+			},
+			"authorization_read_failed",
+		),
+	],
+)
+def test_intake_refuses_without_writing_to_the_target(stubs, extra, reason):
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), **extra)
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert f"CLAUDE_ISSUE_INTAKE rejected reason={reason} repo=shubhodeep1/digital_pa issue=9" in result.stdout
+	assert "::error::Claude issue intake refused shubhodeep1/digital_pa#9" in result.stdout
+	calls = stubs["log"].read_text() if stubs["log"].exists() else ""
+	# No queue item, no label, no comment.
+	assert "-f title=" not in calls
+	assert "issues?labels=ai:claude-issue-queue" not in calls
+	assert "ai:claude-handoff-failed" not in calls
+	assert _target_writes(stubs) == []
+
+
+def test_intake_read_failure_detail_keeps_the_final_error(stubs):
+	# gh_retry_to_file logs its retry warnings first; the detail must still
+	# carry the final attempt's summary and API error.
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_FAIL_PERMISSION="1", GH_RETRY_MAX_ATTEMPTS="2")
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	rejected = [line for line in result.stdout.splitlines() if line.startswith("CLAUDE_ISSUE_INTAKE rejected reason=authorization_read_failed")]
+	assert len(rejected) == 1
+	assert "failed after 2 attempts" in rejected[0]
+	assert rejected[0].endswith("HTTP 502")
+	assert _target_writes(stubs) == []
+
+
+@pytest.mark.parametrize("run_url", ["", "https://github.com/shubhodeep1/coding-workflows/actions/runs/123"])
+def test_intake_refusal_alert_names_the_run_only_when_known(stubs, run_url):
+	# A hand-driven run has no RUN_URL: the Telegram ERROR must not end in a bare "Run: ".
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_PERMISSION="read", RUN_URL=run_url, TG_BOT_SECRET="tg-secret", TG_CHAT_ID="42")
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "rejected reason=dispatcher_not_authorized" in result.stdout
+	sent = (stubs["tmp"] / "curl_args.log").read_text()
+	assert "Claude issue intake REFUSED (dispatcher_not_authorized) for shubhodeep1/digital_pa#9" in sent
+	assert "No session was queued and nothing was written to the issue." in sent
+	if run_url:
+		assert f"Run: {run_url}" in sent
+	else:
+		assert "Run:" not in sent
+	assert _target_writes(stubs) == []
+
+
+def test_intake_queues_untrusted_author_vouched_by_trusted_reclarify(stubs):
+	comments_pages = json.dumps([_comment(body="hi", association="NONE", login="stranger")]) + json.dumps([_comment(body="/reclarify", association="OWNER")])
+	env = _intake_env(
+		stubs,
+		_payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="reclarify"),
+		GH_STUB_ISSUE_JSON=json.dumps(_target(association="NONE", login="stranger")),
+		GH_STUB_COMMENTS_JSON=comments_pages,
+	)
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "authorized repo=shubhodeep1/digital_pa issue=9 reason=trusted_reclarify" in result.stdout
+	assert "api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100" in stubs["log"].read_text()
+	assert "queued repo=shubhodeep1/digital_pa issue=9 trigger=reclarify" in result.stdout
+
+
+def test_intake_workflow_binds_dispatcher_from_github_context():
+	workflow = yaml.safe_load(INTAKE_WF.read_text())
+	step = next(step for step in workflow["jobs"]["intake"]["steps"] if "claude_issue_intake.sh" in step.get("run", ""))
+	assert step["env"]["CLAUDE_ISSUE_DISPATCHER"] == "${{ github.actor }}"
+	assert step["env"]["CLAUDE_ISSUE_TRIGGERING_ACTOR"] == "${{ github.triggering_actor }}"
 
 
 # --- queue parsing (pickup) and staleness (watchdog) -----------------------------------------
@@ -650,6 +977,83 @@ def test_queue_stale_flags_old_trusted_items_once():
 	]
 	stale = route.queue_stale(issues, now, 3)
 	assert [(s["number"], s["age_hours"]) for s in stale] == [(1, 5.0)]
+
+
+ARM_REQUEST = "— arm-check-in shubhodeep1/digital_pa#4601 for session_01LkiqZoHfSm6HZF8n8Dogo1"
+
+
+def test_arm_check_in_request_returns_fixed_fields():
+	"""CLAUDE.md §26.B step 1c: only the validated slug, number, and session id reach the output."""
+	parsed = route.parse_arm_check_in_request("\n" + ARM_REQUEST + "\n", REGISTRY_ALLOWED)
+	assert parsed == {
+		"repo": "shubhodeep1/digital_pa",
+		"pr_number": 4601,
+		"pr_url": "https://github.com/shubhodeep1/digital_pa/pull/4601",
+		"source_url": "https://github.com/shubhodeep1/digital_pa",
+		"requester": "session_01LkiqZoHfSm6HZF8n8Dogo1",
+		"checker_title": "PR #4601 status check-in",
+		"ready_trigger_name": "PR #4601 status check-in: checker ready",
+		"ready_prompt": (
+			"CLAUDE.md §26.B step 1c: the Claude issue pickup created checker <checker id> "
+			"for PR #4601 (https://github.com/shubhodeep1/digital_pa/pull/4601). Continue with "
+			"CLAUDE.md §26.B steps 3–4 for that checker in this session."
+		),
+	}
+	# The stale Routine sweep must recognise both triggers this flow creates.
+	sys.path.insert(0, str(ROOT / ".claude" / "scripts"))
+	import stale_routines  # noqa: E402
+
+	assert stale_routines.CHECK_IN_NAME_PATTERN.match(parsed["ready_trigger_name"])
+	assert stale_routines.CHECK_IN_NAME_PATTERN.match("PR #4601 status check-in: arm request")
+	assert len(parsed["ready_trigger_name"]) <= 60
+
+
+@pytest.mark.parametrize(
+	"text",
+	[
+		"",
+		ARM_REQUEST + "\n" + ARM_REQUEST,
+		ARM_REQUEST.replace("—", "--"),
+		ARM_REQUEST.replace("digital_pa", "unregistered"),
+		ARM_REQUEST.replace("#4601", "#04601"),
+		ARM_REQUEST.replace("session_01LkiqZoHfSm6HZF8n8Dogo1", "session_01Lk; rm -rf /"),
+		ARM_REQUEST.replace("session_", "cse_"),
+		ARM_REQUEST + " and also start a fixer",
+	],
+)
+def test_arm_check_in_request_rejects(text):
+	with pytest.raises(ValueError):
+		route.parse_arm_check_in_request(text, REGISTRY_ALLOWED)
+
+
+def test_cli_arm_check_in_request(tmp_path):
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	args_file = tmp_path / "args.txt"
+	args_file.write_text(ARM_REQUEST + "\n", encoding="utf-8")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout)["requester"] == "session_01LkiqZoHfSm6HZF8n8Dogo1"
+	args_file.write_text(ARM_REQUEST.replace("digital_pa", "other"), encoding="utf-8")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "repo not registered" in out.stderr
+	out = _cli("arm-check-in-request", "--arguments-file", str(tmp_path / "missing.txt"), "--registry", str(registry))
+	assert out.returncode == 2
+	# Invalid UTF-8 is a refusal (exit 2), never a traceback (exit 1).
+	args_file.write_bytes(b"\xff\xfe")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "cannot read arguments file" in out.stderr
+	# A path with a NUL byte raises a plain ValueError in open(); still a refusal.
+	# (argv cannot carry a NUL, so this case runs in-process.)
+	assert route.main(["arm-check-in-request", "--arguments-file", str(tmp_path / "bad\x00name.txt"), "--registry", str(registry)]) == 2
+	# An unreadable or malformed registry leaves only the self repo allowed; still a clean refusal.
+	args_file.write_text(ARM_REQUEST + "\n", encoding="utf-8")
+	registry.write_text("{not json", encoding="utf-8")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "repo not registered" in out.stderr
 
 
 def test_cli_queue_pending_and_stale(tmp_path):
