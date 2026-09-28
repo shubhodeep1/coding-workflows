@@ -1076,7 +1076,12 @@ not delete wrappers that are already present in `.github/workflows/`.
 > `~/.claude/permission-prompts/`; at the end of each stage
 > `permission_prompts.py file` lists them in the report and, in
 > coding-workflows only, files each new pattern as an `ai:permission-prompt`
-> issue routed to the Claude issue implementer. `/implement-plan-claude` now
+> issue routed to the Claude issue implementer. When a prompt blocks an
+> unattended cloud session, the hook also starts a detached
+> `permission_prompts.py report-now` that reports the sanitized command, the
+> session, and the pattern right away (once per signature per session, at
+> most 5), and `permission_prompts.py lookup --session <id>` gives the
+> operator's poller that command and its issue link. `/implement-plan-claude` now
 > requires Auto mode, and stops before any phase that must edit `.claude/**`
 > to ask how to run it.
 

@@ -17,6 +17,14 @@ proceeds exactly as it would without the hook. It issues no API calls (§15),
 reads no environment variables, and never fails the tool call: any error is
 swallowed and the event is simply not logged.
 
+After logging a `PermissionRequest` it starts one detached
+`permission_prompts.py report-now` (issue #4755) and returns without waiting:
+stdio goes to /dev/null and the child runs in its own session, so the prompt
+is never delayed. The child decides whether the session is unattended and
+reports the prompt to GitHub right away, because a session stuck on a prompt
+never reaches the end-of-stage `permission_prompts.py file`. A spawn failure
+is swallowed like any other error. `PermissionDenied` starts nothing.
+
 Each line holds `ts`, `event` (`PermissionRequest` or `PermissionDenied`),
 `session_id`, `tool_name`, `tool_input` (string values longer than
 MAX_VALUE_CHARS are truncated), `reason` (from `reason` or
@@ -28,6 +36,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +49,8 @@ SETTINGS_EVENTS = ("PermissionRequest", "PermissionDenied")
 LOG_DIR_PARTS = (".claude", "permission-prompts")
 MAX_VALUE_CHARS = 8000
 _SESSION_FILE_RE = re.compile(r"[^A-Za-z0-9_.-]")
+# The helper `spawn_reporter` starts, resolved from this file so it works from any cwd.
+REPORTER_PATH = Path(__file__).resolve().parent.parent / "scripts" / "permission_prompts.py"
 
 
 def log_dir() -> Path:
@@ -84,6 +95,20 @@ def append_record(record: dict, directory: Path) -> Path:
 	return path
 
 
+def spawn_reporter(log_path: Path, cwd: str) -> None:
+	"""Start `permission_prompts.py report-now` detached and return at once; never waits on the child."""
+	if not REPORTER_PATH.is_file():
+		return
+	subprocess.Popen(
+		[sys.executable, "-B", str(REPORTER_PATH), "report-now", "--log-file", str(log_path), "--cwd", cwd],
+		stdin=subprocess.DEVNULL,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+		start_new_session=True,
+		close_fds=True,
+	)
+
+
 def main() -> int:
 	try:
 		raw = sys.stdin.read()
@@ -91,7 +116,9 @@ def main() -> int:
 		if isinstance(payload, dict):
 			record = build_record(payload, datetime.now(timezone.utc))
 			if record is not None:
-				append_record(record, log_dir())
+				path = append_record(record, log_dir())
+				if record["event"] == "PermissionRequest":
+					spawn_reporter(path, record["cwd"])
 	except Exception:  # noqa: BLE001 - logging must never affect the permission flow
 		pass
 	return 0

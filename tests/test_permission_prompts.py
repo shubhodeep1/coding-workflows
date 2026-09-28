@@ -59,6 +59,13 @@ def _payload(command=None, event="PermissionRequest", tool="Bash", **extra):
 	return payload
 
 
+def _hook_env(tmp_path):
+	"""Environment for running the real hook: a temporary HOME and no cloud session, so its reporter child never posts."""
+	env = dict(os.environ, HOME=str(tmp_path), PYTHONDONTWRITEBYTECODE="1")
+	env.pop(pp.REMOTE_SESSION_ENV, None)
+	return env
+
+
 def _log(tmp_path, payloads):
 	directory = tmp_path / "log"
 	for payload in payloads:
@@ -72,7 +79,7 @@ def _log(tmp_path, payloads):
 
 
 def test_hook_logs_a_prompt_and_prints_nothing(tmp_path):
-	env = dict(os.environ, HOME=str(tmp_path), PYTHONDONTWRITEBYTECODE="1")
+	env = _hook_env(tmp_path)
 	payload = _payload("gh api -X GET search/issues -f q=x | sort -n", reason="Bash command")
 	result = subprocess.run([sys.executable, str(HOOK_PATH)], input=json.dumps(payload), capture_output=True, text=True, env=env, check=False)
 	assert result.returncode == 0
@@ -102,7 +109,7 @@ def test_hook_truncates_long_values():
 
 @pytest.mark.parametrize("stdin_text", ["", "   ", "not json", "[1]", '{"hook_event_name": 5}'])
 def test_hook_never_fails_or_decides(tmp_path, stdin_text):
-	env = dict(os.environ, HOME=str(tmp_path), PYTHONDONTWRITEBYTECODE="1")
+	env = _hook_env(tmp_path)
 	result = subprocess.run([sys.executable, str(HOOK_PATH)], input=stdin_text, capture_output=True, text=True, env=env, check=False)
 	assert result.returncode == 0 and result.stdout == ""
 
@@ -110,7 +117,7 @@ def test_hook_never_fails_or_decides(tmp_path, stdin_text):
 def test_hook_swallows_write_errors(tmp_path):
 	blocker = tmp_path / ".claude"
 	blocker.write_text("not a directory")
-	env = dict(os.environ, HOME=str(tmp_path), PYTHONDONTWRITEBYTECODE="1")
+	env = _hook_env(tmp_path)
 	result = subprocess.run([sys.executable, str(HOOK_PATH)], input=json.dumps(_payload("ls")), capture_output=True, text=True, env=env, check=False)
 	assert result.returncode == 0 and result.stdout == "" and result.stderr == ""
 
@@ -122,8 +129,59 @@ def test_hook_session_id_cannot_escape_the_log_dir(tmp_path):
 
 def test_hook_has_no_api_calls_or_env_reads():
 	source = HOOK_PATH.read_text(encoding="utf-8")
-	for forbidden in ("os.environ", "getenv", "subprocess", "urllib", "api.github.com"):
+	for forbidden in ("os.environ", "getenv", "urllib", "api.github.com", "subprocess.run", "check_output", ".wait(", ".communicate("):
 		assert forbidden not in source
+	# The only child process is the detached reporter (issue #4755).
+	assert source.count("subprocess.Popen(") == 1
+	assert "def spawn_reporter(" in source
+
+
+class FakePopen:
+	calls: list = []
+
+	def __init__(self, args, **kwargs):
+		FakePopen.calls.append((args, kwargs))
+
+
+@pytest.fixture
+def fake_popen(monkeypatch):
+	FakePopen.calls = []
+	monkeypatch.setattr(logger.subprocess, "Popen", FakePopen)
+	return FakePopen
+
+
+def _run_hook_main(monkeypatch, tmp_path, payload):
+	monkeypatch.setattr(logger, "log_dir", lambda: tmp_path / "log")
+	monkeypatch.setattr(logger.sys, "stdin", __import__("io").StringIO(json.dumps(payload)))
+	return logger.main()
+
+
+def test_hook_spawns_one_detached_reporter_for_a_prompt(monkeypatch, tmp_path, fake_popen, capsys):
+	assert _run_hook_main(monkeypatch, tmp_path, _payload("ls")) == 0
+	assert capsys.readouterr().out == ""
+	assert len(fake_popen.calls) == 1
+	args, kwargs = fake_popen.calls[0]
+	assert args[1:] == ["-B", str(logger.REPORTER_PATH), "report-now", "--log-file", str(tmp_path / "log" / "sess-1.jsonl"), "--cwd", "/home/user/coding-workflows"]
+	assert logger.REPORTER_PATH == SCRIPT_PATH
+	assert kwargs["start_new_session"] is True and kwargs["close_fds"] is True
+	for stream in ("stdin", "stdout", "stderr"):
+		assert kwargs[stream] is logger.subprocess.DEVNULL
+
+
+def test_hook_spawns_nothing_for_a_denial(monkeypatch, tmp_path, fake_popen):
+	assert _run_hook_main(monkeypatch, tmp_path, _payload("ls", event="PermissionDenied")) == 0
+	assert fake_popen.calls == []
+	assert (tmp_path / "log" / "sess-1.jsonl").exists()
+
+
+def test_hook_swallows_a_spawn_failure(monkeypatch, tmp_path, capsys):
+	def boom(*args, **kwargs):
+		raise OSError("fork failed")
+
+	monkeypatch.setattr(logger.subprocess, "Popen", boom)
+	assert _run_hook_main(monkeypatch, tmp_path, _payload("ls")) == 0
+	assert capsys.readouterr().out == ""
+	assert (tmp_path / "log" / "sess-1.jsonl").exists()
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -355,6 +413,295 @@ def test_extract_repo_slug():
 
 
 # ──────────────────────────────────────────────────────────────────
+# Immediate report (report-now, issue #4755)
+# ──────────────────────────────────────────────────────────────────
+
+SESSION = "session_01Pqd1mbhdV8mCxriki9onge"
+FILING = "shubhodeep1/coding-workflows"
+
+
+class FakeGitHub:
+	"""Fake `gh api` reads and POSTs for report-now and lookup."""
+
+	def __init__(self, issues=None, pulls=None, search=None, comments=None, fail_read=False, fail_post=False):
+		self.issues = issues or []
+		self.pulls = pulls or []
+		self.search = search or {"items": []}
+		self.comments = comments or {}
+		self.fail_read = fail_read
+		self.fail_post = fail_post
+		self.reads: list[str] = []
+		self.posts: list[tuple[str, dict]] = []
+
+	def gh_api_list(self, path):
+		self.reads.append(path)
+		if self.fail_read:
+			raise pp.check_in_status.ReadError("proxy 403")
+		if "/pulls?" in path:
+			return self.pulls
+		if "/comments" in path:
+			return self.comments.get(int(path.split("/issues/", 1)[1].split("/", 1)[0]), [])
+		return self.issues
+
+	def gh_api(self, path):
+		self.reads.append(path)
+		if self.fail_read:
+			raise pp.check_in_status.ReadError("proxy 403")
+		return self.search
+
+	def post(self, path, body):
+		if self.fail_post:
+			raise pp.check_in_status.ReadError("POST failed")
+		self.posts.append((path, body))
+		return {"number": 900 + len(self.posts)} if path.endswith("/issues") else {"id": 1}
+
+
+@pytest.fixture
+def github(monkeypatch):
+	def install(slug=FILING, branch="claude/some-branch", **kwargs):
+		fake = FakeGitHub(**kwargs)
+		monkeypatch.setattr(pp.check_in_status, "gh_api_list", fake.gh_api_list)
+		monkeypatch.setattr(pp.check_in_status, "gh_api", fake.gh_api)
+		monkeypatch.setattr(pp, "_post", fake.post)
+		monkeypatch.setattr(pp, "local_repo_slug", lambda cwd=None: slug)
+		monkeypatch.setattr(pp, "_git_output", lambda args, cwd: branch if args[:1] == ["branch"] else "")
+		return fake
+
+	return install
+
+
+def _session_log(tmp_path, payloads):
+	directory = _log(tmp_path, payloads)
+	return directory / "sess-1.jsonl"
+
+
+def _report(log_file, session=SESSION):
+	return pp.report_now(log_file, "/home/user/coding-workflows", session_label=session, now=NOW)
+
+
+@pytest.mark.parametrize(
+	("session", "payload"),
+	[
+		("", _payload("ls")),
+		(SESSION, _payload("ls", permission_mode="default")),
+		(SESSION, _payload("ls", permission_mode="plan")),
+		(SESSION, _payload("ls", permission_mode="acceptEdits")),
+		(SESSION, _payload("ls", event="PermissionDenied")),
+	],
+)
+def test_report_now_skips_attended_sessions_and_denials(tmp_path, github, session, payload):
+	fake = github()
+	log_file = _session_log(tmp_path, [payload])
+	assert _report(log_file, session).startswith("skipped: not an unattended")
+	assert fake.reads == [] and fake.posts == []
+	assert not (log_file.parent / pp.IMMEDIATE_STATE_FILE).exists()
+
+
+@pytest.mark.parametrize("mode", ["auto", "bypassPermissions"])
+def test_report_now_opens_a_routed_issue_in_coding_workflows(tmp_path, github, mode):
+	fake = github()
+	log_file = _session_log(tmp_path, [_payload("gh api -X GET search/issues -f q=a | sort -n", permission_mode=mode, reason="needs approval")])
+	pp.write_session_meta(log_file.parent, "implement-issue-claude — #4707")
+	assert _report(log_file) == "reported: issue #901"
+	path, body = fake.posts[0]
+	assert path == "repos/shubhodeep1/coding-workflows/issues"
+	assert body["labels"] == ["ai:permission-prompt", "ai:claude"]
+	sig = pp.group_patterns(pp.load_records(log_file.parent))[0]["signature"]
+	assert f"<!-- ai:permission-prompt:v1 sig={sig} -->" in body["body"]
+	assert f"<!-- ai:permission-prompt-session:v1 session={SESSION} sig={sig} -->" in body["body"]
+	assert f"https://claude.ai/code/{SESSION}" in body["body"]
+	assert "**Session title:** `implement-issue-claude — #4707`" in body["body"]
+	assert "- **Event:** PermissionRequest (permission prompt)" in body["body"]
+	assert "- **Tool:** `Bash`" in body["body"]
+	state = json.loads((log_file.parent / pp.IMMEDIATE_STATE_FILE).read_text())
+	assert state["count"] == 1 and state["reports"][sig]["target"] == "issue #901"
+	assert json.loads((log_file.parent / pp.STATE_FILE).read_text()) == {sig: 1}
+
+
+def test_report_now_comments_on_a_closed_matching_issue(tmp_path, github):
+	log_file = _session_log(tmp_path, [_payload("ls -la")])
+	sig = pp.group_patterns(pp.load_records(log_file.parent))[0]["signature"]
+	fake = github(issues=[{"number": 42, "state": "closed", "body": f"x\n<!-- ai:permission-prompt:v1 sig={sig} -->"}])
+	assert _report(log_file) == "reported: issue #42"
+	path, body = fake.posts[0]
+	assert path == "repos/shubhodeep1/coding-workflows/issues/42/comments"
+	assert body["body"].startswith("Seen again.") and pp.IMMEDIATE_HEADING in body["body"]
+	assert "**Session title:** not recorded" in body["body"]
+
+
+def test_report_now_sanitizes_the_command_and_title(tmp_path, github):
+	fake = github()
+	secret = "ghp_abcdefghijklmnopqrstuvwxyz0123"
+	log_file = _session_log(tmp_path, [_payload(f"curl -H 'Authorization: Bearer {secret}' x && python3 - <<'EOF'\nprint('{secret}')\nEOF")])
+	pp.write_session_meta(log_file.parent, f"stage `x` token={secret}\nsecond line")
+	_report(log_file)
+	body = fake.posts[0][1]["body"]
+	assert secret not in body
+	assert "<heredoc body omitted>" in body and "print(" not in body
+	assert "**Session title:** `stage 'x' token=*** second line`" in body
+
+
+def test_report_now_once_per_signature_per_session(tmp_path, github):
+	fake = github()
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert _report(log_file).startswith("reported")
+	logger.append_record(logger.build_record(_payload("ls"), NOW), log_file.parent)
+	assert _report(log_file) == "skipped: already reported"
+	assert len(fake.posts) == 1 and len(fake.reads) == 1
+
+
+def test_report_now_caps_reports_per_session(tmp_path, github):
+	fake = github()
+	log_file = _session_log(tmp_path, [])
+	for index in range(pp.MAX_IMMEDIATE_REPORTS + 1):
+		logger.append_record(logger.build_record(_payload(f"tool{index} x"), NOW), log_file.parent)
+		outcome = _report(log_file)
+	assert outcome == "skipped: cap reached"
+	assert len(fake.posts) == pp.MAX_IMMEDIATE_REPORTS
+
+
+def test_file_skips_signatures_already_reported(tmp_path, github):
+	fake = github()
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	_report(log_file)
+	logger.append_record(logger.build_record(_payload("ls"), NOW), log_file.parent)
+	reads = len(fake.reads)
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and summary["filed"] == [] and summary["commented"] == []
+	assert summary["already_reported"] == [{"signature": pp.group_patterns(pp.load_records(log_file.parent))[0]["signature"], "target": "issue #901"}]
+	assert len(fake.reads) == reads and len(fake.posts) == 1
+
+
+def test_file_still_files_other_patterns_after_a_report(tmp_path, github):
+	fake = github()
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	_report(log_file)
+	logger.append_record(logger.build_record(_payload("rm x", event="PermissionDenied"), NOW), log_file.parent)
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and len(summary["filed"]) == 1 and len(summary["already_reported"]) == 1
+	assert len(fake.posts) == 2
+
+
+@pytest.mark.parametrize(
+	("failure", "kwargs"),
+	[("read", {"fail_read": True}), ("post", {"fail_post": True})],
+)
+def test_report_now_fails_open_and_records_nothing(tmp_path, github, failure, kwargs):
+	github(**kwargs)
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert _report(log_file).startswith("error:")
+	assert not (log_file.parent / pp.IMMEDIATE_STATE_FILE).exists()
+	assert not (log_file.parent / pp.STATE_FILE).exists()
+	fake = github()
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and len(summary["filed"]) == 1 and len(fake.posts) == 1
+
+
+def test_report_now_unknown_repository_posts_nothing(tmp_path, github):
+	fake = github(slug="")
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert _report(log_file) == "skipped: unknown repository"
+	assert fake.reads == [] and fake.posts == []
+
+
+def test_report_now_elsewhere_prefers_the_open_pr(tmp_path, github):
+	fake = github(slug="someone/consumer", branch="claude/implement-plan-issue-12-fix", pulls=[{"number": 77}])
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert _report(log_file) == "reported: PR #77"
+	assert fake.reads == ["repos/someone/consumer/pulls?state=open&head=someone%3Aclaude%2Fimplement-plan-issue-12-fix"]
+	path, body = fake.posts[0]
+	assert path == "repos/someone/consumer/issues/77/comments"
+	assert "pull request" in body["body"] and "ai:permission-prompt-session:v1" in body["body"]
+	assert not (log_file.parent / pp.STATE_FILE).exists()
+
+
+def test_report_now_elsewhere_falls_back_to_the_issue_branch(tmp_path, github):
+	fake = github(slug="someone/consumer", branch="claude/implement-plan-issue-12-fix-phase-1")
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert _report(log_file) == "reported: issue #12"
+	assert fake.posts[0][0] == "repos/someone/consumer/issues/12/comments"
+
+
+def test_report_now_elsewhere_without_a_target_posts_nothing(tmp_path, github):
+	fake = github(slug="someone/consumer", branch="feature/x")
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert _report(log_file) == "skipped: no target"
+	assert fake.posts == [] and not (log_file.parent / pp.IMMEDIATE_STATE_FILE).exists()
+
+
+def test_report_now_main_prints_nothing_and_exits_0(tmp_path, capsys, monkeypatch):
+	monkeypatch.delenv(pp.REMOTE_SESSION_ENV, raising=False)
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert pp.main(["report-now", "--log-file", str(log_file), "--cwd", str(tmp_path)]) == 0
+	assert pp.main(["report-now", "--log-file", str(tmp_path / "missing.jsonl")]) == 0
+	assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+	("raw", "label"),
+	[("cse_01ABC", "session_01ABC"), ("session_01ABC", "session_01ABC"), ("01ABC", "session_01ABC"), ("", ""), ("bad id", ""), ("../x", "")],
+)
+def test_session_label_normalization(monkeypatch, raw, label):
+	monkeypatch.setenv(pp.REMOTE_SESSION_ENV, raw)
+	assert pp.session_label_from_env() == label
+
+
+def test_session_meta_writes_the_title(tmp_path, capsys):
+	assert pp.main(["session-meta", "--title", "implement-plan x — phase 1/1", "--log-dir", str(tmp_path / "log")]) == 0
+	assert json.loads(capsys.readouterr().out) == {"ok": True}
+	assert pp.read_session_title(tmp_path / "log") == "implement-plan x — phase 1/1"
+
+
+def test_session_meta_never_fails(tmp_path, capsys):
+	blocker = tmp_path / "file"
+	blocker.write_text("x")
+	assert pp.main(["session-meta", "--title", "t", "--log-dir", str(blocker / "log")]) == 0
+	assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def _reported_body(tmp_path, github):
+	fake = github()
+	log_file = _session_log(tmp_path, [_payload("gh api repos/o/r/issues --jq '.[]'")])
+	pp.write_session_meta(log_file.parent, "implement-issue-claude — #4707")
+	_report(log_file)
+	return fake.posts[0][1]["body"]
+
+
+def test_lookup_finds_the_report_in_an_issue_body(tmp_path, github):
+	body = _reported_body(tmp_path, github)
+	fake = github(search={"items": [{"number": 901, "html_url": "https://github.com/x/y/issues/901", "author_association": "OWNER", "body": body}]})
+	result = pp.lookup(SESSION, FILING)
+	assert result["found"] is True and result["issue_url"] == "https://github.com/x/y/issues/901"
+	assert result["command"] == "gh api repos/o/r/issues --jq '.[]'"
+	assert result["title"] == "implement-issue-claude — #4707"
+	assert result["event"] == "PermissionRequest" and result["tool_name"] == "Bash"
+	assert len(fake.reads) == 1 and "search/issues?q=repo%3Ashubhodeep1%2Fcoding-workflows%20%22" in fake.reads[0]
+
+
+def test_lookup_finds_the_newest_trusted_comment(tmp_path, github):
+	body = _reported_body(tmp_path, github)
+	comments = {
+		42: [
+			{"html_url": "c1", "author_association": "OWNER", "body": body},
+			{"html_url": "c2", "author_association": "NONE", "body": body.replace("--jq", "--forged")},
+		]
+	}
+	fake = github(search={"items": [{"number": 42, "html_url": "i42", "author_association": "NONE", "body": body}]}, comments=comments)
+	result = pp.lookup(SESSION, FILING)
+	assert result["found"] is True and result["comment_url"] == "c1" and "--forged" not in result["command"]
+	assert len(fake.reads) == 2
+
+
+def test_lookup_not_found_and_read_failure(tmp_path, github, capsys):
+	github()
+	assert pp.lookup(SESSION, FILING) == {"found": False, "session": SESSION}
+	github(fail_read=True)
+	assert pp.main(["lookup", "--session", "cse_01Pqd1mbhdV8mCxriki9onge", "--repo", FILING]) == 2
+	assert json.loads(capsys.readouterr().out)["error"] == "proxy 403"
+	assert pp.main(["lookup", "--session", "bad id", "--repo", FILING]) == 1
+
+
+# ──────────────────────────────────────────────────────────────────
 # Wiring and docs
 # ──────────────────────────────────────────────────────────────────
 
@@ -372,6 +719,13 @@ def test_settings_wire_the_logger_on_both_events(path):
 def test_template_parity():
 	assert TEMPLATE_HOOK_PATH.read_text(encoding="utf-8") == HOOK_PATH.read_text(encoding="utf-8")
 	assert TEMPLATE_SCRIPT_PATH.read_text(encoding="utf-8") == SCRIPT_PATH.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", ["implement-plan-claude.md", "implement-issue-claude.md"])
+def test_commands_record_the_session_title(name):
+	for root in (REPO_ROOT / ".claude", REPO_ROOT / "workflow-templates" / ".claude"):
+		text = (root / "commands" / name).read_text(encoding="utf-8")
+		assert 'permission_prompts.py session-meta --title "<title from get_session>"' in text
 
 
 def test_label_is_in_the_contract():
