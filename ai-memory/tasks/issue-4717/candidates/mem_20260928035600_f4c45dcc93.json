@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `d199454bcbb634562ec7cc17863dc62dcd6eef99` on `orchestrator/project-4715`; matches the integration branch.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary_b.txt`  \nScope-mode justification: The complete request is a one-line replacement in an existing file. Expanding the change would add risk without improving correctness; the \u00a76 priority order is Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and wiring\n- Modify existing content only; introduce no script.\n- Entry point: the existing `.github/workflows/implement.yml` approval-triggered implementation path. No new scheduler wiring, supervisor, or database gate is needed.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt` only. Its first line is already exactly `status: ok`; replace its second line, currently `decompose-run: 25567947079`, with `decompose-run: 36374918973`.\n\n## Functions, data structures, and API/interface changes\nNone. Preserve all other file content and the two-line format.\n\n## Decisions\n### D1 \u2014 Replace only the outdated run value\n- **Chosen:** Edit line two in place.\n- **Alternatives considered:** Rewrite both lines or regenerate the file.\n- **Why:** Line one already satisfies the issue, and an in-place edit avoids unrelated changes.\n\n## Security considerations\nNo new trust boundary, endpoint, or authorization surface. Treat the requested run number as literal file content; do not execute or interpolate it.\n\n## Risks and edge cases\nCheck that the file still has the observed first two lines before editing; if it changed meanwhile, preserve unrelated content and verify the requested final lines. No conflict was found between the issue and the checked-out ref.\n\n## Testing considerations\nVerify the first two lines byte-for-byte, confirm `git diff` touches only the second line of the listed file, and confirm no other paths changed. No new test script is needed.\n\n## Pre-execution self-check\nThe target exists, the ref matches, the requested value is explicit, and the change is confined to the allowed file.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4fc285bc752250922470a5047c8002b80876b60106e036493b77c73b32a8ab4e",
+  "lineage": {
+    "issue_number": 4717,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36375301263",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36375301263",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4717"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260928035600_f4c45dcc93",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4717,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36375301263"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4717",
+  "timestamps": {
+    "created_at": "2026-09-28T03:56:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
