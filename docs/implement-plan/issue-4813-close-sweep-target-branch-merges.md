@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-4813-close-sweep-target-branch-merges-plan.md
 - Source issue: shubhodeep1/coding-workflows#4813
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4813-close-sweep-target-branch-merges   Final PR: pending
+- Project branch: claude/implement-plan-issue-4813-close-sweep-target-branch-merges   Final PR: #4826 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: project branch opened from main; implementing phase 1.
+- Last note: phase 1 implemented and verified; phase PR opened against the project branch.
 
 ## Phases
 1. [ ] Phase 1 — gate issue close and `ai:merged` on the issue's target branch (sweep + issue_pr_status.yml + tests + changelog)
@@ -35,7 +35,9 @@
 - AD-6 [plan, 2026-09-28] What happens to an issue whose only implementation PR merged into a non-target branch? — Picked: A — log `rejected=non_target_base` and fall through to the existing no-merged-PR policy of its label class. Alternatives: B — a new silent skip. Why: the issue asks for the existing policy. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] Any rule that treats a merged PR as an issue's finished work must accept the issue's own target branch (its `Integration branch:` / `Target branch:` line, or `orchestrator/project-<N>` for managed children), not only the default branch; issue-mode and orchestrator projects routinely merge into branches other than the default. (files: scripts/orchestrate_poll_process.sh, .github/workflows/issue_pr_status.yml)
 
 ## Notes
+- Out of scope, seen while tracing #4813: `issue_pr_status.yml` still labels a linked issue `ai:closed` and closes it when a PR is closed **without** merging, whatever the base (a project-branch PR abandoned mid-project would close its issue). Not changed here; worth its own issue.
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4813#issuecomment-5870080698
 - Security pass: run (`security_pass_skip.py`: no skip label).
