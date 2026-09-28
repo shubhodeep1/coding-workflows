@@ -472,6 +472,35 @@ def test_cli_writes_output_and_log_lines(tmp_path):
 	assert "=== NON-BLOCKING FINDINGS ===" in out.read_text()
 
 
+def test_each_reviewer_output_is_read_once_and_statuses_scanned_once(tmp_path, monkeypatch, capsys):
+	"""PR #4695 review round 1: no repeated reads of review_<slug>.txt or status_review_*.txt."""
+	ledger_path = tmp_path / "ledger.txt"
+	ledger_path.write_text(_ledger(README_FINDING), encoding="utf-8")
+	reviews = _reviews(tmp_path, rejecters=OTHERS)
+	reads: list[str] = []
+	real_read_text = Path.read_text
+
+	def counting_read_text(self, *args, **kwargs):
+		reads.append(self.name)
+		return real_read_text(self, *args, **kwargs)
+
+	scans: list[Path] = []
+	real_successful_reviewers = nonblocking.successful_reviewers
+
+	def counting_successful_reviewers(reviews_dir):
+		scans.append(reviews_dir)
+		return real_successful_reviewers(reviews_dir)
+
+	monkeypatch.setattr(Path, "read_text", counting_read_text)
+	monkeypatch.setattr(nonblocking, "successful_reviewers", counting_successful_reviewers)
+	assert nonblocking.main(["--ledger", str(ledger_path), "--reviews-dir", str(reviews), "--output", str(tmp_path / "out.txt")]) == 0
+	assert scans == [reviews]
+	output_reads = [name for name in reads if name.startswith("review_")]
+	assert sorted(output_reads) == sorted(f"review_{slug}.txt" for slug in [FLAGGER, *OTHERS])
+	assert sum(name.startswith("status_review_") for name in reads) == 6
+	assert capsys.readouterr().out.splitlines()[0] == "CLAUDE_FIXER_NONBLOCKING demoted=1 successful_reviewers=6"
+
+
 def test_cli_fails_on_a_missing_reviews_dir(tmp_path):
 	ledger_path = tmp_path / "ledger.txt"
 	ledger_path.write_text(_ledger(README_FINDING), encoding="utf-8")

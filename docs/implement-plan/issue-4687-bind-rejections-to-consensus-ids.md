@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4687-bind-rejections-to-consensus-ids-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4687
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason
-- Project branch: claude/implement-plan-issue-4687-bind-rejections-to-consensus-ids   Final PR: #4695 ready — review rounds: 1
+- Project branch: claude/implement-plan-issue-4687-bind-rejections-to-consensus-ids   Final PR: #4695 ready — review rounds: 2
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason)
-- Waiting on: PR #4695 (final PR into the base branch; review round 2 on the head this commit creates)
+- Waiting on: PR #4695 (final PR into the base branch; the review round on the head this commit creates)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_0117txgg28BLvgvA4ZjrRbV3 (reused for every wait)   safety net and hand-back: the ids are in the final-merge stage's report
+- Check-in: checker session_0117txgg28BLvgvA4ZjrRbV3 (reused for every wait)   safety net and hand-back: the ids are in the final-merge — review round stage's report
 - Last updated: 2026-09-28
-- Last note: final-merge review round 1 on #4695 (head 175b9d78d309) reported 0 findings from 5 reviewers, but the minimax/minimax-m3 slot stalled on all 3 attempts, so the round was handed off instead of auto-merged; operator answered Q3: A on #4687, and this log commit gives the final PR a new head for a full-panel review.
+- Last note: final-merge review round 2 on #4695 (head 24e38db1959e, workflow round 1, run 36430261246): all 6 reviewers ran; 2 low-severity consensus findings (repeated reads of `review_<slug>.txt` and a second `successful_reviewers()` scan in `main()`) were fixed in this `[claude-autofix]` commit with a regression test; minimax's legacy-count hardening note was rejected (a bound line cannot match `REJECTED_FINDING_RE`, and dropping the count contradicts AD-4).
 
 ## Phases
 1. [x] Phase 1 — bind rejections to consensus ids and keep ambiguous matches blocking   — PR #4698 merged 2026-09-28; review rounds: 0 (the first reviewer run reported no findings); interventions: 0
@@ -35,7 +35,7 @@
 ## Completion
 - PR #4747 merged 2026-09-28 (squash 175b9d7, merged by the operator per `Q2: C`) — doc moved to docs/completed/issue-4687-bind-rejections-to-consensus-ids-plan.md
 - Merged PRs into the project branch: #4698 (phase 1/1, merged 2026-09-28), #4747 (completion, merged 2026-09-28)
-- Final PR #4695 ready — review rounds: 1 (round 1 on 175b9d78d309: 0 findings from 5 of 6 reviewers, minimax/minimax-m3 slot stalled 3 times, handed off; operator `Q3: A` → this log commit for a new head)
+- Final PR #4695 ready — review rounds: 2 (round 1 on 175b9d78d309: 0 findings from 5 of 6 reviewers, minimax/minimax-m3 slot stalled 3 times, handed off; operator `Q3: A` → log commit 24e38db for a new head. Round 2 on 24e38db1959e: 6 of 6 reviewers, 2 low-severity consensus findings fixed in a `[claude-autofix]` commit, 1 per-reviewer note rejected)
 
 ## Activation
 - Not applicable: the base branch is `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason`, not the default branch.
@@ -59,3 +59,4 @@
 - Validation 1/3 stopped at `Status: BLOCKED` (2026-09-28, session_01XU5G93fyGxoT3k9Ehe3LS5) and asked Q1 on #4687. Operator decision `Q1: A` (issue comment, 2026-09-28): `Validation: skipped (non-default base)`. The long-term fix is tracked in #4734 (let `validate.yml` authorize a final PR into a project branch whose own PR into `main` is open).
 - Completion review round 1 on #4747 (head 5ea3be8b3403) was clean, but a push-leg `review-claude-branch-push` run still active on the same head made the pre-merge check refresh fail closed, so the workflow posted a 0-finding hand-off. With no `CLAUDE_FIXER_VERDICT_BOT_LOGIN` configured, the stage stopped and asked Q2 on #4687. Operator decision `Q2: C` (2026-09-28): the operator merged #4747 by hand (squash 175b9d7).
 - Final-merge review round 1 on #4695 (head 175b9d78d309, run 36416865588) reported 0 findings and 0 task gaps from 5 reviewers; the `minimax/minimax-m3` slot was killed by the stall guard on all 3 attempts, so the clean-ledger check failed closed and handed the round off. The stage posted a `hold` claim and asked Q3 on #4687. Operator decision `Q3: A` (2026-09-28): commit this log update to the project branch so the final PR gets a new head and a full-panel review. The stalled-slot problem is filed as #4835; if the slot stalls again before #4835 lands, the stage stops BLOCKED and cites #4835 instead of asking again.
+- Final-merge review round 2 on #4695 (head 24e38db1959e, run 36430261246, ledger e7b819c3…): the full panel ran (the minimax slot did not stall). Consensus findings, both NIT/low from gemini-3.1-flash-lite and minimax-m3: (1) `demote_with_diagnostics` read each `review_<slug>.txt` three times; now read once, parsed by the new private `_bound_rejections_in` / `_legacy_rejections_in`, with `reviewer_bound_rejections` / `reviewer_rejections` kept as Path wrappers (§6); (2) `main()` re-ran `successful_reviewers()` for its log line; now scanned once and passed through a new optional keyword `reviewers=`. Regression test `test_each_reviewer_output_is_read_once_and_statuses_scanned_once`. Rejected: minimax's note that the legacy `REJECTED_FINDING_RE` count could include unparsable lines (every counted line is fully parsed by that regex, a bound line never matches it, and the count only feeds a log line; its suggested removal contradicts AD-4).

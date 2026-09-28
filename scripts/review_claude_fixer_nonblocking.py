@@ -298,8 +298,13 @@ def successful_reviewers(reviews_dir: Path) -> dict[str, Path]:
 
 def reviewer_rejections(output: Path) -> list[tuple[str, tuple[int, int], str]]:
 	"""REJECTED_FINDING lines without a consensus id (the pre-#4687 shape); they bind nothing."""
+	return _legacy_rejections_in(output.read_text(encoding="utf-8", errors="replace"))
+
+
+def _legacy_rejections_in(text: str) -> list[tuple[str, tuple[int, int], str]]:
+	"""``reviewer_rejections`` over an output already read into memory."""
 	rejections = []
-	for line in output.read_text(encoding="utf-8", errors="replace").splitlines():
+	for line in text.splitlines():
 		match = REJECTED_FINDING_RE.match(line)
 		if match:
 			rejections.append((
@@ -312,8 +317,13 @@ def reviewer_rejections(output: Path) -> list[tuple[str, tuple[int, int], str]]:
 
 def reviewer_bound_rejections(output: Path) -> list[tuple[str, str, tuple[int, int], str]]:
 	"""``REJECTED_FINDING: <consensus_id> | <file>:<range> | flagged_by: <slug>`` lines of one output."""
+	return _bound_rejections_in(output.read_text(encoding="utf-8", errors="replace"))
+
+
+def _bound_rejections_in(text: str) -> list[tuple[str, str, tuple[int, int], str]]:
+	"""``reviewer_bound_rejections`` over an output already read into memory."""
 	rejections = []
-	for line in output.read_text(encoding="utf-8", errors="replace").splitlines():
+	for line in text.splitlines():
 		bound = REJECTED_FINDING_ID_RE.match(line)
 		if not bound:
 			continue
@@ -328,10 +338,12 @@ def reviewer_bound_rejections(output: Path) -> list[tuple[str, str, tuple[int, i
 	return rejections
 
 
-def demote_with_diagnostics(ledger_text: str, reviews_dir: Path) -> tuple[str, list[dict], list[dict], int]:
+def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, *,
+		reviewers: dict[str, Path] | None = None) -> tuple[str, list[dict], list[dict], int]:
 	"""Return the filtered ledger, the demoted records, the kept single-reviewer
 	records (with the reason each stays blocking), and the number of ignored
-	id-less REJECTED_FINDING lines."""
+	id-less REJECTED_FINDING lines. ``reviewers`` is ``successful_reviewers(reviews_dir)``
+	when the caller already has it; each reviewer output is read once."""
 	segments = parse_ledger(ledger_text)
 	blocks = [segment for segment in segments if isinstance(segment, Block)]
 	consensus = _consensus_block(segments)
@@ -342,10 +354,11 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path) -> tuple[str, l
 	if any(block.name == NONBLOCKING_BLOCK for block in blocks):
 		raise ValueError("ledger already carries a NON-BLOCKING FINDINGS block")
 
-	reviewers = successful_reviewers(reviews_dir)
+	if reviewers is None:
+		reviewers = successful_reviewers(reviews_dir)
 	outputs = {slug: path.read_text(encoding="utf-8", errors="replace") for slug, path in reviewers.items()}
-	rejections = {slug: reviewer_bound_rejections(path) for slug, path in reviewers.items()}
-	legacy_rejections = sum(len(reviewer_rejections(path)) for path in reviewers.values())
+	rejections = {slug: _bound_rejections_in(text) for slug, text in outputs.items()}
+	legacy_rejections = sum(len(_legacy_rejections_in(text)) for text in outputs.values())
 	per_reviewer = {block.name[len(PER_REVIEWER_PREFIX):]: block for block in blocks if block.name.startswith(PER_REVIEWER_PREFIX)}
 
 	pass1 = pass1_consensus_entries(reviews_dir)
@@ -486,12 +499,14 @@ def main(argv: list[str] | None = None) -> int:
 		ledger_text = args.ledger.read_text(encoding="utf-8")
 		if not args.reviews_dir.is_dir():
 			raise ValueError(f"reviews dir {args.reviews_dir} does not exist")
-		filtered, demoted, kept_records, legacy_rejections = demote_with_diagnostics(ledger_text, args.reviews_dir)
+		reviewers = successful_reviewers(args.reviews_dir)
+		filtered, demoted, kept_records, legacy_rejections = demote_with_diagnostics(ledger_text, args.reviews_dir,
+			reviewers=reviewers)
 		args.output.write_text(filtered, encoding="utf-8")
 	except (OSError, ValueError) as exc:
 		print(f"CLAUDE_FIXER_NONBLOCKING error={exc}", file=sys.stderr)
 		return 1
-	print(f"CLAUDE_FIXER_NONBLOCKING demoted={len(demoted)} successful_reviewers={len(successful_reviewers(args.reviews_dir))}")
+	print(f"CLAUDE_FIXER_NONBLOCKING demoted={len(demoted)} successful_reviewers={len(reviewers)}")
 	for record in demoted:
 		print(f"CLAUDE_FIXER_NONBLOCKING_ENTRY file={record['path']}:{_span(record['lines'])} flagged_by={record['flagger']} "
 			f"rejected_by={','.join(record['rejecters'])} others={record['others']}")
