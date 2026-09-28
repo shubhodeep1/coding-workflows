@@ -10,7 +10,7 @@ The guard now reads the raw command the way Bash does. Backtick substitutions ou
 
 | The numbers that matter | Value |
 | --- | --- |
-| New guard test cases | 19 (5 new prompts, 5 new no-decision cases, 9 quoting cases for `substitution_bodies`) |
+| New guard test cases | 24 (7 new prompts, 5 new no-decision cases, 12 quoting cases for `substitution_bodies`) |
 | GitHub API calls added | 0 |
 
 What this means for operators: fewer unattended stops on log and commit edits that quote a `gh api` command, and no silent pass for a backticked `gh api` write. The fix reaches consumer repos on the next `@stable` sync of `.claude/`.
