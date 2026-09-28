@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/claude-fixer-unattended-convergence-plan.md: lines 529-542 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The pickup keeps deduplication state only in session working memory, so archiving or restarting the pickup can cause the same ongoing stall to be reported again.\n  WHY: A stuck fixer session can trigger duplicate PushNotifications and duplicate comments on the same `ai:permission-prompt` issue on every hourly pickup until the stall clears.\n- docs/plans/claude-fixer-unattended-convergence-plan.md: lines 170-175 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The plan does not address that a fixer stuck on a permission prompt never reaches the end-of-session prompt-report step, leaving the janitor without the actual pending prompt text.\n  WHY: An operator triaging the resulting `ai:permission-prompt` issue can identify the stuck session but not which command was waiting for approval.\n- docs/plans/claude-fixer-unattended-convergence-plan.md: lines 685-687 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The plan adds `PushNotification` to the pickup's Tool Access list without explicitly stating that the pickup's settings allowlist must include this tool.\n  WHY: Without the `PushNotification` allow rule, a stall notification can prompt for permission and stall the pickup or be silently denied in Auto mode.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/plans/claude-fixer-unattended-convergence-plan.md: lines 529-542 | severity=low | confidence=[3]\n  PROBLEM: The D12 deduplication state lives only in the pickup session's working memory; if that session is archived or restarted, the same stall can be reported again.\n  WHY: A stuck fixer session blocked on a permission prompt can produce duplicate Telegram pushes and duplicate comments on the same `ai:permission-prompt` issue on every hourly pickup until the stall clears.\n- docs/plans/claude-fixer-unattended-convergence-plan.md: lines 170-175 | severity=low | confidence=[3]\n  PROBLEM: The plan does not address that a fixer stuck on a permission prompt never reaches its end-of-session `permission_prompts.py file` step, and the janitor's session title and `task_summary` omit the actual prompt text.\n  WHY: An operator triaging the `ai:permission-prompt` issue opened for a stuck fixer cannot tell which command was waiting for approval, only which session was stuck.\n- docs/plans/claude-fixer-unattended-convergence-plan.md: lines 685-687 | severity=low | confidence=[3]\n  PROBLEM: D12 adds `PushNotification` to the pickup's Tool Access list without explicitly stating whether that tool is allow-listed in `.claude/settings.json`.\n  WHY: If the `PushNotification` allow rule is missing, every stall notification can prompt for permission and stall the pickup or be silently denied in Auto mode.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "57c00b4e1caf340ab130c4bbe9f657550ea855ac0bf88ee8eeb4b495041c3d06",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36364947244",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36364947244",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928012141_0725d1c43e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36364947244"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T01:21:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
