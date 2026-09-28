@@ -204,7 +204,7 @@ def test_verdict_body_carries_the_marker_and_every_ruling():
 def _functions_block() -> str:
 	text = RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
 	start = text.index('CLAUDE_FIXER_JUDGE_MODE="false"')
-	end = text.index("# _resilient_phase_swap <issue_number> <target_label>")
+	end = text.index("# Early guard: skip judge when the PR is closed-without-merge.")
 	return text[start:end]
 
 
@@ -472,7 +472,7 @@ def test_rb_judge_claude_mode_hooks():
 	assert fix_block.index('claude_fixer_judge_record fix findings') < fix_block.index('git push origin "HEAD:${TARGET_BRANCH}"')
 	assert 'echo "judge_skip_reason=claude_fixer_fix_push_failed"' in text
 	# Claude mode posts its own verdict instead of the generic assessment.
-	assert 'if [ "${CLAUDE_FIXER_JUDGE_MODE}" != "true" ]; then\npost_review_blocked_assessment' in text
+	assert "post_review_blocked_assessment() { :; }" in text
 	# Its own cap, counted on the PR's commits.
 	assert 'MAX_REVIEW_BLOCKED_RETRIES="${CLAUDE_FIXER_JUDGE_FIX_CAP:-2}"' in text
 	assert 'RETRY_COUNT="$(claude_fixer_judge_fix_count "${PR_BASE_REF:-}" "${MAX_REVIEW_BLOCKED_RETRIES}")"' in text

@@ -769,6 +769,106 @@ fi
 echo "judge_handled=false" >> "$GITHUB_OUTPUT"
 echo "judge_skip_reason=" >> "$GITHUB_OUTPUT"
 
+# _resilient_phase_swap <issue_number> <target_label>
+#
+# Swap AI phase labels without letting a concurrent terminal label be
+# removed by a stale full-label PUT. Non-terminal targets are added first,
+# then only phase labels observed by the initial GET are removed; a final
+# GET reconciles terminal precedence. GitHub exposes no conditional label
+# mutation, so the existing GET cannot safely support a full replacement.
+# API calls: terminal target 2 (GET + PUT); non-terminal target 3 plus one
+# DELETE per observed old phase, and one more DELETE when a terminal race wins.
+_resilient_phase_swap()
+{
+	local _rps_issue="$1" _rps_target="$2"
+	local _rps_phases='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+	local _rps_cur _rps_new _rps_phase _rps_terminal
+	if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+		echo "::warning::_resilient_phase_swap: GET labels failed for #${_rps_issue} — falling back to POST add." >&2
+		gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
+			|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
+		return 1
+	fi
+	_rps_cur="${_rps_cur:-[]}"
+	# Never downgrade a terminal phase.  The PR-close handler
+	# (issue_pr_status.yml) labels the linked issue ai:merged as soon as
+	# the PR merges, and this judge runs its swap only AFTER the merge
+	# (and, for merge_with_followup, after follow-up creation), so the
+	# two race.  tele-funtoken-msg-scoring#4379: ai:merged landed at
+	# 14:18:39, this swap replaced it with ai:ready-to-merge at ~14:18:45,
+	# and the orchestrator's security-pass check then read the closed
+	# issue as "closed without a merged PR" and failed project #3928.
+	# A terminal label is only ever replaced by another terminal label.
+	_rps_terminal="$(printf '%s\n' "${_rps_cur}" | jq -r --arg t "${_rps_target}" '
+		if ($t == "ai:merged" or $t == "ai:closed") then empty
+		else (map(select(. == "ai:merged" or . == "ai:closed")) | first // empty)
+		end' 2>/dev/null || echo "")"
+	if [ -n "${_rps_terminal}" ]; then
+		echo "_resilient_phase_swap: issue #${_rps_issue} already carries terminal label ${_rps_terminal}; not swapping to ${_rps_target}."
+		return 0
+	fi
+	if [ "${_rps_target}" != "ai:merged" ] && [ "${_rps_target}" != "ai:closed" ]; then
+		if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			-f "labels[]=${_rps_target}" >/dev/null 2>&1; then
+			echo "::warning::_resilient_phase_swap: POST add failed for #${_rps_issue}." >&2
+			return 1
+		fi
+		while IFS= read -r _rps_phase; do
+			[ -n "${_rps_phase}" ] || continue
+			gh_retry gh api -X DELETE "repos/${REPOSITORY}/issues/${_rps_issue}/labels/$(printf '%s' "${_rps_phase}" | jq -sRr @uri)" >/dev/null 2>&1 \
+				|| echo "::warning::_resilient_phase_swap: could not remove prior phase ${_rps_phase} from #${_rps_issue}." >&2
+		done < <(printf '%s\n' "${_rps_cur}" | jq -r --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
+			'.[] | select(. as $label | ($p | index($label)) != null and . != $t and . != "ai:merged" and . != "ai:closed")')
+		if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+			echo "::warning::_resilient_phase_swap: terminal reconciliation GET failed for #${_rps_issue}; target was added without deleting any terminal label." >&2
+			return 0
+		fi
+		_rps_terminal="$(printf '%s\n' "${_rps_cur:-[]}" | jq -r 'map(select(. == "ai:merged" or . == "ai:closed")) | first // empty' 2>/dev/null || echo "")"
+		if [ -n "${_rps_terminal}" ]; then
+			if gh_retry gh api -X DELETE "repos/${REPOSITORY}/issues/${_rps_issue}/labels/$(printf '%s' "${_rps_target}" | jq -sRr @uri)" >/dev/null 2>&1; then
+				echo "_resilient_phase_swap: terminal label ${_rps_terminal} appeared while swapping #${_rps_issue}; removed non-terminal target ${_rps_target}."
+			else
+				echo "::warning::_resilient_phase_swap: terminal ${_rps_terminal} won for #${_rps_issue}, but removing ${_rps_target} failed." >&2
+			fi
+		fi
+		return 0
+	fi
+	_rps_new="$(printf '%s\n' "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
+		'(. - $p) + [$t] | unique')"
+	if printf '{"labels":%s}' "${_rps_new}" | \
+		gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			--input - >/dev/null 2>&1; then
+		return 0
+	fi
+	echo "::warning::_resilient_phase_swap: PUT failed for #${_rps_issue} — falling back to POST add." >&2
+	gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
+		|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
+}
+
+if [ "${ENABLE_REVIEW_BLOCKED_JUDGE}" != "true" ]; then
+  echo "Review-blocked judge disabled (set ENABLE_REVIEW_BLOCKED_JUDGE=true to enable)."
+  echo "judge_skip_reason=disabled" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+
+if [ "${CAN_PUSH:-false}" != "true" ]; then
+  echo "Branch not writable — skipping judge."
+  echo "judge_skip_reason=not_writable" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+
+if [ -z "${PR_NUMBER:-}" ] || ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+  echo "Invalid PR_NUMBER — skipping review-blocked judge."
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=invalid_pr_number" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+
 # -----------------------------------------------------------
 # Claude-fixer judge mode (CLAUDE_FIXER_JUDGE=true)
 # -----------------------------------------------------------
@@ -994,106 +1094,6 @@ claude_fixer_judge_execute()
 	return 0
 }
 
-# _resilient_phase_swap <issue_number> <target_label>
-#
-# Swap AI phase labels without letting a concurrent terminal label be
-# removed by a stale full-label PUT. Non-terminal targets are added first,
-# then only phase labels observed by the initial GET are removed; a final
-# GET reconciles terminal precedence. GitHub exposes no conditional label
-# mutation, so the existing GET cannot safely support a full replacement.
-# API calls: terminal target 2 (GET + PUT); non-terminal target 3 plus one
-# DELETE per observed old phase, and one more DELETE when a terminal race wins.
-_resilient_phase_swap()
-{
-	local _rps_issue="$1" _rps_target="$2"
-	local _rps_phases='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
-	local _rps_cur _rps_new _rps_phase _rps_terminal
-	if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
-		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
-		echo "::warning::_resilient_phase_swap: GET labels failed for #${_rps_issue} — falling back to POST add." >&2
-		gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
-			-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
-			|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
-		return 1
-	fi
-	_rps_cur="${_rps_cur:-[]}"
-	# Never downgrade a terminal phase.  The PR-close handler
-	# (issue_pr_status.yml) labels the linked issue ai:merged as soon as
-	# the PR merges, and this judge runs its swap only AFTER the merge
-	# (and, for merge_with_followup, after follow-up creation), so the
-	# two race.  tele-funtoken-msg-scoring#4379: ai:merged landed at
-	# 14:18:39, this swap replaced it with ai:ready-to-merge at ~14:18:45,
-	# and the orchestrator's security-pass check then read the closed
-	# issue as "closed without a merged PR" and failed project #3928.
-	# A terminal label is only ever replaced by another terminal label.
-	_rps_terminal="$(printf '%s\n' "${_rps_cur}" | jq -r --arg t "${_rps_target}" '
-		if ($t == "ai:merged" or $t == "ai:closed") then empty
-		else (map(select(. == "ai:merged" or . == "ai:closed")) | first // empty)
-		end' 2>/dev/null || echo "")"
-	if [ -n "${_rps_terminal}" ]; then
-		echo "_resilient_phase_swap: issue #${_rps_issue} already carries terminal label ${_rps_terminal}; not swapping to ${_rps_target}."
-		return 0
-	fi
-	if [ "${_rps_target}" != "ai:merged" ] && [ "${_rps_target}" != "ai:closed" ]; then
-		if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
-			-f "labels[]=${_rps_target}" >/dev/null 2>&1; then
-			echo "::warning::_resilient_phase_swap: POST add failed for #${_rps_issue}." >&2
-			return 1
-		fi
-		while IFS= read -r _rps_phase; do
-			[ -n "${_rps_phase}" ] || continue
-			gh_retry gh api -X DELETE "repos/${REPOSITORY}/issues/${_rps_issue}/labels/$(printf '%s' "${_rps_phase}" | jq -sRr @uri)" >/dev/null 2>&1 \
-				|| echo "::warning::_resilient_phase_swap: could not remove prior phase ${_rps_phase} from #${_rps_issue}." >&2
-		done < <(printf '%s\n' "${_rps_cur}" | jq -r --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
-			'.[] | select(. as $label | ($p | index($label)) != null and . != $t and . != "ai:merged" and . != "ai:closed")')
-		if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
-			--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
-			echo "::warning::_resilient_phase_swap: terminal reconciliation GET failed for #${_rps_issue}; target was added without deleting any terminal label." >&2
-			return 0
-		fi
-		_rps_terminal="$(printf '%s\n' "${_rps_cur:-[]}" | jq -r 'map(select(. == "ai:merged" or . == "ai:closed")) | first // empty' 2>/dev/null || echo "")"
-		if [ -n "${_rps_terminal}" ]; then
-			if gh_retry gh api -X DELETE "repos/${REPOSITORY}/issues/${_rps_issue}/labels/$(printf '%s' "${_rps_target}" | jq -sRr @uri)" >/dev/null 2>&1; then
-				echo "_resilient_phase_swap: terminal label ${_rps_terminal} appeared while swapping #${_rps_issue}; removed non-terminal target ${_rps_target}."
-			else
-				echo "::warning::_resilient_phase_swap: terminal ${_rps_terminal} won for #${_rps_issue}, but removing ${_rps_target} failed." >&2
-			fi
-		fi
-		return 0
-	fi
-	_rps_new="$(printf '%s\n' "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
-		'(. - $p) + [$t] | unique')"
-	if printf '{"labels":%s}' "${_rps_new}" | \
-		gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
-			--input - >/dev/null 2>&1; then
-		return 0
-	fi
-	echo "::warning::_resilient_phase_swap: PUT failed for #${_rps_issue} — falling back to POST add." >&2
-	gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
-		-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
-		|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
-}
-
-if [ "${ENABLE_REVIEW_BLOCKED_JUDGE}" != "true" ]; then
-  echo "Review-blocked judge disabled (set ENABLE_REVIEW_BLOCKED_JUDGE=true to enable)."
-  echo "judge_skip_reason=disabled" >> "$GITHUB_OUTPUT"
-  exit 0
-fi
-
-if [ "${CAN_PUSH:-false}" != "true" ]; then
-  echo "Branch not writable — skipping judge."
-  echo "judge_skip_reason=not_writable" >> "$GITHUB_OUTPUT"
-  exit 0
-fi
-
-if [ -z "${PR_NUMBER:-}" ] || ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid PR_NUMBER — skipping review-blocked judge."
-  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-  echo "judge_action=skip" >> "$GITHUB_OUTPUT"
-  echo "judge_skip_reason=invalid_pr_number" >> "$GITHUB_OUTPUT"
-  exit 0
-fi
-
 # Early guard: skip judge when the PR is closed-without-merge. Merged
 # PRs (state=closed + merged=true) ARE allowed through so the judge can
 # choose merge_with_followup against an already-merged PR — that's the
@@ -1274,7 +1274,7 @@ if [ "${RETRY_COUNT}" -ge "${MAX_REVIEW_BLOCKED_RETRIES}" ]; then
 else
   echo "Judge retry ${RETRY_COUNT}/${MAX_REVIEW_BLOCKED_RETRIES}."
 fi
-if [ "${CLAUDE_FIXER_JUDGE_MODE}" = "true" ]; then
+if [ "${CLAUDE_FIXER_JUDGE_MODE:-false}" = "true" ]; then
 	# Claude mode: its own cap, counted on this PR's commits only.
 	MAX_REVIEW_BLOCKED_RETRIES="${CLAUDE_FIXER_JUDGE_FIX_CAP:-2}"
 	[[ "${MAX_REVIEW_BLOCKED_RETRIES}" =~ ^[0-9]+$ ]] || MAX_REVIEW_BLOCKED_RETRIES=2
@@ -1537,7 +1537,7 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
     echo "=== END PRIOR ROUND DECISIONS ==="
     echo
   fi
-  if [ "${CLAUDE_FIXER_JUDGE_MODE}" = "true" ]; then
+  if [ "${CLAUDE_FIXER_JUDGE_MODE:-false}" = "true" ]; then
     echo "=== CLAUDE-FIXER JUDGE TASK ==="
     echo "Claude-fixer judge mode is ACTIVE for this run: follow the CLAUDE-FIXER JUDGE MODE rules above, not the review-blocked action rules."
     echo "Judged head: ${RB_JUDGED_HEAD_SHA:-unknown}. Review round: ${CLAUDE_FIXER_JUDGE_ROUND}. Judge fixes already on this PR: ${RETRY_COUNT} of ${MAX_REVIEW_BLOCKED_RETRIES}."
@@ -1871,7 +1871,7 @@ fi
 
 emit_review_rb_lessons_learned_records "${FIRST_ISSUE:-}" "${PR_NUMBER:-}" "${JUDGE_JSON}"
 
-if [ "${CLAUDE_FIXER_JUDGE_MODE}" = "true" ]; then
+if [ "${CLAUDE_FIXER_JUDGE_MODE:-false}" = "true" ]; then
 	printf '%s\n' "${JUDGE_JSON}" > "${CLAUDE_FIXER_JUDGE_INPUTS_DIR}/model.json"
 	if claude_fixer_judge_execute; then
 		exit 0
@@ -1882,6 +1882,9 @@ if [ "${CLAUDE_FIXER_JUDGE_MODE}" = "true" ]; then
 		.action = "fix"
 		| .fix_description = ((($decision[0].fix_description // "") + "\n\nUpheld findings to fix (and nothing else):\n" + ([$decision[0].upheld[] | "- \(.finding) \(.file):\(.line) [\(.category)] \(.claim) (judge: \(.reason))"] | join("\n"))) | ltrimstr("\n\n"))
 	' <<< "${JUDGE_JSON}")"
+	# Claude mode posts its own verdict comment (claude_fixer_judge_record),
+	# not the generic assessment.
+	post_review_blocked_assessment() { :; }
 	RB_FIX_COMMIT_SUBJECT="[judge-fix] claude-fixer round ${CLAUDE_FIXER_JUDGE_ROUND}: fix $(jq '.upheld | length' "${CLAUDE_FIXER_JUDGE_DECISION_FILE}") upheld finding(s)"
 fi
 
@@ -1996,14 +1999,11 @@ RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
   echo "**Remaining issues:** ${RB_REMAINING}"
 } > "${RB_JUDGE_COMMENT_FILE}"
 
-# Claude mode posts its own verdict comment (claude_fixer_judge_record).
-if [ "${CLAUDE_FIXER_JUDGE_MODE}" != "true" ]; then
 post_review_blocked_assessment \
   "${RB_JUDGE_COMMENT_FILE}" \
   "${RB_OUTBOUND_REVIEW_STATE}" \
   "${RB_JUDGED_HEAD_SHA}" \
   "${POST_REVIEW_HEAD_REF}" || true
-fi
 
 # -----------------------------------------------------------
 # Execute judge action
@@ -2153,7 +2153,7 @@ case "${RB_ACTION}" in
         echo "You are on the PR branch (${TARGET_BRANCH})."
         echo "Apply the fixes you identified directly to the repository files."
         echo "Focus only on the issues that blocked the review."
-        if [ "${CLAUDE_FIXER_JUDGE_MODE}" = "true" ]; then
+        if [ "${CLAUDE_FIXER_JUDGE_MODE:-false}" = "true" ]; then
           echo "Claude-fixer judge mode: fix ONLY the findings you upheld, listed here; never touch a finding you ruled invalid:"
           printf '%s\n' "${RB_FIX_DESC}"
         fi
@@ -2344,7 +2344,7 @@ Review-blocked judge applied fixes to unblock the review pipeline.
 Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
 ${RB_FIX_DESC}"
-          if [ "${CLAUDE_FIXER_JUDGE_MODE}" = "true" ]; then
+          if [ "${CLAUDE_FIXER_JUDGE_MODE:-false}" = "true" ]; then
             # Record before the push: its synchronize event may cancel this run.
             claude_fixer_judge_record fix findings "" "Fix commit: \`$(git rev-parse HEAD)\`."
           fi
@@ -2355,14 +2355,14 @@ ${RB_FIX_DESC}"
             echo "judge_action=fix" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::Failed to push judge fix — falling back to manual intervention."
-            if [ "${CLAUDE_FIXER_JUDGE_MODE}" = "true" ]; then
+            if [ "${CLAUDE_FIXER_JUDGE_MODE:-false}" = "true" ]; then
               # The verdict was recorded before the push; without the commit
               # the PR is blocked, not fixed (last output value wins).
               echo "judge_handled=false" >> "$GITHUB_OUTPUT"
               echo "judge_skip_reason=claude_fixer_fix_push_failed" >> "$GITHUB_OUTPUT"
             fi
           fi
-        elif [ "${CLAUDE_FIXER_JUDGE_MODE}" = "true" ]; then
+        elif [ "${CLAUDE_FIXER_JUDGE_MODE:-false}" = "true" ]; then
           claude_fixer_judge_hold "The judge upheld findings but its fix staged no effective change, so they are still open."
         else
           echo "Judge staged no effective changes. Treating as merge."
@@ -2375,7 +2375,7 @@ ${RB_FIX_DESC}"
           echo "judge_handled=true" >> "$GITHUB_OUTPUT"
           echo "judge_action=merge" >> "$GITHUB_OUTPUT"
         fi
-      elif [ "${CLAUDE_FIXER_JUDGE_MODE}" = "true" ]; then
+      elif [ "${CLAUDE_FIXER_JUDGE_MODE:-false}" = "true" ]; then
         claude_fixer_judge_hold "The judge upheld findings but its fix produced no file change, so they are still open."
       else
         echo "Judge produced no file changes. Treating as merge."
