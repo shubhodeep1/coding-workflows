@@ -1172,8 +1172,10 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   no deterministic-skip auto-merge), and `scripts/claude_pr_sweep.py` never
   queues a fixer for one.
 - **Sync-state check:** the CI step "Claude twin sync state (CLAUDE.md
-  §28.C)" runs `claude_twin_sync.py check --base <base> --head HEAD` (PR:
-  the merge commit's first parent; push: `github.event.before`). It fails
+  §28.C)" runs `claude_twin_sync.py check --base <base> --head HEAD` on PRs
+  into `main` (base: the merge commit's first parent) and pushes to `main`
+  (base: `github.event.before`); `stable` promotions span many PRs and are
+  skipped. It fails
   when the range moves a non-excluded `.claude/` file to content other than
   its twin at HEAD. The twin may be ahead while a sync PR is pending; on
   `main` the two match again once it merges. Tests load the twin and call
