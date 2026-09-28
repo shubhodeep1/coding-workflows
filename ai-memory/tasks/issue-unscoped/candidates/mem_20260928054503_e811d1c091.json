@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/4704-gh-api-guard-quote-aware-substitutions.md:11-13 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The changelog table reports 19 new guard test cases, but the actual total is 24.\n  WHY: The changelog is the operator-facing record of what shipped, and the inaccurate count misrepresents the test coverage added.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog fragment's \u201cnumbers that matter\u201d table must match the shipped test count; the PR description says, \u201cIt has 19 new cases, all of which fail on the old guard and pass on the new one.\u201d\n  expected_change_site: changelog.d/4704-gh-api-guard-quote-aware-substitutions.md, line 13, the \u201cNew guard test cases\u201d table row\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  EVIDENCE: changelog.d/4704-gh-api-guard-quote-aware-substitutions.md line 13 says \u201c19 (5 new prompts, 5 new no-decision cases, 9 quoting cases for substitution_bodies)\u201d but the actual shipped totals are 24: 7 ASK, 5 NO_DECISION, and 12 substitution_bodies; tests/test_gh_api_write_guard.py:241-242 added two ASK cases and tests/test_gh_api_write_guard.py:589-591 added three substitution_bodies cases without updating the changelog table from 19 to 24.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: changelog fragment accuracy (the `## Testing` section of the PR description requires \"It has 19 new cases, all of which fail on the old guard and pass on the new one\", and the fragment's \"The numbers that matter\" table must match the shipped test count)\n  Expected change site: changelog.d/4704-gh-api-guard-quote-aware-substitutions.md line 13, the \"New guard test cases\" row\n  Evidence of absence: The fragment says \"19 (5 new prompts, 5 new no-decision cases, 9 quoting cases for substitution_bodies)\" but the actual shipped totals are 24: 7 ASK, 5 NO_DECISION, and 12 substitution_bodies. The round-1 autofix added 2 quote-tracking ASK entries and 3 quote-tracking substitution_bodies cases without updating the fragment. The PR description's \"Testing\" section says \"19 new cases\" which is also stale.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/4704-gh-api-guard-quote-aware-substitutions.md:11 | severity=NIT | confidence=5\n  PROBLEM: The summary table contains inaccurate counts for test cases.\n  WHY: While this does not impact runtime behavior, the changelog is an operator-facing record of the changes, and inaccurate information undermines trust in the accuracy of the documentation for shipped features. The table claims 19 new guard test cases, but the actual total is 24 (7 new ASK cases, 5 new no-decision cases, and 12 substitution_bodies cases).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/4704-gh-api-guard-quote-aware-substitutions.md: Lines 11-13, \"The numbers that matter\" table | severity=NIT | confidence=5\n  PROBLEM: The table reports \"19 (5 new prompts, 5 new no-decision cases, 9 quoting cases for `substitution_bodies`)\" but the actual totals are 24: 7 ASK cases (lines 238-244 in tests/test_gh_api_write_guard.py), 5 no-decision cases (lines 279-283), and 12 `substitution_bodies` cases (lines 584-594).\n  WHY: The changelog is the operator-facing record of what shipped. An inaccurate count undermines trust in the numbers table and misrepresents the test coverage added.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The changelog fragment's \"numbers that matter\" table claims \"19 (5 new prompts, 5 new no-decision cases, 9 quoting cases for `substitution_bodies`)\" but the actual test count after round 1 added 2 ASK cases and 3 `substitution_bodies` cases is 24 (7 new prompts, 5 no-decision cases, 12 `substitution_bodies` cases).\n  Expected change site: changelog.d/4704-gh-api-guard-quote-aware-substitutions.md, line 13, the \"New guard test cases\" table row.\n  Evidence of absence: The last commit (c498834) added test cases \"quoted paren inside quoted substitution\" and \"single-quoted paren inside quoted substitution\" to the ASK parametrize block (tests/test_gh_api_write_guard.py:241-242) and three new `substitution_bodies` parametrize entries (tests/test_gh_api_write_guard.py:589-591) but did not update the changelog table from 19 to 24.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2f00f1e224bf732eff331bdffbd62abf9379dc5d87dbfb6f6569a5f76f24732f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4704,
+    "run_id": "36381451280",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36381451280",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928054503_e811d1c091",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4704,
+    "run_id": "36381451280"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T05:45:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
