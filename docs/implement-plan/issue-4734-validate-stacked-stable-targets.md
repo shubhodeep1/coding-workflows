@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4734-validate-stacked-stable-targets-plan.md
 - Source issue: shubhodeep1/coding-workflows#4734
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4734-validate-stacked-stable-targets   Final PR: #TBD draft
+- Project branch: claude/implement-plan-issue-4734-validate-stacked-stable-targets   Final PR: #4746 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #4758
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_012e6ydasL9pmy6MozTwudaD   safety net and hand-back: see the review round 1 stage report (session_01EZHGCdV7TY945CtCcrSunG)
 - Last updated: 2026-09-28
-- Last note: project branch opened; implementing phase 1.
+- Last note: review round 1 (head 23f6660): both consensus findings fixed — the parent PR binding now also requires a 40-hex head SHA, and a project-branch base that fails `git check-ref-format` gets its own error message (tests/test_validate_target_ref_input.py 11 passed; 269 related tests passed; actionlint clean; validate.yml 69,061 bytes).
 
 ## Phases
-1. [ ] Phase 1 — authorize stacked project-branch and stable-heal targets in validate.yml
+1. [ ] Phase 1 — authorize stacked project-branch and stable-heal targets in validate.yml   — PR #4758 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 

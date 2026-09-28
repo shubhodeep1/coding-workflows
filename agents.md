@@ -1178,7 +1178,11 @@ committing the corresponding file:
   sourced or executed. Any other changed or deleted path rejects the entire
   replay as an isolation/transfer failure, stopping validation even for
   nonfatal hooks. An explicit `validate.yml` `target_ref` requires exactly one open
-  trusted-author same-repo project PR targeting the default branch; checkout
+  trusted-author same-repo project PR targeting the default branch, a
+  `claude/implement-plan-*` project branch whose own single open trusted
+  same-repo PR targets the default branch (one level of stacking), or `stable`
+  for a `claude/implement-plan-issue-<n>-*` head whose issue `<n>` carries
+  `ai:workflow-heal`; any other base is refused. Checkout
   pins and verifies that PR's SHA without persisting checkout credentials.
   Empty `target_ref` retains integration/default selection.
 
