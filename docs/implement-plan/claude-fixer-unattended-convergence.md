@@ -3,18 +3,18 @@
 - Plan: docs/plans/claude-fixer-unattended-convergence-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-claude-fixer-unattended-convergence   Final PR: #4648 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 2/4
 - Activation: not started
-- Waiting on: the operator's `.claude/**` edits for phase 2 (branch claude/implement-plan-claude-fixer-unattended-convergence-phase-2 pushed; no phase PR yet)
+- Waiting on: PR #4691
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01CUoZtWt9aXXvwPvx9QwhAx (idle, kept for reuse)   safety net none   hand-back none
+- Check-in: checker session_01CUoZtWt9aXXvwPvx9QwhAx   safety net trig_017taXQZJn5xqodFHSqUp5bw   hand-back trig_01EjgrPWeD4LHTrzPiHHhGbh
 - Last updated: 2026-09-28
-- Last note: phase 2 (GPT judge) implemented outside `.claude/**` and verified locally; stopped at BLOCKED for the two `.claude/commands/` edits the operator applies (copy the workflow-templates twins), then the chain resumes at step 6 (open the phase PR)
+- Last note: operator applied the phase 2 `.claude/commands` edits (6b8a1a3); phase 2 PR #4691 opened against the project branch; wait armed
 
 ## Phases
 1. [x] Phase 1 — Checks-pending, not a hand-off (evidence artifact + helper, checks-pending marker, merge-check gate and step)   — PR #4651 merged 2026-09-27 (squash b7745e7, by the operator under D8 after the supervising session verified every round-1 rejection); review rounds: 1; interventions: 0
-2. [ ] Phase 2 — GPT judge for Claude-fixer PRs (judge dispatch input, Claude mode in review_rb_judge.sh, sticky rulings, fixer docs REST dispatch)   — protected paths: .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md; branch pushed, BLOCKED on those two edits; review rounds: 0; interventions: 0
+2. [ ] Phase 2 — GPT judge for Claude-fixer PRs (judge dispatch input, Claude mode in review_rb_judge.sh, sticky rulings, fixer docs REST dispatch)   — protected paths: .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md; PR #4691 open (waiting); `.claude` edits applied by the operator in 6b8a1a3; review rounds: 0; interventions: 0
 3. [ ] Phase 3 — Checkers never ask; reasoning before holds; held backoff (retry_after_minutes)   — protected paths: .claude/commands/implement-plan-claude.md, .claude/commands/fix-claude-pr.md, .claude/scripts/check_in_status.py
 4. [ ] Phase 4 — Session janitor (stale_sessions.py run by the hourly Claude issue pickup)   — protected paths: .claude/scripts/stale_sessions.py, .claude/commands/claude-issue-pickup.md, .claude/settings.json
 
@@ -50,6 +50,7 @@
 - [source:plan-deviation] "Enable auto-merge on PR" and the evidence upload run before the review-blocked judge step, so a judge that merges or writes evidence must call scripts/review_enable_auto_merge.sh itself and upload in its own later step. (files: scripts/review_rb_judge.sh, .github/workflows/review_autofix.yml)
 
 ## Notes
+- Protected-path application: phase 2 — the supervising session applied both `.claude/commands` edits (copies of their workflow-templates twins) in 6b8a1a3 on 2026-09-28 with the operator's approval; verified byte-identical to the twins, and the parity, command-doc and judge suites pass (194 tests).
 - Protected-path approval: phase 2 — operator: implement every change outside `.claude/**` in the stage session, stop at Status: BLOCKED naming each `.claude/**` file and its exact edit; the operator applies them in the supervising session, which then resumes the chain (2026-09-27, relayed by session_01VwSvLnEGmUoaQD42DKapiU)
 - 2026-09-28 phase 2 stage: synced the project branch with main (merge c7ee1cf, README variable-table conflict resolved keeping both rows), pushed. Local verification used Python 3.12 (CI's version; the container default is 3.11) and needed gawk installed; without them 40 unrelated tests fail locally.
 - 2026-09-28 phase 2: `.claude/scripts/check_in_status.py` still treats a findings hand-off as due after the judge has answered it; the fixer's 3-hour claim covers the judge run (minutes), and the judge's verdict, [judge-fix] push or ai:needs-human label moves the PR on. Not changed here (a phase 3 file); noted for phase 3.
