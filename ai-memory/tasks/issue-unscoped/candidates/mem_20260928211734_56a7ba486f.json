@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:817 and 1487 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Redundant calls to `gate_fetch_marker_comments` occur on the same `workflow_dispatch` execution path.\n  WHY: The function is memoized, so the second call makes no API request; the reviewer describes it as redundant shell logic that increases execution latency and violates clean coding patterns.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document the deterministic skip for claude/* PRs consistently across the operator-facing files so the small-diff route reads as both bounded, not just the addition bound.\n  expected_change_site: README.md CLAUDE_FIXER_ENABLED row settings column, agents.md Phase 7 Claude-fixer mode bullet\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: README.md line 86 now reads \"(`AUTOFIX_SKIP_DOC_ONLY`, `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS`)\" (resolved in commit 70b538d). agents.md lines 94-107 lists two exceptions (\"An accepted `claude_fixer_converged_head` verification run (`CLAUDE_FIXER_VERIFY`) never skips\" and \"A head with a pending hand-off runs the review instead of skipping\"), which already matches CLAUDE.md \u00a726.H. The only remaining readability nit is agents.md lines 100-103, where the two-exceptions paragraph ends with \"and runs the review too.\" and the next sentence (\"`[claude-intervention]` and `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`\") begins on a new line but the prior \"[claude-intervention] and\" clause on the diff line still attaches semantically to the previous sentence; the wording is intelligible and the change is reviewer-flagged as NIT, so this is documentation completeness, not a behaviour gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:817 and 1487 | severity=NIT | confidence=4\n  PROBLEM: Redundant shell function calls to `gate_fetch_marker_comments` occur on the same execution path for `workflow_dispatch` events.\n  WHY: This is not a runtime failure as the function includes memoization logic (guarding against redundant API calls), but it remains redundant shell logic that increases execution latency and violates clean coding patterns.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: Document the deterministic skip for claude/* PRs consistently across the operator-facing files so the small-diff route reads as both bounded, not just the addition bound.\nExpected change site: README.md CLAUDE_FIXER_ENABLED row settings column, agents.md Phase 7 Claude-fixer mode bullet\nEvidence of absence: README.md line 86 now reads \"(`AUTOFIX_SKIP_DOC_ONLY`, `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS`)\" (resolved in commit 70b538d). agents.md lines 94-107 lists two exceptions (\"An accepted `claude_fixer_converged_head` verification run (`CLAUDE_FIXER_VERIFY`) never skips\" and \"A head with a pending hand-off runs the review instead of skipping\"), which already matches CLAUDE.md \u00a726.H. The only remaining readability nit is agents.md lines 100-103, where the two-exceptions paragraph ends with \"and runs the review too.\" and the next sentence (\"`[claude-intervention]` and `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`\") begins on a new line but the prior \"[claude-intervention] and\" clause on the diff line still attaches semantically to the previous sentence; the wording is intelligible and the change is reviewer-flagged as NIT, so this is documentation completeness, not a behaviour gap.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4970299d30c350221995a8e2b7b60e92add8785c1db9d5198487291885021893",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36483238033",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36483238033",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928211734_56a7ba486f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36483238033"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T21:17:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
