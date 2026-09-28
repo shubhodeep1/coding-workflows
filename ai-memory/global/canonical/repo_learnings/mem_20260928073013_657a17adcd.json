@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Validation security changes should be checked across process boundaries and their callers, not just in one script.",
   "timestamps": {
     "created_at": "2026-09-28T07:30:13Z",
