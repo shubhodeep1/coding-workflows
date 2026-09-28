@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T07:04:01Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a plan narrows a rule in CLAUDE.md, grep the old wording in the text that scripts generate (issue bodies, PR comments built by `.claude/scripts/*`) and plan the sibling change or record why it stays.",
+  "phase": "implement_plan",
+  "pr_number": 4728,
+  "record_id": "lesson-implement-plan-21402f6475f2a81968dd0d0b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4678-edit-files-without-python-heredocs",
+    "file:CLAUDE.md",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}

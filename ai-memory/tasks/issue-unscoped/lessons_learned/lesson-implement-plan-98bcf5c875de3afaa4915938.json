@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-28T07:04:01Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A contract test that pins a phrase must assert a string unique to the clause it guards; when another paragraph shares the phrase, assert the clause's full wording and check it with a mutation of that clause alone.",
+  "phase": "implement_plan",
+  "pr_number": 4728,
+  "record_id": "lesson-implement-plan-98bcf5c875de3afaa4915938",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4678-edit-files-without-python-heredocs",
+    "file:tests/test_permission_prompts.py"
+  ]
+}
