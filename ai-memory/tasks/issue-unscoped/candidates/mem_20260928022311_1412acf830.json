@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_judge.py:166-173 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `decide()` may hold the entire PR when security/data-loss findings and other fixable findings are both upheld.\n  WHY: The review says this conservative behavior may require extra human intervention for issues that could otherwise be fixed.\n- scripts/review_claude_fixer_judge.py:164-165 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Partial model rulings may result in incorrect decisions because findings without rulings default to upheld.\n  WHY: The review says missing rulings may reflect model confusion rather than that the findings are correct.\n- scripts/review_rb_judge.sh:1003-1006, 1069-1081 | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The `merge_with_followup` path creates a follow-up issue before checking whether the PR's checks are green, so the issue and verdict can claim the PR merged when it did not.\n  WHY: The reviewer rates this MAJOR and notes that a later judge round at the cap can create duplicate tracking issues for the same findings.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_claude_fixer_judge.py:166-173 | confidence=3\n  PROBLEM: The `decision` logic may hold the entire PR when security/data-loss findings and other fixable findings are both upheld.\n  WHY: The reviewer says this conservative behavior may cause extra human intervention for fixable issues.\n- scripts/review_claude_fixer_judge.py:164-165 | confidence=3\n  PROBLEM: Partial model output may result in incorrect decisions because findings without rulings default to upheld.\n  WHY: Missing rulings may reflect model confusion rather than that those findings are correct.\n- scripts/review_claude_fixer_judge.py:152 | HARDENING_SUGGESTION\n  Issue: Finding ID parsing uses string splitting, which might be brittle.\n  Suggested minimal fix: Validate finding ID against F<integer> pattern.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 3 (failback minimax/minimax-m2.5); no findings available.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_rb_judge.sh:1069-1081 and scripts/review_rb_judge.sh:1003-1006 | severity=MAJOR | confidence=3\n  PROBLEM: For a `merge_with_followup` decision, the follow-up issue is created before checks are verified and can assert that the PR merged when it did not.\n  WHY: When checks fail, the PR is not merged; if checks are later fixed and a new judge round reaches the cap, another follow-up issue may be created for the same findings.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3a32c18be4e6cae526441bf40e01fd70703589a374eabc14bd00c80b3d891c1e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4691,
+    "run_id": "36367911274",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36367911274",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928022311_1412acf830",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4691,
+    "run_id": "36367911274"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T02:23:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
