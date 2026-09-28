@@ -39,6 +39,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Append review pipeline iteration summary": ("review_autofix_step_iteration_summary.sh", "warning"),
 	"Hand review round to Claude session (Claude-fixer mode)": ("review_autofix_step_claude_fixer_handoff.sh", "error"),
 	"Claude-fixer merge check": ("review_autofix_step_claude_fixer_merge_check.sh", "error"),
+	"Prepare Claude-fixer judge": ("review_autofix_step_claude_fixer_judge.sh", "error"),
 }
 
 _WRAPPER_START_RE = re.compile(

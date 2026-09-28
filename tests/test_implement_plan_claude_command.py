@@ -260,3 +260,28 @@ def test_third_conformance_fix_gets_a_fix_check_not_a_fourth_run(text):
 	assert "after the third run's fix PR merges, the fix check replaces it" in text
 	assert "`Outside fix-check scope`" in text
 	assert "conformance 3/3 — fix check | security-pass" in text
+
+
+FIX_CLAUDE_PR = ROOT / ".claude" / "commands" / "fix-claude-pr.md"
+TEMPLATE_FIX_CLAUDE_PR = ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md"
+
+
+def test_rejected_rounds_go_to_the_gpt_judge_not_a_hold(text):
+	# Plan claude-fixer-unattended-convergence, phase 2: when every finding is
+	# rejected the session posts its reasons and dispatches the GPT judge
+	# over REST (the dispatch helper), instead of holding for a verdict bot.
+	assert "<!-- ai:claude-fixer-rejection:v1 head=<sha> round=<r> -->" in text
+	assert "`--workflow review_autofix.yml --input pr_number=<N> --input claude_fixer_judge_head=<sha>`" in text
+	assert "This is not a hold: arm the wait as in step 7." in text
+	assert "<!-- ai:claude-fixer-judge:v1 head=<sha> round=<r> run=<id> decision=<decision> -->" in text
+	assert "Fall back to the verdict bot only when the helper reports `\"dispatched\": false`" in text
+	assert "review-judge, and review-convergence dispatches in steps 7a, 9, and 10 are the §23.C **command-invoked** carve-out" in text
+
+
+def test_fix_claude_pr_sends_rejected_rounds_to_the_judge():
+	assert TEMPLATE_FIX_CLAUDE_PR.read_text(encoding="utf-8") == FIX_CLAUDE_PR.read_text(encoding="utf-8")
+	text = _flat(FIX_CLAUDE_PR)
+	assert "--input claude_fixer_judge_head=<sha>" in text
+	assert "<!-- ai:claude-fixer-rejection:v1 head=<sha> round=<r> -->" in text
+	assert "This is not a hold: report and continue with step 7." in text
+	assert "gh workflow run review_autofix.yml" not in text and "gh workflow run ai-review.yml" not in text

@@ -68,7 +68,9 @@ EDITOR_TAIL_STEPS = (
 	"Re-dispatch review on editor-changes-lost",
 	"Telegram editor-changes-lost warning",
 	"Telegram editor-noop-suspicious warning",
-	# Q20: the review-blocked judge would have GPT edit the PR.
+	# Q20: the review-blocked judge would have GPT edit the PR. Its Claude
+	# mode (claude_fixer_judge_head) is the one exception, pinned in
+	# test_judge_step_runs_only_on_an_accepted_judge_dispatch.
 	"Detect review-blocked break-glass override",
 	"Review-blocked judge decision",
 	"Telegram review-blocked judge decision",
@@ -1006,7 +1008,8 @@ def test_merge_check_wiring_in_the_workflow():
 	assert step["env"]["HEAD_SHA"] == "${{ env.INITIAL_HEAD_SHA }}"
 	assert step["env"]["DEFAULT_BRANCH"] == "${{ github.event.repository.default_branch }}"
 	step = AGENT_STEPS[upload]
-	assert step["if"] == "always() && env.CLAUDE_FIXER_MODE == 'true'"
+	# A judge run uploads the same artifact name after the judge instead.
+	assert step["if"] == "always() && env.CLAUDE_FIXER_MODE == 'true' && env.CLAUDE_FIXER_JUDGE != 'true'"
 	assert step["continue-on-error"] is True
 	assert step["uses"].startswith("actions/upload-artifact@")
 	assert step["with"]["name"] == "claude-fixer-evidence-${{ github.run_id }}-${{ github.run_attempt }}"
@@ -1016,7 +1019,7 @@ def test_merge_check_wiring_in_the_workflow():
 	assert "env.CLAUDE_FIXER_MERGE_CHECK != 'true'" in AGENT_STEPS["Label Claude-fixer PR review-blocked (autofix exhaustion)"]["if"]
 
 
-def _run_retrigger_guard(tmp: Path, *, merge_check: bool, force_rb_judge: bool = False, autofix_commits: int = 0) -> dict:
+def _run_retrigger_guard(tmp: Path, *, merge_check: bool, force_rb_judge: bool = False, autofix_commits: int = 0, judge: bool = False) -> dict:
 	repo = tmp / "repo"
 	repo.mkdir()
 	git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com"]
@@ -1035,6 +1038,7 @@ def _run_retrigger_guard(tmp: Path, *, merge_check: bool, force_rb_judge: bool =
 		"ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-",
 		"PR_META_FILE": str(tmp / "missing.json"),
 		"CLAUDE_FIXER_MERGE_CHECK": "true" if merge_check else "false",
+		"CLAUDE_FIXER_JUDGE": "true" if judge else "false",
 	}
 	proc = subprocess.run(["bash", "-c", AGENT_STEPS["Count autofix iterations"]["run"]], cwd=repo, env=env, capture_output=True, text=True)
 	assert proc.returncode == 0, proc.stderr
@@ -1062,3 +1066,284 @@ def test_merge_check_short_circuits_reviewers_and_judge():
 
 def test_review_autofix_stays_under_the_phase_size_budget():
 	assert REVIEW_AUTOFIX_WORKFLOW_PATH.stat().st_size < 470_000
+
+
+# ---- Claude-fixer GPT judge (claude_fixer_judge_head) ----
+
+# The hand-off step's real layout: header, run link, markers.
+RUN_LINK_HANDOFF = f"## Review round 1: findings handed to the Claude session\n\nReviewed head: `{HEAD}` ([workflow run](https://github.com/o/r/actions/runs/4321)).\n\n" + HANDOFF + "\n" + LEDGER_HANDOFF
+JUDGE_VERDICT = f"## Review round 1: GPT judge verdict — merge\n\n<!-- ai:claude-fixer-judge:v1 head={HEAD} round=1 run=900 decision=merge -->"
+
+
+def test_judge_head_input_on_every_entry_point():
+	for trigger in ("workflow_call", "workflow_dispatch"):
+		spec = WORKFLOW["on"][trigger]["inputs"]["claude_fixer_judge_head"]
+		assert spec["default"] == "" and spec["type"] == "string" and spec["required"] is False
+	for wrapper in WRAPPERS:
+		workflow = _load(wrapper)
+		assert workflow["on"]["workflow_dispatch"]["inputs"]["claude_fixer_judge_head"]["default"] == ""
+		assert workflow["jobs"]["review"]["with"]["claude_fixer_judge_head"] == (
+			"${{ github.event_name == 'workflow_dispatch' && github.event.inputs.claude_fixer_judge_head || '' }}"
+		)
+	# internal-review.yml calls review_autofix.yml@main: never forward a new input.
+	internal = _load(INTERNAL_REVIEW)
+	assert "claude_fixer_judge_head" not in internal["on"]["workflow_dispatch"]["inputs"]
+	for job in internal["jobs"].values():
+		assert "claude_fixer_judge_head" not in (job.get("with") or {})
+	gate_env = _steps(WORKFLOW, "gate")["Evaluate review gate"]["env"]
+	assert gate_env["CLAUDE_FIXER_JUDGE_HEAD"] == "${{ inputs.claude_fixer_judge_head || github.event.inputs.claude_fixer_judge_head || '' }}"
+	assert gate_env["CLAUDE_FIXER_JUDGE_ENABLED"] == "${{ vars.CLAUDE_FIXER_JUDGE_ENABLED || 'true' }}"
+
+
+def test_gate_accepts_a_judge_dispatch_for_the_latest_findings_handoff():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(RUN_LINK_HANDOFF)], extra_env={"CLAUDE_FIXER_JUDGE_HEAD": HEAD})
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "true" and out["skip_reason"] == ""
+	assert out["claude_fixer_judge"] == "true"
+	assert out["claude_fixer_judge_run"] == "4321" and out["claude_fixer_judge_round"] == "1" and out["claude_fixer_judge_ledger"] == DIGEST
+	assert out["claude_fixer_merge_check"] == "false" and out["claude_fixer_converged"] == "false"
+	assert f"AUTOFIX_GATE_CLAUDE_FIXER_JUDGE pr=42 head={HEAD} requested={HEAD} accepted=true detail=handoff_run=4321 round=1" in proc.stdout
+
+
+def test_gate_rejects_judge_dispatches_it_cannot_bind():
+	cases = (
+		({"comments": [_c(RUN_LINK_HANDOFF)], "judge_head": "d" * 40}, "stale_or_invalid_head"),
+		({"comments": [_c(RUN_LINK_HANDOFF)], "judge_head": "not-a-sha"}, "stale_or_invalid_head"),
+		({"comments": [_c(RUN_LINK_HANDOFF)], "extra_env": {"CLAUDE_FIXER_JUDGE_ENABLED": "false"}}, "disabled"),
+		({"comments": [_c(RUN_LINK_HANDOFF)], "head_ref": "ai/issue-7"}, "not_claude_fixer_pr"),
+		({"comments": []}, "no_handoff"),
+		({"comments": [_c(RUN_LINK_HANDOFF, author="someone")]}, "no_handoff"),
+		({"comments": [_c(RUN_LINK_HANDOFF), _c(CONFLICT)]}, "latest_handoff_not_findings"),
+		({"comments": [_c(RUN_LINK_HANDOFF.replace(LEDGER_HANDOFF, ""))]}, "no_ledger_digest"),
+		({"comments": [_c(RUN_LINK_HANDOFF.replace(LEDGER_HANDOFF, LEDGER_HANDOFF.replace("round=1", "round=2")))]}, "no_ledger_digest"),
+		({"comments": [_c(HANDOFF + "\n" + LEDGER_HANDOFF)]}, "no_handoff_run"),
+		({"comments": [_c(RUN_LINK_HANDOFF), _c(JUDGE_VERDICT)]}, "already_judged"),
+		({"comments": None}, "comments_"),
+	)
+	for kwargs, detail in cases:
+		judge_head = kwargs.pop("judge_head", HEAD)
+		extra = {"CLAUDE_FIXER_JUDGE_HEAD": judge_head, **kwargs.pop("extra_env", {})}
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=kwargs.pop("head_ref", FIXER_REF), extra_env=extra, **kwargs)
+		assert proc.returncode == 0, proc.stderr
+		assert out["claude_fixer_judge"] == "false", detail
+		assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_judge_unverified", detail
+		assert "accepted=false detail=" + detail in proc.stdout, (detail, proc.stdout)
+
+
+def test_gate_judges_a_newer_handoff_after_an_old_verdict_for_the_same_round():
+	"""A force-review of the same head re-issues round 1; the old verdict answers the old hand-off only."""
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(RUN_LINK_HANDOFF), _c(JUDGE_VERDICT), _c(RUN_LINK_HANDOFF.replace("4321", "4400"))], extra_env={"CLAUDE_FIXER_JUDGE_HEAD": HEAD})
+	assert out["claude_fixer_judge"] == "true" and out["claude_fixer_judge_run"] == "4400", proc.stdout
+
+
+def test_gate_judge_bypasses_the_terminal_same_head_skip_and_exports_outputs():
+	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
+	block = gate_run.split("# ----- Terminal same-head skip", 1)[1].split("terminal_force_review=\"false\"", 1)[0]
+	assert '&& [ "${CLAUDE_FIXER_JUDGE}" != "true" ] \\' in block
+	outputs = WORKFLOW["jobs"]["gate"]["outputs"]
+	agent_env = WORKFLOW["jobs"]["codex-agent"]["env"]
+	for name, env_name in (("claude_fixer_judge", "CLAUDE_FIXER_JUDGE"), ("claude_fixer_judge_run", "CLAUDE_FIXER_JUDGE_RUN_ID"), ("claude_fixer_judge_round", "CLAUDE_FIXER_JUDGE_ROUND"), ("claude_fixer_judge_ledger", "CLAUDE_FIXER_JUDGE_LEDGER_SHA256")):
+		assert outputs[name] == "${{ steps.evaluate.outputs." + name + " }}"
+		assert agent_env[env_name] == "${{ needs.gate.outputs." + name + " }}"
+
+
+def test_judge_dispatch_short_circuits_reviewers_and_keeps_the_judge():
+	with tempfile.TemporaryDirectory() as td:
+		out = _run_retrigger_guard(Path(td), merge_check=False, judge=True, autofix_commits=1)
+	assert out["max_iterations_reached"] == "true" and out["skip_judge"] == "false"
+
+
+def test_judge_step_runs_only_on_an_accepted_judge_dispatch():
+	judge_if = AGENT_STEPS["Review-blocked judge decision"]["if"]
+	assert judge_if.endswith("&& (env.CLAUDE_FIXER_MODE != 'true' || env.CLAUDE_FIXER_JUDGE == 'true')")
+	env = AGENT_STEPS["Review-blocked judge decision"]["env"]
+	assert env["CLAUDE_FIXER_JUDGE_FIX_CAP"] == "${{ vars.CLAUDE_FIXER_JUDGE_FIX_CAP || '2' }}"
+	assert env["CLAUDE_FIXER_CHECKS_PENDING_ENABLED"] == "${{ vars.CLAUDE_FIXER_CHECKS_PENDING_ENABLED || 'true' }}"
+	prepare = AGENT_STEPS["Prepare Claude-fixer judge"]
+	assert prepare["if"] == "success() && env.CLAUDE_FIXER_JUDGE == 'true' && env.CLAUDE_FIXER_MODE == 'true' && env.PR_CLOSED != 'true'"
+	assert prepare["env"]["HEAD_SHA"] == "${{ env.INITIAL_HEAD_SHA }}"
+	names = list(AGENT_STEPS)
+	assert names.index("Prepare Claude-fixer judge") + 1 == names.index("Review-blocked judge decision")
+	upload = AGENT_STEPS["Upload Claude-fixer judge evidence"]
+	assert upload["if"] == "always() && env.CLAUDE_FIXER_JUDGE == 'true'"
+	assert upload["with"]["name"] == AGENT_STEPS["Upload Claude-fixer evidence"]["with"]["name"]
+	assert names.index("Review-blocked judge decision") < names.index("Upload Claude-fixer judge evidence")
+	# A judge that decided labels nothing; a judge that could not decide blocks the PR.
+	label_if = AGENT_STEPS["Label Claude-fixer PR review-blocked (autofix exhaustion)"]["if"]
+	assert "(env.CLAUDE_FIXER_JUDGE != 'true' || steps.rb_judge.outputs.judge_handled != 'true')" in label_if
+	assert "claude_fixer_*)" in AGENT_STEPS["Post review-blocked comment on PR (autofix exhaustion)"]["run"]
+
+
+# ---- "Prepare Claude-fixer judge" step, executed with stubbed helpers ----
+
+PREPARE_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_judge.sh"
+JUDGE_HELPER = REPO_ROOT / "scripts" / "review_claude_fixer_judge.py"
+
+FAKE_EVIDENCE = """import json, os, sys
+from pathlib import Path
+def verify_evidence(**kwargs):
+	return {"verified": False, "reason": "not_used", "evidence": None}
+if __name__ == "__main__":
+	args = sys.argv[1:]
+	Path(os.environ["MOCK_VERIFY_ARGS"]).write_text(json.dumps(args))
+	verdict = json.loads(os.environ["MOCK_VERIFY"])
+	if verdict.get("verified") and "--ledger-out" in args:
+		Path(args[args.index("--ledger-out") + 1]).write_text(os.environ["MOCK_LEDGER"])
+	print(json.dumps(verdict))
+"""
+
+
+def _run_prepare(tmp: Path, *, verdict: dict, comments: list[dict]):
+	support = tmp / "support"
+	support.mkdir()
+	(support / "review_claude_fixer_evidence.py").write_text(FAKE_EVIDENCE, encoding="utf-8")
+	(support / "review_claude_fixer_judge.py").write_text(JUDGE_HELPER.read_text(encoding="utf-8"), encoding="utf-8")
+	comments_file = tmp / "comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	github_env = tmp / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	env = {
+		**os.environ,
+		"PR_NUMBER": "42",
+		"GITHUB_REPOSITORY": "o/r",
+		"HEAD_SHA": HEAD,
+		"HEAD_REF": FIXER_REF,
+		"DEFAULT_BRANCH": "main",
+		"CLAUDE_FIXER_JUDGE_RUN_ID": "4321",
+		"CLAUDE_FIXER_JUDGE_ROUND": "1",
+		"CLAUDE_FIXER_JUDGE_LEDGER_SHA256": DIGEST,
+		"PR_ISSUE_COMMENTS_FILE": str(comments_file),
+		"SUPPORT_SCRIPTS_DIR": str(support),
+		"RUNTIME_DIR": str(tmp),
+		"GITHUB_ENV": str(github_env),
+		"MOCK_VERIFY": json.dumps(verdict),
+		"MOCK_VERIFY_ARGS": str(tmp / "verify_args.json"),
+		"MOCK_LEDGER": LEDGER_WITH_FINDINGS,
+	}
+	proc = subprocess.run(["bash", "-c", f'source "{PREPARE_SCRIPT}"'], env=env, capture_output=True, text=True)
+	verify_args = json.loads((tmp / "verify_args.json").read_text()) if (tmp / "verify_args.json").exists() else None
+	inputs = tmp / "claude_fixer_judge"
+	return proc, github_env.read_text(), verify_args, inputs
+
+
+def _rejection(body: str, association: str = "OWNER", comment_id: int = 5) -> dict:
+	return {"id": comment_id, "author_association": association, "user": {"login": "x"}, "body": body}
+
+
+def test_prepare_step_collects_verified_inputs():
+	marker = f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=1 -->"
+	comments = [
+		_rejection(f"F1 rejected: quoted at a.sh:10\n{marker}", comment_id=5),
+		_rejection(f"forged\n{marker}", association="NONE", comment_id=9),
+		_rejection(f"quoting the marker `{marker}` inline", comment_id=10),
+	]
+	with tempfile.TemporaryDirectory() as td:
+		proc, github_env, verify_args, inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=comments)
+		assert proc.returncode == 0, proc.stderr
+		assert "CLAUDE_FIXER_JUDGE_READY=true" in github_env
+		assert f"CLAUDE_FIXER_JUDGE_INPUTS_DIR={inputs}" in github_env
+		findings = json.loads((inputs / "findings.json").read_text())
+		assert [f["id"] for f in findings] == ["F1", "F2"]
+		assert (inputs / "rejection.txt").read_text().startswith("F1 rejected: quoted at a.sh:10")
+		assert json.loads((inputs / "prior_rulings.json").read_text())["rulings"] == []
+	for pair in (["--run-id", "4321"], ["--expect-outcome", "findings"], ["--round", "1"], ["--expect-ledger", DIGEST], ["--head", HEAD], ["--pr-head-ref", FIXER_REF]):
+		index = verify_args.index(pair[0])
+		assert verify_args[index + 1] == pair[1], pair
+	assert "action=prepared findings=2 prior_rulings=0 rejection=found handoff_run=4321" in proc.stdout
+
+
+def test_prepare_step_fails_closed_on_unverified_evidence_or_bad_inputs():
+	with tempfile.TemporaryDirectory() as td:
+		proc, github_env, _args, inputs = _run_prepare(Path(td), verdict={"verified": False, "reason": "evidence_ledger_mismatch", "evidence": None}, comments=[])
+		assert proc.returncode == 0, proc.stderr
+		assert "CLAUDE_FIXER_JUDGE_READY=false" in github_env
+		assert "CLAUDE_FIXER_JUDGE_SKIP_REASON=evidence_evidence_ledger_mismatch" in github_env
+		assert not (inputs / "findings.json").exists()
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		github_env = tmp / "e"
+		github_env.write_text("")
+		proc = subprocess.run(["bash", "-c", f'source "{PREPARE_SCRIPT}"'], env={**os.environ, "PR_NUMBER": "42", "HEAD_SHA": HEAD, "CLAUDE_FIXER_JUDGE_ROUND": "1", "CLAUDE_FIXER_JUDGE_RUN_ID": "5", "CLAUDE_FIXER_JUDGE_LEDGER_SHA256": "short", "RUNTIME_DIR": str(tmp), "GITHUB_ENV": str(github_env), "SUPPORT_SCRIPTS_DIR": str(tmp)}, capture_output=True, text=True)
+		assert proc.returncode == 0 and "CLAUDE_FIXER_JUDGE_SKIP_REASON=invalid_inputs" in github_env.read_text()
+
+
+def test_prepare_missing_rejection_is_noted_not_fatal():
+	with tempfile.TemporaryDirectory() as td:
+		proc, github_env, _args, inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=[])
+		assert "CLAUDE_FIXER_JUDGE_READY=true" in github_env
+		assert "no rejection comment" in (inputs / "rejection.txt").read_text()
+	assert "rejection=missing" in proc.stdout
+
+
+# ---- sticky rulings in the hand-off step ----
+
+STICKY_EVIDENCE = """import json, os
+def verify_evidence(**kwargs):
+	return {"verified": True, "reason": "ok", "evidence": {"judge": {"rulings": json.loads(os.environ["MOCK_RULINGS"])}}}
+def main():
+	return 0
+if __name__ == "__main__":
+	import runpy, sys
+	sys.argv[0] = os.environ["REAL_EVIDENCE"]
+	runpy.run_path(os.environ["REAL_EVIDENCE"], run_name="__main__")
+"""
+
+
+def _run_handoff_with_rulings(tmp: Path, rulings: list[dict], *, enabled: str = "true"):
+	comments = tmp / "pr_comments.json"
+	comments.write_text(json.dumps([{"id": 3, "body": f"<!-- ai:claude-fixer-judge:v1 head={HEAD} round=1 run=900 decision=merge -->"}]), encoding="utf-8")
+	extra = {
+		"PR_ISSUE_COMMENTS_FILE": str(comments),
+		"MOCK_RULINGS": json.dumps(rulings),
+		"REAL_EVIDENCE": str(EVIDENCE_HELPER),
+		"CLAUDE_FIXER_JUDGE_ENABLED": enabled,
+		"DEFAULT_BRANCH": "main",
+	}
+	orig_write_text = Path.write_text
+
+	# _run_handoff copies the real evidence helper; swap in the stub (which
+	# still delegates the CLI `write` to the real helper) after it does.
+	def patched(self, data, *args, **kwargs):
+		if self.name == "review_claude_fixer_evidence.py" and "support" in self.parts:
+			orig_write_text(self.parent / "review_claude_fixer_judge.py", JUDGE_HELPER.read_text(encoding="utf-8"), encoding="utf-8")
+			data = STICKY_EVIDENCE
+		return orig_write_text(self, data, *args, **kwargs)
+
+	Path.write_text = patched
+	try:
+		return _run_handoff(tmp, ledger=LEDGER_WITH_FINDINGS, extra_env=extra)
+	finally:
+		Path.write_text = orig_write_text
+
+
+def test_handoff_demotes_findings_the_judge_ruled_invalid():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff_with_rulings(Path(td), [{"file": "scripts/a.sh", "line": 12, "ruling": "invalid"}])
+	assert proc.returncode == 0, proc.stderr
+	# Both ledger entries sat within 3 lines of the ruling: the round is clean.
+	assert "action=sticky_demoted findings=2" in proc.stdout
+	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
+	assert calls == []
+
+
+def test_handoff_keeps_findings_outside_the_sticky_window_or_with_the_switch_off():
+	for rulings, enabled in (([{"file": "scripts/a.sh", "line": 14, "ruling": "invalid"}], "true"), ([{"file": "scripts/a.sh", "line": 10, "ruling": "invalid"}], "false")):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_handoff_with_rulings(Path(td), rulings, enabled=enabled)
+		assert proc.returncode == 0, proc.stderr
+		assert "sticky_demoted" not in proc.stdout
+		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+		assert "kind=findings findings=2" in proc.stdout
+
+
+def test_findings_handoff_offers_the_judge_dispatch():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, _env = _run_handoff(Path(td), ledger=LEDGER_WITH_FINDINGS)
+	body = calls[0]["payload"]["body"]
+	assert f"claude_fixer_judge_head={HEAD}" in body
+	assert f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=2 -->" in body
+	# The marker is only quoted inline; no line of the hand-off is a bare rejection marker.
+	assert f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=2 -->" not in body.splitlines()

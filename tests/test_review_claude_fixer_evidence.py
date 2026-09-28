@@ -284,3 +284,82 @@ def test_write_cli_rejects_a_bad_head_and_verify_cli_fails_closed():
 	assert proc.returncode == 0, proc.stderr
 	result = json.loads(proc.stdout)
 	assert result == {"evidence": None, "reason": "run_unavailable", "verified": False}
+
+
+# ---- Claude-fixer GPT judge additions ----
+
+LEDGER_TEXT = "=== CONSENSUS FINDINGS ===\n- scripts/a.sh:10 | severity=high\n=== END CONSENSUS FINDINGS ===\n"
+LEDGER_DIGEST = __import__("hashlib").sha256(LEDGER_TEXT.encode()).hexdigest()
+
+
+def _zip_with_ledger(payload: dict, ledger: str | None) -> bytes:
+	buf = io.BytesIO()
+	with zipfile.ZipFile(buf, "w") as archive:
+		archive.writestr("evidence.json", json.dumps(payload))
+		if ledger is not None:
+			archive.writestr("reviewer_consensus.txt", ledger)
+	return buf.getvalue()
+
+
+def _findings_evidence(**overrides) -> dict:
+	payload = evidence_mod.build_evidence(
+		pr=PR, head_sha=HEAD, round_number=2, outcome="findings",
+		ledger_sha256=LEDGER_DIGEST, finding_count=1, failed_checks=[],
+	)
+	payload.update(overrides)
+	return payload
+
+
+def test_ledger_out_writes_the_verified_ledger_only_when_its_digest_matches():
+	with tempfile.TemporaryDirectory() as td:
+		out = Path(td) / "ledger.txt"
+		api = FakeApi(zip_bytes={5: _zip_with_ledger(_findings_evidence(), LEDGER_TEXT)})
+		result = _verify(api, expect_outcome="findings", expect_round=2, expect_ledger=LEDGER_DIGEST, ledger_out=str(out))
+		assert result["verified"] is True, result
+		assert out.read_text() == LEDGER_TEXT
+	for zip_bytes, reason in (
+		(_zip_with_ledger(_findings_evidence(), LEDGER_TEXT + "tampered\n"), "evidence_ledger_digest_mismatch"),
+		(_zip_with_ledger(_findings_evidence(), None), "evidence_ledger_missing"),
+	):
+		with tempfile.TemporaryDirectory() as td:
+			out = Path(td) / "ledger.txt"
+			result = _verify(FakeApi(zip_bytes={5: zip_bytes}), expect_outcome="findings", ledger_out=str(out))
+			assert result == {"verified": False, "reason": reason, "evidence": None}
+			assert not out.exists()
+
+
+def test_expect_ledger_rejects_a_digest_that_differs_from_the_handoff():
+	api = FakeApi(zip_bytes={5: _zip_with_ledger(_findings_evidence(), LEDGER_TEXT)})
+	result = _verify(api, expect_outcome="findings", expect_ledger="b" * 64)
+	assert result["reason"] == "evidence_ledger_mismatch" and result["verified"] is False
+
+
+def test_require_judge_needs_judge_rulings():
+	rulings = {"decision": "merge", "rulings": [{"file": "scripts/a.sh", "line": 10, "ruling": "invalid"}]}
+	api = FakeApi(zip_bytes={5: _zip_with_ledger(_findings_evidence(judge=rulings), LEDGER_TEXT)})
+	result = _verify(api, expect_outcome="", require_judge=True)
+	assert result["verified"] is True and result["evidence"]["judge"] == rulings
+	api = FakeApi(zip_bytes={5: _zip_with_ledger(_findings_evidence(), LEDGER_TEXT)})
+	assert _verify(api, expect_outcome="", require_judge=True)["reason"] == "evidence_judge_missing"
+
+
+def test_write_records_judge_rulings_and_rejects_malformed_ones():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		judge_file = tmp / "judge.json"
+		judge_file.write_text(json.dumps({"decision": "hold", "rulings": [{"file": "a", "line": 1, "ruling": "upheld"}]}))
+		proc = subprocess.run(
+			[sys.executable, str(SCRIPT), "write", "--out-dir", str(tmp / "out"), "--pr", "42", "--head", HEAD, "--round", "3",
+				"--outcome", "findings", "--ledger-sha256", "a" * 64, "--judge-file", str(judge_file)],
+			capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert proc.returncode == 0, proc.stderr
+		evidence = json.loads((tmp / "out" / "evidence.json").read_text())
+		assert evidence["judge"]["decision"] == "hold" and evidence["round"] == 3
+		judge_file.write_text(json.dumps({"decision": "hold"}))
+		proc = subprocess.run(
+			[sys.executable, str(SCRIPT), "write", "--out-dir", str(tmp / "out2"), "--pr", "42", "--head", HEAD, "--round", "3",
+				"--outcome", "findings", "--judge-file", str(judge_file)],
+			capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert proc.returncode == 2 and "rulings list" in proc.stderr

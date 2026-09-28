@@ -30,6 +30,13 @@
 #          (scripts/review_autofix_step_claude_fixer_merge_check.sh) instead
 #          of re-running the reviewers.
 #
+# Sticky judge rulings (CLAUDE_FIXER_JUDGE_ENABLED, default true): before the
+# ledger is counted, every finding that matches an `invalid` ruling of an
+# earlier GPT judge run on this PR (same file, start line within +/-3; rulings
+# read back from verified judge evidence, newest 3 runs) moves into a
+# `=== NON-BLOCKING FINDINGS ===` block that is not counted, so a round with
+# only such findings is clean (scripts/review_claude_fixer_judge.py sticky).
+#
 # Every outcome also writes the round's evidence (outcome, head, round,
 # ledger digest, finding count, failing checks) through
 # scripts/review_claude_fixer_evidence.py into CLAUDE_FIXER_EVIDENCE_DIR
@@ -50,12 +57,16 @@
 # AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED, REVIEWER_CONSENSUS_FILE,
 # PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR, GITHUB_RUN_ID,
 # GITHUB_SERVER_URL, RUNTIME_DIR, CLAUDE_FIXER_CHECKS_PENDING_ENABLED
-# (default true), CLAUDE_FIXER_EVIDENCE_DIR (optional).
+# (default true), CLAUDE_FIXER_EVIDENCE_DIR (optional),
+# CLAUDE_FIXER_JUDGE_ENABLED (default true), PR_ISSUE_COMMENTS_FILE (the
+# comments "Collect PR metadata" fetched), DEFAULT_BRANCH.
 # API calls: on a clean candidate, the existing check-run collector refreshes
 # its paginated check-runs GET; on findings, the ledger chunks from
 # post_review_comment.sh and one hand-off comment are posted; on checks
 # pending, one GET /user, one paginated GET of the PR's comments (to update
-# this head's checks-pending comment in place) and one POST or PATCH.
+# this head's checks-pending comment in place) and one POST or PATCH; sticky
+# rulings add 3 REST reads per prior judge run (at most 3 runs, none when the
+# PR has no judge verdict).
 set -euo pipefail
 
 # shellcheck source=/dev/null
@@ -168,6 +179,29 @@ if [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" = "true" ]; then
   claude_fixer_post_marker_comment
   echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=conflict"
   exit 0
+fi
+
+if [ "${CLAUDE_FIXER_JUDGE_ENABLED:-true}" != "false" ] \
+  && [ -s "${REVIEWER_CONSENSUS_FILE:-}" ] \
+  && [ -s "${PR_ISSUE_COMMENTS_FILE:-}" ] \
+  && [ -f "${SUPPORT_SCRIPTS_DIR}/review_claude_fixer_judge.py" ] \
+  && [ -f "${SUPPORT_SCRIPTS_DIR}/review_claude_fixer_evidence.py" ]; then
+  claude_fixer_prior_rulings_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/claude_fixer_prior_rulings.XXXXXX")"
+  claude_fixer_sticky_moved="0"
+  if PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/review_claude_fixer_judge.py" prior-rulings \
+      --comments "${PR_ISSUE_COMMENTS_FILE}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --pr "${PR_NUMBER}" \
+      --default-branch "${DEFAULT_BRANCH:-}" \
+      --out "${claude_fixer_prior_rulings_file}" >/dev/null 2>&1; then
+    claude_fixer_sticky_moved="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/review_claude_fixer_judge.py" sticky \
+      --ledger "${REVIEWER_CONSENSUS_FILE}" \
+      --rulings "${claude_fixer_prior_rulings_file}" 2>/dev/null || echo 0)"
+  fi
+  if [ "${claude_fixer_sticky_moved:-0}" != "0" ]; then
+    echo "CLAUDE_FIXER_JUDGE pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} action=sticky_demoted findings=${claude_fixer_sticky_moved}"
+  fi
+  rm -f "${claude_fixer_prior_rulings_file}"
 fi
 
 # Count ledger entries: every "- " bullet inside a CONSENSUS FINDINGS,
@@ -295,7 +329,8 @@ fi
   echo
   echo "Claude-fixer mode: the GPT editor did not run. The Claude session that owns this PR judges each finding against the code, then either"
   echo "- fixes the valid ones in **one** commit whose subject starts with \`[claude-autofix]\` and pushes it (the push starts the next review round; the commits count toward \`MAX_AUTOFIX_ITERATIONS\` like \`[ai-autofix]\` ones), or"
-  echo "- when nothing valid is left, has the dedicated fixer bot (not GH_PAT or a human) post a separate comment listing rejections and ending with both \`ai:claude-fixer-verdict:v1\` and \`ai:claude-fixer-verdict:v2\` markers for this head, round and ledger SHA-256, then dispatches this workflow with \`claude_fixer_converged_head=${HEAD_SHA}\`. That dispatch re-runs the reviewers; only a clean review with a fresh ready check snapshot can enable auto-merge. If the bot cannot post, leave the PR blocked."
+  echo "- when nothing valid is left, posts one comment giving each finding's rejection reason (citing \`file:line\` or a test) and ending with \`<!-- ai:claude-fixer-rejection:v1 head=${HEAD_SHA} round=${claude_fixer_round} -->\`, then dispatches this workflow with \`claude_fixer_judge_head=${HEAD_SHA}\`: the GPT judge rules on every finding and merges, fixes what it upholds in a \`[judge-fix]\` commit, or holds for a human (\`CLAUDE_FIXER_JUDGE_ENABLED\`), or"
+  echo "- where a dedicated fixer bot is configured (\`CLAUDE_FIXER_VERDICT_BOT_LOGIN\`), has that bot (not GH_PAT or a human) post a separate comment listing rejections and ending with both \`ai:claude-fixer-verdict:v1\` and \`ai:claude-fixer-verdict:v2\` markers for this head, round and ledger SHA-256, then dispatches this workflow with \`claude_fixer_converged_head=${HEAD_SHA}\`. That dispatch re-runs the reviewers; only a clean review with a fresh ready check snapshot can enable auto-merge."
   echo
   echo "<!-- ai:claude-fixer-handoff:v1 kind=findings head=${HEAD_SHA} round=${claude_fixer_round} -->"
   if [ -n "${claude_fixer_ledger_digest}" ]; then

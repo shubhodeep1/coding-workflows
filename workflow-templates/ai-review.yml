@@ -26,6 +26,11 @@ on:
         required: false
         default: ""
         type: string
+      claude_fixer_judge_head:
+        description: "Claude-fixer mode: head SHA whose findings the Claude session rejected; the review workflow verifies the hand-off and runs the GPT judge on it"
+        required: false
+        default: ""
+        type: string
 permissions:
   contents: write
   pull-requests: write
@@ -44,4 +49,5 @@ jobs:
       pr_body: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && vars.ALLOW_WORKFLOW_EDITS != 'false') }}
       claude_fixer_converged_head: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.claude_fixer_converged_head || '' }}
+      claude_fixer_judge_head: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.claude_fixer_judge_head || '' }}
     secrets: inherit
