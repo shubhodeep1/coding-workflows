@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/issue-4713-rerun-cancelled-ci-plan.md: \"Goals\" bullet \"At most one automatic re-run per head: attempt 2 or later is always skipped.\"; \"Approach\" step 3 \"`run_attempt != 1` \u2192 `already_rerun`\"; \"Tests\" bullet \"`cancelled` attempt 1 \u2192 re-run; attempt 2 \u2192 skip; `failure` \u2192 skip; `startup_failure` \u2192 re-run\u2026\" | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The plan uses `run_attempt == 1` as a per-head re-run cap, but each newly created rerun starts with its own `run_attempt` at 1, allowing repeated reruns of the same head.\n  WHY: A persistent cancellation or startup failure can therefore trigger reruns indefinitely; the planned attempt-2 test is unreachable for a rerun because the new run resets to 1, and a genuine attempt 2 is skipped earlier by the conclusion check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Extend the 30-minute sweep job of .github/workflows/review_autofix_sweep.yml so that, for every open non-draft PR, a CI run that ended cancelled or startup_failure on the PR's current head is re-run once\"\n  expected_change_site: scripts/ci_cancelled_rerun.py [new], .github/workflows/review_autofix_sweep.yml, tests/test_ci_cancelled_rerun.py [new], .github/workflows/ci.yml, README.md, agents.md, changelog.d/4713-rerun-cancelled-ci.md [new]\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The PR diff contains only docs/implement-plan/issue-4713-rerun-cancelled-ci.md and docs/plans/issue-4713-rerun-cancelled-ci-plan.md; the implement-plan log marks Phase 1 as unchecked (`[ ]`) and Status: IN_PROGRESS.\n- requirement: \"Kill switch repo variable CI_CANCELLED_AUTO_RERUN_ENABLED, default true (\u00a74), documented in the README 'Required Variables' table.\"\n  expected_change_site: README.md \"Required Variables\" table\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No diff hunk touches README.md; the variable is not documented anywhere in the PR.\n- requirement: \"One log line per decision: CI_CANCELLED_RERUN ... plus a CI_CANCELLED_RERUN_END summary. Both prefixes listed in agents.md 'Stable log prefixes (contractual)'.\"\n  expected_change_site: agents.md \"Stable log prefixes (contractual)\" section\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: agents.md is not in the PR diff; neither prefix is registered.\n- requirement: \"Tests for every rule; a changelog.d/ fragment.\"\n  expected_change_site: tests/test_ci_cancelled_rerun.py [new], changelog.d/4713-rerun-cancelled-ci.md [new], .github/workflows/ci.yml (one test step)\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: None of these three files are present in the PR diff; no test coverage or changelog fragment exists yet.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/plans/issue-4713-rerun-cancelled-ci-plan.md | severity=MAJOR | confidence=4\n  PROBLEM: The plan treats `run_attempt == 1` as the per-head re-run cap, but `run_attempt` is a property of the individual workflow-run entity, not of the head's history. `POST /repos/{repo}/actions/runs/{run_id}/rerun-failed-jobs` creates a brand-new run whose own `run_attempt` starts at 1, so on the next tick the script will see the new run, conclude the cap is unspent, and re-run it again \u2014 producing another new run with `run_attempt == 1`, indefinitely.\n  WHY IT FAILS AT RUNTIME: A CI workflow that keeps concluding `cancelled` or `startup_failure` for the same reason every 30 minutes \u2014 a real runner outage, a missing dependency, an unparseable manifest, a quota hit, etc. \u2014 will be re-run by the sweep forever. Each tick allocates a fresh failed-jobs run (and the `startup_failure` fallback allocates a second, full re-run) until an operator notices the Telegram log lines and flips `CI_CANCELLED_AUTO_RERUN_ENABLED=false`. The only stop is the manual kill switch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: \"Extend the 30-minute sweep job of .github/workflows/review_autofix_sweep.yml so that, for every open non-draft PR, a CI run that ended cancelled or startup_failure on the PR's current head is re-run once\"\n  Expected change site: scripts/ci_cancelled_rerun.py [new], .github/workflows/review_autofix_sweep.yml, tests/test_ci_cancelled_rerun.py [new], .github/workflows/ci.yml, README.md, agents.md, changelog.d/4713-rerun-cancelled-ci.md [new] (plan \"Phases & Merge Strategy\" \u2192 Phase 1 Files).\n  Evidence of absence: The PR diff contains only docs/implement-plan/issue-4713-rerun-cancelled-ci.md and docs/plans/issue-4713-rerun-cancelled-ci-plan.md. No scripts/ci_cancelled_rerun.py, no .github/workflows/review_autofix_sweep.yml edit, no tests/test_ci_cancelled_rerun.py, no ci.yml test step, no README row, no agents.md log-prefix entry, and no changelog.d/4713-rerun-cancelled-ci.md fragment are present. The implement-plan log marks Phase 1 as unchecked (`[ ]`) and Status: IN_PROGRESS, confirming the phase 1 implementation has not been written yet.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Kill switch repo variable CI_CANCELLED_AUTO_RERUN_ENABLED, default true (\u00a74), documented in the README 'Required Variables' table.\" (plan Goals / Implementation Steps 4).\n  Expected change site: README.md \"Required Variables\" table.\n  Evidence of absence: No diff hunk touches README.md; the variable is not documented anywhere in the PR.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"One log line per decision: CI_CANCELLED_RERUN ... plus a CI_CANCELLED_RERUN_END summary. Both prefixes listed in agents.md 'Stable log prefixes (contractual)'.\" (plan Goals / Implementation Steps 5).\n  Expected change site: agents.md \"Stable log prefixes (contractual)\" section.\n  Evidence of absence: agents.md is not in the PR diff; neither prefix is registered.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Tests for every rule; a changelog.d/ fragment.\" (plan Goals / Implementation Steps 3, 6).\n  Expected change site: tests/test_ci_cancelled_rerun.py [new], changelog.d/4713-rerun-cancelled-ci.md [new], .github/workflows/ci.yml (one test step).\n  Evidence of absence: None of these three files are present in the PR diff; no test coverage or changelog fragment exists yet.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "786b52fd6540babbc9ac405357e923c8c86a9050b8d536c82774e0182f7968ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36378698576",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36378698576",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928045431_4d5d4e89d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36378698576"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T04:54:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
