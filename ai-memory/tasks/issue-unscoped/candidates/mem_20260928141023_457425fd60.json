@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4033-4052 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The default-branch lookup can leave `_sweep_default_branch` empty when `default_branch` is missing from the pull request payload, risking an incorrect target-branch match.\n  WHY: The reviewer notes that an empty default branch may not match `_sweep_pr_base_ref` or the integration branch.\n- .github/workflows/issue_pr_status.yml:200-237 (the `record_issue_integration_branches` function) | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Parsing a malformed or unexpectedly large payload with `jq` could fail or hang in `record_issue_integration_branches`.\n  WHY: The reviewer notes that `|| true` and `2>/dev/null` protect the parse, but says extreme cases could still cause the step to fail safely.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Accept votes only from separate, schema-validated reviewer verdict fields bound to a unique finding ID; never parse quoted prose as authorization.\"\n  expected_change_site: `scripts/review_claude_fixer_nonblocking.py:185` (the rejection-counting branch identified in the finding)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR diff targets `scripts/gh_helpers.sh`, `scripts/orchestrate_poll_process.sh`, `.github/workflows/issue_pr_status.yml`, and their tests. No modifications touch `scripts/review_claude_fixer_nonblocking.py` (the file referenced by the linked finding does not exist in the current branch state, so the rejection-counting path the finding cites is not addressed or migrated here).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Accept votes only from separate, schema-validated reviewer verdict fields bound to a unique finding ID.\"\nExpected change site: `scripts/review_laude_fixer_onblocking.py:185`\nEvidence of absence: The linked issue #4688 shown in the prompt context is the INCIDEN issue (the issue prematurely closed when its completion PR merged into the wrong project branch). The actual task specification is issue #4813, whose plan `docs/plans/issue-4813-lose-sweep-arget-ranch-merges-plan.md` names the close-sweep and `issue_pr_status.yml` target-branch gating as the sole deliverable. The PR implements every file, test, and doc the plan requires. No code change in `review_laude_fixer_onblocking.py` is warranted by this task.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:4033-4052 | confidence=2\n  PROBLEM: The logic for determining the target branch includes a default branch lookup that falls back to `main`. While this covers many cases, it relies on GitHub's API returning the default branch in the `pulls/<n>` payload. In environments where the default branch might be `master` or another name, the logic `_sweep_default_branch=\"$(printf '%s' \"${_sweep_candidate_pr_json}\" | jq -r '.base.repo.default_branch // \"\"' 2>/dev/null || echo \"\")\"` seems correct for the default case, but the fallback `echo \"\"` when `default_branch` is missing might be risky if not handled carefully downstream.\n  WHY: If `_sweep_default_branch` is empty, it may not match correctly against `_sweep_pr_base_ref` if `_sweep_pr_base_ref` is also not matching the integration branch.\n- .github/workflows/issue_pr_status.yml:200-237 (the `record_issue_integration_branches` function) | confidence=3\n  PROBLEM: The `record_issue_integration_branches` function uses `jq` to parse the payload. If the payload is malformed or unexpectedly large, `jq` might fail or hang, though it is protected with `|| true` and `2>/dev/null`.\n  WHY: In extreme cases, this could cause the step to fail, but it seems well-protected and should fail safely.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Accept votes only from separate, schema-validated reviewer verdict fields bound to a unique finding ID; never parse quoted prose as authorization.\" (Linked security finding #4688, STRIDE: Tampering severity high, location `scripts/review_claude_fixer_nonblocking.py:185`.)\nExpected change site: `scripts/review_claude_fixer_nonblocking.py:185` (the rejection-counting branch identified in the finding).\nEvidence of absence: The PR diff targets `scripts/gh_helpers.sh`, `scripts/orchestrate_poll_process.sh`, `.github/workflows/issue_pr_status.yml`, and their tests. No modifications touch `scripts/review_claude_fixer_nonblocking.py` (the file referenced by the linked finding does not exist in the current branch state, so the rejection-counting path the finding cites is not addressed or migrated here). The PR description and progress log explicitly identify the work as phase 1/1 of `docs/plans/issue-4813-close-sweep-target-branch-merges-plan.md` \u2014 a different bug than the linked issue's quoted-rejection-counting concern.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP:\nRequirement (from #4688, misidentified as this PR's task): \"Accept votes only from separate, schema-validated reviewer verdict fields bound to a unique finding ID; never parse quoted prose as authorization.\"\nExpected change site: scripts/review_claude_fixer_nonblocking.py:185\nEvidence of absence: not applicable \u2014 this PR addresses #4813, not #4688; the #4688 reference in the PR body is incident context, not the task spec.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5 (certain the TASK_GAP is misattributed)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6ca26661005b126e2a1c6796bf4a2986b4a077fc1dc120c0d9804b539aadc4ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4842,
+    "run_id": "36429169702",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36429169702",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928141023_457425fd60",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4842,
+    "run_id": "36429169702"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T14:10:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
