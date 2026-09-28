@@ -86,13 +86,14 @@ CLASSIFIER_OUTAGE_LABEL = "classifier outage"
 # The Auto-mode classifier refused without judging the call: an outage
 # (`Classifier unavailable`, the reason on every 2026-09-28 issue) or no
 # verdict. A real block carries the classifier's reason instead and is filed.
-# A no-verdict phrase counts only next to the word "classifier", so another
-# subsystem's "did not return a verdict" stays a fileable pattern.
+# A no-verdict phrase counts only next to the word "classifier" on the same
+# line (no re.DOTALL), so another subsystem's "did not return a verdict", or
+# classifier debug text on another line of a real denial, stays fileable.
 CLASSIFIER_OUTAGE_REASON_RE = re.compile(
 	r"\bclassifier\s+(?:is\s+)?(?:unavailable|error|timed\s+out|timeout|overloaded)\b"
 	r"|\bclassifier\b.*\b(?:no|without\s+a|did\s+not\s+return\s+a|could\s+not\s+reach\s+a)\s+verdict\b"
 	r"|\b(?:no|without\s+a|did\s+not\s+return\s+a|could\s+not\s+reach\s+a)\s+verdict\b.*\bclassifier\b",
-	re.IGNORECASE | re.DOTALL,
+	re.IGNORECASE,
 )
 
 REDACTION_PATTERNS = (
