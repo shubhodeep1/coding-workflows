@@ -17,7 +17,11 @@ jobs:
     # and its shards can be slower on a cold runner than on a warm one.
     # At 30 every run — on main as well as on PRs — was cancelled
     # mid-suite, so the repo had no completing full-test gate at all.
-    timeout-minutes: 45
+    # 60, not 45 (2026-09-28): the suite grew to 40–45 minutes, and main's
+    # runs 36367681221 and 36368393442 were cancelled at 45 with every test
+    # still passing. This is a stopgap until the job is split into parallel
+    # jobs.
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
