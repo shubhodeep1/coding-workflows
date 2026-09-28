@@ -81,6 +81,10 @@ claude_fix_claim = _load("claude_fix_claim", _SCRIPTS / "claude_fix_claim.py")
 claude_issue_route = _load("claude_issue_route", ROOT / "scripts" / "claude_issue_route.py")
 
 DUE_STATES = ("conflict", "review-round", "ci-failed", "blocked")
+# Claude twin sync PRs (CLAUDE.md §28.C, scripts/claude_twin_sync.py) copy
+# already-reviewed twins into .claude/**; a fixer session could not edit
+# .claude/** anyway, and they are merged by the sync workflow or the owner.
+CLAUDE_TWIN_SYNC_BRANCH_PREFIX = "claude/claude-twin-sync-"
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
@@ -113,13 +117,19 @@ def load_repos(registry_path: Path, self_repo: str) -> list[str]:
 
 
 def list_candidates(repo: str) -> list[dict]:
-	"""Open, non-draft, same-repository `claude/*` PRs without a `[skip ai]` marker."""
+	"""Open, non-draft, same-repository `claude/*` PRs without a `[skip ai]` marker.
+
+	Claude twin sync heads (`claude/claude-twin-sync-*`) are never candidates.
+	"""
 	candidates = []
 	for pr in check_in_status.gh_api_list(f"repos/{repo}/pulls?state=open"):
 		head = pr.get("head") or {}
 		head_repo = (head.get("repo") or {}).get("full_name") or ""
 		ref = head.get("ref") or ""
 		if pr.get("draft") or head_repo.lower() != repo.lower() or not ref.startswith(check_in_status.CLAUDE_BRANCH_PREFIX):
+			continue
+		if ref.startswith(CLAUDE_TWIN_SYNC_BRANCH_PREFIX):
+			log(f"skip repo={repo} pr=#{pr.get('number')} reason=claude_twin_sync")
 			continue
 		if "[skip ai]" in f"{pr.get('title') or ''} {pr.get('body') or ''}":
 			log(f"skip repo={repo} pr=#{pr.get('number')} reason=skip_ai_marker")

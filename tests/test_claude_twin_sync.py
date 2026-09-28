@@ -1,0 +1,625 @@
+"""Contract for scripts/claude_twin_sync.py — the CLAUDE.md §28.C twin sync
+that copies workflow-templates/.claude/** into .claude/** through one PR
+(issue #4785) — and its wiring in .github/workflows/claude-twin-sync.yml."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+_spec = importlib.util.spec_from_file_location("claude_twin_sync", ROOT / "scripts" / "claude_twin_sync.py")
+sync = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(sync)
+
+WORKFLOW = ROOT / ".github" / "workflows" / "claude-twin-sync.yml"
+GIT_ENV = {
+	"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+	"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+	"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+}
+
+
+def git(repo: Path, *args: str) -> str:
+	proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, env={**os.environ, **GIT_ENV})
+	assert proc.returncode == 0, proc.stderr
+	return proc.stdout.strip()
+
+
+def write(repo: Path, rel: str, text: str) -> None:
+	path = repo / rel
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(text, encoding="utf-8")
+
+
+def commit(repo: Path, message: str) -> str:
+	git(repo, "add", "-A")
+	git(repo, "commit", "-q", "--allow-empty", "-m", message)
+	return git(repo, "rev-parse", "HEAD")
+
+
+def twin(rel: str) -> str:
+	return f"{sync.TWIN_ROOT}/{rel}"
+
+
+def claude(rel: str) -> str:
+	return f"{sync.CLAUDE_ROOT}/{rel}"
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+	"""A work repo whose twins and .claude/ start identical, with a bare origin."""
+	origin = tmp_path / "origin.git"
+	subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True, env={**os.environ, **GIT_ENV})
+	work = tmp_path / "work"
+	work.mkdir()
+	git(work, "init", "-q", "-b", "main")
+	git(work, "remote", "add", "origin", str(origin))
+	for rel, text in {
+		"commands/a.md": "a v1\n",
+		"scripts/s.py": "s v1\n",
+		"hooks/h.py": "h v1\n",
+		"settings.json": "{}\n",
+		"commands/analyze-log.md": "consumer edition\n",
+	}.items():
+		write(work, twin(rel), text)
+		write(work, claude(rel), "upstream edition\n" if rel == "commands/analyze-log.md" else text)
+	commit(work, "base")
+	git(work, "push", "-q", "origin", "main")
+	return work
+
+
+# --- paths -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("rel,unsafe", [
+	("commands/a.md", False),
+	("hooks/deep/h.py", False),
+	("", True),
+	("/etc/passwd", True),
+	("../x", True),
+	("commands/../../x", True),
+	("commands/./a.md", True),
+	("commands//a.md", True),
+	("commands\\a.md", True),
+])
+def test_unsafe_path_reason(rel, unsafe):
+	assert bool(sync.unsafe_path_reason(rel)) is unsafe
+
+
+@pytest.mark.parametrize("rel,guard", [
+	("hooks/pr_watch_guard.py", True),
+	("hooks/session-start.sh", True),
+	("settings.json", True),
+	("settings.local.json", True),
+	("commands/settings.json", False),
+	("scripts/check_in_status.py", False),
+	("commands/hooks.md", False),
+])
+def test_is_guard_path(rel, guard):
+	assert sync.is_guard_path(rel) is guard
+
+
+def test_upstream_only_paths_are_the_known_variants_and_the_pickup():
+	assert sync.UPSTREAM_ONLY_PATHS == {
+		"commands/analyze-log.md", "commands/claude-issue-pickup.md", "commands/deploy-activate.md",
+		"commands/investigate-issue.md", "commands/validate-consumer-issue.md", "commands/verify-activation.md",
+	}
+
+
+def test_live_repo_twins_differ_only_in_upstream_only_files():
+	"""Every non-excluded twin in this checkout is either identical or awaiting sync."""
+	twins = {p.relative_to(ROOT / sync.TWIN_ROOT).as_posix() for p in (ROOT / sync.TWIN_ROOT).rglob("*") if p.is_file()}
+	for rel in sorted(twins - sync.UPSTREAM_ONLY_PATHS):
+		assert (ROOT / sync.CLAUDE_ROOT / rel).exists(), rel
+
+
+# --- plan --------------------------------------------------------------------
+
+
+def test_plan_identical_twins_is_empty(repo):
+	plan = sync.plan_sync(str(repo), "HEAD")
+	assert plan["copies"] == [] and plan["conflicts"] == [] and not plan["needs_owner"]
+	assert plan["excluded"] == ["commands/analyze-log.md"]
+
+
+def test_plan_copies_a_behind_file_and_a_new_file(repo):
+	write(repo, twin("commands/a.md"), "a v2\n")
+	write(repo, twin("commands/new.md"), "new\n")
+	commit(repo, "twin ahead")
+	plan = sync.plan_sync(str(repo), "HEAD")
+	assert [(c["path"], c["reason"]) for c in plan["copies"]] == [("commands/a.md", "behind"), ("commands/new.md", "missing")]
+	assert plan["conflicts"] == [] and not plan["guard"] and not plan["needs_owner"]
+
+
+def test_plan_behind_by_several_versions_is_still_a_copy(repo):
+	for version in ("v2", "v3", "v4"):
+		write(repo, twin("scripts/s.py"), f"s {version}\n")
+		commit(repo, version)
+	plan = sync.plan_sync(str(repo), "HEAD")
+	assert [c["path"] for c in plan["copies"]] == ["scripts/s.py"]
+
+
+def test_plan_direct_edit_is_a_conflict_and_needs_the_owner(repo):
+	write(repo, twin("commands/a.md"), "a v2\n")
+	write(repo, claude("commands/a.md"), "operator edit\n")
+	commit(repo, "diverged")
+	plan = sync.plan_sync(str(repo), "HEAD")
+	assert plan["copies"] == []
+	assert [c["path"] for c in plan["conflicts"]] == ["commands/a.md"]
+	assert plan["needs_owner"] and not plan["guard"]
+
+
+def test_plan_guard_copy_needs_the_owner(repo):
+	write(repo, twin("hooks/h.py"), "h v2\n")
+	write(repo, twin("settings.json"), '{"a": 1}\n')
+	commit(repo, "guards")
+	plan = sync.plan_sync(str(repo), "HEAD")
+	assert plan["guard_paths"] == ["hooks/h.py", "settings.json"]
+	assert plan["guard"] and plan["needs_owner"]
+
+
+def test_plan_symlinks_are_conflicts(repo):
+	os.symlink("a.md", repo / twin("commands/link.md"))
+	write(repo, twin("commands/b.md"), "b\n")
+	os.symlink("a.md", repo / claude("commands/b.md"))
+	commit(repo, "symlinks")
+	plan = sync.plan_sync(str(repo), "HEAD")
+	reasons = {c["path"]: c["reason"] for c in plan["conflicts"]}
+	assert "not a regular file" in reasons["commands/link.md"]
+	assert "not a regular file" in reasons["commands/b.md"]
+	assert plan["copies"] == []
+
+
+def test_plan_mode_change_is_a_copy(repo):
+	(repo / twin("scripts/s.py")).chmod(0o755)
+	commit(repo, "exec bit")
+	plan = sync.plan_sync(str(repo), "HEAD")
+	assert [(c["path"], c["reason"], c["mode"]) for c in plan["copies"]] == [("scripts/s.py", "mode", "100755")]
+
+
+def test_plan_ignores_upstream_only_files(repo):
+	write(repo, twin("commands/analyze-log.md"), "consumer edition v2\n")
+	commit(repo, "variant")
+	plan = sync.plan_sync(str(repo), "HEAD")
+	assert plan["copies"] == [] and plan["conflicts"] == []
+
+
+def test_plan_refuses_a_shallow_clone(repo, tmp_path):
+	write(repo, twin("commands/a.md"), "a v2\n")
+	commit(repo, "second")
+	shallow = tmp_path / "shallow"
+	subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{repo}", str(shallow)], check=True, env={**os.environ, **GIT_ENV})
+	with pytest.raises(sync.SyncError, match="shallow"):
+		sync.plan_sync(str(shallow), "HEAD")
+
+
+def test_build_tree_writes_copies_without_touching_the_work_tree(repo):
+	write(repo, twin("commands/a.md"), "a v2\n")
+	head = commit(repo, "twin ahead")
+	plan = sync.plan_sync(str(repo), head)
+	tree = sync.build_tree(str(repo), head, plan["copies"])
+	assert git(repo, "show", f"{tree}:{claude('commands/a.md')}") == "a v2"
+	assert (repo / claude("commands/a.md")).read_text() == "a v1\n"
+	assert git(repo, "status", "--porcelain") == ""
+
+
+def test_build_tree_refuses_an_unsafe_copy(repo):
+	with pytest.raises(sync.SyncError, match="unsafe"):
+		sync.build_tree(str(repo), "HEAD", [{"path": "../x", "mode": "100644", "blob": "a" * 40}])
+
+
+# --- check -------------------------------------------------------------------
+
+
+def test_check_allows_the_twin_to_be_ahead(repo):
+	base = git(repo, "rev-parse", "HEAD")
+	write(repo, twin("commands/a.md"), "a v2\n")
+	head = commit(repo, "twin only")
+	assert sync.check_not_ahead(str(repo), base, head)["ok"]
+
+
+def test_check_allows_a_sync_to_the_twin(repo):
+	write(repo, twin("commands/a.md"), "a v2\n")
+	base = commit(repo, "twin only")
+	write(repo, claude("commands/a.md"), "a v2\n")
+	head = commit(repo, "sync")
+	result = sync.check_not_ahead(str(repo), base, head)
+	assert result["ok"] and result["checked"] == [claude("commands/a.md")]
+
+
+def test_check_fails_when_claude_moves_past_its_twin(repo):
+	base = git(repo, "rev-parse", "HEAD")
+	write(repo, claude("hooks/h.py"), "loosened\n")
+	head = commit(repo, "direct edit")
+	result = sync.check_not_ahead(str(repo), base, head)
+	assert not result["ok"]
+	assert [v["path"] for v in result["violations"]] == [claude("hooks/h.py")]
+
+
+def test_check_fails_for_a_claude_only_new_file_and_a_one_sided_delete(repo):
+	base = git(repo, "rev-parse", "HEAD")
+	write(repo, claude("commands/only-here.md"), "x\n")
+	(repo / claude("scripts/s.py")).unlink()
+	head = commit(repo, "ahead")
+	assert {v["path"] for v in sync.check_not_ahead(str(repo), base, head)["violations"]} == {
+		claude("commands/only-here.md"), claude("scripts/s.py"),
+	}
+
+
+def test_check_allows_a_synced_delete_and_upstream_only_edits(repo):
+	base = git(repo, "rev-parse", "HEAD")
+	(repo / claude("scripts/s.py")).unlink()
+	(repo / twin("scripts/s.py")).unlink()
+	write(repo, claude("commands/analyze-log.md"), "upstream edition v2\n")
+	write(repo, claude("commands/claude-issue-pickup.md"), "pickup\n")
+	head = commit(repo, "ok")
+	assert sync.check_not_ahead(str(repo), base, head)["ok"]
+
+
+def test_check_cli_exit_codes(repo, capsys):
+	base = git(repo, "rev-parse", "HEAD")
+	write(repo, claude("commands/a.md"), "ahead\n")
+	commit(repo, "ahead")
+	assert sync.main(["check", "--repo-root", str(repo), "--base", base]) == 1
+	assert "::error file=.claude/commands/a.md::" in capsys.readouterr().out
+	assert sync.main(["check", "--repo-root", str(repo), "--base", sync.ZERO_SHA]) == 0
+	assert sync.main(["check", "--repo-root", str(repo), "--base", "no-such-ref"]) == 2
+
+
+# --- merge rules -------------------------------------------------------------
+
+
+def _sync_branch(repo: Path, files: dict[str, str]) -> tuple[str, str]:
+	"""Main with the twin ahead, and a branch head that applies `files`."""
+	write(repo, twin("commands/a.md"), "a v2\n")
+	main = commit(repo, "twin ahead")
+	git(repo, "checkout", "-q", "-b", "sync")
+	for rel, text in files.items():
+		write(repo, rel, text)
+	head = commit(repo, "sync")
+	git(repo, "checkout", "-q", "main")
+	return main, head
+
+
+def test_merge_check_accepts_a_pure_sync(repo):
+	main, head = _sync_branch(repo, {claude("commands/a.md"): "a v2\n"})
+	assert sync.merge_check(str(repo), main, head, [{"filename": claude("commands/a.md"), "status": "modified"}]) == {"ok": True, "reasons": []}
+
+
+@pytest.mark.parametrize("files,pr_files,expected", [
+	({claude("commands/a.md"): "a v3\n"}, [{"filename": claude("commands/a.md"), "status": "modified"}], "differs from"),
+	({twin("commands/a.md"): "a v9\n", claude("commands/a.md"): "a v9\n"},
+		[{"filename": twin("commands/a.md"), "status": "modified"}, {"filename": claude("commands/a.md"), "status": "modified"}], "outside .claude/"),
+	({claude("hooks/h.py"): "h v1\n"}, [{"filename": claude("hooks/h.py"), "status": "modified"}], "guard path"),
+	({}, [{"filename": claude("scripts/s.py"), "status": "removed"}], "status removed"),
+	({}, [{"filename": claude("commands/analyze-log.md"), "status": "modified"}], "upstream-only"),
+	({}, [], "changes no file"),
+])
+def test_merge_check_refuses_anything_but_a_pure_non_guard_sync(repo, files, pr_files, expected):
+	main, head = _sync_branch(repo, files)
+	verdict = sync.merge_check(str(repo), main, head, pr_files)
+	assert not verdict["ok"]
+	assert any(expected in reason for reason in verdict["reasons"]), verdict
+
+
+def _run(name, status="completed", conclusion="success", run_id="1"):
+	return {"name": name, "status": status, "conclusion": conclusion, "details_url": f"https://github.com/o/r/actions/runs/{run_id}/job/9"}
+
+
+@pytest.mark.parametrize("runs,state,count,ok,why", [
+	([_run("lint"), _run("gate", conclusion="skipped")], "", 0, True, "all checks passed"),
+	([_run("gate")], "", 0, False, "lint has not passed"),
+	([_run("lint"), _run("x", status="in_progress", conclusion=None)], "", 0, False, "in_progress"),
+	([_run("lint"), _run("x", conclusion="failure")], "", 0, False, "concluded failure"),
+	([_run("lint"), _run("sync", status="in_progress", conclusion=None, run_id="77")], "", 0, True, "all checks passed"),
+	([_run("lint")], "pending", 1, False, "statuses are pending"),
+	([_run("lint")], "success", 1, True, "all checks passed"),
+])
+def test_checks_green(runs, state, count, ok, why):
+	green, reason = sync.checks_green(runs, state, count, "77")
+	assert green is ok and why in reason
+
+
+HEAD_SHA = "c" * 40
+
+
+def _review(state, user="owner", assoc="OWNER", commit=HEAD_SHA, at="2026-09-28T10:00:00Z", rid=1):
+	return {"id": rid, "state": state, "user": {"login": user}, "author_association": assoc, "commit_id": commit, "submitted_at": at}
+
+
+@pytest.mark.parametrize("reviews,approved", [
+	([], False),
+	([_review("APPROVED")], True),
+	([_review("APPROVED", user="Owner")], True),
+	([_review("APPROVED", commit="d" * 40)], False),
+	([_review("APPROVED", user="someone", assoc="COLLABORATOR")], False),
+	([_review("APPROVED", assoc="COLLABORATOR")], False),
+	([_review("APPROVED", rid=1), _review("CHANGES_REQUESTED", at="2026-09-28T11:00:00Z", rid=2)], False),
+	([_review("CHANGES_REQUESTED", rid=1), _review("APPROVED", at="2026-09-28T11:00:00Z", rid=2)], True),
+	([_review("APPROVED", rid=1), _review("COMMENTED", at="2026-09-28T11:00:00Z", rid=2)], True),
+	([_review("DISMISSED")], False),
+])
+def test_owner_approved(reviews, approved):
+	assert sync.owner_approved(reviews, "owner", HEAD_SHA) is approved
+
+
+def test_render_body_carries_skip_ai_and_the_merge_rule():
+	plan = {"ref": "a" * 40, "copies": [{"path": "hooks/h.py", "reason": "behind"}], "conflicts": [], "rejected": [],
+		"guard_paths": ["hooks/h.py"], "needs_owner": True}
+	body = sync.render_body(plan)
+	assert "[skip ai]" in body and "Needs the repository owner" in body and "never approves or merges" in body
+	assert not re.search(r"(?i)\b(fix(es|ed)?|close[sd]?|resolve[sd]?)\s+#\d+", body)
+	plan.update({"guard_paths": [], "needs_owner": False})
+	assert "the workflow merges this PR" in sync.render_body(plan)
+
+
+# --- run (driver) ------------------------------------------------------------
+
+
+class FakeGitHub(sync.GitHub):
+	def __init__(self, repo_slug="o/r", prs=None, reviews=None, files=None, runs=None, status=None):
+		super().__init__(repo_slug, "read-token", "write-token")
+		self.prs = prs or []
+		self.reviews = reviews or []
+		self.files = files or []
+		self.runs = runs or []
+		self.status = status or {"state": "", "statuses": []}
+		self.writes: list[list[str]] = []
+
+	def get(self, path):
+		if "/pulls?state=open" in path:
+			return self.prs if "page=1" in path else []
+		if path.startswith(f"repos/{self.repo}/pulls/") and "/reviews" in path:
+			return self.reviews if "page=1" in path else []
+		if "/files" in path:
+			return self.files if "page=1" in path else []
+		if "/check-runs" in path:
+			return {"check_runs": self.runs if "page=1" in path else []}
+		if path.endswith("/status"):
+			return self.status
+		raise AssertionError(path)
+
+	def write(self, args):
+		self.writes.append(args)
+		if args[:4] == ["api", "-X", "POST", f"repos/{self.repo}/pulls"]:
+			return json.dumps({"number": 41})
+		return "{}"
+
+	def wrote(self, needle: str) -> list[list[str]]:
+		return [w for w in self.writes if any(needle in part for part in w)]
+
+	def merges(self) -> list[list[str]]:
+		return [w for w in self.writes if w[:2] == ["pr", "merge"]]
+
+
+def _pr_from_origin(repo: Path, branch: str, number=40, labels=(), body=""):
+	return {"number": number, "body": body, "labels": [{"name": n} for n in labels],
+		"head": {"ref": branch, "sha": git(repo, "rev-parse", f"origin/{branch}"), "repo": {"full_name": "o/r"}}}
+
+
+def _twin_ahead(repo: Path, rel="commands/a.md", text="a v2\n") -> str:
+	write(repo, twin(rel), text)
+	sha = commit(repo, f"twin {rel}")
+	git(repo, "push", "-q", "origin", "main")
+	return sha
+
+
+def test_run_noop_when_twins_match(repo):
+	gh = FakeGitHub()
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["action"] == "noop" and gh.writes == []
+
+
+def test_run_closes_a_stale_sync_pr(repo):
+	gh = FakeGitHub(prs=[{"number": 40, "head": {"ref": "claude/claude-twin-sync-x", "sha": "a" * 40, "repo": {"full_name": "o/r"}}}])
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["action"] == "closed_stale"
+	assert ["api", "-X", "PATCH", "repos/o/r/pulls/40", "-f", "state=closed"] in gh.writes
+
+
+def test_run_opens_a_non_guard_sync_pr_and_waits_for_checks(repo):
+	main = _twin_ahead(repo)
+	gh = FakeGitHub()
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["action"] == "opened" and summary["pr"] == 41
+	branch = summary["branch"]
+	assert branch == f"claude/claude-twin-sync-{main[:12]}"
+	git(repo, "fetch", "-q", "origin")
+	assert git(repo, "show", f"origin/{branch}:{claude('commands/a.md')}") == "a v2"
+	assert git(repo, "rev-parse", f"origin/{branch}^") == main
+	assert git(repo, "diff", "--name-only", main, f"origin/{branch}") == claude("commands/a.md")
+	create = gh.wrote("repos/o/r/pulls")[0]
+	assert "base=main" in create and any("[skip ai]" in part for part in create)
+	assert any("state=success" in w for w in gh.wrote("/statuses/"))
+	assert gh.wrote("labels") == [] and gh.merges() == []
+	assert summary["merge"] == "waiting for checks on the new head" and summary["alert"] == ""
+
+
+def test_run_merges_an_unchanged_non_guard_pr_once_checks_pass(repo):
+	_twin_ahead(repo)
+	first = FakeGitHub()
+	branch = sync.run_sync(str(repo), first, "HEAD", "main", "owner", "77")["branch"]
+	git(repo, "fetch", "-q", "origin")
+	pr = _pr_from_origin(repo, branch, body=sync.render_body(sync.plan_sync(str(repo), "HEAD")))
+	files = [{"filename": claude("commands/a.md"), "status": "modified"}]
+	waiting = FakeGitHub(prs=[pr], files=files, runs=[_run("lint", status="in_progress", conclusion=None)])
+	summary = sync.run_sync(str(repo), waiting, "HEAD", "main", "owner", "77")
+	assert summary["action"] == "unchanged" and summary["merge"].startswith("waiting:") and waiting.merges() == []
+	assert waiting.wrote("PATCH") == []
+	green = FakeGitHub(prs=[pr], files=files, runs=[_run("lint")])
+	summary = sync.run_sync(str(repo), green, "HEAD", "main", "owner", "77")
+	assert summary["merge"] == "merged"
+	assert ["pr", "merge", "40", "--repo", "o/r", "--squash", "--match-head-commit", pr["head"]["sha"]] in green.writes
+
+
+def test_run_refuses_to_merge_a_tampered_sync_branch(repo):
+	_twin_ahead(repo)
+	branch = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")["branch"]
+	git(repo, "fetch", "-q", "origin")
+	pr = _pr_from_origin(repo, branch)
+	files = [{"filename": claude("commands/a.md"), "status": "modified"}, {"filename": "scripts/evil.sh", "status": "added"}]
+	gh = FakeGitHub(prs=[pr], files=files, runs=[_run("lint")])
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["merge"].startswith("refused:") and gh.merges() == []
+
+
+def test_run_updates_an_open_pr_forward_when_main_moves(repo):
+	_twin_ahead(repo)
+	branch = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")["branch"]
+	git(repo, "fetch", "-q", "origin")
+	old_head = git(repo, "rev-parse", f"origin/{branch}")
+	pr = _pr_from_origin(repo, branch)
+	main = _twin_ahead(repo, "scripts/s.py", "s v2\n")
+	gh = FakeGitHub(prs=[pr])
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["action"] == "updated" and summary["pr"] == 40
+	assert gh.wrote("repos/o/r/pulls/40") and not [w for w in gh.writes if w[:4] == ["api", "-X", "POST", "repos/o/r/pulls"]]
+	git(repo, "fetch", "-q", "origin")
+	new_head = git(repo, "rev-parse", f"origin/{branch}")
+	assert git(repo, "merge-base", "--is-ancestor", old_head, new_head) == ""
+	assert git(repo, "merge-base", "--is-ancestor", main, new_head) == ""
+	assert sorted(git(repo, "diff", "--name-only", main, new_head).splitlines()) == [claude("commands/a.md"), claude("scripts/s.py")]
+	assert summary["merge"] == "waiting for checks on the new head"
+
+
+def test_run_guard_pr_is_labelled_alerted_and_never_merged(repo):
+	_twin_ahead(repo, "hooks/h.py", "h v2\n")
+	gh = FakeGitHub()
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["needs_owner"] and summary["merge"] == "owner only"
+	assert "needs the owner" in summary["alert"] and ".claude/hooks/h.py" in summary["alert"]
+	assert gh.wrote(f"labels[]={sync.APPROVAL_LABEL}")
+	assert any("state=pending" in w for w in gh.wrote("/statuses/"))
+	# An owner approval on the current head flips the status, and still nothing merges.
+	git(repo, "fetch", "-q", "origin")
+	pr = _pr_from_origin(repo, summary["branch"], labels=[sync.APPROVAL_LABEL])
+	approved = FakeGitHub(prs=[pr], reviews=[_review("APPROVED", commit=pr["head"]["sha"])], runs=[_run("lint")],
+		files=[{"filename": claude("hooks/h.py"), "status": "modified"}])
+	summary = sync.run_sync(str(repo), approved, "HEAD", "main", "owner", "77")
+	assert summary["owner_approved"] and summary["alert"] == "" and summary["merge"] == "owner only"
+	assert any("state=success" in w for w in approved.wrote("/statuses/"))
+	assert approved.merges() == [] and approved.wrote("labels[]") == []
+	assert not any(w for w in approved.writes if "APPROVE" in " ".join(w) or "/reviews" in " ".join(w))
+
+
+def test_run_conflict_only_opens_an_empty_marker_pr(repo):
+	write(repo, twin("commands/a.md"), "a v2\n")
+	write(repo, claude("commands/a.md"), "operator edit\n")
+	main = commit(repo, "diverged")
+	git(repo, "push", "-q", "origin", "main")
+	gh = FakeGitHub()
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["conflicts"] == ["commands/a.md"] and summary["needs_owner"]
+	git(repo, "fetch", "-q", "origin")
+	assert git(repo, "diff", "--name-only", main, f"origin/{summary['branch']}") == ""
+	assert git(repo, "show", f"origin/{summary['branch']}:{claude('commands/a.md')}") == "operator edit"
+	assert gh.wrote(f"labels[]={sync.APPROVAL_LABEL}")
+
+
+def test_run_closes_duplicate_sync_prs(repo):
+	_twin_ahead(repo)
+	branch = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")["branch"]
+	git(repo, "fetch", "-q", "origin")
+	gh = FakeGitHub(prs=[_pr_from_origin(repo, branch, number=45), _pr_from_origin(repo, branch, number=40)])
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["pr"] == 40
+	assert ["api", "-X", "PATCH", "repos/o/r/pulls/45", "-f", "state=closed"] in gh.writes
+
+
+def test_run_picks_a_free_branch_name(repo):
+	main = _twin_ahead(repo)
+	git(repo, "push", "-q", "origin", f"{main}:refs/heads/claude/claude-twin-sync-{main[:12]}")
+	summary = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")
+	assert summary["branch"] == f"claude/claude-twin-sync-{main[:12]}-2"
+
+
+def test_run_cli_requires_tokens(repo, monkeypatch):
+	monkeypatch.delenv("CLAUDE_TWIN_SYNC_READ_TOKEN", raising=False)
+	monkeypatch.delenv("CLAUDE_TWIN_SYNC_WRITE_TOKEN", raising=False)
+	assert sync.main(["run", "--repo-root", str(repo), "--repo", "o/r", "--owner", "o"]) == 2
+
+
+# --- workflow wiring ---------------------------------------------------------
+
+
+def _workflow() -> dict:
+	return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+
+
+def test_workflow_triggers():
+	on = _workflow()["on"]
+	assert on["push"]["branches"] == ["main"]
+	assert on["push"]["paths"] == ["workflow-templates/.claude/**"]
+	assert on["schedule"] and "workflow_dispatch" in on
+	assert on["workflow_run"]["workflows"] == ["CI"]
+	assert on["workflow_run"]["types"] == ["completed"]
+	assert on["workflow_run"]["branches"] == ["claude/claude-twin-sync-*"]
+	assert set(on["pull_request_review"]["types"]) == {"submitted", "dismissed"}
+
+
+def test_workflow_is_least_privilege_and_pinned():
+	text = WORKFLOW.read_text(encoding="utf-8")
+	wf = _workflow()
+	assert wf["permissions"] == {"contents": "read", "pull-requests": "read", "checks": "read", "statuses": "read"}
+	for job in wf["jobs"].values():
+		assert job["if"].startswith("github.repository == 'shubhodeep1/coding-workflows'")
+		for step in job["steps"]:
+			uses = step.get("uses")
+			if uses:
+				assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", uses), uses
+				assert step["with"]["persist-credentials"] is False
+	for session_var in ("FUNTOKEN_IO_CF", "FT_GAMES_CF", "DIGITALOCEAN_ACCESS_TOKEN"):
+		assert session_var not in text
+	assert text.count("secrets.GH_PAT") == 1
+	assert "--auto" not in text and "APPROVE" not in text
+	assert "fetch-depth: 0" in text
+
+
+def test_workflow_passes_gh_pat_only_to_the_sync_step():
+	for job in _workflow()["jobs"].values():
+		for step in job["steps"]:
+			env = step.get("env") or {}
+			if "CLAUDE_TWIN_SYNC_WRITE_TOKEN" in env:
+				assert env["CLAUDE_TWIN_SYNC_WRITE_TOKEN"] == "${{ secrets.GH_PAT }}"
+				assert env["CLAUDE_TWIN_SYNC_READ_TOKEN"] == "${{ github.token }}"
+				assert "scripts/claude_twin_sync.py run" in step["run"]
+			else:
+				assert "GH_PAT" not in json.dumps(step)
+		assert "GH_PAT" not in json.dumps(job.get("env") or {})
+
+
+# --- docs --------------------------------------------------------------------
+
+
+def _flat_doc(path: Path) -> str:
+	return " ".join(path.read_text(encoding="utf-8").split())
+
+
+def test_claude_md_documents_twin_first_and_the_sync():
+	text = _flat_doc(ROOT / "CLAUDE.md")
+	assert "unattended sessions **edit the twin, never `.claude/**`** (twin-first, issue #4785)" in text
+	assert "`.github/workflows/claude-twin-sync.yml` (`scripts/claude_twin_sync.py`)" in text
+	assert "merged only by the repository owner: the workflow never approves or merges it" in text
+	assert "The one exception is a Claude twin sync PR (`claude/claude-twin-sync-*`, §28.C)" in text
+
+
+@pytest.mark.parametrize("name", ["implement-plan-claude.md", "implement-issue-claude.md", "fix-claude-pr.md"])
+def test_command_twins_say_edit_the_twin(name):
+	text = _flat_doc(ROOT / sync.TWIN_ROOT / "commands" / name)
+	assert "**Edit the twin, never `.claude/**`.**" in text
+	assert "claude-twin-sync.yml" in text
+
+
+def test_approval_label_is_in_the_label_contract():
+	contract = json.loads((ROOT / ".github" / "ai" / "label_contract.v1.json").read_text(encoding="utf-8"))
+	label = contract["labels"][sync.APPROVAL_LABEL]
+	assert label == {"color": sync.APPROVAL_LABEL_COLOR, "description": sync.APPROVAL_LABEL_DESCRIPTION}
+	assert len(sync.APPROVAL_LABEL_DESCRIPTION) <= 100

@@ -567,6 +567,18 @@ def test_gate_leaves_other_prs_alone():
 	assert out["claude_fixer"] == "false" and out["should_run"] == "true"
 
 
+def test_gate_skips_claude_twin_sync_prs_without_merging():
+	"""CLAUDE.md §28.C: sync PRs are merged by claude-twin-sync.yml or the owner, never by AI review."""
+	for event_name, converged in (("pull_request", ""), ("workflow_dispatch", HEAD)):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref="claude/claude-twin-sync-0123456789ab", comments=[], event_name=event_name, converged_head=converged)
+		assert proc.returncode == 0, proc.stderr
+		assert out["should_run"] == "false", event_name
+		assert out.get("deterministic_skip") != "true", event_name
+		assert out.get("claude_fixer_converged") != "true", event_name
+		assert "AUTOFIX_GATE_SKIP reason=claude_twin_sync pr=42" in proc.stdout, proc.stdout[-2000:]
+
+
 def test_gate_skips_dispatch_rerun_while_the_session_owns_the_round():
 	with tempfile.TemporaryDirectory() as td:
 		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF)])
