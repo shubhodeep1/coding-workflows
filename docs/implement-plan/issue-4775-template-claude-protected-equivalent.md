@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4775-template-claude-protected-equivalent-plan.md
 - Source issue: shubhodeep1/coding-workflows#4775
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4678-edit-files-without-python-heredocs
-- Project branch: claude/implement-plan-issue-4775-template-claude-protected-equivalent   Final PR: (opened after this commit) draft
+- Project branch: claude/implement-plan-issue-4775-template-claude-protected-equivalent   Final PR: #4783 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR from `claude/implement-plan-issue-4775-template-claude-protected-equivalent-phase-1` (the PR that carries this line)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker, safety net, and hand-back ids are in the stage report and the next `— resume.` block
 - Last updated: 2026-09-28
-- Last note: project branch opened from the #4678 project branch; phase 1 starting.
+- Last note: phase 1 implemented and verified (CLAUDE.md §23.I/§28.C wording, tests/test_claude_template_parity.py, ci.yml wiring); phase PR opened.
 
 ## Phases
-1. [ ] Phase 1 — protected-equivalent template tree: CLAUDE.md §23.I/§28.C and the template parity contract test (CLAUDE.md, tests/test_claude_template_parity.py [new], tests/test_permission_prompts.py, .github/workflows/ci.yml, agents.md, changelog.d/4775-template-claude-protected-equivalent.md [new]); protected paths: none
+1. [ ] Phase 1 — protected-equivalent template tree: CLAUDE.md §23.I/§28.C and the template parity contract test (CLAUDE.md, tests/test_claude_template_parity.py [new], tests/test_permission_prompts.py, .github/workflows/ci.yml, agents.md, changelog.d/4775-template-claude-protected-equivalent.md [new]); protected paths: none   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
