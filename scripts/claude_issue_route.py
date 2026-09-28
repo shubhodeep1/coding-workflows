@@ -110,7 +110,12 @@ CODEX_ONLY_LABELS: tuple[str, ...] = (
 
 # Labels whose issues skip their own security pass in the Claude project
 # sequence (they are produced by automation; a security-finding project that
-# ran its own audit could open follow-ups of follow-ups).
+# ran its own audit could open follow-ups of follow-ups). The
+# `skip_security_pass` value route_issue derives from them is advisory: it is
+# logged and carried in the dispatch payload and queue item, but a label can be
+# added by anyone, so `/implement-issue-claude` decides with
+# `.claude/scripts/security_pass_skip.py`, which verifies the issue was created
+# and labelled by the issue automation (issue #4623).
 SECURITY_PASS_SKIP_LABELS: tuple[str, ...] = (
 	"ai:security",
 	"ai:check-triage",
