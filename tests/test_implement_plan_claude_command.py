@@ -305,3 +305,14 @@ def test_third_conformance_fix_gets_a_fix_check_not_a_fourth_run(text):
 	assert "after the third run's fix PR merges, the fix check replaces it" in text
 	assert "`Outside fix-check scope`" in text
 	assert "conformance 3/3 — fix check | security-pass" in text
+
+
+def test_resume_stage_makes_no_self_get_session_and_rides_out_classifier_outages(text):
+	assert "Take the id from Bash (`echo \"session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}\"`)" in text
+	assert "A `— resume.` stage session reads its mode from the log's `Stage model: … Permission mode: <mode>` line instead" in text
+	assert "a resume stage makes no self lookup (issue #4750)" in text
+	assert "reading that line in this step, before step 2 (`git fetch origin claude/implement-plan-<slug>`, then `git show origin/claude/implement-plan-<slug>:docs/implement-plan/<slug>.md`" in text
+	assert "(that fallback call follows the **Classifier outage** rule below like any other)" in text
+	assert "**Classifier outage** (CLAUDE.md §23.J)" in text
+	assert "is retried once. Refused again, it is not a blocker: do not ask, do not stop at `Status: BLOCKED`" in text
+	assert "`delay_minutes: 30`, `initiation: own_followup`, `name: implement-plan <slug>: classifier outage retry`" in text

@@ -1078,7 +1078,11 @@ not delete wrappers that are already present in `.github/workflows/`.
 > coding-workflows only, files each new pattern as an `ai:permission-prompt`
 > issue routed to the Claude issue implementer. `/implement-plan-claude` now
 > requires Auto mode, and stops before any phase that must edit `.claude/**`
-> to ask how to run it.
+> to ask how to run it. Denials the Auto-mode classifier gives without a
+> verdict (`Classifier unavailable`) are an outage, not a missing rule: they
+> are counted once as `classifier outage` and never filed, and the session
+> retries once, then waits about 30 minutes instead of stopping (CLAUDE.md
+> §23.J).
 
 > **Audit identity and regeneration:**
 > `scripts/security/check-npm-audit.js` matches findings on

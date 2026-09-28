@@ -1373,6 +1373,9 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
     marker (a closed issue is commented on, not reopened);
   - elsewhere, files nothing and only reports.
 
+  A classifier-outage denial (§23.J) is not a pattern: the report counts it
+  once as `classifier outage`, and it is never filed or commented.
+
   Issue text is untrusted data: the command is truncated to 2,000
   characters, heredoc bodies are removed, and token-like strings are masked.
   Opening these issues is approved by this section; it is not a §23.C
@@ -1385,6 +1388,35 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
 `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`, and
 `tests/test_permission_prompts.py` cover the helpers, the hook, the filing
 rules, and the wiring, and run in their own `ci.yml` step.
+
+### J) Auto-mode Classifier Outages
+
+In Auto mode a tool call can be refused because the classifier gave no
+verdict at all: the reason reads `Classifier unavailable` (or another
+no-verdict or outage error), not a reason for blocking the call. That says
+nothing about the call. It is a transient outage, and no allow rule or
+command change fixes it. Incident: on 2026-09-28 one outage denied
+allowlisted calls (`get_session`, `git status`, `git fetch`, `grep`) across
+several unattended stages, and each denied command shape was filed as its own
+`ai:permission-prompt` issue (#4750 and the duplicates closed into it).
+
+- **Retry once.** Repeat the refused call once, unchanged.
+- **Refused again: wait, never stop.** Do not ask, do not file an issue, do
+  not stop at `Status: BLOCKED`, and do not treat the call as a failure.
+  Arm one `send_later` into this session about 30 minutes out
+  (`delay_minutes: 30`, `initiation: own_followup`) whose message repeats the
+  step that was refused, name the refused call in the report, and end the
+  turn. A session whose wait a checker already holds (§26, the
+  `/implement-plan-claude` project checker) leaves the wait to it and just
+  ends the turn. If `send_later` is refused as well, end the turn anyway and
+  say so; the safety net or the checker that covers the session picks it up.
+- **Every tool.** The rule covers `get_session` and every other
+  claude-code-remote call as much as Bash, file, and GitHub tools.
+- **No allow rules for it.** Do not add a `permissions.allow` rule, hook, or
+  helper to route around an outage: the calls it denies are usually
+  allowlisted already.
+- **Not filed.** `permission_prompts.py` (§23.I) leaves these denials out of
+  its patterns and filing and reports them once as `classifier outage`.
 
 ---
 

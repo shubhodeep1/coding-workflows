@@ -32,6 +32,15 @@ nothing. For each pattern with occurrences not filed yet:
 Filed counts are kept in `filed-state.json` next to the logs, so a later run
 in the same session files only what is new.
 
+A **classifier outage** is not a pattern. A `PermissionDenied` whose reason
+says the Auto-mode classifier gave no verdict or was unavailable
+(CLASSIFIER_OUTAGE_REASON_RE, for example `Classifier unavailable`) says
+nothing about the command, and no repository change can fix it (CLAUDE.md
+§23.J; issue #4750). Such records are left out of `patterns`, `total`,
+`filed-state.json`, and filing, and reported once under `outage_denials`
+(`label` "classifier outage", `count`, `tools`, `first_ts`, `last_ts`). A log
+holding only outage denials makes no API call.
+
 Issue text is untrusted data: the tool name, the prompt reason, and the
 command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
 token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
@@ -73,6 +82,19 @@ DEFAULT_LOG_DIR = Path.home() / ".claude" / "permission-prompts"
 MAX_COMMAND_CHARS = 2000
 MAX_SHAPE_CHARS = 200
 MAX_TITLE_SHAPE_CHARS = 90
+CLASSIFIER_OUTAGE_LABEL = "classifier outage"
+# The Auto-mode classifier refused without judging the call: an outage
+# (`Classifier unavailable`, the reason on every 2026-09-28 issue) or no
+# verdict. A real block carries the classifier's reason instead and is filed.
+# A no-verdict phrase counts only next to the word "classifier" on the same
+# line (no re.DOTALL), so another subsystem's "did not return a verdict", or
+# classifier debug text on another line of a real denial, stays fileable.
+CLASSIFIER_OUTAGE_REASON_RE = re.compile(
+	r"\bclassifier\s+(?:is\s+)?(?:unavailable|error|timed\s+out|timeout|overloaded)\b"
+	r"|\bclassifier\b.*\b(?:no|without\s+a|did\s+not\s+return\s+a|could\s+not\s+reach\s+a)\s+verdict\b"
+	r"|\b(?:no|without\s+a|did\s+not\s+return\s+a|could\s+not\s+reach\s+a)\s+verdict\b.*\bclassifier\b",
+	re.IGNORECASE,
+)
 
 REDACTION_PATTERNS = (
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
@@ -303,11 +325,46 @@ def group_patterns(records: list[dict]) -> list[dict]:
 	return list(patterns.values())
 
 
+def is_classifier_outage(record: dict) -> bool:
+	"""True for an Auto-mode denial the classifier gave without a verdict (see the module docstring)."""
+	return record.get("event") == "PermissionDenied" and bool(CLASSIFIER_OUTAGE_REASON_RE.search(str(record.get("reason") or "")))
+
+
+def split_classifier_outages(records: list[dict]) -> tuple[list[dict], list[dict]]:
+	"""Return (records to group and file, classifier-outage denials)."""
+	kept: list[dict] = []
+	outages: list[dict] = []
+	for record in records:
+		(outages if is_classifier_outage(record) else kept).append(record)
+	return kept, outages
+
+
+def classifier_outage_summary(outages: list[dict]) -> dict:
+	tools: list[str] = []
+	for record in outages:
+		tool = str(record.get("tool_name") or "")
+		if tool and tool not in tools:
+			tools.append(tool)
+	return {
+		"label": CLASSIFIER_OUTAGE_LABEL,
+		"count": len(outages),
+		"tools": tools,
+		"first_ts": outages[0].get("ts") if outages else None,
+		"last_ts": outages[-1].get("ts") if outages else None,
+	}
+
+
 def report(log_dir: Path) -> dict:
-	patterns = group_patterns(load_records(log_dir))
+	records, outages = split_classifier_outages(load_records(log_dir))
+	return summarize_permission_records(group_patterns(records), outages)
+
+
+def summarize_permission_records(patterns: list[dict], outages: list[dict]) -> dict:
+	"""The `report` summary for already grouped patterns and classifier-outage denials."""
 	return {
 		"total": sum(pattern["count"] for pattern in patterns),
 		"patterns": [{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons")} for pattern in patterns],
+		"outage_denials": classifier_outage_summary(outages),
 	}
 
 
@@ -446,8 +503,9 @@ def existing_issues(slug: str) -> dict[str, dict]:
 def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | None = None) -> tuple[int, dict]:
 	"""File new patterns as issues or comments; see the module docstring."""
 	slug = local_repo_slug() if slug is None else slug
-	patterns = group_patterns(load_records(log_dir))
-	summary = report(log_dir)
+	records, outages = split_classifier_outages(load_records(log_dir))
+	patterns = group_patterns(records)
+	summary = summarize_permission_records(patterns, outages)
 	if slug.lower() != FILING_REPO:
 		summary.update({"filed": [], "commented": [], "errors": [], "skipped": f"filing is limited to {FILING_REPO}; this checkout is {slug or 'unknown'}"})
 		return 0, summary
