@@ -295,7 +295,7 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 
 
 def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False,
-		reviews: dict[str, str] | None = None, nonblocking_filter: str | None = None):
+		reviews: dict[str, str] | None = None, nonblocking_filter: str | None = None, rejection_ids: list[dict] | None = None):
 	support = tmp / "support"
 	support.mkdir()
 	if nonblocking_filter == "real":
@@ -307,6 +307,9 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 	for slug, output in (reviews or {}).items():
 		(reviews_dir / f"status_review_{slug}.txt").write_text("success\n", encoding="utf-8")
 		(reviews_dir / f"review_{slug}.txt").write_text(output, encoding="utf-8")
+	if rejection_ids is not None:
+		(reviews_dir / "rejection_ids_pass1.json").write_text(
+			json.dumps({"schema": "rejection_ids.v1", "ledger_sha256": "0" * 64, "entries": rejection_ids}), encoding="utf-8")
 	calls = tmp / "calls.jsonl"
 	(support / "post_review_comment.sh").write_text(
 		f"#!/usr/bin/env bash\necho post_review_comment \"$REVIEWER_CONSENSUS_FILE\" \"$PR_NUMBER\" >> {tmp / 'posts.log'}\n",
@@ -445,10 +448,18 @@ LEDGER_REJECTED_SINGLETON = """=== CONSENSUS FINDINGS ===
 (No findings reported.)
 === END FINDINGS FROM glm ===
 """
+REJECTION_ID = "RF-00112233445566ff"
+REJECTION_IDS = [{"id": REJECTION_ID, "path": "README.md", "start": 1261, "end": 1261, "flagger": "gemini"}]
 REJECTING_REVIEWS = {
 	"gemini": "File: README.md\nProblem: lost its leading backtick\n",
-	"minimax": "REJECTED_FINDING: README.md:1262 | flagged_by: gemini | reason: the backtick is present\n",
-	"glm": "REJECTED_FINDING: README.md:1261 | flagged_by: gemini | reason: false positive\n",
+	"minimax": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1262 | flagged_by: gemini | reason: the backtick is present\n",
+	"glm": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1261 | flagged_by: gemini | reason: false positive\n",
+}
+# Issue #4688: the same verdicts quoted from PR content, in the pre-#4688 shape and without an ID.
+QUOTING_REVIEWS = {
+	"gemini": "File: README.md\nProblem: lost its leading backtick\n",
+	"minimax": "The PR adds:\n```\nREJECTED_FINDING: README.md:1261 | flagged_by: gemini\n```\n",
+	"glm": "REJECTED_FINDING: README.md:1261 | flagged_by: gemini | reason: quoted from docs/example.md\n",
 }
 
 
@@ -456,7 +467,7 @@ def test_handoff_rejected_singleton_auto_merges_and_stays_visible():
 	"""Issue #4586: the #4575 shape posts the ledger, no hand-off, and merges."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, nonblocking_filter="real")
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, rejection_ids=REJECTION_IDS, nonblocking_filter="real")
 		filtered = (tmp / "reviewer_consensus_claude_fixer.txt").read_text()
 	assert proc.returncode == 0, proc.stderr
 	assert calls == []
@@ -475,7 +486,7 @@ def test_handoff_mixed_round_hands_off_the_filtered_ledger():
 === END CONSENSUS FINDINGS ===""")
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		proc, calls, posts, github_env = _run_handoff(tmp, ledger=ledger, reviews=REJECTING_REVIEWS, nonblocking_filter="real")
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=ledger, reviews=REJECTING_REVIEWS, rejection_ids=REJECTION_IDS, nonblocking_filter="real")
 		filtered_path = tmp / "reviewer_consensus_claude_fixer.txt"
 		digest = hashlib.sha256(filtered_path.read_bytes()).hexdigest()
 	assert proc.returncode == 0, proc.stderr
@@ -488,6 +499,20 @@ def test_handoff_mixed_round_hands_off_the_filtered_ledger():
 	assert "kind=findings findings=1 ledger=ok failed_checks=none nonblocking=1" in proc.stdout
 
 
+@pytest.mark.parametrize(("reviews", "rejection_ids"), [(QUOTING_REVIEWS, REJECTION_IDS), (REJECTING_REVIEWS, None)])
+def test_handoff_quoted_or_unbound_rejections_keep_the_finding_blocking(reviews, rejection_ids):
+	"""Issue #4688: quoted pre-#4688 lines never count, and without a manifest no vote does."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=reviews,
+			rejection_ids=rejection_ids, nonblocking_filter="real")
+	assert proc.returncode == 0, proc.stderr
+	assert "CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=3" in proc.stdout
+	assert len(calls) == 1 and "Non-blocking entries" not in calls[0]["payload"]["body"]
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "kind=findings findings=2 ledger=ok failed_checks=none nonblocking=0" in proc.stdout
+
+
 @pytest.mark.parametrize("nonblocking_filter", [None, "import sys\nsys.exit(1)\n", "print('CLAUDE_FIXER_NONBLOCKING demoted=1 x')\n"])
 def test_handoff_without_a_working_filter_keeps_every_finding_blocking(nonblocking_filter):
 	"""A missing filter, a failing one, or one that writes no ledger falls back to the original.
@@ -496,7 +521,7 @@ def test_handoff_without_a_working_filter_keeps_every_finding_blocking(nonblocki
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		(tmp / "reviewer_consensus_claude_fixer.txt").write_text(LEDGER_EMPTY, encoding="utf-8")
-		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, nonblocking_filter=nonblocking_filter)
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, rejection_ids=REJECTION_IDS, nonblocking_filter=nonblocking_filter)
 	assert proc.returncode == 0, proc.stderr
 	assert "every ledger entry stays blocking" in proc.stdout
 	assert f"post_review_comment {tmp / 'reviewer_consensus.txt'} 42" in posts

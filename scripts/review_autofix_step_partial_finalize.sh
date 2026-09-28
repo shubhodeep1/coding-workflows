@@ -145,6 +145,7 @@ for pattern in (
     "pass1_*.txt",
     "review_*.txt",
     "consensus_pass1.txt",
+    "rejection_ids_pass1.json",
 ):
     if previous_reviews_dir:
         for matched_path in sorted(glob.glob(str(Path(previous_reviews_dir) / pattern))):
@@ -364,6 +365,7 @@ if previous_reviews_dir is not None:
         "pass1_*.txt",
         "review_*.txt",
         "consensus_pass1.txt",
+        "rejection_ids_pass1.json",
     ):
         previous_review_artifacts.extend(sorted(previous_reviews_dir.glob(pattern)))
 copy_artifacts(previous_review_artifacts, partial_marker_dir / "previous_reviews")
