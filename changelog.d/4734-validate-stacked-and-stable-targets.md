@@ -5,7 +5,7 @@ The `Authorize explicit validation target` step of `.github/workflows/validate.y
 
 | The numbers that matter | Value |
 | --- | --- |
-| GitHub reads per explicit target | 1 for a default-branch base, 2 for a project-branch base, 3 for a `stable` base |
+| GitHub reads per explicit target | 1 for a default-branch base, 2 for a project-branch base, 3 for a `stable` base (one more per further 100 issue events) |
 | Levels of project-branch stacking allowed | 1 |
 | Projects unblocked | #4665 (workflow heal, final PR #4667 into `stable`) |
 

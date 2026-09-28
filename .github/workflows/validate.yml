@@ -199,11 +199,12 @@ jobs:
           #     parent PR listing);
           #   - stable, for a claude/implement-plan-issue-<n>-* head whose
           #     issue <n> the heal automation filed and whose author opened the
-          #     target PR (one issue read, one issue-events read; issue #4791).
+          #     target PR (one issue read, one paginated issue-events read;
+          #     issue #4791).
           # GitHub reads (CLAUDE.md §15): the target listing, plus one parent
-          # listing for a project-branch base or two issue reads for a stable
-          # base. No earlier call in this job returns PR head/base data, issue
-          # authorship, or label history.
+          # listing for a project-branch base, or for a stable base the issue
+          # and one read per 100 of its events. No earlier call in this job
+          # returns PR head/base data, issue authorship, or label history.
           validate_pr_jq_defs='
             def trusted_pr($repo):
               type == "object" and .state == "open" and
@@ -230,7 +231,8 @@ jobs:
               elif .base.ref | test("^claude/implement-plan-[A-Za-z0-9][A-Za-z0-9._-]*$") then
                 "project \(.head.sha) \(.base.ref)"
               elif .base.ref == "stable" and ($branch | test("^claude/implement-plan-issue-[1-9][0-9]*-")) and
-                (.user | type == "object" and (.login | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$"))) then
+                (.user | type == "object" and (.login | type == "string" and
+                  test("^[A-Za-z0-9](?:-?[A-Za-z0-9])*(\\[bot\\])?$") and (sub("\\[bot\\]$"; "") | length <= 39))) then
                 "stable \(.head.sha) \($branch | capture("^claude/implement-plan-issue-(?<n>[1-9][0-9]*)-").n) \(.user.login)"
               else error("target PR base is not authorized") end
             else error("target PR is unauthorized") end' <<< "${target_prs}")" || { echo "::error::Explicit validation target is not authorized."; exit 1; }
@@ -287,13 +289,13 @@ jobs:
                 then .created_at | fromdateiso8601
                 else error("heal issue provenance is not verified") end' <<< "${heal_issue_json}")" ||
                 { echo "::error::Explicit validation target is not authorized."; exit 1; }
-              # One 100-item page, not paginated: a full page means the label
-              # history cannot be verified in one read, so it fails closed.
-              heal_events_json="$(gh api --method GET -f per_page=100 \
+              # Every events page is read, so the whole label history is
+              # verified: one read per 100 events (one for a typical heal issue).
+              heal_events_json="$(gh api --method GET --paginate --slurp -f per_page=100 \
                 "repos/${GITHUB_REPOSITORY}/issues/${target_detail}/events")" || exit 1
               jq -e --arg author "${target_author}" --argjson created "${heal_issue_created}" '
-                type == "array" and length < 100 and
-                ([ .[] | select(type == "object" and .event == "labeled" and
+                type == "array" and all(.[]; type == "array") and
+                ([ .[][] | select(type == "object" and .event == "labeled" and
                    (.label | type == "object") and .label.name == "ai:workflow-heal") ] as $applied |
                  ($applied | length) > 0 and
                  all($applied[]; (.actor | type == "object") and .actor.login == $author) and

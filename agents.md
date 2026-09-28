@@ -1185,7 +1185,7 @@ committing the corresponding file:
   verified workflow-heal issue: `ai:workflow-heal`, authored by an `OWNER` User
   or `github-actions[bot]`, the `workflow-failure-heal:fp=` marker line,
   `stable` as its Integration/Target branch line, the label applied only by the
-  author within 120 s of creation (one 100-item events page), and the same
+  author within 120 s of creation (every events page read), and the same
   author as the target PR (issue #4791); any other base is refused. Checkout
   pins and verifies that PR's SHA without persisting checkout credentials.
   Empty `target_ref` retains integration/default selection.

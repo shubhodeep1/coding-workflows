@@ -61,7 +61,7 @@ def _gh_stub(bin_dir: Path) -> None:
 
 	The target listing (head=<owner>:$VALIDATE_TARGET_REF) prints PULLS_JSON,
 	any other pull listing prints PARENT_JSON, an issue-events read prints
-	EVENTS_JSON, and an issue read prints ISSUE_JSON. FAIL_API=yes fails every
+	EVENTS_JSON (the slurped pages), and an issue read prints ISSUE_JSON. FAIL_API=yes fails every
 	call; FAIL_SECOND=yes fails every call after the first; FAIL_THIRD=yes
 	fails every call after the second.
 	"""
@@ -100,7 +100,7 @@ def _make_invoke(tmp_path: Path):
 	bin_dir = tmp_path / "bin"
 	_gh_stub(bin_dir)
 
-	def invoke(pulls, target="claude/implement-plan-example", api_failure=False, parent=None, issue=None, second_failure=False, events=None, third_failure=False):
+	def invoke(pulls, target="claude/implement-plan-example", api_failure=False, parent=None, issue=None, second_failure=False, events=None, third_failure=False, event_pages=None):
 		output = tmp_path / "output"
 		output.write_text("", encoding="utf-8")
 		calls = tmp_path / "calls"
@@ -114,7 +114,7 @@ def _make_invoke(tmp_path: Path):
 			"PARENT_JSON": json.dumps([parent if parent is not None else []]),
 			"ISSUE_JSON": json.dumps(issue if issue is not None else {}),
 			"FAIL_SECOND": "yes" if second_failure else "no",
-			"EVENTS_JSON": json.dumps(events if events is not None else []),
+			"EVENTS_JSON": json.dumps(event_pages if event_pages is not None else [events if events is not None else []]),
 			"FAIL_THIRD": "yes" if third_failure else "no",
 		})
 		result = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
@@ -246,7 +246,7 @@ def test_stable_base_requires_verified_heal_issue(tmp_path: Path):
 	assert "/events" not in invoke.calls[1]
 	assert invoke.calls[2].endswith("repos/owner/repo/issues/4665/events")
 	assert "per_page=100" in invoke.calls[2]
-	assert "--paginate" not in invoke.calls[2]
+	assert "--paginate --slurp" in invoke.calls[2]
 	# Unrelated later labels, including by other accounts, do not matter.
 	assert invoke([pr], target=branch, issue=heal, events=HEAL_EVENTS + [_labeled("ai:claude-blocked", actor="someone")])[0] == 0
 	# github-actions[bot] is the other heal automation author.
@@ -294,21 +294,42 @@ def test_stable_base_requires_verified_heal_issue(tmp_path: Path):
 		"labelled before creation": [_labeled("ai:workflow-heal", at="2026-09-27T17:05:52Z")],
 		"unreadable event time": [_labeled("ai:workflow-heal", at="soon")],
 		"no actor": [{"event": "labeled", "label": {"name": "ai:workflow-heal"}, "created_at": "2026-09-27T17:05:55Z"}],
-		"full page": HEAL_EVENTS + [_labeled("ai:other", at="2026-09-27T18:00:00Z")] * 98,
 		"not an array": {"events": HEAL_EVENTS},
 	}
 	for name, events in rejected_events.items():
 		assert invoke([pr], target=branch, issue=heal, events=events) == (1, ""), name
 		assert len(invoke.calls) == 3, name
 
+	# Every events page is verified, so a long label history is read in full
+	# rather than failing at 100 events.
+	filler = [_labeled("ai:other", at="2026-09-27T18:00:00Z")] * 99
+	assert invoke([pr], target=branch, issue=heal, event_pages=[HEAL_EVENTS[:1] + filler, HEAL_EVENTS[1:]])[0] == 0
+	late_relabel = _labeled("ai:workflow-heal", actor="someone", at="2026-09-28T01:00:00Z")
+	rejected_pages = {
+		"re-labelled by someone else on a later page": [HEAL_EVENTS[:1] + filler, [late_relabel]],
+		"labelled first on a later page, too late": [filler, [_labeled("ai:workflow-heal", at="2026-09-27T18:00:01Z")]],
+		"pages not an array": {"pages": [HEAL_EVENTS]},
+		"a page not an array": [HEAL_EVENTS, {"events": []}],
+		"no pages": [],
+	}
+	for name, pages in rejected_pages.items():
+		assert invoke([pr], target=branch, issue=heal, event_pages=pages) == (1, ""), name
+		assert len(invoke.calls) == 3, name
+
 	# Read failures fail closed.
 	assert invoke([pr], target=branch, issue=heal, events=HEAL_EVENTS, second_failure=True) == (1, "")
 	assert invoke([pr], target=branch, issue=heal, events=HEAL_EVENTS, third_failure=True) == (1, "")
 	# The target PR author must be a plain login before anything else is read.
-	for login in ("", "two words", "owner$(id)", "-owner", None):
+	for login in ("", "two words", "owner$(id)", "-owner", "owner-", "own--er", "o" * 40, "owner[bot]x", None):
 		assert invoke([{**pr, "user": {"login": login, "type": "User"}}], target=branch, issue=heal, events=HEAL_EVENTS) == (1, ""), login
 		assert len(invoke.calls) == 1, login
 	assert invoke([{key: value for key, value in pr.items() if key != "user"}], target=branch, issue=heal, events=HEAL_EVENTS) == (1, "")
+	# Logins that follow GitHub's rules pass the pattern: single inner hyphens,
+	# the 39-character maximum, and a `[bot]` suffix after it.
+	for login in ("o-w-n-e-r", "o" * 39, "o" * 39 + "[bot]"):
+		user = {"login": login, "type": "User"}
+		issue = _heal_issue(user=user)
+		assert invoke([{**pr, "user": user}], target=branch, issue=issue, events=[_labeled("ai:workflow-heal", actor=login)])[0] == 0, login
 	# A stable base is refused for a head that is not an issue project.
 	other = "claude/implement-plan-some-project"
 	assert invoke([_pr(other, "stable")], target=other, issue=heal, events=HEAL_EVENTS) == (1, "")
