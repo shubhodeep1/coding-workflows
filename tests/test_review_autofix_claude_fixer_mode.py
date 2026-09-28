@@ -484,6 +484,8 @@ if args[:1] != ["api"]:
 if path == "user":
 	emit({"login": state["login"]})
 elif path.endswith("/comments"):
+	if state.get("comments_fail"):
+		sys.exit(1)
 	emit(state["comments"])
 elif path.endswith("/files"):
 	emit(state.get("files") or [{"filename": "scripts/big_change.sh"}])
@@ -494,7 +496,7 @@ else:
 '''
 
 
-def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str = "workflow_dispatch", converged_head: str = "", extra_env: dict | None = None, marker_author: str = AUTHOR, files: list[dict] | None = None, pr_overrides: dict | None = None):
+def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str = "workflow_dispatch", converged_head: str = "", extra_env: dict | None = None, marker_author: str = AUTHOR, files: list[dict] | None = None, pr_overrides: dict | None = None, comments_fail: bool = False):
 	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
@@ -509,6 +511,7 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 		],
 		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1", **(pr_overrides or {})},
 		"files": files,
+		"comments_fail": comments_fail,
 	}), encoding="utf-8")
 	output_file = tmp / "out.txt"
 	output_file.write_text("", encoding="utf-8")
@@ -646,10 +649,11 @@ def test_gate_same_head_pull_request_event_with_a_pending_handoff_reviews_instea
 
 def test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails():
 	with tempfile.TemporaryDirectory() as td:
-		proc, out = _run_gate(Path(td), head_ref="claude/sharp-franklin-1hrznc-11", comments=None, event_name="pull_request",
-			files=DOCS_FILES, pr_overrides={"changed_files": 2})
+		proc, out = _run_gate(Path(td), head_ref="claude/sharp-franklin-1hrznc-11", comments=[], event_name="pull_request",
+			files=DOCS_FILES, pr_overrides={"changed_files": 2}, comments_fail=True)
 	assert proc.returncode == 0, proc.stderr
-	assert "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_handoff_unverified pr=42" in proc.stdout
+	assert "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_handoff_unverified pr=42 fetch_state=api_error" in proc.stdout
+	assert "claude_handoff_suppressed=true" in proc.stdout
 	assert out["deterministic_skip"] == "false" and out["should_run"] == "true"
 
 
