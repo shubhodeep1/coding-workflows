@@ -146,7 +146,7 @@ def test_review_rounds_are_fixed_by_claude(text):
 	assert "`[claude-merge-resolve] merge <base branch>`" in text
 	assert "`[claude-intervention] <summary>`" in text
 	assert "the workflow never runs the GPT review-blocked judge" in text
-	assert "if `state` is review-round / conflict use `<next stage on review round>`" in text
+	assert "`review` → `<next stage on review round>`" in text
 
 
 def test_security_dispatch_targets_project_branch(text):
@@ -209,6 +209,12 @@ def test_checker_ignores_superseded_waits(text):
 	assert "end the turn without re-arming: the next stage hands you its own wait" in text
 
 
+def test_stage_sessions_start_no_side_sessions(text):
+	"""A stage's side session and its §26 checker add two links (PR #4601's checker hit depth 8)."""
+	assert "- **No side sessions.** A stage session calls `create_session` only where this command says so: the project checker, the next stage, the `/deploy-activate` session, and a fixer." in text
+	assert "When a separate fix is wanted, file it as a GitHub issue: the Claude issue route starts it from the pickup, at depth 2 or less." in text
+
+
 def test_depth_limit_refusal_is_loud_not_a_session_local_cron(text):
 	assert "**Refused at the depth limit.**" in text
 	assert "do **not** fall back to `CronCreate` or any other session-local loop" in text
@@ -258,6 +264,51 @@ def test_issue_mode_archives_stopped_stage_sessions(text):
 	assert "If that read fails, archive nothing: treat the label as still present" in text
 	# The stop title must not collide with a stage title that is still working.
 	assert "blocked on issue" not in text.replace("— blocked on issue", "")
+
+
+def test_checker_routes_on_action_not_state(text):
+	"""PR #4596: a low-effort checker read `state: review-round` and handed the
+	PR back; the checker prompt now follows the script's `action` field."""
+	prompt = text[text.index("### Checker prompt"):text.index("### Hand-back")]
+	assert "Route on the JSON's `action` field only, never on `state`" in prompt
+	assert "A review round or a conflict never uses the hand-back: it is always `next_stage` + `review` (step 5)" in prompt
+	# The explicit state → action table, one row per mapping.
+	for row in (
+		"| PR | merged | next_stage | success | 5 |",
+		"| PR | review-round, conflict | next_stage | review | 5 |",
+		"| PR | blocked, closed, stuck | hand_back | — | 4 |",
+		"| run | completed | next_stage | success | 5 |",
+		"| run | failed | next_stage | block | 5 |",
+		"| issue list | resolved | next_stage | success | 5 |",
+		"| issue list | blocked | next_stage | block | 5 |",
+		"| anything | not done | wait | — | 2 |",
+		"| anything | read failed (exit 2) | retry | — | 3 |",
+	):
+		assert row in prompt, row
+	assert "2. `action` is `wait` →" in prompt
+	# A checker reused across the change refreshes its older script first.
+	assert "git checkout FETCH_HEAD -- .claude/scripts/check_in_status.py` once and run step 1 again" in prompt
+	assert "3. `action` is `retry` (exit 2, the JSON carries `error`) →" in prompt
+	assert "4. `action` is `hand_back` (only a blocked, closed, or stuck PR) →" in prompt
+	assert "Never take this step for any other `action`." in prompt
+	assert "5. `action` is `next_stage` (or a step 3 / 4 / 4b fallback, which uses `block`) → pick the next stage from the JSON's `next_stage` field alone" in prompt
+	assert "`success` → `<next stage on success>`; `review` → `<next stage on review round>`; `block` → `<next stage on block>`" in prompt
+	# The old state-reading branches are gone.
+	assert "`state` is blocked / closed / stuck and a hand-back trigger is given" not in prompt
+	assert "if `state` is merged / completed / resolved use" not in prompt
+
+
+def test_done_waiting_documents_action(text):
+	section = text[text.index("**What counts as \"done waiting\"**"):text.index("### Checker prompt")]
+	assert "`action`, and `next_stage` when `action` is `next_stage`" in section
+	assert "exit 2 means the read failed and carries `action: retry`" in section
+	assert "A review round or a conflict is **never** `hand_back`" in section
+
+
+def test_hand_back_section_routes_on_action(text):
+	section = text[text.index("### Hand-back"):text.index("### Fallbacks")]
+	assert "and routes on its `action`" in section
+	assert "If `action` is `hand_back` (blocked, closed, or stuck), the stage session:" in section
 
 
 def test_third_conformance_fix_gets_a_fix_check_not_a_fourth_run(text):

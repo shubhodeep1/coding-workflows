@@ -15,7 +15,9 @@ Shell drivers:
     with the ``ai:claude`` label and sends one ``repository_dispatch``
     (event type ``claude-issue``) to coding-workflows.
   * ``scripts/claude_issue_intake.sh`` runs in coding-workflows. It validates
-    the payload against the consumer-repo registry and queues it as one
+    the payload against the consumer-repo registry, authorizes it against the
+    live target issue and the dispatcher's permission on the target repo
+    (``authorize-target``, issue #4620), and queues it as one
     ``ai:claude-issue-queue`` issue in coding-workflows (``queue-issue``),
     created with the workflow's ``GITHUB_TOKEN`` so no workflow reacts to it.
   * The Claude issue pickup session (``.claude/commands/claude-issue-pickup.md``)
@@ -25,6 +27,10 @@ Shell drivers:
     claude-code-remote tools (issue #4525).
   * ``scripts/claude_issue_queue_watchdog.sh`` flags queue issues nobody picked
     up (``queue-stale``).
+  * A session too deep in the session lineage to create its own CLAUDE.md
+    §26 checker asks the pickup for one with a one-shot trigger; the pickup
+    parses that request with ``arm-check-in-request`` (CLAUDE.md §26.B step
+    1c).
 
 Queue binding (issue #4621): the creator of a queue issue says nothing about
 its current title and body, which anyone who can edit the issue can change.
@@ -108,7 +114,12 @@ CODEX_ONLY_LABELS: tuple[str, ...] = (
 
 # Labels whose issues skip their own security pass in the Claude project
 # sequence (they are produced by automation; a security-finding project that
-# ran its own audit could open follow-ups of follow-ups).
+# ran its own audit could open follow-ups of follow-ups). The
+# `skip_security_pass` value route_issue derives from them is advisory: it is
+# logged and carried in the dispatch payload and queue item, but a label can be
+# added by anyone, so `/implement-issue-claude` decides with
+# `.claude/scripts/security_pass_skip.py`, which verifies the issue was created
+# and labelled by the issue automation (issue #4623).
 SECURITY_PASS_SKIP_LABELS: tuple[str, ...] = (
 	"ai:security",
 	"ai:check-triage",
@@ -116,6 +127,15 @@ SECURITY_PASS_SKIP_LABELS: tuple[str, ...] = (
 )
 
 VALID_TRIGGERS: tuple[str, ...] = ("opened", "reclarify", "manual")
+
+# Intake authorization (issue #4620): the same author rule clarify applies
+# before it routes an issue (.github/workflows/clarify.yml), plus the
+# repository permissions a dispatcher needs on the target repo. The REST
+# `permission` field folds `maintain` into `write` and `triage` into `read`.
+TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS: tuple[str, ...] = ("OWNER", "MEMBER", "COLLABORATOR")
+TRUSTED_ISSUE_BOT_AUTHOR = "github-actions[bot]"
+DISPATCHER_ALLOWED_PERMISSIONS: tuple[str, ...] = ("admin", "write")
+RECLARIFY_COMMAND_PREFIX = "/reclarify"
 
 ORCHESTRATOR_BODY_MARKER_RE = re.compile(r"(?mi)^\s*(?:[-*]\s*)?Managed by:\s*AI Orchestrator\b")
 E2E_FIXTURE_TITLE_RE = re.compile(r"(?i)^\[E2E ")
@@ -279,6 +299,88 @@ def validate_payload(
 		"skip_security_pass": payload.get("skip_security_pass") is True,
 		"reporter_run_url": payload.get("reporter_run_url") if isinstance(payload.get("reporter_run_url"), str) else "",
 	}
+
+
+def _user_field(item: dict[str, Any], key: str) -> str:
+	user = item.get("user")
+	value = user.get(key) if isinstance(user, dict) else None
+	return value if isinstance(value, str) else ""
+
+
+def is_trusted_issue_author(item: dict[str, Any]) -> bool:
+	"""Clarify's author rule for an issue or comment object from the REST API.
+
+	A ``User`` whose ``author_association`` is OWNER, MEMBER, or COLLABORATOR,
+	or the ``github-actions[bot]`` Bot.
+	"""
+	if not isinstance(item, dict):
+		return False
+	user_type = _user_field(item, "type")
+	if user_type == "User":
+		return item.get("author_association") in TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS
+	return user_type == "Bot" and _user_field(item, "login") == TRUSTED_ISSUE_BOT_AUTHOR
+
+
+def has_trusted_reclarify(comments: list[Any]) -> bool:
+	"""True when a trusted ``User`` commented ``/reclarify`` (clarify's comment gate)."""
+	for comment in comments or []:
+		if not isinstance(comment, dict) or _user_field(comment, "type") != "User":
+			continue
+		body = comment.get("body")
+		if (
+			isinstance(body, str)
+			and body.startswith(RECLARIFY_COMMAND_PREFIX)
+			and comment.get("author_association") in TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS
+		):
+			return True
+	return False
+
+
+def authorize_target(
+	validated: dict[str, Any],
+	issue: Any,
+	dispatcher_permissions: dict[str, str],
+	comments: list[Any] | None = None,
+) -> dict[str, Any]:
+	"""Decide whether a validated intake payload may start a Claude session.
+
+	Inputs: ``validated`` from ``validate_payload``; ``issue`` from one
+	``GET repos/<repo>/issues/<N>``; ``dispatcher_permissions`` maps each
+	dispatcher login of the intake run (``github.actor`` and
+	``github.triggering_actor``) to the ``permission`` field of
+	``GET repos/<repo>/collaborators/<login>/permission``; ``comments`` is the
+	issue's comment array, needed only when the author is not trusted.
+
+	Output: ``{"authorized": bool, "reason": str, "needs_comments": bool}``.
+	``needs_comments`` is true only when every other check passed and the
+	caller has not supplied ``comments`` yet; the caller reads them and asks
+	again. Pure: no API calls.
+	"""
+	def _result(authorized: bool, reason: str, needs_comments: bool = False) -> dict[str, Any]:
+		return {"authorized": authorized, "reason": reason, "needs_comments": needs_comments}
+
+	if not isinstance(dispatcher_permissions, dict) or not dispatcher_permissions:
+		return _result(False, "dispatcher_unknown")
+	for login, permission in dispatcher_permissions.items():
+		if not isinstance(login, str) or not login:
+			return _result(False, "dispatcher_unknown")
+		if permission not in DISPATCHER_ALLOWED_PERMISSIONS:
+			return _result(False, "dispatcher_not_authorized")
+	if not isinstance(issue, dict) or "pull_request" in issue or issue.get("number") != validated.get("issue_number"):
+		return _result(False, "target_not_issue")
+	repository_url = issue.get("repository_url")
+	expected_url = f"https://api.github.com/repos/{validated.get('repo', '')}"
+	if not isinstance(repository_url, str) or repository_url.lower() != expected_url.lower():
+		return _result(False, "target_repo_mismatch")
+	if issue.get("state") != "open":
+		return _result(False, "issue_closed")
+	if is_trusted_issue_author(issue):
+		return _result(True, "trusted_author")
+	if comments is None:
+		return _result(False, "untrusted_issue_author", needs_comments=True)
+	if has_trusted_reclarify(comments):
+		return _result(True, "trusted_reclarify")
+	return _result(False, "untrusted_issue_author")
 
 
 def build_fire_text(validated: dict[str, Any]) -> str:
@@ -864,6 +966,51 @@ def queue_stale(
 	return stale
 
 
+# CLAUDE.md §26.B step 1c: the arguments a deep session sends the pickup.
+ARM_CHECK_IN_REQUEST_RE = re.compile(
+	r"^— arm-check-in (?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?P<pr>[1-9][0-9]{0,9}) "
+	r"for (?P<requester>session_[A-Za-z0-9]{10,64})$"
+)
+
+
+def parse_arm_check_in_request(text: str, allowed_repos: list[str]) -> dict[str, Any]:
+	"""Parse one ``— arm-check-in <owner>/<repo>#<n> for <session id>`` line.
+
+	Input: the pickup's ``$ARGUMENTS`` text and the allowed repositories
+	(``load_allowed_repos``). Output: the fixed fields the pickup uses to
+	create the checker and wake the requester; nothing in the output is copied
+	from the request except the validated slug, number, and session id.
+	Raises ValueError on anything else: more than one line, another format,
+	or an unregistered repository. Pure; no API calls.
+	"""
+	lines = [line.strip() for line in (text or "").strip().splitlines() if line.strip()]
+	if len(lines) != 1:
+		raise ValueError("expected exactly one arguments line")
+	match = ARM_CHECK_IN_REQUEST_RE.match(lines[0])
+	if not match:
+		raise ValueError("arguments are not '— arm-check-in <owner>/<repo>#<n> for session_<id>'")
+	repo = match.group("repo")
+	allowed = {slug.lower() for slug in allowed_repos if isinstance(slug, str)}
+	if repo.lower() not in allowed:
+		raise ValueError(f"repo not registered: {repo}")
+	number = int(match.group("pr"))
+	pr_url = f"https://github.com/{repo}/pull/{number}"
+	return {
+		"repo": repo,
+		"pr_number": number,
+		"pr_url": pr_url,
+		"source_url": f"https://github.com/{repo}",
+		"requester": match.group("requester"),
+		"checker_title": f"PR #{number} status check-in",
+		"ready_trigger_name": f"PR #{number} status check-in: checker ready",
+		"ready_prompt": (
+			f"CLAUDE.md §26.B step 1c: the Claude issue pickup created checker <checker id> "
+			f"for PR #{number} ({pr_url}). Continue with CLAUDE.md §26.B steps 3–4 for that "
+			f"checker in this session."
+		),
+	}
+
+
 def _read_json(path: str) -> Any:
 	return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -905,6 +1052,18 @@ def _cmd_validate_payload(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_authorize_target(args: argparse.Namespace) -> int:
+	validated = _read_json(args.validated_json)
+	issue = _read_json(args.issue_json)
+	permissions = _read_json(args.permissions_json)
+	comments = _read_json(args.comments_json) if args.comments_json else None
+	if comments is not None and not isinstance(comments, list):
+		print("comments JSON is not an array", file=sys.stderr)
+		return 2
+	print(json.dumps(authorize_target(validated, issue, permissions, comments)))
+	return 0
+
+
 def _cmd_fire_body(args: argparse.Namespace) -> int:
 	validated = _read_json(args.validated_json)
 	print(json.dumps({"text": build_fire_text(validated)}))
@@ -920,6 +1079,25 @@ def _cmd_queue_issue(args: argparse.Namespace) -> int:
 def _cmd_pr_fix_queue_issue(args: argparse.Namespace) -> int:
 	try:
 		print(json.dumps(build_pr_fix_queue_issue(args.repo, args.pr, args.head, args.kind, args.claim, args.run_url)))
+	except ValueError as exc:
+		print(str(exc), file=sys.stderr)
+		return 2
+	return 0
+
+
+def _cmd_arm_check_in_request(args: argparse.Namespace) -> int:
+	try:
+		# ValueError covers UnicodeDecodeError and a path with a NUL byte.
+		text = Path(args.arguments_file).read_text(encoding="utf-8")
+	except (OSError, ValueError) as exc:
+		print(f"cannot read arguments file: {exc}", file=sys.stderr)
+		return 2
+	try:
+		# load_allowed_repos already maps an unreadable or malformed registry
+		# to the self repo only, so the only error this block raises today is
+		# parse_arm_check_in_request's ValueError, which ends in exit 2.
+		allowed = load_allowed_repos(Path(args.registry), args.self_repo)
+		print(json.dumps(parse_arm_check_in_request(text, allowed)))
 	except ValueError as exc:
 		print(str(exc), file=sys.stderr)
 		return 2
@@ -1210,6 +1388,13 @@ def main(argv: list[str] | None = None) -> int:
 	p_validate.add_argument("--self-repo", default=DEFAULT_UPSTREAM_REPO)
 	p_validate.set_defaults(func=_cmd_validate_payload)
 
+	p_authorize = sub.add_parser("authorize-target", help="decide whether a validated payload may start a Claude session (issue #4620)")
+	p_authorize.add_argument("--validated-json", required=True)
+	p_authorize.add_argument("--issue-json", required=True)
+	p_authorize.add_argument("--permissions-json", required=True, help='{"<login>": "<permission>"} for each dispatcher login')
+	p_authorize.add_argument("--comments-json", default="", help="the issue's comments; only needed when the author is not trusted")
+	p_authorize.set_defaults(func=_cmd_authorize_target)
+
 	p_fire = sub.add_parser("fire-body", help="build the routine /fire request body")
 	p_fire.add_argument("--validated-json", required=True)
 	p_fire.set_defaults(func=_cmd_fire_body)
@@ -1253,6 +1438,12 @@ def main(argv: list[str] | None = None) -> int:
 	p_stale.add_argument("--now", default="")
 	p_stale.add_argument("--trusted-author", default=QUEUE_TRUSTED_AUTHOR)
 	p_stale.set_defaults(func=_cmd_queue_stale)
+
+	p_arm = sub.add_parser("arm-check-in-request", help="parse a pickup — arm-check-in request (CLAUDE.md §26.B step 1c)")
+	p_arm.add_argument("--arguments-file", required=True)
+	p_arm.add_argument("--registry", required=True)
+	p_arm.add_argument("--self-repo", default=DEFAULT_UPSTREAM_REPO)
+	p_arm.set_defaults(func=_cmd_arm_check_in_request)
 
 	args = parser.parse_args(argv)
 	return args.func(args)

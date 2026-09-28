@@ -16,12 +16,24 @@ plus `--repo OWNER/REPO` (required).
 
 Output: one JSON object on stdout, e.g.
 
-  {"done": true, "reason": "PR #12 merged at 2026-09-23T04:00:00Z", ...}
-  {"done": false, "reason": "PR #12 open, healthy", ...}
-  {"done": false, "error": "gh api repos/o/r/pulls/12 failed: HTTP 403"}
+  {"done": true, "reason": "PR #12 merged at 2026-09-23T04:00:00Z", ..., "action": "next_stage", "next_stage": "success"}
+  {"done": false, "reason": "PR #12 open, healthy", ..., "action": "wait"}
+  {"done": false, "error": "gh api repos/o/r/pulls/12 failed: HTTP 403", "action": "retry"}
 
 Exit status: 0 when a verdict was reached (done or not), 2 when a read
-failed (the JSON then carries `error` and `done` is false).
+failed (the JSON then carries `error`, `done` is false and `action` is
+`retry`).
+
+Every JSON line `main` prints also carries `action` (and, for
+`next_stage`, `next_stage`): the routing decision the checker follows, so no
+checker model interprets `state` itself. `main` adds it with `route_verdict`;
+the `check_*` functions return the verdict without it, so a direct caller
+(`scripts/claude_pr_sweep.py`) that needs it calls `route_verdict` itself.
+`route_verdict` holds the full state → action table. In short: plain PR
+mode → `wait` / `hand_back` / `next_stage` (`success`, `review`, `block`),
+and a review round or conflict is never `hand_back`;
+run and issue-list modes → `wait` / `next_stage`; --hand-back mode →
+`wait` / `hand_back_fixer` / `hand_back_all`.
 
 "Done waiting" rules (match `/implement-plan-claude` → Check-in Loop):
 
@@ -46,6 +58,8 @@ failed (the JSON then carries `error` and `done` is false).
     `claude/implement-plan-*` head keeps the --stuck-hours window). A live
     `ai:claude-fix-claim` on the current head reports `claimed` and a hold
     reports `held`; both are not done, so nobody starts a second fixer.
+    A claim counts only when an owner / member / collaborator posted it as
+    the PR's author or as CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN (issue #4622).
     --min-age-hours keeps a due fix waiting until it has been visible that
     long (`since`). Every verdict carries `kind`, `head_sha`, `claim`,
     `hand_backs`, `cap` and `cap_reached` (hand-backs counted per distinct
@@ -413,10 +427,38 @@ def _env_positive_float(name: str, default: float) -> float:
 	return value if value > 0 else default
 
 
-def read_fix_claims(comments: list, head_sha: str, now: dt.datetime, ignore_by: tuple[str, ...] = ()) -> dict:
+def _fix_claim_trusted_logins(pr: dict) -> tuple[str, ...]:
+	"""Casefolded logins whose `ai:claude-fix-claim` comments count on `pr`.
+
+	Only the identities that actually post claims (issue #4622): the PR's own
+	author, whose Claude sessions push and fix it through the session proxy,
+	and the configured workflow account CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN, the
+	`GH_PAT` login the catch-all sweep posts its reservations with. Any other
+	collaborator's claim or hold is ignored. No API calls: `pr` is the
+	`pulls/N` object the caller already fetched. Empty when neither is known,
+	so no claim counts (fail closed); a `pr` that is not an object counts only
+	the workflow account's claims.
+	"""
+	logins = []
+	author = pr.get("user") if isinstance(pr, dict) else None
+	if isinstance(author, dict) and isinstance(author.get("login"), str) and author["login"]:
+		logins.append(author["login"].casefold())
+	workflow_login = os.environ.get("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "").strip()
+	if workflow_login:
+		logins.append(workflow_login.casefold())
+	return tuple(logins)
+
+
+def read_fix_claims(comments: list, head_sha: str, now: dt.datetime, ignore_by: tuple[str, ...] = (),
+	trusted_logins: tuple[str, ...] = ()) -> dict:
 	"""Summarise the trusted `ai:claude-fix-claim` markers on one PR.
 
-	Input: the PR's issue comments (REST objects) and its current head sha.
+	Input: the PR's issue comments (REST objects), its current head sha, and
+	the casefolded `trusted_logins` whose claims count
+	(`_fix_claim_trusted_logins`). A claim counts only when its comment's
+	author association is owner / member / collaborator **and** its author's
+	login is in `trusted_logins`; an empty tuple counts no claim (fail
+	closed), so a collaborator cannot forge a hold or push a PR to the cap.
 	Output: `{"claim": {"state": none|live|expired|held, "kind", "by", "at"},
 	"hand_backs": n, "cap": c, "cap_reached": bool}`. The latest trusted claim
 	on the current head decides `claim`; a `hold` never expires while the head
@@ -434,6 +476,10 @@ def read_fix_claims(comments: list, head_sha: str, now: dt.datetime, ignore_by: 
 	latest = None
 	for comment in sorted(comments, key=lambda entry: entry.get("id") if type(entry.get("id")) is int else 0):
 		if comment.get("author_association") not in FIX_CLAIM_TRUSTED_ASSOCIATIONS:
+			continue
+		claim_author = comment.get("user")
+		if (not isinstance(claim_author, dict) or not isinstance(claim_author.get("login"), str)
+			or claim_author["login"].casefold() not in trusted_logins):
 			continue
 		body = comment.get("body")
 		if not isinstance(body, str):
@@ -494,7 +540,7 @@ def check_pr_hand_back(repo: str, number: int, stuck_hours: float, min_age_hours
 		raise ValueError("PR head sha must be 40 lowercase hex characters")
 
 	comments = gh_api_list(f"repos/{repo}/issues/{number}/comments")
-	claims = read_fix_claims(comments, head_sha, now, ignore_claim_by)
+	claims = read_fix_claims(comments, head_sha, now, ignore_claim_by, trusted_logins=_fix_claim_trusted_logins(pr))
 	base = {"head_sha": head_sha, **claims}
 	claim = claims["claim"]
 	if claim["state"] == "held":
@@ -581,6 +627,78 @@ def check_issues(repo: str, numbers: list[int]) -> dict:
 	return {"done": True, "state": "resolved", "reason": "every issue closed or ai:merged: " + ", ".join(f"#{n}" for n in numbers)}
 
 
+# The routing table `route_verdict` reads (its docstring renders it).
+CHECKER_ROUTE_TABLE = {
+	"pr": {
+		"merged": ("next_stage", "success"),
+		"review-round": ("next_stage", "review"),
+		"conflict": ("next_stage", "review"),
+		"blocked": ("hand_back", None),
+		"closed": ("hand_back", None),
+		"stuck": ("hand_back", None),
+	},
+	"run": {
+		"completed": ("next_stage", "success"),
+		"failed": ("next_stage", "block"),
+	},
+	"issues": {
+		"resolved": ("next_stage", "success"),
+		"blocked": ("next_stage", "block"),
+	},
+	"hand_back": {
+		"conflict": ("hand_back_fixer", None),
+		"review-round": ("hand_back_fixer", None),
+		"ci-failed": ("hand_back_fixer", None),
+		"blocked": ("hand_back_fixer", None),
+		"merged": ("hand_back_all", None),
+		"closed": ("hand_back_all", None),
+	},
+}
+
+
+def route_verdict(verdict: dict, mode: str) -> dict:
+	"""Return the routing fields (`action`, plus `next_stage`) for one verdict.
+
+	Input: a verdict dict from `check_pr`, `check_pr_hand_back`, `check_run`
+	or `check_issues`, and `mode` — `pr` (plain or --terminal-only; the
+	`/implement-plan-claude` project checker), `hand_back` (the CLAUDE.md §26
+	checker), `run`, or `issues`. Output: `{"action": ...}` or
+	`{"action": "next_stage", "next_stage": ...}`, for the caller to merge
+	into the verdict. No API calls; only `done` and `state` are read.
+
+	A verdict with `"done": false` is always `wait`, whatever its `state`.
+	For `"done": true`:
+
+	| mode        | state                         | action          | next_stage |
+	|-------------|-------------------------------|-----------------|------------|
+	| `pr`        | merged                        | next_stage      | success    |
+	| `pr`        | review-round, conflict        | next_stage      | review     |
+	| `pr`        | blocked, closed, stuck        | hand_back       | —          |
+	| `run`       | completed                     | next_stage      | success    |
+	| `run`       | failed                        | next_stage      | block      |
+	| `issues`    | resolved                      | next_stage      | success    |
+	| `issues`    | blocked                       | next_stage      | block      |
+	| `hand_back` | conflict, review-round,       | hand_back_fixer | —          |
+	|             | ci-failed, blocked            |                 |            |
+	| `hand_back` | merged, closed                | hand_back_all   | —          |
+
+	A review round or a conflict is never `hand_back`: it starts a fresh
+	review-round stage session (#4596's checker misrouted one). When a
+	`hand_back` fails, the checker falls back to `next_stage` `block` itself.
+	Run and issue-list waits have no hand-back. A read failure (exit 2) is
+	`retry`; `main` adds it. Any other done state raises `ValueError`, so an
+	unmapped state is a loud exit-2 `retry`, never a silent guess.
+	"""
+	if not verdict.get("done"):
+		return {"action": "wait"}
+	state = verdict.get("state")
+	routed = CHECKER_ROUTE_TABLE.get(mode, {}).get(state)
+	if routed is None:
+		raise ValueError(f"no checker route for mode {mode!r} state {state!r}")
+	action, next_stage = routed
+	return {"action": action, "next_stage": next_stage} if next_stage else {"action": action}
+
+
 def _parse_issue_list(value: str) -> list[int]:
 	numbers = [int(part.strip().lstrip("#")) for part in value.split(",") if part.strip()]
 	if not numbers:
@@ -610,24 +728,29 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 	args = build_parser().parse_args(argv)
 	if args.repo.count("/") != 1:
-		print(json.dumps({"done": False, "error": f"--repo must be OWNER/REPO, got {args.repo!r}"}))
+		print(json.dumps({"done": False, "error": f"--repo must be OWNER/REPO, got {args.repo!r}", "action": "retry"}))
 		return 2
 	if args.pr is None and args.hand_back:
-		print(json.dumps({"done": False, "error": "--hand-back needs --pr"}))
+		print(json.dumps({"done": False, "error": "--hand-back needs --pr", "action": "retry"}))
 		return 2
 	now = now or dt.datetime.now(dt.timezone.utc)
 	try:
 		if args.pr is not None and args.hand_back:
 			verdict = check_pr_hand_back(args.repo, args.pr, args.stuck_hours, args.min_age_hours, now,
 				tuple(args.ignore_claim_by))
+			route_mode = "hand_back"
 		elif args.pr is not None:
 			verdict = check_pr(args.repo, args.pr, args.terminal_only, args.stuck_hours, now)
+			route_mode = "pr"
 		elif args.run is not None:
 			verdict = check_run(args.repo, args.run)
+			route_mode = "run"
 		else:
 			verdict = check_issues(args.repo, args.issues)
+			route_mode = "issues"
+		verdict = {**verdict, **route_verdict(verdict, route_mode)}
 	except (ReadError, KeyError, TypeError, ValueError) as exc:
-		print(json.dumps({"done": False, "error": str(exc)}))
+		print(json.dumps({"done": False, "error": str(exc), "action": "retry"}))
 		return 2
 	print(json.dumps(verdict))
 	return 0
