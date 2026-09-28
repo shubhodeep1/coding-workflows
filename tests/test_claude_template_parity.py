@@ -13,7 +13,11 @@ template-only change fail closed:
   `TEMPLATE_DIVERGENCE`, whose SHA-256 pins the template copy, so a change to a
   consumer-variant command also fails until the pin is updated in review;
 - a listed divergence must still exist and still differ;
-- the template tree holds no symlinks.
+- the template tree holds no symlinks, whatever their name.
+
+`__pycache__/` and `*.pyc` runtime output is skipped only while git does not
+track it: the sync copies every regular file, so a committed bytecode file is
+checked like any other (and when git cannot list the tree, nothing is skipped).
 
 Updating `TEMPLATE_DIVERGENCE` is itself a protected-equivalent change: in an
 unattended `/implement-plan-claude` project it needs a recorded
@@ -24,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -32,7 +37,8 @@ TEMPLATE_CLAUDE = REPO_ROOT / "workflow-templates" / ".claude"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-# Untracked runtime output (.gitignore) that is never synced or committed.
+# Runtime output (.gitignore). Skipped only while git does not track it: the
+# sync (`find -type f`) copies a committed bytecode file like any other.
 IGNORED_DIR_NAMES = frozenset({"__pycache__"})
 IGNORED_SUFFIXES = (".pyc",)
 
@@ -55,9 +61,32 @@ HOW_TO_FIX = (
 )
 
 
-def _walk(base: Path) -> tuple[list[str], list[str]]:
+def _is_runtime_output(rel: str) -> bool:
+	parts = rel.split("/")
+	return parts[-1].endswith(IGNORED_SUFFIXES) or any(part in IGNORED_DIR_NAMES for part in parts[:-1])
+
+
+def _git_tracked(base: Path) -> frozenset[str] | None:
+	"""Paths git tracks under `base`, relative to it; None when git cannot
+	list them (not a checkout, git missing), so the caller skips nothing."""
+	try:
+		prefix = base.relative_to(REPO_ROOT).as_posix()
+		result = subprocess.run(
+			["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", prefix],
+			capture_output=True,
+			check=True,
+		)
+	except (OSError, ValueError, subprocess.CalledProcessError):
+		return None
+	paths = result.stdout.decode("utf-8", "surrogateescape").split("\0")
+	return frozenset(path[len(prefix) + 1:] for path in paths if path.startswith(prefix + "/"))
+
+
+def _walk(base: Path, tracked: frozenset[str] | None = frozenset()) -> tuple[list[str], list[str]]:
 	"""Return (regular files, symlinks) under `base` as sorted POSIX paths
-	relative to it. Symlinked directories are reported, never followed."""
+	relative to it. Symlinks are reported whatever their name, and symlinked
+	directories are never followed. `__pycache__/` and `*.pyc` files are
+	skipped unless listed in `tracked`; `tracked=None` skips nothing."""
 	files: list[str] = []
 	links: list[str] = []
 	for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
@@ -66,15 +95,11 @@ def _walk(base: Path) -> tuple[list[str], list[str]]:
 			if (current / name).is_symlink():
 				links.append((current / name).relative_to(base).as_posix())
 				dirnames.remove(name)
-			elif name in IGNORED_DIR_NAMES:
-				dirnames.remove(name)
 		for name in filenames:
-			if name.endswith(IGNORED_SUFFIXES):
-				continue
 			rel = (current / name).relative_to(base).as_posix()
 			if (current / name).is_symlink():
 				links.append(rel)
-			else:
+			elif tracked is None or rel in tracked or not _is_runtime_output(rel):
 				files.append(rel)
 	return sorted(files), sorted(links)
 
@@ -83,12 +108,19 @@ def _sha256(path: Path) -> str:
 	return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def parity_violations(template_root: Path, root_claude: Path, divergence: dict[str, str]) -> list[str]:
-	"""Every reason the template tree fails the contract; empty when it passes."""
+def parity_violations(
+	template_root: Path,
+	root_claude: Path,
+	divergence: dict[str, str],
+	tracked: frozenset[str] | None = frozenset(),
+) -> list[str]:
+	"""Every reason the template tree fails the contract; empty when it passes.
+	`tracked` is what `_walk` needs to tell committed bytecode from runtime
+	output."""
 	problems: list[str] = []
 	if not template_root.is_dir():
 		return [f"{template_root} is missing"]
-	files, links = _walk(template_root)
+	files, links = _walk(template_root, tracked)
 	for rel in links:
 		problems.append(f"symlink in the template tree: {rel}")
 	for rel in files:
@@ -111,8 +143,13 @@ def parity_violations(template_root: Path, root_claude: Path, divergence: dict[s
 
 
 def test_template_tree_matches_root_claude():
-	problems = parity_violations(TEMPLATE_CLAUDE, ROOT_CLAUDE, TEMPLATE_DIVERGENCE)
+	problems = parity_violations(TEMPLATE_CLAUDE, ROOT_CLAUDE, TEMPLATE_DIVERGENCE, _git_tracked(TEMPLATE_CLAUDE))
 	assert not problems, "\n".join(problems + [HOW_TO_FIX])
+
+
+def test_git_lists_the_template_tree():
+	tracked = _git_tracked(TEMPLATE_CLAUDE)
+	assert tracked is not None and "settings.json" in tracked
 
 
 def test_template_tree_is_not_empty():
@@ -197,6 +234,43 @@ def test_checker_rejects_symlinks(tmp_path):
 	assert parity_violations(template, root, _pin(template)) == [
 		"symlink in the template tree: commands/same.md",
 		"symlink in the template tree: linked",
+	]
+
+
+def test_checker_rejects_symlinks_named_like_runtime_output(tmp_path):
+	template, root = _tree(tmp_path)
+	(template / "commands" / "evil.pyc").symlink_to(root / "settings.json")
+	(template / "hooks" / "__pycache__").mkdir()
+	(template / "hooks" / "__pycache__" / "guard.cpython-311.pyc").symlink_to(root / "hooks" / "guard.py")
+	(template / "scripts" / "__pycache__").mkdir(parents=True)
+	(template / "scripts" / "__pycache__" / "linked").symlink_to(root / "hooks", target_is_directory=True)
+	assert parity_violations(template, root, _pin(template)) == [
+		"symlink in the template tree: commands/evil.pyc",
+		"symlink in the template tree: hooks/__pycache__/guard.cpython-311.pyc",
+		"symlink in the template tree: scripts/__pycache__/linked",
+	]
+
+
+def test_checker_checks_committed_bytecode(tmp_path):
+	template, root = _tree(tmp_path)
+	(template / "hooks" / "evil.pyc").write_bytes(b"\0")
+	(template / "hooks" / "__pycache__").mkdir()
+	(template / "hooks" / "__pycache__" / "guard.cpython-311.pyc").write_bytes(b"\0")
+	(template / "hooks" / "__pycache__" / "local.cpython-311.pyc").write_bytes(b"\0")
+	tracked = frozenset({"hooks/evil.pyc", "hooks/__pycache__/guard.cpython-311.pyc"})
+	assert parity_violations(template, root, _pin(template), tracked) == [
+		"template-only file (no root .claude/ twin): hooks/__pycache__/guard.cpython-311.pyc",
+		"template-only file (no root .claude/ twin): hooks/evil.pyc",
+	]
+
+
+def test_checker_skips_nothing_when_git_cannot_list_the_tree(tmp_path):
+	template, root = _tree(tmp_path)
+	(template / "hooks" / "__pycache__").mkdir()
+	(template / "hooks" / "__pycache__" / "guard.cpython-311.pyc").write_bytes(b"\0")
+	assert _git_tracked(tmp_path / "workflow-templates" / ".claude") is None
+	assert parity_violations(template, root, _pin(template), None) == [
+		"template-only file (no root .claude/ twin): hooks/__pycache__/guard.cpython-311.pyc",
 	]
 
 
