@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/claude_issue_route.py\n  Location: ARM_CHECK_IN_REQUEST_RE at line 875-878 (the parser regex)\n  Issue: The session-id branch accepts `[A-Za-z0-9]{10,64}` but does not enforce the minimum length observed in production. The fix is a one-line tightening of the regex's minimum length to 24 to match the observed `session_01LkiqZoHfSm6HZF8n8Dogo1` (26 chars after `session_`) shape; the test at tests/test_claude_issue_route.py:660 uses 26 chars, so the test fixture still passes.\n  Suggested minimal fix: change `[A-Za-z0-9]{10,64}` to `[A-Za-z0-9]{20,64}` and add a parametrized rejection case for `session_abcdef12`.\n  HARDENING_RISK_SCORE: 1\n- File: .claude/commands/claude-issue-pickup.md\n  Location: Step 5.2 (line 67)\n  Issue: Step 5.2 says \"If it fails twice\" but does not specify the per-attempt timeout; if `create_session` hangs, the pickup can sit on the call for the whole MCP timeout before retrying, lengthening the wake. A bounded retry timeout (e.g., \"if the call does not return within 60 seconds, count it as a failure\") would bound the worst case.\n  Suggested minimal fix: append \"Treat any non-response within the MCP's per-call timeout as a failure for the retry counter.\" to the step 5.2 instruction.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f9aaa3dca9f2f830c78d1ed903eec8d757bcc2a3b6856e478e859361c8a3a77f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4610,
+    "run_id": "36372104681",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36372104681",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928032228_8b1c54ae14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4610,
+    "run_id": "36372104681"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T03:22:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
