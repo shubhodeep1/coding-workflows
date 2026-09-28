@@ -498,6 +498,34 @@ def test_intake_rejects_unregistered_repo(stubs):
 	assert result.returncode == 1
 	assert "reason=invalid_payload" in result.stdout
 	assert "-f title=" not in (stubs["log"].read_text() if stubs["log"].exists() else "")
+	# The payload's repo + issue are unverified: nothing is written to them.
+	assert "rejected reason=invalid_payload" in result.stdout
+	assert _target_writes(stubs, repo="stranger/repo", number=3) == []
+
+
+def test_intake_invalid_payload_for_registered_repo_writes_nothing(stubs):
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="bogus"))
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "rejected reason=invalid_payload" in result.stdout
+	assert _target_writes(stubs) == []
+	assert "/permission" not in (stubs["log"].read_text() if stubs["log"].exists() else "")
+
+
+@pytest.mark.parametrize("run_url", ["", "https://github.com/shubhodeep1/coding-workflows/actions/runs/123"])
+def test_intake_failure_alert_names_the_run_only_when_known(stubs, run_url):
+	# fail() after authorization: a hand-driven run has no RUN_URL, so no bare "Run: " line.
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), CLAUDE_ISSUE_QUEUE_TOKEN="", RUN_URL=run_url, TG_BOT_SECRET="tg-secret", TG_CHAT_ID="42")
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "reason=queue_not_configured" in result.stdout
+	sent = (stubs["tmp"] / "curl_args.log").read_text()
+	assert "Claude issue intake FAILED (queue_not_configured) for shubhodeep1/digital_pa#9" in sent
+	if run_url:
+		assert f"Run: {run_url}" in sent
+	else:
+		assert "Run:" not in sent
+	assert "labels[]=ai:claude-handoff-failed" in stubs["log"].read_text()
 
 
 def test_intake_without_queue_token_marks_issue(stubs):

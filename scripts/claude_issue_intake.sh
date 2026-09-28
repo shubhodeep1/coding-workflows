@@ -34,9 +34,11 @@
 # cannot start that session (issue #4525). CLAUDE_ISSUE_ROUTINE_ID and
 # CLAUDE_ISSUE_ROUTINE_TOKEN are still accepted and ignored (deprecated).
 #
-# Every failure after the payload names a well-formed repo + issue marks that
-# issue `ai:claude-handoff-failed`, comments how to retry or switch to Codex,
-# sends a Telegram ERROR, and exits 1 so the run is visibly red. All stable
+# An invalid payload or a refused authorization writes nothing to the issue
+# the payload names (reject()). Every failure after authorization (queue not
+# configured, queue read or write failed) marks the target issue
+# `ai:claude-handoff-failed`, comments how to retry or switch to Codex (fail()).
+# Both send a Telegram ERROR and exit 1 so the run is visibly red. All stable
 # log lines are prefixed CLAUDE_ISSUE_INTAKE.
 #
 # Required env (set by the workflow):
@@ -83,8 +85,9 @@ mkdir -p "${RUNTIME_DIR}"
 BINDING_FILE="${CLAUDE_ISSUE_QUEUE_BINDING_FILE:-${RUNTIME_DIR}/claude-issue-queue-binding/claude_issue_queue_binding.json}"
 RUN_ID="${GITHUB_RUN_ID:-}"
 
-# Best-effort target for failure reporting, read before validation so an
-# unregistered-but-well-formed repo still hears why nothing happened.
+# Best-effort target for the log and alert lines, read before validation so a
+# refused payload still names what it asked for. Nothing is written to it
+# until step 1b has authorized it (see reject()).
 RAW_REPO="$(jq -r '(.client_payload // .).repo // empty' "${PAYLOAD_FILE}" 2>/dev/null || true)"
 RAW_ISSUE="$(jq -r '(.client_payload // .).issue_number // empty' "${PAYLOAD_FILE}" 2>/dev/null || true)"
 
@@ -106,7 +109,10 @@ No Claude session was started for this issue.
 		[ -z "${RUN_URL}" ] || body+=$'\n\n'"Intake run: ${RUN_URL}"
 		gh_retry gh api "repos/${RAW_REPO}/issues/${RAW_ISSUE}/comments" -f body="${body}" >/dev/null 2>&1 || true
 	fi
-	tg_send_msg "Claude issue intake FAILED (${reason}) for ${RAW_REPO:-?}#${RAW_ISSUE:-?}: ${detail}"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+	local fail_tg_msg="Claude issue intake FAILED (${reason}) for ${RAW_REPO:-?}#${RAW_ISSUE:-?}: ${detail}"
+	# RUN_URL is empty on a hand-driven run; leave the line out rather than send a bare "Run: ".
+	[ -z "${RUN_URL}" ] || fail_tg_msg+=$'\n'"Run: ${RUN_URL}"
+	tg_send_msg "${fail_tg_msg}" "ERROR" >/dev/null 2>&1 || true
 	exit 1
 }
 
@@ -146,7 +152,10 @@ if ! python3 "${ROUTE_PY}" validate-payload \
 	--registry "${REGISTRY}" \
 	--self-repo "${SELF_REPO}" \
 	> "${VALIDATED_FILE}" 2> "${RUNTIME_DIR}/validate_error.txt"; then
-	fail "invalid_payload" "$(head -c 300 "${RUNTIME_DIR}/validate_error.txt" | tr '\n' ' ')"
+	# reject(), not fail(): the payload's repo + issue are unverified until
+	# step 1b, so an invalid payload must not make GH_PAT label or comment on
+	# whatever issue it names (an unregistered repo included).
+	reject "invalid_payload" "$(head -c 300 "${RUNTIME_DIR}/validate_error.txt" | tr '\n' ' ')"
 fi
 REPO="$(jq -r '.repo' "${VALIDATED_FILE}")"
 ISSUE_NUMBER="$(jq -r '.issue_number' "${VALIDATED_FILE}")"

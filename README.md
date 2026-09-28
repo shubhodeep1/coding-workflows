@@ -1300,9 +1300,10 @@ three REST reads.
 | Send one issue to Claude in a `codex` repo | Add `ai:claude`, then comment `/reclarify` |
 | Retry a failed handoff or resume a blocked issue | Comment `/reclarify` |
 
-**Failure modes.** A rejected dispatch, an unregistered repo, or a failed
-queue read or write labels the issue `ai:claude-handoff-failed`, comments how
-to retry or switch, and sends a Telegram ERROR. A dispatch that fails
+**Failure modes.** A failed dispatch from the handoff, or a failed queue read
+or write in the intake, labels the issue `ai:claude-handoff-failed`, comments
+how to retry or switch, and sends a Telegram ERROR. An invalid payload
+(`invalid_payload`, an unregistered repo included) or a dispatch that fails
 authorization (reasons `dispatcher_unknown`, `dispatcher_not_authorized`,
 `target_not_issue`, `target_repo_mismatch`, `issue_closed`,
 `untrusted_issue_author`, or `authorization_read_failed` when a read fails)
