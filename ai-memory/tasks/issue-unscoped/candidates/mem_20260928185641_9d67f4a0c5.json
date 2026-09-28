@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:358 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `Permission prompts:` output template contains malformed angle-bracket syntax at `<error>><; classifier outage: <n> (not filed)]`.\n  WHY: The template grouping is syntactically invalid (the `<error>` tag is closed by `>>`, and then a new group is opened by `<;`). A stage session reading this template will render garbled report text or invalid delimiter literals instead of a correctly formatted outage report line.\n- workflow-templates/.claude/scripts/permission_prompts.py:95 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `CLASSIFIER_OUTAGE_REASON_RE` is compiled with `re.DOTALL`, which allows `.` to span newlines in the denial reason.\n  WHY: A multiline `PermissionDenied` reason that happens to include a verdict-negation phrase on a newline (e.g., \"Permission denied due to policy.\\nClassifier: unavailable\") will be incorrectly misclassified as a classifier outage, excluding it from filing and hiding real permission gaps.\n- workflow-templates/.claude/scripts/permission_prompts.py:498-507 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `file_patterns()` and `report()` independently load, decode, and partition the same log records.\n  WHY: Each stage-end report performs duplicate disk I/O and JSON parsing for the same log file per invocation, wasting resources unnecessarily.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"every `.claude/**` change is made only in its `workflow-templates/.claude/**` twins and copied into `.claude/**` by the supervising session... `CLAUDE.md` \u00a728.C / Q40: protected paths are edited only in their `workflow-templates/.claude/**` twins.\"\n  expected_change_site: `.claude/scripts/permission_prompts.py` and `.claude/commands/implement-plan-claude.md`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff shows direct modifications to `.claude/scripts/permission_prompts.py` and `.claude/commands/implement-plan-claude.md` in addition to their `workflow-templates/.claude/` counterparts, violating the twin-first policy that requires only the `workflow-templates/.claude/` copies to be edited.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:358 | severity=critical | confidence=5\n  PROBLEM: The `Permission prompts:` output template contains malformed angle-bracket syntax at `<error>><; classifier outage: <n> (not filed)]`.\n  WHY: The template grouping is syntactically invalid (the `<error>` tag is closed by `>>`, and then a new group is opened by `<;`). A stage session reading this template will render garbled report text or invalid delimiter literals instead of a correctly formatted outage report line.\n- workflow-templates/.claude/scripts/permission_prompts.py:95 | severity=high | confidence=4\n  PROBLEM: `CLASSIFIER_OUTAGE_REASON_RE` is compiled with `re.DOTALL`, which allows `.` to span newlines in the denial reason.\n  WHY: A multiline `PermissionDenied` reason that happens to include a verdict-negation phrase on a newline (e.g., \"Permission denied due to policy.\\nClassifier: unavailable\") will be incorrectly misclassified as a classifier outage, excluding it from filing and hiding real permission gaps.\n- workflow-templates/.claude/scripts/permission_prompts.py:498-507 | severity=low | confidence=5\n  PROBLEM: `file_patterns()` and `report()` independently load, decode, and partition the same log records.\n  WHY: Each stage-end report performs duplicate disk I/O and JSON parsing for the same log file per invocation, wasting resources unnecessarily.\n- TASK_GAP\n  Requirement: \"every `.claude/**` change is made only in its `workflow-templates/.claude/**` twins and copied into `.claude/**` by the supervising session... `CLAUDE.md` \u00a728.C / Q40: protected paths are edited only in their `workflow-templates/.claude/**` twins.\"\n  Expected change site: `.claude/scripts/permission_prompts.py` and `.claude/commands/implement-plan-claude.md`\n  Evidence of absence: The PR diff shows direct modifications to `.claude/scripts/permission_prompts.py` and `.claude/commands/implement-plan-claude.md` in addition to their `workflow-templates/.claude/` counterparts, violating the twin-first policy that requires only the `workflow-templates/.claude/` copies to be edited.\n  SEVERITY: high\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "29d0b4863a544b65e82f7569ced6e0a9c29ec18cd84ad59eaecc66d8c7cd77b3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4821,
+    "run_id": "36463458847",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36463458847",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928185641_9d67f4a0c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4821,
+    "run_id": "36463458847"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T18:56:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
