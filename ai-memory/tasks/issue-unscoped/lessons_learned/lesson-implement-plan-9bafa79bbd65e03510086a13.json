@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T00:43:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A new tracked file under scripts/ that README.md or agents.md names must also get a docs/INVENTORY.md \"Scripts\" entry; run `python3 tests/inventory_parity.py` (a plain-python CI step, not a pytest suite) before pushing.",
+  "phase": "implement_plan",
+  "pr_number": 4596,
+  "record_id": "lesson-implement-plan-9bafa79bbd65e03510086a13",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4586-rejected-singleton-findings-hold-reason",
+    "file:docs/INVENTORY.md",
+    "file:tests/inventory_parity.py"
+  ]
+}
