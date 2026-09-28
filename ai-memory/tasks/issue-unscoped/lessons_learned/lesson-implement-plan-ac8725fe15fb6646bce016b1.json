@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T07:34:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "The review_autofix.yml gate job checks out no support scripts (only a sparse fingerprint-cap helper), so any artifact or API verification a gate decision needs runs in a codex-agent step before the step that acts; the gate only binds comment markers and passes run ids on.",
+  "phase": "implement_plan",
+  "pr_number": 4691,
+  "record_id": "lesson-implement-plan-ac8725fe15fb6646bce016b1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:claude-fixer-unattended-convergence",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/review_autofix_step_claude_fixer_judge.sh"
+  ]
+}

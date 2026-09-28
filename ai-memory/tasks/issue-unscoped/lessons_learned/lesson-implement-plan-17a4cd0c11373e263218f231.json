@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T07:34:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A side effect that records an outcome (a follow-up issue saying the PR merged, a verdict saying auto-merge is on) must run after the step that decides the outcome, and its text must name what actually happened on that run.",
+  "phase": "implement_plan",
+  "pr_number": 4691,
+  "record_id": "lesson-implement-plan-17a4cd0c11373e263218f231",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-fixer-unattended-convergence",
+    "file:scripts/review_rb_judge.sh",
+    "file:scripts/review_claude_fixer_judge.py"
+  ]
+}

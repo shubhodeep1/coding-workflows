@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T07:34:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "\"Enable auto-merge on PR\" and the evidence upload run before the review-blocked judge step, so a judge that merges or writes evidence must call scripts/review_enable_auto_merge.sh itself and upload in its own later step.",
+  "phase": "implement_plan",
+  "pr_number": 4691,
+  "record_id": "lesson-implement-plan-3037d6d04946651bce71a580",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:claude-fixer-unattended-convergence",
+    "file:scripts/review_rb_judge.sh",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

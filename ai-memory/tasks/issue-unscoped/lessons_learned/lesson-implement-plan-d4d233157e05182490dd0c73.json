@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-28T07:34:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A reviewer can re-report a finding fixed in the previous round with the previous round's line numbers (round 2 of PR #4691 repeated round 1 almost verbatim, including a path that does not exist); check every finding against the current head before fixing, and reject with the commit that fixed it.",
+  "phase": "implement_plan",
+  "pr_number": 4691,
+  "record_id": "lesson-implement-plan-d4d233157e05182490dd0c73",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-fixer-unattended-convergence",
+    "file:scripts/review_rb_judge.sh",
+    "file:scripts/review_claude_fixer_judge.py"
+  ]
+}
