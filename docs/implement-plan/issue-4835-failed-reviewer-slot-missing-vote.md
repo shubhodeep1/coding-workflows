@@ -2,16 +2,16 @@
 
 - Plan: docs/plans/issue-4835-failed-reviewer-slot-missing-vote-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote   Final PR: (opening) draft
+- Project branch: claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote   Final PR: #4847 draft
 - Source issue: shubhodeep1/coding-workflows#4835   Base branch: main   Security pass: run
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (head claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote-phase-1; number in the stage report and the checker instructions)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-28
-- Last note: project branch opened from main; phase 1 starting
+- Last note: phase 1 implemented and verified (53 Claude-fixer tests, 309 review_autofix contract tests, yamllint, actionlint, shellcheck, mawk and gawk); phase PR opened against the project branch; waiting on its review round or merge
 
 ## Phases
 1. [ ] Phase 1 — Failed reviewer slots are missing votes (classifier in the Claude-fixer clean-ledger check, CLAUDE_FIXER_MIN_CLEAN_REVIEWERS, CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS, tests, docs, changelog)
