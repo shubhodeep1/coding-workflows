@@ -81,7 +81,9 @@ after they were queued (owner scope addition, #4912).
   whose latest trusted blocker has an `environment-*` reason. It does this
   within its next hourly run, through the intake (`trigger: reclarify`), at
   most 2 times per issue per rolling 24 hours. After that it sends one
-  Telegram ERROR per issue per window and leaves the label in place.
+  Telegram ERROR per issue and leaves the label in place. It re-queues that
+  issue again only after a trusted `/reclarify`, which restarts the count
+  ("alerts once and stops"; AD-10, conformance 1).
 - A plain blocker, or any non-`environment-*` reason, is never re-queued.
 - The pickup starts no session for an issue that is closed when it wakes, and
   the watchdog closes queue items whose target issue is closed.
@@ -276,7 +278,8 @@ Phase 1:
   count (`is_trusted_issue_author`), and the intake re-authorizes every
   dispatch (#4620).
 - Re-queue loops → capped at 2 per rolling 24 hours per issue from markers,
-  one alert per issue per window, and the label stays.
+  one alert per issue, then no more re-queues until a trusted `/reclarify`
+  (AD-10), and the label stays.
 - A re-queued session dies silently (e.g. no sources and no working GitHub
   transport) → AD-4 re-queues again once the label is still present after
   `CLAUDE_ISSUE_QUEUE_STALE_HOURS`. This counts toward the cap, so it ends in

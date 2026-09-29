@@ -1733,9 +1733,10 @@ def test_env_decision_alerts_once_per_issue_even_when_a_new_blocker_follows():
 	assert route.env_requeue_decision(forged, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
 
 
-def test_env_decision_resumes_once_the_window_has_passed():
-	# The alert and both re-queues are older than 24h: retries start over,
-	# and the next exhaustion alerts again.
+def test_env_decision_stays_stopped_after_the_alert_once_the_window_has_passed():
+	# Issue #4938: "after 2 failed retries it alerts once and stops". The
+	# alert and both re-queues are older than 24h, and a new environment
+	# blocker follows: still no re-queue and no second alert.
 	comments = [
 		_env_comment(1, ENV_BLOCKER, 40),
 		_env_comment(2, _requeue_marker(1), 39),
@@ -1743,17 +1744,53 @@ def test_env_decision_resumes_once_the_window_has_passed():
 		_env_comment(4, _requeue_marker(3), 34),
 		_env_comment(5, ENV_BLOCKER, 30),
 		_env_comment(6, _exhausted_marker(5), 29.5),
+		_env_comment(7, ENV_BLOCKER, 1),
 	]
 	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
-	assert decision["action"] == "requeue" and decision["retry"] == 1
-	later = [
-		*comments,
-		_env_comment(7, _requeue_marker(5), 5),
-		_env_comment(8, ENV_BLOCKER, 4),
-		_env_comment(9, _requeue_marker(8), 3),
-		_env_comment(10, ENV_BLOCKER, 1),
+	assert decision["action"] == "skip" and decision["reason"] == "exhausted_alerted"
+	assert decision["blocker_id"] == 7 and decision["retries_in_window"] == 0
+
+
+def test_env_decision_a_trusted_reclarify_restarts_the_count():
+	stopped = [
+		_env_comment(1, ENV_BLOCKER, 40),
+		_env_comment(2, _requeue_marker(1), 39),
+		_env_comment(3, ENV_BLOCKER, 35),
+		_env_comment(4, _requeue_marker(3), 34),
+		_env_comment(5, ENV_BLOCKER, 30),
+		_env_comment(6, _exhausted_marker(5), 29.5),
 	]
-	assert route.env_requeue_decision(later, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
+	# A fresh blocker after the operator's /reclarify is re-queued as retry 1.
+	restarted = [*stopped, _env_comment(7, "/reclarify", 10), _env_comment(8, ENV_BLOCKER, 6)]
+	decision = route.env_requeue_decision(restarted, ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "requeue" and decision["retry"] == 1 and decision["reason"] == "environment_blocker"
+	# Its budget is the full cap again: two more re-queues, then one alert.
+	exhausted = [
+		*restarted,
+		_env_comment(9, _requeue_marker(8), 5),
+		_env_comment(10, ENV_BLOCKER, 4),
+		_env_comment(11, _requeue_marker(10), 3.5),
+		_env_comment(12, ENV_BLOCKER, 1),
+	]
+	assert route.env_requeue_decision(exhausted, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
+	# A /reclarify from an outsider, or a comment quoting it, restarts nothing.
+	for forged in (
+		_env_comment(7, "/reclarify", 10, assoc="NONE", login="stranger"),
+		_env_comment(7, "please /reclarify", 10),
+	):
+		ignored = [*stopped, forged, _env_comment(8, ENV_BLOCKER, 6)]
+		assert route.env_requeue_decision(ignored, ENV_BLOCKED_LABELS, ENV_NOW)["reason"] == "exhausted_alerted"
+
+
+def test_env_decision_waits_on_a_reclarify_newer_than_the_blocker():
+	# The /reclarify handoff sends its own dispatch, so the watchdog waits the
+	# stale window before it adds a second one, then counts a silent death.
+	comments = [_env_comment(1, ENV_BLOCKER, 5), _env_comment(2, "/reclarify", 1)]
+	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "skip" and decision["reason"] == "requeued_waiting"
+	older = [_env_comment(1, ENV_BLOCKER, 8), _env_comment(2, "/reclarify", 4)]
+	decision = route.env_requeue_decision(older, ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "requeue" and decision["stale_retry"] is True and decision["retry"] == 1
 
 
 def test_env_decision_counts_only_the_rolling_window_and_trusted_markers():

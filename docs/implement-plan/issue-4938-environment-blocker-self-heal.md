@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4938-environment-blocker-self-heal   Final PR: #5000 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #5006 (review round 2)
+- Waiting on: conformance fix PR from `claude/implement-plan-issue-4938-environment-blocker-self-heal-conformance-fix-1` (into the project branch)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01A7dbR1Gp8C8dTgzjPpDioe   safety net and hand-back: see the #4938 progress comment
 - Last updated: 2026-09-29
-- Last note: twin sync `8b00301` landed (master, Q40) and `/reclarify` resumed the chain in session_01G1dTXhCREs7S7X8Kk3VKSg; review round 1 on `8b00301` handled (5 findings fixed, 4 rejected with reasons on #5006); checker armed after the push (ids in the #4938 progress comment)
+- Last note: conformance 1/3 (session_01XtSdq3PxHRwwxbf2u3PH85): INCOMPLETE — the watchdog resumed re-queues 24h after its exhausted alert, against #4938's "alerts once and stops"; fixed in the conformance-fix-1 PR (AD-10)
 
 ## Phases
-1. [ ] Phase 1 — environment self-heal, environment blockers, hourly re-queue, closed-target refusal   — PR #5006 open; review rounds: 1; interventions: 0; protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md, .claude/commands/fix-claude-pr.md, .claude/commands/claude-issue-dispatch.md, .claude/hooks/session-start.sh (edited as workflow-templates/.claude/** twins only, Q40)
+1. [x] Phase 1 — environment self-heal, environment blockers, hourly re-queue, closed-target refusal   — PR #5006 merged 2026-09-29; review rounds: 2; interventions: 0; protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md, .claude/commands/fix-claude-pr.md, .claude/commands/claude-issue-dispatch.md, .claude/hooks/session-start.sh (edited as workflow-templates/.claude/** twins only, Q40)
    - [x] session-start.sh twin: per-step gh install checks, `gh_install=failed reason=…` log line, marker file
    - [x] command twins: ToolSearch + session-start re-run self-heal, add_repo checkout self-heal, `environment-*` blocker reasons, no in-session questions / AskUserQuestion, gh REST fallback
    - [x] scripts/claude_issue_route.py: marker parsers, env re-queue decisions and plan, closed-target refusal in queue-pending, queue-closed-targets
@@ -23,6 +23,7 @@
    - [x] README.md, agents.md, changelog.d/4938-environment-blocker-self-heal.md
 
 ## Conformance
+- Run 1 — 2026-09-29: INCOMPLETE — fix PR from `claude/implement-plan-issue-4938-environment-blocker-self-heal-conformance-fix-1` (pre-security). One EVIDENCE-BASED BLOCKER: `env_requeue_decision` re-queued again (and alerted again) once the 24h window passed after the exhausted alert, while #4938's acceptance criterion is "after 2 failed retries it alerts once and stops"; `tests/test_claude_issue_route.py::test_env_decision_resumes_once_the_window_has_passed` asserted the divergent behaviour. Everything else conforms: 311 plan-suite tests, the hook script, `ruff`, and `shellcheck -S warning` passed on the project branch.
 
 ## Security pass
 
@@ -42,11 +43,13 @@
 - AD-7 [plan, 2026-09-29] How are closed targets refused? — Picked: A — `queue-pending --fetch-repo` reads each pending issue target (one GET each, at most the wake limit) and moves closed ones to `ignored` (`issue_closed`), failing open on a read error; the watchdog's new step closes open queue items whose target is closed (`state_reason: not_planned`, queue token). Alternatives: B — also edit `claude-issue-pickup.md` to close them (no twin, needs a watched session); C — leave it to the session's step 2 gate. Why: covers #4912 without a protected edit that Q40 cannot route. Applied in: phase 1 PR. Status: pending review
 - AD-8 [plan, 2026-09-29] What if the MCP GitHub tools stay missing but `gh` works? — Picked: A — use `gh api` REST calls shaped per CLAUDE.md §23.D (inline `-f` fields, no `--input` files or heredocs) for the labels, comments, and PRs the command would do through MCP. Alternatives: B — treat missing MCP tools as missing even with a working `gh`. Why: `gh` through the proxy covers those writes (this session used it); B would stop sessions that can work. Applied in: phase 1 PR. Status: pending review
 - AD-9 [plan, 2026-09-29] Marker file path and content for a failed gh install? — Picked: A — `${SESSION_START_GH_MARKER_FILE:-$HOME/.claude-session-start-gh-install}`, holding the same `gh_install=failed reason=… exit_code=… at=<UTC>` line, removed after a successful install. Alternatives: B — a JSON file under `~/.claude/`; C — no marker. Why: one grep-able format for the log and the file; outside `.claude/`; the env override (default set, §4) lets tests isolate it. Applied in: phase 1 PR. Status: pending review
+- AD-10 [conformance 1/3, 2026-09-29] After the exhausted alert, when may the watchdog re-queue the issue again? — Picked: A — never on its own: it stays stopped until a trusted `/reclarify` newer than the alert, which restarts the count (and counts as the blocker's latest re-queue for the stale wait). Alternatives: B — keep the rolling 24h window (2 retries and one alert per issue per day, indefinitely) and reword the alert; C — stop until the label is removed (not observable from comments). Why: #4938's acceptance criterion says "alerts once and stops", the alert already names `/reclarify` as the way back, and A bounds the Opus sessions and consumer-issue comments. Applied in: conformance-fix-1 PR. Status: pending review
 
 ## Lessons
 - [source:intervention] A retry cap counted per issue needs its alert suppression keyed per issue and per window too: every failed re-queued session posts a new blocker id, so a per-blocker key never converges (files: scripts/claude_issue_route.py)
 - [source:intervention] The issue-comments endpoint lists oldest first and takes no direction, so a capped page loop must fail when it hits the cap with a full page rather than decide on an older marker (files: scripts/claude_issue_route.py)
 - [source:plan-deviation] Shell-driver tests for scripts/claude_issue_*.sh belong in the stub harness of tests/test_claude_issue_route.py, which ci.yml already runs; a new test file would also need its own ci.yml wiring (files: tests/test_claude_issue_route.py, scripts/claude_issue_queue_watchdog.sh)
+- [source:conformance] When a plan restates an issue's acceptance criterion, keep its exact stop condition: "alerts once and stops" became "one alert per window" in the plan, and the code and its test followed the plan instead of the issue (files: scripts/claude_issue_route.py, tests/test_claude_issue_route.py)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #4938; start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
@@ -57,3 +60,5 @@
 - Phase 1 verification (2026-09-29): on the phase branch, `tests/test_claude_issue_route.py` 226 passed; `tests/test_implement_issue_claude_command.py` 34 passed + the 3 `test_template_parity` cases failing as expected until the twin sync; `tests/test_session_start_extract_repo_slug.py` passes for the twin and fails only for the unsynced root hook. On a scratch copy with the twins copied into `.claude/` (the post-sync state): 1,199 passed across the route, command, plan-command, security-skip, guardrails, sweep, check-in, fixer-mode, gh-api guard, check-in reminder, stale-routines, checkout-audit, check-in status, lessons-ingest, permission-prompts, and merge-guard suites, and the hook test passes in full. `ruff check` and `shellcheck -S warning` are clean. Live read-only check: the 8 open `ai:claude-blocked` issues in this repo all resolve to `skip: not_environment` (plain blockers are never re-queued).
 - Twins to sync into `.claude/` (Q40): `commands/implement-issue-claude.md`, `commands/implement-plan-claude.md`, `commands/fix-claude-pr.md`, `commands/claude-issue-dispatch.md`, `hooks/session-start.sh` (hook: Q62/Q64 approval window).
 - Review round 1 (2026-09-29, head `8b00301`, ledger `24eaa315…`): fixed — exhausted-alert guard keyed per issue within the window (was per blocker); comment reads fail at the 1,000-comment cap instead of deciding on an older blocker; search paged up to the API's 1,000-result cap with truncation / `incomplete_results` reported under `errors`; Telegram alert omits `Run:` without `RUN_URL`; `retry` / `retries` validated as integers. Rejected — per-blocker retry counting (the spec caps per issue, and per-blocker counts never converge); exit code 3 (matches `queue-pending`'s read-failure code); a kill switch (not in the spec, step is `continue-on-error`); marker aliasing (the plain marker still matches, §6); the tests-file task gap (documented plan deviation). 352 tests pass across the route, command, security-skip, sweep and clarify suites; the 5 new regression tests fail on `8b00301`.
+- Review round 2 (2026-09-29, PR #5006): 5 findings, all rejected as repeats of round 1; with no verdict bot configured (`CLAUDE_FIXER_VERDICT_BOT_LOGIN` empty) the chain stopped `BLOCKED` on review-round-2 Q1, and the owner answered A by merging #5006 as `72c8583` (pinned to head `2e16a96`; #5006 comments 5885258009 and 5888066880). `ai:claude-blocked` was removed from #4938.
+- Conformance 1/3 (2026-09-29): the project branch was synced with `main` (`7053363`, clean merge) before the audit.

@@ -79,6 +79,8 @@ fi
 #      on the issue; after CLAUDE_ISSUE_ENV_REQUEUE_MAX (default 2) in
 #      CLAUDE_ISSUE_ENV_REQUEUE_WINDOW_HOURS (default 24) it posts the
 #      exhausted marker and one Telegram ERROR instead, and the label stays.
+#      It then leaves that issue alone until a trusted `/reclarify` comment,
+#      which restarts the count (env_requeue_decision).
 #
 # claude_issue_route.py decides (env-requeue-plan, queue-closed-targets); this
 # function only writes. Reads: see env_requeue_plan's batching contract.
