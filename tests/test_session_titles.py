@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_COMMANDS = ROOT / "workflow-templates" / ".claude" / "commands"
 PICKUP = ROOT / ".claude" / "commands" / "claude-issue-pickup.md"
 CLAUDE_MD = ROOT / "CLAUDE.md"
+AGENTS_MD = ROOT / "agents.md"
 
 
 def _flat(path: Path) -> str:
@@ -184,3 +185,12 @@ def test_claude_md_keeps_the_check_in_title_exact_and_prefixes_fixer_and_report(
 	assert "`PR #<n> merged — <no action needed | action needed>` or `PR #<n> closed — decision needed`, either title with `#<issue> · ` in front when the PR has a source issue" in claude_md
 	# The checker's terminal renames are unchanged.
 	assert "`PR #<n> <merged | closed> — handed to <fixer session id>`" in claude_md
+
+
+def test_agents_md_describes_the_checker_archive_check_as_contains():
+	# The archive check matches by "contains" like the reuse check and the
+	# zombie cleanup (AD-14), so agents.md must not describe it as the §26
+	# checker's exact-title check.
+	agents = _flat(AGENTS_MD)
+	assert "applies the same check before it archives its project checker, except that the title must contain `implement-plan <slug> — checker` (with or without a `#<issue> · PR #<pr> — ` prefix, issue #4886) rather than equal it" in agents
+	assert "applies the same check (title `implement-plan <slug> — checker`)" not in agents
