@@ -3,24 +3,24 @@
 - Plan: docs/plans/issue-4948-protected-path-twin-first-default-plan.md
 - Source issue: shubhodeep1/coding-workflows#4948
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4948-protected-path-twin-first-default   Final PR: #F draft
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-4948-protected-path-twin-first-default   Final PR: #4989 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5008 (phase 1): twin sync by the supervising session, then /reclarify
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: none (no project checker yet; the resumed stage creates one when it arms the wait on PR #5008)
 - Last updated: 2026-09-29
-- Last note: project branch opened; implementing phase 1 twin-first (operator Q40).
+- Last note: Phase 1 implemented twin-first (operator Q40 A): only `workflow-templates/.claude/commands/implement-plan-claude.md` changed among `.claude` twins; PR #5008 opened against the project branch and a `hold` claim is posted on its head. BLOCKED until the supervising session copies the twin into `.claude/commands/implement-plan-claude.md` as `[claude-twin-sync]`, runs the tests, pushes, and comments `/reclarify`. On resume, arm the wait on PR #5008; do not re-implement the phase.
 
 ## Phases
-1. [ ] Phase 1 — interim twin-first default for protected-path phases   — protected paths: `.claude/commands/implement-plan-claude.md` (edited only in its `workflow-templates/.claude/` twin, Q40)
-   - [ ] Twin `implement-plan-claude.md` step 4: interim paragraph (automatic approval line, twin-only edits, no-twin diff + sha256, hold claim + twin-sync blocker, resume, later stages, the three question cases, sunset)
-   - [ ] CLAUDE.md §28.C: new bullet naming the interim automatic twin-first default and its sunset (#4785)
-   - [ ] `agents.md` and `docs/operations/master-session.md` (Q40 row) updated
-   - [ ] `tests/test_implement_plan_claude_command.py`: command-twin, CLAUDE.md, and sunset-guard tests
-   - [ ] `changelog.d/4948-protected-path-twin-first-default.md`
-   - Done: the new tests pass; the rest of `tests/` passes except `test_template_parity` until the `[claude-twin-sync]` copy
+1. [ ] Phase 1 — interim twin-first default for protected-path phases   — protected paths: `.claude/commands/implement-plan-claude.md` (edited only in its `workflow-templates/.claude/` twin, Q40) — PR #5008 open (hold: awaiting `[claude-twin-sync]`); review rounds: 0; interventions: 0
+   - [x] Twin `implement-plan-claude.md` step 4: interim paragraph (automatic approval line, twin-only edits, no-twin diff + sha256, hold claim + twin-sync blocker, resume, later stages, the three uncovered cases, sunset) — `workflow-templates/.claude/commands/implement-plan-claude.md:35-45` (root copy: pending twin sync)
+   - [x] CLAUDE.md §28.C: new bullet naming the interim automatic twin-first default and its sunset (#4785) — `CLAUDE.md:2236-2253`
+   - [x] `agents.md` (`:1116-1123`) and `docs/operations/master-session.md` (Q40 row) updated
+   - [x] `tests/test_implement_plan_claude_command.py`: 5 new tests (command twin, CLAUDE.md, sunset guard)
+   - [x] `changelog.d/4948-protected-path-twin-first-default.md`
+   - Done: in the twin overlay the command and changelog tests pass (55 passed, 1 skipped); the real tree fails only `test_template_parity` until the twin sync. Full overlay run: 4720 passed, 122 failed — the same 122 fail on a clean `origin/main` copy (missing `jsonschema` / `gawk` in the container)
 
 ## Conformance
 
@@ -48,3 +48,6 @@
 - Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29). Operator context of the dispatch trigger (standing decision Q40: A, `docs/operations/master-session.md`): edit only the `workflow-templates/.claude/**` twins, open the phase PR, post a `hold` claim on its head, and stop BLOCKED for the `[claude-twin-sync]` copy.
 - `security_pass_skip.py`: `{"skip": false, "label": null, "reason": "no skip label"}` → `Security pass: run`.
 - Stale Routine sweep: deleted 1 (`trig_015sJatxZ2Cy2xBDGCaZRLP6`, an ended one-shot of issue-4927).
+- Twin to sync: `workflow-templates/.claude/commands/implement-plan-claude.md` → `.claude/commands/implement-plan-claude.md`, twin sha256 `83884435a9a1db1dd5f102ac455dd60dd6628a29cac2cd4c6386e704f9bb90a7`. No `.claude/` path without a twin is changed.
+- `tests/test_workflow_retro.py` was excluded locally: `scripts/workflow_retro.py` needs Python 3.12 f-string syntax and the container runs 3.11 (unrelated to this change).
+- While building the test overlay, a failed `rsync` let one `cp` run in the real checkout and overwrite `.claude/commands/implement-plan-claude.md` with the twin; it was restored with `git checkout` before any commit, and `.claude/` matched HEAD afterwards.
