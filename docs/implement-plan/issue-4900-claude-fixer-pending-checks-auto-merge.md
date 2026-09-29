@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4900-claude-fixer-pending-checks-auto-merge-plan.md
 - Source issue: shubhodeep1/coding-workflows#4900
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
-- Project branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge   Final PR: pending
+- Project branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge   Final PR: #4922 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from main at ffd1065; phase 1 starting.
+- Last note: phase 1 implemented and verified locally (ruff, yamllint, actionlint, shellcheck, inventory parity, 345 related tests pass); phase 1 PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — pending-checks marker, gate skip, and sweep auto-merge
+1. [ ] Phase 1 — pending-checks marker, gate skip, and sweep auto-merge   — phase 1 PR open (waiting); review rounds: 0; interventions: 0
    - Hand-off step posts `ai:claude-fixer-pending-checks:v1` for a clean ledger with only incomplete checks
    - Gate skips dispatched re-runs on such a head (`claude_fixer_pending_checks`)
    - `scripts/claude_fixer_pending_checks.py` + `scripts/claude_pr_sweep.py` enable head-bound auto-merge once the head's checks are ready
@@ -44,6 +44,7 @@
 - AD-9 [plan, 2026-09-29] A `cancelled` / `stale` check? — Picked: A — never merge; log it. Alternatives: B — treat it as green. Why: fail closed (§1). Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] When a clean Claude-fixer outcome needs a later action, record it as its own workflow-owned marker rather than a `kind=findings` hand-off: `check_in_status.py` treats every findings hand-off as a review round, so a 0-entry hand-off wakes a fixer with nothing to fix. (files: scripts/review_autofix_step_claude_fixer_handoff.sh, scripts/claude_fixer_pending_checks.py)
 
 ## Notes
 - Issue-mode project started by the Claude issue dispatcher routine (trigger trig_01REPcAnL9kSG6T8m3G2hkpn) in session session_01VGQb3cJVEoX1uoX989DUaJ (Auto mode). Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4900#issuecomment-5882051076
