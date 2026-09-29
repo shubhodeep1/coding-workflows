@@ -7,11 +7,11 @@
 | --- | --- |
 | Loop shapes approved | 1 (`for` over literal tokens, `;`-framed) |
 | Read subcommands allowed besides `gh api` | 3 (`gh run view`, `gh run list`, `gh pr view`) |
-| New guard test cases | 46 (10 allowed, 32 no decision, 3 ask, 1 hook process) |
+| New guard test cases | 50 (10 allowed, 36 no decision, 3 ask, 1 hook process) |
 | GitHub API calls added | 0 |
 
 What this means for operators: unattended sessions that read run, job, or PR details for a handful of IDs in one loop run without waiting for approval. Nothing that writes, and no loop over computed values, is approved. The change reaches consumer repos on the next `@stable` sync of `.claude/`.
 
 ### For contributors
 
-The loop variable must be lowercase (so it can never be `PATH`, `IFS`, `GH_HOST`, or `GH_TOKEN`) and must not contain `proxy` (assigning to an exported `https_proxy` would re-route `gh`), tokens must match `[A-Za-z0-9._-]+` and not start with `-`, and `$VAR` may not sit in a `gh api` endpoint's first path segment or after its `?`. Backslashes, other `$` expansions, file redirects, `||`, `&`, nested loops, a trailing `;` after `done`, and newline-separated loops all keep the old no-decision result. The new predicate is `_is_approvable_read_loop`; the flag allowlists are `_GH_READ_SUBCOMMAND_FLAGS`.
+The loop variable must be lowercase (so it can never be `PATH`, `IFS`, `GH_HOST`, or `GH_TOKEN`) and must not contain `proxy` (assigning to an exported `https_proxy` would re-route `gh`), tokens must match `[A-Za-z0-9._-]+` and not start with `-`, and `$VAR` may not sit in a `gh api` endpoint's first path segment or after its `?`. Backslashes, other `$` expansions, file redirects, `||`, `&`, nested loops, a trailing `;` after `done`, newline-separated loops, and a quoted `gh api` call in the body (`gh 'api' …`, `"gh" api …`, which the guard's raw-text check never classifies) all keep the old no-decision result. The new predicate is `_is_approvable_read_loop`; the flag allowlists are `_GH_READ_SUBCOMMAND_FLAGS`.

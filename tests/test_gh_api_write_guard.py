@@ -416,6 +416,16 @@ READ_LOOP_NO_DECISION = {
 	"routine write in body": (
 		"for r in 1 2; do echo $r; gh api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=hi; done"
 	),
+	# A quoted `gh api` never matches the raw-text fast path, so it is never
+	# classified; the loop must not be allowed around it.
+	"single-quoted api DELETE beside a read": (
+		"for r in 1; do gh run view $r; gh 'api' -X DELETE repos/o/r/issues/$r; done"
+	),
+	"double-quoted gh DELETE beside a read": "for r in 1; do gh pr view $r; \"gh\" api -X DELETE repos/o/r/issues/1; done",
+	"split api word mutation beside a read": (
+		"for r in 1; do gh run list; gh ap''i graphql -f query='mutation{x}'; done"
+	),
+	"quoted api read beside a read": "for r in 1; do gh run view $r; gh 'api' repos/o/r/actions/runs/$r; done",
 }
 
 

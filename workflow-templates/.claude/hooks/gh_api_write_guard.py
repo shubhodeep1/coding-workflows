@@ -874,7 +874,10 @@ def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bo
 	more items joined by `;` or `&&`, each one of:
 	  - a `gh api` call that `classify` marks `read` (every entry of `results`
 	    must be a read; a routine write keeps today's result), with `$VAR` /
-	    `${VAR}` only in the endpoint path;
+	    `${VAR}` only in the endpoint path. Every `gh api` body item must be
+	    one of the calls `evaluate` classified, so a quoted or split-word call
+	    (`gh 'api' ...`, `"gh" api ...`, `gh ap''i ...`) keeps today's
+	    no-decision result;
 	  - `gh run view`, `gh run list`, or `gh pr view` with allowlisted flags
 	    and `$VAR` only as a positional argument;
 	each optionally piped into the safe filters (`head`/`tail -n N`, `wc -l`,
@@ -927,6 +930,15 @@ def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bo
 	if body[0][0][:1] != ["do"]:
 		return False
 	body[0][0] = body[0][0][1:]
+	# Every `gh api` item must be one of the calls `evaluate` classified. The
+	# fast path passes no results, and a quoted call (`gh 'api' -X DELETE ...`,
+	# `"gh" api ...`) never matches `_RAW_GH_API_RE`, so it was never
+	# classified and a loop holding one is not approvable.
+	api_items = sum(
+		1 for pipeline in body if len(pipeline[0]) >= 2 and pipeline[0][0] == "gh" and pipeline[0][1] == "api"
+	)
+	if api_items != len(results):
+		return False
 	for pipeline in body:
 		if any(not words for words in pipeline):
 			return False
