@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T10:51:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A scheduled job that posts a commit status must post it only when it changes: GitHub refuses more than 1000 statuses per sha and context.",
+  "phase": "implement_plan",
+  "pr_number": 5108,
+  "record_id": "lesson-implement-plan-f3819e3011f8ef7db425bb7e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4785-twin-first-claude-sync",
+    "file:scripts/claude_twin_sync.py"
+  ]
+}

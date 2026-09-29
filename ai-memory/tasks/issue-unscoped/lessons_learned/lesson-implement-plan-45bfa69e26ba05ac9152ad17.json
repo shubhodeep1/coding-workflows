@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T10:51:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A command twin ships to consumer repos, so a rule that names `workflow-templates/.claude/` or a coding-workflows-only workflow must also say what a consumer does.",
+  "phase": "implement_plan",
+  "pr_number": 5108,
+  "record_id": "lesson-implement-plan-45bfa69e26ba05ac9152ad17",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4785-twin-first-claude-sync",
+    "file:workflow-templates/.claude/commands/fix-claude-pr.md",
+    "file:workflow-templates/.claude/commands/implement-issue-claude.md"
+  ]
+}

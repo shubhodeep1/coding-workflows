@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T10:51:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Merging the default branch into a project branch can bring in tests written under the invariant the project replaces (here a `.claude/` \u2194 twin byte-parity assert from #4787); rerun the affected suites after every sync merge and convert them in the next PR.",
+  "phase": "implement_plan",
+  "pr_number": 5108,
+  "record_id": "lesson-implement-plan-4eb31f15210ce5dcde2cbfb4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4785-twin-first-claude-sync",
+    "file:tests/test_check_in_session_targeting.py",
+    "file:tests/claude_twin_state.py"
+  ]
+}
