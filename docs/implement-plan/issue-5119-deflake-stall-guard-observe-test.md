@@ -1,28 +1,33 @@
 # Implement-Plan Log — Deflake the stall-guard observe-only tests on loaded CI runners
 
-- Plan: docs/plans/issue-5119-deflake-stall-guard-observe-test-plan.md
+- Plan: docs/completed/issue-5119-deflake-stall-guard-observe-test-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5119 (https://github.com/shubhodeep1/coding-workflows/issues/5119)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5119-deflake-stall-guard-observe-test   Final PR: #5151 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
-- Activation: not started
-- Waiting on: PR #5156
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (branch claude/implement-plan-issue-5119-deflake-stall-guard-observe-test-complete)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01FRuvgsU7nunhaDLkzJ5G16
 - Last updated: 2026-09-29
-- Last note: review round 1 on PR #5156: fixed the one consensus finding (status-file poll now retries only `FileNotFoundError`); rejected the task-gap entry (it reports no gap)
+- Last note: validation cycle 1 passed (10/10 against the project branch at 86772db); project branch synced with main at 5a44371; completion PR moves the plan to docs/completed/
 
 ## Phases
-1. [ ] Phase 1 — deterministic observe-only stall tests (`tests/test_codex_stall_guard_scripts.py`)   — PR #5156 open (waiting); review rounds: 1; interventions: 0
+1. [x] Phase 1 — deterministic observe-only stall tests (`tests/test_codex_stall_guard_scripts.py`)   — PR #5156 merged 2026-09-29 (merge f7296a8); review rounds: 1; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT — no fixes (pre-security). Stress: 20/20 runs of the 3 changed tests under simulated 1.2 s guard stalls and 20/20 under CPU burners; pre-fix baseline failed 4 of 5.
 
 ## Security pass
+- Cycle 1 — run 36592649507 2026-09-29 (ref: project branch): clean (tracker=#3576 findings=0 followups_created=0; incremental scope 401e349..86772db)
 
 ## Validation
+- Cycle 1 — run 36593387342 2026-09-29 (target_ref: project branch, validated head 86772db): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 300s); no fix issues
 
 ## Completion
+- Completion PR (this branch) — doc moved to docs/completed/issue-5119-deflake-stall-guard-observe-test-plan.md
+- Final PR #5151 draft (ready after the completion PR merges into the project branch)
 
 ## Activation
 
@@ -41,3 +46,5 @@
 - `security_pass_skip.py`: `{"skip": false, "label": null, "reason": "no skip label"}` → `Security pass: run`.
 - Draft final PR #5151 opened 2026-09-29.
 - Phase 1 verification (2026-09-29): `python3 tests/test_codex_stall_guard_scripts.py` passes in 32.1 s (34.6 s before the fix); 57 assert lines before and after, none changed; ruff E,F clean. Stress harness (local, not committed): 4 `yes` burners plus a helper that SIGSTOPs the guard at random moments. Pre-fix 1.3 s sleep with 0.7 s stalls: 10/10 runs failed with the CI assertion. Issue's 2.5 s sleep with 1.2 s stalls: 2/8 failed. Fix with 1.2 s stalls: 20/20 passed; fix with CPU burners only: 20/20 passed. Negative control (a guard that never writes `state=observed`): the unchanged assertion fails after 15.2 s, no `TimeoutExpired`.
+- Project branch synced with main at 86772db (before security/validation) and at 5a44371 (validation 1/3 read-result stage, clean merge; `tests/test_codex_stall_guard_scripts.py` passes and ruff E,F with CI's E501 ignore is clean after the merge).
+- Issue progress comment id: 5889789542.
