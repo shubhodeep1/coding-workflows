@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/gh_api_write_guard.py:746-747 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The permission-prompt description hardcodes `-F` for file-backed fields, even when the command used `--field`.\n  WHY: The guard still classifies the call correctly, but the prompt names a flag spelling the user may not have used.\n- workflow-templates/.claude/hooks/gh_api_write_guard.py:754 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The GraphQL branch's `parsed[\"input\"] is None` check is structurally redundant because the preceding `--input` check returns first.\n  WHY: It does not fail at runtime; if a future refactor moves the `--input` check below the GraphQL branch, this guard could be silently lost.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/hooks/gh_api_write_guard.py, line 747, classify() | severity=NIT | confidence=3\n  PROBLEM: The description string for file-backed fields always prints the flag as `-F`, even when the user typed `--field`.\n  WHY: Does not fail at runtime. The prompt fires correctly and the human sees a message. The imprecise flag name could cause a brief moment of confusion when scanning a prompt for `-F` and finding `--field` instead.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/hooks/gh_api_write_guard.py, 746 | severity=NIT | confidence=4\n  PROBLEM: The prompt description for a file-backed field hardcodes the flag as -F, even if the user invoked the call with --field.\n  WHY: This is not a functional failure but creates a confusing user experience where the permission prompt explicitly names a flag the user did not use.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/hooks/gh_api_write_guard.py, line 754 | severity=NIT | confidence=2\n  PROBLEM: The check `parsed[\"input\"] is None` in the GraphQL branch is now structurally redundant. The new --input check at line 748-749 returns before reaching the GraphQL branch, so `parsed[\"input\"] is None` is always True at line 754.\n  WHY: It does not fail at runtime \u2014 the check still evaluates correctly and behaves as expected. The dead-code nature means a future refactor that moves the --input check below the GraphQL branch (for example, to special-case GraphQL --input) would silently lose this guard. Keeping it as defence in depth is defensible.\n- workflow-templates/.claude/hooks/gh_api_write_guard.py, line 747 | severity=NIT | confidence=3\n  PROBLEM: The description string `with file-backed field \\`-F {field_key}=@...\\`` always formats the flag as `-F`, even when the caller typed `--field` or `--field=`.\n  WHY: The prompt still fires correctly with `KIND_WRITE`, and the user sees the file-backed field's name (e.g., `body`) so the prompt conveys what the command did. The flag spelling mismatch may briefly confuse a user scanning the prompt, but the prompt is a permission decision, not a tool output, and the user has the original command visible. The behaviour is correct.\n- TASK_GAP\n  Requirement: Plan section \"Implementation Steps\" item 1 names `.claude/hooks/gh_api_write_guard.py` as one of the files to edit (alongside `workflow-templates/.claude/hooks/gh_api_write_guard.py`).\n  Expected change site: `.claude/hooks/gh_api_write_guard.py` `classify()`.\n  Evidence of absence: The live `.claude/hooks/gh_api_write_guard.py` is unchanged in the diff. The PR description explicitly defers this to the supervising session's `[claude-twin-sync]` commit (Q40 / Q62 / Q64 approval window). Per CLAUDE.md \u00a728.C, protected-path edits (`.claude/**`) are never started unattended; the PR opens, holds for the twin sync, and stops BLOCKED. This is the intentional twin-first pattern, not a missing deliverable \u2014 the deferral is documented in the description, the progress log, and the hold claim. No gap.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/hooks/gh_api_write_guard.py, classify(), line 747 \u2014 `f\"{description} with file-backed field `-F {field_key}=@...` (gh reads a local file)\"` | severity=NIT | confidence=3\n  PROBLEM: The reason string always hardcodes `-F` even when the user typed `--field` (or `-Fkey=` attached form).\n  WHY: No runtime failure \u2014 the prompt still fires correctly and the security decision is right. The reason text shown to the human at the permission prompt is slightly imprecise for `--field` spellings (e.g. `gh api ... --field body=@secret.txt` produces a reason saying `-F body=@...`), which could cause a brief double-take but does not weaken the guard.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5d24f1d7aa4bbbafc0b00b69dc7d2689b3615a84f1b41f63b600dbb629c875af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5004,
+    "run_id": "36519165055",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36519165055",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929041709_56c798eb75",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5004,
+    "run_id": "36519165055"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T04:17:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
