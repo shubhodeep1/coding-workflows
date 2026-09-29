@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5260
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5260-asset-sync-pr-base-drift   Final PR: #5280 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: PR #5282: twin sync (`[claude-twin-sync]` of `workflow-templates/.claude/commands/implement-plan-claude.md` and `workflow-templates/.claude/commands/fix-claude-pr.md` into `.claude/commands/`), then `/reclarify` on #5260
+- Waiting on: PR #5282
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (twin-first stop: the stage `/reclarify` resumes arms the wait on PR #5282)
+- Check-in: checker session_01FHuvL5vgkLnpx5nqkmQZUP   safety net trig_01RacPGYq3hGQndui2CU7Dgf   hand-back trig_018Yj1bTwDKMZgo2mPyGHcK6
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented twin-first and opened as PR #5282 (hold claim posted); waiting for the `[claude-twin-sync]` copy and `/reclarify` on #5260.
+- Last note: `/reclarify` resume (session_01K9w3zKrwmgqbudkbBxma2o): twin sync fd78ed4 verified (sha256 match, 223 passed / 1 skipped), project branch synced with its base (dee3c0e), review wait armed on PR #5282.
 
 ## Phases
-1. [ ] Phase 1 — base-aware drift check in the Claude-asset sync — PR #5282 open (twin sync pending); review rounds: 0; interventions: 0 — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`
+1. [ ] Phase 1 — base-aware drift check in the Claude-asset sync — PR #5282 open (waiting on review); review rounds: 0; interventions: 0 — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`
    - Edit the `workflow-templates/.claude/**` twins only (interim twin-first default); the `.claude/` copies follow via `[claude-twin-sync]`.
    - `implement-plan-claude.md` `### Claude-asset sync` steps 1–4: fetch the PR base, default and base drift checks, project-base verification, base merge for other bases.
    - `fix-claude-pr.md` step 5: the stop also covers a failed project-base verification.
@@ -48,3 +48,5 @@
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-29)
 - Twin-first verification: with the two twins copied over `.claude/commands/` in a scratch copy, `tests/test_claude_asset_sync_command.py`, `tests/test_session_start_claude_assets_drift.py`, `tests/test_implement_plan_claude_command.py`, `tests/test_implement_issue_claude_command.py`, `tests/test_check_in_status_hand_back.py`, and `tests/test_update_workflows_guardrails.py` pass (223 passed, 1 skipped), as do `tests/test_permission_prompts.py`, `tests/test_check_in_session_targeting.py`, `tests/test_check_in_status.py`, and `tests/test_ingest_implement_plan_lessons.py` (316 passed); `tests/test_session_start_extract_repo_slug.py` prints PASS. On the branch as pushed only the `.claude/commands` parametrizations and the twin-parity checks fail, as expected until the sync.
 - Twin sync needed (sha256 of the twins at 10929bc): `workflow-templates/.claude/commands/implement-plan-claude.md` → `.claude/commands/implement-plan-claude.md` `c0a46399aed90a3e4a757053642ff7635084912fb52a8204691d4e159e689b1d`; `workflow-templates/.claude/commands/fix-claude-pr.md` → `.claude/commands/fix-claude-pr.md` `0b5400ff0c82f3836a3987f05d538b76632704157f04cba6b11f55f237bfff8a`. No `.claude/` path without a twin changed.
+- Twin sync landed 2026-09-29 as fd78ed4 (`[claude-twin-sync]`, operator answer A on #5260); both `.claude/commands/` copies match the twin sha256 above, and the six blocker test files pass on the PR head (223 passed, 1 skipped). `ai:claude-blocked` removed from #5260.
+- Project branch synced with its base on 2026-09-29: dee3c0e, clean merge of 4200c38 (the base's merge of main ccd2ebc); `tests/test_ci_job_split_contract.py`, `tests/test_claude_asset_sync_command.py`, `tests/test_implement_plan_claude_command.py` pass (66 passed, 1 skipped). The base has not moved (no merged PR has it as head; draft final PR #4995 still open).
