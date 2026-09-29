@@ -2,25 +2,25 @@
 
 - Plan: docs/plans/retire-master-session-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-retire-master-session   Final PR: pending (opened after this commit)
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-retire-master-session   Final PR: #5132 draft
+- Status: BLOCKED
 - Stage: phase 1/4
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR: twin sync (the `[claude-twin-sync]` copy of four `workflow-templates/.claude/` twins, including `settings.json`, which goes through the operator under Q9: A)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: none (not armed while the twin-sync hold stands; the stage `/reclarify` resumes arms it)
 - Last updated: 2026-09-29
-- Last note: Project branch opened from main at f736cad; phase 1 (escalation judge) starts under the automatic twin-first default.
+- Last note: Phase 1 (escalation judge) implemented twin-first and opened as its phase PR with a `hold` claim; stopped for the `[claude-twin-sync]` copy.
 
 ## Phases
-1. [ ] Phase 1 — Escalation judge   — protected paths: `.claude/commands/escalation-judge.md` (new), `.claude/scripts/escalation_ledger.py` (new), `.claude/commands/implement-plan-claude.md`, `.claude/settings.json`
-   - [ ] `workflow-templates/.claude/scripts/escalation_ledger.py` (`fingerprint`, `allowed`, `record`; exit 2 on a malformed log line), allowlisted in the `settings.json` twin (plain and `PYTHONDONTWRITEBYTECODE=1`)
-   - [ ] `workflow-templates/.claude/commands/escalation-judge.md` (inputs, steps 1–8, never-list)
-   - [ ] `implement-plan-claude.md` twin: the ten §28.C failure-escalation stops carry `kind=escalation stop=<id>` and hand the checker an `escalation` wait; `escalation` wait type in the checker instructions; `## Escalations` in the log template; "Never auto-decided" recap and Issue Mode bullet updated
-   - [ ] CLAUDE.md §28.G (new) and a §28.C pointer sentence
-   - [ ] `agents.md` ("Interactive slash-command model selection", "Interactive post-push PR status check-in")
-   - [ ] Tests: `tests/test_escalation_ledger.py`, `tests/test_escalation_judge_command.py` (own `ci.yml` steps); `tests/test_claude_md_section_numbers.py` extended for §28.G
-   - [ ] Changelog fragment
+1. [ ] Phase 1 — Escalation judge   — protected paths: `.claude/commands/escalation-judge.md` (new), `.claude/scripts/escalation_ledger.py` (new), `.claude/commands/implement-plan-claude.md`, `.claude/settings.json` (edited only in their `workflow-templates/.claude/` twins) — PR open, waiting on the twin sync; review rounds: 0; interventions: 0
+   - [x] `workflow-templates/.claude/scripts/escalation_ledger.py` (`fingerprint`, `allowed`, `record`; exit 1 bad arguments, exit 2 unreadable or malformed log), allowlisted in the `settings.json` twin in both forms — `tests/test_escalation_ledger.py` (48 tests)
+   - [x] `workflow-templates/.claude/commands/escalation-judge.md` (inputs, steps 0–9, menu, never-list)
+   - [x] `implement-plan-claude.md` twin: the ten stops name `escalation stop <id>` (lines 55, 66, 68, 69, 75, 76, 78, 81, 82, 89, 92, 273); new `## Escalations` section (line 292: stop-id table, human-only list, the 3-step stop procedure with the `kind=escalation stop=<id>` marker, `budget` / `descope` / `close` stages); checker step 0a (line 235) and Arming the wait step 3 for the `escalation` wait; `— resume.` template lines; `## Escalations` in the log template; Status `CLOSED`; recap, Issue Mode bullet, "Read first", Rules, Tool Access, Output Format updated
+   - [x] CLAUDE.md §28.G (`CLAUDE.md:2360`) and the §28.C pointer (`CLAUDE.md:2253-2255`)
+   - [x] `agents.md` (`:882` escalation judge stage; `:969` escalation waits)
+   - [x] Tests: `tests/test_escalation_ledger.py`, `tests/test_escalation_judge_command.py` (own `ci.yml` steps); `tests/test_claude_md_section_numbers.py` checks §28 runs A–G
+   - [x] Changelog fragment `changelog.d/5132-escalation-judge.md`
    - Done: every §28.C escalation stop hands off to the judge; `escalation_ledger.py` passes its tests; template parity passes after the twin sync
 2. [ ] Phase 2 — Blocked-issue sweep and automatic resume   — protected paths: `.claude/scripts/claude_blocked_sweep.py` (new), `.claude/commands/claude-issue-pickup.md` (no twin), `.claude/commands/implement-plan-claude.md`, `.claude/commands/claude-issue-dispatch.md`, `.claude/scripts/dispatch_workflow.py`, `.claude/settings.json`
    - [ ] `claude_blocked_sweep.py` (`scan`, `decide`) with the §15 docstring contract; allowlisted
@@ -51,6 +51,16 @@
 ## Escalations
 
 ## Auto-decisions
+- AD-1 [phase 1/4, 2026-09-29] The plan's line list for step 3 includes line 61 (no verified verdict-bot posting path), and steps 9 and 10 stop when a consumer wrapper rejects `ref` / `target_ref`. Are these escalation stops? — Picked: A — no; they stay human stops, listed in the new section's human-only paragraph. Alternatives: B — route them to the judge under an existing stop id. Why: none is a §28.C failure escalation or one of the plan's ten stop ids; each needs a configuration or sync only a human can supply, and the judge may never post a verdict marker. Applied in: phase 1. Status: pending review
+- AD-2 [phase 1/4, 2026-09-29] Which stop ids do the INCOMPLETE-with-no-fix-PR stops of step 8 (conformance) and step 12 (full-scope verify) use? — Picked: A — `conformance-cap` and `verify-activation-cap`. Alternatives: B — two new ids (`conformance-incomplete`, `verify-activation-incomplete`); C — keep them human. Why: the plan cites lines 68-69 and 89-92 under those two stops, and its stop list is fixed at ten; Q8 sends every non-human-only stop to the judge. Applied in: phase 1. Status: pending review
+- AD-3 [phase 1/4, 2026-09-29] How does a `budget` round raise the cap? — Picked: A — every cap counts one extra round per `ES-<n>` entry with `choice=budget` or `choice=descope` for the same stop id (for `intervention-cap`, only entries naming the same PR); a repeat stop goes back to the judge, where the same fingerprint gets only unused choices. Alternatives: B — the capped stage recomputes the fingerprint and counts only matching entries. Why: A needs no fingerprint in the capped stage and still bounds the loop, because `allowed` refuses a second `budget` or `descope` for the same failure. Applied in: phase 1. Status: pending review
+- AD-4 [phase 1/4, 2026-09-29] Where is an `ES-<n>` entry persisted when no PR is in flight? — Picked: A — like an auto-decision: the report and an `Uncommitted escalations:` line in the `— resume.` block, committed by the next PR; the judge also re-adds entries from `ai:claude-escalation:v1` comments missing from the log before calling `allowed`. Alternatives: B — the judge pushes a log commit straight to the project branch. Why: B adds a third direct push to the project branch and conflicts with the log copy in an in-flight PR; the comments make the ledger recoverable. Applied in: phase 1. Status: pending review
+- AD-5 [phase 1/4, 2026-09-29] Does an issue-mode escalation stop still send its `PushNotification`? — Picked: A — no; only the judge's `close` notifies. Alternatives: B — keep the stop's notification. Why: Q12 limits alerts to ask-first operations, a `close`, and Q8 stops. Applied in: phase 1. Status: pending review
+- AD-6 [phase 1/4, 2026-09-29] What does `descope` mean for `intervention-cap`, whose failing code is not on the base branch yet? — Picked: A — one `[claude-intervention] descope ES-<n>` commit on the blocked PR's own branch, then the wait is re-armed on that PR. Alternatives: B — close the PR and open a revert PR. Why: there is nothing to revert on the base branch; removing the part from the PR is the smallest change. Applied in: phase 1. Status: pending review
+- AD-7 [phase 1/4, 2026-09-29] What does the log's `Status:` say after a judge `close`? — Picked: A — a new value `CLOSED (not planned, ES-<n>)`. Alternatives: B — `BLOCKED` with a note; C — `COMPLETE`. Why: B reads as waiting and C as done; no script parses the value (checked with grep). Applied in: phase 1. Status: pending review
+- AD-8 [phase 1/4, 2026-09-29] How does the checker learn it has an `escalation` wait and which command to start? — Picked: A — a `Wait: escalation — start <next stage> with <start command>` line replaces the `--pr` / `--run` / `--issues` target; checker step 0a runs no script, goes to step 5, and swaps the resume prompt's first command. Alternatives: B — a new `check_in_status.py --escalation` mode. Why: there is nothing to poll, and a script change would add a second protected-path file. Applied in: phase 1. Status: pending review
+- AD-9 [phase 1/4, 2026-09-29] Which evidence goes into the fingerprint? — Picked: A — `checks`, `findings`, `issues` (follow-up issue numbers), `validation_class`, `validation_status`, with any other key refused. Alternatives: B — only the plan's check names, finding ids, and validation class. Why: `security-followup-unmerged` is identified by its follow-up issues; refusing unknown keys keeps fingerprints deterministic. Applied in: phase 1. Status: pending review
+- AD-10 [phase 1/4, 2026-09-29] How is evidence passed to `fingerprint`? — Picked: A — `--evidence <json>` as planned, plus `--evidence-file <path>`, which the judge uses. Alternatives: B — `--evidence` only. Why: a JSON argument in a shell command risks quoting prompts in an unwatched session; a file written with the Write tool does not. Applied in: phase 1. Status: pending review
 
 ## Lessons
 
@@ -60,3 +70,5 @@
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-29)
 - The `settings.json` allow rules count as a guard change under the operator's Q9: A, so their sync goes through the operator (twin-sync blocker says so).
 - `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` in every status check and in the checker instructions (#5057).
+- Twins to sync for phase 1 (`workflow-templates/.claude/<path>` → `.claude/<path>`), sha256 of the twin: `commands/escalation-judge.md` (new) `c06f187f51fc0e9da2f84e4f4b13f8e70a1cbec952a78caacd8b9357430865a3`; `commands/implement-plan-claude.md` `f5a811fbe7e25cb11e361ddad0ea5d36353afb702fbd20618a749295c514a47c`; `scripts/escalation_ledger.py` (new) `c989bd6b28fbe01d5fd39f9c4de20f08d97c0a9c86006fbb3e6f5beba331ac8a`; `settings.json` (two added `allow` rules; a guard change under Q9: A, so the operator syncs it) `287fc56a4bd91c32b552dad08a50f36e8919bb8f4d7eea3f993cb42295e9e961`. No `.claude/` path without a twin is changed. Before the sync, `.claude/settings.json` and `.claude/commands/implement-plan-claude.md` equal their twins on `main`, so the copy is exact.
+- Test runs for phase 1 are recorded in the phase PR body.
