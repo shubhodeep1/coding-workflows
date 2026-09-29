@@ -1355,10 +1355,19 @@ re-queued. Only markers from owners, members, collaborators, and
 target issue was closed after queueing, and the pickup's `queue-pending`
 refuses them (`issue_closed: <repo>#<N>`), so a closed issue never starts a
 session. Log prefix: `CLAUDE_ISSUE_QUEUE_WATCHDOG` (`env_requeue requeued`,
-`env_requeue exhausted`, `env_requeue skip`, `closed_target`). An issue with
-more than 1,000 comments, or a search with more results than were read, is
-logged as `env_requeue_read_failed`, and the issues it could not read are left
-alone.
+`env_requeue exhausted`, `env_requeue skip`, `closed_target`). A search with
+more results than were read is logged as `env_requeue_read_failed`, and the
+issues it could not read are left alone. Comments are read at most 10 pages
+(1,000 comments) per issue per run, and the scan resumes where the last run
+stopped (issue #5136): the step keeps a checkpoint (the page and id of the last
+comment read, plus the trusted marker and `/reclarify` comments seen so far)
+at `CLAUDE_ISSUE_ENV_REQUEUE_CHECKPOINT`, restored from and saved to the Actions
+cache (`claude-env-requeue-checkpoint-<run id>-<attempt>`). A thread whose scan
+has not reached its last comment yet is logged as `env_requeue_scan_pending`
+and decided on a later run, never from a partial read, so flooding a blocked
+issue with comments delays its re-queue instead of disabling it. A missing or
+unusable checkpoint restarts the scans from page 1
+(`env_requeue checkpoint status=missing|invalid`).
 
 If `claude_issue_route.py`
 itself errors, clarify falls back to the Codex pipeline with a warning, so no

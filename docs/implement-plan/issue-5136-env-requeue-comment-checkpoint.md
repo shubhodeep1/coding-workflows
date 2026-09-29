@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5136-env-requeue-comment-checkpoint-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Source issue: shubhodeep1/coding-workflows#5136   Base branch: claude/implement-plan-issue-4938-environment-blocker-self-heal
-- Project branch: claude/implement-plan-issue-5136-env-requeue-comment-checkpoint   Final PR: pending
+- Project branch: claude/implement-plan-issue-5136-env-requeue-comment-checkpoint   Final PR: #5162 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (the PR carrying this log commit)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from the issue base; phase 1 in progress
+- Last note: phase 1 implemented and verified (full suite on Python 3.12); phase PR opened, waiting on its review round or merge
 
 ## Phases
-1. [ ] Phase 1 — checkpointed comment scan, wired into the watchdog
+1. [ ] Phase 1 — checkpointed comment scan, wired into the watchdog   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -35,8 +35,10 @@
 - AD-5 [plan, 2026-09-29] What does `env-requeue-plan` do without `--checkpoint`? — Picked: A — exactly today's stateless read and cap error. Alternatives: B — an in-memory checkpoint that reports `pending`. Why: backward compatibility for any other caller and the existing tests (§6); the watchdog always passes the flag. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A resumable page scan that re-reads its cursor page needs at least two reads per run, or a full cursor page consumes the whole budget and the scan never advances. (files: scripts/claude_issue_route.py)
 
 ## Notes
 - Issue mode: the plan was written by /implement-issue-claude from #5136 (progress comment 5890575522).
 - Protected paths: none (phase 1 touches no `.claude/**` file).
+- Local test runs need Python 3.12 (CI's version): `scripts/workflow_retro.py` does not parse on 3.11.
 - This session had no `mcp__github__*` tools; GitHub writes go through `gh api` calls the CLAUDE.md §23.H guard classifies as routine.
