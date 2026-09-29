@@ -1032,7 +1032,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   auto-merging, and the repo's `ENABLE_AUTO_MERGE` variable reads `true`
   (404 = unset = `true`; any other read failure = no merge), it runs
   `scripts/review_enable_auto_merge.sh` for that head
-  (`--match-head-commit`). It logs `pending_checks` and counts
+  (`--match-head-commit`). Before that it lists the PR's review runs
+  (issue #5148, `check_review_runs`): any run on the head branch, an
+  `internal-review.yml` dispatch titled `[pr:<N>]`, or any
+  `review_autofix.yml` / `ai-review.yml` dispatch (no PR binding) that is
+  not `completed` returns `review_active`; a latest newer completed review
+  of the PR that did not conclude `success`, or a marker that is no longer
+  the live one on a re-read of the comments, returns `review_superseded`.
+  Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
   running); a failed read, or a snapshot whose temp directory cannot be
   written (`OSError`), logs `pending_checks_failed` and moves on. Tests:
