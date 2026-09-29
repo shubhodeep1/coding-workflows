@@ -1310,6 +1310,7 @@ three REST reads.
 | Move one issue to Codex | Add `ai:codex`, then comment `/reclarify` (the `ai:claude` claim is released) |
 | Send one issue to Claude in a `codex` repo | Add `ai:claude`, then comment `/reclarify` |
 | Retry a failed handoff or resume a blocked issue | Comment `/reclarify` |
+| Resume a project blocked at `final-merge` after merging its final PR by hand (the merge closed the issue) | Comment `/reclarify` on the closed issue |
 
 **Failure modes.** A failed dispatch from the handoff, or a failed queue read
 or write in the intake, labels the issue `ai:claude-handoff-failed`, comments
@@ -1332,7 +1333,19 @@ claude-code-remote tools never implements an issue itself:
 exhausted cap, a failed security or validation run, an ask-first operation,
 a missing base branch) comments once on the issue, labels it
 `ai:claude-blocked`, and sends a push notification; answer there and comment
-`/reclarify` to resume. If `claude_issue_route.py`
+`/reclarify` to resume. The blocked comment names its stage on its own `**Stage:**` line.
+A stop at a `final-merge` stage usually asks for the final PR to be merged by
+hand. Its `Fixes #<N>` closes the issue, but `/reclarify` still resumes the
+project (#5222). clarify and the intake route a trusted `/reclarify` on a
+closed issue as `final_merge_resume` only when the issue carries `ai:claude`
+and `ai:claude-blocked`, its latest trusted `ai:claude-blocked:v1` comment
+names a `final-merge` stage, and the `/reclarify` comes after that comment
+(`AI_PHASE_GATE_V1 phase=clarify gate=route reason=final_merge_resume
+outcome=handoff`). The issue stays closed. The resumed session removes
+`ai:claude-blocked` and continues with verify-activation. Every other comment
+on a closed issue is still skipped (`reason=issue_closed outcome=skip`), and
+the intake refuses it with `issue_closed`. The check reads the comments once,
+and only on a closed issue that carries both labels. If `claude_issue_route.py`
 itself errors, clarify falls back to the Codex pipeline with a warning, so no
 issue is dropped.
 
