@@ -203,6 +203,17 @@ def test_the_notice_is_posted_once_per_head(tmp_path):
 	assert "posted=false detail=already_posted" in result.stdout
 
 
+def test_a_notice_edited_to_crlf_still_counts_as_posted(tmp_path):
+	# Review round 1 on #5056: a comment edited in the web UI is stored with
+	# CRLF; the jq dedupe must strip `\r` like `_head_has_review_trace` does.
+	existing = {"id": 1, "user": {"login": "workflow-bot", "type": "User"}, "author_association": "OWNER",
+		"created_at": "t", "body": f"x\r\n<!-- ai:claude-fixer-review-skipped:v1 reason=skip_ai_marker head={HEAD} -->\r\n"}
+	assert checker._head_has_review_trace([existing], HEAD, "workflow-bot")
+	result, posted = _run_block(tmp_path, [existing])
+	assert result.returncode == 0 and posted is None
+	assert "posted=false detail=already_posted" in result.stdout
+
+
 def test_a_notice_by_another_account_does_not_count(tmp_path):
 	forged = {"id": 1, "user": {"login": "someone", "type": "User"}, "author_association": "NONE",
 		"created_at": "t", "body": f"<!-- ai:claude-fixer-review-skipped:v1 reason=skip_ai_marker head={HEAD} -->"}

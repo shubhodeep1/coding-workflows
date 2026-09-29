@@ -1558,7 +1558,7 @@ jobs:
               echo "::warning::AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=false detail=comments_${gate_marker_fetch_state}"
             elif jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
                 any(.[]; .author_login == $author and
-                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-review-skipped:v1 reason=[a-z_]+ head=" + $head + " -->$"))))
+                  ((.body // "") | gsub("\r"; "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-review-skipped:v1 reason=[a-z_]+ head=" + $head + " -->$"))))
               ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
               echo "AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=false detail=already_posted"
             else

@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4985-skip-marker-review-stall   Final PR: #5031 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #5056 (phase 1/1 review round or merge)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_011mS4g4dN4yMqg1hT4BY67M   safety net trig_016iPBDe7BJj9m6pzj5JxWWu   hand-back trig_01Kr6BbNpiXo8K8ytJXhbd5C
+- Check-in: checker session_011mS4g4dN4yMqg1hT4BY67M (reused; the round-1 stage session re-arms it with a new safety net and hand-back, ids in its report)
 - Last updated: 2026-09-29
-- Last note: twin sync 0e9976d landed (Q1: A, master session); blocked label removed; wait on PR #5056 armed. Added tests that a failed read inside `_review_stall_verdict` ends as exit-2 `retry` (master-session review point); 16 suites, 1,002 passed on the synced branch.
+- Last note: review round 1 on head 5372dc5 (27 ledger entries): fixed the jq skip-notice dedupe (strips `\r`) and registered `AUTOFIX_GATE_SKIP_NOTICE` in agents.md; rejected the `due` UnboundLocalError (initialised at check_in_status.py:766), the stall-read error handling (main() already maps ReadError/KeyError/TypeError/ValueError to exit-2 retry, tested), the root-copy task gap (synced in 0e9976d), and two no-defect NITs.
 
 ## Phases
-1. [ ] Phase 1 — intentional-marker rule, gate skip log and comment, review-stall detection and fixer re-dispatch   — PR #5056 open (twin sync 0e9976d done); review rounds: 0; interventions: 0; protected paths: `.claude/scripts/check_in_status.py`, `.claude/scripts/dispatch_workflow.py`, `.claude/settings.json`, `.claude/hooks/gh_api_write_guard.py`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/implement-plan-claude.md` (all edited through their `workflow-templates/.claude/` twins)
+1. [ ] Phase 1 — intentional-marker rule, gate skip log and comment, review-stall detection and fixer re-dispatch   — PR #5056 open (twin sync 0e9976d done); review rounds: 1; interventions: 0; protected paths: `.claude/scripts/check_in_status.py`, `.claude/scripts/dispatch_workflow.py`, `.claude/settings.json`, `.claude/hooks/gh_api_write_guard.py`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/implement-plan-claude.md` (all edited through their `workflow-templates/.claude/` twins)
    - gate: marker rule, `AUTOFIX_GATE_SKIP` line on every skip, one `claude/*` skip comment per head (`.github/workflows/review_autofix.yml`)
    - sweeps: same rule in `.github/workflows/review_autofix_sweep.yml` and `scripts/claude_pr_sweep.py`; `review-stalled` is due; `CLAUDE_REVIEW_STALL_HOURS` in the catch-all env
    - checker twin: `has_skip_ai_marker`, `review-stalled` → `hand_back_fixer`, `stall_redispatched`
@@ -49,6 +49,7 @@
 - AD-13 [plan, 2026-09-29] Log every skip even with an earlier `AUTOFIX_GATE_SKIP` line? — Picked: A — yes, one uniform end-of-gate line. Alternatives: B — only when none was logged. Why: one searchable line per run. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:intervention] A jq filter that matches a whole comment line (`split("\n")` + an anchored `test`) must strip `\r` first (`gsub("\r"; "")`): comments edited in the GitHub web UI are stored with CRLF, and the Python (`splitlines`) and awk parsers of the same marker already ignore it. (files: .github/workflows/review_autofix.yml)
 - [source:plan-deviation] Adding a workflow to `dispatch_workflow.py`'s allowlist also means adding it to the `.claude/settings.json` allow rules and to `gh_api_write_guard.py`'s `DISPATCHABLE_WORKFLOWS`; tests keep all three equal, and the settings and hook changes need the operator's approval window. (files: .claude/scripts/dispatch_workflow.py, .claude/settings.json, .claude/hooks/gh_api_write_guard.py)
 
 ## Notes
