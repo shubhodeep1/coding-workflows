@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#4619
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4619-gh-api-guard-file-backed-fields   Final PR: pending
-- Status: BLOCKED
-- Stage: phase 1/1
+- Status: IN_PROGRESS
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: twin sync of `.claude/hooks/gh_api_write_guard.py` (Q40) on the phase 1 PR, then `/reclarify` on #4619
+- Waiting on: PR #5004
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01SdjPMQ5uLDRMKgrHa86Men   safety net (re-armed each stage)   hand-back (re-armed each stage)
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented twin-first (Q40): the fix is in `workflow-templates/.claude/hooks/gh_api_write_guard.py` only; the phase PR is held until the supervising session copies it into `.claude/hooks/` as `[claude-twin-sync]`.
+- Last note: review round 1 on head 73ad50e: 1 finding fixed (reason-text coverage for `--field`/`--field=`/`-Fbody=`), changelog counts updated, 5 findings rejected with reasons on PR #5004.
 
 ## Phases
-1. [ ] Phase 1 — file-backed `-F` values and `--input` always prompt in the gh api guard — protected paths: `.claude/hooks/gh_api_write_guard.py` — phase PR open, held for the twin sync (2026-09-29); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — file-backed `-F` values and `--input` always prompt in the gh api guard — protected paths: `.claude/hooks/gh_api_write_guard.py` — PR #5004 open (waiting); twin sync 73ad50e landed 2026-09-29; review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -44,3 +44,5 @@
 - Twin verification: in a scratch copy with the twin placed at `.claude/hooks/`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, `tests/test_pr_check_in_reminder.py`, and `tests/test_update_workflows_guardrails.py` pass (393 passed). In the real checkout before the sync, 27 guard tests fail as expected: 26 new file-backed cases against the old hook, plus `test_template_parity`.
 - Session environment: no `mcp__github__*` tools were attached, so GitHub reads and writes went through `gh` (installed by `.claude/hooks/session-start.sh`) over REST, with inline `-f` fields only.
 - Stale Routine sweep 2026-09-29: the Auto-mode classifier denied deleting `trig_01Y1gp9ViVXk3gMqKmWBRUrp` (`dispatch …#4969: deliver`, ended); left for a later sweep.
+- Twin sync 73ad50e landed 2026-09-29 (master session): `.claude/hooks/gh_api_write_guard.py` is byte-identical to its twin. `ai:claude-blocked` removed from #4619; Status back to IN_PROGRESS. Checker session_01SdjPMQ5uLDRMKgrHa86Men. Every `check_in_status.py` call passes `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` (#5057).
+- Review round 1 (2026-09-29, session session_01TCPp9FSuNWJRP8G8cgQYUv): fixed the reason-text test gap for the `--field` spellings (test-only, no `.claude/` edit, so no twin sync needed). Rejected: the "root hook unchanged" task gap (73ad50e synced it), the redundant GraphQL `--input` conjunct (kept as defence in depth), the hardcoded `-F` in the reason (`-F` is the short name of the same flag), and the changelog count (17 new plus 5 moved = 22 entries; the row now says `new`).

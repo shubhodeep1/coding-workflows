@@ -6,7 +6,7 @@
 | The numbers that matter | Value |
 | --- | --- |
 | Finding | `api-guard-allows-file-backed-comment`, high, issue #4619 |
-| New guard test cases | 26 (17 file-backed or `--input` asks, 4 classification reasons, 1 ask reason, 1 hook process, 3 raw-field allows) |
+| New guard test cases | 29 (17 new file-backed or `--input` asks, 7 classification reasons, 1 ask reason, 1 hook process, 3 raw-field allows) |
 | Existing fixtures now expected to ask | 5 observed `-F body=@...` commands |
 | GitHub API calls added | 0 |
 

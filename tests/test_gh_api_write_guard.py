@@ -312,6 +312,11 @@ def test_file_backed_value_or_input_always_asks(name):
 	("args", "expected"),
 	[
 		(["repos/a/b/issues/1/comments", "-F", "body=@f"], "with file-backed field `-F body=@...`"),
+		# `--field`, `--field=`, and the attached `-Fkey=` form are the same flag;
+		# the reason names it by its short spelling.
+		(["repos/a/b/issues/1/comments", "--field", "body=@f"], "with file-backed field `-F body=@...`"),
+		(["repos/a/b/issues/1/comments", "--field=body=@f"], "with file-backed field `-F body=@...`"),
+		(["repos/a/b/issues/1/comments", "-Fbody=@f"], "with file-backed field `-F body=@...`"),
 		(["-X", "GET", "search/issues", "-F", "q=@f"], "with file-backed field `-F q=@...`"),
 		(["graphql", "-F", "query=@q.graphql"], "with file-backed field `-F query=@...`"),
 		(["-X", "GET", "repos/a/b", "--input", "f.json"], "with --input"),
