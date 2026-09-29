@@ -4,18 +4,18 @@
 - Source issue: shubhodeep1/coding-workflows#5227
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Base branch: claude/implement-plan-issue-4813-close-sweep-target-branch-merges
-- Project branch: claude/implement-plan-issue-5227-lineage-only-target-branch-merges   Final PR: pending
+- Project branch: claude/implement-plan-issue-5227-lineage-only-target-branch-merges   Final PR: #5257 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (branch claude/implement-plan-issue-5227-lineage-only-target-branch-merges-phase-1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from the issue base; phase 1 starting.
+- Last note: phase 1 implemented and verified (18/18 gate tests, 103 related tests, yamllint -s, ruff, actionlint 1.7.12); phase PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — lineage allow-list in `issue_pr_status.yml` (workflow + tests + README row + changelog fragment)
+1. [ ] Phase 1 — lineage allow-list in `issue_pr_status.yml` (workflow + tests + README row + changelog fragment)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
