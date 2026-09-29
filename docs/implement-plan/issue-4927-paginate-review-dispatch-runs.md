@@ -5,18 +5,19 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4927-paginate-review-dispatch-runs   Final PR: #4966 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #4987
+- Waiting on: conformance fix PR from `claude/implement-plan-issue-4927-paginate-review-dispatch-runs-conformance-fix-1` (number in the stage report and the `— resume.` block)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01S3zQzuBBZcAddUe4zJZ2NU   safety net (in the stage report)   hand-back (in the stage report)
 - Last updated: 2026-09-29
-- Last note: review round 1 (session_019qMjW6ytgJgYDJbAJKdfVf): fixed the `rc=` field of the `pr_named_listing_incomplete` log line and pinned it in a test; rejected the indentation nit; waiting on round 2
+- Last note: conformance 1/3 (session_01GKRmGY9EumfL3TUZCjdwHR): CONFORMANT with CONCERNS; opened a comment-only fix PR for three caller comments that still described the helper's old single-call, fail-open contract
 
 ## Phases
-1. [ ] Phase 1 — paginated, completeness-aware PR-named review dispatch lookup (`scripts/orchestrate_poll_process.sh` helper + 3 call sites, tests, agents.md, README.md, changelog)   — PR #4987 open (waiting); review rounds: 1; interventions: 0
+1. [x] Phase 1 — paginated, completeness-aware PR-named review dispatch lookup (`scripts/orchestrate_poll_process.sh` helper + 3 call sites, tests, agents.md, README.md, changelog)   — PR #4987 merged 2026-09-29; review rounds: 1; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT (Correctness: CONCERNS) — fix PR from `…-conformance-fix-1` (pre-security): three stale caller comments at `scripts/orchestrate_poll_process.sh` (`_has_active_autofix_run` header: "one extra call" and a return contract missing the incomplete-listing case; `_direct_inflight_review_run_on_branch` header: "one more call" and an unqualified fail-open claim; failed-autofix redispatch: "one call, §15"). Checks: `bash -n` pass; 4 focused test files 77 pass; poller integration subset 23 + 9 pass; live read-only run of the helper against this repo rc=0 (125 `internal-review.yml` runs over 2 pages, `ai-review.yml` 404); shellcheck on the full poller could-not-run locally (OOM), clean at `--severity=warning` on the three changed functions.
 
 ## Security pass
 - Skipped: plan header `Security pass: skip (ai:security: automation-produced issue)` (`security_pass_skip.py` verified)
@@ -37,6 +38,7 @@
 - AD-7 [phase 1/1, 2026-09-29] Should a failed branch listing in `_direct_inflight_review_run_on_branch` also skip the empty-commit push? — Picked: A — no; keep its documented fail-open (`outcome=listing_unavailable`, covered by `test_empty_or_non_array_payload_fails_open`). Alternatives: B — return `listing-incomplete` there too; C — still run the PR-named lookup before failing open. Why: §5; the branch listing is scoped to the PR's own branch, so the finding's crowding vector cannot reach it. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:conformance] When a helper's return codes or API-call budget change, update the header comments of every caller that restates them, not only the helper's own docstring; grep the callers for phrases like "one extra call" and "Returns 0 if". (files: scripts/orchestrate_poll_process.sh)
 - [source:plan-deviation] Shell code that accumulates GitHub API JSON across pages must feed jq through stdin, never `--argjson`: about 1,000 runs exceed the kernel's 128 KiB single-argument limit, and a failed `x="$(jq …)"` aborts a `set -e` script. (files: scripts/orchestrate_poll_process.sh)
 
 ## Notes
