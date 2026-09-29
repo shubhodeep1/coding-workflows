@@ -17,7 +17,7 @@ $ARGUMENTS
    - **Routed away** — the issue carries `ai:codex` or `ai:orchestrator-managed`, or its body has a `Managed by: AI Orchestrator` line → report `issue belongs to the Codex pipeline` and stop without touching it.
    - **Claim** — add `ai:claude` if missing and remove `ai:claude-blocked` / `ai:claude-handoff-failed` if present (`mcp__github__issue_write`), so a resumed issue is visibly back in progress.
 
-3. **Resolve the issue base.** `<issue base>` is the branch named by the body's `Integration branch:` line, else its `Target branch:` line, else the default branch. Parse it with `extract_integration_branch` from `scripts/resolve_integration_ref.sh` when the repo has it; otherwise use the same rules, where the canonical line wins and backticks and bold are allowed. Security follow-ups name their project's branch, and heal issues name `stable` or a pull request's head branch. Check it exists (`git ls-remote --heads origin <issue base>`); a missing branch is a hard blocker.
+3. **Resolve the issue base.** `<issue base>` is the branch named by the body's `Integration branch:` line, else its `Target branch:` line, else the default branch. Parse it with `extract_integration_branch` from `scripts/resolve_integration_ref.sh` when the repo has it; otherwise use the same rules, where the canonical line wins and backticks and bold are allowed. Security follow-ups name their project's branch, and heal issues name `stable` or a pull request's head branch. Check it exists (`git ls-remote --heads origin <issue base>`); a missing branch is a hard blocker. This is the **named base**; step 6a decides whether the project is built on it or on the default branch.
 
 4. **Resume, never duplicate.** Run `git ls-remote --heads origin 'claude/implement-plan-issue-<N>-*'` and read each match's `docs/implement-plan/*.md` for a `Source issue: <owner>/<repo>#<N>` line. Also check `docs/completed/issue-<N>-*-plan.md` on the default branch.
    - **This issue's project exists** → if its log's `Check-in:` names a checker session that exists and is neither archived nor failed (`get_session`) and its `Status:` is `IN_PROGRESS`, report `already in progress: <stage>` and stop. Otherwise follow `/implement-plan-claude` in this session with that project's plan path as `$ARGUMENTS`; it resumes from its log, and reports and stops when the project is already complete.
@@ -39,6 +39,13 @@ $ARGUMENTS
    
    Leave the plan uncommitted. Step 3a of `/implement-plan-claude` commits it to the project branch with the log.
 
+6a. **Pick the project base (plan D13).** An issue-mode project uses the default branch as its base unless the code it fixes exists only on the branch the issue names. Run this once the plan's file list exists and before the project branch is created:
+   - The named base (step 3) **is** the default branch → keep it.
+   - The issue is an **`ai:security` follow-up** → keep the named base: the audited code lives on the project branch it names.
+   - Otherwise, for every file the plan **changes** (not one it creates), run `git cat-file -e origin/<default>:<path>`. **All present** → use the default branch as `<issue base>` and record `AD-<n>` `Base: <default> instead of <named> (D13)`. **Any missing** → keep the named base and record `AD-<n>` `Base: <named> instead of <default> (D13): <missing paths> missing on <default>`.
+
+   Write the chosen branch into the plan header's `Base branch:` line. The auto-decision goes under the plan's `## Auto-decisions` like every other planning decision. A project that still runs on a non-default base is checked for a dead base at every stage and check-in, and rebuilt on the default branch when that base's pull request closes without merging (`/implement-plan-claude` [Issue Mode](.claude/commands/implement-plan-claude.md#issue-mode)).
+
 7. **Post the progress comment.** Create the issue's single progress comment (`mcp__github__add_issue_comment`) starting `<!-- ai:claude-issue-progress:v1 -->`. It carries:
    - the plan title and path;
    - a 3–6 bullet summary of the approach;
@@ -55,7 +62,7 @@ $ARGUMENTS
 
 - **One issue, one phase, one chain.** Never fold a second issue in or split one into several phases. Everything after the plan is `/implement-plan-claude` issue mode; this file never ships PRs itself.
 - **The issue closes only when the whole project merged.** The final PR carries `Fixes #<N>` into the default branch, or the final-merge stage closes the issue and labels it `ai:merged` for any other base. Every other PR uses `Refs #<N>`. An `ai:orchestrator-tracking` issue is never routed here (§19).
-- **Build on the branch the issue names.** A security follow-up is built on its project's branch and a heal issue on `stable` or the named PR branch; nothing else defaults to the default branch.
+- **Build on the default branch unless the code lives only on the named branch** (step 6a, plan D13). A security follow-up is always built on its project's branch; any other named base (a heal issue's PR head, `stable`) is used only when a file the plan changes is missing on the default branch.
 - **Resume instead of duplicating.** Step 4 runs before any write, so a second dispatch for the same issue (`/reclarify`, a manual intake run) lands on the project already in progress.
 - **Never merge, never watch.** Auto-merge and `review_autofix.yml` land the PRs; the Sonnet checker waits. No `subscribe_pr_activity`, no polling, no `sleep`.
 
