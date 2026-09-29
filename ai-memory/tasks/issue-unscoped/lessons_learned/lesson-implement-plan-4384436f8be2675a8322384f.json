@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T22:39:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When two readers act on the same marker (a gate that skips re-reviews and a sweep that merges), they must select the same comment; `any()` in one and latest-wins in the other lets them disagree, and the PR stalls with neither a merge nor a review.",
+  "phase": "implement_plan",
+  "pr_number": 5213,
+  "record_id": "lesson-implement-plan-4384436f8be2675a8322384f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5147-bind-pending-merge-to-base",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}

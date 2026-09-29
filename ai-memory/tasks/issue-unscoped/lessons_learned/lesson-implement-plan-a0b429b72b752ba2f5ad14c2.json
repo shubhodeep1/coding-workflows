@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T22:39:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A jq filter that must agree with a Python reader on comment text has to split lines the way `str.splitlines()` does (CRLF, lone CR, and the Unicode line boundaries), not with `split(\"\\n\")`, and a test should run both readers over the same comments.",
+  "phase": "implement_plan",
+  "pr_number": 5213,
+  "record_id": "lesson-implement-plan-a0b429b72b752ba2f5ad14c2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5147-bind-pending-merge-to-base",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}
