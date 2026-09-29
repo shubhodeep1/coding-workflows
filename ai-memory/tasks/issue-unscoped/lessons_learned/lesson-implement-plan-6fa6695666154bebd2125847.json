@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T00:43:10Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An issue-mode project whose base is another project's branch cannot run `validate.yml` with `target_ref` until the explicit-target authorization accepts a final PR into a non-default base; check that binding before dispatching, and plan the validation route (wait for the fix, or an operator skip covered by the parent project's validation) up front.",
+  "phase": "implement_plan",
+  "pr_number": 4876,
+  "record_id": "lesson-implement-plan-6fa6695666154bebd2125847",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:validation",
+    "plan:issue-4775-template-claude-protected-equivalent",
+    "file:.github/workflows/validate.yml"
+  ]
+}
