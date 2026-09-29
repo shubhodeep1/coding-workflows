@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:517-525 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_migrate_legacy_counts` uses the current sorted log-file order to identify the legacy-count prefix, so file additions, renames, or rotations can change which records are treated as already filed.\n  WHY: If the file set or order differs from when the legacy count was written, migration can incorrectly skip real denials.\n- .claude/scripts/permission_prompts.py:531-534 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When `_load_filed_records` encounters malformed or unreadable state, it returns an empty dictionary, causing `file_patterns` to treat the state as empty and re-file records.\n  WHY: A transient I/O error or corrupted `filed-state.json` can cause issues or comments to be posted again, potentially hitting rate limits.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The plan AD-1 states: \"track filed records by key (<log file>:<line>) per signature in a versioned filed-state.json, migrating legacy counts by the load-order prefix.\"\n  expected_change_site: .claude/scripts/permission_prompts.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: .claude/scripts/permission_prompts.py, `load_keyed_records` and `_migrate_legacy_counts` (lines 517-525): current sorted file order may differ from the order used when the legacy count was calculated, so migration may process a different prefix.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/permission_prompts.py:517-525 | severity=critical | confidence=4\n  PROBLEM: The legacy migration logic (`_migrate_legacy_counts`) relies on `keyed_records` to determine the \"prefix\" of records covered by a legacy count. However, the order of `keyed_records` is determined by `sorted(log_dir.glob(\"*.jsonl\"))`. If log files are renamed or if multiple sessions interact with the `log_dir` in a way that shifts file order, the \"prefix\" of `N` records will change, leading to inconsistent migration results (some real denials might still be skipped if they were \"suppressed\" by an outage that no longer appears at the beginning of the list).\n  WHY: The migration is non-deterministic if the set of files or their order changes between the time the legacy count was written and the time migration occurs, which is highly probable in sessions with rotating logs.\n- .claude/scripts/permission_prompts.py:531-534 | severity=high | confidence=4\n  PROBLEM: If `_load_filed_records` encounters a file that exists but contains malformed JSON or is otherwise unreadable, it returns an empty dictionary `{}` which leads `file_patterns` to treat the state as empty and re-file everything.\n  WHY: This causes excessive re-posting of issues/comments upon any transient file I/O error or corruption in `filed-state.json`, potentially hitting rate limits.\n- Requirement: The plan AD-1 states: \"track filed records by key (<log file>:<line>) per signature in a versioned filed-state.json, migrating legacy counts by the load-order prefix.\"\n  Expected change site: .claude/scripts/permission_prompts.py\n  Evidence of absence: The implementation uses `sorted(log_dir.glob(\"*.jsonl\"))` as the basis for the load order in `load_keyed_records`, but it does not ensure that the legacy count migration uses the *exact* same file list/order that the original filer used when it calculated the cumulative count. If log files have been archived, rotated, or if a newer log file with a name that sorts earlier was added, the migration will process a different set of files as the \"prefix\", leading to incorrect migration of the legacy count.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a18dbaa55211f6ae02e77bfb49a6575478b7e7978c3d1de9e269665f53bac120",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5028,
+    "run_id": "36598221743",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36598221743",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929164546_de109123c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5028,
+    "run_id": "36598221743"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T16:45:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
