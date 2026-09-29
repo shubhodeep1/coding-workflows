@@ -433,6 +433,11 @@ def test_forced_review_running_from_the_default_branch_blocks_the_merge(fake_gh)
 	("consumer ai-review.yml dispatch (no PR binding)", [],
 		{"internal-review.yml": None, "review_autofix.yml": None,
 			"ai-review.yml": [_run(RUN_ID + 4, workflow="ai-review.yml", status="queued", event="workflow_dispatch", head_branch="main")]}),
+	# The stall poller's force_rb_judge path (conformance run 1): it runs
+	# review_autofix.yml through its own wrapper, past the pending-checks skip.
+	("stall-poller review_rb_judge_dispatch.yml dispatch (no PR binding)", [],
+		{"review_rb_judge_dispatch.yml": [_run(RUN_ID + 5, workflow="review_rb_judge_dispatch.yml", status="in_progress",
+			event="workflow_dispatch", head_branch="main", title="Internal: Review-Blocked Judge Dispatch")]}),
 ])
 def test_an_active_review_defers_the_merge(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -477,6 +482,9 @@ def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, bran
 			head_branch="main")]}),
 	("no review workflow dispatch listings at all (404)", [],
 		{"internal-review.yml": None, "review_autofix.yml": None}),
+	("a finished review_rb_judge_dispatch.yml dispatch", [],
+		{"review_rb_judge_dispatch.yml": [_run(RUN_ID + 5, workflow="review_rb_judge_dispatch.yml", conclusion="failure",
+			event="workflow_dispatch", head_branch="main", title="Internal: Review-Blocked Judge Dispatch")]}),
 ])
 def test_settled_reviews_let_the_merge_through(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,

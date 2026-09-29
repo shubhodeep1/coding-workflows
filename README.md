@@ -1468,8 +1468,8 @@ blocking label, no conflict, and the repository's `ENABLE_AUTO_MERGE`
 variable (unset means `true`; `GH_PAT` needs Actions-variables read, or the
 PR is left alone). It also waits while a newer review of the PR may still be
 running (issue #5148): any run on the head branch, an `internal-review.yml`
-dispatch titled for the PR, or any `review_autofix.yml` / `ai-review.yml`
-dispatch that has not completed (`review_active`), and it never merges when
+dispatch titled for the PR, or any `review_autofix.yml` / `ai-review.yml` /
+`review_rb_judge_dispatch.yml` dispatch that has not completed (`review_active`), and it never merges when
 the latest newer completed review of the PR did not succeed or the marker
 changed while it checked (`review_superseded`). A check that fails instead
 is a `ci-failed` Claude fix, and a push starts a new review round.

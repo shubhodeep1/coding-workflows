@@ -1035,8 +1035,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   (`--match-head-commit`). Before that it lists the PR's review runs
   (issue #5148, `check_review_runs`): any run on the head branch, an
   `internal-review.yml` dispatch titled `[pr:<N>]`, or any
-  `review_autofix.yml` / `ai-review.yml` dispatch (no PR binding) that is
-  not `completed` returns `review_active`; a latest newer completed review
+  `review_autofix.yml` / `ai-review.yml` / `review_rb_judge_dispatch.yml`
+  dispatch (no PR binding) that is not `completed` returns `review_active`; a latest newer completed review
   of the PR that did not conclude `success`, or a marker that is no longer
   the live one on a re-read of the comments, returns `review_superseded`.
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
