@@ -5,18 +5,19 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5174-guard-differential-check   Final PR: #5185 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #5187
+- Waiting on: conformance fix PR (see ## Conformance)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_019rGgoLZBfTcYZUkbRAYsRN (project checker; per-wait safety net and hand-back ids are in the stage report)
 - Last updated: 2026-09-29
-- Last note: review round 4 on PR #5187: 1 finding fixed (a new or deleted guard with no corpus now fails, AD-9; untracked hook files count locally), 1 rejected (per-tree rows, the same misread as rounds 1-3; a code comment at the call now says so).
+- Last note: conformance 1/3: CONFORMANT (all goals G1-G6 met, G1 re-run: b6dd693 exits 1, 03c2487 exits 0); one stale-doc concern fixed in the conformance fix PR (the guard differential steps now run in `tests-hooks-and-orchestrator`, not `lint`, after #4874's job split came in with the main sync).
 
 ## Phases
-1. [ ] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog) — PR #5187 open; review rounds: 4; interventions: 0
+1. [x] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog) — PR #5187 merged 2026-09-29 (a295948); review rounds: 5 (round 5: all 3 findings rejected, no verdict bot configured, so the project stopped BLOCKED and the owner merged the PR per Q1: A); interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT — fix PR (stale `lint` job wording in scripts/guard_differential.py, agents.md, changelog.d/5174-guard-differential-check.md) (pre-security)
 
 ## Security pass
 
@@ -41,7 +42,9 @@
 - [source:intervention] When a test harness filters the caller's environment to isolate a subprocess, apply the same filter to every other source merged into that environment (scenario or fixture overrides). Otherwise a later override can undo the isolation. (files: scripts/guard_differential.py)
 - [source:intervention] A "required input is missing" gate must test for an empty parsed input, not only an absent key: a comments-only file parses to an empty list and otherwise passes the gate with zero checks run. (files: scripts/guard_differential.py)
 - [source:intervention] A coverage gate ("every X needs a test corpus") must apply to new X too, not only to X that existed before: an exemption for new items lets a loosening move into a new file and skip the check. In working-tree mode, `git diff <base>` omits untracked files, so add `git ls-files --others --exclude-standard` when the detector feeds a gate. (files: scripts/guard_differential.py)
+- [source:conformance] After syncing the default branch into a project branch, re-read the project's own docs for names the sync may have changed (a CI job, a step, a path): a clean merge can leave the docs pointing at a structure that no longer exists. (files: .github/workflows/ci.yml, agents.md)
 
 ## Notes
+- 2026-09-29: phase 1 stopped BLOCKED at review round 5 (issue comment 5899421387; that BLOCKED status was never committed to this log because no PR was in flight). The owner answered Q1: A, merged PR #5187 as a295948, and commented `/reclarify` (issue comment 5900159063). The resumed session synced main into the project branch (a50ae2e, clean merge that brought #4874's CI job split) and ran conformance 1/3.
 - Session started with the repo attached mid-session, so `gh` came from running `.claude/hooks/session-start.sh` by hand. No `mcp__github__*` tools were available; GitHub writes use `gh api` routine calls (§23.B/§23.H).
 - Pre-existing guard gaps on `main` (not regressions, recorded per AD-8): `gh_api_write_guard.py` allows `gh api … -F body=@<file>` although CLAUDE.md §23.D says file-backed fields always prompt; `pr_merge_status_guard.py` gives no decision for `(cd <dir> && git push)`.
