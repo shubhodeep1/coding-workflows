@@ -472,6 +472,9 @@ def test_sweep_runs_the_pending_pass_only_for_open_verdicts(monkeypatch):
 	KeyError("run_id"),
 	TypeError("malformed payload"),
 	ValueError("malformed payload"),
+	OSError(28, "No space left on device"),
+	IndexError("list index out of range"),
+	RuntimeError("unexpected failure in the pass"),
 ])
 def test_sweep_pending_pass_fails_open_per_pr(monkeypatch, capsys, error):
 	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: [{"number": 1, "head_ref": REF}, {"number": 2, "head_ref": REF}])

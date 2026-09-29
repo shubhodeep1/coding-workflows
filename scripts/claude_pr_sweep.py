@@ -251,14 +251,14 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 				summary["skipped"] += 1
 				log(f"skip repo={repo} pr=#{number} state={state} reason={json.dumps(verdict.get('reason', ''))}")
 				if pending_checks is not None and state == "open":
-					# OSError too: the snapshot's temp directory can fail (disk
-					# full, unwritable TMPDIR), and that must not end the sweep
-					# for every later PR and repo. AttributeError too: this pass
-					# parses more API payloads than the hand-back read above, and
-					# one malformed payload must not end the sweep either.
+					# Any exception: this pass is an add-on to the catch-all
+					# above, so nothing it raises (a failed read, a malformed
+					# payload, an unwritable snapshot temp directory, or a bug
+					# in the pass itself) may end the sweep for every later PR
+					# and repo and stop due fixers from being queued there.
 					try:
 						pending = pending_checks(repo, number, dry_run)
-					except (check_in_status.ReadError, AttributeError, KeyError, OSError, TypeError, ValueError) as exc:
+					except Exception as exc:
 						summary["errors"] += 1
 						print(f"::warning::CLAUDE_PR_SWEEP pending_checks_failed repo={repo} pr=#{number} error={exc}")
 						continue

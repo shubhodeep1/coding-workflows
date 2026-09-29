@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #4942
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_011Tb3U5tZETVFkPYfdpNYmZ   safety net pending   hand-back pending (re-armed by the round 3 stage, session_01V1eeYZQLA1YkotDYMf3FQx)
+- Check-in: checker session_011Tb3U5tZETVFkPYfdpNYmZ   safety net pending   hand-back pending (re-armed by the round 4 stage, session_01Vqfx592KSqqnuJxU98CZ25)
 - Last updated: 2026-09-29
-- Last note: review round 3 on PR #4942 (head 1954dc6): merged the synced project branch (ci.yml test-list conflict; adapted `verify_review_run` to main's default-branch review dispatch, #4634); 1 finding fixed (the sweep's pending-checks pass also catches `AttributeError`), 6 findings / task gaps rejected (already fixed, or fail-closed by design).
+- Last note: review round 4 on PR #4942 (head 1516ddf, workflow round 2): 1 finding fixed (the sweep's pending-checks pass now catches every exception, so it can never end the catch-all sweep), 4 findings / task gaps rejected (fail-closed by design, or already present).
 
 ## Phases
-1. [ ] Phase 1 — pending-checks marker, gate skip, and sweep auto-merge   — PR #4942 open (waiting); review rounds: 3; interventions: 0
+1. [ ] Phase 1 — pending-checks marker, gate skip, and sweep auto-merge   — PR #4942 open (waiting); review rounds: 4; interventions: 0
    - Hand-off step posts `ai:claude-fixer-pending-checks:v1` for a clean ledger with only incomplete checks
    - Gate skips dispatched re-runs on such a head (`claude_fixer_pending_checks`)
    - `scripts/claude_fixer_pending_checks.py` + `scripts/claude_pr_sweep.py` enable head-bound auto-merge once the head's checks are ready
@@ -44,6 +44,7 @@
 - AD-9 [plan, 2026-09-29] A `cancelled` / `stale` check? — Picked: A — never merge; log it. Alternatives: B — treat it as green. Why: fail closed (§1). Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] A new pass added inside an existing per-item sweep loop must catch every exception per item (`except Exception`, logged), not a list of expected classes: widening the list one class per review round left the older, more important work of the loop exposed to any failure the list missed. (files: scripts/claude_pr_sweep.py)
 - [source:intervention] When a workflow jq gate and a Python parser both match the same marker comment, give them the same round and header regexes (rounds start at 1) and cover the edge value in both test files, or a marker one side accepts can stall the other. (files: .github/workflows/review_autofix.yml, scripts/claude_fixer_pending_checks.py)
 - [source:plan-deviation] When a clean Claude-fixer outcome needs a later action, record it as its own workflow-owned marker rather than a `kind=findings` hand-off: `check_in_status.py` treats every findings hand-off as a review round, so a 0-entry hand-off wakes a fixer with nothing to fix. (files: scripts/review_autofix_step_claude_fixer_handoff.sh, scripts/claude_fixer_pending_checks.py)
 - [source:intervention] A per-item fail-open loop must catch every exception class the item's code can raise, including `OSError` from temp files and subprocess setup, not only the API read errors; one uncaught item ends the run for every later item. (files: scripts/claude_pr_sweep.py, scripts/claude_fixer_pending_checks.py)
