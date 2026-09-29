@@ -213,6 +213,32 @@ def test_capture_sites_use_the_paged_lookup() -> None:
 	assert '"$ISSUE_TITLE"' in plan_field.group(0)
 
 
+def test_wait_steps_fail_fast_on_an_empty_issue_title() -> None:
+	# An empty ISSUE_TITLE switches the lookup's title filter off, which is
+	# the unscoped lookup of run 36374918973. Every step that scopes by title
+	# must stop before its first lookup instead.
+	wf = _workflow()
+	expected = {"wait-clarify": "clarify_failed", "wait-plan": "plan_failed", "wait-implement": "implement_failed"}
+	for step_id, status in expected.items():
+		step = re.search(rf"id: {step_id}\n.*?        run: \|\n(.*?)\n      - ", wf, re.S)
+		assert step is not None, step_id
+		body = step.group(1)
+		guard = re.search(r"\n(          if \[ -z \"\$\{ISSUE_TITLE\}\" \]; then\n.*?\n          fi)\n", body, re.S)
+		assert guard is not None, step_id
+		assert guard.start() < body.index(". ./scripts/comprehensive_test_and_release_gh_api.sh"), step_id
+		with tempfile.TemporaryDirectory() as tmp:
+			output = Path(tmp) / "output"
+			result = subprocess.run(
+				["bash", "-c", "set -euo pipefail\n" + textwrap.dedent(guard.group(1)) + "\necho reached"],
+				capture_output=True,
+				text=True,
+				env={**os.environ, "ISSUE_TITLE": "", "GITHUB_OUTPUT": str(output)},
+			)
+			assert result.returncode == 1, step_id
+			assert "reached" not in result.stdout, step_id
+			assert output.read_text(encoding="utf-8") == f"status={status}\n", step_id
+
+
 def _phase7_helper() -> str:
 	match = re.search(r"\n(          phase7_list_cancel_runs\(\) \{.*?\n          \})\n", _workflow(), re.S)
 	assert match is not None, "phase7_list_cancel_runs() not found in test-and-mark-stable.yml"

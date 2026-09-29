@@ -626,6 +626,15 @@ jobs:
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
+
+          # An empty title turns off the lookup's title filter and brings
+          # back the unscoped lookup of run 36374918973; fail like Plan does.
+          if [ -z "${ISSUE_TITLE}" ]; then
+            echo "::error::Missing issue title for Clarify run scoping"
+            echo "status=clarify_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           # Robust workflow run-ID capture — retries on empty results to ride out
@@ -955,6 +964,15 @@ jobs:
           MIN_GRACE_SECONDS=60
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
+
+          # An empty title turns off the lookup's title filter and brings
+          # back the unscoped lookup of run 36374918973; fail like Plan does.
+          if [ -z "${ISSUE_TITLE}" ]; then
+            echo "::error::Missing issue title for Implement run scoping"
+            echo "status=implement_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           # Robust workflow run-ID capture — retries on empty results to ride out

@@ -13,4 +13,4 @@ What this means for operators: a `@stable` promotion or the daily promote cycle 
 
 ### For contributors
 
-The paged lookup is `find_latest_scoped_run_field` in `scripts/comprehensive_test_and_release_gh_api.sh`, used by the three `capture_run_id` definitions and the Plan wait's `latest_scoped_run_field`; all three phases now pass the smoke issue's `ISSUE_TITLE`. The Phase 7 retry is the step-local `phase7_list_cancel_runs`. `tests/test_release_smoke_run_lookup.py` covers both and runs in its own `ci.yml` step.
+The paged lookup is `find_latest_scoped_run_field` in `scripts/comprehensive_test_and_release_gh_api.sh`, used by the three `capture_run_id` definitions and the Plan wait's `latest_scoped_run_field`; all three phases now pass the smoke issue's `ISSUE_TITLE`, and each wait step stops with `clarify_failed`, `plan_failed` or `implement_failed` when that title is empty instead of dropping the filter. The Phase 7 retry is the step-local `phase7_list_cancel_runs`. `tests/test_release_smoke_run_lookup.py` covers both and runs in its own `ci.yml` step.
