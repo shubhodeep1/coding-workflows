@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T07:18:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`git cat-file blob <sha>:<path>` reads everything after the SHA's colon as a literal path, so a `:` in the path cannot redirect the read to another blob. Reproduce a reviewer's git revision-syntax claim in a scratch repo before you act on it. Gates still refuse `:` so their reads never depend on revision syntax.",
+  "phase": "implement_plan",
+  "pr_number": 5034,
+  "record_id": "lesson-implement-plan-8aa8023a3e0ac839c5fcb517",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4976-source-grounded-rejection-votes",
+    "file:scripts/review_claude_fixer_nonblocking.py"
+  ]
+}
