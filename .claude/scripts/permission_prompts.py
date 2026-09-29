@@ -419,10 +419,14 @@ def _segment_is_inline_write(segment: list[str], segment_bodies: list[str]) -> b
 	if _PYTHON_RE.match(name):
 		# Only the interpreter's own switches, before the first operand: in
 		# `python3 tool.py -c X` or `python3 -m mod -` the `-c` / `-` belong to
-		# the script or module, so no inline program runs.
+		# the script or module, so no inline program runs. After `--` every
+		# argument is an operand: `python3 -- -c X` runs a file named `-c`.
 		position = 0
 		while position < len(args):
 			arg = args[position]
+			if arg == "--":
+				position += 1
+				break
 			if _PYTHON_C_RE.match(arg):
 				return position + 1 < len(args) and _program_writes(args[position + 1])
 			if arg == "-" or not arg.startswith("-") or _PYTHON_M_RE.match(arg):
