@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:165 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The awk script uses an undefined variable `first`, causing it to print an empty failure line and mark failed slots unverified.\n  WHY: The reviewer says this prevents the Bash script from parsing and comparing the failure line, forcing a hand-off for every failure.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:194 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Bash parsing of `claude_fixer_block_line` is incorrect when `claude_fixer_block_rest` does not contain a space.\n  WHY: The reviewer says the parsed line becomes the slug, so comparison with the runner output fails and forces unnecessary hand-offs.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:217 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Reading reviewer output with `cat` may be unsafe because the file path is dynamically constructed from the reviewer slug.\n  WHY: The reviewer considers slug validation a security boundary that could become unsafe if weakened.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:165 | severity=critical | confidence=[5]\n  PROBLEM: The awk script uses an undefined variable `first`, causing it to print an empty failure line; modifications to `model` also destroy the original failure line information.\n  WHY: This prevents the Bash script from parsing the failure line and comparing it against the reviewer runner's output file, marking failed slots unverified and forcing a hand-off for every failure.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:194 | severity=high | confidence=[4]\n  PROBLEM: Bash parsing of `claude_fixer_block_line` is incorrect when `claude_fixer_block_rest` does not contain a space.\n  WHY: The parsed line becomes the slug rather than the expected empty/failure string, so comparison with the runner output fails and forces unnecessary hand-offs.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:217 | severity=low | confidence=[2]\n  PROBLEM: Reading reviewer output with `cat` may be unsafe because the file path is dynamically constructed from the reviewer slug.\n  WHY: The reviewer slug is validated as alphanumeric, but the reviewer considers this a security boundary that could become unsafe if validation were weakened.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ada5f13e583ea22d2579ab4e2ae118176480cbe6398f0fd45552b864cf90de4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4918,
+    "run_id": "36535303458",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36535303458",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929073224_a3c125a85a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4918,
+    "run_id": "36535303458"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T07:32:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
