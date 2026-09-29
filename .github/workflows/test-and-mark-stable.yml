@@ -443,6 +443,7 @@ jobs:
           ref: main
 
       - name: Validate prerequisites
+        id: prereqs
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN}" ]; then
@@ -512,9 +513,23 @@ jobs:
             echo "::error::REVIEW_WORKFLOW_FILE='${REVIEW_WORKFLOW_FILE}' is not a safe basename matching ^[A-Za-z0-9][A-Za-z0-9_.-]*\\.yml\$ — refusing to proceed"
             exit 1
           fi
-          # Verify we can access the repo
-          gh api "repos/${TEST_REPO}" --jq '.full_name' \
-            || { echo "::error::Cannot access ${TEST_REPO}. Check GH_PAT permissions."; exit 1; }
+          # Verify we can access the repo, and read its default branch from
+          # the same response (issue #5093, CLAUDE.md §15): Phase 3c and
+          # Phase 4b dispatch ${REVIEW_WORKFLOW_FILE} at that branch, never
+          # at the smoke PR's branch, whose unmerged wrapper would run with
+          # TEST_REPO's secrets.
+          if ! TEST_REPO_META=$(gh api "repos/${TEST_REPO}" --jq '[.full_name, .default_branch] | @tsv'); then
+            echo "::error::Cannot access ${TEST_REPO}. Check GH_PAT permissions."
+            exit 1
+          fi
+          IFS=$'\t' read -r TEST_REPO_FULL_NAME TEST_REPO_DEFAULT_BRANCH <<< "${TEST_REPO_META}"
+          echo "${TEST_REPO_FULL_NAME}"
+          if ! [[ "${TEST_REPO_DEFAULT_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::${TEST_REPO} default branch is missing or not a safe ref name."
+            exit 1
+          fi
+          echo "Review dispatch ref (default branch): ${TEST_REPO_DEFAULT_BRANCH}"
+          echo "test_repo_default_branch=${TEST_REPO_DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
 
       # Fast-fail the hottest orchestrate-poll regression before the
       # workflow creates live smoke-test resources or waits on long
@@ -1134,6 +1149,9 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          # TEST_REPO's default branch (Validate prerequisites): the Bug B
+          # fallback dispatches the reviewed wrapper there (issue #5093).
+          REVIEW_DISPATCH_REF: ${{ steps.prereqs.outputs.test_repo_default_branch }}
         run: |
           set -euo pipefail
           BRANCH="ai/issue-${ISSUE_NUMBER}"
@@ -1326,12 +1344,10 @@ jobs:
           # default internal-review.yml) is never auto-triggered and
           # wait-review (Phase 4) ages out at REVIEW_TIMEOUT minutes.
           # Run 25204168842 was the most recent confirmed occurrence.
-          # Explicitly dispatch ${REVIEW_WORKFLOW_FILE} against the PR
-          # branch so a review run with head_sha=BAIT_SHA always exists
-          # — workflow_dispatch resolves the ref's tip SHA at dispatch
-          # time, and we just pushed the bait commit there, so the
-          # dispatched run carries head_sha=BAIT_SHA and is matched by
-          # wait-review's pinned filter without any extra logic.
+          # Explicitly dispatch ${REVIEW_WORKFLOW_FILE} for the PR so a
+          # review run always exists; review_autofix.yml checks out the
+          # PR head from the PR's metadata at runtime, so the run reviews
+          # the bait commit we just pushed.
           # The dispatch is keyed on a separate concurrency group (in
           # the source repo's internal-review.yml at lines 48-50,
           # group `internal-review-dispatch-pr-N`; consumer repos with
@@ -1350,28 +1366,66 @@ jobs:
           # repo we just pushed the bait commit to, leaving Phase 4
           # still vulnerable to no_review_triggered.
           #
-          # Dispatch ref (issue #4898, finding
-          # review-dispatches-unmerged-workflow): this site IS exposed. The
-          # dispatch runs BRANCH's copy of ${REVIEW_WORKFLOW_FILE} with
-          # TEST_REPO's secrets (secrets: inherit), and BRANCH is
-          # ai/issue-<N> of the smoke issue this job opened. It carries the
-          # E2E implement run's commits and the bait commit above, and any
-          # writer to TEST_REPO (by default this repository) can push to it.
-          # It stays at the branch ref because Phase 4 pins review runs to
-          # head_sha == BAIT_SHA, and only a dispatch at the branch
-          # produces that SHA; a default-branch dispatch carries the
-          # default branch's SHA and would never match. The retrigger in
-          # review_autofix.yml, the sweep, the poller, the merge train, and
-          # the forward-merge fallback all dispatch from the default branch.
-          if gh workflow run "${REVIEW_WORKFLOW_FILE}" \
-              --repo "${TEST_REPO}" \
-              --ref "${BRANCH}" \
-              -f pr_number="${PR_NUMBER}" >/tmp/dispatch_resp.txt 2>&1; then
-            echo "✓ Dispatched ${REVIEW_WORKFLOW_FILE} on ${BRANCH} for PR #${PR_NUMBER} (Bug B fallback)"
+          # Dispatch ref (issue #5093, finding
+          # smoke-review-dispatches-unmerged-workflow): the dispatch runs
+          # TEST_REPO's default-branch copy of ${REVIEW_WORKFLOW_FILE}
+          # (REVIEW_DISPATCH_REF, read by Validate prerequisites), never
+          # BRANCH's. BRANCH is ai/issue-<N> of the smoke issue this job
+          # opened; any writer to TEST_REPO can push to it, and a dispatch
+          # there would run that unmerged wrapper with TEST_REPO's secrets
+          # (secrets: inherit). The retrigger in review_autofix.yml, the
+          # sweep, the poller, the merge train, and the forward-merge
+          # fallback dispatch from the default branch too (#4618, #4701,
+          # #4898).
+          #
+          # A default-branch run carries the default branch's head_branch
+          # and head_sha, so Phase 4's branch listing and head_sha pin
+          # cannot see it. The wrapper names dispatch runs
+          # "<name> [pr:<N>]", so the run is registered here by that name:
+          # the oldest PR-named run above a pre-dispatch baseline, within
+          # 90 seconds. Phase 4 gets it as bug_b_run_id and accepts it only
+          # once its own codex-agent log shows it checked out the bait
+          # commit (scripts/smoke_review_dispatch.sh).
+          # Fail-soft as before: no baseline (or no dispatch ref) means no
+          # dispatch, and no registration leaves bug_b_run_id empty. The
+          # synchronize run stays the primary path either way.
+          # §15: one listing call for the baseline; it is the same read the
+          # registration loop below polls, and no earlier call in this step
+          # lists workflow runs.
+          . ./scripts/smoke_review_dispatch.sh
+          BUG_B_RUN_ID=""
+          if ! [[ "${REVIEW_DISPATCH_REF:-}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::warning::No valid default-branch dispatch ref for ${TEST_REPO}; skipping the Bug B fallback and relying on pull_request:synchronize event only"
+          elif ! BUG_B_BASELINE_RUNS=$(smoke_review_pr_named_runs "${TEST_REPO}" "${REVIEW_WORKFLOW_FILE}" "${REVIEW_DISPATCH_REF}" "${PR_NUMBER}"); then
+            echo "::warning::Could not list PR-named ${REVIEW_WORKFLOW_FILE} runs before the Bug B fallback; skipping it and relying on pull_request:synchronize event only"
           else
-            echo "::warning::Could not dispatch ${REVIEW_WORKFLOW_FILE} as Bug B fallback; relying on pull_request:synchronize event only"
-            cat /tmp/dispatch_resp.txt >&2 || true
+            BUG_B_BASELINE_ID=$(printf '%s\n' "${BUG_B_BASELINE_RUNS}" | jq -r '[.[].id] | max // 0')
+            if gh workflow run "${REVIEW_WORKFLOW_FILE}" \
+                --repo "${TEST_REPO}" \
+                --ref "${REVIEW_DISPATCH_REF}" \
+                -f pr_number="${PR_NUMBER}" >/tmp/dispatch_resp.txt 2>&1; then
+              echo "✓ Dispatched ${REVIEW_WORKFLOW_FILE} on ${REVIEW_DISPATCH_REF} for PR #${PR_NUMBER} (Bug B fallback)"
+              BUG_B_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))
+              while [ -z "${BUG_B_RUN_ID}" ] && [ "$(date +%s)" -lt "${BUG_B_REGISTRATION_DEADLINE}" ]; do
+                sleep 5
+                if ! BUG_B_RUNS=$(smoke_review_pr_named_runs "${TEST_REPO}" "${REVIEW_WORKFLOW_FILE}" "${REVIEW_DISPATCH_REF}" "${PR_NUMBER}"); then
+                  echo "  (could not list PR-named runs; retrying within the registration window)"
+                  continue
+                fi
+                BUG_B_RUN_ID=$(printf '%s\n' "${BUG_B_RUNS}" | jq -r --argjson baseline_id "${BUG_B_BASELINE_ID}" \
+                  '[.[] | select(.id > $baseline_id)] | sort_by(.id) | .[0].id // empty')
+              done
+              if [ -n "${BUG_B_RUN_ID}" ]; then
+                echo "✓ Registered Bug B review run #${BUG_B_RUN_ID}; Phase 4 accepts it once its checked-out commit is verified"
+              else
+                echo "::warning::Bug B dispatch did not register a PR-named ${REVIEW_WORKFLOW_FILE} run within 90 seconds; relying on pull_request:synchronize event only"
+              fi
+            else
+              echo "::warning::Could not dispatch ${REVIEW_WORKFLOW_FILE} as Bug B fallback; relying on pull_request:synchronize event only"
+              cat /tmp/dispatch_resp.txt >&2 || true
+            fi
           fi
+          echo "bug_b_run_id=${BUG_B_RUN_ID}" >> "$GITHUB_OUTPUT"
 
       # ── Phase 4: Wait for review/edit to complete ───────────────
       - name: "Phase 4: Wait for review & autofix to complete"
@@ -1409,10 +1463,18 @@ jobs:
           # treats the entire script as a single expression and enforces a
           # 21,000-char limit; this script is ~25k chars and was tripping it.
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          # The default-branch Bug B review run Phase 3c registered (issue
+          # #5093); empty when it did not dispatch or register one. Leg (c)
+          # below.
+          BUG_B_RUN_ID: ${{ steps.inject-bait.outputs.bug_b_run_id }}
         run: |
           set -euo pipefail
           if [ -n "${BAIT_SHA:-}" ] && ! [[ "${BAIT_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::Bait commit output is not a valid 40-hex SHA."
+            exit 1
+          fi
+          if [ -n "${BUG_B_RUN_ID:-}" ] && ! [[ "${BUG_B_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Bug B review run id is not a positive integer."
             exit 1
           fi
           if [ -n "${BAIT_CREATED_AT:-}" ] \
@@ -1474,6 +1536,14 @@ jobs:
           PIN_SHA="${BAIT_SHA:-}"
 
           . ./scripts/comprehensive_test_and_release_gh_api.sh
+          . ./scripts/smoke_review_dispatch.sh
+
+          # Leg (c) state for the default-branch Bug B run (issue #5093):
+          # "" = not verified yet, "verified" = its codex-agent log shows it
+          # checked out PIN_SHA or BAIT_SHA, "rejected" = it checked out
+          # something else or never checked out the PR (dropped for the
+          # rest of this step).
+          BUG_B_STATE=""
 
           # Give the review workflow a moment to start
           sleep 5
@@ -1502,15 +1572,15 @@ jobs:
             # only when the bait-injection step did not produce a SHA
             # (status=skipped path).
             #
-            # The URL no longer pins event=pull_request: Phase 3c also
-            # dispatches ${REVIEW_WORKFLOW_FILE} as a Bug B fallback, and
-            # those runs carry event=workflow_dispatch. Dropping the
-            # event filter from the URL lets head_sha=BAIT_SHA match
-            # both paths uniformly. (We still rely on the jq name match
-            # to avoid latching onto e.g. CI runs that happen to share
-            # the bait SHA.) The dispatched run's head_sha matches
-            # BAIT_SHA because we dispatch with --ref "${BRANCH}" and
-            # GitHub records the ref's tip SHA at dispatch time.
+            # The URL does not pin event=pull_request, so a
+            # workflow_dispatch run at the branch with head_sha=PIN_SHA
+            # still matches. (We still rely on the jq name match to avoid
+            # latching onto e.g. CI runs that happen to share the bait
+            # SHA.) Phase 3c's own Bug B fallback no longer runs at the
+            # branch: it dispatches from TEST_REPO's default branch (issue
+            # #5093), so its run is not in this listing and its head_sha
+            # is the default branch's. It joins the candidate set as leg
+            # (c), below, by the run id Phase 3c registered.
             #
             # GitHub's "Running Copilot Code Review" run is excluded
             # (event == "dynamic" / name contains "copilot"): it is a
@@ -1612,8 +1682,59 @@ jobs:
               # "completed with failure" before any editor ran (stable gate
               # run 35903885958, phantom .github/workflows/review_autofix.yml
               # runs after #4327).
-              REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not) | select(.name != .path) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
+              #
+              # Leg (c) (issue #5093): the Bug B run Phase 3c dispatched
+              # from TEST_REPO's default branch and registered as
+              # BUG_B_RUN_ID. It is not in the branch listing and its
+              # head_sha is the default branch's, so it is read by id and
+              # joins $m through $extra: while it is active, as a
+              # candidate; once completed, only after its own codex-agent
+              # log shows it checked out PIN_SHA or BAIT_SHA (the same
+              # exact pin as leg (a)). A run that checked out anything
+              # else, or never checked out the PR (no codex-agent job or
+              # no checkout line), is rejected for the rest of the step; an
+              # unreadable log is retried on the next poll.
+              # §15: one run read per poll while leg (c) is live, plus one
+              # jobs read and one log read per verification attempt; the
+              # branch listing below cannot return this run, and no other
+              # call in the loop reads it.
+              BUG_B_EXTRA='[]'
+              if [ -n "${BUG_B_RUN_ID:-}" ] && [ "${BUG_B_STATE}" != "rejected" ]; then
+                if BUG_B_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${BUG_B_RUN_ID}") \
+                    && printf '%s\n' "${BUG_B_RUN}" | jq -e --argjson bug_b_id "${BUG_B_RUN_ID}" \
+                      'type == "object" and .id == $bug_b_id and (.status | type == "string") and (.created_at | type == "string")' >/dev/null 2>&1; then
+                  if [ "$(printf '%s\n' "${BUG_B_RUN}" | jq -r '.status')" != "completed" ]; then
+                    BUG_B_EXTRA=$(printf '%s\n' "${BUG_B_RUN}" | jq -c '[.]')
+                  else
+                    if [ -z "${BUG_B_STATE}" ]; then
+                      BUG_B_SHA_RC=0
+                      BUG_B_SHA=$(smoke_review_checked_out_sha "${TEST_REPO}" "${BUG_B_RUN_ID}") || BUG_B_SHA_RC=$?
+                      if [ "${BUG_B_SHA_RC}" -eq 0 ] && { [ "${BUG_B_SHA}" = "${PIN_SHA}" ] || [ "${BUG_B_SHA}" = "${BAIT_SHA}" ]; }; then
+                        BUG_B_STATE="verified"
+                        echo "  ✓ Bug B review run #${BUG_B_RUN_ID} checked out ${BUG_B_SHA:0:7} (bait/pin commit)"
+                      elif [ "${BUG_B_SHA_RC}" -eq 0 ]; then
+                        BUG_B_STATE="rejected"
+                        echo "::warning::Bug B review run #${BUG_B_RUN_ID} checked out ${BUG_B_SHA:0:7}, not the bait/pin commit ${PIN_SHA:0:7}; not counting it"
+                      elif [ "${BUG_B_SHA_RC}" -eq 1 ]; then
+                        echo "  (Bug B review run #${BUG_B_RUN_ID}: checked-out commit not readable yet; retrying next poll)"
+                      else
+                        BUG_B_STATE="rejected"
+                        echo "::warning::Bug B review run #${BUG_B_RUN_ID} has no codex-agent checkout of the PR (rc=${BUG_B_SHA_RC}); not counting it"
+                      fi
+                    fi
+                    if [ "${BUG_B_STATE}" = "verified" ]; then
+                      BUG_B_EXTRA=$(printf '%s\n' "${BUG_B_RUN}" | jq -c '[.]')
+                    fi
+                  fi
+                else
+                  echo "  (could not read Bug B review run #${BUG_B_RUN_ID}; leaving it out of this poll)"
+                fi
+              fi
+              REVIEW_RUN=""
+              if REVIEW_RUNS_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100"); then
+                REVIEW_RUN=$(printf '%s\n' "${REVIEW_RUNS_JSON}" | jq -c --argjson extra "${BUG_B_EXTRA}" \
+                  "([.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not) | select(.name != .path) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] + \$extra) as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" 2>/dev/null || echo "")
+              fi
             else
               REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
                 --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i")) | select((.event == "dynamic" or (.name | test("copilot"; "i"))) | not) | select(.name != .path)] | sort_by(.created_at) | last' || echo "")
@@ -2027,9 +2148,11 @@ jobs:
       # effort and prompt content; production runs hit empty-completion
       # state non-deterministically). On first pytest failure we
       # snapshot the branch head SHA, adopt the oldest active review run
-      # for the bait/current head when one exists, or re-dispatch
-      # ${REVIEW_WORKFLOW_FILE} via `--ref "${BRANCH}"` and register the
-      # oldest matching post-snapshot run. We allow up to 25 minutes for
+      # for the bait/current head (or an active run named for the PR) when
+      # one exists, or re-dispatch ${REVIEW_WORKFLOW_FILE} from TEST_REPO's
+      # default branch (issue #5093) and register the oldest post-snapshot
+      # run named for the PR, whose checked-out commit is then verified
+      # before attempt 2. We allow up to 25 minutes for
       # the pinned run to complete (raised from 10 min
       # after run 25371432937 truncated a still-running successful
       # retry); if the second verification also fails, we hard-fail
@@ -2055,6 +2178,9 @@ jobs:
       #   retry_dispatch_failed    — run discovery/dispatch/registration failed, or wait-review id non-numeric
       #   retry_timeout            — pinned retry run did not complete in 25 min
       #   retry_workflow_failed    — retry run completed but conclusion != success
+      #   retry_run_unverified     — the PR-named retry run's own log does not show it
+      #                              checked out the bait, the pre-dispatch head, or a
+      #                              descendant of the bait (issue #5093)
       #   pr_closed_during_retry   — PR closed/merged while waiting for the retry run
       #   pr_state_check_failed    — fetch_pr_state returned "unknown" 4 consecutive times
       #                              (~60s of GitHub API outage); poll loop bails to avoid
@@ -2084,6 +2210,9 @@ jobs:
           # inline expression makes GitHub Actions treat the whole script
           # as one expression, capped at 21,000 chars; this body is ~21.3k.
           PRIOR_REVIEW_RUN: ${{ steps.wait-review.outputs.review_run_id }}
+          # TEST_REPO's default branch (Validate prerequisites): the retry
+          # dispatches the reviewed wrapper there (issue #5093).
+          REVIEW_DISPATCH_REF: ${{ steps.prereqs.outputs.test_repo_default_branch }}
         run: |
           set -euo pipefail
           BRANCH="ai/issue-${ISSUE_NUMBER}"
@@ -2328,13 +2457,23 @@ jobs:
           # Phase 3c or pull_request:synchronize; adopting the oldest one
           # avoids adding another run behind it in pr-autofix concurrency.
           #
-          # `gh workflow run` is dispatched with --ref "${BRANCH}"
-          # (its documented contract is branch/tag, not raw SHA);
-          # RETRY_DISPATCH_SHA and BAIT_SHA select already-active work before
-          # dispatch. After dispatch, the branch-scoped baseline identifies
-          # the oldest new run even if the branch advanced. Once selected,
-          # one positive run id is polled directly so a newer peer cannot
-          # replace it.
+          # Dispatch ref (issue #5093, finding
+          # smoke-review-dispatches-unmerged-workflow): `gh workflow run`
+          # is dispatched at TEST_REPO's default branch
+          # (REVIEW_DISPATCH_REF), never at BRANCH, whose unmerged copy of
+          # the wrapper would run with TEST_REPO's secrets. Such a run
+          # carries the default branch's head_branch and head_sha, so it
+          # is found by the name the wrapper gives dispatch runs,
+          # "<name> [pr:<N>]" (scripts/smoke_review_dispatch.sh):
+          # RETRY_DISPATCH_SHA and BAIT_SHA select already-active branch
+          # work, and active PR-named runs (Phase 3c's own Bug B run, or a
+          # post-commit retrigger) are adopted too. After dispatch, the
+          # PR-named baseline identifies the oldest new run even if the
+          # branch advanced. Once selected, one positive run id is polled
+          # directly so a newer peer cannot replace it, and a PR-named run
+          # must show in its own codex-agent log that it checked out the
+          # bait, the pre-dispatch head, or a descendant of the bait before
+          # attempt 2 trusts it.
           if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]] || [ "${PRIOR_REVIEW_RUN}" -lt 1 ]; then
             echo "::error::wait-review.outputs.review_run_id is not a positive integer ('${PRIOR_REVIEW_RUN}'); refusing retry discovery with a no-op exclusion filter"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
@@ -2373,21 +2512,48 @@ jobs:
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          RETRY_BASELINE_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r '[.workflow_runs[].id] | max // 0')
+
+          . ./scripts/smoke_review_dispatch.sh
+          if ! [[ "${REVIEW_DISPATCH_REF:-}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::No valid default-branch dispatch ref for ${TEST_REPO}; refusing to dispatch the retry at ${BRANCH}"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if ! [[ "${BAIT_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Bait commit output is not a valid 40-hex SHA; cannot correlate a retry run with it"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          # §15: one PR-named listing before adoption. The branch listing
+          # above (RETRY_RUNS_QUERY) cannot return default-branch dispatch
+          # runs, and no other call in this step lists them.
+          if ! RETRY_PR_NAMED_JSON=$(smoke_review_pr_named_runs "${TEST_REPO}" "${REVIEW_WORKFLOW_FILE}" "${REVIEW_DISPATCH_REF}" "${PR_NUMBER}"); then
+            echo "::error::Could not discover PR-named review runs before retry dispatch"
+            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          RETRY_BASELINE_ID=$(printf '%s\n' "${RETRY_PR_NAMED_JSON}" | jq -r '[.[].id] | max // 0')
           if ! [[ "${RETRY_BASELINE_ID}" =~ ^[0-9]+$ ]]; then
             echo "::error::Malformed review run baseline id: '${RETRY_BASELINE_ID}'"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          RETRY_PR_NAMED_ACTIVE=$(printf '%s\n' "${RETRY_PR_NAMED_JSON}" | jq -c \
+            '[.[] | select(.status != "completed") | {id, status, created_at}]')
 
           RETRY_ACTIVE_RUN=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -c \
             --arg bait_sha "${BAIT_SHA}" \
             --arg retry_sha "${RETRY_DISPATCH_SHA}" \
             --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
-            '[.workflow_runs[]
+            --argjson pr_named_active "${RETRY_PR_NAMED_ACTIVE}" \
+            '([.workflow_runs[]
               | select(.id != $prior_run_id)
               | select(.status != "completed")
-              | select(.head_sha == $bait_sha or .head_sha == $retry_sha)]
+              | select(.head_sha == $bait_sha or .head_sha == $retry_sha)
+              | {id, created_at, retry_source: "branch"}]
+              + [$pr_named_active[]
+              | select(.id != $prior_run_id)
+              | {id, created_at, retry_source: "pr_named"}])
             | sort_by(.created_at, .id)
             | .[0] // empty')
 
@@ -2395,8 +2561,12 @@ jobs:
           RETRY_STATUS=""
           RETRY_CONCL=""
           RETRY_REGISTRATION_DEADLINE=0
+          # "branch": correlated by head_sha (BAIT_SHA / RETRY_DISPATCH_SHA);
+          # "pr_named": correlated after completion by its checked-out SHA.
+          RETRY_SOURCE="pr_named"
           if [ -n "${RETRY_ACTIVE_RUN}" ]; then
             RETRY_RUN_ID=$(printf '%s\n' "${RETRY_ACTIVE_RUN}" | jq -r '.id')
+            RETRY_SOURCE=$(printf '%s\n' "${RETRY_ACTIVE_RUN}" | jq -r '.retry_source')
             if ! [[ "${RETRY_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${RETRY_RUN_ID}" -lt 1 ]; then
               echo "::error::Adopted review run id is not a positive integer: '${RETRY_RUN_ID}'"
               echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
@@ -2404,16 +2574,9 @@ jobs:
             fi
             echo "✓ Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work"
           else
-            # Dispatch ref (issue #4898): exposed in the same way as the
-            # Phase 3c Bug B dispatch (BRANCH's copy of the wrapper, with
-            # TEST_REPO's secrets), and kept at the branch for the same
-            # reason: the retry registration lists runs with
-            # branch=${BRANCH} (RETRY_RUNS_QUERY) and adopts ones whose
-            # head_sha is BAIT_SHA or RETRY_DISPATCH_SHA; a default-branch
-            # dispatch appears in neither.
             if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
                 --repo "${TEST_REPO}" \
-                --ref "${BRANCH}" \
+                --ref "${REVIEW_DISPATCH_REF}" \
                 -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
               echo "::error::Retry dispatch failed; cannot recover"
               cat /tmp/retry_dispatch.txt >&2 || true
@@ -2421,7 +2584,7 @@ jobs:
               exit 1
             fi
             RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))
-            echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — registering the oldest new branch run after baseline ${RETRY_BASELINE_ID}"
+            echo "✓ Retry dispatch sent on ${REVIEW_DISPATCH_REF} for PR #${PR_NUMBER} (${BRANCH} head ${RETRY_DISPATCH_SHA:0:7}) — registering the oldest new PR-named run after baseline ${RETRY_BASELINE_ID}"
           fi
 
           # EDITOR_RETRY_BUDGET_MINUTES defaults to 25 (was 10; raised after
@@ -2468,28 +2631,17 @@ jobs:
                 echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
                 exit 1
               fi
-              if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
-                echo "::warning::Could not list post-dispatch review runs; retrying within the registration window"
+              # The dispatched run is on the default branch, so it is
+              # registered from the PR-named listing (the helper validates
+              # the payload shape and returns 1 on a malformed one).
+              if ! RETRY_PR_NAMED_JSON=$(smoke_review_pr_named_runs "${TEST_REPO}" "${REVIEW_WORKFLOW_FILE}" "${REVIEW_DISPATCH_REF}" "${PR_NUMBER}"); then
+                echo "::warning::Could not list post-dispatch PR-named review runs; retrying within the registration window"
                 continue
               fi
-              if ! printf '%s\n' "${RETRY_RUNS_JSON}" | jq -e '
-                type == "object" and
-                (.workflow_runs | type == "array") and
-                all(.workflow_runs[];
-                  type == "object" and
-                  (.id | type == "number") and .id > 0 and .id == (.id | floor) and
-                  (.head_sha | type == "string") and
-                  (.status | type == "string") and
-                  (.created_at | type == "string") and
-                  ((.conclusion == null) or (.conclusion | type == "string")))
-              ' >/dev/null 2>&1; then
-                echo "::warning::Malformed post-dispatch review run-list payload; retrying within the registration window"
-                continue
-              fi
-              RETRY_RUN_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r \
+              RETRY_RUN_ID=$(printf '%s\n' "${RETRY_PR_NAMED_JSON}" | jq -r \
                 --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
                 --argjson baseline_id "${RETRY_BASELINE_ID}" \
-                '[.workflow_runs[]
+                '[.[]
                   | select(.id > $baseline_id and .id != $prior_run_id)]
                 | sort_by(.created_at, .id)
                 | .[0].id // empty')
@@ -2540,6 +2692,61 @@ jobs:
             echo "::error::Retry review run #${RETRY_RUN_ID} completed with conclusion=${RETRY_CONCL} (not 'success'); refusing to attribute the resulting canary state to the editor"
             echo "status=retry_workflow_failed" >> "$GITHUB_OUTPUT"
             exit 1
+          fi
+
+          # Correlate a PR-named retry run with the smoke PR (issue #5093).
+          # Its head_sha is the default branch's, so the commit it reviewed
+          # comes from its own codex-agent log (the first
+          # "Captured INITIAL_HEAD_SHA=..." line, written by the trusted
+          # checkout step before any PR content is read). It must be the
+          # bait, the pre-dispatch head, or a descendant of the bait (one
+          # compare read, only when it is neither), because registration
+          # tolerates the branch advancing after the snapshot. Unreadable
+          # reads retry within the retry deadline; a definite miss is
+          # retry_run_unverified. Adopted branch runs were already
+          # correlated by head_sha.
+          if [ "${RETRY_SOURCE}" = "pr_named" ]; then
+            RETRY_VERIFIED=""
+            while [ -z "${RETRY_VERIFIED}" ]; do
+              RETRY_TRANSIENT=""
+              RETRY_CHECKED_OUT_RC=0
+              RETRY_CHECKED_OUT_SHA=$(smoke_review_checked_out_sha "${TEST_REPO}" "${RETRY_RUN_ID}") || RETRY_CHECKED_OUT_RC=$?
+              if [ "${RETRY_CHECKED_OUT_RC}" -eq 0 ]; then
+                if [ "${RETRY_CHECKED_OUT_SHA}" = "${BAIT_SHA,,}" ] || [ "${RETRY_CHECKED_OUT_SHA}" = "${RETRY_DISPATCH_SHA,,}" ]; then
+                  RETRY_VERIFIED="yes"
+                else
+                  RETRY_DESCENDS_RC=0
+                  smoke_review_sha_descends_from "${TEST_REPO}" "${BAIT_SHA,,}" "${RETRY_CHECKED_OUT_SHA}" || RETRY_DESCENDS_RC=$?
+                  if [ "${RETRY_DESCENDS_RC}" -eq 0 ]; then
+                    RETRY_VERIFIED="yes"
+                  elif [ "${RETRY_DESCENDS_RC}" -eq 1 ]; then
+                    RETRY_VERIFIED="no"
+                    echo "::error::Retry review run #${RETRY_RUN_ID} checked out ${RETRY_CHECKED_OUT_SHA:0:7}, which is not the bait ${BAIT_SHA:0:7} or a descendant of it"
+                  else
+                    RETRY_TRANSIENT="compare read failed"
+                  fi
+                fi
+              elif [ "${RETRY_CHECKED_OUT_RC}" -eq 1 ]; then
+                RETRY_TRANSIENT="run log not readable"
+              else
+                RETRY_VERIFIED="no"
+                echo "::error::Retry review run #${RETRY_RUN_ID} has no codex-agent checkout of the PR in its log (rc=${RETRY_CHECKED_OUT_RC})"
+              fi
+              if [ -n "${RETRY_TRANSIENT}" ]; then
+                if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
+                  RETRY_VERIFIED="no"
+                  echo "::error::Could not verify retry review run #${RETRY_RUN_ID}'s checked-out commit before the retry deadline (${RETRY_TRANSIENT})"
+                else
+                  echo "  (retry run #${RETRY_RUN_ID} correlation: ${RETRY_TRANSIENT}; retrying)"
+                  sleep 15
+                fi
+              fi
+            done
+            if [ "${RETRY_VERIFIED}" != "yes" ]; then
+              echo "status=retry_run_unverified" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            echo "✓ Retry review run #${RETRY_RUN_ID} checked out ${RETRY_CHECKED_OUT_SHA:0:7} on ${BRANCH}"
           fi
 
           # ── Attempt 2 ──────────────────────────────────────────────
