@@ -99,9 +99,23 @@ if args[:2] == ["api", "graphql"]:
 	sys.exit(0)
 
 if len(args) >= 2 and args[0] == "api" and args[1].startswith("repos/") and "/issues/" in args[1] and "--jq" in args:
+	# Serve the real REST shape (labels are objects, not names) and apply the
+	# caller's own --jq filter with jq, as gh does, so the test exercises the
+	# workflow's label transform instead of a pre-flattened payload.
+	import subprocess
 	num = args[1].rsplit("/", 1)[1]
 	issue = state["issues"][num]
-	print(json.dumps({"labels": list(issue["labels"]), "body": issue["body"]}))
+	rest_issue = {
+		"number": int(num),
+		"labels": [{"id": 1000 + idx, "name": name, "color": "ededed"} for idx, name in enumerate(issue["labels"])],
+		"body": issue["body"],
+	}
+	jq_filter = args[args.index("--jq") + 1]
+	proc = subprocess.run(["jq", "-c", jq_filter], input=json.dumps(rest_issue), capture_output=True, text=True)
+	if proc.returncode != 0:
+		sys.stderr.write(proc.stderr)
+		sys.exit(proc.returncode)
+	sys.stdout.write(proc.stdout)
 	sys.exit(0)
 
 if args[:2] == ["issue", "close"]:

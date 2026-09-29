@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4957-managed-status-from-label-and-lineage-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4957
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4957-managed-status-from-label-and-lineage   Final PR: #4999 draft
+- Project branch: claude/implement-plan-issue-4957-managed-status-from-label-and-lineage   Final PR: #4999 ready
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4813-close-sweep-target-branch-merges)
-- Waiting on: completion PR (branch claude/implement-plan-issue-4957-managed-status-from-label-and-lineage-complete)
+- Waiting on: PR #4999 (final PR, review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01T1YB4i2LsJMe7tn8ohxfW3
 - Last updated: 2026-09-29
-- Last note: conformance run 1 CONFORMANT (no fixes); validation skipped by Q1: A (standing decision Q17: A); completion PR opened.
+- Last note: final PR #4999 review round 1: 1 of 5 findings valid (REST fallback test stub), fixed; 4 rejected with reasons.
 
 ## Phases
 1. [x] Phase 1 — label-only managed status with a project-branch match (sweep + issue_pr_status.yml + helper + tests + docs + changelog) — PR #5011 merged 2026-09-29 (42c307a); review rounds: 1; interventions: 0
@@ -27,7 +27,8 @@
 
 ## Completion
 - Completion PR (branch claude/implement-plan-issue-4957-managed-status-from-label-and-lineage-complete) — doc moved to docs/completed/issue-4957-managed-status-from-label-and-lineage-plan.md
-- Final PR #4999 draft (base claude/implement-plan-issue-4813-close-sweep-target-branch-merges)
+- Completion PR #5080 merged 2026-09-29 (791a65b)
+- Final PR #4999 ready — review rounds: 1 (base claude/implement-plan-issue-4813-close-sweep-target-branch-merges)
 
 ## Activation
 - n/a: the issue base is the #4813 project branch, so this change goes live with #4813's lifecycle (Issue Mode).
@@ -41,6 +42,7 @@
 
 ## Lessons
 - [source:plan-deviation] An issue-mode project whose base is another project's branch cannot run runtime validation, because validate.yml authorizes `target_ref` only through an open final PR into the default branch; its plan should state up front that the parent project's validation covers it. (files: .github/workflows/validate.yml)
+- [source:intervention] A test stub for a `gh api ... --jq <filter>` call must serve the real REST payload shape and apply the caller's own filter with jq; a stub that prints the pre-transformed result cannot catch a broken `--jq` transform. (files: tests/test_issue_pr_status_target_branch_gate.py)
 
 ## Notes
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4957#issuecomment-5883218912
@@ -51,3 +53,4 @@
 - Review round 1 (2026-09-29, session_017ufc3dG2wiwamEgTTaBDmm, head 7fc0073): 1 finding (minimax, low) — the MANAGED_ISSUES comment block said managed children merge "never main". Valid: fixed, and the standalone-bucket wording was corrected to the #4813 rule in the same comment block.
 - PR #5011 merged 2026-09-29T05:43:26Z (merge commit 42c307a).
 - Conformance 1/3 stage (2026-09-29, session_01AvoNBswiUwSKCmYNNZXtwz): CONFORMANT; the issue base had not merged and the project branch was already in sync with it. Validation could not be dispatched (see ## Validation): blocked comment https://github.com/shubhodeep1/coding-workflows/issues/4957#issuecomment-5885067849, `ai:claude-blocked` added, then removed after the owner's Q1: A. The same session continued to the completion PR on the master session's wake.
+- Final PR #4999 review round 1 (2026-09-29, session_01RecX8wuU9DHq5JhpGW16gk, head 791a65b, ledger db9251be…): 5 consensus findings. Valid: the REST-fallback gh stub in tests/test_issue_pr_status_target_branch_gate.py returned pre-flattened label names and ignored the workflow's `--jq`, so the test could not catch a broken label transform; the stub now serves REST label objects and applies the caller's `--jq` with jq (a mutation of the workflow's `--jq` now fails the test). Rejected: issue_pr_status.yml:499 label check (the REST call's `--jq` already maps labels to names, and `index("…")` on a string array works); issue_pr_status.yml:241 `jq_nodes` interpolation (both callers pass fixed expressions); orchestrate_poll_process.sh:3995 `echo` (the input is always a JSON array starting with `[`); gh_helpers.sh:1738 regex (it is the repo's canonical `Tracking issue:` parser, same as review_rb_judge.sh:2316, and every emitter writes `- Tracking issue: #N`).
