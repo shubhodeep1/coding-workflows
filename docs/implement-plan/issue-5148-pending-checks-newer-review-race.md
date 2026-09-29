@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01HRuW9tokc4gWgq1vPau85k   safety net and hand-back: ids in the conformance 1/3 — review round stage report
 - Last updated: 2026-09-29
-- Last note: conformance 1/3 review round 1 (session session_01THs9m7YYkJhTWmkFW1haNS) on PR #5209: the one task-gap finding (no `docs/INVENTORY.md` hunk) misread the project, since phase 1 already added the sentence; settled by naming the watched review runs in that sentence (AD-8) rather than rejecting it, which needs the verdict bot. 230 tests and the inventory parity check pass.
+- Last note: conformance 1/3 review round 2 (session session_01BrXD1ZHudX99F66gmdoxHi) on PR #5209: the one task-gap finding (the changelog fragment's reads row still said 3 `workflow_dispatch` listings after the docstring moved to 4) was valid and fixed; 316 tests and the inventory parity check pass.
 
 ## Phases
 1. [x] Phase 1 — defer the pending-checks merge while a newer review is active or unsettled   — PR #5183 merged 2026-09-29; review rounds: 1; interventions: 0
@@ -22,7 +22,7 @@
    - Done: the plan's phase 1 "done" condition. Protected paths: none.
 
 ## Conformance
-- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — fix PR #5209: `review_rb_judge_dispatch.yml` added to the unbound dispatch listings (pre-security); review rounds: 1
+- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — fix PR #5209: `review_rb_judge_dispatch.yml` added to the unbound dispatch listings (pre-security); review rounds: 2
 
 ## Security pass
 
@@ -47,6 +47,7 @@
 - [source:conformance] When a guard lists workflow runs by workflow file, list the wrapper workflows too: a `workflow_dispatch` wrapper that calls a reusable workflow (such as `review_rb_judge_dispatch.yml` calling `review_autofix.yml`) records its runs under the wrapper's own path, not the reusable workflow's. (files: scripts/claude_fixer_pending_checks.py, .github/workflows/review_rb_judge_dispatch.yml)
 
 ## Notes
+- Conformance review round 2 (2026-09-29, head 08ae2d0, PR #5209): the only finding (task gap, glm, NIT) was valid: `changelog.d/5148-pending-checks-newer-review-race.md`'s reads row still said 3 `workflow_dispatch` runs listings while the module docstring says 4 after `review_rb_judge_dispatch.yml` joined them; fixed to 4. No other doc carries the count.
 - Conformance review round 1 (2026-09-29, head c2ae591, PR #5209): the only finding was a task gap (no `docs/INVENTORY.md` hunk); invalid on the project (line 125 carries phase 1's sentence), settled by AD-8. The push-triggered `review-claude-branch-push / codex-agent (claude-branch-review)` check failed in its LLM summariser (`all 10 attempts failed`, run 36598991686), an infrastructure failure; the PR-event review run on the same head succeeded.
 - Review round 1 (2026-09-29, head a697863): F1 (run with no `status`) fixed; the old code already failed closed but reported it as an active run. F2 (run with a non-integer `id`) fixed; the superseded check skipped such a run (fail open), while its `TypeError` claim about `marker_run_id` was wrong (always an `int`). F3 (comments re-read unvalidated) rejected: `check_in_status.gh_api_list` raises `ReadError` on a non-array page or a non-object item.
 - Issue-mode project started by the Claude issue dispatcher routine (trigger trig_01REnV4f26hDKipeNXXCHKgR) in session session_01AnxtvQ843pzNkV2iTQRcJc (Auto mode). Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5148#issuecomment-5891537425

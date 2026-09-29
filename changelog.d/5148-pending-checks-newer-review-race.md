@@ -6,7 +6,7 @@ The sweep's pending-checks pass (issue #4900) enabled auto-merge from an earlier
 | The numbers that matter | Value |
 | --- | --- |
 | Audit finding | `pending-merge-races-newer-review`, high, `scripts/claude_pr_sweep.py:253` (issue #5148) |
-| Extra reads per PR that is ready to merge | 1 head-branch runs listing, 3 `workflow_dispatch` runs listings (a missing workflow costs its one 404), 1 comments re-read |
+| Extra reads per PR that is ready to merge | 1 head-branch runs listing, 4 `workflow_dispatch` runs listings (a missing workflow costs its one 404), 1 comments re-read |
 | Extra reads for every other PR | 0 |
 | Longest added delay | one sweep tick (`17 * * * *`) per active review |
 
