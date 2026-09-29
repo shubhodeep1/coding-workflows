@@ -12,6 +12,9 @@ Usage:
 
   permission_prompts.py report [--log-dir DIR]
   permission_prompts.py file [--log-dir DIR] [--session-label ID] [--dry-run]
+  permission_prompts.py report-now --log-file FILE [--cwd DIR]
+  permission_prompts.py lookup --session ID [--repo OWNER/REPO]
+  permission_prompts.py session-meta --title TITLE [--log-dir DIR]
 
 A **pattern** is the event, the tool, and the command's shape: for Bash, each
 command word, its flags, subcommand, `gh api` method and endpoint (numbers
@@ -30,33 +33,78 @@ nothing. For each pattern with occurrences not filed yet:
   - otherwise → one new issue labelled `ai:permission-prompt` and `ai:claude`,
     so clarify routes it to the Claude issue implementer.
 Filed counts are kept in `filed-state.json` next to the logs, so a later run
-in the same session files only what is new.
+in the same session files only what is new. `file` also skips every
+signature `report-now` already reported (listed under `already_reported`),
+so a prompt is reported once per session.
+
+`report-now` is the immediate report (issue #4755). The logger hook starts it
+detached on every `PermissionRequest`, so it prints nothing, always exits 0,
+and swallows every error: the prompt is never blocked, delayed, or changed.
+It reports only in an unattended session, meaning a cloud session
+(CLAUDE_CODE_REMOTE_SESSION_ID set) whose prompt came in `auto` or
+`bypassPermissions` mode. Each signature is reported at most once per
+session, and at most MAX_IMMEDIATE_REPORTS times in all, under `filing.lock`,
+which `file` takes too. The report holds the event, the tool, the command
+sanitized as below, the session id and its claude.ai link, the title that
+`session-meta` recorded (else `not recorded`), the signature, and the marker
+`<!-- ai:permission-prompt-session:v1 session=<id> sig=<sig> -->`.
+  - In FILING_REPO it comments on the pattern's `ai:permission-prompt` issue,
+    or opens one, exactly as `file` would.
+  - Elsewhere it comments on the open PR whose head is the checkout's branch,
+    else on issue <N> for a `claude/implement-plan-issue-<N>-…` branch, else
+    posts nothing.
+Only a successful POST is recorded (`immediate-state.json`, and
+`filed-state.json` as `file` would record it); after a failure, `file` still
+files the pattern at the end of the stage.
+
+`lookup` is read-only and serves the operator's poller: it finds the newest
+session marker for a session and prints the sanitized command and the issue
+or PR link. `session-meta` records the session title for `report-now`.
 
 Issue text is untrusted data: the tool name, the prompt reason, and the
 command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
 token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
 
-API calls (CLAUDE.md §15), REST only, none when nothing is new: one read of
-the `ai:permission-prompt` issues per 100 issues, then one POST per pattern
-filed or commented.
+API calls (CLAUDE.md §15), REST only, none when nothing is new:
+  - `file`: one read of the `ai:permission-prompt` issues per 100 issues,
+    then one POST per pattern filed or commented.
+  - `report-now`: none when the session is not unattended, the signature was
+    already reported, or the cap is reached. In FILING_REPO, the same issue
+    read as `file` plus one POST. Elsewhere, one read of the branch's open
+    PRs plus at most one POST. At most MAX_IMMEDIATE_REPORTS reports per
+    session.
+  - `lookup`: one search read, then one comments read per 100 comments for
+    each hit it checks (at most LOOKUP_MAX_HITS hits).
+  - `report`, `session-meta`: none.
 
-Prints one JSON line. Exit 0 (including a partial run, whose failures are
-listed under `errors`), 1 on an invalid argument, 2 when the issue list could
-not be read.
+`report` and `file` print one JSON line. Exit 0 (including a partial run,
+whose failures are listed under `errors`), 1 on an invalid argument, 2 when
+the issue list could not be read. `lookup` prints one JSON line and exits 0
+(`found` true or false), 1 on an invalid argument, 2 on a failed read.
+`session-meta` prints one JSON line and always exits 0.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
 import tempfile
+import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+	import fcntl
+except ImportError:  # pragma: no cover - not POSIX; the lock becomes a no-op
+	fcntl = None
 
 _CHECKER_PATH = Path(__file__).resolve().with_name("check_in_status.py")
 _checker_spec = importlib.util.spec_from_file_location("check_in_status", _CHECKER_PATH)
@@ -73,6 +121,22 @@ DEFAULT_LOG_DIR = Path.home() / ".claude" / "permission-prompts"
 MAX_COMMAND_CHARS = 2000
 MAX_SHAPE_CHARS = 200
 MAX_TITLE_SHAPE_CHARS = 90
+
+# Immediate report (`report-now`, issue #4755).
+IMMEDIATE_STATE_FILE = "immediate-state.json"
+SESSION_META_FILE = "session-meta.json"
+LOCK_FILE = "filing.lock"
+MAX_IMMEDIATE_REPORTS = 5
+MAX_SESSION_TITLE_CHARS = 200
+LOOKUP_MAX_HITS = 3
+REMOTE_SESSION_ENV = "CLAUDE_CODE_REMOTE_SESSION_ID"
+UNATTENDED_MODES = frozenset({"auto", "bypassPermissions"})
+SESSION_URL_TEMPLATE = "https://claude.ai/code/{session}"
+IMMEDIATE_HEADING = "**Immediate report:** an unattended session is waiting on this permission prompt now."
+SESSION_MARKER_TEMPLATE = "<!-- ai:permission-prompt-session:v1 session={session} sig={sig} -->"
+SESSION_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-session:v1 session=(session_[A-Za-z0-9_-]{1,120}) sig=([0-9a-f]{12}) -->")
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,120}")
+_ISSUE_BRANCH_RE = re.compile(r"^claude/implement-plan-issue-([0-9]+)-")
 
 REDACTION_PATTERNS = (
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
@@ -389,12 +453,17 @@ def extract_repo_slug(url: str) -> str:
 	return path if re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9._-]+", path) else ""
 
 
-def local_repo_slug() -> str:
+def _git_output(args: list[str], cwd: str | None) -> str:
+	"""Stripped stdout of one `git` command in `cwd` (the current directory when empty), or "" on any failure."""
 	try:
-		proc = subprocess.run(["git", "config", "--get", "remote.origin.url"], capture_output=True, text=True, timeout=5)
+		proc = subprocess.run(["git", *args], capture_output=True, text=True, timeout=5, cwd=cwd or None)
 	except (OSError, subprocess.SubprocessError):
 		return ""
-	return extract_repo_slug(proc.stdout) if proc.returncode == 0 else ""
+	return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def local_repo_slug(cwd: str | None = None) -> str:
+	return extract_repo_slug(_git_output(["config", "--get", "remote.origin.url"], cwd))
 
 
 def _post(path: str, body: dict) -> dict:
@@ -431,6 +500,101 @@ def _save_state(log_dir: Path, state: dict[str, int]) -> None:
 	(log_dir / STATE_FILE).write_text(json.dumps(state, indent=1, sort_keys=True), encoding="utf-8")
 
 
+@contextlib.contextmanager
+def _filing_lock(log_dir: Path):
+	"""Hold an exclusive lock on `<log dir>/filing.lock` around every state read-modify-write."""
+	log_dir.mkdir(parents=True, exist_ok=True)
+	with (log_dir / LOCK_FILE).open("a", encoding="utf-8") as handle:
+		if fcntl is not None:
+			fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+		try:
+			yield
+		finally:
+			if fcntl is not None:
+				fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _load_immediate_state(log_dir: Path) -> dict:
+	"""`{"reports": {sig: {...}}, "count": n}` from `immediate-state.json`; empty when missing or invalid."""
+	try:
+		state = json.loads((log_dir / IMMEDIATE_STATE_FILE).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		state = {}
+	reports = state.get("reports") if isinstance(state, dict) else None
+	reports = {key: value for key, value in reports.items() if isinstance(key, str) and isinstance(value, dict)} if isinstance(reports, dict) else {}
+	count = state.get("count") if isinstance(state, dict) else None
+	return {"reports": reports, "count": count if isinstance(count, int) and count >= len(reports) else len(reports)}
+
+
+def _save_immediate_state(log_dir: Path, state: dict) -> None:
+	log_dir.mkdir(parents=True, exist_ok=True)
+	(log_dir / IMMEDIATE_STATE_FILE).write_text(json.dumps(state, indent=1, sort_keys=True), encoding="utf-8")
+
+
+def session_label_from_env() -> str:
+	"""`session_<id>` for this cloud session (CLAUDE_CODE_REMOTE_SESSION_ID, `cse_` prefix stripped), or ""."""
+	raw = os.environ.get(REMOTE_SESSION_ENV, "").strip()
+	return normalize_session_label(raw)
+
+
+def normalize_session_label(raw: str) -> str:
+	"""`session_<id>` from `session_<id>`, `cse_<id>`, or a bare id; "" when it is not a safe id."""
+	raw = raw.strip()
+	for prefix in ("session_", "cse_"):
+		if raw.startswith(prefix):
+			raw = raw[len(prefix) :]
+			break
+	return f"session_{raw}" if _SESSION_ID_RE.fullmatch(raw) else ""
+
+
+def is_unattended(record: dict, session_label: str) -> bool:
+	"""True for a `PermissionRequest` in a cloud session running in `auto` or `bypassPermissions` mode."""
+	return (
+		bool(session_label)
+		and record.get("event") == "PermissionRequest"
+		and str(record.get("permission_mode") or "") in UNATTENDED_MODES
+	)
+
+
+def _inline_code(text: str) -> str:
+	"""One line of untrusted text, safe inside a Markdown code span."""
+	return " ".join(text.replace("`", "'").split())
+
+
+def read_session_title(log_dir: Path) -> str:
+	"""The title `session-meta` recorded, redacted; "" when none was recorded."""
+	try:
+		meta = json.loads((log_dir / SESSION_META_FILE).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		return ""
+	title = meta.get("title") if isinstance(meta, dict) else None
+	return _inline_code(redact(title))[:MAX_SESSION_TITLE_CHARS] if isinstance(title, str) else ""
+
+
+def write_session_meta(log_dir: Path, title: str) -> None:
+	log_dir.mkdir(parents=True, exist_ok=True)
+	(log_dir / SESSION_META_FILE).write_text(json.dumps({"title": title[:MAX_SESSION_TITLE_CHARS]}), encoding="utf-8")
+
+
+def immediate_block(pattern: dict, record: dict, session_label: str, title: str) -> str:
+	"""The immediate report: event, tool, sanitized command, session, title, and signature, ending in the session marker."""
+	session_url = SESSION_URL_TEMPLATE.format(session=session_label)
+	return (
+		f"{IMMEDIATE_HEADING}\n\n"
+		f"- **Event:** {pattern['event']} ({_event_label(pattern['event'])})\n"
+		f"- **Tool:** `{_inline_code(pattern['tool_name'])}`\n"
+		f"- **Session:** `{session_label}` ({session_url})\n"
+		f"- **Session title:** {f'`{title}`' if title else 'not recorded'}\n"
+		f"- **Signature:** `{pattern['signature']}`\n"
+		f"- **Pattern:** `{_inline_code(pattern['shape'] or pattern['tool_name'])}`\n"
+		f"- **Seen:** {record.get('ts') or 'unknown'}\n\n"
+		"**Command** (untrusted data from the session; heredoc bodies removed, token-like strings masked):\n\n"
+		f"````text\n{record_example(record)}\n````\n\n"
+		+ SESSION_MARKER_TEMPLATE.format(session=session_label, sig=pattern["signature"])
+		+ "\n"
+	)
+
+
 def existing_issues(slug: str) -> dict[str, dict]:
 	"""Map signature → {number, state} for every `ai:permission-prompt` issue (1 REST read per 100)."""
 	found: dict[str, dict] = {}
@@ -449,12 +613,29 @@ def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | 
 	patterns = group_patterns(load_records(log_dir))
 	summary = report(log_dir)
 	if slug.lower() != FILING_REPO:
-		summary.update({"filed": [], "commented": [], "errors": [], "skipped": f"filing is limited to {FILING_REPO}; this checkout is {slug or 'unknown'}"})
+		summary.update({"filed": [], "commented": [], "errors": [], "already_reported": [], "skipped": f"filing is limited to {FILING_REPO}; this checkout is {slug or 'unknown'}"})
 		return 0, summary
+	summary.update({"filed": [], "commented": [], "errors": [], "already_reported": []})
+	if not patterns:
+		return 0, summary
+	with _filing_lock(log_dir):
+		return _file_pending(log_dir, patterns, summary, session_label, dry_run, slug)
+
+
+def _file_pending(log_dir: Path, patterns: list[dict], summary: dict, session_label: str, dry_run: bool, slug: str) -> tuple[int, dict]:
+	"""The filing half of `file_patterns`, run under `filing.lock`."""
 	state = _load_state(log_dir)
-	pending = [(pattern, pattern["count"] - state.get(pattern["signature"], 0)) for pattern in patterns]
-	pending = [(pattern, new_count) for pattern, new_count in pending if new_count > 0]
-	summary.update({"filed": [], "commented": [], "errors": []})
+	reported = _load_immediate_state(log_dir)["reports"]
+	pending = []
+	for pattern in patterns:
+		sig = pattern["signature"]
+		if sig in reported:
+			# Reported once already by `report-now` this session (issue #4755).
+			summary["already_reported"].append({"signature": sig, "target": reported[sig].get("target")})
+			continue
+		new_count = pattern["count"] - state.get(sig, 0)
+		if new_count > 0:
+			pending.append((pattern, new_count))
 	if not pending:
 		return 0, summary
 	try:
@@ -488,6 +669,160 @@ def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | 
 	return 0, summary
 
 
+def _last_record(log_file: Path) -> dict | None:
+	"""The last JSON line of one session log (the prompt the hook just appended), or None."""
+	try:
+		lines = log_file.read_text(encoding="utf-8").splitlines()
+	except OSError:
+		return None
+	for line in reversed(lines):
+		if not line.strip():
+			continue
+		try:
+			record = json.loads(line)
+		except ValueError:
+			return None
+		return record if isinstance(record, dict) else None
+	return None
+
+
+def _report_to_filing_repo(slug: str, pattern: dict, block: str, session_label: str, log_dir: Path) -> str:
+	"""Comment on the pattern's `ai:permission-prompt` issue, or open it, with the immediate block appended."""
+	existing = existing_issues(slug)
+	new_count = max(pattern["count"] - _load_state(log_dir).get(pattern["signature"], 0), 1)
+	if pattern["signature"] in existing:
+		number = existing[pattern["signature"]]["number"]
+		_post(f"repos/{slug}/issues/{number}/comments", {"body": comment_body(pattern, new_count, session_label) + "\n" + block})
+		return f"issue #{number}"
+	created = _post(
+		f"repos/{slug}/issues",
+		{"title": issue_title(pattern), "body": issue_body(pattern, new_count, session_label) + "\n" + block, "labels": [LABEL, ROUTE_LABEL]},
+	)
+	return f"issue #{created['number']}" if isinstance(created.get("number"), int) else "issue #?"
+
+
+def _report_to_own_thread(slug: str, cwd: str | None, block: str) -> str:
+	"""Outside FILING_REPO: comment on the branch's open PR, else on a `claude/implement-plan-issue-<N>-` issue; "" when neither exists."""
+	branch = _git_output(["branch", "--show-current"], cwd)
+	if not branch:
+		return ""
+	head = urllib.parse.quote(f"{slug.split('/', 1)[0]}:{branch}", safe="")
+	pulls = check_in_status.gh_api_list(f"repos/{slug}/pulls?state=open&head={head}")
+	number = next((pull["number"] for pull in pulls if isinstance(pull.get("number"), int)), None)
+	kind = "PR"
+	if number is None:
+		match = _ISSUE_BRANCH_RE.match(branch)
+		if not match:
+			return ""
+		number, kind = int(match.group(1)), "issue"
+	body = (
+		"A permission prompt is blocking the unattended Claude Code session working on this "
+		f"{'pull request' if kind == 'PR' else 'issue'}. Reported by `.claude/scripts/permission_prompts.py` "
+		"(CLAUDE.md §23.I).\n\n" + block
+	)
+	_post(f"repos/{slug}/issues/{number}/comments", {"body": body})
+	return f"{kind} #{number}"
+
+
+def report_now(log_file: Path, cwd: str | None, session_label: str | None = None, now: datetime | None = None) -> str:
+	"""Report the prompt the hook just logged, at most once per signature per session; see the module docstring.
+
+	Never raises: the hook runs it detached and nobody reads its result. The
+	returned outcome string exists for the tests. Nothing is recorded unless a
+	POST succeeded.
+	"""
+	try:
+		return _report_now(log_file, cwd, session_label_from_env() if session_label is None else session_label, now or datetime.now(timezone.utc))
+	except Exception as exc:  # noqa: BLE001 - the immediate report must fail open
+		return f"error: {exc}"
+
+
+def _report_now(log_file: Path, cwd: str | None, session_label: str, now: datetime) -> str:
+	record = _last_record(log_file)
+	if record is None or not is_unattended(record, session_label):
+		return "skipped: not an unattended permission prompt"
+	log_dir = log_file.parent
+	sig = signature(str(record.get("event")), str(record.get("tool_name") or ""), record_shape(record))
+	with _filing_lock(log_dir):
+		immediate = _load_immediate_state(log_dir)
+		if sig in immediate["reports"]:
+			return "skipped: already reported"
+		if immediate["count"] >= MAX_IMMEDIATE_REPORTS:
+			return "skipped: cap reached"
+		pattern = next((item for item in group_patterns(load_records(log_dir)) if item["signature"] == sig), None)
+		if pattern is None:
+			return "skipped: pattern not found"
+		slug = local_repo_slug(cwd)
+		if not slug:
+			return "skipped: unknown repository"
+		block = immediate_block(pattern, record, session_label, read_session_title(log_dir))
+		filing_repo = slug.lower() == FILING_REPO
+		target = _report_to_filing_repo(slug, pattern, block, session_label, log_dir) if filing_repo else _report_to_own_thread(slug, cwd, block)
+		if not target:
+			return "skipped: no target"
+		immediate["reports"][sig] = {"target": target, "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "session": session_label}
+		immediate["count"] += 1
+		_save_immediate_state(log_dir, immediate)
+		if filing_repo:
+			state = _load_state(log_dir)
+			state[sig] = max(state.get(sig, 0), pattern["count"])
+			_save_state(log_dir, state)
+		return f"reported: {target}"
+
+
+_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+
+def parse_immediate_block(text: str, session_label: str) -> dict | None:
+	"""The fields of the newest immediate block in `text` for this session, or None."""
+	markers = [match for match in SESSION_MARKER_RE.finditer(text) if match.group(1) == session_label]
+	if not markers:
+		return None
+	marker = markers[-1]
+	head = text[: marker.start()]
+	start = head.rfind(IMMEDIATE_HEADING)
+	if start < 0:
+		return None
+	section = head[start:]
+
+	def field(name: str) -> str:
+		match = re.search(rf"^- \*\*{re.escape(name)}:\*\* (.*)$", section, re.MULTILINE)
+		return match.group(1).strip() if match else ""
+
+	title = field("Session title")
+	command = re.search(r"^````text\n(.*)\n````$", section, re.MULTILINE | re.DOTALL)
+	return {
+		"signature": marker.group(2),
+		"event": field("Event").split(" (", 1)[0],
+		"tool_name": field("Tool").strip("`"),
+		"command": command.group(1) if command else "",
+		"title": title[1:-1] if len(title) >= 2 and title.startswith("`") and title.endswith("`") else "",
+	}
+
+
+def lookup(session_label: str, slug: str) -> dict:
+	"""Find the newest immediate report for a session; see the module docstring. Raises ReadError on a failed read."""
+	query = urllib.parse.quote(f'repo:{slug} "{session_label}"', safe="")
+	result = check_in_status.gh_api(f"search/issues?q={query}&sort=updated&order=desc&per_page={LOOKUP_MAX_HITS}")
+	items = result.get("items") if isinstance(result.get("items"), list) else []
+	for item in items[:LOOKUP_MAX_HITS]:
+		if not isinstance(item, dict) or not isinstance(item.get("number"), int):
+			continue
+		issue_url = str(item.get("html_url") or "")
+		if item.get("author_association") in _TRUSTED_ASSOCIATIONS:
+			parsed = parse_immediate_block(str(item.get("body") or ""), session_label)
+			if parsed:
+				return {"found": True, "session": session_label, "issue_url": issue_url, "comment_url": "", **parsed}
+		comments = check_in_status.gh_api_list(f"repos/{slug}/issues/{item['number']}/comments")
+		for comment in reversed(comments):
+			if comment.get("author_association") not in _TRUSTED_ASSOCIATIONS:
+				continue
+			parsed = parse_immediate_block(str(comment.get("body") or ""), session_label)
+			if parsed:
+				return {"found": True, "session": session_label, "issue_url": issue_url, "comment_url": str(comment.get("html_url") or ""), **parsed}
+	return {"found": False, "session": session_label}
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -497,11 +832,43 @@ def build_parser() -> argparse.ArgumentParser:
 		if name == "file":
 			command.add_argument("--session-label", default="unknown")
 			command.add_argument("--dry-run", action="store_true")
+	report_now_command = sub.add_parser("report-now")
+	report_now_command.add_argument("--log-file", required=True)
+	report_now_command.add_argument("--cwd", default="")
+	lookup_command = sub.add_parser("lookup")
+	lookup_command.add_argument("--session", required=True)
+	lookup_command.add_argument("--repo", default="")
+	meta_command = sub.add_parser("session-meta")
+	meta_command.add_argument("--title", required=True)
+	meta_command.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
 	return parser
 
 
 def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
+	if args.command == "report-now":
+		report_now(Path(args.log_file), args.cwd or None)
+		return 0
+	if args.command == "session-meta":
+		try:
+			write_session_meta(Path(args.log_dir), args.title)
+		except OSError as exc:
+			print(json.dumps({"ok": False, "error": str(exc)}))
+			return 0
+		print(json.dumps({"ok": True}))
+		return 0
+	if args.command == "lookup":
+		session_label = normalize_session_label(args.session)
+		slug = args.repo or local_repo_slug()
+		if not session_label or not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9._-]+", slug):
+			print(json.dumps({"error": "--session must be a session id and --repo (or the checkout) must name owner/repo"}))
+			return 1
+		try:
+			print(json.dumps(lookup(session_label, slug)))
+		except check_in_status.ReadError as exc:
+			print(json.dumps({"found": False, "session": session_label, "error": str(exc)}))
+			return 2
+		return 0
 	log_dir = Path(args.log_dir)
 	if args.command == "report":
 		print(json.dumps(report(log_dir)))
