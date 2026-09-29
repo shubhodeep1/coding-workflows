@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/fix-claude-pr.md:46 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The `.claude/` conflict PushNotification template names `<default>` as the merge source even when the actual source is the PR base or project branch.\n  WHY: A conflict during a base or project-branch merge would produce a misleading notification naming the wrong source.\n- workflow-templates/.claude/commands/implement-plan-claude.md:182 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Step 2 is labelled \"Two checks\" even though the base-drift check is conditional when the PR head's base is not the default branch.\n  WHY: For a PR head based on the default branch, this wording overstates the required checks and invites a redundant base check.\n- workflow-templates/.claude/commands/implement-plan-claude.md:186 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Step 2 does not explicitly state that a non-zero result from either check continues the flow to step 3.\n  WHY: An agent following step 2 without considering step 3 could miss a base-drift-only case and skip the documented merge.\n- workflow-templates/.claude/commands/implement-plan-claude.md and workflow-templates/.claude/commands/fix-claude-pr.md | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The commands use `<base>` and `<base ref>` respectively for the PR's base ref.\n  WHY: The differing placeholder names add inconsistency for maintainers copying prose, although each command substitutes its own placeholder correctly.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/commands/fix-claude-pr.md, line 46, the PushNotification template `('<repo>#<N>: .claude/ conflict with <default> \u2014 decision needed')` | severity=low | confidence=4\n  PROBLEM: The conflict PushNotification template uses `<default>` even though the sync's merge source can be the PR's base or the project branch.\n  WHY: A session following the template during a base or project-branch merge conflict would send a notification naming the wrong source.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/commands/fix-claude-pr.md, line 46 | severity=low | confidence=4\n  PROBLEM: The `.claude/` conflict PushNotification template refers to \"conflict with <default>\" regardless of the actual merge source.\n  WHY: A conflict during a merge from the PR's own base or a project branch would be reported as a conflict with the default branch.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/commands/fix-claude-pr.md, line 46 \u2014 `PushNotification` template `(<repo>#<N>: .claude/ conflict with <default> \u2014 decision needed)` | severity=low | confidence=4\n  PROBLEM: The conflict notification hardcodes `<default>` as the merge source, although the source can be the project branch or PR base.\n  WHY: An operator would see a notification misidentifying the conflicting side.\n- workflow-templates/.claude/commands/implement-plan-claude.md, line 182 \u2014 step 2 \"**Stale?** Two checks, run against the branches the working branch takes its guards from\" | severity=low | confidence=3\n  PROBLEM: Step 2 is labelled \"Two checks\" although the base-drift check is conditional when the PR head's base is not the default branch.\n  WHY: For a PR head whose base is the default branch, the wording invites a redundant check and fetch.\n- workflow-templates/.claude/commands/implement-plan-claude.md, line 186 \u2014 \"Both exit 0 \u2192 nothing to do.\" | severity=low | confidence=2\n  PROBLEM: Step 2 does not explicitly direct the agent to continue to step 3 when either check exits non-zero.\n  WHY: An agent following step 2 literally could miss a base-drift-only case and skip the documented merge.\n- workflow-templates/.claude/commands/implement-plan-claude.md and fix-claude-pr.md | severity=low | confidence=3\n  PROBLEM: `implement-plan-claude.md` uses `<base>` for the PR's base ref; `fix-claude-pr.md` uses `<base ref>` for the same concept.\n  WHY: This is not a runtime defect, but the differing placeholders create inconsistency for maintainers copying prose between commands.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/fix-claude-pr.md, line 46 (step 5, the PushNotification template) | severity=low | confidence=4\n  PROBLEM: The notification template says \"conflict with <default>\" although the merge source may be the PR's base or the project branch.\n  WHY: A `.claude/` conflict during either merge would misidentify the source in the notification.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- workflow-templates/.claude/commands/fix-claude-pr.md:46 | severity=low | confidence=3\n  PROBLEM: PushNotification for `.claude/` conflict still hardcodes \"<default>\" in template.\n  WHY: The notification is misleading when the source is the PR base or project branch.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/commands/fix-claude-pr.md, step 5, the `.claude/` conflict PushNotification template: `<repo>#<N>: .claude/ conflict with <default> \u2014 decision needed` | severity=low | confidence=4\n  PROBLEM: The notification hardcodes `<default>` as the conflict source, although the source can be the default branch, project branch, or PR base.\n  WHY: A session following this command would send a misleading notification naming the wrong branch.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7b83b78d82ffc595812062ca98a2ad0dbf65930b8654142a09153fa197e7fa49",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5282,
+    "run_id": "36639103961",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36639103961",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929231202_73d4866bb6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5282,
+    "run_id": "36639103961"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T23:12:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
