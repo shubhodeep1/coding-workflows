@@ -459,8 +459,8 @@ def test_settings_twin_allows_the_janitor():
 
 
 def test_pickup_runs_the_sweep_on_wake():
-	# .claude/commands/claude-issue-pickup.md has no twin; this fails until the
-	# supervising session applies the edit (interim twin-first rule, #4887).
+	# .claude/commands/claude-issue-pickup.md has no twin, so this reads the
+	# root pickup file directly.
 	text = " ".join(PICKUP.read_text(encoding="utf-8").split())
 	assert "3a. **Archive finished sessions** (`— wake.` mode only" in text
 	assert "PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_session_janitor.py --sessions <file> --self <your session id>" in text

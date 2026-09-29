@@ -1,5 +1,5 @@
 <!-- changelog: added -->
-- **Finished Claude sessions are archived automatically.** Fixer sessions archive themselves when their pull request merges or closes. The Claude issue pickup's hourly wake archives the fixer, issue-start, and report sessions nothing else archived.
+- **Finished Claude sessions are archived automatically.** Fixer sessions archive themselves when their pull request merges or closes. The Claude issue pickup's hourly wake archives the fixer, issue-start, and report sessions that nothing else archived.
 
 Until now, three kinds of automation session were never archived: `/fix-claude-pr` fixer and hold sessions after their PR was terminal, issue-start sessions after the `/implement-plan-claude` chain had moved past them, and CLAUDE.md §26.D report sessions. On 2026-09-29 the account had 66 open sessions for about 26 active projects, and the operator archived 30 by hand.
 - A fixer handed a terminal PR back now does the checker bookkeeping, replies in one line, and archives itself.
