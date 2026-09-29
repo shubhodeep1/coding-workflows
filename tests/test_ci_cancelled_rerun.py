@@ -265,3 +265,10 @@ def test_enumerate_step_writes_snapshot_with_head_sha_before_zero_candidate_exit
 
 def test_ci_runs_this_test_file():
 	assert "tests/test_ci_cancelled_rerun.py" in CI_WF.read_text(encoding="utf-8")
+
+
+def test_log_prefixes_are_registered_in_both_agents_md_forms():
+	agents_text = (ROOT / "agents.md").read_text(encoding="utf-8")
+	for prefix in ("CI_CANCELLED_RERUN", "CI_CANCELLED_RERUN_END", "AUTOFIX_SWEEP_PR_SNAPSHOT_WRITE_FAILED"):
+		assert f"- `{prefix}`" in agents_text
+		assert f"LOG_PREFIX.name={prefix}" in agents_text
