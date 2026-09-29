@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T02:21:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Capturing `gh_api_safe_print` with `$(...)` also captures its `::error::gh api call failed` line, so a failed read is non-empty text, not an empty string: shape-check the JSON before trusting it, never just test for emptiness",
+  "phase": "implement_plan",
+  "pr_number": 4875,
+  "record_id": "lesson-implement-plan-8f0ed689cb730d56f9a6da0c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4723-require-plan-run-id",
+    "file:.github/workflows/test-and-mark-stable.yml",
+    "file:scripts/comprehensive_test_and_release_gh_api.sh"
+  ]
+}
