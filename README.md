@@ -1068,7 +1068,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > the same sync ships three allowlisted helpers that `/implement-plan-claude`
 > stage sessions use instead of hand-built shell, so they do not stop at
 > permission prompts: `.claude/scripts/dispatch_workflow.py` (dispatch an
-> allowlisted workflow and get the id of the run it started),
+> allowlisted workflow and get the id of the run it started, as returned by
+> GitHub for that dispatch, so parallel dispatches never swap runs),
 > `.claude/scripts/edit_comment.py` (edit one comment in place), and
 > `.claude/scripts/permission_prompts.py`. A `PermissionRequest` /
 > `PermissionDenied` hook, `.claude/hooks/permission_prompt_logger.py`, logs
