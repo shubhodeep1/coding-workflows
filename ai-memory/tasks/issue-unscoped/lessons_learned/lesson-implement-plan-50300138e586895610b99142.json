@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T14:58:11Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A parser that reads untrusted text back out of a Markdown report must anchor on the report's own trailing marker and delimiter, never search forward or `rfind` a heading, because the untrusted text can imitate every earlier part of the report.",
+  "phase": "implement_plan",
+  "pr_number": 5182,
+  "record_id": "lesson-implement-plan-50300138e586895610b99142",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-5127-permission-report-fence",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}
