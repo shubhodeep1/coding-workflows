@@ -6,7 +6,7 @@
 - Status: BLOCKED
 - Stage: phase 4/4
 - Activation: not started
-- Waiting on: phase 4 PR: twin sync (the supervising session copies the twins and the `claude-issue-pickup.md` text into `.claude/**`, then review)
+- Waiting on: PR #5215: twin sync (the supervising session copies the twins and the `claude-issue-pickup.md` text into `.claude/**`, then review)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01CUoZtWt9aXXvwPvx9QwhAx (idle; no wait armed while the phase 4 PR holds for the twin sync)
 - Last updated: 2026-09-29
@@ -16,7 +16,7 @@
 1. [x] Phase 1 — Checks-pending, not a hand-off (evidence artifact + helper, checks-pending marker, merge-check gate and step)   — PR #4651 merged 2026-09-27 (squash b7745e7, by the operator under D8 after the supervising session verified every round-1 rejection); review rounds: 1; interventions: 0
 2. [x] Phase 2 — GPT judge for Claude-fixer PRs (judge dispatch input, Claude mode in review_rb_judge.sh, sticky rulings, fixer docs REST dispatch)   — protected paths: .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md; PR #4691 merged 2026-09-28 (squash e1979d2, by the operator under D8 after the hold); `.claude` edits applied by the operator in 6b8a1a3; review rounds: 3 (round 1, 2026-09-28: follow-up issue only when the PR is set to merge, outcome-accurate verdict text, unreadable judge-fix count decides nothing, cautious duplicate rulings, distinct decide-failure skip reason; prompt-guard finding rejected as the plan's accepted risk; round 2, 2026-09-28: all 7 findings and the task gap rejected, see the PR reply; project-branch merge pushed); interventions: 0
 3. [x] Phase 3 — Checkers never ask; reasoning before holds; held backoff (retry_after_minutes)   — protected paths: .claude/commands/implement-plan-claude.md, .claude/commands/fix-claude-pr.md, .claude/commands/implement-issue-claude.md, .claude/scripts/check_in_status.py, .claude/scripts/claude_fix_claim.py; implemented twin-first (Protected-path approval below); PR #4904 merged 2026-09-29 (merge commit 15a1b1c, by the master session under D8 / Q46 after every round-2 finding was rejected with a reason, comment 5887278304); two `[claude-twin-sync]` copies by the supervising session; review rounds: 2 as the workflow counts them (hand-offs on d4d4a16, ee73d4a, c03e646, 5e7a15c and 688b8a6; the count restarted after the twin-sync pushes; every finding on 688b8a6 was rejected); interventions: 0
-4. [ ] Phase 4 — Session janitor (stale_sessions.py run by the hourly Claude issue pickup)   — protected paths: .claude/scripts/stale_sessions.py, .claude/commands/claude-issue-pickup.md, .claude/settings.json, .claude/commands/fix-claude-pr.md; implemented twin-first (Protected-path approval below) from the project branch at f476447; phase PR open, held for the twin sync
+4. [ ] Phase 4 — Session janitor (stale_sessions.py run by the hourly Claude issue pickup)   — protected paths: .claude/scripts/stale_sessions.py, .claude/commands/claude-issue-pickup.md, .claude/settings.json, .claude/commands/fix-claude-pr.md; implemented twin-first (Protected-path approval below) from the project branch at f476447; PR #5215 open, held for the twin sync; review rounds: 0; interventions: 0
 
 ## Conformance
 
