@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T20:37:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a guard lists workflow runs by workflow file, list the wrapper workflows too: a `workflow_dispatch` wrapper that calls a reusable workflow (such as `review_rb_judge_dispatch.yml` calling `review_autofix.yml`) records its runs under the wrapper's own path, not the reusable workflow's.",
+  "phase": "implement_plan",
+  "pr_number": 5209,
+  "record_id": "lesson-implement-plan-6a408d660290fccd9394ca4e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5148-pending-checks-newer-review-race",
+    "file:scripts/claude_fixer_pending_checks.py",
+    "file:.github/workflows/review_rb_judge_dispatch.yml"
+  ]
+}
