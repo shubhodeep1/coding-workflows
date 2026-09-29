@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12637 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The `pr_named_listing_incomplete` diagnostic log uses `${_di_rc}` instead of `${_di_pr_named_rc}`, so it reports the branch listing's return code rather than the PR-named listing's failure code.\n  WHY: The branch listing succeeded before this path, so the log reports `rc=0` for an incomplete PR-named listing and misleads triage; severity was reported as both NIT and MAJOR, with MAJOR highest.\n- scripts/orchestrate_poll_process.sh:16610 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new `elif` is indented with spaces rather than tabs, creating a style inconsistency.\n  WHY: Its indentation differs from the surrounding tab-indented code.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:12637 | severity=low | confidence=[5]\n  PROBLEM: The diagnostic log uses `rc=${_di_rc}` which is the branch listing's return code, not the PR-named listing's return code stored in `_di_pr_named_rc`.\n  WHY: The branch listing succeeded, so `rc=0` appears next to `outcome=pr_named_listing_incomplete` in the log, misleading triage.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:12637 | severity=high | confidence=[4]\n  PROBLEM: Incorrect variable used in log statement in `_direct_inflight_review_run_on_branch`.\n  WHY: The code uses `${_di_rc}` instead of `${_di_pr_named_rc}`, providing misleading information in logs during triage when a listing is incomplete.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:lines 12634\u201312637 (in `_direct_inflight_review_run_on_branch`) | severity=high | confidence=[5]\n  PROBLEM: When the PR-named listing fails, the helper emits `STALL_INFLIGHT_DIRECT_CHECK \u2026 rc=${_di_rc} \u2026 outcome=pr_named_listing_incomplete`, but `_di_rc` is the return code of the branch listing captured at line 12606; the PR-named return code is in `_di_pr_named_rc`.\n  WHY: The log claims `rc=0` for a PR-named listing that returned 1, misleading operator triage; the runtime decision is correct, and the matching assertion in `tests/test_review_dispatch_default_branch.py::test_incomplete_listing_prints_the_sentinel` does not pin the rc value.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:12637 | severity=low | confidence=[5]\n  PROBLEM: The STALL_INFLIGHT_DIRECT_CHECK log for the pr_named_listing_incomplete path uses `rc=${_di_rc}` instead of `rc=${_di_pr_named_rc}`.\n  WHY: `_di_rc` is the branch listing's return code and is always 0 at this point, while the PR-named listing's actual failure code is in `_di_pr_named_rc`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:12637 | severity=low | confidence=[4]\n  PROBLEM: Log uses `_di_rc` not `_di_pr_named_rc`, showing an incorrect rc on incomplete listing.\n  WHY: The incomplete-listing log reports the wrong return code.\n- scripts/orchestrate_poll_process.sh:16610 | severity=low | confidence=[3]\n  PROBLEM: New `elif` is indented with spaces vs tabs, creating a style inconsistency.\n  WHY: The indentation differs from the tab style.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh:12637, STALL_INFLIGHT_DIRECT_CHECK log in _direct_inflight_review_run_on_branch | severity=low | confidence=[4]\n  PROBLEM: The incomplete-listing log line uses `rc=${_di_rc}` which is the branch listing's return code, not the PR-named listing's.\n  WHY: `_di_rc` is always 0 here, so the log reports a misleading return code alongside `outcome=pr_named_listing_incomplete`; there is no runtime failure because the push is correctly skipped and `return 0` executes.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "66c58a8876a741154c0d347bf27e1b3dae96b8282c161b6ba68d863bd3bfe09a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4987,
+    "run_id": "36516133888",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36516133888",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929033346_920582e95f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4987,
+    "run_id": "36516133888"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T03:33:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
