@@ -301,7 +301,14 @@ jobs:
 
           shard_failures=0
           for shard in $(seq 0 "$((shards - 1))"); do
-            [ -f "/tmp/poll_shard_${shard}.log" ] || continue
+            [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
+            # A shard with tests but no log died before its runner started, so
+            # its tests never ran: count it as failed instead of skipping it.
+            if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
+              echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
+              shard_failures=$((shard_failures + 1))
+              continue
+            fi
             echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
             cat "/tmp/poll_shard_${shard}.log"
             echo "::endgroup::"

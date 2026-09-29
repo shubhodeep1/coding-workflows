@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -179,6 +180,32 @@ class ShardPartitionTest(unittest.TestCase):
 		)
 		self.assert_partition(len(remaining_names), 4)
 		self.assert_two_level_partition(len(remaining_names), poll_group_count(), 4)
+
+
+def run_shard_judge(step_run: str, shard_files: dict[int, dict[str, str]], shards: int = 4) -> subprocess.CompletedProcess:
+	"""Run the step's shard judgment loop in bash against fake shard files.
+
+	`shard_files` maps a shard index to the files it left behind (`txt`,
+	`log`, `rc`: file contents; a missing key means no file). The loop is
+	cut from the shipped step text and pointed at a temp dir, so the test
+	exercises the real shell, not a restatement of it.
+	"""
+	start = step_run.index("shard_failures=0")
+	tally_error = step_run.index("orchestrate-poll shard(s) failed.", start)
+	end = step_run.index("\nfi\n", tally_error) + len("\nfi\n")
+	with tempfile.TemporaryDirectory(prefix="test_shard_judge_") as shard_dir:
+		for shard, files in shard_files.items():
+			for suffix, content in files.items():
+				Path(shard_dir, f"poll_shard_{shard}.{suffix}").write_text(content, encoding="utf-8")
+		for shard in range(shards):
+			Path(shard_dir, f"poll_shard_{shard}.txt").touch()
+		script = step_run[start:end].replace("/tmp/poll_shard_", f"{shard_dir}/poll_shard_")
+		return subprocess.run(
+			["bash", "-c", f"set -euo pipefail\nshards={shards}\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
 
 
 class PollStepContractTest(unittest.TestCase):
@@ -393,6 +420,58 @@ class ReleaseValidateScriptsShardContractTest(unittest.TestCase):
 				self.assertEqual(
 					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 60
 				)
+
+
+class ShardJudgeTest(unittest.TestCase):
+	"""A shard that had tests but left no log must fail the step (#4884 review round 2).
+
+	The judgment loop used to `continue` past any shard without a log, so a
+	shard whose subshell died before its runner started was never counted
+	and the step could pass on a partial run. Empty shards (more workers
+	than tests) still have nothing to judge and are skipped.
+	"""
+
+	def step_runs(self) -> dict[str, str]:
+		runs = {"ci": poll_step()["run"]}
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			runs[workflow_name] = release_poll_step(workflow_path)["run"]
+		return runs
+
+	def test_all_shards_green_passes(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				result = run_shard_judge(
+					step_run,
+					{n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)},
+				)
+				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+	def test_shard_with_tests_but_no_log_fails(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = {n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+				shard_files[2] = {"txt": "test_2\n"}
+				result = run_shard_judge(step_run, shard_files)
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				self.assertIn("orchestrate-poll shard 2 produced no log", result.stdout)
+				self.assertIn("1 orchestrate-poll shard(s) failed.", result.stdout)
+
+	def test_empty_shard_without_log_is_skipped(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = {n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(3)}
+				result = run_shard_judge(step_run, shard_files)
+				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+				self.assertNotIn("produced no log", result.stdout)
+
+	def test_shard_with_log_but_no_rc_still_fails(self) -> None:
+		for workflow_name, step_run in self.step_runs().items():
+			with self.subTest(workflow=workflow_name):
+				shard_files = {n: {"txt": f"test_{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+				shard_files[1] = {"txt": "test_1\n", "log": "partial\n"}
+				result = run_shard_judge(step_run, shard_files)
+				self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+				self.assertIn("orchestrate-poll shard 1 failed (exit 1)", result.stdout)
 
 
 if __name__ == "__main__":
