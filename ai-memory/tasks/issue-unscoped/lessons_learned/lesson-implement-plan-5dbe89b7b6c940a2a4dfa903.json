@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:28:46Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A heuristic that binds heredoc bodies to commands must bind none when its two parsers disagree, not all of them, or the misalignment brings back the false positive the binding was added to prevent. A regex cannot balance brackets to arbitrary depth, so scan call arguments with a bracket- and quote-aware loop.",
+  "phase": "implement_plan",
+  "pr_number": 5073,
+  "record_id": "lesson-implement-plan-5dbe89b7b6c940a2a4dfa903",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}

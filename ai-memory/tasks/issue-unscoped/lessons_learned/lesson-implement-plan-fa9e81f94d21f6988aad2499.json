@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:28:46Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A regex that finds a call's later argument by scanning to the first `)` misses a nested call in an earlier argument (`open(os.path.join(d, f), \"w\")`) and misreads a comma inside it; match balanced parentheses to a fixed depth instead.",
+  "phase": "implement_plan",
+  "pr_number": 5073,
+  "record_id": "lesson-implement-plan-fa9e81f94d21f6988aad2499",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}

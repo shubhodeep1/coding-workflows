@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:28:46Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a Bash command is split into simple commands, heredoc bodies must be bound to the command whose `<<` owns them (by operator order), or one command's heredoc text classifies another.",
+  "phase": "implement_plan",
+  "pr_number": 5073,
+  "record_id": "lesson-implement-plan-f7b497aa8530f8ee65e847dd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}
