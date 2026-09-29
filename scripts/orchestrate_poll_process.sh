@@ -17451,7 +17451,8 @@ _has_active_autofix_run()
 #
 # Input:     $1 = PR number. Anything but ^[1-9][0-9]*$ prints [] with no call.
 #            $2 = optional lookback in minutes (default and fallback for
-#            anything but ^[1-9][0-9]*$: REVIEW_RUN_MAX_RUNTIME_MINUTES).
+#            anything but ^[1-9][0-9]*$: REVIEW_RUN_MAX_RUNTIME_MINUTES,
+#            itself replaced by 250 when it is not ^[1-9][0-9]*$).
 #            The in-flight guards keep the default, which is the poller's
 #            own active-run window. The failed-autofix redispatch passes
 #            REVIEW_RUN_MAX_RUNTIME_MINUTES + STALL_THRESHOLD_MINUTES: a run
@@ -17492,6 +17493,9 @@ _pr_named_review_dispatch_runs()
 	local pr_number="$1"
 	local _pnr_window_min="${2:-}"
 	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min="${REVIEW_RUN_MAX_RUNTIME_MINUTES:-250}"
+	# The env fallback gets the same check: anything but a positive integer
+	# (0, negative, non-numeric, a leading zero) becomes the 250 default.
+	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min=250
 	local _pnr_max_pages=10
 	local _pnr_now="" _pnr_cutoff="" _pnr_err_file="" _pnr_reason=""
 	local _pnr_wrapper="" _pnr_page=0 _pnr_page_json="" _pnr_page_rc=0 _pnr_page_len=0
@@ -17500,7 +17504,6 @@ _pr_named_review_dispatch_runs()
 		printf '[]\n'
 		return 0
 	fi
-	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min=250
 	_pnr_now="$(date +%s 2>/dev/null || echo "")"
 	if [[ "${_pnr_now}" =~ ^[0-9]+$ ]]; then
 		_pnr_cutoff="$(jq -nr --argjson t "$(( _pnr_now - _pnr_window_min * 60 ))" '$t | todate' 2>/dev/null || echo "")"

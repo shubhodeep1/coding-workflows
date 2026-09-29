@@ -352,6 +352,19 @@ class PrNamedReviewDispatchRuns(_ShellHarness):
 				for age in ages:
 					self.assertAlmostEqual(age, 240, delta=0.1)
 
+	def test_invalid_review_window_env_falls_back_to_250(self) -> None:
+		# The env fallback is checked like the argument: a misconfigured
+		# REVIEW_RUN_MAX_RUNTIME_MINUTES never yields an unusable cutoff.
+		for window in ("0", "-3", "abc", "1.5", "0250"):
+			for lookback in (None, "x"):
+				with self.subTest(window=window, lookback=lookback):
+					self.gh_log.write_text("", encoding="utf-8")
+					self._runs("12", [], lookback=lookback, REVIEW_RUN_MAX_RUNTIME_MINUTES=window)
+					ages = self._cutoff_age_minutes()
+					self.assertEqual(len(ages), 2, self.gh_calls())
+					for age in ages:
+						self.assertAlmostEqual(age, 250, delta=0.1)
+
 	def test_pages_until_every_reported_run_is_read(self) -> None:
 		# 150 unrelated wrapper runs are newer than the one for PR 12; the
 		# old single page of 100 would have lost it.

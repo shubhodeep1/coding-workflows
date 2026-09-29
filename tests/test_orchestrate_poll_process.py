@@ -16852,6 +16852,9 @@ def test_retrigger_review_pr_named_failure_lookup_reaches_past_the_review_window
 		assert m, path
 		cutoff = calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%SZ"))
 		# Cutoff age in minutes, bounded by the poller's start and end times.
+		# The helper takes "now" between those two instants, so the lookback
+		# lies in [low, high] however long the poller runs; the 0.1-minute
+		# slack only absorbs the cutoff's truncation to whole seconds.
 		ages.append(((started - cutoff) / 60, (finished - cutoff) / 60))
 	assert ages, result.get("api_calls", [])
 	# The first PR-named lookup is the redispatch's (370 minutes); the
