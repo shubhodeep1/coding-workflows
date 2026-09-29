@@ -7,14 +7,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #4925 (phase 1): review round 2
+- Waiting on: PR #4925 (phase 1): review round 3
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: armed by session_01UHnPGfQZkuJy56A17mPu1m after this push (ids in its report and on the #4858 progress comment)
+- Check-in: checker session_012fdy3doXASWrZZ9W5itkZu (reused), re-armed by session_012emrSDbkxsTBUpzQkXo7ua after this push (trigger ids in its report and on the #4858 progress comment)
 - Last updated: 2026-09-29
-- Last note: Twin sync landed (`2917932`, operator Q1 A). Review round 1 on `2917932`: one finding (the hook's private tokenizer calls are not pinned by a test), judged valid and fixed test-only in `tests/test_inline_edit_guard.py`; no `.claude/**` edit.
+- Last note: Review round 2 on `97d1f5e`: two findings valid (the hook's `permission_prompt_logger.py` calls and the `DENY_MESSAGE` / `EXPECTED_DENY_REASON_PREFIXES` contract were not pinned by a test), fixed test-only in `tests/test_inline_edit_guard.py`; four rejected with evidence; no `.claude/**` edit.
 
 ## Phases
-1. [ ] Phase 1 — inline-edit guard hook, wiring, logging, docs, tests   — protected paths: `.claude/hooks/inline_edit_guard.py`, `.claude/settings.json`, `.claude/scripts/permission_prompts.py`, `.claude/commands/seed-repo.md` (edited only in their `workflow-templates/.claude/` twins, Q40) — PR #4925 open (twin sync `2917932` landed); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — inline-edit guard hook, wiring, logging, docs, tests   — protected paths: `.claude/hooks/inline_edit_guard.py`, `.claude/settings.json`, `.claude/scripts/permission_prompts.py`, `.claude/commands/seed-repo.md` (edited only in their `workflow-templates/.claude/` twins, Q40) — PR #4925 open (twin sync `2917932` landed); review rounds: 2; interventions: 0
    - [x] `inline_edit_guard.py` twin: deny with the issue's message; no decision for reads, `pytest`, file-path scripts, and data; fail open; `CLAUDE_INLINE_EDIT_GUARD=off` (root copy: pending twin sync)
    - [x] Twin `settings.json` wires it as a `PreToolUse` `Bash` hook (root copy: pending twin sync)
    - [x] Denies log `INLINE_EDIT_GUARD action=deny` and write a `source: inline_edit_guard` record; the `permission_prompts.py` twin counts them as `expected_denies` and never files them (root copy: pending twin sync)
@@ -45,6 +45,7 @@
 
 ## Lessons
 - [source:intervention] A hook that reuses another hook's functions by path must pin every attribute it calls in a test that loads the real sibling module, because the fail-open handler turns a rename into a silently disabled guard. (files: .claude/hooks/inline_edit_guard.py, tests/test_inline_edit_guard.py)
+- [source:intervention] When one file matches another file's constant by prefix or exact text (a deny reason and the filter that recognises it), add a test that loads both real files and asserts the match, so rewording either side fails CI instead of silently changing behaviour. (files: .claude/hooks/inline_edit_guard.py, .claude/scripts/permission_prompts.py, tests/test_inline_edit_guard.py)
 
 ## Notes
 - Permission mode at start: auto.
@@ -56,3 +57,6 @@
 - CLAUDE.md §23.I: #4678's rule text is still on its own project branch, so phase 1 adds the rule together with its enforcement in a new paragraph at the end of §23.I. It does not touch the lines #4678 edits, so the two merge in either order. The deny message names "§28.C twin-first" (added by #4785) and is kept verbatim from the issue.
 - Resumed 2026-09-29 by session session_01UHnPGfQZkuJy56A17mPu1m (dispatcher trigger trig_01NvdhtsDNaHUvsDYxvNKvNB, after the operator's twin sync `2917932` and `/reclarify`). The review workflow had already handed off round 1 on `2917932` (comment 5882947491). `check_in_status.py` reports it only when `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` is set; without it, it reads `open` (fail-closed), so the checker is given that login.
 - Review round 1 (`2917932`): 2 consensus entries, one finding: `inline_edit_guard.py` calls `tokenizer._command_word_index`, `shell_segments`, and `strip_heredoc_bodies` from `gh_api_write_guard.py` and no test pins them. Valid (a rename would be swallowed by the fail-open path). Fixed test-only: `test_tokenizer_api_the_hook_calls_exists` (root and template) loads the sibling tokenizer and asserts every `tokenizer.<name>` the hook calls exists; confirmed to fail on a renamed `_command_word_index`.
+- Resumed 2026-09-29 by session session_012emrSDbkxsTBUpzQkXo7ua (review round 2, started by checker session_012fdy3doXASWrZZ9W5itkZu). Archived the previous stage session, deleted its safety net and hand-back, synced the project branch with `main` (clean merge `2a4bc4b`), and claimed head `97d1f5e` (comment 5883901265).
+- Review round 2 (`97d1f5e`, ledger `fd0656c1…`): 5 consensus entries and 1 task gap. Valid: (1) `record_deny` calls `logger.build_record`, `append_record`, and `log_dir` from `permission_prompt_logger.py` and no test pins them (the root copy's end-to-end test would only fail with a missing log file; nothing covers the template copy); (2) no test pins `DENY_MESSAGE` to `permission_prompts.py`'s `EXPECTED_DENY_REASON_PREFIXES`. Fixed test-only: `test_logger_api_the_hook_calls_exists` and `test_deny_message_matches_the_filing_exclusion_prefix` (root and template), each confirmed to fail on a scratch copy with a renamed `build_record` or a reworded message. Rejected: the `_command_start` endless-loop claim (line 159 always advances; `sudo sudo sudo sudo sed -i …` returns `sed`), both `timeout` claims (`timeout sed -i f` and `timeout timeout 5 …` are refused by GNU `timeout` before any command runs), the `-Wc` claim (`-Wc` gives no decision and `-bc` is denied, which matches how CPython parses those flags), and the `isinstance` hardening (the API is pinned by a test).
+- This session's own read-only `python3` heredoc probe was denied by the guard, because its test strings contained `open('x','w')`. That is the accepted false positive the plan's Risks names; the probe ran from a scratch file instead.

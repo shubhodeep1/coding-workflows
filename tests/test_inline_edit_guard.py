@@ -351,6 +351,47 @@ def test_tokenizer_api_the_hook_calls_exists(hook_path: Path):
 	assert not missing, f"{tokenizer_path} no longer defines {missing}, which {hook_path.name} calls"
 
 
+@pytest.mark.parametrize("hook_path", [GUARD_PATH, TEMPLATE_GUARD_PATH], ids=["root", "template"])
+def test_logger_api_the_hook_calls_exists(hook_path: Path):
+	"""Pin every `logger.<name>` the hook calls to the sibling permission_prompt_logger.py.
+
+	`record_deny` runs inside `except Exception: pass`, so a rename there would keep
+	the deny but silently drop its `source: inline_edit_guard` record.
+	"""
+	source = hook_path.read_text(encoding="utf-8")
+	called = sorted(set(re.findall(r"\blogger\.([A-Za-z_]\w*)", source)))
+	assert {"append_record", "build_record", "log_dir"} <= set(called)
+	logger_path = hook_path.parent / "permission_prompt_logger.py"
+	spec = importlib.util.spec_from_file_location(f"_logger_api_{hook_path.parent.parent.parent.name}", logger_path)
+	assert spec is not None and spec.loader is not None
+	logger = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(logger)
+	missing = [name for name in called if not callable(getattr(logger, name, None))]
+	assert not missing, f"{logger_path} no longer defines {missing}, which {hook_path.name} calls"
+
+
+@pytest.mark.parametrize("hook_path", [GUARD_PATH, TEMPLATE_GUARD_PATH], ids=["root", "template"])
+def test_deny_message_matches_the_filing_exclusion_prefix(hook_path: Path):
+	"""`permission_prompts.py` recognises a guard deny without `source` by its reason prefix.
+
+	Rewording `DENY_MESSAGE` so it no longer starts with one of
+	`EXPECTED_DENY_REASON_PREFIXES` would file every such deny as a new
+	`ai:permission-prompt` pattern.
+	"""
+	spec = importlib.util.spec_from_file_location(f"_guard_msg_{hook_path.parent.parent.parent.name}", hook_path)
+	assert spec is not None and spec.loader is not None
+	hook = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(hook)
+	script_path = hook_path.parent.parent / "scripts" / "permission_prompts.py"
+	spec = importlib.util.spec_from_file_location(f"_pp_prefix_{hook_path.parent.parent.parent.name}", script_path)
+	assert spec is not None and spec.loader is not None
+	prompts = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(prompts)
+	assert hook.DENY_MESSAGE.startswith(prompts.EXPECTED_DENY_REASON_PREFIXES)
+	assert prompts.is_expected_deny({"event": "PermissionDenied", "reason": hook.DENY_MESSAGE})
+	assert hook.RECORD_SOURCE in prompts.EXPECTED_DENY_SOURCES
+
+
 # ──────────────────────────────────────────────────────────────────
 # Wiring and docs
 # ──────────────────────────────────────────────────────────────────
