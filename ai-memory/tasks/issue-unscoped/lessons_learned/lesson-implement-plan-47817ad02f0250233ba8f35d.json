@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T09:10:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "GitHub answers primary and secondary rate limits with HTTP 403, so code that reads a 403 as \"can never succeed\" must first exclude rate-limit messages, or a transient limit silently skips a gate.",
+  "phase": "implement_plan",
+  "pr_number": 5055,
+  "record_id": "lesson-implement-plan-47817ad02f0250233ba8f35d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4934-chain-same-file-security-followups",
+    "file:scripts/claude_issue_route.py"
+  ]
+}
