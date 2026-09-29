@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-5016-dispatch-exact-run-id-plan.md
 - Source issue: shubhodeep1/coding-workflows#5016
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5016-dispatch-exact-run-id   Final PR: pending (opened right after this commit)
+- Project branch: claude/implement-plan-issue-5016-dispatch-exact-run-id   Final PR: #5051 draft
 - Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
@@ -11,17 +11,17 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: phase 1 touches `.claude/**` (protected paths) and the log has no `Protected-path approval: phase 1` line, so the phase stops before it starts (CLAUDE.md §28.C); the ask is on issue #5016 with `ai:claude-blocked`.
+- Last note: phase 1 implemented twin-first (Q40): only the `workflow-templates/.claude/` twins changed; the phase PR carries a `hold` claim and waits for the master's `[claude-twin-sync]` into `.claude/` (twin-sync request on issue #5016).
 
 ## Phases
 1. [ ] Phase 1 — exact run id from the dispatch response, no guessing on fallback, target-ref check in steps 9–10
    - protected paths: `.claude/scripts/dispatch_workflow.py`, `.claude/commands/implement-plan-claude.md` (twins: `workflow-templates/.claude/scripts/dispatch_workflow.py`, `workflow-templates/.claude/commands/implement-plan-claude.md`)
-   - [ ] `_post_dispatch` sends `return_run_details: true` and returns the parsed response
-   - [ ] `dispatch` uses the response's `workflow_run_id` (`matched_by: dispatch_response`), one best-effort run read fills `status` / `created_at`
-   - [ ] fallback poll: one new run → `matched_by: new_run`; more than one → exit 2, `ambiguous: true`, `candidate_run_ids`
-   - [ ] `tests/test_dispatch_workflow.py`: race, fallback, body, parsing tests; twin parity
-   - [ ] `/implement-plan-claude` Dispatch helper section and steps 9–10: target-ref check, one re-dispatch on mismatch
-   - [ ] `README.md`, `agents.md`, `changelog.d/5016-dispatch-exact-run-id.md`
+   - [x] `_post_dispatch` sends `return_run_details: true` and returns the parsed response
+   - [x] `dispatch` uses the response's `workflow_run_id` (`matched_by: dispatch_response`), one best-effort run read fills `status` / `created_at`
+   - [x] fallback poll: one new run → `matched_by: new_run`; more than one → exit 2, `ambiguous: true`, `candidate_run_ids`
+   - [x] `tests/test_dispatch_workflow.py`: race, fallback, body, parsing tests; twin parity
+   - [x] `/implement-plan-claude` Dispatch helper section and steps 9–10: target-ref check, one re-dispatch on mismatch
+   - [x] `README.md`, `agents.md`, `changelog.d/5016-dispatch-exact-run-id.md`
    - Done: `tests/test_dispatch_workflow.py`, `tests/test_permission_prompts.py`, `tests/test_update_workflows_guardrails.py` pass; `ruff check` clean on changed Python.
 
 ## Conformance
@@ -43,6 +43,8 @@
 ## Lessons
 
 ## Notes
+- Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29): answered Q1: A by the master session on issue #5016 (comment 5884723402).
+- Phase 1 verification (2026-09-29): in a scratch copy with the twin in `.claude/scripts/`, `tests/test_dispatch_workflow.py`, `tests/test_permission_prompts.py`, `tests/test_update_workflows_guardrails.py` → 101 passed; `ruff check` clean. On the phase branch itself `test_template_parity` fails until the twin sync, by design.
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#5016: deliver`) in session session_015qQ7gjLiTs5eDGwni2CFiA, permission mode `auto`.
 - Security pass: `security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}`, so the pass runs.
 - Session started without `gh` and without a repository checkout (known pattern, #4938): the repo was attached and cloned, and `.claude/hooks/session-start.sh` was run by hand to install `gh`. No GitHub MCP tools were available; issue and PR writes went through `gh api` routine writes (CLAUDE.md §23.H).
