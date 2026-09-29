@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T10:58:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a plan restates an issue's acceptance criterion, keep its exact stop condition: \"alerts once and stops\" became \"one alert per window\" in the plan, and the code and its test followed the plan instead of the issue",
+  "phase": "implement_plan",
+  "pr_number": 5113,
+  "record_id": "lesson-implement-plan-f929109546889bba6ae53de6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4938-environment-blocker-self-heal",
+    "file:scripts/claude_issue_route.py",
+    "file:tests/test_claude_issue_route.py"
+  ]
+}
