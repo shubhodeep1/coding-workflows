@@ -1134,7 +1134,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   environment makes `report-now` do nothing (default: unset, on). The hook
   still logs every prompt and `file` still files at step 14.
 - `permission_prompts.py session-meta --title <t>` records the session title,
-  with this session's id, at step 0 of `/implement-plan-claude` and
+  keyed by this session's id in `session-meta.json` under `filing.lock` (so
+  sessions sharing a home directory keep their own titles), at step 0 of
+  `/implement-plan-claude` and
   `/implement-issue-claude`.
 - `permission_prompts.py lookup --session <id> [--repo <slug>]` is
   read-only, for the operator's poller: one search read plus one comments

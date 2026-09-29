@@ -821,6 +821,28 @@ def test_session_meta_writes_the_title(tmp_path, capsys, monkeypatch):
 	assert pp.read_session_title(tmp_path / "log", "session_01OTHER") == ""
 
 
+def test_session_meta_keeps_each_sessions_title(tmp_path):
+	# Review round 2: a second session's session-meta never overwrites the first session's title.
+	log_dir = tmp_path / "log"
+	pp.write_session_meta(log_dir, "stage A", "session_01A")
+	pp.write_session_meta(log_dir, "stage B", "session_01B")
+	pp.write_session_meta(log_dir, "stage A — renamed", "session_01A")
+	assert pp.read_session_title(log_dir, "session_01A") == "stage A — renamed"
+	assert pp.read_session_title(log_dir, "session_01B") == "stage B"
+	assert json.loads((log_dir / pp.SESSION_META_FILE).read_text(encoding="utf-8")) == {
+		"sessions": {"session_01A": "stage A — renamed", "session_01B": "stage B"}
+	}
+
+
+def test_session_meta_ignores_an_invalid_file(tmp_path):
+	log_dir = tmp_path / "log"
+	log_dir.mkdir()
+	(log_dir / pp.SESSION_META_FILE).write_text("[1, 2]", encoding="utf-8")
+	assert pp.read_session_title(log_dir, "session_01A") == ""
+	pp.write_session_meta(log_dir, "stage A", "session_01A")
+	assert pp.read_session_title(log_dir, "session_01A") == "stage A"
+
+
 def test_session_meta_never_fails(tmp_path, capsys):
 	blocker = tmp_path / "file"
 	blocker.write_text("x")
