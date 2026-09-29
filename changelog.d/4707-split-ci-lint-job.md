@@ -8,9 +8,10 @@
 | Old `lint` job | 1 job, 40–45 minutes, `timeout-minutes: 45` |
 | New CI jobs | `static-checks` (15 min budget), 4 test jobs (20 each), `orchestrate-poll` × 4 groups (20 each), `lint` aggregate (5) |
 | Orchestrate-poll split | 4 matrix groups × `CI_POLL_TEST_SHARDS` (default 4) local shards |
+| First split run (run 36523765261) | 9.0 minutes wall-clock; critical path `orchestrate-poll (0)` at 8.7 minutes, slowest test job `tests-promote-stall-and-review` at 8.2 minutes |
 | Release `validate-scripts` | 37 minutes measured (run 36374918973); budget 45 → 60 minutes |
 
-What this means for operators: CI results arrive in minutes instead of most of an hour. That shortens every Claude-fixer review round, and clean reviews are more likely to find a ready check snapshot within `CHECK_RUNS_WAIT_TIMEOUT_SECS`. The Checks tab shows each job separately; `CI / lint` still summarises them.
+What this means for operators: CI results arrive in about 9 minutes instead of most of an hour. That shortens every Claude-fixer review round, and clean reviews are more likely to find a ready check snapshot within `CHECK_RUNS_WAIT_TIMEOUT_SECS`. The Checks tab shows each job separately; `CI / lint` still summarises them.
 
 ### For contributors
 
