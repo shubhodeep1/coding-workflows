@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T23:12:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A project fix PR whose body says `Refs #<issue>` is reviewed against the whole issue body (`scripts/review_collect_pr_metadata.sh` falls back to the referenced issue when the base is not the default branch), so reviewers report the issue's other requirements as task gaps. State in the PR body which earlier PR already shipped each of them, with file:line evidence.",
+  "phase": "implement_plan",
+  "pr_number": 5049,
+  "record_id": "lesson-implement-plan-4ab746eaa4056c4c3801ca35",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4786-guard-allow-read-loops",
+    "file:scripts/review_collect_pr_metadata.sh"
+  ]
+}

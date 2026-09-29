@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T23:12:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A guard fast path that skips commands without raw `gh api` text must not approve anything it later finds as a dequoted `gh api` call (`gh 'api'`, `\"gh\" api`): the raw-text check never classified it, so require every `gh api` item to match a classified call.",
+  "phase": "implement_plan",
+  "pr_number": 5049,
+  "record_id": "lesson-implement-plan-6d7c9c49730f3d53c7700765",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4786-guard-allow-read-loops",
+    "file:.claude/hooks/gh_api_write_guard.py",
+    "file:workflow-templates/.claude/hooks/gh_api_write_guard.py"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T23:12:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Reviewer ledgers can repeat findings about an earlier head of the same PR, such as a root/twin divergence that a later `[claude-twin-sync]` closed. Check each finding against the current head's files and tests before fixing it, and reject it with that evidence when it no longer holds.",
+  "phase": "implement_plan",
+  "pr_number": 5049,
+  "record_id": "lesson-implement-plan-428cee9075061b87c417b077",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4786-guard-allow-read-loops",
+    "file:.claude/hooks/gh_api_write_guard.py",
+    "file:tests/test_gh_api_write_guard.py"
+  ]
+}
