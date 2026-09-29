@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:_pr_named_review_dispatch_runs | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pagination logic does not explicitly enforce pipefail in the subshell where `gh` and `jq` are piped.\n  WHY: An intermediate `gh` command could fail while `jq` succeeds, allowing partial or malformed data to proceed; z-ai_glm-5_2 disagreed, stating that captured `jq` invocations and fallback chains handle empty or failed output.\n- .claude/scripts/check_in_status.py:_active_run_count / _is_pr_dispatched_review_run | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The implementation does not detect `ai-review.yml` runs used in consumer repositories.\n  WHY: When `internal-review.yml` does not exist and returns HTTP 404, active review runs may be incorrectly reported as due, potentially triggering fix-up commits during an active review.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"add `run-name: AI Review [pr:<N>]` to `workflow-templates/ai-review.yml` and match both names in every lookup\"\n  expected_change_site: .claude/scripts/check_in_status.py and workflow-templates/.claude/scripts/check_in_status.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Neither copy of check_in_status.py references ai-review.yml in its dispatch-run detection constants or functions; DISPATCHED_REVIEW_RUNS_PATH, DISPATCHED_REVIEW_WORKFLOW, and DISPATCHED_REVIEW_TITLE are all internal-review.yml-only.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh\n  Line or code reference: _pr_named_review_dispatch_runs\n  Problem: The new pagination logic in _pr_named_review_dispatch_runs correctly pages through runs but lacks explicit pipefail enforcement in the subshell where `gh` and `jq` are piped.\n  Why it fails at runtime: While the code structure uses `if ! ... || ! ...` to catch failure, `pipefail` is not explicitly set in the function scope. If an intermediate `gh` command in the pipe chain fails but `jq` succeeds, the script might inadvertently proceed with partial or malformed data.\n  ISSUE_CONFIDENCE: 2\n\n- .claude/scripts/check_in_status.py\n  Line or code reference: _active_run_count / _is_pr_dispatched_review_run\n  Problem: The implementation does not detect `ai-review.yml` runs, which are used in consumer repositories.\n  Why it fails at runtime: When `internal-review.yml` does not exist (causing an HTTP 404), the system currently reports active review runs as due. This incorrect report can trigger the orchestrator to erroneously initiate fix-up commits during an active review.\n  ISSUE_CONFIDENCE: 4\n\n- TASK_GAP\n  Requirement: \"add `run-name: AI Review [pr:<N>]` to `workflow-templates/ai-review.yml` and match both names in every lookup\"\n  Expected change site: .claude/scripts/check_in_status.py and workflow-templates/.claude/scripts/check_in_status.py\n  Evidence of absence: Neither copy of check_in_status.py references ai-review.yml in its dispatch-run detection constants or functions; DISPATCHED_REVIEW_RUNS_PATH, DISPATCHED_REVIEW_WORKFLOW, and DISPATCHED_REVIEW_TITLE are all internal-review.yml-only.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "48c05c26ed2a46afef0884450dada7577f879c77bde013b348b481725cdfca8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4966,
+    "run_id": "36641456604",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36641456604",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929231826_87c973d329",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4966,
+    "run_id": "36641456604"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T23:18:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
