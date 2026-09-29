@@ -71,7 +71,8 @@ its target, and `filed-state.json` as `file` would record it.
 
 `lookup` is read-only and serves the operator's poller: it finds the newest
 session marker for a session and prints the sanitized command and the issue
-or PR link. `session-meta` records the session title for `report-now`.
+or PR link. `session-meta` records the session title for `report-now`,
+keyed by session id in `session-meta.json` under `filing.lock`.
 
 Issue text is untrusted data: the tool name, the prompt reason, and the
 command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
@@ -591,21 +592,28 @@ def _inline_code(text: str) -> str:
 	return " ".join(text.replace("`", "'").split())
 
 
-def read_session_title(log_dir: Path, session_label: str = "") -> str:
-	"""The title `session-meta` recorded for this session, redacted; "" when none was, or another session wrote it last."""
+def _load_session_titles(log_dir: Path) -> dict[str, str]:
+	"""`{session label: title}` from `session-meta.json`; empty when missing or invalid."""
 	try:
 		meta = json.loads((log_dir / SESSION_META_FILE).read_text(encoding="utf-8"))
 	except (OSError, ValueError):
-		return ""
-	if not isinstance(meta, dict) or str(meta.get("session") or "") != session_label:
-		return ""
-	title = meta.get("title")
+		return {}
+	titles = meta.get("sessions") if isinstance(meta, dict) else None
+	return {key: value for key, value in titles.items() if isinstance(key, str) and isinstance(value, str)} if isinstance(titles, dict) else {}
+
+
+def read_session_title(log_dir: Path, session_label: str = "") -> str:
+	"""The title `session-meta` recorded for this session, redacted; "" when this session recorded none."""
+	title = _load_session_titles(log_dir).get(session_label)
 	return _inline_code(redact(title))[:MAX_SESSION_TITLE_CHARS] if isinstance(title, str) else ""
 
 
 def write_session_meta(log_dir: Path, title: str, session_label: str = "") -> None:
-	log_dir.mkdir(parents=True, exist_ok=True)
-	(log_dir / SESSION_META_FILE).write_text(json.dumps({"title": title[:MAX_SESSION_TITLE_CHARS], "session": session_label}), encoding="utf-8")
+	"""Record this session's title in `session-meta.json`, keyed by session id under `filing.lock`, so sessions sharing a home directory never overwrite each other's."""
+	with _filing_lock(log_dir):
+		titles = _load_session_titles(log_dir)
+		titles[session_label] = title[:MAX_SESSION_TITLE_CHARS]
+		(log_dir / SESSION_META_FILE).write_text(json.dumps({"sessions": titles}, indent=1, sort_keys=True), encoding="utf-8")
 
 
 def immediate_block(pattern: dict, record: dict, session_label: str, title: str) -> str:
