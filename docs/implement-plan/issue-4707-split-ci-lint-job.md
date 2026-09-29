@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4707-split-ci-lint-job-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4707
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4707-split-ci-lint-job   Final PR: #4874 draft
+- Project branch: claude/implement-plan-issue-4707-split-ci-lint-job   Final PR: #4874 ready
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round
 - Activation: pending verify-activation
-- Waiting on: completion PR (into the project branch), then final PR #4874
+- Waiting on: PR #4874 (final PR into main)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01BWX5wabwbkpvBkn9CqZcd6 (project checker, reused)   safety net and hand-back: in the validation 1/3 — read result stage report
+- Check-in: checker session_01BWX5wabwbkpvBkn9CqZcd6 (project checker, reused)   safety net and hand-back: in the final-merge — review round stage report
 - Last updated: 2026-09-29
-- Last note: conformance fix check FIX-VERIFIED (#5092); security cycle 1 clean (run 36569012905); validation cycle 1 (run 36577216412, target_ref project branch at 6bfe900) passed: status=pass raw_status=pass, 10/10 tests. No validation-fix PR, so no conformance re-run; completion PR opened to move the plan to docs/completed/.
+- Last note: final PR #4874 review round 1 (head d2e9b2e): one task gap (`tests/test_ci_inventory_parity_order_contract.py` untouched) accepted — with parallel jobs, line order no longer means run order, so the test now also pins the three steps to one job; project branch synced with `main` (9bc6368).
 
 ## Phases
 1. [x] Phase 1 — split `ci.yml` into parallel jobs behind an aggregate `lint`, raise release `validate-scripts` budget, update tests and docs   — PR #4884 merged 2026-09-29 (5f6dd77); review rounds: 2; interventions: 0
@@ -31,7 +31,7 @@
 ## Completion
 - Merged into the project branch: phase 1 PR #4884; conformance fix PRs #5052, #5078, #5092
 - Completion PR (this log commit) — doc moved to docs/completed/issue-4707-split-ci-lint-job-plan.md
-- Final PR #4874 draft (marked ready in the final-merge stage, with the measured critical path from CI run 36523765261: 9.0 minutes wall-clock, critical path `orchestrate-poll (0)` 8.7 minutes)
+- Final PR #4874 ready — marked ready 2026-09-29 by the final-merge stage (project branch synced with `main` at d2e9b2e), body carries the measured critical path from CI run 36523765261 (9.0 minutes wall-clock, critical path `orchestrate-poll (0)` 8.7 minutes) and Refs #4707, #4884, #5052, #5078, #5092; review rounds: 1
 
 ## Activation
 
@@ -52,10 +52,12 @@
 - [source:intervention] A parallel-shard judge must decide "did this shard have work" from its input (the non-empty test list), never from an output file: skipping on a missing log turns a shard that died before its runner started into a silent pass. (files: .github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml)
 - [source:conformance] When a change replaces a value that other text still describes (a "mirrors X's budget" comment, a stopgap PR's unreleased changelog fragment), grep for every mention of the old value and the old job before merging; fragments that ship in the same release must not contradict each other. (files: .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml, changelog.d/4707-split-ci-lint-job.md)
 - [source:intervention] A Claude-fixer hand-off with 0 ledger findings and `failed_checks=none` is a check-snapshot timeout, not a review result: the clean-review auto-merge waits 300s for every other check run on the head, including a sibling review run on the same head. Record the round and push the next legitimate change (base merge or log update) so a new head is reviewed; never post a verdict for findings that do not exist. (files: scripts/review_autofix_step_claude_fixer_handoff.sh)
+- [source:intervention] Splitting one CI job into parallel jobs turns every "step A runs before step B" test that compares line numbers into a false guarantee; pin that both steps share a job as well. (files: tests/test_ci_inventory_parity_order_contract.py, .github/workflows/ci.yml)
 
 ## Notes
 - 2026-09-29 conformance 3/3 review round 1 (PR #5092, head 4c88a59, run 36544376629), session session_01BRgrMkoTK7XoieXM6NhfwA: ledger clean (0 findings from 6 reviewers), `CLAUDE_FIXER_HANDOFF ... findings=0 ledger=ok failed_checks=none`; the hand-off step logged `CHECK_RUNS_WAIT_TIMEOUT reached after 300s` with the push-event `review-claude-branch-push / codex-agent (claude-branch-review)` run 36544309488 on the same head still in progress (it finished clean at 09:11). The base had nothing to merge, so the round's log update was pushed as a new head for the next review; no bot verdict was posted. Same pattern as issue-4622's final-merge round 3.
 - 2026-09-29 conformance 3/3 review round 1 again (PR #5092, head 800d07a, run 36553601684), session session_017KnC6qWcU8g6ZYgJcE2Ntd: ledger of 2 entries, both the same NIT task gap from `x-ai_grok-4_20` (confidence 5, consensus of one), asking to update the `ci.yml` job comments and this log to the measured runtimes. Rejected: `git diff` of the PR against the project branch already shows exactly those updates (`ci.yml` static-checks header "2 minutes measured (1.4-1.9 …)" and the four test-job headers "2-8 minutes", plus the Run 3 entry here), and the reviewer's own evidence line says so. No failing check on the head. No verdict bot is configured, so no verdict was posted; the round's commit is the `main` → project branch sync (f30f8df, 8 `main` commits from issue-4948's merge and #5112, clean) merged into the PR head as `[claude-merge-resolve]`. Checks after the merge: 9 CI, changelog, and command test modules (141 passed, 1 skipped).
 - The plan's "measured critical path is recorded in the PR" goal: PR #4884 merged without it (its CI could not run on a PR into the project branch); the final-merge stage puts run 36523765261's timings in final PR #4874's body (step 11a).
+- 2026-09-29 final-merge review round 1 (PR #4874, head d2e9b2e, run 36592353653), session session_01BMsZUWuWvJUXWCM4c9k4XU: ledger of 2 entries, both one MAJOR task gap from `google_gemini-3_1-flash-lite` (confidence 4): the issue names `tests/test_ci_inventory_parity_order_contract.py` among the tests to update, and the PR leaves it untouched. Accepted: the test compared line numbers only, which after the split would still pass if `Inventory parity` moved to an earlier parallel job (checked by moving it into `static-checks`: the old tests passed, the new one fails). Added `test_inventory_parity_shares_a_job_with_the_coverage_gates`. Checks: 19 CI-reading and command test modules (830 passed), `tests/inventory_parity.py`.
 - Issue mode; security pass: run (`security_pass_skip.py`: no skip label).
 - PR #4706 (stopgap, 45 → 60 min on `lint`) merged 2026-09-28, before this project's phase PR; its fragment `changelog.d/4706-ci-lint-timeout-60.md` ships in the same release as this project's.
