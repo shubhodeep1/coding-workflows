@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4798-run-skip-check-standalone-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4798
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4798-run-skip-check-standalone   Final PR: #4810 ready (review rounds: 1, second cycle)
-- Status: BLOCKED
-- Stage: final-merge — review round 1 (second cycle)
+- Project branch: claude/implement-plan-issue-4798-run-skip-check-standalone   Final PR: #4810 ready (review rounds: 2)
+- Status: IN_PROGRESS
+- Stage: final-merge — review round 2
 - Activation: pending verify-activation
-- Waiting on: supervised twin sync of the review-round fix (Q4 on #4798)
+- Waiting on: PR #4810
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01VUZBCfRW6VRQzfT7fLS4Za (idle, kept for reuse)   safety net none   hand-back none
+- Check-in: checker session_01VUZBCfRW6VRQzfT7fLS4Za (reused)   safety net and hand-back: see the stage report of session_01D4ErR8efCxXtEfiouY2kV8
 - Last updated: 2026-09-29
-- Last note: Final PR #4810 review round 1 (second cycle): one valid finding (the Helpers intro called the checker's env-prefixed `check_in_status.py` call allowlisted), fixed twin-first on `claude/implement-plan-issue-4798-run-skip-check-standalone-review-fix-1`; one NIT rejected. Blocked on the supervised `[claude-twin-sync]` (Q4 on #4798).
+- Last note: Q4: A answered on #4798; the supervised `[claude-twin-sync]` (740d215) is on the review-fix branch. This stage merged main, verified it, and fast-forwarded the project branch to it (AD-5), which starts review round 2 on #4810.
 
 ## Phases
 1. [x] Phase 1 — standalone-call guidance for the skip check and the chain helpers   — protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md   — PR #4823 merged 2026-09-28 into the project branch (0fd39cf); review rounds: 1; interventions: 0
@@ -42,6 +42,7 @@
 - AD-2 [plan, 2026-09-28] How wide should the guidance be? — Picked: A — the skip check in `/implement-issue-claude` step 6 plus one sentence in `/implement-plan-claude`'s Helpers intro covering every helper. Alternatives: B — only step 6; C — also CLAUDE.md §23.I and agents.md. Why: every helper has the same failure mode, and the Helpers intro is where the chain already sets shell-shape rules. Applied in: phase 1 PR. Status: pending review
 - AD-3 [plan, 2026-09-28] Is README.md or agents.md updated (§7)? — Picked: A — no; no env var, DB behaviour, or operational step changes. Alternatives: B — add a line to agents.md's §23.I helper section. Why: §5 minimal change set. Applied in: no code change. Status: pending review
 - AD-4 [final-merge — review round, 2026-09-29] How should the finding that the checker's env-prefixed `check_in_status.py` call matches no allow rule be settled? — Picked: A — say so in the Helpers intro, next to the standalone-call rule (doc-only, twin-first). Alternatives: B — add a `permissions.allow` rule for the prefixed form; C — give `check_in_status.py` `--handoff-author-login` / `--verdict-bot-login` flags and drop the prefixes from the checker prompt, `/fix-claude-pr`, and CLAUDE.md §26.C. Why: §5 smallest change that makes the guidance true; B widens permissions (the plan's non-goal) and C changes a script after the security and validation passes. Applied in: final PR #4810 (review-round fix). Status: pending review
+- AD-5 [final-merge — review round, 2026-09-29] Q4: A's supervised sync committed `740d215` on the review-fix branch but did not fast-forward the project branch, which was still at `2ee05f8`. Who pushes it? — Picked: A — this stage fast-forwards the project branch to `740d215` plus its step 2 main sync, the push Q4: A describes. Alternatives: B — ask again on #4798; C — push only the main sync and leave the fix off #4810. Why: the operator approved the Q4: A end state, and the push is a non-force write to the chain's own branch (§23.B). Applied in: final PR #4810. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] A twin-first phase breaks every parity test over the edited command files until `[claude-twin-sync]`, not only the one the plan names; grep `tests/` for each filename and list all of them in the hold. (files: tests/test_implement_issue_claude_command.py, tests/test_implement_plan_claude_command.py, tests/test_ingest_implement_plan_lessons.py)
@@ -59,3 +60,4 @@
 - 2026-09-29: review round 1 (first cycle), 02:58:27Z on head 489390e: 0 findings from 6 reviewers; the hand-off was posted only because the 300 s same-head check-run snapshot timed out with 1 run still queued (no failed checks). The review-round stage (03:44Z) posted no verdict (`CLAUDE_FIXER_VERDICT_BOT_LOGIN` unset); its step 2 sync merged main (e0725f1) as 2ee05f8, which started a second cycle of round 1.
 - 2026-09-29: review round 1 (second cycle), 04:10:04Z on head 2ee05f8 (ledger d57a18bd…): consensus finding (5 reviewers) — the Helpers intro names `check_in_status.py` as allowlisted, but the checker's as-written call carries two `CLAUDE_FIXER_*` prefixes that match neither allow rule. Valid as a wording defect; the claim that it *will* prompt is unproven (no `ai:permission-prompt` issue has this shape, and this session ran it in Auto mode without a prompt). Fixed per AD-4. NIT (1 reviewer, confidence 3) that the parity tests are unverified at the head: rejected, since the twins are byte-identical and all 4 contract test files pass on 2ee05f8 (106 passed).
 - 2026-09-29: the fix edits `.claude/commands/implement-plan-claude.md`, a protected path; #4785 is still open, so the standing twin-first rule (Q40: A, as in Q1: D) applies: only the `workflow-templates/` twin is edited, and the supervising session syncs it. A `hold` claim is on 2ee05f8; asked Q4 on #4798.
+- 2026-09-29: Q4: A answered on #4798 (operator's standing Q40: A): the supervising session committed `[claude-twin-sync]` 740d215 on the review-fix branch. Resumed on `/reclarify` in session `session_01D4ErR8efCxXtEfiouY2kV8`, which found the project branch still at 2ee05f8. It merged main (d78034e) on top of 740d215; the live and template twins are byte-identical, and the four contract test files pass (106). It then fast-forwarded the project branch (AD-5). The push moves the head off 2ee05f8, which lifts the hold, and starts review round 2 on #4810.
