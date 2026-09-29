@@ -144,8 +144,50 @@ def _assistant_text(text: str) -> dict:
 BLOCKED_BODY = "<!-- ai:claude-blocked:v1 -->\n🛑 Blocked at phase 1/1: conformance cap reached."
 
 
-def _evaluate(payload: dict, tmp_path: Path, env: dict | None = None) -> dict | None:
-	return guard.evaluate(payload, _env() if env is None else env, _marker_dir(tmp_path), NOW)
+class FakeGh:
+	"""A scripted `gh api` runner: records every call, never touches the network.
+
+	`script` maps a call kind ("get", "post_comment", "label") to a list of
+	return codes consumed in order; an exhausted list returns 0. `existing`
+	is the stdout of the comments GET.
+	"""
+
+	def __init__(self, script: dict | None = None, existing: str = ""):
+		self.script = {key: list(value) for key, value in (script or {}).items()}
+		self.existing = existing
+		self.calls: list[tuple[str, list]] = []
+
+	@staticmethod
+	def kind(args: list) -> str:
+		if args and args[0] == "--paginate":
+			return "get"
+		if args and args[0].endswith("/labels"):
+			return "label"
+		return "post_comment"
+
+	def __call__(self, args: list, timeout: float):
+		kind = self.kind(args)
+		self.calls.append((kind, list(args)))
+		codes = self.script.get(kind) or []
+		code = codes.pop(0) if codes else 0
+		if code != 0:
+			return code, "", f"HTTP 502: {kind} failed"
+		return 0, self.existing if kind == "get" else "{}", ""
+
+	def kinds(self) -> list[str]:
+		return [kind for kind, _ in self.calls]
+
+
+def _evaluate(payload: dict, tmp_path: Path, env: dict | None = None, runner: FakeGh | None = None, sleeps: list | None = None) -> dict | None:
+	return guard.evaluate(
+		payload,
+		_env() if env is None else env,
+		_marker_dir(tmp_path),
+		NOW,
+		runner=FakeGh() if runner is None else runner,
+		sleep=(sleeps.append if sleeps is not None else (lambda _seconds: None)),
+		clock=lambda: 0.0,
+	)
 
 
 # 1. Interactive sessions are never blocked.
@@ -331,7 +373,7 @@ def test_cap_allows_the_third_stop_with_a_structured_line(tmp_path):
 	assert third["systemMessage"].startswith(guard.CAP_MESSAGE_PREFIX)
 	assert SESSION in third["systemMessage"] and "shubhodeep1/coding-workflows#4911" in third["systemMessage"]
 	lines = (directory / guard.CAP_LOG_NAME).read_text(encoding="utf-8").splitlines()
-	record = json.loads(lines[-1])
+	record = next(json.loads(line) for line in lines if json.loads(line)["event"] == "cap_reached")
 	assert record["event"] == "cap_reached" and record["session"] == SESSION and record["issue"] == 4911 and record["blocks"] == 2
 
 
@@ -483,10 +525,192 @@ def test_stdin_read_error_allows_with_warning(capsys):
 	assert "could not read" in json.loads(capsys.readouterr().out)["systemMessage"]
 
 
-def test_hook_makes_no_network_calls():
+def test_hook_network_access_is_only_the_gh_api_runner():
 	source = TEMPLATE_HOOK_PATH.read_text(encoding="utf-8")
-	for forbidden in ("subprocess", "urllib", "http.client", "requests", "socket", "gh api"):
+	for forbidden in ("urllib", "http.client", "requests", "socket", "GH_TOKEN", "GITHUB_TOKEN", "shell=True"):
 		assert forbidden not in source, forbidden
+	assert source.count("subprocess.run(") == 1
+	assert 'subprocess.run(["gh", "api", *args]' in source
+
+
+def test_no_api_calls_below_the_cap(tmp_path):
+	_mark(tmp_path)
+	fake = FakeGh()
+	for text in (SECTION_2_QUESTION, INLINE_QUESTION, ORDINARY_REPORT):
+		_evaluate(_stop(text), tmp_path, runner=fake)
+	for _ in range(3):
+		_evaluate(_ask(), tmp_path, runner=fake)
+	assert fake.calls == []
+
+
+# Cap blocker (#5083).
+
+
+def _reach_cap(tmp_path: Path) -> Path:
+	directory = _mark(tmp_path)
+	guard.write_blocks(SESSION, directory, guard.STOP_BLOCK_CAP)
+	return directory
+
+
+def _cap_log(directory: Path) -> list[dict]:
+	path = directory / guard.CAP_LOG_NAME
+	return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+
+def test_cap_publishes_the_blocker_comment_and_label(tmp_path):
+	directory = _reach_cap(tmp_path)
+	fake = FakeGh()
+	result = _evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	assert "decision" not in result and result["systemMessage"].startswith(guard.CAP_MESSAGE_PREFIX)
+	assert "posted the blocker on shubhodeep1/coding-workflows#4911" in result["systemMessage"]
+	assert fake.kinds() == ["get", "post_comment", "label"]
+	get_args = fake.calls[0][1]
+	assert get_args[:2] == ["--paginate", "repos/shubhodeep1/coding-workflows/issues/4911/comments?per_page=100"]
+	post_args = fake.calls[1][1]
+	assert post_args[0] == "repos/shubhodeep1/coding-workflows/issues/4911/comments" and post_args[1] == "-f"
+	body = post_args[2][len("body=") :]
+	assert body.startswith(guard.BLOCKED_COMMENT_MARKER + "\n")
+	assert guard.cap_blocker_marker(SESSION) in body and "/reclarify" in body
+	assert fake.calls[2][1] == ["repos/shubhodeep1/coding-workflows/issues/4911/labels", "-f", "labels[]=ai:claude-blocked"]
+	assert guard.read_state(SESSION, directory)["cap_blocker"] == guard.CAP_BLOCKER_POSTED
+	events = [record["event"] for record in _cap_log(directory)]
+	assert events == ["cap_reached", "cap_blocker_posted"]
+
+
+def test_cap_blocker_body_never_contains_model_text(tmp_path):
+	_reach_cap(tmp_path)
+	fake = FakeGh()
+	secret = "Q1: A/B — token ghp_SHOULDNOTLEAK"
+	_evaluate(_stop(secret), tmp_path, runner=fake)
+	body = fake.calls[1][1][2]
+	assert "ghp_SHOULDNOTLEAK" not in body and "Q1: A/B" not in body
+
+
+def test_cap_blocker_is_idempotent_when_the_comment_exists(tmp_path):
+	directory = _reach_cap(tmp_path)
+	fake = FakeGh(existing="older comment\n" + guard.cap_blocker_marker(SESSION) + "\n🛑 ...")
+	result = _evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	assert fake.kinds() == ["get", "label"]
+	assert "already on shubhodeep1/coding-workflows#4911" in result["systemMessage"]
+	assert _cap_log(directory)[-1]["event"] == "cap_blocker_exists"
+
+
+def test_another_sessions_cap_marker_does_not_suppress_the_post(tmp_path):
+	_reach_cap(tmp_path)
+	fake = FakeGh(existing=guard.cap_blocker_marker("cse_01OTHERSESSION"))
+	_evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	assert fake.kinds() == ["get", "post_comment", "label"]
+
+
+def test_posted_blocker_is_never_published_twice(tmp_path):
+	_reach_cap(tmp_path)
+	fake = FakeGh()
+	_evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	second = FakeGh()
+	result = _evaluate(_stop(INLINE_QUESTION), tmp_path, runner=second)
+	assert second.calls == [] and "already on" in result["systemMessage"]
+	assert _evaluate(_stop(ORDINARY_REPORT), tmp_path, runner=second) is None and second.calls == []
+
+
+def test_cap_blocker_retries_within_the_hook(tmp_path):
+	directory = _reach_cap(tmp_path)
+	fake = FakeGh(script={"post_comment": [1]})
+	sleeps: list = []
+	result = _evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake, sleeps=sleeps)
+	assert fake.kinds() == ["get", "post_comment", "get", "post_comment", "label"]
+	assert sleeps == [1.0] and "posted the blocker" in result["systemMessage"]
+	assert _cap_log(directory)[-1]["attempts"] == 2
+
+
+def test_label_failure_retries_only_the_label(tmp_path):
+	_reach_cap(tmp_path)
+	fake = FakeGh(script={"label": [1]})
+	result = _evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	assert fake.kinds() == ["get", "post_comment", "label", "label"]
+	assert "posted the blocker" in result["systemMessage"]
+
+
+def test_failed_publish_is_pending_and_retried_at_the_next_stop(tmp_path):
+	directory = _reach_cap(tmp_path)
+	failing = FakeGh(script={"get": [1, 1, 1]})
+	sleeps: list = []
+	result = _evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=failing, sleeps=sleeps)
+	assert failing.kinds() == ["get", "get", "get"] and sleeps == [1.0, 2.0]
+	assert "failed after 3 attempt(s)" in result["systemMessage"] and "HTTP 502" in result["systemMessage"]
+	assert "retried at the next stop" in result["systemMessage"]
+	state = guard.read_state(SESSION, directory)
+	assert state["cap_blocker"] == guard.CAP_BLOCKER_PENDING and state["cap_blocker_kind"] == guard.KIND_QUESTION
+	assert state["stop_blocks"] == guard.STOP_BLOCK_CAP
+	assert _cap_log(directory)[-1]["event"] == "cap_blocker_failed"
+
+	healthy = FakeGh()
+	retry = _evaluate(_stop(ORDINARY_REPORT), tmp_path, runner=healthy)
+	assert healthy.kinds() == ["get", "post_comment", "label"]
+	assert retry["systemMessage"].startswith("unattended-question-guard: cap blocker retry:") and "posted the blocker" in retry["systemMessage"]
+	assert guard.read_state(SESSION, directory)["cap_blocker"] == guard.CAP_BLOCKER_POSTED
+
+
+def test_pending_retry_is_not_repeated_by_the_cap_path_in_the_same_stop(tmp_path):
+	directory = _reach_cap(tmp_path)
+	guard._write_state(SESSION, directory, {"cap_blocker": guard.CAP_BLOCKER_PENDING, "cap_blocker_kind": guard.KIND_QUESTION})
+	fake = FakeGh(script={"get": [1, 1, 1]})
+	result = _evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	assert fake.kinds() == ["get", "get", "get"]
+	assert result["systemMessage"].startswith(guard.CAP_MESSAGE_PREFIX)
+
+
+def test_time_budget_bounds_the_attempts(tmp_path):
+	directory = _reach_cap(tmp_path)
+	marker = guard.read_marker(SESSION, directory)
+	ticks = iter([0.0, guard.CAP_BLOCKER_BUDGET_SECONDS])
+	fake = FakeGh(script={"get": [1, 1, 1]})
+	outcome = guard.publish_cap_blocker(
+		marker, SESSION, guard.KIND_QUESTION, 2, directory, NOW, runner=fake, sleep=lambda _s: None, clock=lambda: next(ticks)
+	)
+	assert outcome["status"] == "failed" and outcome["attempts"] == 1 and fake.kinds() == ["get"]
+
+
+def test_missing_gh_is_a_pending_failure_not_a_crash(tmp_path, monkeypatch):
+	directory = _reach_cap(tmp_path)
+
+	def _no_gh(*_args, **_kwargs):
+		raise FileNotFoundError("gh")
+
+	monkeypatch.setattr(guard.subprocess, "run", _no_gh)
+	result = guard.evaluate(_stop(SECTION_2_QUESTION), _env(), directory, NOW, sleep=lambda _s: None, clock=lambda: 0.0)
+	assert "decision" not in result and "gh could not run" in result["systemMessage"]
+	assert guard.read_state(SESSION, directory)["cap_blocker"] == guard.CAP_BLOCKER_PENDING
+
+
+def test_invalid_marker_target_makes_no_call(tmp_path):
+	directory = _marker_dir(tmp_path)
+	directory.mkdir(parents=True)
+	guard.marker_path(SESSION, directory).write_text(
+		json.dumps({"version": 1, "session": SESSION, "repo": "not a repo; rm -rf", "issue": 4911}), encoding="utf-8"
+	)
+	guard.write_blocks(SESSION, directory, guard.STOP_BLOCK_CAP)
+	fake = FakeGh()
+	result = _evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	assert fake.calls == [] and "nothing was posted" in result["systemMessage"]
+	assert guard.read_state(SESSION, directory)["cap_blocker"] == guard.CAP_BLOCKER_INVALID
+	assert _evaluate(_stop(ORDINARY_REPORT), tmp_path, runner=fake) is None and fake.calls == []
+
+
+def test_write_blocks_keeps_the_cap_blocker_state(tmp_path):
+	directory = _mark(tmp_path)
+	guard._write_state(SESSION, directory, {"cap_blocker": guard.CAP_BLOCKER_POSTED})
+	guard.write_blocks(SESSION, directory, 1)
+	state = guard.read_state(SESSION, directory)
+	assert state == {"cap_blocker": guard.CAP_BLOCKER_POSTED, "stop_blocks": 1}
+
+
+def test_run_gh_api_reports_timeouts_without_raising(monkeypatch):
+	def _slow(*_args, **kwargs):
+		raise subprocess.TimeoutExpired(cmd="gh", timeout=kwargs.get("timeout"))
+
+	monkeypatch.setattr(guard.subprocess, "run", _slow)
+	code, out, err = guard.run_gh_api(["user"], 6.0)
+	assert code == 124 and out == "" and "timed out" in err
 
 
 # `mark` subcommand.
@@ -590,6 +814,9 @@ def test_claude_md_documents_the_enforcement():
 		"At most 2 blocks per session",
 		guard.CAP_MESSAGE_PREFIX,
 		"tests/test_unattended_question_guard.py",
+		"**Cap blocker**",
+		"<!-- ai:unattended-guard-cap:v1 session=<id> -->",
+		"cap_blocker: pending",
 	):
 		assert needle in section, needle
 	assert guard.STOP_BLOCK_CAP == 2

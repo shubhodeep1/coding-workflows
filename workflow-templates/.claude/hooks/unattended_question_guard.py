@@ -17,7 +17,9 @@ moved again (issue #4911). Prose cannot prevent that; this hook does:
   `ai:claude-blocked:v1` comment, the stop is blocked with a reason that
   restates §28. At most STOP_BLOCK_CAP blocks per session; after that the
   stop is allowed with a `systemMessage` starting CAP_MESSAGE_PREFIX and one
-  JSON line in `~/.claude/unattended-issue-mode/stop-guard.jsonl`.
+  JSON line in `~/.claude/unattended-issue-mode/stop-guard.jsonl`, and the
+  hook publishes the source-issue blocker itself (see "Cap blocker" below),
+  so a stop past the cap never leaves the chain stalled silently (#5083).
 - `PreToolUse` on `AskUserQuestion`: always denied, with the same reason.
 
 Only **marked** sessions are affected. The issue-mode preflight of
@@ -29,8 +31,28 @@ for exactly that id exists. Interactive and local sessions have no marker (a
 local session has no `CLAUDE_CODE_REMOTE_SESSION_ID` at all), so the hook
 prints nothing for them and allows everything.
 
-The hook makes no GitHub API calls (§15): the blocked-comment check reads the
-local session transcript (`transcript_path`). It fails open with a
+Below the cap the hook makes no GitHub API calls (§15): the blocked-comment
+check reads the local session transcript (`transcript_path`).
+
+Cap blocker (issue #5083). At the cap, `publish_cap_blocker` posts one
+comment on the marker's issue that starts with BLOCKED_COMMENT_MARKER and
+carries `<!-- ai:unattended-guard-cap:v1 session=<id> -->`, and adds the
+`ai:claude-blocked` label. Its only calls, all through `gh api` against the
+marker's validated `<owner>/<repo>` and issue number:
+  - GET  repos/<repo>/issues/<N>/comments (paginated, 100 per page), to skip
+    the POST when this session's cap marker is already there (idempotent);
+  - POST repos/<repo>/issues/<N>/comments with a fixed template that never
+    contains model-written text;
+  - POST repos/<repo>/issues/<N>/labels with `ai:claude-blocked`.
+Up to CAP_BLOCKER_ATTEMPTS attempts per hook run, backing off
+CAP_BLOCKER_BACKOFF_SECONDS, each call bounded by CAP_BLOCKER_CALL_TIMEOUT
+and the run by CAP_BLOCKER_BUDGET_SECONDS (inside the 30 s wiring timeout).
+A publish that still fails leaves `cap_blocker: pending` in the state file
+and is retried at the start of every later `Stop` in the session, question
+or not. Every outcome appends one `cap_blocker_*` line to the cap log. A
+failed publish never blocks the stop and never raises.
+
+It fails open with a
 `systemMessage` on an unreadable, invalid, or non-object payload, an
 unreadable marker or state file, or an internal error, the same contract as
 the §21/§25/§26 hooks. Empty or whitespace-only input is allowed silently.
@@ -46,9 +68,12 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 
 # The `.claude/settings.json` wiring this hook expects. Kept here so the tests
@@ -63,6 +88,20 @@ STOP_BLOCK_CAP = 2
 BLOCKED_COMMENT_MARKER = "<!-- ai:claude-blocked:v1 -->"
 CAP_LOG_NAME = "stop-guard.jsonl"
 CAP_MESSAGE_PREFIX = "unattended-question-guard: cap reached"
+
+# Cap blocker (#5083): the source-issue blocker the hook publishes at the cap.
+CAP_BLOCKER_MARKER_PREFIX = "<!-- ai:unattended-guard-cap:v1 session="
+CAP_BLOCKER_LABEL = "ai:claude-blocked"
+CAP_BLOCKER_ATTEMPTS = 3
+CAP_BLOCKER_BACKOFF_SECONDS = (1.0, 2.0)
+CAP_BLOCKER_CALL_TIMEOUT = 6.0
+CAP_BLOCKER_BUDGET_SECONDS = 24.0
+CAP_BLOCKER_POSTED = "posted"
+CAP_BLOCKER_PENDING = "pending"
+CAP_BLOCKER_INVALID = "invalid"
+
+# A `gh api` runner: (args after `gh api`, timeout) -> (returncode, stdout, stderr).
+GhRunner = Callable[[list, float], "tuple[int, str, str]"]
 
 _SESSION_FILE_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -149,24 +188,42 @@ def read_marker(session: str, directory: Path) -> dict | None:
 	return marker
 
 
-def read_blocks(session: str, directory: Path) -> int:
+def read_state(session: str, directory: Path) -> dict:
+	"""Return the session's state object ({} when there is none)."""
 	path = state_path(session, directory)
 	if not path.exists():
-		return 0
+		return {}
 	try:
 		state = json.loads(path.read_text(encoding="utf-8"))
-		blocks = int(state.get("stop_blocks", 0))
-	except (OSError, ValueError, TypeError, AttributeError) as exc:
+	except (OSError, ValueError) as exc:
+		raise GuardStateError(f"state {path} is unreadable ({exc})") from exc
+	if not isinstance(state, dict):
+		raise GuardStateError(f"state {path} is unreadable (not a JSON object)")
+	return state
+
+
+def _write_state(session: str, directory: Path, updates: dict) -> None:
+	"""Merge `updates` into the state file, keeping every other key."""
+	state = read_state(session, directory)
+	state.update(updates)
+	try:
+		directory.mkdir(parents=True, exist_ok=True)
+		state_path(session, directory).write_text(json.dumps(state) + "\n", encoding="utf-8")
+	except OSError as exc:
+		raise GuardStateError(f"state for {session} could not be written ({exc})") from exc
+
+
+def read_blocks(session: str, directory: Path) -> int:
+	path = state_path(session, directory)
+	try:
+		blocks = int(read_state(session, directory).get("stop_blocks", 0))
+	except (ValueError, TypeError) as exc:
 		raise GuardStateError(f"state {path} is unreadable ({exc})") from exc
 	return max(blocks, 0)
 
 
 def write_blocks(session: str, directory: Path, blocks: int) -> None:
-	try:
-		directory.mkdir(parents=True, exist_ok=True)
-		state_path(session, directory).write_text(json.dumps({"stop_blocks": blocks}) + "\n", encoding="utf-8")
-	except OSError as exc:
-		raise GuardStateError(f"state for {session} could not be written ({exc})") from exc
+	_write_state(session, directory, {"stop_blocks": blocks})
 
 
 def question_kind(text: str) -> str | None:
@@ -320,14 +377,160 @@ def _append_cap_log(directory: Path, record: dict) -> None:
 		pass
 
 
+def run_gh_api(args: list, timeout: float) -> "tuple[int, str, str]":
+	"""Run `gh api <args>` without a shell; never raises."""
+	try:
+		proc = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=timeout, check=False)
+	except subprocess.TimeoutExpired:
+		return 124, "", f"gh api timed out after {timeout:g}s"
+	except OSError as exc:
+		return 127, "", f"gh could not run ({exc})"
+	return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
+def cap_blocker_marker(session: str) -> str:
+	return f"{CAP_BLOCKER_MARKER_PREFIX}{_stem(session)} -->"
+
+
+def cap_blocker_body(marker: dict, session: str, kind: str, blocks: int) -> str:
+	"""The fixed cap-blocker comment. It never includes model-written text."""
+	issue = marker.get("issue")
+	return (
+		f"{BLOCKED_COMMENT_MARKER}\n"
+		f"{cap_blocker_marker(session)}\n"
+		"🛑 **Unattended session stopped on an unanswered question** (CLAUDE.md §28.G)\n\n"
+		f"Session `{_stem(session)}` ended its turn on {kind} without posting a blocker here. "
+		f"The unattended question guard blocked {blocks} such stops, its cap, and then had to allow the stop, "
+		f"so the chain for #{issue} is not moving.\n\n"
+		"This comment was posted by the guard hook, not written by the session: open the session to read "
+		"the question it ended on.\n\n"
+		"To resume: answer the question here, then comment `/reclarify`."
+	)
+
+
+def _gh_error(stderr: str, returncode: int) -> str:
+	lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+	return lines[-1][:200] if lines else f"exit {returncode}"
+
+
+def publish_cap_blocker(
+	marker: dict,
+	session: str,
+	kind: str,
+	blocks: int,
+	directory: Path,
+	now: datetime,
+	runner: GhRunner = run_gh_api,
+	sleep: Callable[[float], None] = time.sleep,
+	clock: Callable[[], float] = time.monotonic,
+) -> dict:
+	"""Publish the source-issue blocker for `session`, idempotently and with retries.
+
+	Input: the validated marker (`repo`, `issue`), the session id, the stop's
+	kind, and the block count. Output: {"status": "posted" | "exists" |
+	"already_posted" | "failed" | "invalid", "attempts": n, "error": str | None}.
+	API calls per attempt: one GET per 100 issue comments, at most one
+	comment POST, one label POST; at most CAP_BLOCKER_ATTEMPTS attempts within
+	CAP_BLOCKER_BUDGET_SECONDS. Fail open: never raises; a failure is stored
+	as `cap_blocker: pending` so the next `Stop` retries it.
+	"""
+	state = read_state(session, directory)
+	if state.get("cap_blocker") == CAP_BLOCKER_POSTED:
+		return {"status": "already_posted", "attempts": 0, "error": None}
+	repo = marker.get("repo")
+	issue = marker.get("issue")
+	if not isinstance(repo, str) or not _REPO_RE.match(repo) or not isinstance(issue, int) or isinstance(issue, bool) or issue <= 0:
+		_write_state(session, directory, {"cap_blocker": CAP_BLOCKER_INVALID})
+		outcome = {"status": "invalid", "attempts": 0, "error": "marker has no valid <owner>/<repo> and issue"}
+	else:
+		outcome = _publish_attempts(repo, issue, cap_blocker_body(marker, session, kind, blocks), cap_blocker_marker(session), runner, sleep, clock)
+		if outcome["status"] in ("posted", "exists"):
+			_write_state(session, directory, {"cap_blocker": CAP_BLOCKER_POSTED})
+		else:
+			_write_state(session, directory, {"cap_blocker": CAP_BLOCKER_PENDING, "cap_blocker_kind": kind})
+	_append_cap_log(
+		directory,
+		{
+			"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+			"event": f"cap_blocker_{outcome['status']}",
+			"session": session,
+			"repo": repo,
+			"issue": issue,
+			"attempts": outcome["attempts"],
+			"error": outcome["error"],
+		},
+	)
+	return outcome
+
+
+def _publish_attempts(repo: str, issue: int, body: str, cap_marker: str, runner: GhRunner, sleep, clock) -> dict:
+	base = f"repos/{repo}/issues/{issue}"
+	deadline = clock() + CAP_BLOCKER_BUDGET_SECONDS
+	comment_done = False
+	found_existing = False
+	error = None
+	attempts = 0
+	for attempt in range(CAP_BLOCKER_ATTEMPTS):
+		if attempt:
+			delay = CAP_BLOCKER_BACKOFF_SECONDS[min(attempt - 1, len(CAP_BLOCKER_BACKOFF_SECONDS) - 1)]
+			if clock() + delay + CAP_BLOCKER_CALL_TIMEOUT > deadline:
+				break
+			sleep(delay)
+		attempts += 1
+		if not comment_done:
+			code, out, err = runner(["--paginate", f"{base}/comments?per_page=100", "--jq", ".[].body"], CAP_BLOCKER_CALL_TIMEOUT)
+			if code != 0:
+				error = f"reading comments failed: {_gh_error(err, code)}"
+				continue
+			if cap_marker in out:
+				comment_done = found_existing = True
+			else:
+				code, _out, err = runner([f"{base}/comments", "-f", f"body={body}"], CAP_BLOCKER_CALL_TIMEOUT)
+				if code != 0:
+					error = f"posting the comment failed: {_gh_error(err, code)}"
+					continue
+				comment_done = True
+		code, _out, err = runner([f"{base}/labels", "-f", f"labels[]={CAP_BLOCKER_LABEL}"], CAP_BLOCKER_CALL_TIMEOUT)
+		if code != 0:
+			error = f"adding the {CAP_BLOCKER_LABEL} label failed: {_gh_error(err, code)}"
+			continue
+		return {"status": "exists" if found_existing else "posted", "attempts": attempts, "error": None}
+	return {"status": "failed", "attempts": attempts, "error": error or "no attempt fit in the time budget"}
+
+
+def _cap_blocker_summary(outcome: dict, issue_ref: str) -> str:
+	status = outcome["status"]
+	if status == "posted":
+		return f"the guard posted the blocker on {issue_ref} (comment and {CAP_BLOCKER_LABEL} label)"
+	if status == "exists":
+		return f"this session's blocker was already on {issue_ref}; the {CAP_BLOCKER_LABEL} label is set"
+	if status == "already_posted":
+		return f"the blocker for this session is already on {issue_ref}"
+	if status == "invalid":
+		return f"nothing was posted: {outcome['error']}"
+	return (
+		f"publishing the blocker on {issue_ref} failed after {outcome['attempts']} attempt(s) ({outcome['error']}); "
+		"it is retried at the next stop in this session"
+	)
+
+
 def _warn(reason: str) -> dict:
 	return {"systemMessage": f"Unattended question guard skipped: {reason}"}
 
 
-def evaluate(payload: dict, env: dict, directory: Path, now: datetime) -> dict | None:
+def evaluate(
+	payload: dict,
+	env: dict,
+	directory: Path,
+	now: datetime,
+	runner: GhRunner = run_gh_api,
+	sleep: Callable[[float], None] = time.sleep,
+	clock: Callable[[], float] = time.monotonic,
+) -> dict | None:
 	"""Decide the hook outcome for one payload.
 
-	Returns the JSON object to print, or None to allow silently.
+	Returns the JSON object to print, or None to allow silently. `runner`,
+	`sleep`, and `clock` are used only by the cap blocker (tests inject them).
 	"""
 	event = payload.get("hook_event_name")
 	is_stop = event == SETTINGS_STOP_EVENT
@@ -353,15 +556,39 @@ def evaluate(payload: dict, env: dict, directory: Path, now: datetime) -> dict |
 			}
 		}
 
+	# A cap blocker that failed earlier in this session is retried at every
+	# later stop, question or not (#5083).
+	retried = None
+	try:
+		state = read_state(session, directory)
+		if state.get("cap_blocker") == CAP_BLOCKER_PENDING:
+			pending_kind = state.get("cap_blocker_kind")
+			retried = publish_cap_blocker(
+				marker,
+				session,
+				pending_kind if isinstance(pending_kind, str) else KIND_QUESTION,
+				read_blocks(session, directory),
+				directory,
+				now,
+				runner,
+				sleep,
+				clock,
+			)
+	except GuardStateError as exc:
+		return _warn(str(exc))
+	retry_message = None
+	if retried is not None:
+		retry_message = {"systemMessage": f"unattended-question-guard: cap blocker retry: {_cap_blocker_summary(retried, _issue_ref(marker))}."}
+
 	entries = load_transcript(payload.get("transcript_path"))
 	text = payload.get("last_assistant_message")
 	if not isinstance(text, str) or not text.strip():
 		text = final_assistant_text(entries)
 	kind = question_kind(text)
 	if kind is None:
-		return None
+		return retry_message
 	if blocked_comment_posted(current_turn(entries)):
-		return None
+		return retry_message
 	try:
 		blocks = read_blocks(session, directory)
 		if blocks >= STOP_BLOCK_CAP:
@@ -377,11 +604,12 @@ def evaluate(payload: dict, env: dict, directory: Path, now: datetime) -> dict |
 					"blocks": blocks,
 				},
 			)
+			outcome = retried or publish_cap_blocker(marker, session, kind, blocks, directory, now, runner, sleep, clock)
 			return {
 				"systemMessage": (
 					f"{CAP_MESSAGE_PREFIX} session={session} issue={_issue_ref(marker)} blocks={blocks}: the "
 					f"session ended its turn on {kind} without posting an ai:claude-blocked comment; the stop is "
-					"allowed and nothing was posted on the issue."
+					f"allowed and {_cap_blocker_summary(outcome, _issue_ref(marker))}."
 				)
 			}
 		write_blocks(session, directory, blocks + 1)

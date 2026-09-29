@@ -2326,12 +2326,27 @@ enforces §28.B and §28.C in those sessions. It is wired in
   allowed, with a `systemMessage` starting
   `unattended-question-guard: cap reached` and one JSON line in
   `~/.claude/unattended-issue-mode/stop-guard.jsonl`.
+- **Cap blocker** (issue #5083). At the cap the hook itself publishes the
+  §28.C blocker, so the stop never leaves the chain stalled silently: one
+  comment on the marker's issue starting `<!-- ai:claude-blocked:v1 -->`,
+  carrying `<!-- ai:unattended-guard-cap:v1 session=<id> -->`, from a fixed
+  template with no model-written text, plus the `ai:claude-blocked` label.
+  It reads the issue's comments first and skips the post when this
+  session's cap marker is already there. It tries up to 3 times within the
+  hook (1 s and 2 s backoff, a 24 s budget inside the 30 s wiring timeout);
+  a publish that still fails is stored as `cap_blocker: pending` and retried
+  at every later `Stop` in the session. Each outcome adds a
+  `cap_blocker_<posted|exists|failed|invalid>` line to `stop-guard.jsonl`.
+  The session still sends its own `PushNotification`; a hook cannot.
 - **`AskUserQuestion`.** Always denied in a marked session, with the same
   §28 reason.
 - **Fail open.** The hook allows with a `systemMessage` on an unreadable,
   invalid, or non-object payload, an unreadable marker or state file, or an
-  internal error, and allows empty input silently. It makes no GitHub API
-  calls (§15) and has no environment-variable escape hatch.
+  internal error, and allows empty input silently. Its only GitHub API
+  calls (§15) are the cap blocker's, through `gh api` and only at the cap:
+  one read per 100 issue comments, at most one comment post, and one label
+  post per attempt. A failed publish never blocks the stop. It has no
+  environment-variable escape hatch.
   `tests/test_unattended_question_guard.py` covers the rules and the wiring
   and runs in its own `ci.yml` step.
 
