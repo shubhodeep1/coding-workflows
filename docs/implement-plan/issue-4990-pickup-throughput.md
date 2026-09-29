@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#4990 (https://github.com/shubhodeep1/coding-workflows/issues/4990)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4990-pickup-throughput   Final PR: #5030 draft
-- Status: IN_PROGRESS
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5061 (phase 1/1) — twin sync of `.claude/commands/claude-issue-pickup.md` (Q40), then /reclarify
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented (script, tests, docs, changelog); the `claude-issue-pickup.md` change waits on the Q40 twin sync
+- Last note: phase 1 PR #5061 opened; BLOCKED on the Q40 twin sync (pickup diff in the #4990 blocker comment, hold claim on the PR head); resume with /reclarify
 
 ## Phases
-1. [ ] Phase 1 — pickup throughput: catch-up wake, limit 20 (`CLAUDE_ISSUE_PICKUP_LIMIT`), resumes first, `oldest_waiting`   — protected paths: `.claude/commands/claude-issue-pickup.md` (no twin; diff in the sync blocker per Q40)
+1. [ ] Phase 1 — pickup throughput: catch-up wake, limit 20 (`CLAUDE_ISSUE_PICKUP_LIMIT`), resumes first, `oldest_waiting`   — PR #5061 open (blocked: twin sync); review rounds: 0; interventions: 0 — protected paths: `.claude/commands/claude-issue-pickup.md` (no twin; diff in the sync blocker per Q40)
    - [x] `scripts/claude_issue_route.py`: `QUEUE_PICKUP_LIMIT = 20`, `resolve_pickup_limit`, two-tier ordering, `oldest_waiting_minutes`, `catch_up_due`, `--wake` / `--now`
    - [x] `tests/test_claude_issue_route.py`: limit, ordering, oldest-waiting, catch-up tests
    - [x] `tests/test_implement_issue_claude_command.py`: pickup catch-up assertions (fail until the twin sync)
@@ -47,6 +47,7 @@
 ## Lessons
 
 ## Notes
+- Tests on the phase head (Python 3.12, full `tests/`, 2 pickup-text tests deselected): 4830 passed, 2 skipped, 40 failed; the same 40 (`test_review_reject_verify.py`, `test_review_issue_ledger.py`, `test_review_parse_consolidator.py`, `test_review_pipeline_integration.py`, `test_implement_post_codex_recovery.py`) fail on clean `origin/main` e0725f1 in this environment. With the pickup diff applied the three pickup suites give 266 passed.
 - Protected-path approval: phase 1 — twin-first per Q40, as the issue body (OWNER) prescribes (2026-09-29). No `workflow-templates/.claude/**` twin needs a change; the `claude-issue-pickup.md` diff goes in the sync blocker.
 - security_pass_skip.py: `{"skip": false, "label": null, "reason": "no skip label"}` → Security pass: run.
 - The invoking session installed `gh` by running `.claude/hooks/session-start.sh` by hand: the repository was attached after session start, so the SessionStart hook had not run.
