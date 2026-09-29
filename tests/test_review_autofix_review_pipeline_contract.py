@@ -3139,12 +3139,16 @@ def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None
 	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"' in helper_text
 	for merge_line in (line for line in helper_text.splitlines() if "gh_retry gh pr merge" in line):
 		assert '--match-head-commit "${INITIAL_HEAD_SHA}"' in merge_line, merge_line
+	# Both merge calls run through the protected-path gate (issue #4919) and
+	# still expose ready labels only after a successful bound merge request.
 	assert re.search(
-		r'if gh_retry gh pr merge .*? --merge --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}"; then\n\s+record_auto_merge_ready_labels_allowed "true"',
+		r'protected_path_guarded_merge gh_retry gh pr merge .*? --merge --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}" \|\| _forward_merge_rc=\$\?\n'
+		r'\s+if \[ "\$\{_forward_merge_rc\}" -eq 0 \]; then\n\s+record_auto_merge_ready_labels_allowed "true"',
 		helper_text,
 	)
 	assert re.search(
-		r'if gh_retry gh pr merge .*? --squash --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}"; then\n\s+record_auto_merge_ready_labels_allowed "true"',
+		r'protected_path_guarded_merge gh_retry gh pr merge .*? --squash --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}" \|\| _auto_merge_rc=\$\?\n'
+		r'if \[ "\$\{_auto_merge_rc\}" -eq 0 \]; then\n\s+record_auto_merge_ready_labels_allowed "true"',
 		helper_text,
 	)
 
@@ -6693,6 +6697,11 @@ def _run_auto_merge_helper_with_fake_gh(
 			    path = next(a for a in args[1:] if not a.startswith("-"))
 			    if "/labels" in path:
 			        sys.stdout.write("")
+			        sys.exit(0)
+			    # protected_path_gate.sh (issue #4919) reads the PR's files;
+			    # none is protected, so the merge call runs unchanged.
+			    if "/pulls/42/files" in path:
+			        sys.stdout.write("[]")
 			        sys.exit(0)
 			    if path.endswith("/pulls/42"):
 			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "body": ""}}))

@@ -1389,6 +1389,31 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   `tests/test_claude_template_parity.py` fails CI on a template-only change
   (issue #4775).
 
+  CI cannot tell who changed a protected-equivalent path, so merging and
+  releasing one needs the repository owner's approval of the exact head
+  (issue #4919). The protected-equivalent set is:
+  - `.claude/**` and `workflow-templates/.claude/**`;
+  - the divergence pins in `tests/test_claude_template_parity.py`;
+  - the gate's own `scripts/protected_path_authorization.py` and
+    `scripts/protected_path_gate.sh`.
+
+  Every unattended `gh pr merge` in `scripts/` runs through
+  `scripts/protected_path_gate.sh`. Merges come from `review_autofix.yml`'s
+  auto-merge, the review-blocked judge, and the orchestrator. The
+  `test-and-mark-stable.yml` / `mark-stable.yml` release check fails on any
+  such change since the previous `stable` tag.
+
+  The approval is a PR comment whose whole body is
+  `/authorize-protected-paths <head sha>`. It must be posted by an
+  OWNER/MEMBER/COLLABORATOR user with no `performed_via_github_app`, and never
+  edited. Claude sessions post through the claude.ai proxy's GitHub App, so
+  they cannot produce one. A Claude session never posts it, never edits a
+  comment that carries it, and never asks another tool to post it.
+
+  An unauthorized protected PR stays open with one instruction comment per
+  head. The owner approves it and merges it, or lets the orchestrator
+  retry. A PR merged before the gate existed is grandfathered.
+
 **File edits use the Edit and Write tools.** Edit repository files with the
 Edit and Write tools, including the byte-identical `workflow-templates/`
 twins, which get the same edit in each copy. Never edit a file with an inline

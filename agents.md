@@ -1127,8 +1127,83 @@ reviews, comments, and conflicts stay a direct §12 request.
   CI when a template file has no root twin, differs from it, is a symlink,
   or is one of the five listed consumer-variant commands
   (`TEMPLATE_DIVERGENCE`) whose pinned SHA-256 no longer matches. Updating
-  that list is a protected-equivalent change too. Once an Edit or Write to
-  the root `.claude/**` is blocked or denied, the session never retries it
+  that list is a protected-equivalent change too.
+- **Protected-path merge and release gate (issue #4919).** The parity test
+  cannot see who changed a pin, so merging and releasing a
+  protected-equivalent change needs the repository owner's approval of the
+  exact head. The protected set is:
+  - `.claude/**` and `workflow-templates/.claude/**`;
+  - `tests/test_claude_template_parity.py`;
+  - `scripts/protected_path_authorization.py` and
+    `scripts/protected_path_gate.sh`.
+
+  Paths are compared case-insensitively. A rename source counts, and a
+  truncated file list counts as protected.
+  - **The approval** is a PR comment whose whole body is
+    `/authorize-protected-paths <40-hex head sha>`. It counts only when all
+    of these hold:
+    - the author is a `User` with OWNER/MEMBER/COLLABORATOR association;
+    - `performed_via_github_app` is null (Claude sessions post as the
+      `claude` app);
+    - it was never edited.
+  - **Merge.** Every `gh pr merge` in `scripts/*.sh` is prefixed with
+    `protected_path_guarded_merge`. That covers `review_enable_auto_merge.sh`,
+    the three `review_rb_judge.sh` merge paths (5 calls), and 15 calls at 9
+    `orchestrate_poll_process.sh` sites.
+    - It runs `protected_path_authorization.py pr`, which makes one PR read
+      and one files page per 100 files. Comments are read only for a
+      protected PR.
+    - It passes unprotected PRs through unchanged. An authorized PR gets
+      `--match-head-commit <head>` added when the call has none.
+    - Otherwise it returns 3 without merging. It posts one comment per head
+      (marker `<!-- ai:protected-path-authorization:v1 head=<sha> -->`) and
+      logs `PROTECTED_PATH_GATE pr=… decision=block`.
+    - `review_enable_auto_merge.sh` then logs
+      `AUTOFIX_AUTO_MERGE_PROTECTED_PATH … action=refuse` (squash) or
+      `action=refuse_merge_commit` (forward-merge fallback PR) and withholds
+      `ai:ready-to-merge`.
+    - The instruction comment lists at most 20 paths, then `… and N more`.
+    - No label is added, so Claude checkers keep waiting instead of starting
+      a fixer.
+    - Read errors retry three times, then block for that attempt.
+    - The gate reads the PR number from the token right after `pr merge`
+      and refuses any other shape (`reason=unparseable_merge_call`).
+      `tests/test_protected_path_authorization.py` fails CI on a
+      `gh pr merge` call in `scripts/*.sh` that is unwrapped or puts a flag
+      before the PR number.
+    - Both files are in `REQUIRED_BOOTSTRAP_SCRIPTS`
+      (`scripts/stage_workflow_support.sh`) and in the orchestrator's
+      staging list (`orchestrate_poll.yml`).
+    - `review_autofix.yml`'s deterministic-skip merge is not wrapped: its
+      `PROTECTED_SKIP_SUPPRESSED` guard refuses the skip for `.claude/*`,
+      `workflow-templates/*`, `scripts/*`, and
+      `tests/test_claude_template_parity.py`.
+      `tests/test_protected_path_authorization.py` runs the real guard over
+      every path in the gate's protected set, so a path added to the gate
+      must be added to the guard too.
+  - **Release.** `test-and-mark-stable.yml` and `mark-stable.yml` run
+    "Verify protected-path changes are authorized (issue #4919)" in
+    `validate`, before `release` moves the `stable` tag.
+    - The step runs
+      `protected_path_authorization.py release --base refs/tags/stable --head HEAD`.
+    - Each non-merge commit in the range that touches the set passes when
+      one of its merged PRs (`commits/{sha}/pulls`) has the owner's comment
+      for that PR's merged `head.sha`.
+    - Commits reachable from the gate's arrival commit are grandfathered.
+      The arrival commit is the oldest first-parent commit that changed the
+      script.
+    - A commit with no merged PR is blocked.
+    - To unblock a release, the owner posts the command with the merged head
+      SHA on each listed PR and re-runs the release.
+  - **Residual risk (accepted).** A `GH_PAT` workflow comment also has no
+    app attribution. Only a comment whose entire body is the command counts,
+    and every workflow comment path wraps its text in headers or markers.
+    Local CLI sessions with a PAT post without app attribution. They are
+    human-watched, and CLAUDE.md §23.I forbids any Claude session from
+    posting the command.
+  - Tests: `tests/test_protected_path_authorization.py` (own `ci.yml` step).
+- Once an Edit or Write to the root `.claude/**` is blocked or denied, the
+  session never retries it
   through Bash, `python3`, `sed`, `tee`, `cp`, a heredoc, or any other
   tool: it stops at `Status: BLOCKED` naming each file and its exact edit,
   and the operator's watched session applies it.
@@ -1733,6 +1808,8 @@ and shipped:
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
+- `PROTECTED_PATH_GATE`
+- `AUTOFIX_AUTO_MERGE_PROTECTED_PATH`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1925,6 +2002,8 @@ LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
 LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=PROTECTED_PATH_GATE
+LOG_PREFIX.name=AUTOFIX_AUTO_MERGE_PROTECTED_PATH
 
 ---
 

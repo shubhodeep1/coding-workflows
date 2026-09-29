@@ -444,6 +444,11 @@ jobs:
             tests/test_permission_prompts.py \
             tests/test_claude_template_parity.py
 
+      - name: "Protected-path merge and release authorization gate tests (issue #4919)"
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_protected_path_authorization.py
+
       - name: Claude-fixer hand-back, claim and catch-all sweep tests (CLAUDE.md §26.C, §26.H)
         run: |
           set -euo pipefail

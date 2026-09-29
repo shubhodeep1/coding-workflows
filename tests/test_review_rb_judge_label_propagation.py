@@ -1718,6 +1718,9 @@ def _build_merge_with_followup_harness(
 	# helper in scripts/pr_checks_lib.sh; source it so the branch can call it
 	# (gh_retry/_safe_gh_jq are defined above, used by the helper at call time).
 	pr_checks_lib_path = (REPO_ROOT / "scripts" / "pr_checks_lib.sh").as_posix()
+	# The sync merge runs through protected_path_guarded_merge (issue #4919);
+	# source the real gate so it reads the mocked PR files.
+	protected_path_gate_path = (REPO_ROOT / "scripts" / "protected_path_gate.sh").as_posix()
 	return f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -1727,6 +1730,7 @@ _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
 sleep() {{ :; }}
 source "{pr_checks_lib_path}"
+source "{protected_path_gate_path}"
 
 GITHUB_OUTPUT="{github_output}"
 
@@ -1819,6 +1823,9 @@ def _run_merge_with_followup(
 
 		_mock_config: dict = {
 			"api_responses": {
+				# Listed before "pulls/42" (first substring match wins): the
+				# protected-path gate's file read; nothing is protected.
+				"pulls/42/files": [],
 				"pulls/42": pr_response,
 				f"commits/{pr_head_sha}/check-runs": check_runs_response,
 			},
