@@ -1386,6 +1386,46 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
 `tests/test_permission_prompts.py` cover the helpers, the hook, the filing
 rules, and the wiring, and run in their own `ci.yml` step.
 
+**File edits use the Edit and Write tools, and a hook enforces it.** Never
+edit a file through an inline interpreter (`python3 - <<'EOF' …
+write_text(…)`, `python3 -c "open(p, 'w')…"`, `sed -i`, `perl -i` / `-pi`,
+`ruby -i`, `awk -i inplace`). Claude Code cannot read the program such a
+command runs, so no allow rule approves it and an unattended session stops
+at a permission prompt nobody answers. `.claude/hooks/inline_edit_guard.py`,
+a `PreToolUse` hook on `Bash` in `.claude/settings.json` next to the §23.H
+guard, turns this rule (the wording issue #4678 adds to this section) into an
+enforced one (issue #4858):
+
+- It answers `permissionDecision: deny`, not `ask`, when a command's
+  interpreter (past assignments, `env`, `sudo`, `timeout N`, `nice`) is
+  `python` / `python3` running a program from `-c` or from a heredoc on stdin
+  that writes (`write_text`, `write_bytes`, `open(` with a `w` / `a` / `x` /
+  `+` mode, `os.replace`, `os.remove`, a mutating `shutil` call, `.unlink(`),
+  or is `sed -i` / `--in-place`, `perl -i`, `ruby -i`, or `awk -i inplace`.
+  The reason tells the session to use the Edit tool (exact `old_string` /
+  `new_string`) or the Write tool, and to edit the
+  `workflow-templates/.claude/**` twin of a protected `.claude/**` file (the
+  §28.C twin-first delivery issue #4785 adds). A deny needs no human: the
+  session retries with Edit or Write in the same turn.
+- It gives no decision for a read-only interpreter program, `pytest`,
+  `python3 -m …`, a script run from a file path (`python3 scripts/x.py`,
+  `python3 .claude/scripts/x.py`), and interpreter text that is only data
+  (an argument of `git commit -m`, `echo`, or `grep`, or a quoted string). It
+  reuses the §23.H guard's quote-aware tokenizer.
+- It fails **open**, unlike the §23.H guard: an unreadable or invalid
+  payload, an unparseable command, or an internal error gives no decision,
+  so a broken hook cannot stop a session. `CLAUDE_INLINE_EDIT_GUARD=off`
+  turns it off (default: on). It issues no API calls and starts no
+  subprocess.
+- Each deny writes `INLINE_EDIT_GUARD action=deny kind=<python | sed | perl
+  | ruby | awk> session=<id>` to stderr and appends one `PermissionDenied`
+  record with `source: "inline_edit_guard"` to the permission-prompt log.
+  `permission_prompts.py` counts those records as `expected_denies` and never
+  files them as `ai:permission-prompt` issues.
+
+`tests/test_inline_edit_guard.py` covers the rules, the fail-open contract,
+and the wiring, and runs in its own `ci.yml` step.
+
 ---
 
 ## §24. Cloudflare Access (MANDATORY)

@@ -345,6 +345,42 @@ def test_no_new_occurrences_means_no_api_calls(tmp_path, issues):
 	assert code == 0 and summary["total"] == 0 and fake.reads == 0
 
 
+def test_expected_guard_denies_are_counted_not_filed(tmp_path, issues):
+	# `.claude/hooks/inline_edit_guard.py` denies inline-interpreter edits on
+	# purpose (issue #4858). Its records, and a PermissionDenied carrying its
+	# redirect reason without the `source` field, are expected: counted, never filed.
+	fake = issues()
+	directory = tmp_path / "log"
+	guard_payload = _payload("sed -i s/a/b/ f", event="PermissionDenied", reason="Edit files with the Edit tool (exact old_string/new_string) or the Write tool, not an inline interpreter.")
+	guard_record = logger.build_record(guard_payload, NOW)
+	guard_record["source"] = "inline_edit_guard"
+	logger.append_record(guard_record, directory)
+	logger.append_record(logger.build_record(_payload("perl -pi -e x f", event="PermissionDenied", reason=guard_payload["reason"]), NOW), directory)
+	logger.append_record(logger.build_record(_payload("gh api -X GET search/issues -f q=a | sort -n", reason="needs approval"), NOW), directory)
+	summary = pp.report(directory)
+	assert summary["expected_denies"] == 2
+	assert summary["total"] == 1 and [pattern["event"] for pattern in summary["patterns"]] == ["PermissionRequest"]
+	code, filed = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and filed["expected_denies"] == 2 and len(filed["filed"]) == 1
+	assert len(fake.posts) == 1 and "sed -i" not in fake.posts[0][1]["body"]
+
+
+def test_only_guard_denies_means_no_api_calls(tmp_path, issues):
+	fake = issues()
+	directory = tmp_path / "log"
+	record = logger.build_record(_payload("sed -i s/a/b/ f", event="PermissionDenied", reason="guard"), NOW)
+	record["source"] = "inline_edit_guard"
+	logger.append_record(record, directory)
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and summary["total"] == 0 and summary["expected_denies"] == 1
+	assert fake.reads == 0 and fake.posts == []
+
+
+def test_other_denials_with_a_source_are_still_filed():
+	assert not pp.is_expected_deny({"event": "PermissionDenied", "source": "something_else", "reason": "blocked"})
+	assert not pp.is_expected_deny({"event": "PermissionRequest", "reason": "Edit files with the Edit tool (exact old_string/new_string) or the Write tool"})
+
+
 def test_main_rejects_bad_session_label(capsys):
 	assert pp.main(["file", "--session-label", "bad label"]) == 1
 

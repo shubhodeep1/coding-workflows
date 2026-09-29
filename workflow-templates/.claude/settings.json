@@ -146,6 +146,16 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/inline_edit_guard.py",
+            "timeout": 30
+          }
+        ]
+      },
+      {
         "matcher": "mcp__github__push_files|mcp__github__create_or_update_file",
         "hooks": [
           {

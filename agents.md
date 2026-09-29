@@ -1118,6 +1118,23 @@ reviews, comments, and conflicts stay a direct §12 request.
   three scripts live under `workflow-templates/.claude/`. Tests:
   `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`,
   `tests/test_permission_prompts.py` (one `ci.yml` step).
+- `.claude/hooks/inline_edit_guard.py` (issue #4858), a `PreToolUse` hook on
+  `Bash` next to `gh_api_write_guard.py`, enforces CLAUDE.md §23.I's "file
+  edits use the Edit and Write tools" rule. It answers
+  `permissionDecision: deny` with a redirect to the Edit and Write tools for
+  `python` / `python3` programs from `-c` or a stdin heredoc that write
+  (`write_text`, `write_bytes`, `open(` with a `w` / `a` / `x` / `+` mode,
+  `os.replace`, `os.remove`, a mutating `shutil` call, `.unlink(`), and for
+  `sed -i`, `perl -i` / `-pi`, `ruby -i`, and `awk -i inplace`. Reads,
+  `pytest`, `python3 -m …`, scripts run from a file path, and interpreter
+  text that is only data get no decision. It fails open (no decision on a bad
+  payload, an unparseable command, or an internal error), has the kill switch
+  `CLAUDE_INLINE_EDIT_GUARD=off` (default on), logs
+  `INLINE_EDIT_GUARD action=deny kind=<kind> session=<id>` to stderr, and
+  appends a `PermissionDenied` record with `source: "inline_edit_guard"`
+  that `permission_prompts.py` counts as `expected_denies` and never files.
+  A byte-identical copy lives under `workflow-templates/.claude/hooks/`.
+  Tests: `tests/test_inline_edit_guard.py` (its own `ci.yml` step).
 
 ---
 
