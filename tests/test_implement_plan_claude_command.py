@@ -312,7 +312,11 @@ def test_third_conformance_fix_gets_a_fix_check_not_a_fourth_run(text):
 # (twin-first); `.claude/` catches up through the [claude-twin-sync] copy.
 INTERIM_TWIN_FIRST_MARKER = "Interim automatic default: twin-first (until #4785)"
 INTERIM_TWIN_FIRST_CLAUDE_MD_MARKER = "Interim automatic twin-first default for protected-path phases (until #4785)"
+INTERIM_TWIN_FIRST_AGENTS_MD_MARKER = "Interim until #4785 (issue #4948):"
+INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER = "Since #4948, stages in this repo record"
 TWIN_SYNC_SCRIPT = ROOT / "scripts" / "claude_twin_sync.py"
+AGENTS_MD = ROOT / "agents.md"
+MASTER_SESSION_MD = ROOT / "docs" / "operations" / "master-session.md"
 
 
 def _step_4_twin() -> str:
@@ -374,6 +378,17 @@ def test_claude_md_section_28c_names_the_interim_twin_first_default():
 	assert "**Sunset:** the PR that makes #4785's Actions sync live (`scripts/claude_twin_sync.py`) removes this bullet" in section
 
 
+def test_operator_docs_name_the_interim_twin_first_default():
+	# The sunset guard below checks these markers are gone; this keeps them from
+	# drifting while the interim default is live, so that guard never passes vacuously.
+	if TWIN_SYNC_SCRIPT.exists():
+		pytest.skip("#4785's Actions twin sync is on this branch; the interim default is removed")
+	agents = _flat(AGENTS_MD)
+	assert INTERIM_TWIN_FIRST_AGENTS_MD_MARKER in agents
+	assert "The PR that makes #4785's sync live removes this default." in agents
+	assert INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER in _flat(MASTER_SESSION_MD)
+
+
 def test_interim_twin_first_default_is_removed_when_the_4785_sync_lands():
 	"""Removal trigger (#4948): once #4785's sync script exists, the interim default must be gone."""
 	if not TWIN_SYNC_SCRIPT.exists():
@@ -381,3 +396,5 @@ def test_interim_twin_first_default_is_removed_when_the_4785_sync_lands():
 	assert INTERIM_TWIN_FIRST_MARKER not in _flat(TEMPLATE_COMMAND), "remove the #4948 interim default from implement-plan-claude.md step 4"
 	assert INTERIM_TWIN_FIRST_MARKER not in _flat(COMMAND), "remove the #4948 interim default from implement-plan-claude.md step 4"
 	assert INTERIM_TWIN_FIRST_CLAUDE_MD_MARKER not in _flat(CLAUDE_MD), "remove the #4948 interim bullet from CLAUDE.md §28.C"
+	assert INTERIM_TWIN_FIRST_AGENTS_MD_MARKER not in _flat(AGENTS_MD), "remove the #4948 interim sentence from agents.md"
+	assert INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER not in _flat(MASTER_SESSION_MD), "remove the #4948 interim clause from the Q40 row of docs/operations/master-session.md"

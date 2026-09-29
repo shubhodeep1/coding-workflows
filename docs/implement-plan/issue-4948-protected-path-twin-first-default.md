@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#4948
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4948-protected-path-twin-first-default   Final PR: #4989 draft
-- Status: BLOCKED
-- Stage: phase 1/1
+- Status: IN_PROGRESS
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5008 (phase 1): twin sync by the supervising session, then /reclarify
+- Waiting on: PR #5008 (phase 1): review round 2
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (no project checker yet; the resumed stage creates one when it arms the wait on PR #5008)
+- Check-in: checker session_01Ame2D1ptdLmTxyN2aYG1jw (project checker, reused)   safety net and hand-back: in the review-round stage report
 - Last updated: 2026-09-29
-- Last note: Phase 1 implemented twin-first (operator Q40 A): only `workflow-templates/.claude/commands/implement-plan-claude.md` changed among `.claude` twins; PR #5008 opened against the project branch and a `hold` claim is posted on its head. BLOCKED until the supervising session copies the twin into `.claude/commands/implement-plan-claude.md` as `[claude-twin-sync]`, runs the tests, pushes, and comments `/reclarify`. On resume, arm the wait on PR #5008; do not re-implement the phase.
+- Last note: The `[claude-twin-sync]` copy landed in f60a3b1 and `ai:claude-blocked` was removed on 2026-09-29. Review round 1 on f60a3b1 (ledger `f8e2625c…`): both task gaps valid and fixed in one `[claude-autofix]` commit; the sunset test now also covers the agents.md sentence and the master-session.md Q40 clause, and a presence test keeps those markers from drifting. No `.claude/**` file changed, so no twin sync is needed.
 
 ## Phases
-1. [ ] Phase 1 — interim twin-first default for protected-path phases   — protected paths: `.claude/commands/implement-plan-claude.md` (edited only in its `workflow-templates/.claude/` twin, Q40) — PR #5008 open (hold: awaiting `[claude-twin-sync]`); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — interim twin-first default for protected-path phases   — protected paths: `.claude/commands/implement-plan-claude.md` (edited only in its `workflow-templates/.claude/` twin, Q40) — PR #5008 open (twin synced in f60a3b1); review rounds: 1; interventions: 0
    - [x] Twin `implement-plan-claude.md` step 4: interim paragraph (automatic approval line, twin-only edits, no-twin diff + sha256, hold claim + twin-sync blocker, resume, later stages, the three uncovered cases, sunset) — `workflow-templates/.claude/commands/implement-plan-claude.md:35-45` (root copy: pending twin sync)
    - [x] CLAUDE.md §28.C: new bullet naming the interim automatic twin-first default and its sunset (#4785) — `CLAUDE.md:2236-2253`
    - [x] `agents.md` (`:1116-1123`) and `docs/operations/master-session.md` (Q40 row) updated
@@ -42,6 +42,7 @@
 - AD-7 [plan, 2026-09-29] How is "a phase whose plan explicitly needs a watched session" recognised? — Picked: A — the plan's phase text says the phase must run in a watched session (for example `watched session: required`). Alternatives: B — infer it from the files (for example hooks or `settings.json`). Why: hook and `settings.json` twins can be edited unattended; only their sync needs the operator (Q62/Q64), which stop 2 already covers. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:intervention] A sunset (removal-trigger) test must assert the absence of every interim text the plan's Rollout names, in every file that carries it (docs included), and a paired presence test must pin the same markers while the interim is live so the sunset guard cannot pass vacuously. (files: tests/test_implement_plan_claude_command.py, agents.md, docs/operations/master-session.md)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #4948 (session session_01KWvixVyQiLvzZBHTrbRFpw, started by the master's dispatch trigger trig_017hVhQvGvbgboSSGrnNqVBF); start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
