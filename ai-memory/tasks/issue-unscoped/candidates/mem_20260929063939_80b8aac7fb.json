@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The plan at docs/plans/issue-5016-dispatch-exact-run-id-plan.md, Files & Modules section, lists `.claude/scripts/dispatch_workflow.py` as a file to change. Implementation Steps section says this file should gain `_post_dispatch` sending `return_run_details: true`, `new_runs`, `_response_run_id`, `_read_run`, updated `dispatch` with `matched_by`/`ambiguous`/`candidate_run_ids`, and an updated module docstring. The Done checklist in docs/implement-plan/issue-5016-dispatch-exact-run-id.md marks each of these items complete.\n  expected_change_site: `.claude/scripts/dispatch_workflow.py` \u2014 the master copy, not the twin.\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The file `.claude/scripts/dispatch_workflow.py` at the PR head (84cdcbd) is the old version. It lacks `new_runs`, `_response_run_id`, `_read_run`. Its `dispatch` does not send `return_run_details`, does not use `matched_by`, does not handle `ambiguous`/`candidate_run_ids`. Its `_post_dispatch` returns None and does not send `return_run_details: true`. The tests at `tests/test_dispatch_workflow.py` load from `SCRIPT_PATH = REPO_ROOT / \".claude\" / \"scripts\" / \"dispatch_workflow.py\"` (line 20), which resolves to the master copy. The new tests `test_uses_the_run_id_github_returned_even_when_a_newer_run_raced_in`, `test_response_id_stands_when_the_run_read_fails`, `test_response_without_a_usable_run_id_falls_back_to_polling`, `test_fallback_never_guesses_between_several_new_runs`, `test_post_dispatch_returns_the_response_object_or_none`, and `test_find_new_run_still_returns_the_newest_new_run` all reference functions and FakeGitHub features that only exist in the twin `workflow-templates/.claude/scripts/dispatch_workflow.py`. The modified existing test `test_returns_the_new_run_not_the_previous_one` asserts `result[\"matched_by\"] == \"new_run\"` but the old master module never sets `matched_by`. The monkeypatched `dw.new_runs` in `test_poll_failure_after_the_post_reports_dispatched_true` and `test_main_keeps_dispatched_true_on_a_failed_poll` is ineffective because the old `dispatch` calls `find_new_run` (not `new_runs`), and the unhandled fallback produces a different error message than the test expects.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: The plan at docs/plans/issue-5016-dispatch-exact-run-id-plan.md, Files & Modules section, lists `.claude/scripts/dispatch_workflow.py` as a file to change. Implementation Steps section says this file should gain `_post_dispatch` sending `return_run_details: true`, `new_runs`, `_response_run_id`, `_read_run`, updated `dispatch` with `matched_by`/`ambiguous`/`candidate_run_ids`, and an updated module docstring. The Done checklist in docs/implement-plan/issue-5016-dispatch-exact-run-id.md marks each of these items complete.\n  Expected change site: `.claude/scripts/dispatch_workflow.py` \u2014 the master copy, not the twin.\n  Evidence of absence: The file `.claude/scripts/dispatch_workflow.py` at the PR head (84cdcbd) is the old version. It lacks `new_runs`, `_response_run_id`, `_read_run`. Its `dispatch` does not send `return_run_details`, does not use `matched_by`, does not handle `ambiguous`/`candidate_run_ids`. Its `_post_dispatch` returns None and does not send `return_run_details: true`. The tests at `tests/test_dispatch_workflow.py` load from `SCRIPT_PATH = REPO_ROOT / \".claude\" / \"scripts\" / \"dispatch_workflow.py\"` (line 20), which resolves to the master copy. The new tests `test_uses_the_run_id_github_returned_even_when_a_newer_run_raced_in`, `test_response_id_stands_when_the_run_read_fails`, `test_response_without_a_usable_run_id_falls_back_to_polling`, `test_fallback_never_guesses_between_several_new_runs`, `test_post_dispatch_returns_the_response_object_or_none`, and `test_find_new_run_still_returns_the_newest_new_run` all reference functions and FakeGitHub features that only exist in the twin `workflow-templates/.claude/scripts/dispatch_workflow.py`. The modified existing test `test_returns_the_new_run_not_the_previous_one` asserts `result[\"matched_by\"] == \"new_run\"` but the old master module never sets `matched_by`. The monkeypatched `dw.new_runs` in `test_poll_failure_after_the_post_reports_dispatched_true` and `test_main_keeps_dispatched_true_on_a_failed_poll` is ineffective because the old `dispatch` calls `find_new_run` (not `new_runs`), and the unhandled fallback produces a different error message than the test expects.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4e773b6a137bb152effdbb41b4dc0a4eccdc140bc8b3cbc9f98d9c17e6517012",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36530290668",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36530290668",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929063939_80b8aac7fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36530290668"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T06:39:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
