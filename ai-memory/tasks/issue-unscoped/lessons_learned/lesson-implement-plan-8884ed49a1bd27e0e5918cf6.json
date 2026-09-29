@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T06:14:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Under the interim twin-first rule every review round that touches `.claude/**` needs another supervising-session twin sync, so a project that edits `.claude/` should expect one BLOCKED stop per such round.",
+  "phase": "implement_plan",
+  "pr_number": 4903,
+  "record_id": "lesson-implement-plan-8884ed49a1bd27e0e5918cf6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}

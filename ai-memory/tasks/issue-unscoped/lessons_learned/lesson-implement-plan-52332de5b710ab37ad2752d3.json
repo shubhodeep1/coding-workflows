@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T06:14:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`check_in_status.py` fails closed and reports a Claude-fixer PR as plain `open` when `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` is unset, so a resuming session must pass it (the review workflow's comment account) or it misses the pending review round.",
+  "phase": "implement_plan",
+  "pr_number": 4903,
+  "record_id": "lesson-implement-plan-52332de5b710ab37ad2752d3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:.claude/scripts/check_in_status.py"
+  ]
+}

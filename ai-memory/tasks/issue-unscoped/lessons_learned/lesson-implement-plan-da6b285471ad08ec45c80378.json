@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T06:14:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A regex that detects a file-write mode in `open(` must anchor on the mode argument (after a comma, `mode=`, or as `Path.open`'s first argument), not on any quoted string inside the call, or a one-letter file name such as `open('a')` reads as a write.",
+  "phase": "implement_plan",
+  "pr_number": 4903,
+  "record_id": "lesson-implement-plan-da6b285471ad08ec45c80378",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}
