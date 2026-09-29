@@ -1153,11 +1153,25 @@ reviews, comments, and conflicts stay a direct §12 request.
     - It runs `protected_path_authorization.py pr`, which makes one PR read
       and one files page per 100 files. Comments are read only for a
       protected PR.
-    - It passes unprotected PRs through unchanged. An authorized PR gets
-      `--match-head-commit <head>` added when the call has none.
+    - A call without `--match-head-commit` gets the head the check read, for
+      unprotected and authorized PRs alike. A push between the check and the
+      merge then fails the merge instead of landing a protected path
+      unchecked. An unprotected call that already names a head, or whose
+      head is not a 40-hex SHA, runs unchanged.
     - Otherwise it returns 3 without merging. It posts one comment per head
       (marker `<!-- ai:protected-path-authorization:v1 head=<sha> -->`) and
-      logs `PROTECTED_PATH_GATE pr=… decision=block`.
+      logs `PROTECTED_PATH_GATE pr=… decision=block … auto_merge=…`.
+    - A refused protected PR also has a pending auto-merge turned off (one
+      GraphQL `disablePullRequestAutoMerge` call, made only when the PR
+      read shows `auto_merge`). GitHub keeps auto-merge enabled across
+      pushes by anyone with write access. Without this, an auto-merge
+      enabled on an earlier, unprotected head would land the unauthorized
+      one. The call counts only when its response carries no GraphQL
+      `errors` and shows no auto-merge request left; otherwise it is
+      retried twice (2s, 4s), each retry after a PR read that ends the
+      loop if auto-merge is already off. `auto_merge=` in the log reads
+      `disabled`, `none pending`, or `disable failed: …`. A failure still
+      refuses the merge.
     - `review_enable_auto_merge.sh` then logs
       `AUTOFIX_AUTO_MERGE_PROTECTED_PATH … action=refuse` (squash) or
       `action=refuse_merge_commit` (forward-merge fallback PR) and withholds
@@ -1201,6 +1215,20 @@ reviews, comments, and conflicts stay a direct §12 request.
     Local CLI sessions with a PAT post without app attribution. They are
     human-watched, and CLAUDE.md §23.I forbids any Claude session from
     posting the command.
+    - An auto-merge is turned off only when the gate runs on the new head.
+      Suppose a push adds a protected path to a PR whose earlier head
+      already had auto-merge enabled, and the review of the new head ends in
+      findings, so it never reaches `review_enable_auto_merge.sh`. The gate
+      then relies on GitHub honouring that auto-merge's `--match-head-commit`
+      binding.
+    - The gate's call sites, its wrap test
+      (`tests/test_protected_path_authorization.py`), `ci.yml`, and the
+      release steps are outside the protected set, so a PR could unwrap a
+      merge call. Such a PR touches `scripts/*` or `.github/*`, so it never
+      takes the deterministic skip and always gets the full reviewer panel.
+      The wrap test fails CI on an unwrapped call unless the same PR also
+      edits the test. Protecting these files would stop most orchestrator
+      PRs for owner approval (AD-14 of the #4919 project).
   - Tests: `tests/test_protected_path_authorization.py` (own `ci.yml` step).
 - Once an Edit or Write to the root `.claude/**` is blocked or denied, the
   session never retries it

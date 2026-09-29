@@ -15,13 +15,18 @@
 #
 #   - a PR that changes no protected-equivalent path (`.claude/**`,
 #     `workflow-templates/.claude/**`, tests/test_claude_template_parity.py,
-#     and the gate's own two files) runs the command unchanged;
+#     and the gate's own two files) runs the command unchanged, except that a
+#     call without `--match-head-commit` gets the head the check read, so a
+#     push between the check and the merge cannot slip a protected path in;
 #   - a protected PR runs only when the repository owner authorized its
 #     current head with an `/authorize-protected-paths <sha>` comment; the
 #     command then gets `--match-head-commit <sha>` when it has none, so a
 #     later push cannot ride on the approval;
 #   - otherwise the command is not run: one instruction comment per head is
-#     posted, a warning is logged, and the wrapper returns 3. A failed read,
+#     posted, a pending auto-merge on the PR is turned off (GitHub keeps
+#     auto-merge across pushes by anyone with write access, so one enabled
+#     on an earlier, unprotected head would land this one), a warning is
+#     logged, and the wrapper returns 3. A failed read,
 #     a missing checker, or an unparseable call also returns 3 (fail closed).
 #
 # Callers put the PR number right after `pr merge`. A flag first
@@ -82,7 +87,7 @@ protected_path_guarded_merge()
 		_ppg_json="${_PROTECTED_PATH_GATE_CACHE_JSON}"
 		_ppg_rc="${_PROTECTED_PATH_GATE_CACHE_RC}"
 	else
-		local -a _ppg_check=(python3 "${PROTECTED_PATH_GATE_CHECKER}" pr --repo "${_ppg_repo}" --pr "${_ppg_pr}" --post-instructions)
+		local -a _ppg_check=(python3 "${PROTECTED_PATH_GATE_CHECKER}" pr --repo "${_ppg_repo}" --pr "${_ppg_pr}" --post-instructions --disable-auto-merge)
 		if [ -n "${_ppg_head}" ]; then
 			_ppg_check+=(--head "${_ppg_head}")
 		fi
@@ -97,15 +102,16 @@ protected_path_guarded_merge()
 		_PROTECTED_PATH_GATE_CACHE_JSON="${_ppg_json}"
 	fi
 
-	local _ppg_decision _ppg_protected _ppg_authorized_head _ppg_reason
+	local _ppg_decision _ppg_protected _ppg_authorized_head _ppg_reason _ppg_auto_merge
 	_ppg_decision="$(printf '%s' "${_ppg_json}" | jq -r '.decision // "block"' 2>/dev/null || echo "block")"
 	_ppg_protected="$(printf '%s' "${_ppg_json}" | jq -r 'if .protected == false then "false" else "true" end' 2>/dev/null || echo "true")"
 	_ppg_authorized_head="$(printf '%s' "${_ppg_json}" | jq -r '.head // ""' 2>/dev/null || echo "")"
 	_ppg_reason="$(printf '%s' "${_ppg_json}" | jq -r '.reason // .error // "no decision"' 2>/dev/null || echo "no decision")"
+	_ppg_auto_merge="$(printf '%s' "${_ppg_json}" | jq -r '.auto_merge // "not checked"' 2>/dev/null || echo "not checked")"
 
 	if [ "${_ppg_rc}" != "0" ] || [ "${_ppg_decision}" != "allow" ]; then
 		echo "::warning::protected-path gate refused the merge of PR #${_ppg_pr}: ${_ppg_reason}. The repository owner must post '/authorize-protected-paths <head sha>' on the PR (issue #4919)." >&2
-		echo "PROTECTED_PATH_GATE pr=${_ppg_pr} head=${_ppg_authorized_head:-${_ppg_head:-unknown}} decision=block rc=${_ppg_rc} reason=${_ppg_reason}" >&2
+		echo "PROTECTED_PATH_GATE pr=${_ppg_pr} head=${_ppg_authorized_head:-${_ppg_head:-unknown}} decision=block rc=${_ppg_rc} auto_merge=${_ppg_auto_merge} reason=${_ppg_reason}" >&2
 		return 3
 	fi
 	if [ "${_ppg_protected}" = "true" ]; then
@@ -117,6 +123,11 @@ protected_path_guarded_merge()
 			_ppg_cmd+=(--match-head-commit "${_ppg_authorized_head}")
 		fi
 		echo "PROTECTED_PATH_GATE pr=${_ppg_pr} head=${_ppg_authorized_head} decision=allow protected=true reason=${_ppg_reason}" >&2
+	elif [ -z "${_ppg_head}" ] && [[ "${_ppg_authorized_head}" =~ ^[0-9a-f]{40}$ ]]; then
+		# Bind an unprotected merge to the head whose files were checked, so a
+		# push that adds a protected path between the check and the merge
+		# fails the merge instead of riding on this decision.
+		_ppg_cmd+=(--match-head-commit "${_ppg_authorized_head}")
 	fi
 	"${_ppg_cmd[@]}"
 }

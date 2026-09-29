@@ -34,7 +34,7 @@ when all of these hold:
 
 Usage:
 
-  protected_path_authorization.py pr --repo OWNER/REPO --pr N [--head SHA] [--post-instructions]
+  protected_path_authorization.py pr --repo OWNER/REPO --pr N [--head SHA] [--post-instructions] [--disable-auto-merge]
   protected_path_authorization.py release --repo OWNER/REPO --base REF --head REF [--git-dir DIR]
 
 `pr` prints one JSON line with `decision` (`allow` or `block`), `protected`,
@@ -42,7 +42,11 @@ Usage:
 it, 2 means a read failed (the caller blocks), 1 is a usage error. With
 `--post-instructions`, a blocked protected PR gets one comment per head
 (marker `<!-- ai:protected-path-authorization:v1 head=<sha> -->`) naming the
-command; that comment is never a bare command, so it cannot authorize.
+command; that comment is never a bare command, so it cannot authorize. With
+`--disable-auto-merge`, a blocked protected PR also has a pending auto-merge
+turned off (GitHub keeps auto-merge across pushes by anyone with write
+access, so one enabled on an earlier, unprotected head would otherwise land
+the unauthorized one); the JSON's `auto_merge` field says what happened.
 
 `release` checks every non-merge commit in `<base>..<head>` that touches a
 protected path. A commit passes when one of its merged PRs
@@ -55,11 +59,16 @@ is not grandfathered and has no merged PR is blocked. A missing `<base>`
 prints one JSON line with `decision` (`pass` or `block`); exit 0 passes, 3
 blocks, 2 means a read failed, 1 is a usage error.
 
-GitHub API budget (CLAUDE.md §15), REST only, reads retried three times:
+GitHub API budget (CLAUDE.md §15), reads over REST and retried three times:
 `pr` costs one PR read and one files page per 100 files, plus, only for a
-protected PR, one comments page per 100 comments and at most one comment
-POST. `release` costs one `commits/{sha}/pulls` read per protected commit and
-one comments page per 100 comments per distinct PR that needs it.
+protected PR, one comments page per 100 comments, at most one comment
+POST, and, only when auto-merge is pending on a blocked PR, one GraphQL
+`disablePullRequestAutoMerge` mutation (the only mutation that turns
+auto-merge off). A failed mutation, including an HTTP 200 answer with
+`errors` or one that still shows an auto-merge request, is retried at most
+twice, each retry after one more PR read. `release` costs one `commits/{sha}/pulls` read per
+protected commit and one comments page per 100 comments per distinct PR
+that needs it.
 """
 
 from __future__ import annotations
@@ -287,10 +296,22 @@ def check_pr(
 	post_instructions: bool = False,
 	get: Callable[[str], Any] | None = None,
 	post: Callable[[str, str], None] | None = None,
+	disable_auto_merge: bool = False,
+	disable: Callable[[str], None] | None = None,
+	sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-	"""Fetch what `evaluate_pr` needs and return its decision."""
+	"""Fetch what `evaluate_pr` needs and return its decision.
+
+	With `disable_auto_merge`, a protected PR blocked for want of the owner's
+	comment also has a pending auto-merge turned off. GitHub keeps auto-merge
+	enabled when someone with write access pushes, so an auto-merge enabled on
+	an earlier, unprotected head would otherwise land this unauthorized one.
+	The PR read already carries `auto_merge`, so this costs a write only when
+	one is pending; a failed write is retried up to READ_ATTEMPTS times, each
+	retry after one more PR read (`_turn_off_auto_merge`)."""
 	get = get or gh_get_json
 	post = post or _post_comment
+	disable = disable or _disable_auto_merge
 	if not REPO_RE.fullmatch(repo or ""):
 		raise ValueError("--repo must be OWNER/REPO")
 	if number <= 0:
@@ -318,11 +339,88 @@ def check_pr(
 				post(f"repos/{repo}/issues/{number}/comments", instruction_body(head, protected_files(files)))
 			except ReadError as exc:
 				decision["instructions"] = f"post failed: {exc}"
+	if decision["decision"] == "block" and disable_auto_merge:
+		node_id = pr.get("node_id")
+		if not pr.get("auto_merge"):
+			decision["auto_merge"] = "none pending"
+		elif not isinstance(node_id, str) or not node_id:
+			decision["auto_merge"] = "disable failed: PR node_id is unavailable"
+		else:
+			decision["auto_merge"] = _turn_off_auto_merge(repo, number, node_id, get, disable, sleep)
 	return decision
+
+
+def _turn_off_auto_merge(
+	repo: str,
+	number: int,
+	node_id: str,
+	get: Callable[[str], Any],
+	disable: Callable[[str], None],
+	sleep: Callable[[float], None],
+) -> str:
+	"""Turn off the PR's pending auto-merge; return the `auto_merge` status.
+
+	Up to READ_ATTEMPTS mutations (2s, 4s backoff). Before each retry the PR
+	is read again: a failed attempt may still have landed, and a second
+	mutation on a PR with no auto-merge fails, so a re-read showing no
+	`auto_merge` counts as disabled. A read error there leaves the retry
+	to the mutation."""
+	failure: ReadError | None = None
+	for attempt in range(READ_ATTEMPTS):
+		if attempt:
+			sleep(2 ** attempt)
+			try:
+				fresh = get(f"repos/{repo}/pulls/{number}")
+			except ReadError:
+				fresh = None
+			if isinstance(fresh, dict) and not fresh.get("auto_merge"):
+				return "disabled"
+		try:
+			disable(node_id)
+			return "disabled"
+		except ReadError as exc:
+			failure = exc
+	return f"disable failed: {failure}"
 
 
 def _post_comment(path: str, body: str) -> None:
 	_gh_json([path, "-X", "POST", "-f", f"body={body}"])
+
+
+DISABLE_AUTO_MERGE_MUTATION = (
+	"mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) "
+	"{ pullRequest { autoMergeRequest { enabledAt } } } }"
+)
+
+
+def auto_merge_disable_error(result: Any) -> str:
+	"""Return "" when a `disablePullRequestAutoMerge` response confirms the PR
+	has no auto-merge request left, else why it does not. GraphQL can answer
+	HTTP 200 with a top-level `errors` array, so exit 0 alone proves nothing."""
+	if not isinstance(result, dict):
+		return "response is not a JSON object"
+	errors = result.get("errors")
+	if errors:
+		messages = [
+			str(error.get("message")) for error in errors
+			if isinstance(error, dict) and error.get("message")
+		] if isinstance(errors, list) else []
+		return "GraphQL errors: " + ("; ".join(messages) or "unreadable")
+	data = result.get("data")
+	payload = data.get("disablePullRequestAutoMerge") if isinstance(data, dict) else None
+	pull = payload.get("pullRequest") if isinstance(payload, dict) else None
+	if not isinstance(pull, dict):
+		return "response has no disablePullRequestAutoMerge.pullRequest"
+	if pull.get("autoMergeRequest") is not None:
+		return "auto-merge is still enabled after the mutation"
+	return ""
+
+
+def _disable_auto_merge(node_id: str) -> None:
+	result = _gh_json(["graphql", "-f", f"query={DISABLE_AUTO_MERGE_MUTATION}", "-f", f"id={node_id}"])
+	problem = auto_merge_disable_error(result)
+	if problem:
+		raise ReadError(f"gh api graphql disablePullRequestAutoMerge: {problem}")
 
 
 def _git(args: list[str], git_dir: str | None) -> str:
@@ -452,6 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
 	pr.add_argument("--pr", type=int, required=True)
 	pr.add_argument("--head", default=None)
 	pr.add_argument("--post-instructions", action="store_true")
+	pr.add_argument("--disable-auto-merge", action="store_true")
 	release = sub.add_parser("release", help="decide whether a release range may ship")
 	release.add_argument("--repo", required=True)
 	release.add_argument("--base", required=True)
@@ -467,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
 		return EXIT_USAGE if exc.code else EXIT_OK
 	try:
 		if args.command == "pr":
-			result = check_pr(args.repo, args.pr, args.head, args.post_instructions)
+			result = check_pr(args.repo, args.pr, args.head, args.post_instructions, disable_auto_merge=args.disable_auto_merge)
 			blocked = result["decision"] != "allow"
 		else:
 			result = check_release(args.repo, args.base, args.head, args.git_dir)
