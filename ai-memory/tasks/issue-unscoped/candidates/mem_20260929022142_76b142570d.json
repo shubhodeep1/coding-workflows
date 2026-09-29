@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u00a720.A changelog fragment for an observable behavior change to `classifier_outage_summary` (`first_ts`/`last_ts` semantics shifted from \"first/last record in load order\" to \"earliest/latest stamp across all sessions\").\n  expected_change_site: `changelog.d/4750-classifier-outage-denials.md`\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No `changelog.d/` file is added or amended by this PR; `git diff` against `HEAD~1` shows only `.claude/scripts/permission_prompts.py`, `docs/implement-plan/issue-4750-classifier-outage-get-session.md`, `tests/test_permission_prompts.py`, and `workflow-templates/.claude/scripts/permission_prompts.py`. The head-observed PR title explicitly tags this as a \"conformance fix\" so the original fragment can stay unchanged, but readers of the changelog will still see no entry explaining that `outage_denials.first_ts`/`last_ts` are now correctly bounded.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \u00a720.A changelog fragment for an observable behavior change to `classifier_outage_summary` (`first_ts`/`last_ts` semantics shifted from \"first/last record in load order\" to \"earliest/latest stamp across all sessions\").\n  Expected change site: `changelog.d/4750-classifier-outage-denials.md` (the existing fragment from PR #4821 does not document the `outage_denials` sub-summary or its `first_ts`/`last_ts` fields at all; SEMBLE [9] shows only the parent-feature keys are listed).\n  Evidence of absence: No `changelog.d/` file is added or amended by this PR; `git diff` against `HEAD~1` shows only `.claude/scripts/permission_prompts.py`, `docs/implement-plan/issue-4750-classifier-outage-get-session.md`, `tests/test_permission_prompts.py`, and `workflow-templates/.claude/scripts/permission_prompts.py`. The head-observed PR title explicitly tags this as a \"conformance fix\" so the original fragment can stay unchanged, but readers of the changelog will still see no entry explaining that `outage_denials.first_ts`/`last_ts` are now correctly bounded.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1b4bca0ee3dd41f8d74d3f512dd540ce68e53c3dbdea2657a82aaccb4f928dc1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4932,
+    "run_id": "36511279812",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36511279812",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929022142_76b142570d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4932,
+    "run_id": "36511279812"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T02:21:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
