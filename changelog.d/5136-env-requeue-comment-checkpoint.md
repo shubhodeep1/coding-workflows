@@ -10,7 +10,7 @@ The environment re-queue step of `claude-issue-queue-watchdog.yml` reads every c
 | Checkpoint | `CLAUDE_ISSUE_ENV_REQUEUE_CHECKPOINT`, cache key `claude-env-requeue-checkpoint-<run id>-<attempt>` |
 | New log lines | `env_requeue_scan_pending`, `env_requeue checkpoint status=<loaded, missing, invalid, off>` |
 
-What this means for operators: a flooded issue now recovers after a delay of one extra hourly run per 1,000 comments. `env_requeue_scan_pending` in the watchdog log means a scan is still in progress, not that it failed. The watchdog never acts on a partly read thread.
+What this means for operators: a flooded issue now recovers after a delay of one extra hourly run per 1,000 comments, and one more per 1,000 comments deleted before the scan's position. `env_requeue_scan_pending` in the watchdog log means a scan is still in progress, not that it failed. The watchdog never acts on a partly read thread.
 
 ### For contributors
 

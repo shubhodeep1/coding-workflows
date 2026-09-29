@@ -1289,15 +1289,21 @@ def _scan_issue_comments(read: Any, repo: str, number: int, state: dict[str, Any
 
 	``state`` (``_new_scan_state`` or a checkpoint entry) is updated in place
 	after every page, so a read error keeps the progress made so far:
-	``page`` is the page holding the last consumed comment, ``last_id`` its id,
-	``relevant`` the ``_env_relevant_comment`` compacts consumed so far, and
+	``page`` is the page to resume from (the page holding the last consumed
+	comment, or an earlier page a step back reached), ``last_id`` the id of
+	the last consumed comment, ``relevant`` the ``_env_relevant_comment``
+	compacts consumed so far, and
 	``complete`` whether the last read reached the end of the thread.
 
 	Comments are listed oldest first by id, so new comments only ever append.
 	The first read of a run re-reads the cursor page: when it is past page 1
 	and empty, or starts after ``last_id``, earlier comments were deleted and
 	the page boundaries moved, so the scan steps back one page and checks
-	again. Then it reads forward, keeping only comments newer than
+	again. Each step back is saved in ``page``, so a deletion larger than one
+	run's budget is walked back across runs (one extra run per 1,000 deleted
+	comments) instead of stalling. Re-reading an earlier page never skips or
+	duplicates a comment, because only ids above ``last_id`` are consumed.
+	Then it reads forward, keeping only comments newer than
 	``last_id``, until a short page ends the thread or ``budget`` reads were
 	spent. Calls: at most ``budget`` comment-page reads, and never fewer than
 	two, because the resume read of a full cursor page adds nothing new and a
@@ -1314,6 +1320,10 @@ def _scan_issue_comments(read: Any, repo: str, number: int, state: dict[str, Any
 		ids = [item.get("id") if isinstance(item, dict) and isinstance(item.get("id"), int) and not isinstance(item.get("id"), bool) else 0 for item in data]
 		if resuming and page > 1 and (not data or ids[0] > state["last_id"]):
 			page -= 1
+			# Keep the step back: a bulk deletion can move the cursor back
+			# more pages than one run reads, and the next run must continue
+			# from here instead of repeating the same reads forever.
+			state["page"] = page
 			continue
 		resuming = False
 		for item, cid in zip(data, ids):
@@ -1376,22 +1386,22 @@ def env_requeue_plan(
 	"""Read the blocked Claude issues and decide what to do with each (issue #4938).
 
 	Batching contract (CLAUDE.md §15):
-	  input   the registered repositories (``load_allowed_repos``);
-	  calls   one search per ``env_requeue_search_queries`` chunk and per 100
-	          results (at most ``ENV_REQUEUE_SEARCH_PAGES_MAX`` pages; one
-	          call per chunk while fewer than 100 issues are blocked), then
-	          one comment read per 100 comments of each candidate only, at
-	          most ``ENV_REQUEUE_COMMENT_PAGES_MAX`` per candidate; with a
-	          ``checkpoint``, those reads resume where the last run stopped
-	          (``_scan_issue_comments``), so a quiet issue costs one read;
-	  output  ``{"actions": [candidate fields + env_requeue_decision fields],
-	          "skipped": [...], "errors": [...], "searches": <n>,
-	          "pending": [{"repo", "issue_number", "issue_url",
-	          "cursor_page"}]}``;
-	  failure fail open: a failed search or comment read is listed under
-	          ``errors`` and that chunk or issue waits for the next hourly run;
-	          a search the API reports as incomplete, or with more results
-	          than were read, is listed under ``errors`` too.
+	input: the registered repositories (``load_allowed_repos``);
+	calls: one search per ``env_requeue_search_queries`` chunk and per 100
+		results (at most ``ENV_REQUEUE_SEARCH_PAGES_MAX`` pages; one call
+		per chunk while fewer than 100 issues are blocked), then one
+		comment read per 100 comments of each candidate only, at most
+		``ENV_REQUEUE_COMMENT_PAGES_MAX`` per candidate; with a
+		``checkpoint``, those reads resume where the last run stopped
+		(``_scan_issue_comments``), so a quiet issue costs one read;
+	output: ``{"actions": [candidate fields + env_requeue_decision fields],
+		"skipped": [...], "errors": [...], "searches": <n>,
+		"pending": [{"repo", "issue_number", "issue_url",
+		"cursor_page"}]}``;
+	failure: fail open: a failed search or comment read is listed under
+		``errors`` and that chunk or issue waits for the next hourly run; a
+		search the API reports as incomplete, or with more results than
+		were read, is listed under ``errors`` too.
 
 	``read`` is a ``path -> parsed JSON`` callable (``_gh_api_read`` by
 	default) that raises RuntimeError on failure.

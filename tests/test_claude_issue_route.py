@@ -2022,6 +2022,31 @@ def test_scan_steps_back_when_earlier_comments_were_deleted():
 	assert [c["id"] for c in state["relevant"]] == [*range(1, 351), 400]
 
 
+def test_scan_walks_back_a_bulk_deletion_across_runs():
+	# Review round 1 of PR #5177: 1,500 comments deleted before the cursor
+	# move it back 15 pages, more than one run reads. The step back must be
+	# kept, or every run repeats the same 10 reads and the scan never ends.
+	thread = [_env_comment(1, ENV_BLOCKER, 10)] + [_chatter(i) for i in range(2, 2501)]
+	state = route._new_scan_state()
+	while not route._scan_issue_comments(_thread_reader(thread), "shubhodeep1/digital_pa", 3, state):
+		pass
+	assert (state["page"], state["last_id"]) == (25, 2500)
+	del thread[1:1501]
+	thread.append(_env_comment(3000, PLAIN_BLOCKER, 1))
+	calls = []
+	assert route._scan_issue_comments(_thread_reader(thread, calls), "shubhodeep1/digital_pa", 3, state) is False
+	assert [c.rsplit("page=", 1)[1] for c in calls] == [str(page) for page in range(25, 15, -1)]
+	assert (state["page"], state["last_id"]) == (15, 2500)
+	state = json.loads(json.dumps(state))
+	calls.clear()
+	assert route._scan_issue_comments(_thread_reader(thread, calls), "shubhodeep1/digital_pa", 3, state) is True
+	# Pages 15-12 are empty; page 11 now starts with the new comment 3000,
+	# so the scan steps back once more to page 10 (last id 2500) and reads on.
+	assert [c.rsplit("page=", 1)[1] for c in calls] == ["15", "14", "13", "12", "11", "10", "11"]
+	assert [c["id"] for c in state["relevant"]] == [1, 3000]
+	assert (state["page"], state["last_id"]) == (11, 3000)
+
+
 def test_scan_keeps_progress_when_a_read_fails():
 	thread = [_chatter(i) for i in range(1, 251)]
 	state = route._new_scan_state()
