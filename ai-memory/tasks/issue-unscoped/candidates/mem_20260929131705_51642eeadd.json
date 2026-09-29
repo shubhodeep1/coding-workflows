@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/smoke_review_dispatch.sh:`grep -aE '^[^[:space:]]+ Captured INITIAL_HEAD_SHA=[0-9a-f]{40} for stale-base detection\\.$'` | severity=high | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The grep pattern accepts only lowercase hexadecimal SHAs, so an uppercase SHA in the Actions log is not matched.\n  WHY: Git SHAs can be represented in either case, and the case-sensitive pattern can cause verification to fail with a false negative.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: AD-10 \u2014 accept any single non-whitespace prefix token before \"Captured INITIAL_HEAD_SHA=\" in `smoke_review_checked_out_sha`, keep exactly one token required and first-match winning, with tests covering other token shapes plus lines that must stay ignored.\n  Expected change site: scripts/smoke_review_dispatch.sh regex line and tests/test_smoke_review_dispatch.py\n  Evidence of absence: Present. The diff shows the grep regex changed from an ISO-8601 timestamp anchor to `^[^[:space:]]+`, the test `test_checked_out_sha_accepts_any_single_prefix_token_but_nothing_looser` was added, and the progress log records AD-10. AD-1 through AD-9 from earlier rounds remain applied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: All planned deliverables per docs/plans/issue-5093-smoke-review-dispatch-default-branch-plan.md (helper script, prereqs id, Phase 3c / 4 / 4b blocks, tests, agents.md, docs/INVENTORY.md, changelog fragment, ci.yml registration).\n  Expected change site: this PR's diff\n  Evidence of absence: Present. scripts/smoke_review_dispatch.sh, the prereqs id and outputs, REVIEW_DISPATCH_REF env in inject-bait and verify-bait-removed, the leg (c) state machine, the Phase 4b adoption and correlation block, tests/test_smoke_review_dispatch.py with 20 checks, the ci.yml step registration, agents.md update, INVENTORY entry, and the security changelog fragment are all present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- scripts/smoke_review_dispatch.sh:smoke_review_checked_out_sha, around the `log_file=\"$(mktemp)\"` block\n  PROBLEM: The temp file created with mktemp is removed only on the explicit return / fall-through paths; if the caller exits abnormally (set -e trap, signal), the file leaks under /tmp.\n  WHY: Suggested minimal fix: add `trap 'rm -f \"${log_file}\"' RETURN` immediately after the mktemp call so every return path runs the cleanup.\n- scripts/smoke_review_dispatch.sh:smoke_review_pr_named_runs input validation\n  PROBLEM: Workflow-file regex `^[A-Za-z0-9][A-Za-z0-9_.-]*\\.yml$` allows multiple consecutive dots in the basename (e.g. `a..b.yml`), producing a syntactically valid but almost certainly 404 path on the API.\n  WHY: Suggested minimal fix: tighten the middle character class to disallow adjacent dots, e.g. `^[A-Za-z0-9](?:[A-Za-z0-9_-]*\\\\.[A-Za-z0-9_-]+)*\\\\.yml$`, so the bash side fails closed before the API round-trip.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/smoke_review_dispatch.sh:`grep -aE '^[^[:space:]]+ Captured INITIAL_HEAD_SHA=[0-9a-f]{40} for stale-base detection\\.$'` | severity=MAJOR | confidence=3\n  PROBLEM: The grep pattern only matches lowercase hexadecimal SHAs (`[0-9a-f]{40}`), but the workflow comparison uses case-insensitive matching (`${BAIT_SHA,,}` and `${RETRY_DISPATCH_SHA,,}`). If the Actions log contains an uppercase SHA, the grep will not match and the function returns 2 (line not found), causing verification to fail.\n  WHY: Git SHAs can be represented in either case. The test fixtures use lowercase SHAs (`BAIT = \"b\" * 40`), but there is no test covering uppercase SHAs in the log. The workflow's case-insensitive comparison suggests the code is prepared for either case, but the grep pattern is case-sensitive, creating a mismatch that could cause false negatives.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "865895d724235c79c35882addc4ad11abe80050620439f3808aca553dacb0b9b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5111,
+    "run_id": "36571421143",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36571421143",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929131705_51642eeadd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5111,
+    "run_id": "36571421143"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T13:17:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
