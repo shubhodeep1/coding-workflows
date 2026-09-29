@@ -1169,7 +1169,8 @@ reviews, comments, and conflicts stay a direct §12 request.
     `gh api` POST to `repos/<owner>/<repo>/issues/<N>/comments` whose
     output carries the comment's `html_url` or `issue_url`), and a write
     adding `ai:claude-blocked` to that issue (`mcp__*__issue_write` with
-    `labels`, or a `gh api` POST to `…/issues/<N>/labels`). A `Bash` call
+    `method: "update"` and `labels`, or a `gh api` POST to
+    `…/issues/<N>/labels`). A `Bash` call
     counts only when it holds `gh api` calls alone, joined by `&&` at most,
     after an optional leading `cd <path>;`. An `echo` of the marker, a
     comment on another issue or repository, or a failed or unverifiable

@@ -36,8 +36,9 @@ A verified blocker (issue #5082) is, in the current turn, both of:
   `repos/<owner>/<repo>/issues/<N>/comments`, with a non-error result that
   carries that issue's comment URL (`html_url` or `issue_url`);
 - a non-error write adding the `ai:claude-blocked` label to that same issue
-  (`mcp__*__issue_write` with `labels`, or a plain `gh api` POST to
-  `repos/<owner>/<repo>/issues/<N>/labels` with `labels[]=ai:claude-blocked`).
+  (`mcp__*__issue_write` with `method: "update"` and `labels`, or a plain
+  `gh api` POST to `repos/<owner>/<repo>/issues/<N>/labels` with
+  `labels[]=ai:claude-blocked`).
 A `Bash` call counts only when it is `gh api` calls alone, joined by `&&` at
 most, after an optional leading `cd <path>;` (no other program, `;`, pipe,
 redirect, or substitution). An `echo` of
@@ -82,6 +83,9 @@ CAP_MESSAGE_PREFIX = "unattended-question-guard: cap reached"
 BLOCKED_LABEL = "ai:claude-blocked"
 MCP_COMMENT_TOOL_SUFFIX = "__add_issue_comment"
 MCP_LABEL_TOOL_SUFFIX = "__issue_write"
+# `issue_write` also takes `method: "create"`, which ignores `issue_number` and
+# opens a new issue, so only an update can put the label on the marker's issue.
+MCP_LABEL_WRITE_METHOD = "update"
 
 _SESSION_FILE_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -263,6 +267,12 @@ def final_assistant_text(entries: list[dict]) -> str:
 
 
 def _contains_marker(value: object) -> bool:
+	"""True when the marker text appears anywhere in `value`.
+
+	Unused since issue #5082 and kept only under CLAUDE.md §6. This is the old
+	marker-anywhere check that an `echo` of the marker could satisfy: never use
+	it as evidence of a blocker. `blocked_comment_posted` is the check.
+	"""
 	if isinstance(value, str):
 		return BLOCKED_COMMENT_MARKER in value
 	if isinstance(value, dict):
@@ -481,7 +491,8 @@ def _blocked_label_targets(name: object, tool_input: object) -> set[tuple[str, i
 		return targets
 	if name.startswith("mcp__") and name.endswith(MCP_LABEL_TOOL_SUFFIX):
 		labels = tool_input.get("labels")
-		target = _mcp_issue_target(tool_input) if isinstance(labels, list) and BLOCKED_LABEL in labels else None
+		adds_label = tool_input.get("method") == MCP_LABEL_WRITE_METHOD and isinstance(labels, list) and BLOCKED_LABEL in labels
+		target = _mcp_issue_target(tool_input) if adds_label else None
 		if target is not None:
 			targets.add(target)
 	elif name == "Bash":
@@ -565,7 +576,7 @@ def _instructions(marker: dict) -> str:
 		f"- The stop is allowed only after this turn did both on {repo}#{issue}: the comment through "
 		f"`mcp__github__add_issue_comment`, or a plain `gh api repos/{repo}/issues/{issue}/comments -f body='…'` "
 		"command whose output shows the comment URL (no `--silent` and no `--jq` that drops `html_url`); and the "
-		f"label through `mcp__github__issue_write` (`labels` including `{BLOCKED_LABEL}`) or "
+		f"label through `mcp__github__issue_write` (`method: \"{MCP_LABEL_WRITE_METHOD}\"`, `labels` including `{BLOCKED_LABEL}`) or "
 		f"`gh api repos/{repo}/issues/{issue}/labels -f 'labels[]={BLOCKED_LABEL}'`. A `Bash` call counts only "
 		"when it holds `gh api` calls alone, joined by `&&` at most, after an optional leading `cd <path>;` (no "
 		"other program, `;`, pipe, redirect, or `$(...)`). An `echo` of the marker or a comment on another issue "

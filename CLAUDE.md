@@ -2366,7 +2366,7 @@ enforces §28.B and §28.C in those sessions. It is wired in
       `repos/<owner>/<repo>/issues/<N>/comments`, whose result carries that
       issue's comment URL (`html_url` or `issue_url`);
     - a write adding the `ai:claude-blocked` label to that issue, with
-      `mcp__*__issue_write` (`labels`) or a `gh api` POST to
+      `mcp__*__issue_write` (`method: "update"`, `labels`) or a `gh api` POST to
       `repos/<owner>/<repo>/issues/<N>/labels` (`labels[]=ai:claude-blocked`).
 
     A `Bash` call counts only when it holds `gh api` calls alone, joined by

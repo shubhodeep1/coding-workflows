@@ -164,14 +164,16 @@ def _mcp_comment(tool_id: str, owner: str = MARKED_OWNER, repo: str = MARKED_REP
 	return _tool_use(tool_id, "mcp__github__add_issue_comment", {"owner": owner, "repo": repo, "issue_number": issue, "body": body})
 
 
-def _mcp_label(tool_id: str, owner: str = MARKED_OWNER, repo: str = MARKED_REPO, issue: object = MARKED_ISSUE, labels: list | None = None) -> dict:
+def _mcp_label(tool_id: str, owner: str = MARKED_OWNER, repo: str = MARKED_REPO, issue: object = MARKED_ISSUE, labels: list | None = None, method: str | None = "update") -> dict:
 	tool_input = {
-		"method": "update",
+		"method": method,
 		"owner": owner,
 		"repo": repo,
 		"issue_number": issue,
 		"labels": ["ai:security", "ai:claude", "ai:claude-blocked"] if labels is None else labels,
 	}
+	if method is None:
+		del tool_input["method"]
 	return _tool_use(tool_id, "mcp__github__issue_write", tool_input)
 
 
@@ -450,6 +452,9 @@ def test_label_without_the_comment_does_not_count(tmp_path):
 		[_mcp_label("toolu_l", labels=["ai:claude"]), _tool_result("toolu_l", content=LABEL_RESULT)],
 		[_mcp_label("toolu_l"), _tool_result("toolu_l", is_error=True, content="403")],
 		[_mcp_label("toolu_l")],
+		[_mcp_label("toolu_l", method="create"), _tool_result("toolu_l", content=LABEL_RESULT)],
+		[_mcp_label("toolu_l", method=None), _tool_result("toolu_l", content=LABEL_RESULT)],
+		[_mcp_label("toolu_l", method="delete"), _tool_result("toolu_l", content=LABEL_RESULT)],
 		[_bash("toolu_l", "gh api repos/shubhodeep1/coding-workflows/issues/4911/labels -f 'labels[]=ai:claude'"), _tool_result("toolu_l", content=LABEL_RESULT)],
 		[_bash("toolu_l", "gh api repos/shubhodeep1/coding-workflows/issues/4912/labels -f 'labels[]=ai:claude-blocked'"), _tool_result("toolu_l", content=LABEL_RESULT)],
 		[_bash("toolu_l", "gh api -X DELETE repos/shubhodeep1/coding-workflows/issues/4911/labels -f 'labels[]=ai:claude-blocked'"), _tool_result("toolu_l", content="[]")],
