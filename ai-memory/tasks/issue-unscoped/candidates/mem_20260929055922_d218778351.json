@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:1196-1205 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The function does not explicitly pass `direction=desc` when fetching issue comments.\n  WHY: The GitHub API defaults to descending (newest first), but this is not guaranteed by the code; older comments might be retrieved first, causing the logic to miss the newest blocker marker and make an incorrect decision to skip or re-queue.\n- scripts/claude_issue_route.py:1116-1136 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Search results are capped at 1,000 items without truncation detection.\n  WHY: If the number of open issues with the specified labels exceeds 1,000, the search API silently truncates results, and the watchdog will omit the truncated issues from the re-queue plan, potentially leaving environment-blocked issues un-healed.\n- scripts/claude_issue_queue_watchdog.sh:182\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The Telegram alert `tg_send_msg` unconditionally appends `Run: ${RUN_URL}`, leaving a dangling `Run: ` line if `RUN_URL` is empty.\n  WHY: When `RUN_URL` is empty, the alert includes a `Run:` line with no URL.\n- scripts/claude_issue_queue_watchdog.sh:144-145\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `retry` and `retries` from the JSON payload are interpolated into comments and Telegram messages without validation as integers.\n  WHY: Unvalidated payload values are interpolated into comments and Telegram messages.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Watchdog tests went into tests/test_claude_issue_queue_watchdog_env_requeue.py [new] (wired into ci.yml)\"\n  expected_change_site: tests/test_claude_issue_queue_watchdog_env_requeue.py + .github/workflows/ci.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  EVIDENCE: The plan explicitly required a new test file wired into CI, but tests were added to the existing `tests/test_claude_issue_route.py` and no `ci.yml` changes were made; Tests added to existing test_claude_issue_route.py instead; no ci.yml change.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_route.py:1196-1205 (_read_issue_comments)\n  PROBLEM: The function does not explicitly pass `direction=desc` when fetching issue comments.\n  WHY: The GitHub API defaults to descending (newest first), but this is not guaranteed by the code. If the default changes or a different instance is used, older comments might be retrieved first, causing the logic to miss the newest blocker marker, leading to an incorrect decision to skip or re-queue.\n  ISSUE_CONFIDENCE: 4\n- scripts/claude_issue_route.py:1116-1136 (env_requeue_plan / search dispatch loop)\n  PROBLEM: Search results are capped at 1,000 items without truncation detection.\n  WHY: If the number of open issues with the specified labels exceeds 1,000, the search API silently truncates results, and the watchdog will omit the truncated issues from the re-queue plan, potentially leaving environment-blocked issues un-healed.\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"Watchdog tests went into tests/test_claude_issue_queue_watchdog_env_requeue.py [new] (wired into ci.yml)\"\n  Expected change site: tests/test_claude_issue_queue_watchdog_env_requeue.py + .github/workflows/ci.yml\n  Evidence of absence: The plan explicitly required a new test file wired into CI, but tests were added to the existing `tests/test_claude_issue_route.py` and no `ci.yml` changes were made. While the logic is tested, the plan-mandated test structure (new file + CI wiring) was not implemented.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- scripts/claude_issue_queue_watchdog.sh:182\n  Issue: The Telegram alert `tg_send_msg` unconditionally appends `Run: ${RUN_URL}`, which leaves a dangling `Run: ` line if `RUN_URL` is empty.\n  Suggested minimal fix: Guard the string append with a check: `[ -z \"${RUN_URL}\" ] || alert_msg+=$'\\n'\"Run: ${RUN_URL}\"`\n  HARDENING_RISK_SCORE: 1\n- scripts/claude_issue_queue_watchdog.sh:144-145\n  Issue: `retry` and `retries` from the JSON payload are interpolated into comments and Telegram messages without validation as integers.\n  Suggested minimal fix: Validate they match `^[0-9]+$` before interpolation.\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: \"Watchdog tests went into tests/test_claude_issue_queue_watchdog_env_requeue.py [new] (wired into ci.yml)\"\n  Expected change site: tests/test_claude_issue_queue_watchdog_env_requeue.py + .github/workflows/ci.yml\n  Evidence of absence: Tests added to existing test_claude_issue_route.py instead; no ci.yml change.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3e9a7f1e1197ed605d9fd83f5d510dff5e88717585830c3d0d45e6a2fdb84c29",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5006,
+    "run_id": "36527669459",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36527669459",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929055922_d218778351",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5006,
+    "run_id": "36527669459"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T05:59:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
