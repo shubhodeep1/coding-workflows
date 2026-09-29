@@ -98,6 +98,13 @@ REAL_FINDING = (
 	"  WHY: word splitting."
 )
 
+# The flagger's raw pass-2 output re-reporting both pass-1 entries, each in its
+# own File: record with its own consensus_id line (issue #4975).
+FLAGGER_CITES_BOTH = (
+	f"File: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\nProblem: lost its backtick\n\n"
+	f"File: README.md\nLine or code reference: 1264\nconsensus_id: {FLAW_ID}\nProblem: command injection\n"
+)
+
 # The run ID the manifest issues for the README pass-1 entry (issue #4688).
 FINDING_ID = "RF-0123456789abcdef"
 
@@ -301,7 +308,7 @@ def test_issue_4687_rejections_of_a_false_positive_do_not_demote_a_nearby_flaw(t
 	flaw = _with_id(FLAW_FINDING, FLAW_ID)
 	ledger = _ledger(README_FINDING + "\n" + flaw)
 	reviews = _reviews(tmp_path, rejecters=OTHERS, pass1=PASS1_README + "\n" + PASS1_FLAW,
-		flagger_output=f"consensus_id: {RID}\nconsensus_id: {FLAW_ID}\n")
+		flagger_output=FLAGGER_CITES_BOTH)
 	text, demoted = _run(tmp_path, ledger, reviews)
 	assert demoted == [] and text == ledger
 	# The flaw has no rejection; the rejected entry is ambiguous next to it.
@@ -354,6 +361,113 @@ def test_issue_4687_a_distant_finding_in_the_same_file_is_not_ambiguous(tmp_path
 	ledger = _ledger(README_FINDING + "\n" + far)
 	_text, demoted = _run(tmp_path, ledger, _reviews(tmp_path, rejecters=OTHERS))
 	assert [record["path"] + ":" + str(record["lines"][0]) for record in demoted] == ["README.md:1261"]
+
+
+# ── Issue #4975: the flagger's citation binds to one of its structured findings ──
+
+# The flagger's default pass-2 record: it re-reports the README pass-1 entry.
+CITING_RECORD = f"File: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\nProblem: lost its backtick\n"
+# A different, real defect the flagger raises on the same line in pass 2.
+NEW_DEFECT_RECORD = "File: README.md\nLine or code reference: 1261\nProblem: the example interpolates an untrusted title into a shell line\n"
+
+
+@pytest.mark.parametrize("quote", [
+	f"\nMy earlier finding {RID} was a false positive.\n",
+	f"\nconsensus_id: {RID}\n",
+	f"\n```\nFile: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\n```\n",
+	f"REJECTED_FINDING: {RID} | README.md:1261 | flagged_by: {FLAGGER} | reason: withdrawn\nconsensus_id: {RID}\n",
+	f"SUMMARY\nconsensus_id: {RID}\n",
+	f"## Withdrawn\nconsensus_id: {RID}\n",
+])
+def test_issue_4975_the_id_quoted_outside_a_finding_record_binds_nothing(tmp_path, quote):
+	"""The exploit: a new same-line defect, the old id quoted elsewhere, the id on the ledger entry."""
+	ledger = _ledger(README_FINDING)
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=NEW_DEFECT_RECORD + quote)
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews) == {"README.md:1261": "flagger_did_not_cite"}
+
+
+def test_issue_4975_an_id_line_before_any_finding_record_binds_nothing(tmp_path):
+	ledger = _ledger(README_FINDING)
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=f"consensus_id: {RID}\n\n" + NEW_DEFECT_RECORD)
+	assert _run(tmp_path, ledger, reviews)[1] == []
+	assert _kept(ledger, reviews) == {"README.md:1261": "flagger_did_not_cite"}
+
+
+@pytest.mark.parametrize("flagger_output", [
+	f"File: docs/other.md\nLine or code reference: 1261\nconsensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: 1300\nconsensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: the rewrapped backtick\nconsensus_id: {RID}\n",
+	f"File: README.md\nconsensus_id: {RID}\n",
+	f"File: (see above)\nLine or code reference: 1261\nconsensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\nconsensus_id: {FLAW_ID}\n",
+	CITING_RECORD + "\n" + CITING_RECORD,
+])
+def test_issue_4975_a_citation_that_does_not_bind_one_record_at_the_entry_stays_blocking(tmp_path, flagger_output):
+	ledger = _ledger(README_FINDING)
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=flagger_output)
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews) == {"README.md:1261": "flagger_citation_mismatch"}
+
+
+@pytest.mark.parametrize("other_record", [
+	NEW_DEFECT_RECORD,
+	"File: README.md\nLine or code reference: 1264\nProblem: injection\n",
+	"File: README.md:1258\nProblem: injection\n",
+	"File: README.md\nProblem: injection\n",
+	"File: (unknown)\nLine or code reference: 1261\nProblem: injection\n",
+])
+def test_issue_4975_another_flagger_finding_at_the_entry_keeps_it_blocking(tmp_path, other_record):
+	"""The summariser folded a same-line defect into the rejected entry: the flagger's output shows two findings there."""
+	ledger = _ledger(README_FINDING)
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=CITING_RECORD + "\n" + other_record)
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews) == {"README.md:1261": "ambiguous_flagger_nearby"}
+
+
+@pytest.mark.parametrize("other_record", [
+	"File: README.md\nLine or code reference: 1400\nProblem: stale link\n",
+	"File: scripts/foo.sh\nLine or code reference: 1261\nProblem: unquoted variable\n",
+])
+def test_issue_4975_a_distant_flagger_finding_does_not_block_demotion(tmp_path, other_record):
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=CITING_RECORD + "\n" + other_record)
+	_text, demoted = _run(tmp_path, _ledger(README_FINDING), reviews)
+	assert [record["path"] for record in demoted] == ["README.md"]
+
+
+@pytest.mark.parametrize("flagger_output", [
+	CITING_RECORD,
+	f"- **File:** `README.md:1261`\n- **Problem:** lost its backtick\n- **consensus_id:** `{RID}`\n",
+	f"File: `README.md`\nLine or code reference: `README.md:1261`\nconsensus_id: `{RID}`\n",
+	f"File: README.md\nLine: L1261\nconsensus_id: {RID}\n",
+	f"FILE: ./README.md\nLines: 1260-1262\nconsensus_id: {RID}\n",
+	f"File: README.md, line 1261\nconsensus_id: {RID}\n",
+	f"File: README.md\nconsensus_id: {RID}\nLine or code reference: 1261\nProblem: lost its backtick\n",
+	f"CORRECTNESS\nFile: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\n\nREJECTED_FINDING: none\n",
+])
+def test_issue_4975_a_citation_inside_the_flaggers_record_demotes(tmp_path, flagger_output):
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=flagger_output)
+	_text, demoted = _run(tmp_path, _ledger(README_FINDING), reviews)
+	assert [record["path"] for record in demoted] == ["README.md"]
+
+
+def test_issue_4975_finding_records_parse_the_reviewer_shape():
+	output = (
+		"SECURITY\n"
+		f"File: scripts/a.py\nLine or code reference: 40-44\nconsensus_id: {RID}\nProblem: x\n"
+		"Why it fails at runtime: y\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\n"
+		f"consensus_id: {FLAW_ID}\n"
+		"File: scripts/b.py:7\nLine or code reference: 99\nProblem: z\n"
+		"```\nFile: scripts/c.py\nLine or code reference: 1\n```\n"
+		"Requirement: add a flag\nExpected change site: scripts/d.py\n"
+	)
+	assert nonblocking.flagger_finding_records(output) == [
+		{"path": "scripts/a.py", "lines": (40, 44), "consensus_ids": [RID]},
+		{"path": "scripts/b.py", "lines": (7, 7), "consensus_ids": []},
+	]
 
 
 def test_a_duplicated_id_in_the_ledger_stays_blocking(tmp_path):
@@ -811,7 +925,7 @@ def test_issued_ids_drive_demotion_end_to_end(tmp_path):
 def test_issued_ids_never_demote_a_nearby_flaw_end_to_end(tmp_path):
 	"""#4687 on top of #4688: votes for the false positive's run ID leave the flaw beside it blocking."""
 	pass1 = _ledger(PASS1_README + "\n" + PASS1_FLAW)
-	reviews = _reviews(tmp_path, rejecters=[], manifest=False, flagger_output=f"consensus_id: {RID}\nconsensus_id: {FLAW_ID}\n")
+	reviews = _reviews(tmp_path, rejecters=[], manifest=False, flagger_output=FLAGGER_CITES_BOTH)
 	(reviews / "consensus_pass1.txt").write_text(pass1, encoding="utf-8")
 	entries = nonblocking.issue_ids(pass1, reviews / nonblocking.MANIFEST_NAME)
 	readme_id = next(e["id"] for e in entries if e["start"] == 1261)
@@ -924,6 +1038,7 @@ def test_cross_pollination_header_lists_issued_ids_and_shows_consensus_ids(tmp_p
 	# The ledger shown is annotated; the persisted pass-1 ledger is never rewritten.
 	assert f"  consensus_id: {RID}" in text.split("=== CONSENSUS FINDINGS ===", 1)[1]
 	assert "  consensus_id: <consensus_id>" in text
+	assert "a consensus_id anywhere else in your output does not count." in text
 	assert "consensus_id" not in (tmp_path / "runtime" / "previous_reviews" / "consensus_pass1.txt").read_text()
 	# A rebuilt header (same-head resume) issues fresh IDs.
 	proc, manifest, summary = _build_summary(tmp_path, SCRIPT.parent, PASS1_LEDGER)

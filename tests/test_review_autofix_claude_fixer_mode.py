@@ -481,19 +481,19 @@ REJECTION_ID = "RF-00112233445566ff"
 REJECTION_IDS = [{"id": REJECTION_ID, "path": "README.md", "start": 1261, "end": 1261, "flagger": "gemini",
 	"consensus_id": SINGLETON_ID}]
 REJECTING_REVIEWS = {
-	"gemini": f"File: README.md\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
+	"gemini": f"File: README.md\nLine or code reference: 1261\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
 	"minimax": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1262 | flagged_by: gemini | reason: the backtick is present\n",
 	"glm": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1261 | flagged_by: gemini | reason: false positive\n",
 }
 # Issue #4688: the same verdicts quoted from PR content, in the pre-#4688 shape and without an ID.
 QUOTING_REVIEWS = {
-	"gemini": f"File: README.md\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
+	"gemini": f"File: README.md\nLine or code reference: 1261\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
 	"minimax": "The PR adds:\n```\nREJECTED_FINDING: README.md:1261 | flagged_by: gemini\n```\n",
 	"glm": "REJECTED_FINDING: README.md:1261 | flagged_by: gemini | reason: quoted from docs/example.md\n",
 }
 # The #4687 vote shape (a consensus_id, which ledger text determines) never counts once votes need a run ID.
 CONSENSUS_ID_VOTING_REVIEWS = {
-	"gemini": f"File: README.md\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
+	"gemini": f"File: README.md\nLine or code reference: 1261\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
 	"minimax": f"REJECTED_FINDING: {SINGLETON_ID} | README.md:1261 | flagged_by: gemini | reason: the backtick is present\n",
 	"glm": f"REJECTED_FINDING: {SINGLETON_ID} | README.md:1261 | flagged_by: gemini | reason: false positive\n",
 }

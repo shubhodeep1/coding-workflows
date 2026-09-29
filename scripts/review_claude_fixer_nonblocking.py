@@ -16,12 +16,19 @@ consensus ids by issue #4687):
     (``consensus_pass1.txt`` in --reviews-dir, the ledger pass-2 reviewers saw
     in the cross-pollination summary), P is flagged by F alone, and P has the
     same file and an overlapping line range;
-  * F's own raw pass-2 output contains the id, so the flagger itself tied its
-    pass-2 finding to P (the summariser only copies the line);
+  * F's own raw pass-2 output ties one structured finding to P (issue
+    #4975): exactly one of its ``File:`` finding records (see
+    flagger_finding_records()) carries a whole ``consensus_id:`` line with
+    the id, and no other id, and that record names P's file with a line
+    reference overlapping both P's range and the entry's. The id quoted
+    anywhere else in the output binds nothing (the summariser only copies
+    the line);
   * the match is unambiguous: no other pass-1 CONSENSUS FINDINGS entry lies in
-    the same file within LINE_TOLERANCE lines of P, and no other CONSENSUS
+    the same file within LINE_TOLERANCE lines of P, no other CONSENSUS
     FINDINGS entry of this ledger lies in the same file within LINE_TOLERANCE
-    lines of the entry;
+    lines of the entry, and F reported no other finding record in the same
+    file within LINE_TOLERANCE lines of either range, in that file without a
+    readable line, or with an unreadable file;
   * at least MIN_REJECTERS successful reviewers other than F each cast a
     rejection vote (below) for a manifest entry whose consensus_id is P's,
     whose file is P's, whose range overlaps P's, and whose flagger is F;
@@ -163,6 +170,22 @@ REJECTION_VOTE_RE = re.compile(r"^ {0,3}(?:[-*] +)?REJECTED_FINDING:[ \t]*`?(?P<
 VOTE_REASON_RE = re.compile(r"(?:^|\|)[ \t]*reason:[ \t]*(?P<reason>\S.*?)[ \t]*$")
 VOTE_REASON_PLACEHOLDER_RE = re.compile(r"^<[^>]*>$")
 FENCE_RE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})")
+
+# Finding records in a reviewer's raw output (issue #4975). The flagger's
+# consensus_id citation binds only as a whole line inside one of them.
+RECORD_MARKUP = r"(?:\*\*|__)?"
+RECORD_FILE_RE = re.compile(rf"^\s*(?:[-*]\s+)?{RECORD_MARKUP}File{RECORD_MARKUP}\s*:{RECORD_MARKUP}\s*(?P<value>.*?)\s*$",
+	re.IGNORECASE)
+RECORD_LINE_RE = re.compile(
+	rf"^\s*(?:[-*]\s+)?{RECORD_MARKUP}(?:Line or code reference|Line reference|Lines?){RECORD_MARKUP}\s*:{RECORD_MARKUP}"
+	r"\s*(?P<value>.*?)\s*$", re.IGNORECASE)
+RECORD_PATH_RE = re.compile(r"^`?(?P<path>[^\s`|:,()]+)`?(?::L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?)?")
+RECORD_LINE_NUMBER_RE = re.compile(r"(?<![\w/.-])L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
+RECORD_CONSENSUS_ID_RE = re.compile(
+	rf"^\s*(?:[-*]\s+)?{RECORD_MARKUP}consensus_id{RECORD_MARKUP}:{RECORD_MARKUP}\s*`?(?P<consensus_id>{CONSENSUS_ID_PATTERN})`?\s*$")
+RECORD_BREAK_RE = re.compile(rf"^\s*(?:[-*]\s+)?(?:{RECORD_MARKUP}Requirement{RECORD_MARKUP}\s*:|REJECTED_FINDING\s*:|#)",
+	re.IGNORECASE)
+RECORD_HEADING_RE = re.compile(r"^[A-Z][A-Z0-9 /&()-]*[A-Z)]$")
 
 
 def _norm_path(path: str) -> str:
@@ -526,6 +549,71 @@ def _votes_in(text: str, manifest: dict[str, tuple[str, tuple[int, int], str]]) 
 	return votes
 
 
+def _record_lines(value: str) -> tuple[int, int] | None:
+	match = RECORD_LINE_NUMBER_RE.search(value)
+	return _range(match.group("start"), match.group("end")) if match else None
+
+
+def flagger_finding_records(text: str) -> list[dict]:
+	"""Return the ``File:`` finding records of a reviewer's raw output (issue #4975).
+
+	A record starts at a ``File:`` line outside any fenced code block and runs
+	to the first blank line, the next ``File:`` or ``Requirement:`` line, a
+	REJECTED_FINDING line, a heading, or a fence. Each record is a dict with
+	``path`` (None when the ``File:`` value is not a path), ``lines`` (None
+	when no line number is read from the ``File:`` value, its first
+	``Line or code reference:`` / ``Line:`` / ``Lines:`` field, or the rest of
+	the ``File:`` value), and ``consensus_ids``, the ids of the whole
+	``consensus_id:`` lines inside it. A consensus_id anywhere else in the
+	output (prose, a quote, a code block, a REJECTED_FINDING line, a line
+	after the record's blank line) belongs to no record and binds nothing.
+	"""
+	records: list[dict] = []
+	current: dict | None = None
+	open_fence: str | None = None
+	for line in text.splitlines():
+		fence = _fence_marker(line)
+		if open_fence is not None:
+			if fence and fence[0] == open_fence[0] and len(fence) >= len(open_fence) and not line.strip()[len(fence):].strip():
+				open_fence = None
+			continue
+		if fence:
+			open_fence = fence
+			current = None
+			continue
+		file_match = RECORD_FILE_RE.match(line)
+		if file_match:
+			value = file_match.group("value")
+			path_match = RECORD_PATH_RE.match(value)
+			path = _norm_path(path_match.group("path")) if path_match else None
+			lines = None
+			if path_match and path_match.group("start"):
+				lines = _range(path_match.group("start"), path_match.group("end"))
+			current = {"path": path or None, "lines": lines, "consensus_ids": [], "line_field_seen": False,
+				"file_rest": value[path_match.end():] if path_match else value}
+			records.append(current)
+			continue
+		if current is None:
+			continue
+		if not line.strip() or RECORD_BREAK_RE.match(line) or RECORD_HEADING_RE.match(line.strip()):
+			current = None
+			continue
+		id_match = RECORD_CONSENSUS_ID_RE.match(line)
+		if id_match:
+			current["consensus_ids"].append(id_match.group("consensus_id"))
+			continue
+		line_match = RECORD_LINE_RE.match(line)
+		if line_match and not current["line_field_seen"]:
+			current["line_field_seen"] = True
+			if current["lines"] is None:
+				current["lines"] = _record_lines(line_match.group("value"))
+	for record in records:
+		if record["lines"] is None and not record["line_field_seen"]:
+			record["lines"] = _record_lines(record["file_rest"])
+		del record["line_field_seen"], record["file_rest"]
+	return records
+
+
 def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: Path | None = None, *,
 		reviewers: dict[str, Path] | None = None, stats: dict | None = None) -> tuple[str, list[dict], list[dict], int]:
 	"""Return the filtered ledger, the demoted records, the kept single-reviewer
@@ -568,6 +656,7 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 	ledger_id_counts = Counter(cid for entry in consensus.entries for cid in entry_consensus_ids(entry))
 	ledger_locations = [entry_location(entry) for entry in consensus.entries]
 
+	records_by_flagger: dict[str, list[dict]] = {}
 	demoted: list[dict] = []
 	kept_records: list[dict] = []
 	kept: list[list[str]] = []
@@ -606,10 +695,22 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 				or not _overlaps(source["location"][1], lines)):
 			keep("consensus_id_mismatch")
 			continue
-		if cid not in outputs[flagger]:
+		# The flagger ties its pass-2 finding to P only through a whole
+		# consensus_id line inside one of its own File: records at P's
+		# location, never through the id quoted elsewhere (issue #4975).
+		if flagger not in records_by_flagger:
+			records_by_flagger[flagger] = flagger_finding_records(outputs[flagger])
+		flagger_records = records_by_flagger[flagger]
+		citing = [record for record in flagger_records if cid in record["consensus_ids"]]
+		if not citing:
 			keep("flagger_did_not_cite")
 			continue
 		source_lines = source["location"][1]
+		cited = citing[0]
+		if (len(citing) != 1 or set(cited["consensus_ids"]) != {cid} or cited["path"] != path or cited["lines"] is None
+				or not _overlaps(cited["lines"], source_lines) or not _overlaps(cited["lines"], lines)):
+			keep("flagger_citation_mismatch")
+			continue
 		if any(other is not source and other["location"] is not None and other["location"][0] == path
 				and _near(other["location"][1], source_lines) for other in pass1):
 			keep("ambiguous_nearby_pass1")
@@ -617,6 +718,10 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 		if any(other_index != index and other is not None and other[0] == path and _near(other[1], lines)
 				for other_index, other in enumerate(ledger_locations)):
 			keep("ambiguous_nearby")
+			continue
+		if any(record is not cited and (record["path"] is None or (record["path"] == path and (record["lines"] is None
+				or _near(record["lines"], source_lines) or _near(record["lines"], lines)))) for record in flagger_records):
+			keep("ambiguous_flagger_nearby")
 			continue
 		others = [slug for slug in reviewers if slug != flagger]
 		rejecters = sorted(slug for slug in others if any(
