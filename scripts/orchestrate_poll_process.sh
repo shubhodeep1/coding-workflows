@@ -1719,6 +1719,9 @@ if ! [[ "${STALL_THRESHOLD_MINUTES}" =~ ^[0-9]+$ ]] || [ "${STALL_THRESHOLD_MINU
   echo "::warning::STALL_THRESHOLD_MINUTES must be a positive integer; defaulting to 120"
   STALL_THRESHOLD_MINUTES="120"
 fi
+# Strip leading zeros: bash arithmetic reads "0120" as octal and fails on
+# "08", while `[ -lt ]` reads both as decimal.
+STALL_THRESHOLD_MINUTES="$(( 10#${STALL_THRESHOLD_MINUTES} ))"
 
 # Review-run freshness window for the in-flight / zombie guards.
 #
@@ -1746,6 +1749,8 @@ if ! [[ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" =~ ^[0-9]+$ ]] || [ "${REVIEW_RUN_MA
   echo "::warning::REVIEW_RUN_MAX_RUNTIME_MINUTES must be a positive integer; defaulting to 250"
   REVIEW_RUN_MAX_RUNTIME_MINUTES="250"
 fi
+# Decimal, as for STALL_THRESHOLD_MINUTES above.
+REVIEW_RUN_MAX_RUNTIME_MINUTES="$(( 10#${REVIEW_RUN_MAX_RUNTIME_MINUTES} ))"
 if [ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" -lt "${STALL_THRESHOLD_MINUTES}" ]; then
   echo "::warning::REVIEW_RUN_MAX_RUNTIME_MINUTES (${REVIEW_RUN_MAX_RUNTIME_MINUTES}) is below STALL_THRESHOLD_MINUTES (${STALL_THRESHOLD_MINUTES}); raising it to the stall threshold so review runs are never treated as zombies sooner than other runs."
   REVIEW_RUN_MAX_RUNTIME_MINUTES="${STALL_THRESHOLD_MINUTES}"
@@ -13814,7 +13819,9 @@ STALL_EOF
           # that hit the codex-agent job's 240-minute timeout ends only
           # minutes before it would leave that window, so a later poll cycle
           # would miss the failure and push an empty commit instead of
-          # redispatching.
+          # redispatching. Both terms are positive decimal integers by now:
+          # the startup block validates them, strips leading zeros, and
+          # floors REVIEW_RUN_MAX_RUNTIME_MINUTES at STALL_THRESHOLD_MINUTES.
           if [ -z "${_rtr_failed_conclusion}" ]; then
             local _rtr_pr_named_row _rtr_pr_named_conclusion _rtr_pr_named_created_at
             local _rtr_pr_named_json="" _rtr_pr_named_rc=0
