@@ -57,8 +57,10 @@ checks `<ref>`, with the refspec's source as the commit that would stack on
 it — so a detached worktree pushing to an open PR's branch is allowed while a
 worktree pushing merged history to a merged branch is blocked, whatever the
 main checkout is on. Deletions and tag refspecs are not judged. When the
-directory cannot be resolved (a variable, a subshell, `pushd`, a path that
-does not exist yet), that call is judged on the session checkout as before
+directory cannot be resolved (a variable, a subshell, `pushd`, a `cd` joined
+by `||`, `&` or `|`, a path that does not exist yet), or a refspec cannot be
+turned into one branch (a variable, a glob, a `heads/` shorthand, a source
+starting with `-`), that call is judged on the session checkout as before
 and a warning names the reason. Each `(slug, branch)` pair is looked up once
 per hook call.
 
@@ -133,6 +135,12 @@ _DIRECTORY_KEYWORD_PREFIXES = frozenset({"if", "then", "else", "elif", "do", "wh
 # `git push` options that consume the following word as their value.
 _PUSH_OPTS_WITH_VALUE = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
 _PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
+# A push refspec word containing any of these is a shell expansion or a
+# pattern the guard cannot turn into one branch name.
+_UNRESOLVABLE_REFSPEC_MARKERS = ("$", "`", "*", "?", "[", "{", "~")
+# Destination shorthands git expands against the remote's refs (`heads/x` →
+# `refs/heads/x`), which make the branch name ambiguous.
+_AMBIGUOUS_REFSPEC_PREFIXES = ("heads/", "tags/", "remotes/")
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -230,6 +238,44 @@ def _shell_segments(command: str) -> list[list[str]]:
 	if current_segment:
 		segments.append(current_segment)
 	return segments
+
+
+def _shell_segments_with_separators(command: str) -> list[tuple[list[str], str, str]]:
+	"""`_shell_segments`, keeping the separator before and after each segment.
+
+	Returns (tokens, separator before, separator after), with "" at the ends
+	of the command. The segments are exactly those of `_shell_segments`.
+	"""
+	lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer.commenters = ""
+	lexer.whitespace = " \t\r"
+	lexer.whitespace_split = True
+	# One pass collects alternating segments and (merged) separator runs.
+	pieces: list[list[str] | str] = []
+	for token in lexer:
+		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
+			if pieces and isinstance(pieces[-1], str):
+				pieces[-1] += token
+			else:
+				pieces.append(token)
+			continue
+		if pieces and isinstance(pieces[-1], list):
+			pieces[-1].append(token)
+		else:
+			pieces.append([token])
+	segments: list[tuple[list[str], str, str]] = []
+	for index, piece in enumerate(pieces):
+		if isinstance(piece, list):
+			before = pieces[index - 1] if index > 0 else ""
+			after = pieces[index + 1] if index + 1 < len(pieces) else ""
+			segments.append((piece, before, after))
+	return segments
+
+
+def _is_sequential_separator(separator: str) -> bool:
+	"""True for "", `;`, `&&` and newlines: the next segment runs in the same
+	shell after this one. `||`, `&`, `|` and redirections are not."""
+	return separator.replace("\n", "") in ("", ";", "&&")
 
 
 def _contains_shell_substitution(command: str) -> bool:
@@ -454,7 +500,7 @@ def _cd_destination(args: list[str], base: str) -> tuple[str | None, str]:
 	return _resolve_guard_path(operands[0], base)
 
 
-def _push_refspec_targets(args: list[str], repo_dir: str) -> list[GuardTarget]:
+def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> list[GuardTarget]:
 	"""Targets for `git push <args>` run in `repo_dir`.
 
 	`<src>:<dst>` (with an optional leading `+` and `refs/heads/` prefix) is
@@ -463,6 +509,12 @@ def _push_refspec_targets(args: list[str], repo_dir: str) -> list[GuardTarget]:
 	(`--delete`, `:<dst>`) and non-branch refs (`refs/tags/…`) land no commits
 	on a branch and yield no target. A push that names no refspec judges the
 	checked-out branch with HEAD, as before.
+
+	A refspec the guard cannot turn into one branch — a shell expansion or
+	pattern (`$B`, `refs/heads/*`), a `heads/` / `tags/` / `remotes/`
+	shorthand git expands against the remote, or a source starting with `-`
+	that git would read as an option — keeps the old behaviour: the session
+	checkout's branch and HEAD, with a `fallback_reason`.
 	"""
 	positionals: list[str] = []
 	index = 0
@@ -490,6 +542,10 @@ def _push_refspec_targets(args: list[str], repo_dir: str) -> list[GuardTarget]:
 		return [GuardTarget("push", repo_dir, "", "HEAD", True)]
 	targets: list[GuardTarget] = []
 	for refspec in refspecs:
+		unresolvable_reason = _unresolvable_refspec_reason(refspec)
+		if unresolvable_reason:
+			targets.append(GuardTarget("push", session_cwd, "", "HEAD", True, unresolvable_reason))
+			continue
 		spec = refspec[1:] if refspec.startswith("+") else refspec
 		if spec == ":":
 			# "Matching" push: judge the checked-out branch, as before.
@@ -509,6 +565,21 @@ def _push_refspec_targets(args: list[str], repo_dir: str) -> list[GuardTarget]:
 		tip = "HEAD" if source in ("HEAD", "@") else source
 		targets.append(GuardTarget("push", repo_dir, destination, tip, True))
 	return targets
+
+
+def _unresolvable_refspec_reason(refspec: str) -> str:
+	"""Why a push refspec cannot be judged on a single branch; "" when it can."""
+	if any(marker in refspec for marker in _UNRESOLVABLE_REFSPEC_MARKERS):
+		return f"refspec `{refspec}` needs shell expansion or is a pattern"
+	spec = refspec[1:] if refspec.startswith("+") else refspec
+	source, colon, destination = spec.partition(":")
+	if not colon:
+		destination = source
+	if source.startswith("-") or destination.startswith("-"):
+		return f"refspec `{refspec}` starts with `-`, which git would read as an option"
+	if destination.startswith(_AMBIGUOUS_REFSPEC_PREFIXES):
+		return f"refspec destination `{destination}` is a shorthand git expands against the remote's refs"
+	return ""
 
 
 def _git_invocation_targets(
@@ -564,7 +635,7 @@ def _git_invocation_targets(
 		return [GuardTarget(subcommand, session_cwd, "", "HEAD", reaches_remote, reason)]
 	if subcommand == "commit":
 		return [GuardTarget(subcommand, repo_dir, "", "HEAD", False)]
-	return _push_refspec_targets(args[index:], repo_dir)
+	return _push_refspec_targets(args[index:], repo_dir, session_cwd)
 
 
 def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
@@ -580,13 +651,13 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 	it ignores is judged here.
 	"""
 	try:
-		segments = _shell_segments(command)
+		segments = _shell_segments_with_separators(command)
 	except ValueError:
 		return []
 	targets: list[GuardTarget] = []
 	directory: str | None = session_cwd
 	unresolved = ""
-	for tokens in segments:
+	for tokens, separator_before, separator_after in segments:
 		assignments: dict[str, str] = {}
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
@@ -610,6 +681,15 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 				directory, unresolved = None, f"a directory change after `{executable}`"
 			elif executable == "export" and any(arg.split("=", 1)[0] == "GIT_DIR" for arg in args):
 				directory, unresolved = None, "`export GIT_DIR`"
+			elif executable == "cd" and not (
+				_is_sequential_separator(separator_before) and _is_sequential_separator(separator_after)
+			):
+				# `cd x || …`, `cd x & …`, `… | cd x`: the shell may not run the
+				# cd, or runs it in a subshell, so later commands' directory is
+				# unknown.
+				joined_by = separator_after if not _is_sequential_separator(separator_after) else separator_before
+				directory, unresolved = None, f"a `cd` joined by `{joined_by.strip()}`"
+				continue
 			elif executable == "cd":
 				destination, cd_reason = _cd_destination(args, directory)
 				if destination is None:

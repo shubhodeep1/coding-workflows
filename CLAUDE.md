@@ -916,9 +916,12 @@ pushing merged history to a merged branch with no open PR is blocked,
 whatever the main checkout is on. Deletions and tag refspecs land no commits
 on a branch and are not judged; a push without a refspec judges the current
 branch. When the directory cannot be resolved (a variable or command
-substitution, a subshell, `pushd`/`popd`, `export GIT_DIR`, a path that does
-not exist yet), that call is judged on the session checkout as before and the
-guard emits a warning naming the reason; it never fails open silently.
+substitution, a subshell, `pushd`/`popd`, a `cd` joined by `||`, `&` or `|`,
+`export GIT_DIR`, a path that does not exist yet), or a refspec cannot be
+turned into one branch (a variable, a glob or brace pattern, a `heads/` /
+`tags/` / `remotes/` shorthand, a word starting with `-`), that call is
+judged on the session checkout as before and the guard emits a warning naming
+the reason; it never fails open silently.
 Several guarded calls in one command are each judged: any block blocks,
 otherwise the warnings and at most one confirmation prompt are merged into one
 hook result.
