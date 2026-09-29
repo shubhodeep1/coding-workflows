@@ -5,23 +5,25 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4750-classifier-outage-get-session
 - Project branch: claude/implement-plan-issue-5012-legacy-outage-filed-counts   Final PR: #5028 draft
 - Status: BLOCKED
-- Stage: phase 1/1
+- Stage: validation cycle 1/3 (blocked before dispatch)
 - Activation: not started
-- Waiting on: phase 1 PR (twin sync by the master session, Q40)
+- Waiting on: none (answer on #5012, then `/reclarify`)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01Uy5MeMKSyq4MRk1wGxY62h (idle, kept for the resumed project)   safety net none   hand-back none
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented twin-first (Q40): only `workflow-templates/.claude/scripts/permission_prompts.py` changed under `.claude`; phase PR opened with a `hold` claim; waiting for the `[claude-twin-sync]` into `.claude/scripts/permission_prompts.py`
+- Last note: conformance run 1 CONFORMANT with no fix PR; security pass skipped per the plan header; runtime validation cannot run: validate.yml authorizes an explicit target_ref only through an open PR into the default branch, and final PR #5028 targets the #4750 project branch. Asked on #5012 (Q17 case).
 
 ## Phases
-1. [ ] Phase 1 — record-level filed state with legacy migration — protected paths: .claude/scripts/permission_prompts.py (edited only in its workflow-templates/.claude/ twin, Q40) — PR open, awaiting twin sync; review rounds: 0; interventions: 0
+1. [x] Phase 1 — record-level filed state with legacy migration — protected paths: .claude/scripts/permission_prompts.py (edited only in its workflow-templates/.claude/ twin, Q40; synced into `.claude/` by the master session in 8390e72) — PR #5039 merged 2026-09-29 (041e962, by the master session under Q46, evidence https://github.com/shubhodeep1/coding-workflows/pull/5039#issuecomment-5886043611); review rounds: 1 (all 17 findings rejected); interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT — no fixes (pre-security). Implemented: COMPLETE: every goal and implementation step maps to the merged code: record keys in `load_keyed_records` (`.claude/scripts/permission_prompts.py:289-306`), `load_records` unchanged in output (`:309-310`), legacy migration by load-order prefix with outages included (`_migrate_legacy_counts`, `:514-525`), v2 load with unknown or malformed state treated as empty (`_load_filed_records`, `:528-545`), v2 save (`:548-551`), pending records per signature and filed-key update only after a successful non-dry-run post (`file_patterns`, `:576-582`, `:610-612`), the module docstring (`:32-42`), the byte-identical `workflow-templates/.claude/` twin, `agents.md:1108-1116`, and `changelog.d/5012-legacy-outage-filed-counts.md` (`security`). Correctness: PASS: signatures and command shapes are unchanged against `main` (so legacy keys still match), `record_signature` is the same formula as `group_patterns`, a legacy entry covering only outages drops out and never hides a later real record, and `_load_state` / `_save_state` / `STATE_FILE` keep their names (§6). Checks: `pytest tests/test_permission_prompts.py` (83 passed), `pytest tests/test_update_workflows_guardrails.py` (12 passed), `ruff check` on the three changed Python files (clean), and the #5012 regression test fails against the base branch's filer (`test_legacy_count_that_included_outages_does_not_hide_a_new_real_denial`). AD-4's double read of `filed-state.json` stays as decided.
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue; security_pass_skip.py verified)
 
 ## Validation
+- Cycle 1 — 2026-09-29: not dispatched. `validate.yml@main` ("Authorize explicit validation target") accepts `target_ref` only when exactly one open PR has that head and `base=<default branch>`; the same listing for this project branch returns 0 PRs, because final PR #5028 targets `claude/implement-plan-issue-4750-classifier-outage-get-session` (project PR #4770, into `main`). Validating the default branch or the base branch in its place is not allowed, so this is a stop (CLAUDE.md §28.C), asked on #5012. Long-term fix: #4734.
 
 ## Completion
 
@@ -31,12 +33,15 @@
 - AD-1 [plan, 2026-09-29] How should the filer stop legacy counts from hiding real denials? — Picked: A — track filed records by key (`<log file>:<line>`) per signature in a versioned `filed-state.json`, migrating legacy counts by the load-order prefix. Alternatives: B — keep counts and subtract each signature's outage records once; C — discard legacy state. Why: A is exact for both old and new state and is the issue's second recommendation; B is wrong when outages arrived after the last filing; C re-comments every pattern. Applied in: phase 1 PR. Status: pending review
 - AD-2 [plan, 2026-09-29] How is an unversioned state treated when it may have been written by the unreleased #4750 code (outage-exclusive counts)? — Picked: A — always as outage-inclusive (the released behaviour). Alternatives: B — as outage-exclusive; C — guess per signature. Why: A can only over-report (one extra comment), B can still hide real denials, which is the defect. Applied in: phase 1 PR. Status: pending review
 - AD-3 [plan, 2026-09-29] Does the state file keep its name? — Picked: A — keep `filed-state.json`, add `"version": 2`. Alternatives: B — a new file name. Why: §6; the version key tells the formats apart. Applied in: phase 1 PR. Status: pending review
+- AD-4 [phase 1/1 — review round 1, 2026-09-29] Fix or reject the valid double-read NIT on filed-state.json, given the fix needs a protected-path twin-first cycle? — Picked: A — reject with reasons (no correctness impact; at worst over-reporting). Alternatives: B — fix twin-first under Q40. Why: §5 minimal change; B costs a master sync and a new review round for a NIT. Applied in: no code change. Status: pending review
+- AD-5 [validation 1/3, 2026-09-29] How is the BLOCKED state persisted when no PR is in flight? — Picked: A — one docs-only log commit pushed straight to the project branch, like the step 3a log commit. Alternatives: B — leave the log at the phase 1 blocker and carry the state only in the issue comment. Why: with B, a resumed session would read a stale phase 1 blocker and an unticked phase, so a `/reclarify` could not resume from the log. Applied in: no code change (log commit). Status: pending review
 
 ## Lessons
 - [source:security] A filer state that stores cumulative per-pattern counts breaks silently when the grouping later drops records; key filed state by stable record identity (file + line for append-only logs) and migrate old counts by their load-order prefix. (files: .claude/scripts/permission_prompts.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29) (operator comment 5883926767 on #5012).
-- Blocked 2026-09-29 before phase 1: protected-path approval asked on #5012 (`ai:claude-blocked`). Answer with a `Protected-path approval: phase 1 — <letter> (<date>)` line and `/reclarify`.
+- Blocked 2026-09-29 before phase 1: protected-path approval asked on #5012 (`ai:claude-blocked`). Resolved 2026-09-29: answered Q1: A (twin-first per Q40, operator comment 5883926767); the master session synced the twin (8390e72) and merged PR #5039 under Q46.
+- Blocked 2026-09-29 at validation cycle 1/3 (before dispatch): `validate.yml` cannot authorize a `target_ref` whose final PR targets another project's branch. Asked on #5012 (`ai:claude-blocked`); the standing decision for this case is Q17 in `docs/operations/master-session.md` on `main`. Answer on the issue and comment `/reclarify`.
 - This log update was pushed directly to the project branch as part of step 3a (no phase PR is in flight to carry it), so a resumed stage sees `Final PR: #5028` and does not open a second final PR.
 - Started by the Claude issue dispatcher routine (trigger trig_01FzNj7jt3iTsxF8CUydykuf) in session session_01FxPzZDsebojWQPAqJirYk1; `gh` was installed by running `.claude/hooks/session-start.sh` because the repository was attached mid-session; the GitHub MCP tools were not available, so issue and PR writes used `gh api` REST calls the §23.H guard classifies as routine.
