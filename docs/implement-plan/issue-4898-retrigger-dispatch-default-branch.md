@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-4898-retrigger-dispatch-default-branch-plan.md
 - Source issue: shubhodeep1/coding-workflows#4898 (https://github.com/shubhodeep1/coding-workflows/issues/4898)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4701-review-dispatch-default-branch
-- Project branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch   Final PR: pending
+- Project branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch   Final PR: #4923 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,16 +11,16 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from #4701's project branch; phase 1 starting
+- Last note: phase 1 implemented and verified locally; phase PR opened
 
 ## Phases
 1. [ ] Phase 1 — default-branch retrigger dispatch plus PR-named probes
-   - [ ] both retrigger step bodies dispatch without `--ref`, with a validated PR number, wrappers first and `review_autofix.yml` last (AD-2, AD-3)
-   - [ ] `_autofix_pr_named_review_runs` helper (AD-5); `autofix_retrigger_has_inflight_peer` sees PR-named in-flight runs (fail open)
-   - [ ] `autofix_changes_lost_head_retry_consumed` counts PR-named completed runs since the head's push-time bound (fail closed, AD-4)
-   - [ ] both step bodies moved to `scripts/review_autofix_step_{post_commit_retrigger,changes_lost_redispatch}.sh`, registered (AD-8)
-   - [ ] E2E exposure comments in `test-and-mark-stable.yml` (AD-6)
-   - [ ] tests, `README.md`, `agents.md`, `docs/INVENTORY.md`, `changelog.d/4898-retrigger-dispatch-default-branch.md`
+   - [x] both retrigger step bodies dispatch without `--ref`, with a validated PR number, wrappers first and `review_autofix.yml` last (AD-2, AD-3)
+   - [x] `_autofix_pr_named_review_runs` helper (AD-5); `autofix_retrigger_has_inflight_peer` sees PR-named in-flight runs (fail open)
+   - [x] `autofix_changes_lost_head_retry_consumed` counts PR-named completed runs since the head's push-time bound (fail closed, AD-4)
+   - [x] both step bodies moved to `scripts/review_autofix_step_{post_commit_retrigger,changes_lost_redispatch}.sh`, registered (AD-8)
+   - [x] E2E exposure comments in `test-and-mark-stable.yml` (AD-6)
+   - [x] tests, `README.md`, `agents.md`, `docs/INVENTORY.md`, `changelog.d/4898-retrigger-dispatch-default-branch.md`
 
 ## Conformance
 
@@ -43,9 +43,12 @@
 - AD-8 [plan, 2026-09-29] How does `review_autofix.yml` stay under §27 as the bodies grow? — Picked: A — move both retrigger step bodies whole into `scripts/review_autofix_step_<slug>.sh`. Alternatives: B — keep them inline; C — move only the shared dispatch chain. Why: the issue asks for the move; the registry keeps contract tests reading the same text. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] Moving a dispatch off the head ref also blinds any head-SHA loop bound keyed on that dispatch's runs; extend the bound (here, PR-named runs since the push) in the same change, or the retry loop loses its limit. (files: scripts/gh_helpers.sh, scripts/review_autofix_step_changes_lost_redispatch.sh)
+- [source:plan-deviation] `tests/test_log_prefix_regressions.sh` pins the exact `AUTOFIX_PEER_CHECK` line, so a new field on a pinned log line is a breaking change; keep the line and surface new detail elsewhere. (files: scripts/gh_helpers.sh, tests/test_log_prefix_regressions.sh)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #4898; start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
 - Security pass: `security_pass_skip.py` returned `skip: false` (`no skip label`), so the pass runs.
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4898#issuecomment-5882065747 (id 5882065747).
+- Phase 1: `AUTOFIX_PEER_CHECK` keeps its exact field set (pinned by `tests/test_log_prefix_regressions.sh`), so the plan's `peer_source=` field was dropped; a PR-named peer shows in `peer_run` / `peer_path`. `tests/test_gh_helpers_list_runs_method.py` was not run by CI before; phase 1 adds it, with the new module, to the "Editor-changes-lost re-dispatch budget tests" step.
 - The invoking session started without `gh` and without the GitHub MCP tools; `gh` was installed with `.claude/hooks/session-start.sh`, and GitHub writes go through `gh api` (REST) via the session proxy.
