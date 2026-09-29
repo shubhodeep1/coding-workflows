@@ -184,9 +184,14 @@ def test_truncated_file_list_counts_as_protected():
 
 def test_head_mismatch_and_missing_head_block():
 	files = [{"filename": "README.md"}]
+	protected = [{"filename": ".claude/settings.json"}]
 	assert ppa.evaluate_pr(_pr(), files, True, None, expected_head=OTHER)["decision"] == "block"
-	assert ppa.evaluate_pr(_pr(head=""), files, True, None)["decision"] == "block"
-	assert ppa.evaluate_pr({"number": 7}, files, True, None)["decision"] == "block"
+	assert ppa.evaluate_pr(_pr(head=""), files, True, None, expected_head=HEAD)["decision"] == "block"
+	# A protected PR needs a real head to bind and authorize.
+	assert ppa.evaluate_pr(_pr(head=""), protected, True, [_comment()])["decision"] == "block"
+	assert ppa.evaluate_pr({"number": 7}, protected, True, [_comment()])["decision"] == "block"
+	# An unprotected PR merges as before, whatever its head looks like.
+	assert ppa.evaluate_pr(_pr(head="sha910"), files, True, None)["decision"] == "allow"
 
 
 def test_approval_of_an_older_head_does_not_carry_over():

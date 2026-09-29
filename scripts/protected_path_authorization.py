@@ -227,18 +227,20 @@ def evaluate_pr(
 		"authorized": False,
 		"reason": "",
 	}
-	if not isinstance(head, str) or not SHA_RE.fullmatch(head):
-		result["reason"] = "PR head SHA is unavailable"
-		return result
 	if expected_head is not None and expected_head != head:
-		result["reason"] = f"PR head moved to {head}; the merge was bound to {expected_head}"
+		result["reason"] = f"PR head moved to {head or 'an unknown head'}; the merge was bound to {expected_head}"
 		return result
 	paths = protected_files(files)
 	changed = pr.get("changed_files")
 	truncated = not files_complete or (isinstance(changed, int) and changed > len(files))
 	result["paths"] = paths[:PATHS_IN_OUTPUT]
 	if not paths and not truncated:
+		# An unprotected merge runs exactly as before (§5); a head SHA is
+		# only needed to bind and authorize a protected one.
 		result.update({"decision": "allow", "protected": False, "reason": "no protected-equivalent path changed"})
+		return result
+	if not isinstance(head, str) or not SHA_RE.fullmatch(head):
+		result["reason"] = "PR head SHA is unavailable"
 		return result
 	if comments is None:
 		result["reason"] = "comments were not read"
