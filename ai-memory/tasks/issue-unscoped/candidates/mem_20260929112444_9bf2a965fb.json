@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_checker_restart.py:211-218 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: A per-branch `git show` failure in `read_project_logs` is silently swallowed, dropping that branch from the returned candidates without recording the failure in `errors[]`.\n  WHY: A temporarily unreadable project log can hide its checker for that wake and delay a restart; severity ranged from NIT to MAJOR, so the highest rating is used.\n- scripts/claude_checker_restart.py:433-444 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: The `_project_trigger` truncated-name matching may fail to recognize an active restart-created trigger for a long slug, allowing the requeue guard to create a duplicate trigger.\n  WHY: The reported failure depends on truncation details; qwen_qwen3_7-plus and z-ai_glm-5_2 traced the documented truncation cases and concluded the matching logic catches them.\n- scripts/claude_checker_restart.py:135-156 | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `ReadError` messages from `_git` and `gh_api` omit which command or request failed.\n  WHY: Errors appended by callers lack the endpoint or command context needed to attribute repeated transient failures during triage.\n- scripts/claude_checker_restart.py:186-189 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_git` failure messages report only the subcommand name and omit its arguments, such as the SHA, ref, or path.\n  WHY: When a per-branch `git show` failure is reported, operators cannot identify the affected branch or commit from the error string.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_checker_restart.py: lines 212-217 | severity=NIT | confidence=4\n  PROBLEM: A per-branch `git show` failure in `read_project_logs` is silently swallowed without recording the failure in `errors[]`.\n  WHY: The affected project is omitted from candidates for that wake, with no indication in the pickup report or workflow log.\n- scripts/claude_checker_restart.py: lines 433-444 | severity=NIT | confidence=3\n  PROBLEM: For sufficiently long slugs, the truncated restart trigger name may not match the stem or prompt-path fallback in `_project_trigger`.\n  WHY: The requeue guard could miss a pending trigger and attempt to create a duplicate trigger.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_checker_restart.py: lines 212-217 | confidence=4\n  PROBLEM: Per-branch `git show` failures are silently swallowed, omitting unreadable branches from the candidate set without recording an error in `errors[]`.\n  WHY: A temporarily unreadable project checker is silently skipped for that wake, delaying restart until a later successful read.\n- scripts/claude_checker_restart.py: lines 433-444 | confidence=4\n  PROBLEM: The `_project_trigger` matching logic may fail for truncated names with very long slugs.\n  WHY: The requeue guard may miss an active trigger and create a duplicate trigger.\n- scripts/claude_checker_restart.py: lines 135-156 | confidence=4\n  PROBLEM: The `ReadError` message omits the context of which request (URL or command) failed.\n  WHY: Errors appended by callers lack the endpoint needed to attribute repeated transient failures during triage.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_checker_restart.py: lines 211-218, the per-branch `git show` loop in `read_project_logs`; `except ReadError: continue` at lines 216-217 | severity=MAJOR | confidence=5\n  PROBLEM: A per-branch `git show` failure is silently swallowed, dropping the branch from the returned dict without recording the failure in `errors[]`.\n  WHY: A temporarily unreadable branch log can silently hide its checker for that wake and leave the operator without a triage signal.\n- scripts/claude_checker_restart.py: lines 427-445, `_project_trigger`; specifically the third branch at line 443 (`if f\"/{slug}-plan.md\" in trigger[\"prompt\"]`) | severity=NIT | confidence=3\n  PROBLEM: If stem matching fails for an unusual long-slug trigger truncation, the prompt-path fallback cannot recognize a trigger created by this script because `RESTART_PROMPT` does not reference a plan path.\n  WHY: The requeue guard could miss an existing trigger and create a duplicate, although the reviewer notes this depends on a truncation marker other than `\u2026` or no marker.\n- scripts/claude_checker_restart.py: lines 186-189, `_git` exception path; `raise ReadError(f\"git {args[0]} failed: ...\")` | severity=NIT | confidence=3\n  PROBLEM: `_git` reports only the subcommand name and not the full arguments, such as the SHA, ref, or path.\n  WHY: A reported per-branch `git show` failure does not identify the affected branch or commit.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_checker_restart.py: read_project_logs, the `except ReadError: continue` inside the `for branch in present:` loop (lines 212-217) | severity=NIT | confidence=4\n  PROBLEM: A per-branch `git show` failure is silently swallowed, omitting the branch from the returned dict without adding an entry to `errors[]`.\n  WHY: The matching checker is omitted from that wake's candidates, leaving the operator without visibility into why it was skipped.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/claude_checker_restart.py:216 | severity=NIT | confidence=4\n  PROBLEM: `except ReadError: continue` silently drops the branch without an `errors[]` entry.\n  WHY: A temporary `git show` failure omits the checker for that wake with no visibility.\n- scripts/claude_checker_restart.py:440 | severity=NIT | confidence=3\n  PROBLEM: Stem matching for truncated names can fail for long slugs.\n  WHY: The requeue guard may miss an active trigger and create a duplicate.\n\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_checker_restart.py: lines 212-217, `read_project_logs` per-branch `git show` loop | severity=NIT | confidence=4\n  PROBLEM: A per-branch `git show` failure is silently swallowed, dropping the branch from the returned dict without recording the failure in `errors[]`.\n  WHY: The matching checker is silently omitted from that wake's candidates, with no error entry in the pickup report or workflow log.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9af222058a8c15128d8ffdf7270e15f8e508ddbd5575e4d048852843913a23a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4984,
+    "run_id": "36557218274",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36557218274",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929112444_9bf2a965fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4984,
+    "run_id": "36557218274"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T11:24:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
