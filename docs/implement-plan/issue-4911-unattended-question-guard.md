@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#4911 (https://github.com/shubhodeep1/coding-workflows/issues/4911)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4911-unattended-question-guard   Final PR: #4964 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: PR #5003 twin sync by the supervising session (interim twin-first rule, operator hook approval window Q62/Q64), then `/reclarify` on #4911
+- Waiting on: the twin-sync follow-up PR from `claude/implement-plan-issue-4911-unattended-question-guard-phase-1-2` (number in the issue progress comment)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented twin-first and pushed as PR #5003 with a `hold` claim on its head; stopped BLOCKED on #4911 listing the 5 files to copy (new hook, settings.json, 3 commands).
+- Last note: PR #5003 merged into the project branch at 04:19Z before the operator's `[claude-twin-sync]` (`2008e8a`, 04:40Z) reached its branch; the reviewed sync commit is carried to the project branch as a follow-up PR (cherry-pick, hashes match the blocker).
 
 ## Phases
-1. [ ] Phase 1 — unattended question guard (`Stop` + `AskUserQuestion` hook, issue-mode marker)   — PR #5003 open (hold: awaiting twin sync); review rounds: 0; interventions: 0 — protected paths: `.claude/hooks/unattended_question_guard.py` [new], `.claude/settings.json`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/seed-repo.md` (all edited through their `workflow-templates/.claude/` twins)
+1. [ ] Phase 1 — unattended question guard (`Stop` + `AskUserQuestion` hook, issue-mode marker)   — PR #5003 merged 2026-09-29 (twins only); `.claude/` sync follow-up PR from `…-phase-1-2` pending; review rounds: 0; interventions: 0 — protected paths: `.claude/hooks/unattended_question_guard.py` [new], `.claude/settings.json`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/seed-repo.md` (all edited through their `workflow-templates/.claude/` twins)
    - [x] `workflow-templates/.claude/hooks/unattended_question_guard.py`: `mark` CLI, `Stop` block with cap 2, `AskUserQuestion` deny, fail open
    - [x] `workflow-templates/.claude/settings.json`: `Stop` + `PreToolUse` `AskUserQuestion` wiring, two `mark` allow rules
    - [x] `workflow-templates/.claude/commands/implement-issue-claude.md` step 0 + `implement-plan-claude.md` step 1 / Issue Mode: run `mark`
@@ -44,8 +44,10 @@
 - AD-8 [plan, 2026-09-29] How is `AskUserQuestion` denied? — Picked: A — `permissionDecision: "deny"` JSON. Alternatives: B — exit 2 with stderr. Why: an explicit deny, as the issue asks. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] Under the interim twin-first rule a `hold` claim does not stop the phase PR from merging; the twin sync must land on the phase branch before the PR can merge, or be carried to the project branch in a follow-up PR when it lands after the merge. (files: .claude/scripts/claude_fix_claim.py, docs/operations/master-session.md)
 
 ## Notes
+- 2026-09-29 04:42Z: master session `session_01LF9aeTnk15B7e9mKy7vDNM` resumed this session (trigger `trig_01PhibSPc3TR6MVh642f3n1M`) after the `[claude-twin-sync]` (`2008e8a`, 775 tests) and asked to arm the review wait on PR #5003. PR #5003 had already merged (squash `1c2c3ad`, 04:19Z) without the sync, so the stage cherry-picked `2008e8a` onto `claude/implement-plan-issue-4911-unattended-question-guard-phase-1-2` (sha256 of the hook `db5f32ba…` and `settings.json` `1121fc5f…` match the blocker; 1054 related tests pass) and waits on that PR instead. `ai:claude-blocked` removed.
 - Verification (2026-09-29, scratch copy with the 5 twins synced into `.claude/`): `tests/test_unattended_question_guard.py` 68 passed; 16 related suites 986 passed; 94 test files referencing touched paths run one by one: 83 pass, 2 collect nothing, 9 fail identically on unmodified `origin/main` (container environment: `test_family_*`, `test_render_validation_templates*`, one `test_implement_post_codex_recovery` case, `test_orchestrate_poll_process` timeout).
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher (trigger `trig_012hHLRNELGddsYm76muyywq`) in session `session_01MD1KoBnW8eNXCRP4Jn1Ysg`; permission mode auto.
 - Security pass: run (`security_pass_skip.py` → `{"skip": false, "label": null, "reason": "no skip label"}`).

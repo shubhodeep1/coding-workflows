@@ -61,6 +61,8 @@
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/edit_comment.py *)",
       "Bash(python3 .claude/scripts/permission_prompts.py *)",
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/permission_prompts.py *)",
+      "Bash(python3 .claude/hooks/unattended_question_guard.py mark *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/hooks/unattended_question_guard.py mark *)",
       "mcp__github__create_pull_request",
       "mcp__github__update_pull_request",
       "mcp__github__add_issue_comment",
@@ -164,6 +166,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/unattended_question_guard.py",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -196,6 +208,17 @@
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/permission_prompt_logger.py",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/unattended_question_guard.py",
+            "timeout": 30
           }
         ]
       }
