@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T08:52:26Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A new workflow or `scripts/` file must be listed in docs/INVENTORY.md in the same PR; `tests/inventory_parity.py` fails CI otherwise, even when the plan's docs step does not name the inventory.",
+  "phase": "implement_plan",
+  "pr_number": 4807,
+  "record_id": "lesson-implement-plan-eab1742aa40cd58c8f329a08",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4785-twin-first-claude-sync",
+    "file:docs/INVENTORY.md",
+    "file:tests/inventory_parity.py"
+  ]
+}

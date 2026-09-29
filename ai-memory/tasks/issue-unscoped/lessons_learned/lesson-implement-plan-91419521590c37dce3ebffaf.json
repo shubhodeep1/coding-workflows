@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T08:52:26Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A CI check over a commit range must only run on ranges that are one PR's net change; a promotion range (main \u2192 stable) can hold a sync followed by a newer source change and read as drift.",
+  "phase": "implement_plan",
+  "pr_number": 4807,
+  "record_id": "lesson-implement-plan-91419521590c37dce3ebffaf",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4785-twin-first-claude-sync",
+    "file:.github/workflows/ci.yml",
+    "file:scripts/claude_twin_sync.py"
+  ]
+}

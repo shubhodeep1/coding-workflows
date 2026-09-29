@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T08:52:26Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A driver that updates an existing PR's head branch must first confirm the branch still exists on origin and close the PR when it does not; otherwise a deleted branch turns every later scheduled run into the same failed fetch.",
+  "phase": "implement_plan",
+  "pr_number": 4807,
+  "record_id": "lesson-implement-plan-5b883b2efd231c094bf77e06",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4785-twin-first-claude-sync",
+    "file:scripts/claude_twin_sync.py"
+  ]
+}
