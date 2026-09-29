@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-5174-guard-differential-check-plan.md
 - Source issue: shubhodeep1/coding-workflows#5174   Progress comment: 5891958656
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5174-guard-differential-check   Final PR: pending
+- Project branch: claude/implement-plan-issue-5174-guard-differential-check   Final PR: #5185 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened; phase 1 implemented and verified locally.
+- Last note: project branch and draft final PR #5185 opened; phase 1 implemented and verified locally, phase PR opened.
 
 ## Phases
 1. [ ] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog)
