@@ -163,8 +163,12 @@ DEPENDS_ON_LINE_RE = re.compile(r"(?mi)^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Depends on
 DEPENDS_ON_VALUE_RE = re.compile(r"^[1-9][0-9]{0,9}(?:,[1-9][0-9]{0,9}){0,%d}$" % (DEPENDS_ON_MAX - 1))
 # A 403 / 404 means this session can never read the dependency (a repository
 # not attached to a web session, or no such issue), so waiting would strand
-# the item; any other read failure is retried on the next wake.
+# the item; any other read failure is retried on the next wake. GitHub also
+# answers a primary or secondary rate limit with 403: that one is transient,
+# so it is retried like any other failure (same pattern as `_is_gh_rate_limit`
+# in scripts/gh_helpers.sh), never read as "can never succeed".
 DEPENDENCY_INACCESSIBLE_RE = re.compile(r"HTTP 40[34]\b")
+DEPENDENCY_RATE_LIMIT_RE = re.compile(r"(?i)rate limit|abuse detection|secondary rate|HTTP 429")
 QUEUE_DEPENDENCY_READ_LIMIT = 30
 
 # Pull-request fix items (CLAUDE.md §26.H): the catch-all sweep
@@ -959,7 +963,8 @@ def fetch_dependency_states(keys: list[str], gh_read: Any = None) -> dict[str, A
 	the result, so their items are deferred. Output: ``{key: record}`` with
 	the ``dependency_state`` record, or ``{"state": "inaccessible" |
 	"unavailable", "reason"}`` for a failed read (HTTP 403 / 404 is
-	``inaccessible``). Calls (CLAUDE.md §15): one REST ``GET
+	``inaccessible``, except a rate-limit 403, which is ``unavailable`` and so
+	holds the item until the next wake). Calls (CLAUDE.md §15): one REST ``GET
 	repos/<repo>/issues/<N>`` per key read through ``gh``; none when ``keys``
 	is empty. A failed read affects only its own key and is never retried here.
 	"""
@@ -977,8 +982,10 @@ def fetch_dependency_states(keys: list[str], gh_read: Any = None) -> dict[str, A
 		try:
 			issue = read(f"repos/{repo}/issues/{number}")
 		except RuntimeError as exc:
-			kind = "inaccessible" if DEPENDENCY_INACCESSIBLE_RE.search(str(exc)) else "unavailable"
-			states[key] = {"state": kind, "reason": str(exc)[:200]}
+			read_error = str(exc)
+			read_inaccessible = DEPENDENCY_INACCESSIBLE_RE.search(read_error) and not DEPENDENCY_RATE_LIMIT_RE.search(read_error)
+			kind = "inaccessible" if read_inaccessible else "unavailable"
+			states[key] = {"state": kind, "reason": read_error[:200]}
 			continue
 		states[key] = dependency_state(issue)
 	return states

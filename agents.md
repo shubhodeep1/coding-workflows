@@ -294,7 +294,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     example a consumer repository not attached to the pickup's web session)
     cannot ever succeed, so that dependency is skipped and noted in the
     entry's `dependency_notes`: attach the consumer repository to the pickup
-    session to enforce holds there. The watchdog runs `queue-stale
+    session to enforce holds there. A rate-limit 403 is transient, so it
+    holds the item for that wake like any other read failure. The watchdog runs `queue-stale
     --fetch-dependencies`: an item waiting on an open dependency is not stale,
     a dependency closed without `ai:merged` flags it at once (log `held
     queue_issue=<n> reason=…`), all-merged dependencies age it from the latest
