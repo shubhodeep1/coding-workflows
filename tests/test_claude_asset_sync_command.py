@@ -81,7 +81,12 @@ def test_every_checkout_runs_the_sync(commands):
 	plan = commands["implement-plan-claude.md"]
 	step2 = _section(plan, "**Sync the project branch**", "- **Context.**")
 	assert "[Claude-asset sync](#claude-asset-sync)" in step2
-	assert "a conflict under `.claude/` is never resolved here" in step2
+	assert "A conflict under `.claude/` is never resolved here" in step2
+	# Step 2's merge stands in for the sync's step 4 and keeps its own subject.
+	assert "It takes the place of that section's step 4 and keeps the command and subject above" in step2
+	assert "the `[claude-asset-sync]` subject marks only the sync merge into a PR head" in step2
+	section = _section(plan, "### Claude-asset sync", "### Permission prompt report")
+	assert "on the project branch itself, step 2's merge is the sync merge and keeps step 2's command and subject" in section
 	step7 = _section(plan, "- **Blocked**", "7a. **Review round")
 	assert "run the [Claude-asset sync](#claude-asset-sync) on it" in step7
 	step7a = _section(plan, "7a. **Review round", "- **`kind=conflict`**")
