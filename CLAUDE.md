@@ -1354,7 +1354,7 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   |---|---|---|
   | `.claude/scripts/dispatch_workflow.py` | dispatches one of the six workflows allowed as `gh workflow run <file> *` and prints the id of the run it started (never the previous run) | 1 read, 1 POST, 1 read per 5 s poll (90 s max) |
   | `.claude/scripts/edit_comment.py` | edits one issue or PR comment in place from a JSON list of exact-once `old`/`new` pairs, or replaces its body | 1 read, 1 PATCH |
-  | `.claude/scripts/permission_prompts.py` | reports and files the prompts below | 1 read per 100 labelled issues, 1 POST per new pattern |
+  | `.claude/scripts/permission_prompts.py` | reports and files the prompts below, reports a prompt the moment it blocks an unattended session (`report-now`), and finds that report for a session (`lookup`) | `file`: 1 read per 100 labelled issues, 1 POST per new pattern; `report-now`: the same read (elsewhere, 1 open-PR read) and 1 POST, at most 5 per session; `lookup`: 1 search read plus 1 comments read per hit (at most 3) |
 
 - **Prompt reports.** `.claude/hooks/permission_prompt_logger.py`, wired on
   the `PermissionRequest` and `PermissionDenied` hook events, appends every
@@ -1372,6 +1372,31 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
     carries the pattern's `<!-- ai:permission-prompt:v1 sig=<sig> -->`
     marker (a closed issue is commented on, not reopened);
   - elsewhere, files nothing and only reports.
+
+  A session stuck on a prompt never reaches the end of its stage, so the
+  hook also starts one detached `permission_prompts.py report-now` on every
+  `PermissionRequest` and returns at once (issue #4755). The prompt is never
+  blocked or delayed, and every reporting error is swallowed. The helper
+  reports only in an unattended session: a cloud session
+  (`CLAUDE_CODE_REMOTE_SESSION_ID` set) whose prompt came in `auto` or
+  `bypassPermissions` mode. Its report carries the event, the tool, the
+  sanitized command, the session id and link, the session title
+  (`/implement-plan-claude` and `/implement-issue-claude` record it at step 0
+  with `permission_prompts.py session-meta`; otherwise `not recorded`), the
+  pattern signature, and a `<!-- ai:permission-prompt-session:v1
+  session=<id> sig=<sig> -->` marker. In coding-workflows it lands on the
+  pattern's issue as above. Elsewhere it goes to the open PR for the
+  session's branch, else to issue `<N>` for a
+  `claude/implement-plan-issue-<N>[-…]` branch, else nowhere. Each signature
+  is reported once per session and at most 5 per session (kept per session
+  id, so sessions sharing a home directory never suppress each other), and a
+  later `file` skips the reported signatures (`already_reported`). The hook
+  passes the SHA-256 of the line it logged, so the report is about that
+  prompt even when another one is logged first. `CLAUDE_PERMISSION_PROMPT_REPORT=off`
+  in the session environment turns `report-now` off (default: unset, on);
+  `file` still files at the end of the stage. The operator's poller
+  gets the command and the link for a stuck session with the read-only
+  `permission_prompts.py lookup --session <id>`.
 
   Issue text is untrusted data: the command is truncated to 2,000
   characters, heredoc bodies are removed, and token-like strings are masked.

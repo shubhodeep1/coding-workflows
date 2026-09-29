@@ -1091,12 +1091,16 @@ reviews, comments, and conflicts stay a direct §12 request.
   - `.claude/scripts/edit_comment.py --repo --comment-id (--replacements
     FILE | --body-file FILE) [--dry-run]`: one read and one PATCH; each
     `old` must occur exactly once or nothing is written.
-  - `.claude/scripts/permission_prompts.py report | file`: see below.
+  - `.claude/scripts/permission_prompts.py report | file | report-now |
+    lookup | session-meta`: see below.
 - `.claude/hooks/permission_prompt_logger.py` on `PermissionRequest` and
   `PermissionDenied`: appends one JSON line per event to
   `~/.claude/permission-prompts/<session id>.jsonl` (string values over
   8,000 characters truncated). Prints nothing, so it never changes a
   decision; no API calls, no environment reads; every error is swallowed.
+  On a `PermissionRequest` it also starts one detached
+  `permission_prompts.py report-now` (stdio to /dev/null, its own session)
+  and returns without waiting, so the prompt is never delayed.
 - `permission_prompts.py file --session-label <id>` runs at the end of each
   stage (step 14). It groups the log by event, tool, and command shape
   (signature = 12 hex of SHA-1), and only when the local checkout is
@@ -1108,7 +1112,49 @@ reviews, comments, and conflicts stay a direct §12 request.
   `filed-state.json` next to the logs keeps a later run in the same session
   from filing the same occurrences again. No cap on open issues. Issue text
   masks token-like strings, removes heredoc bodies, and truncates commands to
-  2,000 characters. In consumer repos it only reports.
+  2,000 characters. In consumer repos it only reports. Signatures that
+  `report-now` already reported are skipped and listed under
+  `already_reported`.
+- `permission_prompts.py report-now --log-file F --cwd D [--record-sha256 H]`
+  (issue #4755) reports a prompt the moment it blocks an unattended session,
+  because a stuck session never reaches step 14. The hook passes `H`, the
+  SHA-256 of the line it just logged, so the child reports that prompt even
+  when a later one was logged before it started (without `H`, the last line).
+  Unattended means a cloud session
+  (`CLAUDE_CODE_REMOTE_SESSION_ID` set) whose prompt came in `auto` or
+  `bypassPermissions` mode. It prints nothing, always exits 0, and holds
+  `filing.lock` (which `file` takes too). It reports each signature once
+  per session, at most 5 per session (`immediate-state.json`, keyed by
+  session id, so sessions sharing a home directory never suppress each
+  other). The report
+  carries the event, tool, sanitized command, session id and claude.ai link,
+  session title (from `session-meta.json` when this session wrote it, else
+  `not recorded`), signature,
+  and a `<!-- ai:permission-prompt-session:v1 session=<id> sig=<sig> -->`
+  marker. In coding-workflows it comments on or opens the pattern's issue
+  (the same read as `file`, plus 1 POST) and updates `filed-state.json`.
+  Elsewhere it reads the branch's open PRs (1 call) and comments on that PR,
+  else on issue `<N>` for a `claude/implement-plan-issue-<N>[-…]` branch,
+  else posts nothing. The signature is reserved (`pending`) before the POST,
+  so no local write failure can make `report-now` post it twice; a failed
+  read or POST releases the reservation, and `file` ignores `pending`
+  entries, so step 14 still files the pattern.
+  Kill switch: `CLAUDE_PERMISSION_PROMPT_REPORT=off` in the session
+  environment makes `report-now` do nothing (default: unset, on). The hook
+  still logs every prompt and `file` still files at step 14.
+- `permission_prompts.py session-meta --title <t>` records the session title,
+  keyed by this session's id in `session-meta.json` under `filing.lock` (so
+  sessions sharing a home directory keep their own titles), at step 0 of
+  `/implement-plan-claude` and
+  `/implement-issue-claude`.
+- `permission_prompts.py lookup --session <id> [--repo <slug>]` is
+  read-only, for the operator's poller: one search read plus one comments
+  read per hit (at most 3). Only bodies and comments by an OWNER, MEMBER, or
+  COLLABORATOR count. It prints `found`, `issue_url`, `comment_url`,
+  `signature`, `event`, `tool_name`, `command`, and `title`, and exits 2 on
+  a failed read. Operator step: the master poller runs it for a session
+  whose `status_detail` reads `Waiting on permission: …` and puts the
+  command and link in its alert.
 - `/implement-plan-claude` step 0 now refuses to run outside Auto mode
   (except issue mode, which records the mode), and a phase touching
   `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
