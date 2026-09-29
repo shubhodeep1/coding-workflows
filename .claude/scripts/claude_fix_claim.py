@@ -9,7 +9,9 @@ the claims through `.claude/scripts/check_in_status.py --hand-back`
 the lease (CLAUDE_FIX_CLAIM_LEASE_HOURS, default 3) ends. A `hold` claim parks
 the head for a human decision (the hand-back cap was reached, or the fixer hit
 a dead end it must not guess past); it never expires while the head stays the
-same.
+same. The reader counts a claim only when it was posted as the PR's author or
+as CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN (issue #4622), so post it with the
+identity whose sessions own the PR.
 
 Usage:
 

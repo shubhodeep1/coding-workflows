@@ -223,6 +223,46 @@ implementing chain must not re-open them.
   where no auto-mode block applies, and it already resolves conflicts for
   every non-`claude/*` PR.
 
+### D15 — A hold comment states its real reason
+
+- **Chosen:** `claude_fix_claim.py post --kind hold` takes a `--reason`, and
+  the hold comment states that reason. The "reached the cap of N Claude
+  hand-backs" wording is used only when the caller passes `--reason cap`.
+  Without `--reason`, the comment keeps today's text, so older callers and
+  consumer copies behave as before. The claim marker line does not change
+  (§6). Added to Phase 3 on 2026-09-28.
+- **Alternatives considered:** leave it, relying on Phase 3's
+  reasoning-before-hold comment.
+- **Why:** every hold says "reached the cap of 3" whatever its cause
+  (`claude_fix_claim.py:67`). On PR #4610 on 2026-09-28 that sent the
+  supervising session after a conflict-cap diagnosis that the claim history
+  did not support: the fixer had actually stopped on its own conflict
+  questions.
+
+### D16 — Plan-mode stops and fixer holds post their question on the PR
+
+- **Chosen:** every place a plan-mode `/implement-plan-claude` stage stops
+  at `Status: BLOCKED`, and every `/fix-claude-pr` hold, posts its §2
+  question as one PR comment. For a stage the comment goes on the project's
+  integration PR, or on the phase PR when the stop is about that PR. For a
+  fixer it goes on the held PR. The comment:
+  - starts with `<!-- ai:claude-blocked:v1 -->`, the marker issue mode
+    already uses on the source issue;
+  - holds the blocker, the evidence, every option and the recommended one;
+  - is posted with `mcp__github__add_issue_comment`.
+
+  The question is still asked in the session as today. The comment makes it
+  visible without opening the session. Answering is unchanged: the
+  operator replies in the session, or through the supervising session.
+  Added to Phase 3 on 2026-09-28.
+- **Alternatives considered:** keep the questions in the sessions and have
+  the supervising session ask each one to post.
+- **Why:** issue mode already posts its stops on the source issue, but plan
+  mode and fixers ask only inside their own sessions. On 2026-09-28 neither
+  the master poller nor the supervising session could see PR #4610's fixer
+  questions or phase 2's `.claude` stop until each session was asked to post
+  them.
+
 ## Context
 
 Observed on 2026-09-27 in `shubhodeep1/coding-workflows`: 11 open `claude/*`
@@ -605,6 +645,25 @@ Workflow side:
   - The workflow stays under the plan's per-phase byte cap. The new step
     body is an externalised `review_autofix_step_<slug>.sh` (§27 pattern),
     and each touched `if:` gains one clause.
+- `claude_fix_claim.py` (+ twin) and the command docs (D15, D16):
+  - `post` gains `--reason <text>`, allowed only with `--kind hold`. It is
+    one line, at most 300 characters, with backticks and `<!--` removed. The
+    hold comment reads "**Claude fixes on hold:** <reason> at head `<sha>`.
+    `<by>` has asked a human how to continue…", and `--reason cap` gives
+    today's cap sentence. No `--reason` keeps today's text.
+  - `fix-claude-pr.md` passes `--reason cap` at its cap stop (step 3). Every
+    other hold passes a one-line reason ("all findings rejected; no verdict
+    path", "conflict needs a side decision", "failure not caused by this
+    PR", "a human was requested").
+  - `/implement-plan-claude` does the same for the holds it posts.
+  - Before any hold, `fix-claude-pr.md` posts the `ai:claude-blocked:v1` §2
+    question comment on the PR. It can be the same comment as Phase 3's
+    reasoning-before-hold comment, carrying both the reasoning and the
+    question.
+  - `implement-plan-claude.md` plan mode posts the same comment on the
+    integration PR, or the phase PR, at every `Status: BLOCKED` stop,
+    before it arms the checker's wait (D11). Issue mode is unchanged: it
+    already posts on the issue.
 
 ### Phase 4: session janitor
 
@@ -696,7 +755,7 @@ stages already do (#4597), so prompts a fixer answered late are filed too.
    `CLAUDE.md` §26.B/§26.C/§26.H, `.claude/commands/implement-plan-claude.md`,
    `.claude/commands/fix-claude-pr.md`,
    `.claude/commands/implement-issue-claude.md`,
-   `.claude/scripts/check_in_status.py`
+   `.claude/scripts/check_in_status.py`, `.claude/scripts/claude_fix_claim.py`
    (+ twins), `.github/workflows/review_autofix.yml`,
    `scripts/review_autofix_step_claude_fixer_handoff.sh`,
    `scripts/review_autofix_step_claude_fixer_protected_conflict.sh` [new],
@@ -719,6 +778,11 @@ stages already do (#4597), so prompts a fixer answered late are filed too.
    hand-off, one without runs no resolver and posts the hand-off, a failed
    resolver posts the hand-off naming the protected paths, and the switch set
    to `false` restores today's path; the workflow stays under the byte cap.
+   D15: `--reason` changes the hold text, `--reason cap` and no `--reason`
+   give today's text, `--reason` with another kind is rejected, and the
+   marker line is unchanged. D16: the command-doc tests assert the
+   `ai:claude-blocked:v1` PR comment at every plan-mode BLOCKED stop and
+   every fixer hold.
    Rollback: revert the PR (checkers default to 60 when the field is absent).
 4. **Session janitor.** Files: `.claude/scripts/stale_sessions.py` [new],
    `tests/test_stale_sessions.py` [new], `.claude/commands/claude-issue-pickup.md`,
@@ -802,7 +866,10 @@ default to 60 minutes without the new field; Phase 4 touches only the pickup.
    prompt (+ twins).
 5. D14: the protected-conflict step (externalised), the resolver `if:`
    clauses, the hand-off skip and fallback line, the variable and log key.
-6. Tests + agents.md + README + changelog fragment.
+6. D15: `claude_fix_claim.py --reason` (+ twin) and the callers in both
+   command docs (+ twins). D16: the `ai:claude-blocked:v1` PR comment in
+   `fix-claude-pr.md` and `implement-plan-claude.md` plan mode (+ twins).
+7. Tests + agents.md + README + changelog fragment.
 
 ### Phase 4
 
@@ -828,7 +895,8 @@ default to 60 minutes without the new field; Phase 4 touches only the pickup.
 - `scripts/review_rb_judge.sh`
 - `scripts/stage_workflow_support.sh`
 - `prompts/mode-judge-review-blocked.txt` (+ `prompts/_templates/` twin if present)
-- `.claude/scripts/check_in_status.py` (+ `workflow-templates/.claude/scripts/` twin)
+- `.claude/scripts/check_in_status.py`, `.claude/scripts/claude_fix_claim.py`
+  (+ `workflow-templates/.claude/scripts/` twins)
 - `.claude/scripts/stale_sessions.py` [new]
 - `.claude/commands/fix-claude-pr.md`, `.claude/commands/implement-plan-claude.md`,
   `.claude/commands/implement-issue-claude.md` (+ twins),
@@ -914,7 +982,8 @@ their fixers through the judge (the supervising session re-dispatches them).
 ## References
 
 - Held PRs: #4582, #4554, #4599, #4601, #4602, #4594, #4609, #4611, #4638,
-  #4596, #4610 (protected-path conflict, D14); projects #4586, #4618, #4653
+  #4596, #4610 (protected-path conflict D14, misleading hold text D15,
+  questions only in-session D16); projects #4586, #4618, #4653
   (dead base, D13).
 - Run 36295340728 (PR #4554 zero-finding hand-off).
 - Overlapping PRs: #4596 / #4593 (issue #4586), #4609; related #4618.

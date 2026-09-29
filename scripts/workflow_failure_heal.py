@@ -1112,6 +1112,14 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 
 _REVIEWER_SLOT_EXIT_RE = re.compile(r"Reviewer slot (?P<slot>\S+) .*execution failed on attempt [0-9]+ \(exit=(?P<rc>[0-9]{1,3})\)")
 _SUMMARISER_EXIT_RE = re.compile(r"summariser \([^)]*\): (?:attempt [0-9]+ exited rc=(?P<rc>[0-9]{1,3})\.|all [0-9]+ attempts failed \(last rc=(?P<last_rc>[0-9]{1,3})\))")
+# summarize_reviewer_consensus.sh logs an attempt that exited 0 with no final
+# message this way (issue #4653: all 10 pass-1 attempts on PR #4607).
+# The prefix is copied verbatim into the evidence, and the same log carries
+# the model's stderr tail, so the class stays bounded instead of `[^)]*`:
+# no spaces or free text reach the fingerprint or the heal report. The script
+# only accepts `--prefix pass1|review`; a test pins every accepted prefix to
+# this class, so widening that list without widening the class fails CI.
+_SUMMARISER_EMPTY_STDOUT_RE = re.compile(r"summariser \((?P<prefix>[A-Za-z0-9_.-]{1,40})\): attempt [0-9]+ produced empty stdout\b")
 # A support script that names itself at the start of its error line, e.g.
 # `untrusted_process_sandbox: …` or `write_opencode_config.sh: …`.
 _SELF_NAMED_SCRIPT_LINE_RE = re.compile(r"^(?:::error::|##\[error\])?\s*(?P<name>[a-z][a-z0-9]*_[a-z0-9_]*(?:\.(?:sh|py))?): (?P<rest>\S.*)$")
@@ -1123,15 +1131,18 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 	"""Summarise why the reviewer step failed, from the per-slot and summariser logs.
 
 	Emits one ``reviewer_slot_exit`` line per failed slot (its last recorded
-	exit code), the summariser's last exit code, the most common exit code
-	across them (``dominant_rc``), and up to REVIEWER_FAILURE_HELPER_LINES_MAX
-	distinct error lines a support script prefixed with its own name (a slot's
-	stderr is indented ``  | `` in its log). The text feeds the failure
-	fingerprint and the heal report, so it keeps only stable fields: no
-	timestamps, attempt counts or run ids.
+	exit code), the summariser's last exit code, one
+	``summariser_empty_stdout`` line per summariser prefix whose attempt
+	exited 0 with no final message (its exit code counts as 0), the most
+	common exit code across them (``dominant_rc``), and up to
+	REVIEWER_FAILURE_HELPER_LINES_MAX distinct error lines a support script
+	prefixed with its own name (a slot's stderr is indented ``  | `` in its
+	log). The text feeds the failure fingerprint and the heal report, so it
+	keeps only stable fields: no timestamps, attempt counts or run ids.
 	"""
 	slot_codes: dict[str, str] = {}
 	summariser_code = ""
+	summariser_empty_stdout_prefixes: set[str] = set()
 	helper_lines: list[str] = []
 	for text in log_texts:
 		for raw_line in sanitize_text(text).split("\n"):
@@ -1146,6 +1157,11 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 			if summariser_match:
 				summariser_code = summariser_match.group("rc") or summariser_match.group("last_rc") or summariser_code
 				continue
+			empty_stdout_match = _SUMMARISER_EMPTY_STDOUT_RE.search(line)
+			if empty_stdout_match:
+				summariser_code = "0"
+				summariser_empty_stdout_prefixes.add(empty_stdout_match.group("prefix"))
+				continue
 			helper_match = _SELF_NAMED_SCRIPT_LINE_RE.match(line)
 			if helper_match and (_CRASH_ERROR_LINE_RE.match(line) or _SELF_NAMED_SCRIPT_FAILURE_RE.search(helper_match.group("rest"))) and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
 				helper_line = single_line(line, 300)
@@ -1156,6 +1172,7 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 	lines.extend(f"reviewer_slot_exit slot={slot} exit={code}" for slot, code in sorted(slot_codes.items()))
 	if summariser_code:
 		lines.append(f"summariser_exit rc={summariser_code}")
+	lines.extend(f"summariser_empty_stdout prefix={prefix}" for prefix in sorted(summariser_empty_stdout_prefixes))
 	if codes:
 		counts: dict[str, int] = {}
 		for code in codes:

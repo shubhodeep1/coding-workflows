@@ -37,6 +37,9 @@ def _pr(**overrides):
 	return pr
 
 
+DISPATCH_RUNS = "repos/o/r/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=100"
+
+
 def _stub(monkeypatch, responses):
 	"""Serve `gh_api(path)` from a {path: payload} map and record the calls."""
 	calls = []
@@ -66,6 +69,7 @@ def _stuck_responses(pr, committed_at, queued=0, in_progress=0, check_runs=None)
 		"repos/o/r/commits/abc": {"commit": {"committer": {"date": committed_at}}},
 		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1": {"total_count": queued},
 		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1": {"total_count": in_progress},
+		DISPATCH_RUNS: {"workflow_runs": []},
 	}
 
 
@@ -124,8 +128,41 @@ def test_conflict_on_old_head_without_active_run_is_stuck(monkeypatch, capsys):
 	calls = _stub(monkeypatch, _stuck_responses(_pr(mergeable_state="dirty"), OLD))
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is True and out["state"] == "stuck"
-	# A conflict needs no check-run read: pulls, commit, queued, in_progress.
-	assert len(calls) == 4
+	# A conflict needs no check-run read: pulls, commit, queued, in_progress,
+	# and the PR-named dispatch listing (issue #4618).
+	assert calls == [
+		"repos/o/r/pulls/7",
+		"repos/o/r/commits/abc",
+		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1",
+		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1",
+		DISPATCH_RUNS,
+	]
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress"])
+def test_old_head_with_active_sweep_dispatch_for_the_pr_waits(monkeypatch, capsys, status):
+	# The sweep dispatches internal-review.yml from the default branch
+	# (issue #4618), so its run is not on the head branch; check_pr's stuck
+	# path must still count it by its `[pr:<N>]` title.
+	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
+	responses[DISPATCH_RUNS] = {"workflow_runs": [
+		{"status": status, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+	]}
+	_stub(monkeypatch, responses)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
+
+
+def test_old_head_with_sweep_dispatch_for_another_pr_or_finished_is_stuck(monkeypatch, capsys):
+	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
+	responses[DISPATCH_RUNS] = {"workflow_runs": [
+		{"status": "in_progress", "display_title": "Internal: AI Review & Autofix [pr:8]"},
+		{"status": "completed", "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		{"status": "pending", "display_title": "Internal: AI Review & Autofix [pr:7]"},
+	]}
+	_stub(monkeypatch, responses)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "stuck"
 
 
 def test_failed_check_on_old_head_without_active_run_is_stuck(monkeypatch, capsys):
@@ -136,7 +173,14 @@ def test_failed_check_on_old_head_without_active_run_is_stuck(monkeypatch, capsy
 	calls = _stub(monkeypatch, _stuck_responses(_pr(mergeable_state="unstable"), OLD, check_runs=runs))
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is True and "lint" in out["reason"] and "superseded" not in out["reason"]
-	assert len(calls) <= 5
+	assert calls == [
+		"repos/o/r/pulls/7",
+		"repos/o/r/commits/abc/check-runs?per_page=100&page=1",
+		"repos/o/r/commits/abc",
+		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1",
+		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1",
+		DISPATCH_RUNS,
+	]
 
 
 def test_failed_check_on_second_page_is_detected(monkeypatch, capsys):
@@ -225,6 +269,7 @@ def _fixer_responses(pr=None, **run_overrides):
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1": {"total_count": 0},
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1": {"total_count": 0},
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1": {"total_count": 0},
+		DISPATCH_RUNS: {"workflow_runs": []},
 	}
 
 
@@ -256,7 +301,8 @@ def test_fixer_findings_handoff_for_current_head_is_a_review_round(monkeypatch, 
 		f"repos/o/r/actions/runs/{FIXER_RUN_ID}",
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1",
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1",
-		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1"]
+		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1",
+		DISPATCH_RUNS]
 
 
 def test_fixer_conflict_handoff_is_a_conflict_round(monkeypatch, capsys):
@@ -616,3 +662,162 @@ def test_settings_preapprove_the_checker_tools(path):
 	assert "ReadNotifications" in allow
 	# Allow rules cannot glob the server segment; an unanchored MCP glob would be skipped.
 	assert not any(rule.startswith("mcp__*") for rule in allow)
+
+
+# --- Routing: `action` / `next_stage` (route_verdict) -------------------------
+# The checker model follows `action` only; the #4596 checker read
+# `state: review-round` and wrongly handed the PR back instead of starting a
+# review-round stage session.
+
+@pytest.mark.parametrize("mode, state, expected", [
+	("pr", "merged", {"action": "next_stage", "next_stage": "success"}),
+	("pr", "review-round", {"action": "next_stage", "next_stage": "review"}),
+	("pr", "conflict", {"action": "next_stage", "next_stage": "review"}),
+	("pr", "blocked", {"action": "hand_back"}),
+	("pr", "closed", {"action": "hand_back"}),
+	("pr", "stuck", {"action": "hand_back"}),
+	("run", "completed", {"action": "next_stage", "next_stage": "success"}),
+	("run", "failed", {"action": "next_stage", "next_stage": "block"}),
+	("issues", "resolved", {"action": "next_stage", "next_stage": "success"}),
+	("issues", "blocked", {"action": "next_stage", "next_stage": "block"}),
+	("hand_back", "conflict", {"action": "hand_back_fixer"}),
+	("hand_back", "review-round", {"action": "hand_back_fixer"}),
+	("hand_back", "ci-failed", {"action": "hand_back_fixer"}),
+	("hand_back", "blocked", {"action": "hand_back_fixer"}),
+	("hand_back", "merged", {"action": "hand_back_all"}),
+	("hand_back", "closed", {"action": "hand_back_all"}),
+])
+def test_route_verdict_done_rows(mode, state, expected):
+	assert checker.route_verdict({"done": True, "state": state}, mode) == expected
+
+
+@pytest.mark.parametrize("mode, state", [
+	("pr", "open"), ("pr", "review-round"), ("run", "in_progress"), ("run", "queued"),
+	("issues", "open"), ("hand_back", "open"), ("hand_back", "claimed"), ("hand_back", "held"),
+	("hand_back", "ci-failed"),
+])
+def test_route_verdict_not_done_is_always_wait(mode, state):
+	assert checker.route_verdict({"done": False, "state": state}, mode) == {"action": "wait"}
+
+
+def test_route_table_matches_the_documented_rows():
+	# Every row of the table is exercised above; no mode gains a row silently.
+	assert {mode: sorted(rows) for mode, rows in checker.CHECKER_ROUTE_TABLE.items()} == {
+		"pr": sorted(["merged", "review-round", "conflict", "blocked", "closed", "stuck"]),
+		"run": sorted(["completed", "failed"]),
+		"issues": sorted(["resolved", "blocked"]),
+		"hand_back": sorted(["conflict", "review-round", "ci-failed", "blocked", "merged", "closed"]),
+	}
+
+
+def test_review_round_and_conflict_never_hand_back():
+	for state in ("review-round", "conflict"):
+		assert checker.route_verdict({"done": True, "state": state}, "pr")["action"] != "hand_back"
+
+
+@pytest.mark.parametrize("mode, state", [("pr", "ci-failed"), ("run", "resolved"), ("issues", "merged"), ("hand_back", "stuck"), ("bogus", "merged")])
+def test_route_verdict_rejects_an_unmapped_done_state(mode, state):
+	with pytest.raises(ValueError, match="no checker route"):
+		checker.route_verdict({"done": True, "state": state}, mode)
+
+
+def test_unmapped_done_state_exits_2_with_retry(monkeypatch, capsys):
+	monkeypatch.setattr(checker, "check_run", lambda repo, run_id: {"done": True, "state": "mystery", "reason": "x"})
+	code, out = _run(["--run", "9"], capsys)
+	assert code == 2 and out == {"done": False, "error": "no checker route for mode 'run' state 'mystery'", "action": "retry"}
+
+
+def test_main_adds_action_for_merged_pr(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(merged=True, merged_at="t", merge_commit_sha="m")})
+	code, out = _run(["--pr", "7"], capsys)
+	assert code == 0 and out["action"] == "next_stage" and out["next_stage"] == "success"
+	# Additive: the existing fields are unchanged.
+	assert out["done"] is True and out["state"] == "merged" and out["merge_commit_sha"] == "m"
+
+
+@pytest.mark.parametrize("pr_overrides", [
+	{"state": "closed", "closed_at": "t"},
+	{"labels": [{"name": "ai:review-blocked"}]},
+])
+def test_main_hands_back_closed_and_blocked_prs(monkeypatch, capsys, pr_overrides):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(**pr_overrides)})
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["action"] == "hand_back" and "next_stage" not in out
+
+
+def test_main_hands_back_a_stuck_pr(monkeypatch, capsys):
+	_stub(monkeypatch, _stuck_responses(_pr(mergeable_state="dirty"), OLD))
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["state"] == "stuck" and out["action"] == "hand_back"
+
+
+def test_main_open_pr_waits(monkeypatch, capsys):
+	_stub(monkeypatch, _stuck_responses(_pr(mergeable_state="dirty"), YOUNG))
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and out["action"] == "wait" and "next_stage" not in out
+
+
+def test_main_terminal_only_routes_like_plain_pr_mode(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(state="closed", closed_at="t")})
+	_, out = _run(["--pr", "7", "--terminal-only"], capsys)
+	assert out["action"] == "hand_back"
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:needs-human"}])})
+	_, out = _run(["--pr", "7", "--terminal-only"], capsys)
+	assert out["action"] == "wait"
+
+
+def test_main_review_round_starts_the_review_stage_not_a_hand_back(monkeypatch, capsys):
+	"""Regression for PR #4596: a review round is `next_stage` + `review`."""
+	_stub_fixer(monkeypatch, _fixer_responses(), [_comment(_handoff(round_number=2))])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["state"] == "review-round"
+	assert out["action"] == "next_stage" and out["next_stage"] == "review"
+
+
+def test_main_conflict_starts_the_review_stage_not_a_hand_back(monkeypatch, capsys):
+	_stub_fixer(monkeypatch, _fixer_responses(_fixer_pr(mergeable_state="dirty")), [])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["state"] == "conflict"
+	assert out["action"] == "next_stage" and out["next_stage"] == "review"
+
+
+@pytest.mark.parametrize("run, expected", [
+	({"status": "completed", "conclusion": "success"}, {"action": "next_stage", "next_stage": "success"}),
+	({"status": "completed", "conclusion": "failure"}, {"action": "next_stage", "next_stage": "block"}),
+	({"status": "completed", "conclusion": "cancelled"}, {"action": "next_stage", "next_stage": "block"}),
+	({"status": "in_progress"}, {"action": "wait"}),
+])
+def test_main_run_mode_actions(monkeypatch, capsys, run, expected):
+	_stub(monkeypatch, {"repos/o/r/actions/runs/9": run})
+	code, out = _run(["--run", "9"], capsys)
+	assert code == 0 and {key: out[key] for key in expected} == expected
+	assert ("next_stage" in out) == ("next_stage" in expected)
+
+
+@pytest.mark.parametrize("issues, expected", [
+	({"repos/o/r/issues/1": {"state": "closed", "labels": []}}, {"action": "next_stage", "next_stage": "success"}),
+	({"repos/o/r/issues/1": {"state": "open", "labels": [{"name": "ai:review-blocked"}]}}, {"action": "next_stage", "next_stage": "block"}),
+	({"repos/o/r/issues/1": {"state": "open", "labels": []}}, {"action": "wait"}),
+])
+def test_main_issue_mode_actions(monkeypatch, capsys, issues, expected):
+	_stub(monkeypatch, issues)
+	code, out = _run(["--issues", "1"], capsys)
+	assert code == 0 and {key: out[key] for key in expected} == expected
+	assert ("next_stage" in out) == ("next_stage" in expected)
+
+
+@pytest.mark.parametrize("argv", [["--pr", "7"], ["--run", "9"], ["--issues", "1"]])
+def test_read_failure_carries_retry_in_every_mode(monkeypatch, capsys, argv):
+	_stub(monkeypatch, {
+		"repos/o/r/pulls/7": checker.ReadError("HTTP 502"),
+		"repos/o/r/actions/runs/9": checker.ReadError("HTTP 502"),
+		"repos/o/r/issues/1": checker.ReadError("HTTP 502"),
+	})
+	code, out = _run(argv, capsys)
+	assert code == 2 and out == {"done": False, "error": "HTTP 502", "action": "retry"}
+
+
+def test_bad_repo_carries_retry(capsys):
+	code = checker.main(["--repo", "nope", "--pr", "1"], now=NOW)
+	out = json.loads(capsys.readouterr().out)
+	assert code == 2 and out["action"] == "retry"

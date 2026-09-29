@@ -11877,6 +11877,34 @@ def test_standalone_conflict_sweep_skips_integration_base_prs():
 	assert result["review_dispatches"] == []
 
 
+def test_standalone_conflict_sweep_skips_draft_claude_prs():
+	# A draft claude/* project integration PR is synced by its own chain;
+	# the sweep neither update-branches it nor dispatches a review for it.
+	state = _base_state(status="complete")
+	prs = [
+		{
+			"number": 415,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "claude/implement-plan-some-project",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+			"headSha": "sha415",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		prs=prs,
+		update_branch_fail_for_prs=[415],
+	)
+	assert result["update_branch_calls"] == []
+	assert result["review_dispatches"] == []
+	assert "PR #415 is a draft claude/* PR" in result["stdout"]
+
+
 def test_standalone_conflict_sweep_handles_non_ai_branch_conflicts():
 	state = _base_state(status="complete")
 	prs = [
