@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T10:24:43Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A parser that reads locations from free-form reviewer output must fail toward \"unreadable\": take a line only from an explicit reference (`path:N`, `line N`, a leading number), never the first digit in the value, and treat prose where a path belongs as no path, because a wrong readable location silently defeats proximity-based safety checks.",
+  "phase": "implement_plan",
+  "pr_number": 5060,
+  "record_id": "lesson-implement-plan-07635d250e917e97da984580",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4975-bind-flagger-citation-to-finding",
+    "file:scripts/review_claude_fixer_nonblocking.py"
+  ]
+}
