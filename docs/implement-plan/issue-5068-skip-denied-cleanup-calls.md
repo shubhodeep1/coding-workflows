@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5068-skip-denied-cleanup-calls-plan.md
 - Source issue: shubhodeep1/coding-workflows#5068
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5068-skip-denied-cleanup-calls   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5068-skip-denied-cleanup-calls   Final PR: #5076 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5097: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: Project started by /implement-issue-claude (session_01Auy2sKWXHcPHqbLY2N3RmG); phase 1 is being implemented twin-first.
+- Last note: Phase 1 PR #5097 opened twin-first (Q40, per the issue): only the `workflow-templates/.claude/` twins changed; a `hold` claim is on its head and the twin-sync blocker is on #5068 (`ai:claude-blocked`). After the `[claude-twin-sync]` copy and `/reclarify`, the resumed stage arms the wait on PR #5097 (step 7) and does not re-implement the phase.
 
 ## Phases
-1. [ ] Phase 1 — skip denied cleanup calls   — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/claude-issue-pickup.md` (twins only; the pickup, which has no twin, goes into the sync blocker as a diff) — PR pending (twin sync pending); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — skip denied cleanup calls   — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/claude-issue-pickup.md` (twins only; the pickup, which has no twin, goes into the sync blocker as a diff) — PR #5097 open (twin sync pending); review rounds: 0; interventions: 0
    - [x] CLAUDE.md §26.I (`CLAUDE.md:2114-2163`) plus pointers in §26.C step 5 (`:1917`), §26.D (`:1948`, `:1981`), §26.G (sweep deletes)
    - [x] `implement-plan-claude.md` twin: resume hygiene with the `get_trigger` ownership check (`:11`), zombie-checker cleanup (`:190`), arming the wait (`:177`), two-step start (`:138`), hand-back (`:249`), steps 12–13 (`:79`, `:83`), checker prompt (`:212`), Output Format (`:358`), Rules (`:392`) (root copy: pending twin sync)
    - [x] `fix-claude-pr.md` twin: step 8 (`:62`) and Rules (`:72`) (root copy: pending twin sync)
@@ -51,3 +51,6 @@
 - `security_pass_skip.py`: `{"skip": false, "label": null, "reason": "no skip label"}` → `Security pass: run`.
 - Stale Routine sweep: deleted 3 ended one-shots (`trig_012pdEMdh4XyfjbcvQbUC1Bb`, `trig_01JbsquVNzafeNQYorYjNRwg`, `trig_015mGEKqaoybeytgGwozzS5s`).
 - Issue progress comment: 5885202067.
+- Twins to sync: `workflow-templates/.claude/commands/implement-plan-claude.md` → `.claude/commands/implement-plan-claude.md` (sha256 `1f5fc77d043bfb77353cf5ff8083721fd7fc0e3187ce9bd9cf22b13f6e54bcaf`); `workflow-templates/.claude/commands/fix-claude-pr.md` → `.claude/commands/fix-claude-pr.md` (sha256 `621356326841dc534d2633e8ad94b741dc2a49bdeb762af3d9bbb7b712d2331d`). No-twin diff: `.claude/commands/claude-issue-pickup.md` (from sha256 `217bd00d…331f` on main to `1484d8d8a6001588e2430efa6c329071c573af8adfd9ab54c91843568565331f`); the diff is in the blocker comment on #5068.
+- Local verification: the full suite times out in this container (both on main and with the change), so the 37 test files that read the changed files were run one by one in an overlay (with the sync applied) and in an `origin/main` copy. The results are identical except for the 8 new passing tests. Unrelated failures reproduce on main: `test_implement_post_codex_recovery.py` (1), `test_orchestrate_poll_promote_cycle.py` / `test_orchestrate_poll_process.py` (hang), `test_workflow_retro.py` (Python 3.12 syntax).
+- A skipped hand-back delete is safe: the stale Routine sweep deletes an `implement-plan <slug>: hand-back` 24 hours after its PR finished, long before its 7-day fire (`HAND_BACK_PROMPT_PATTERN`, case-insensitive, in `.claude/scripts/stale_routines.py`).
