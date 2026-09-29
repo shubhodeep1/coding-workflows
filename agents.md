@@ -1014,7 +1014,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   closed); exit 2 → `retry`. `done`, `state`, `reason`, the hand-back
   fields, and the exit codes are unchanged, and `scripts/claude_pr_sweep.py`
   (which calls `check_pr_hand_back` directly) sees no new field. An
-  unmapped done state exits 2 with `retry` rather than guessing.
+  unmapped done state exits 2 with `retry` rather than guessing. A review
+  run dispatched from the default branch binds to its PR by its exact
+  (workflow, run name) pair, `internal-review.yml` /
+  `Internal: AI Review & Autofix [pr:<N>]` (issue #4618) or `ai-review.yml`
+  / `AI Review [pr:<N>]` (issues #4701, #4926): such a run is accepted as a
+  hand-off's review run, and an active one holds a hand-off back, counted
+  from one repo-wide `workflow_dispatch` listing (newest 100 runs) read
+  only when the head-branch reads found nothing.
 - Stale Routine sweep (CLAUDE.md §26.G): `.claude/scripts/stale_routines.py`
   reads a `list_triggers` result (`include_completed: true`) from a file (the
   harness usually saves that large result to a file itself) and

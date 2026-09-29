@@ -51,7 +51,11 @@ def _pr(ref=REF, **overrides):
 	return pr
 
 
-DISPATCH_RUNS = "repos/o/r/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=100"
+# One repo-wide workflow_dispatch listing covers both PR-named review wrappers
+# (internal-review.yml, issue #4618; ai-review.yml, issues #4701 and #4926).
+DISPATCH_RUNS = "repos/o/r/actions/runs?event=workflow_dispatch&per_page=100"
+INTERNAL_REVIEW_PATH = ".github/workflows/internal-review.yml"
+AI_REVIEW_PATH = ".github/workflows/ai-review.yml"
 
 
 def _runs(ref=REF, queued=0, in_progress=0, pending=0, dispatched=()):
@@ -506,6 +510,9 @@ def test_ignoring_one_claimant_still_respects_another(monkeypatch, capsys):
 # commit. The exact run title binds it to the PR instead.
 DEFAULT_BASE = {"repo": {"default_branch": "main"}}
 DISPATCH_TITLE = "Internal: AI Review & Autofix [pr:7]"
+# Issue #4926: the consumer wrapper ai-review.yml, dispatched from the default
+# branch by the poller and the merge train (issue #4701).
+CONSUMER_DISPATCH_TITLE = "AI Review [pr:7]"
 
 
 def _dispatched_run(**overrides):
@@ -550,7 +557,7 @@ def test_sweep_dispatch_that_does_not_bind_to_the_pr_fails_closed(monkeypatch, c
 
 @pytest.mark.parametrize("status", ["queued", "in_progress", "pending"])
 def test_active_sweep_dispatch_for_the_pr_keeps_the_handoff_waiting(monkeypatch, capsys, status):
-	active = [{"status": status, "display_title": DISPATCH_TITLE}]
+	active = [{"status": status, "path": INTERNAL_REVIEW_PATH, "display_title": DISPATCH_TITLE}]
 	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=active)}
 	_stub(monkeypatch, responses, [_handoff()])
 	_, out = _run(capsys)
@@ -558,29 +565,29 @@ def test_active_sweep_dispatch_for_the_pr_keeps_the_handoff_waiting(monkeypatch,
 
 
 def test_sweep_dispatch_for_another_pr_or_finished_does_not_count(monkeypatch, capsys):
-	other = [{"status": "in_progress", "display_title": "Internal: AI Review & Autofix [pr:8]"},
-		{"status": "completed", "display_title": DISPATCH_TITLE}]
+	other = [{"status": "in_progress", "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:8]"},
+		{"status": "completed", "path": INTERNAL_REVIEW_PATH, "display_title": DISPATCH_TITLE},
+		{"status": "in_progress", "path": AI_REVIEW_PATH, "display_title": DISPATCH_TITLE},
+		{"status": "in_progress", "path": INTERNAL_REVIEW_PATH, "display_title": CONSUMER_DISPATCH_TITLE},
+		{"status": "in_progress", "path": AI_REVIEW_PATH, "display_title": "AI Review [pr:8]"},
+		{"status": "in_progress", "display_title": DISPATCH_TITLE}]
 	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=other)}
 	_stub(monkeypatch, responses, [_handoff()])
 	_, out = _run(capsys)
 	assert out["done"] is True and out["state"] == "review-round"
 
 
-def test_dispatch_listing_404_counts_zero_and_other_errors_raise(monkeypatch):
-	def missing(path):
-		if "internal-review.yml" in path:
-			raise checker.ReadError(f"gh api {path} failed: gh: Not Found (HTTP 404)")
-		return {"total_count": 0}
-	monkeypatch.setattr(checker, "gh_api", missing)
-	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 0
-
-	def broken(path):
-		if "internal-review.yml" in path:
-			raise checker.ReadError(f"gh api {path} failed: HTTP 502")
-		return {"total_count": 0}
-	monkeypatch.setattr(checker, "gh_api", broken)
-	with pytest.raises(checker.ReadError):
-		checker._active_run_count(REPO, REF, include_pending=True, pr_number=7)
+def test_dispatch_listing_failure_raises(monkeypatch):
+	# The repo-wide listing has no per-workflow 404 case (issue #4926, AD-3):
+	# any failed read is a ReadError, which the checker reports as `retry`.
+	for error in ("gh: Not Found (HTTP 404)", "HTTP 502"):
+		def broken(path, error=error):
+			if path == DISPATCH_RUNS:
+				raise checker.ReadError(f"gh api {path} failed: {error}")
+			return {"total_count": 0}
+		monkeypatch.setattr(checker, "gh_api", broken)
+		with pytest.raises(checker.ReadError):
+			checker._active_run_count(REPO, REF, include_pending=True, pr_number=7)
 
 
 def test_branch_active_run_skips_the_dispatch_listing(monkeypatch):
@@ -591,7 +598,55 @@ def test_branch_active_run_skips_the_dispatch_listing(monkeypatch):
 		return {"total_count": 1}
 	monkeypatch.setattr(checker, "gh_api", fake)
 	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 3
-	assert not any("internal-review.yml" in call for call in calls)
+	assert DISPATCH_RUNS not in calls and len(calls) == 3
+
+
+def _consumer_dispatched_run(**overrides):
+	run = {"path": AI_REVIEW_PATH, "event": "workflow_dispatch",
+		"head_branch": "main", "head_sha": OTHER_HEAD, "display_title": CONSUMER_DISPATCH_TITLE}
+	run.update(overrides)
+	return _review_run(**run)
+
+
+def test_review_handoff_from_a_consumer_ai_review_dispatch_is_due(monkeypatch, capsys):
+	responses = {"repos/o/r/pulls/7": _pr(base=DEFAULT_BASE), **_consumer_dispatched_run(), **_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	code, out = _run(capsys)
+	assert code == 0 and out["done"] is True and out["state"] == "review-round"
+	assert not any("/compare/" in call for call in calls)
+
+
+def test_conflict_handoff_from_a_consumer_ai_review_dispatch_is_due(monkeypatch, capsys):
+	responses = {"repos/o/r/pulls/7": _pr(base=DEFAULT_BASE, mergeable_state="dirty"),
+		**_consumer_dispatched_run(path=AI_REVIEW_PATH + "@main"), **_runs()}
+	_stub(monkeypatch, responses, [_handoff(kind="conflict")])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "conflict"
+
+
+@pytest.mark.parametrize("run_change", [
+	{"display_title": DISPATCH_TITLE},
+	{"path": INTERNAL_REVIEW_PATH},
+	{"display_title": "AI Review [pr:8]"},
+	{"display_title": "AI Review [pr:7] "},
+	{"event": "pull_request"},
+	{"head_branch": "claude/other-branch"},
+])
+def test_consumer_dispatch_that_does_not_bind_to_the_pr_fails_closed(monkeypatch, capsys, run_change):
+	responses = {"repos/o/r/pulls/7": _pr(base=DEFAULT_BASE), **_consumer_dispatched_run(**run_change),
+		**_compare(OTHER_HEAD, "diverged"), **_runs()}
+	_stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "waiting for verified completed review run" in out["reason"]
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress", "pending"])
+def test_active_consumer_dispatch_for_the_pr_keeps_the_handoff_waiting(monkeypatch, capsys, status):
+	active = [{"status": status, "path": AI_REVIEW_PATH, "display_title": CONSUMER_DISPATCH_TITLE}]
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=active)}
+	_stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
 
 
 # --- Routing: `action` for the CLAUDE.md §26 checker ---------------------------
