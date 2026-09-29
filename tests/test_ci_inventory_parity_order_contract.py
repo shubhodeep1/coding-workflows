@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Contract test for Inventory parity CI step ordering."""
+"""Contract test for Inventory parity CI step ordering.
+
+Since #4707 split CI into parallel jobs, line order in `ci.yml` only means
+run order inside one job, so the steps must also share a job.
+"""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -13,6 +18,7 @@ INVENTORY_PARITY_STEP = "Inventory parity"
 WORKFLOW_LOG_COLLECTOR_COVERAGE_STEP = "Workflow log collector coverage gate"
 WORKFLOW_LOG_ANALYZER_COVERAGE_STEP = "Workflow log analyzer coverage gate"
 INVENTORY_PARITY_COMMAND = "PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py"
+JOB_KEY_LINE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 
 
 def _workflow_lines() -> list[str]:
@@ -43,6 +49,28 @@ def _step_block(lines: list[str], step_name: str) -> str:
 			break
 		block.append(line)
 	return "\n".join(block)
+
+
+def _step_job(lines: list[str], step_name: str) -> str:
+	start = _step_start_line(lines, step_name)
+	for line in reversed(lines[:start]):
+		if line == "jobs:":
+			break
+		match = JOB_KEY_LINE.match(line)
+		if match:
+			return match.group(1)
+	raise AssertionError(f"No job encloses workflow step: {step_name} in {CI_WF}")
+
+
+def test_inventory_parity_shares_a_job_with_the_coverage_gates() -> None:
+	lines = _workflow_lines()
+	parity_job = _step_job(lines, INVENTORY_PARITY_STEP)
+	for gate_step in (WORKFLOW_LOG_COLLECTOR_COVERAGE_STEP, WORKFLOW_LOG_ANALYZER_COVERAGE_STEP):
+		gate_job = _step_job(lines, gate_step)
+		assert gate_job == parity_job, (
+			f"{gate_step!r} runs in job {gate_job!r} but {INVENTORY_PARITY_STEP!r} runs in "
+			f"job {parity_job!r}; parallel jobs do not order their steps"
+		)
 
 
 def test_inventory_parity_runs_before_workflow_log_collector_coverage_gate() -> None:
