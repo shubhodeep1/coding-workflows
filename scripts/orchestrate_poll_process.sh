@@ -12539,8 +12539,9 @@ prime_phase_concurrency_snapshot() {
 # cannot observe an in_progress/queued run.  This therefore issues a single
 # branch-scoped `gh run list` (server-side --branch filter, so it is NOT subject
 # to the global 50-item listing cap the cached blob is) rather than the 3-call
-# per-workflow loop, keeping the added cost to one REST request on the rare
-# recovery-push path.
+# per-workflow loop, keeping the branch listing's cost to one REST request on
+# the rare recovery-push path (the PR-named lookup below adds its own paged
+# calls only when $2 is given and the branch listing matched nothing).
 #
 # Args: $1 = head branch.  Echoes the databaseId of the freshest matching
 # in_progress/queued/pending review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
@@ -12594,12 +12595,14 @@ _direct_inflight_review_run_on_branch()
 	# threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
 	_di_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
 	# Diagnostics (CLAUDE.md §8): this helper is the last guard before the
-	# destructive empty-commit push and fails open on any error.  Poller
+	# destructive empty-commit push.  The branch listing fails open on any
+	# error; the PR-named lookup below fails closed with the
+	# `listing-incomplete` sentinel (issue #4927).  Poller
 	# run 35230465327 (tele-funtoken-msg-scoring#4367) pushed onto a
 	# branch whose review run 35226455269 was live, with no trace of why
 	# both the cached scan and this listing came back empty.  Report the
 	# listing outcome on stderr (stdout is the return value) so the next
-	# miss is attributable; the fail-open contract itself is unchanged.
+	# miss is attributable; logging does not change either contract.
 	local _di_rc=0 _di_runs_total="invalid" _di_runs_live="invalid" _di_match=""
 	_di_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 		--branch "${_di_branch}" \
