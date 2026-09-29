@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T21:54:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a module's API budget grows, update every caller that restates it too: a batching contract (CLAUDE.md \u00a715) in the calling script's docstring goes stale silently, because no test reads it.",
+  "phase": "implement_plan",
+  "pr_number": 5253,
+  "record_id": "lesson-implement-plan-b3d7da681389f8644b694e7b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5148-pending-checks-newer-review-race",
+    "file:scripts/claude_pr_sweep.py",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}
