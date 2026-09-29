@@ -1694,9 +1694,14 @@ extract_repo_scoped_issue_refs_from_text()
 # and inside one line the lazy value followed by "\s*`?\s*$" backtracks
 # cubically (one label line with 2,000 spaces: 30 s). Whitespace is
 # str.isspace(), the set `\s` matches, minus the "\n" lines are split
-# on. The only results that differ from the regexes are bodies whose
-# label line had no value and the regex took one from a later line;
-# such a label line now yields nothing.
+# on. Results equal the regexes applied to each line on its own. They
+# differ from the regexes on the whole body only where the regex's
+# `\s*` ran past the end of a label line and took its value from a
+# later line: "Integration branch:\nfeature/x" gave "feature/x", and
+# "Integration branch: `\nTarget branch: real" gave "Target branch:
+# real". Here a label line with nothing after the label is no match
+# and the search goes on; one with only whitespace after the label,
+# with or without one backtick, matches as "" (below).
 #
 # Used by close_merged_issues_sweep and issue_pr_status.yml to decide
 # whether a merged PR landed on the issue's own target branch
@@ -1767,9 +1772,13 @@ for labels, value_of in (
 		rest = value_after_label(line, labels)
 		if rest is None:
 			continue
-		# "" is a match, not a miss: the regexes accept a whitespace-only
-		# value, extract_integration_branch returns it as "", and the
-		# search stops there without reading a later Target line.
+		# "" is a match, not a miss: applied to the label line alone, the
+		# regexes accept a whitespace-only value (their "([^`\n]+?)" group
+		# captures one whitespace character, stripped to ""), and the
+		# search stops there without reading a later Target line. When
+		# the whole-body regex cannot take the next line instead (a Target
+		# line with a backticked value, as in the Python-parity test),
+		# extract_integration_branch returns "" the same way.
 		value = value_of(rest)
 		if value is not None:
 			print(value)

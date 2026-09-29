@@ -7,14 +7,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5005 (review round 2)
+- Waiting on: PR #5005 (review round 3)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01SLVShEKcrHxQinLPTfHkTx (project checker, reused)   safety net and hand-back: see the round 1 stage report
+- Check-in: checker session_01SLVShEKcrHxQinLPTfHkTx (project checker, reused)   safety net and hand-back: see the round 2 stage report
 - Last updated: 2026-09-29
-- Last note: review round 1 (session_011U3Gm7GEzLdiF9695J9YiC): the empty-value finding rejected (the helper matches extract_integration_branch, which also returns ""); the reviewers' bodies added to the Python-parity test and the empty match documented in the parser (AD-4).
+- Last note: review round 2 (session_01YWrkAoszijrhN4Bbc1Dech): the high finding rejected (extract_integration_branch returns "" for both cited bodies; parity test passes); the low finding accepted in substance: the parser comments overstated when the whole-body regex returns "", so both comments now state the per-line contract, and two bodies where the whole-body regex takes the next line are pinned in the line-bounded test.
 
 ## Phases
-1. [ ] Phase 1 — linear-time parser for `issue_body_integration_branch` (`scripts/gh_helpers.sh`, its test, changelog fragment)   — PR #5005 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — linear-time parser for `issue_body_integration_branch` (`scripts/gh_helpers.sh`, its test, changelog fragment)   — PR #5005 open (waiting); review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -38,7 +38,9 @@
 - [source:intervention] When a string parser replaces a regex for performance, keep the regex's empty-value matches and add the edge bodies reviewers doubt to the parity test against the reference parser, so the intentional "" result is documented by a test, not only by a comment. (files: scripts/gh_helpers.sh, tests/test_gh_helpers_issue_body_integration_branch.py)
 - [source:plan-deviation] A regex fix that only stops `\s*` from spanning newlines is not enough when a lazy group is followed by adjacent optional whitespace runs: that backtracks cubically inside one line, so parse the value with string operations and test a long single whitespace run, not only many blank lines. (files: scripts/gh_helpers.sh)
 - [source:plan-deviation] A timing test for a search regex must use a body with no match: a match right after the blank lines returns on the first attempt and hides the quadratic scan. (files: tests/test_gh_helpers_issue_body_integration_branch.py)
+- [source:intervention] State a regex replacement's contract as "the original regexes applied to each line on its own" and check every comment claim about the whole-body regex against bodies whose next line has no backtick: under re.MULTILINE a `\s*` after the label can take the next line as the value, so a "returns an empty string" claim holds only for some bodies. (files: scripts/gh_helpers.sh, tests/test_gh_helpers_issue_body_integration_branch.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher routine in session session_019VGvihqo4vEMB83gP6DWSc (Auto mode).
 - This session had no `mcp__github__*` tools; GitHub reads and routine writes went through `gh api` REST (the repo's SessionStart hook installed `gh`, since the repo was attached mid-session).
+- 2026-09-29 round 2 stage: synced the project branch with its base (clean merge of #4997, pushed as fe69e3c).

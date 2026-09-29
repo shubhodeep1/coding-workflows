@@ -130,6 +130,11 @@ LINE_BOUNDED_BODIES = [
 	"Integration branch: two words\n",
 	"Integration branch:\n",
 	"Integration branch:\nfeature/next-line\n",
+	# The whole-body regex takes "Target branch: real" as the value here
+	# (its \s* runs past the newline); line by line it is "" (PR #5005
+	# review round 2).
+	"Integration branch: `\nTarget branch: real\n",
+	"Integration branch:   \nTarget branch: real\n",
 	"-Integration branch: dash/no-space\n",
 	"- - Integration branch: double/dash\n",
 	"*Integration branch:* not/bold\n",
