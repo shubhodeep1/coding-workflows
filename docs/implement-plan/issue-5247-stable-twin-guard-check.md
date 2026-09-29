@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5247-stable-twin-guard-check-plan.md
 - Source issue: shubhodeep1/coding-workflows#5247
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4785-twin-first-claude-sync
-- Project branch: claude/implement-plan-issue-5247-stable-twin-guard-check   Final PR: (opened after this commit) draft
+- Project branch: claude/implement-plan-issue-5247-stable-twin-guard-check   Final PR: #5262 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5270
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01DntaymvRrhdQCxacVD9Xe2   safety net trig_017WdKaq65o5zsUsk25vrsZ8   hand-back trig_012jEFAqC2UCoieo7hnNEus2
 - Last updated: 2026-09-29
-- Last note: project branch opened from the #4785 project branch (8639f38); phase 1 starting.
+- Last note: phase 1 PR #5270 opened (reproduction: 7 CI-step and 6 provenance tests fail on the pre-fix code, all pass with the fix); waiting on its review in Claude-fixer mode.
 
 ## Phases
-1. [ ] Phase 1 — `stable` twin check with guard provenance (`scripts/claude_twin_sync.py`, `.github/workflows/ci.yml`, tests, `agents.md`, changelog fragment; protected paths: none)
+1. [ ] Phase 1 — `stable` twin check with guard provenance (`scripts/claude_twin_sync.py`, `.github/workflows/ci.yml`, tests, `agents.md`, changelog fragment; protected paths: none)   — PR #5270 open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -34,6 +34,7 @@
 - AD-4 [plan, 2026-09-29] Should a PR into `stable` whose head is already on `main` skip like a promotion push? — Picked: A — no, every PR into `stable` is checked. Alternatives: B — skip it after the same compare call. Why: promotions are pushes by `promote-main-to-stable.yml`, and the finding asks that PRs into `stable` fail closed (§1). Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A CI step that reads a token should scope it to the events that need it (`${{ github.event_name == 'push' && github.token || '' }}`): on `pull_request` the step runs PR-controlled scripts. (files: .github/workflows/ci.yml)
 
 ## Notes
 - Security pass: skip (`security_pass_skip.py` → `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`).
@@ -41,3 +42,4 @@
 - Issue progress comment id 5899549666. `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` = `shubhodeep1`; no verdict bot configured.
 - Base is not the default branch: the project ends after the final merge (`Activation: n/a`), and the final-merge stage closes #5247 with `ai:merged`.
 - Base-move check (2026-09-29): #4804 (head = the base branch) is open, not merged.
+- Plan deviation (phase 1): `GH_TOKEN` in the CI step is set on push events only (plan text updated in the phase PR).
