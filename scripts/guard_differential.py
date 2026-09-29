@@ -623,9 +623,11 @@ def run_check(
 			materialize(repo_root, head_ref, tree, head_dir)
 			for path in tree_changes:
 				stem = Path(path).stem
+				# An empty or comments-only corpus runs no comparison, so it
+				# counts as missing.
 				if (
 					stem.endswith("_guard")
-					and stem not in corpora
+					and not corpora.get(stem)
 					and (base_dir / f"{stem}.py").is_file()
 					and (head_dir / f"{stem}.py").is_file()
 				):

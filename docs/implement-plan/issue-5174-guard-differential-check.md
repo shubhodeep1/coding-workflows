@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_019rGgoLZBfTcYZUkbRAYsRN (project checker; per-wait safety net and hand-back ids are in the stage report)
 - Last updated: 2026-09-29
-- Last note: review round 2 on PR #5187: 1 finding fixed (scenario env now drops GIT_* like the caller's env), 1 rejected (per-tree rows are separate hook files, same as round 1).
+- Last note: review round 3 on PR #5187: 1 finding fixed (an empty or comments-only corpus now counts as missing), 4 rejected (per-tree rows are separate hook files; the stub `gh` has no heredoc; allow+warning and the residual env are by design).
 
 ## Phases
-1. [ ] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog) — PR #5187 open; review rounds: 2; interventions: 0
+1. [ ] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog) — PR #5187 open; review rounds: 3; interventions: 0
 
 ## Conformance
 
@@ -38,6 +38,7 @@
 
 ## Lessons
 - [source:intervention] When a test harness filters the caller's environment to isolate a subprocess, apply the same filter to every other source merged into that environment (scenario or fixture overrides). Otherwise a later override can undo the isolation. (files: scripts/guard_differential.py)
+- [source:intervention] A "required input is missing" gate must test for an empty parsed input, not only an absent key: a comments-only file parses to an empty list and otherwise passes the gate with zero checks run. (files: scripts/guard_differential.py)
 
 ## Notes
 - Session started with the repo attached mid-session, so `gh` came from running `.claude/hooks/session-start.sh` by hand. No `mcp__github__*` tools were available; GitHub writes use `gh api` routine calls (§23.B/§23.H).

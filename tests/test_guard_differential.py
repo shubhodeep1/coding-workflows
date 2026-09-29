@@ -379,6 +379,23 @@ def test_cli_fails_when_a_changed_guard_has_no_corpus(hook_repo: Path) -> None:
 	assert "missing_corpus path=.claude/hooks/other_guard.py" in proc.stdout
 
 
+def test_cli_fails_when_a_changed_guard_has_an_empty_corpus(hook_repo: Path) -> None:
+	(hook_repo / "tests" / "guard_corpus" / "fake_guard.txt").write_text("# no shapes yet\n\n", encoding="utf-8")
+	_git(hook_repo, "add", "-A")
+	_git(hook_repo, "commit", "-q", "-m", "empty corpus")
+	_git(hook_repo, "branch", "-f", "base-empty-corpus")
+	(hook_repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_SILENT_HOOK, encoding="utf-8")
+	proc = subprocess.run(
+		[sys.executable, str(SCRIPT_PATH), "--repo-root", str(hook_repo), "--base-ref", "base-empty-corpus"],
+		capture_output=True,
+		text=True,
+		timeout=300,
+	)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "missing_corpus path=.claude/hooks/fake_guard.py" in proc.stdout
+	assert "shapes=0" in proc.stdout
+
+
 def test_cli_a_new_guard_needs_no_corpus_to_pass(hook_repo: Path) -> None:
 	(hook_repo / ".claude" / "hooks" / "brand_new_guard.py").write_text(FAKE_BLOCKING_HOOK, encoding="utf-8")
 	proc = _cli(hook_repo)
