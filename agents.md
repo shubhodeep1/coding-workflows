@@ -1148,6 +1148,27 @@ reviews, comments, and conflicts stay a direct §12 request.
   question remains for an edit denied in the twin tree and for a phase whose
   plan needs a watched session, and a recorded answer is never overwritten.
   The PR that makes #4785's sync live removes this default.
+- **Claude-asset sync** (issue #4952,
+  [Claude-asset sync](.claude/commands/implement-plan-claude.md#claude-asset-sync)).
+  A session runs the hooks of the branch it has checked out, so a
+  long-running branch keeps an old guard until it merges the default branch.
+  `/implement-plan-claude` (step 2 project-branch sync, steps 7 and 7a PR
+  heads), `/implement-issue-claude` resumes (through step 2), and
+  `/fix-claude-pr` (step 5) therefore run
+  `git diff --quiet HEAD...origin/<default> -- .claude/hooks .claude/settings.json`
+  right after checkout and, when it reports a change the default branch
+  holds and the branch lacks, merge the default branch in with a
+  `[claude-asset-sync]` merge commit (no rebase, no force-push). Only
+  branches that land in the default branch are synced; a PR head on a
+  lagging project branch syncs the project branch first. A conflict under
+  `.claude/` aborts the merge and stops with the `ai:claude-blocked:v1`
+  blocker (a `hold` claim in `/fix-claude-pr`). A merged `settings.json`
+  change applies from the next session. Local git only, no GitHub API
+  calls. The SessionStart hook logs the drift as
+  `[session-start] claude_assets=stale …`, or `claude_assets=diverged …`
+  when shallow history has no merge base (stable log prefixes). Tests:
+  `tests/test_claude_asset_sync_command.py`,
+  `tests/test_session_start_claude_assets_drift.py` (one `ci.yml` step).
 - The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
   and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
   three scripts live under `workflow-templates/.claude/`. Tests:
@@ -1749,6 +1770,18 @@ and shipped:
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
+- `[session-start] claude_assets=stale behind=<n> files=<comma list>`
+  (`.claude/hooks/session-start.sh`, Claude Code Web sessions only; issue
+  #4952): the checkout lacks default-branch changes to `.claude/hooks/**` or
+  `.claude/settings.json`. `behind` counts every commit the default branch
+  holds and the checkout lacks (what the sync merge brings in), not only the
+  commits touching the listed files. The default branch comes from
+  `origin/HEAD`, else `git ls-remote --symref origin HEAD`, else `main`; the
+  network calls run only under GNU `timeout` (15 s each).
+- `[session-start] claude_assets=diverged behind=unknown files=<comma list>`
+  (same hook): shallow history has no merge base, so the listed files differ
+  from the default branch but the hook cannot tell whose change each
+  difference is (it may be the branch's own edit).
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
