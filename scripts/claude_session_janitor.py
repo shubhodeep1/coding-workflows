@@ -231,12 +231,22 @@ def load_page(path: str) -> tuple[list, bool, str | None]:
 	return shape
 
 
+def _cached_read(path: str, cache: dict) -> dict:
+	"""One `gh api` read per path; a failure is cached too, so it is never retried."""
+	if path not in cache:
+		try:
+			cache[path] = gh_api(path)
+		except SessionReadError as exc:
+			cache[path] = exc
+	result = cache[path]
+	if isinstance(result, SessionReadError):
+		raise result
+	return result
+
+
 def _terminal_pr_age_hours(repo: str, number: int, now: dt.datetime, cache: dict) -> tuple[str, float] | None:
 	"""(`merged` | `closed`, hours since) for a finished PR, or None while it is open."""
-	key = ("pull", repo, number)
-	if key not in cache:
-		cache[key] = gh_api(f"repos/{repo}/pulls/{number}")
-	pr = cache[key]
+	pr = _cached_read(f"repos/{repo}/pulls/{number}", cache)
 	if pr.get("merged"):
 		state, ended_at = "merged", pr.get("merged_at")
 	elif pr.get("state") == "closed":
@@ -247,10 +257,7 @@ def _terminal_pr_age_hours(repo: str, number: int, now: dt.datetime, cache: dict
 
 
 def _issue_closed(repo: str, number: int, cache: dict) -> bool:
-	key = ("issue", repo, number)
-	if key not in cache:
-		cache[key] = gh_api(f"repos/{repo}/issues/{number}")
-	return cache[key].get("state") == "closed"
+	return _cached_read(f"repos/{repo}/issues/{number}", cache).get("state") == "closed"
 
 
 def classify(sessions: list[dict], now: dt.datetime, self_id: str | None = None,

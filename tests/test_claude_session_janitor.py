@@ -230,6 +230,14 @@ def test_failed_read_keeps_the_session(monkeypatch):
 	assert result["errors"] == ["session_f (PR o/r#12 — fixed review): gh api repos/o/r/pulls/12 failed: HTTP 403"]
 
 
+def test_failed_read_is_not_repeated(monkeypatch):
+	calls = _stub(monkeypatch, {"repos/o/r/pulls/12": janitor.SessionReadError("gh api repos/o/r/pulls/12 failed: HTTP 502")})
+	sessions = [_session("session_a", "PR o/r#12 — fix review"), _session("session_b", "PR o/r#12 — on hold: review")]
+	result = janitor.classify(sessions, NOW)
+	assert result["archive"] == [] and result["kept"] == 2 and len(result["errors"]) == 2
+	assert calls == ["repos/o/r/pulls/12"]
+
+
 def test_malformed_pr_payload_keeps_the_session(monkeypatch):
 	_stub(monkeypatch, {"repos/o/r/pulls/12": {"state": "closed", "merged": True, "merged_at": None}})
 	result = janitor.classify([_session("session_f", "PR o/r#12 — fixed review")], NOW)
