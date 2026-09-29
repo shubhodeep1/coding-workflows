@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T04:56:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a CI step moves to another job, rename (alias, \u00a76) the test helpers and constants that name the old job in the same change; reviewers read a stale job name as a missing guard.",
+  "phase": "implement_plan",
+  "pr_number": 4884,
+  "record_id": "lesson-implement-plan-77417b6ce90f7eb96052b12a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4707-split-ci-lint-job",
+    "file:tests/test_ci_shared_shell_block_guard.py"
+  ]
+}

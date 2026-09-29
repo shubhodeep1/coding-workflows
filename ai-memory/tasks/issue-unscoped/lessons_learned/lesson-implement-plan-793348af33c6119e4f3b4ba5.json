@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T04:56:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When splitting a long CI job, move steps as verbatim text blocks and verify parity (every old step name exactly once, bodies byte-identical) against the base branch's workflow before editing anything else; YAML round-trips reformat run blocks.",
+  "phase": "implement_plan",
+  "pr_number": 4884,
+  "record_id": "lesson-implement-plan-793348af33c6119e4f3b4ba5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4707-split-ci-lint-job",
+    "file:.github/workflows/ci.yml"
+  ]
+}

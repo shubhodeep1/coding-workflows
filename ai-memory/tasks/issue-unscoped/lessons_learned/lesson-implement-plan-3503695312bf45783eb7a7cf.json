@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-29T04:56:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A parallel-shard judge must decide \"did this shard have work\" from its input (the non-empty test list), never from an output file: skipping on a missing log turns a shard that died before its runner started into a silent pass.",
+  "phase": "implement_plan",
+  "pr_number": 4884,
+  "record_id": "lesson-implement-plan-3503695312bf45783eb7a7cf",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4707-split-ci-lint-job",
+    "file:.github/workflows/ci.yml",
+    "file:.github/workflows/mark-stable.yml",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}
