@@ -307,3 +307,106 @@ def test_third_conformance_fix_gets_a_fix_check_not_a_fourth_run(text):
 	assert "after the third run's fix PR merges, the fix check replaces it" in text
 	assert "`Outside fix-check scope`" in text
 	assert "conformance 3/3 — fix check | security-pass" in text
+
+
+# Issue #4948: interim automatic twin-first default for protected-path phases.
+# These tests read the workflow-templates twin, which this change edits first
+# (twin-first); `.claude/` catches up through the [claude-twin-sync] copy.
+INTERIM_TWIN_FIRST_MARKER = "Interim automatic default: twin-first (until #4785)"
+INTERIM_TWIN_FIRST_CLAUDE_MD_MARKER = "Interim automatic twin-first default for protected-path phases (until #4785)"
+INTERIM_TWIN_FIRST_AGENTS_MD_MARKER = "Interim until #4785 (issue #4948):"
+INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER = "Since #4948, stages in this repo record"
+# Closing sentences that sit apart from each opening marker: the sunset guard
+# checks them too, so a partial removal cannot leave one behind.
+INTERIM_TWIN_FIRST_SUNSET_MARKER = "**Sunset:** this default ends with #4785."
+INTERIM_TWIN_FIRST_CLAUDE_MD_SUNSET_MARKER = "**Sunset:** the PR that makes #4785's Actions sync live (`scripts/claude_twin_sync.py`) removes this bullet"
+INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER = "The PR that makes #4785's sync live removes this default."
+TWIN_SYNC_SCRIPT = ROOT / "scripts" / "claude_twin_sync.py"
+AGENTS_MD = ROOT / "agents.md"
+MASTER_SESSION_MD = ROOT / "docs" / "operations" / "master-session.md"
+
+
+def _step_4_twin() -> str:
+	twin = _flat(TEMPLATE_COMMAND)
+	return twin.split("4. **Implement the current phase", 1)[1].split("5. **Verify the phase", 1)[0]
+
+
+def test_protected_path_phase_records_the_automatic_twin_first_approval():
+	step = _step_4_twin()
+	assert INTERIM_TWIN_FIRST_MARKER in step
+	assert "In a repo that has `workflow-templates/.claude/` (coding-workflows), the question above is not asked" in step
+	assert "when the log has no `Protected-path approval: phase <n>` line and the plan does not say the phase needs a watched session" in step
+	assert "record `Protected-path approval: phase <n> — twin-first (automatic, interim until #4785) (<date>)` under `## Notes`" in step
+	# §6: the approval line keeps its format; the new value is one more answer.
+	assert "Record the answer as `Protected-path approval: phase <n> — <letter> (<date>)` under `## Notes`" in step
+	assert "the line format is unchanged; this is one more `<answer>` value" in step
+	assert "started only under a recorded `Protected-path approval: phase <n> — <answer> (<date>)` line" in _flat(TEMPLATE_COMMAND)
+
+
+def test_twin_first_edits_twins_only_and_reaches_the_twin_sync_blocker():
+	step = _step_4_twin()
+	assert "Edit only the `workflow-templates/.claude/**` twins, never `.claude/**`" in step
+	assert "A `.claude/` path with no twin (for example `.claude/commands/claude-issue-pickup.md`) is not edited at all" in step
+	assert "its exact diff and the sha256 of the file it produces go into the twin-sync blocker" in step
+	assert "After step 6 opens the phase PR, do not arm the wait (step 7)" in step
+	assert "`claude_fix_claim.py post … --kind hold --by <your session id>`" in step
+	assert "set `Status: BLOCKED` with `Waiting on: PR #N: twin sync`" in step
+	assert "the `<!-- ai:claude-blocked:v1 -->` comment on the source issue, with the `ai:claude-blocked` label and one `PushNotification`" in step
+	assert "each changed twin with its `.claude/` target and the twin's `sha256sum`" in step
+	assert "as a `[claude-twin-sync]` commit on the phase branch" in step
+	assert "arms the wait on that PR (step 7) and never re-implements the phase" in step
+	assert "A later stage of this project whose push must change a `.claude/**` file" in step
+
+
+def test_protected_path_question_remains_for_what_twin_first_cannot_cover():
+	step = _step_4_twin()
+	# The A/B/C question itself is unchanged.
+	assert "**Q: Phase `<n>` must edit `<paths>`, which Claude Code never auto-approves in an unattended session. How should it run?**" in step
+	assert "**C** — Try it unattended anyway" in step
+	cases = step.split("The automatic default does not cover three cases, and the rules above apply to them unchanged:", 1)[1]
+	assert "an edit that is denied even in the `workflow-templates/.claude/**` twin tree: stop and ask the question;" in cases
+	assert "a phase whose plan says it must run in a watched session (for example `watched session: required`): stop and ask the question;" in cases
+	assert "a log that already records a different `Protected-path approval: phase <n>` answer: that answer stands" in cases
+	assert "The automatic default never overwrites a recorded answer." in cases
+	assert "A repo without `workflow-templates/.claude/` (a consumer) has no twins, so it keeps the question." in cases
+	assert INTERIM_TWIN_FIRST_SUNSET_MARKER in cases
+
+
+def test_claude_md_section_28c_names_the_interim_twin_first_default():
+	claude = _flat(CLAUDE_MD)
+	section = claude.split("### C) Never auto-decided — still stop and ask", 1)[1].split("### D) Recording", 1)[0]
+	# The protected-path stop stays listed; the interim default is added beside it.
+	assert "- **Protected-path edits.** A phase that must edit `.claude/**`" in section
+	assert INTERIM_TWIN_FIRST_CLAUDE_MD_MARKER in section
+	assert "records `Protected-path approval: phase <n> — twin-first (automatic, interim until #4785) (<date>)` itself (the line format is unchanged)" in section
+	assert "edits only the `workflow-templates/.claude/**` twins" in section
+	assert "posts a `hold` claim and the twin-sync blocker" in section
+	assert "for an edit that is denied even in the twin tree and for a phase whose plan says it needs a watched session" in section
+	assert "stands and is never overwritten" in section
+	assert INTERIM_TWIN_FIRST_CLAUDE_MD_SUNSET_MARKER in section
+
+
+def test_operator_docs_name_the_interim_twin_first_default():
+	# The sunset guard below checks these markers are gone; this keeps them from
+	# drifting while the interim default is live, so that guard never passes vacuously.
+	if TWIN_SYNC_SCRIPT.exists():
+		pytest.skip("#4785's Actions twin sync is on this branch; the interim default is removed")
+	agents = _flat(AGENTS_MD)
+	assert INTERIM_TWIN_FIRST_AGENTS_MD_MARKER in agents
+	assert INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER in agents
+	assert INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER in _flat(MASTER_SESSION_MD)
+
+
+def test_interim_twin_first_default_is_removed_when_the_4785_sync_lands():
+	"""Removal trigger (#4948): once #4785's sync script exists, the interim default must be gone."""
+	if not TWIN_SYNC_SCRIPT.exists():
+		pytest.skip("#4785's Actions twin sync is not on this branch yet; the interim default stays")
+	assert INTERIM_TWIN_FIRST_MARKER not in _flat(TEMPLATE_COMMAND), "remove the #4948 interim default from implement-plan-claude.md step 4"
+	assert INTERIM_TWIN_FIRST_MARKER not in _flat(COMMAND), "remove the #4948 interim default from implement-plan-claude.md step 4"
+	assert INTERIM_TWIN_FIRST_SUNSET_MARKER not in _flat(TEMPLATE_COMMAND), "remove the #4948 interim default's Sunset paragraph from implement-plan-claude.md step 4"
+	assert INTERIM_TWIN_FIRST_SUNSET_MARKER not in _flat(COMMAND), "remove the #4948 interim default's Sunset paragraph from implement-plan-claude.md step 4"
+	assert INTERIM_TWIN_FIRST_CLAUDE_MD_MARKER not in _flat(CLAUDE_MD), "remove the #4948 interim bullet from CLAUDE.md §28.C"
+	assert INTERIM_TWIN_FIRST_CLAUDE_MD_SUNSET_MARKER not in _flat(CLAUDE_MD), "remove the #4948 interim bullet's Sunset sentence from CLAUDE.md §28.C"
+	assert INTERIM_TWIN_FIRST_AGENTS_MD_MARKER not in _flat(AGENTS_MD), "remove the #4948 interim sentence from agents.md"
+	assert INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER not in _flat(AGENTS_MD), "remove the #4948 interim closing sentence from agents.md"
+	assert INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER not in _flat(MASTER_SESSION_MD), "remove the #4948 interim clause from the Q40 row of docs/operations/master-session.md"
