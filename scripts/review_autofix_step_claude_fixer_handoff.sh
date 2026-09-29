@@ -23,8 +23,9 @@
 #          finds nothing to commit. A reviewer slot that failed (retry limit
 #          reached, killed, timed out) is a missing vote, not a finding: the
 #          ledger is still clean when at least CLAUDE_FIXER_MIN_CLEAN_REVIEWERS
-#          (default 5) reviewers completed clean, logged as
-#          CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS (see the clean-ledger check).
+#          (default 5) reviewers completed clean, each proven by its own
+#          runner output (NONE, no finding or task gap; issue #5114), logged
+#          as CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS (see the clean-ledger check).
 #
 # The hand-off marker is
 #   <!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->
@@ -39,7 +40,8 @@
 # AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED, REVIEWER_CONSENSUS_FILE,
 # PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR, GITHUB_RUN_ID,
 # GITHUB_SERVER_URL, RUNTIME_DIR, PREVIOUS_REVIEWS_DIR (the reviewer
-# runner's status_review_<slug>.txt and review_<slug>.txt files),
+# runner's status_review_<slug>.txt and review_<slug>.txt files, read for
+# both failed and clean blocks when a slot failed),
 # CLAUDE_FIXER_MIN_CLEAN_REVIEWERS (default 5).
 # API calls: on a clean candidate, the existing check-run collector refreshes
 # its paginated check-runs GET; on findings, the ledger chunks from
@@ -136,11 +138,93 @@ fi
 # "failed" for every failed block and "success" for every clean one, the
 # runner's output file ${PREVIOUS_REVIEWS_DIR}/review_<slug>.txt is exactly the
 # failed block's line (the status file also reads "failed" after a
-# non-retryable error, whose output line differs; issue #4885), no slug
-# repeats, and at least CLAUDE_FIXER_MIN_CLEAN_REVIEWERS (default 5) clean
-# reviewers remain. The ledger is model output over reviewer output, so its
-# text alone never proves a failure; the status and output files are written
+# non-retryable error, whose output line differs; issue #4885), every clean
+# block's review_<slug>.txt is an unambiguous no-findings result (below;
+# "success" only means the reviewer finished, and the ledger can mislabel a
+# reviewer that reported a finding; issue #5114), no slug repeats, and at
+# least CLAUDE_FIXER_MIN_CLEAN_REVIEWERS (default 5) clean reviewers remain.
+# The ledger is model output over reviewer output, so its text alone never
+# proves a failure or a clean vote; the status and output files are written
 # by the runner only.
+#
+# A runner output is an unambiguous no-findings result when it is readable
+# and not empty, at least one line is exactly NONE (the reviewer contract's
+# "found nothing", prompts/_nag_reminders.txt), no line is a finding or
+# task-gap field (File:, Line or code reference:, Problem:, Why it fails at
+# runtime:, Requirement:, Expected change site:, Evidence of absence:,
+# SEVERITY:, ISSUE_CONFIDENCE:, markdown list and emphasis markers ignored),
+# and, when any lens heading of prompts/review-reviewer-checklist.txt appears,
+# all nine appear and the next non-blank line after each is exactly NONE.
+# Prose around those verdicts is allowed.
+# tests/test_review_autofix_claude_fixer_mode.py pins this list to the prompt.
+claude_fixer_checklist_lens_headings="SECURITY & INPUT VALIDATION|CORRECTNESS & LOGIC|CONCURRENCY / RACES / IDEMPOTENCY|ERROR PATHS & EDGE CASES|PERFORMANCE & RESOURCE USE|INDEX-CONTRACT / DB RULES|NAMING / BACKWARD COMPATIBILITY|IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS|TASK COMPLETENESS / INTENT GAPS"
+
+# Prints "clean" when the runner output file is an unambiguous no-findings
+# result, else the reason it is not. Always returns 0. The text is fed to awk
+# through a here-string, not a pipe: under pipefail an early reader exit can
+# fail the writer, and set -e would then end the step.
+claude_fixer_runner_output_state()
+{
+  local claude_fixer_output_file="$1"
+  local claude_fixer_output_text=""
+  if [ ! -f "${claude_fixer_output_file}" ]; then
+    echo "missing"
+    return 0
+  fi
+  if ! claude_fixer_output_text="$(cat "${claude_fixer_output_file}" 2>/dev/null)"; then
+    echo "unreadable"
+    return 0
+  fi
+  if [ -z "${claude_fixer_output_text//[[:space:]]/}" ]; then
+    echo "empty"
+    return 0
+  fi
+  awk -v headings="${claude_fixer_checklist_lens_headings}" '
+    function trim(s)
+    {
+      sub(/^[ \t\r]+/, "", s)
+      sub(/[ \t\r]+$/, "", s)
+      return s
+    }
+    BEGIN {
+      heading_count = split(headings, heading_list, "|")
+      for (i = 1; i <= heading_count; i++) is_heading[heading_list[i]] = 1
+    }
+    {
+      line = trim($0)
+      if (line == "") next
+      if (expect_none) {
+        if (line != "NONE") lens_without_none = 1
+        expect_none = 0
+      }
+      if (line == "NONE") none_seen = 1
+      field = tolower(line)
+      sub(/^[-*>#_` \t]+/, "", field)
+      sub(/^[0-9]+[.)][ \t]*/, "", field)
+      sub(/^[-*>#_` \t]+/, "", field)
+      if (field ~ /^(file|line or code reference|problem|why it fails at runtime|requirement|expected change site|evidence of absence|severity|issue_confidence)[*_` \t]*:/) finding = 1
+      heading = toupper(line)
+      sub(/^[#* \t]+/, "", heading)
+      sub(/[*: \t]+$/, "", heading)
+      if (heading in is_heading) {
+        if (!(heading in heading_seen)) {
+          heading_seen[heading] = 1
+          distinct_headings++
+        }
+        expect_none = 1
+      }
+    }
+    END {
+      if (expect_none) lens_without_none = 1
+      if (finding) print "reports a finding or task gap"
+      else if (!none_seen) print "has no NONE verdict"
+      else if (distinct_headings > 0 && (distinct_headings < heading_count || lens_without_none)) print "leaves a checklist lens without a NONE verdict"
+      else print "clean"
+    }
+  ' <<< "${claude_fixer_output_text}"
+  return 0
+}
+
 claude_fixer_clean_ledger="false"
 claude_fixer_failed_slots=""
 claude_fixer_clean_reviewers=0
@@ -214,7 +298,21 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
         claude_fixer_block_status="$(cat "${PREVIOUS_REVIEWS_DIR}/status_review_${claude_fixer_block_slug}.txt" 2>/dev/null || true)"
       fi
       case "${claude_fixer_block_kind}:${claude_fixer_block_status}" in
-        clean:success) claude_fixer_clean_reviewers="$((claude_fixer_clean_reviewers + 1))" ;;
+        clean:success)
+          # A success status only says the reviewer finished. The clean vote
+          # comes from the runner's own review_<slug>.txt, never from the
+          # ledger's text (issue #5114). The guards repeat the status read's.
+          claude_fixer_block_output_state="missing"
+          if [[ "${claude_fixer_block_slug}" =~ ^[A-Za-z0-9_-]+$ ]] && [ -n "${PREVIOUS_REVIEWS_DIR:-}" ]; then
+            claude_fixer_block_output_state="$(claude_fixer_runner_output_state "${PREVIOUS_REVIEWS_DIR}/review_${claude_fixer_block_slug}.txt")"
+          fi
+          if [ "${claude_fixer_block_output_state}" = "clean" ]; then
+            claude_fixer_clean_reviewers="$((claude_fixer_clean_reviewers + 1))"
+          else
+            echo "::warning::Claude-fixer ledger block '${claude_fixer_block_slug}' reads clean but the reviewer runner's review_${claude_fixer_block_slug}.txt is not an unambiguous no-findings result (${claude_fixer_block_output_state}); the ledger is not clean."
+            claude_fixer_failed_slots_verified="false"
+          fi
+          ;;
         failed:failed)
           # The status file reads `failed` for non-retryable errors too, so it
           # does not prove the failure class (issue #4885). The runner writes
