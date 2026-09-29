@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:417-435 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The switch-walking loop in `_segment_is_inline_write` does not stop at `--`, so a following `-c` operand is incorrectly treated as Python's inline-code switch.\n  WHY: For `python3 -- -c \"open('x', 'w')\"`, Python treats `-c` as a script filename and runs no inline program, but the classifier returns `inline-interpreter-write`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description finding #1 \u2014 \"The switch scan stops at the script operand, at `-`, and at `-m`. It skips the value that follows `-W`, `-X`, and `--check-hash-based-pycs`.\" (the operand boundary is the scan's stopping point).\n  expected_change_site: workflow-templates/.claude/scripts/permission_prompts.py `_segment_is_inline_write` break condition\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The break condition handles `-`, non-dash operands, and `-m`, but `--` (the POSIX/Python option terminator, after which every argument is an operand) is not handled, so the scan does not in fact stop at every operand boundary. No test in tests/test_permission_prompt_duplicates.py covers `python3 -- -c ...`. The stated contract is only partially delivered.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/permission_prompts.py:425-432 | severity=high | confidence=5\n  PROBLEM: The switch-walking loop does not stop when encountering the `--` argument, which signifies the end of interpreter options in standard POSIX/Python argument parsing.\n  WHY: A command like `python3 -- -c \"open('x', 'w')\"` will be incorrectly classified as an inline-interpreter write because the loop continues past `--` and subsequently matches the `-c` operand as an interpreter switch.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/permission_prompts.py:417-435 | severity=high | confidence=5\n  PROBLEM: The switch-walking loop does not stop at `--` (Python's standard end-of-options marker).\n  WHY: For `python3 -- -c \"open('x', 'w')\"`, Python treats `-c` as a positional argument (the script filename), but the loop walks past `--`, matches `_PYTHON_C_RE` against `-c`, and falsely classifies the command as an inline-interpreter write.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/permission_prompts.py:428 | severity=high | confidence=5\n  PROBLEM: The switch-walking loop does not break on `--` (the POSIX end-of-options marker).\n  WHY: For `python3 -- -c \"open('x', 'w')\"`, Python treats `-c` as a script filename, so the loop's classification of the command as an inline-interpreter write is a false positive.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- workflow-templates/.claude/scripts/permission_prompts.py:428 | severity=high | confidence=4\n  PROBLEM: switch-walking loop does not break on \"--\" (break only on \"-\" / non-switch / -m)\n  WHY: \"python3 -- -c 'open(x,\\\"w\\\")'\" classifies as inline-interpreter-write (hits _PYTHON_C_RE after --) but -c is operand (script name); false-positive permission-prompt classification\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py:423-430 | severity=high | confidence=5\n  PROBLEM: The loop does not stop at `--`, the option terminator.\n  WHY: For `python3 -- -c \"open('x', 'w')\"`, CPython treats `-c` as a script filename, but the walk continues past `--` and matches `-c` as Python's inline-code switch, falsely classing the command as an `inline-interpreter-write`.\n- TASK_GAP\n  Requirement: PR description finding #1 \u2014 \"The switch scan stops at the script operand, at `-`, and at `-m`. It skips the value that follows `-W`, `-X`, and `--check-hash-based-pycs`.\" (the operand boundary is the scan's stopping point).\n  Expected change site: workflow-templates/.claude/scripts/permission_prompts.py `_segment_is_inline_write` break condition.\n  Evidence of absence: The break condition handles `-`, non-dash operands, and `-m`, but `--` (the POSIX/Python option terminator, after which every argument is an operand) is not handled, so the scan does not in fact stop at every operand boundary. No test in tests/test_permission_prompt_duplicates.py covers `python3 -- -c ...`. The stated contract is only partially delivered.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "28fa614bf02c57d9d715cbc41c2fd4cba8cb937347964b8168e4314a8affd07f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5133,
+    "run_id": "36563637457",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36563637457",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929120731_37bfbad2cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5133,
+    "run_id": "36563637457"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T12:07:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
