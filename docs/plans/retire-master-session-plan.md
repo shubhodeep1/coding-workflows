@@ -309,29 +309,34 @@ None.
 ## Decisions
 
 ### D1 — Escalation judge instead of a human for §28.C failures
-- Chosen: a fresh Opus judge session with a fixed menu (`budget`, `descope`, `close`), never repeating a choice per fingerprint (Q4: A, Q7: A).
-- Alternatives considered: keep stopping for a human; always de-scope; a Codex judge in Actions like `security_pass_exhaustion_judge`.
-- Why: no master will exist. A Claude session has the project context and tools, and the fingerprint ledger bounds the loop.
+
+- **Chosen:** a fresh Opus judge session with a fixed menu (`budget`, `descope`, `close`), never repeating a choice per fingerprint (Q4: A, Q7: A).
+- **Alternatives considered:** keep stopping for a human; always de-scope; a Codex judge in Actions like `security_pass_exhaustion_judge`.
+- **Why:** no master will exist. A Claude session has the project context and tools, and the fingerprint ledger bounds the loop.
 
 ### D2 — The judge starts through the project checker
-- Chosen: the blocked stage hands its checker an `escalation` wait, and the checker starts the judge like any stage (Q6: A).
-- Alternatives considered: the stage calls `create_session` itself; the pickup starts every judge.
-- Why: stages already start through the checker, so lineage depth stays fixed (§26.B step 1c), and the judge still starts within one cycle.
+
+- **Chosen:** the blocked stage hands its checker an `escalation` wait, and the checker starts the judge like any stage (Q6: A).
+- **Alternatives considered:** the stage calls `create_session` itself; the pickup starts every judge.
+- **Why:** stages already start through the checker, so lineage depth stays fixed (§26.B step 1c), and the judge still starts within one cycle.
 
 ### D3 — Automatic resume from the pickup
-- Chosen: pickup step 3c, a script-decided sweep that wakes the recorded session or requeues through the intake (Q11: A).
-- Alternatives considered: `/reclarify` only; a new Actions producer with its own queue payload.
-- Why: it reuses the bound queue path and the one long-lived session, and a GITHUB_TOKEN comment cannot fire `/reclarify` (`clarify.yml:21`).
+
+- **Chosen:** pickup step 3c, a script-decided sweep that wakes the recorded session or requeues through the intake (Q11: A).
+- **Alternatives considered:** `/reclarify` only; a new Actions producer with its own queue payload.
+- **Why:** it reuses the bound queue path and the one long-lived session, and a GITHUB_TOKEN comment cannot fire `/reclarify` (`clarify.yml:21`).
 
 ### D4 — Deterministic guard classification
-- Chosen: `settings.json` rule-diff classification, with every hook script change counted as loosening (Q9: A).
-- Alternatives considered: model classification of hooks; keep every guard change waiting for the owner.
-- Why: a hook can emit `allow` decisions, so a diff cannot prove a hook edit safe. The deterministic rule fails safe.
+
+- **Chosen:** `settings.json` rule-diff classification, with every hook script change counted as loosening (Q9: A).
+- **Alternatives considered:** model classification of hooks; keep every guard change waiting for the owner.
+- **Why:** a hook can emit `allow` decisions, so a diff cannot prove a hook edit safe. The deterministic rule fails safe.
 
 ### D5 — Retire the poller only after its replacements are on the default branch
-- Chosen: phase 4 checks for phases 1 and 2 before deleting the poller's triggers and archiving it (Q13: A).
-- Alternatives considered: the operator retires it by hand; retire it immediately.
-- Why: it keeps phase 4 independently mergeable and never leaves blocked projects unwatched.
+
+- **Chosen:** phase 4 checks for phases 1 and 2 before deleting the poller's triggers and archiving it (Q13: A).
+- **Alternatives considered:** the operator retires it by hand; retire it immediately.
+- **Why:** it keeps phase 4 independently mergeable and never leaves blocked projects unwatched.
 
 ## References
 
