@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_nonblocking.py:525-530 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: `_safe_source_path` allows `:` in paths, which can cause `git cat-file blob <commit>:<path>` to parse a different path than intended when verifying evidence.\n  WHY: This can let evidence verification read the wrong blob; severity disagreement: deepseek rated this NIT, while the other reporting reviewers rated it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_claude_fixer_nonblocking.py:525-529, function _safe_source_path | severity=low | confidence=[2]\n  PROBLEM: _safe_source_path does not reject paths containing colon (:) characters.\n  WHY: Git's cat-file blob <commit>:<path> syntax uses colon as the separator between commit and path. A path such as foo:bar.txt would cause git to interpret <commit>:foo as the object specifier and bar.txt as the path, yielding an unexpected read target. The code fails closed in practice: git would fail to resolve <commit>:foo as an object, returning non-zero exit, producing empty output, and the vote's evidence would fail verification as source_unavailable. The attack vector requires a reviewer finding to flag a file whose path contains :, which is unusual for repository paths. This is defense-in-depth hardening with no demonstrated exploit path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_claude_fixer_nonblocking.py:_safe_source_path function | severity=high | confidence=[4]\n  PROBLEM: Path validation allows the colon : character.\n  WHY: git cat-file blob commit:path uses the colon as a delimiter between the commit and the path. A path containing a colon can cause git to misinterpret the command or lead to security vulnerabilities if an attacker can manipulate paths.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_claude_fixer_nonblocking.py:`_safe_source_path` (~line 525) | severity=high | confidence=[4]\n  PROBLEM: A path containing `:` is not rejected.\n  WHY: `git cat-file blob <commit>:<path>` parses `<commit>:<path>` with the LAST colon as the commit/path separator. The `VOTE_EVIDENCE_RE` regex captures paths that contain `:` (the `:` between path and line is matched once, but the path group `[^\\s|`]+?` allows additional `:` characters within the path itself \u2014 e.g., `docs:v1/file.md` is parsed as path=`docs:v1/file.md`, start=1261). When the manifest entry's path contains `:`, the shell-level git command can resolve `<sha>:<path-prefix>:<path-suffix>` to a DIFFERENT blob than intended (specifically, the blob at `<sha>:<path-prefix>/<path-suffix>` if `<path-prefix>` is a subtree of the commit's root tree). This is the threat-model premise for the whole gate \u2014 prompt injection that gets reviewers to clear findings. An attacker who can prompt-inject reviewer output and knows the repo's tree structure can cite a path like `<existing-dir>:<existing-file>` whose actual file content they can quote (e.g., a directory named `docs` containing a `v1/file.md` \u2014 the literal evidence would be `docs:v1/file.md:1261`, parsed by git as `<sha>:docs/v1/file.md` = `<sha>:docs/v1/file.md`). The quote check passes against the wrong file, so a finding demotes on content the attacker chose. Although the prerequisite (a manifest entry with `:` in the path) is uncommon, the fix is a one-character defense-in-depth addition in a security-critical gate.\n- tests/test_review_claude_fixer_nonblocking.py: `test_issue_4976_git_source_refuses_unsafe_paths` parametrize list\n  PROBLEM: The parametrize list does not include paths with `:`.\n  WHY: Adding `\"foo:bar\"`, `\"docs:v1/file.md\"`, and `\"a:b:c\"` to the parametrize list would lock the rejection in the test and prevent regression of the `_safe_source_path` hardening.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_claude_fixer_nonblocking.py:530 | severity=high | confidence=[3]\n  PROBLEM: _safe_source_path does not reject ':'\n  WHY: git cat-file blob <commit>:<path> misparses path containing ':' (e.g. \"foo:bar\" treated as commit \"HEAD_SHA:foo\" ref \"bar\"); evidence read can be from wrong file\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "82460e8c8a14959042a05d6a2e6f98ba2473e56c55cf024d5d6eda3b35f1a118",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5034,
+    "run_id": "36523703558",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36523703558",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929053023_a62b3f4055",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5034,
+    "run_id": "36523703558"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T05:30:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
