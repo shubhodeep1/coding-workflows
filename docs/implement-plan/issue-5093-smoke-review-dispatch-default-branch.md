@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch
 - Project branch: claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch   Final PR: #5107 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (the PR carrying this log update)
+- Waiting on: PR #5111
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01DeJ3bVofrAPjfdXYapCF43   safety net trig_01CxWnTqFZhNRvb8vRTi52Wm   hand-back trig_013VdxptFpDhK2Rs1cKMp4oF
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified locally; phase PR opened against the project branch
+- Last note: review round 1 on PR #5111: fixed the null head_branch lookup and the stale #4898 changelog sentence; rejected 9 findings (details in the PR reply)
 
 ## Phases
-1. [ ] Phase 1 — default-branch smoke review dispatch with checked-out-SHA correlation   — phase PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — default-branch smoke review dispatch with checked-out-SHA correlation   — PR #5111 open (waiting); review rounds: 1; interventions: 0
    - [x] `scripts/smoke_review_dispatch.sh`: `smoke_review_pr_named_runs`, `smoke_review_checked_out_sha`, `smoke_review_sha_descends_from` (AD-1, AD-2, AD-9)
    - [x] "Validate prerequisites" (`id: prereqs`) outputs `test_repo_default_branch` from its existing `repos/${TEST_REPO}` read (AD-7)
    - [x] Phase 3c dispatches at `REVIEW_DISPATCH_REF`, registers `bug_b_run_id`, and stays fail-soft (AD-3)
@@ -46,6 +46,7 @@
 - AD-9 [plan, 2026-09-29] Where do the new helpers live? — Picked: A — sourced `scripts/smoke_review_dispatch.sh`. Alternatives: B — inline. Why: one tested implementation for three sites. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] A lookup of default-branch `workflow_dispatch` runs by PR run name must not pass the API's `branch=` filter or require `head_branch == <ref>`: GitHub can report `head_branch` as null on such runs, so keep null or empty head branches and drop only runs on another branch. (files: scripts/smoke_review_dispatch.sh)
 
 ## Notes
 - Security pass skipped per the plan header (verified automation-produced `ai:security` issue).

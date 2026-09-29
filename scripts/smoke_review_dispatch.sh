@@ -19,7 +19,11 @@
 # smoke_review_pr_named_runs <repo> <workflow_file> <dispatch_ref> <pr_number>
 #
 # Lists the workflow_dispatch runs of <workflow_file> on <dispatch_ref> whose
-# run name ends with " [pr:<pr_number>]".
+# run name ends with " [pr:<pr_number>]". GitHub can report head_branch as
+# null (or leave it empty) on a workflow_dispatch run (issue #4928), so such a
+# run is kept too, and the listing is not narrowed with the API's branch
+# filter, which would drop it server-side. A run on any other branch is
+# dropped.
 #   Input:   owner/repo; a workflow basename (*.yml); the dispatch branch;
 #            a positive PR number.
 #   Output:  a JSON array, oldest id first, of
@@ -27,7 +31,8 @@
 #            path, event, display_title}. Phantom "workflow file issue" runs
 #            (name == path) are dropped.
 #   Calls:   1 REST read, GET repos/<repo>/actions/workflows/<file>/runs with
-#            event=workflow_dispatch, branch=<dispatch_ref>, per_page=100.
+#            event=workflow_dispatch, per_page=100 (newest first, so a run
+#            dispatched moments ago is on this page).
 #   Returns: 0 with the array (possibly []); 1 on invalid input, an API
 #            failure, or a malformed payload (nothing printed).
 smoke_review_pr_named_runs()
@@ -52,7 +57,6 @@ smoke_review_pr_named_runs()
 		-H "Accept: application/vnd.github+json" \
 		"repos/${repo}/actions/workflows/${workflow_file}/runs" \
 		-f "event=workflow_dispatch" \
-		-f "branch=${dispatch_ref}" \
 		-f "per_page=100" \
 		2>/dev/null); then
 		return 1
@@ -74,7 +78,7 @@ smoke_review_pr_named_runs()
 			[
 				.workflow_runs[]
 				| select(.event == "workflow_dispatch")
-				| select(.head_branch == $ref)
+				| select((.head_branch // "") == "" or .head_branch == $ref)
 				| select((.name // "") != (.path // ""))
 				| select((.display_title | type == "string")
 					and (.display_title | endswith(" [pr:" + $pr + "]")))
