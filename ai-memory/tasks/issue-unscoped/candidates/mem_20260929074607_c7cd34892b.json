@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:392-406 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: When heredoc counts disagree, passing every body to every command segment can misclassify an unrelated segment as an inline write.\n  WHY: The fallback restores the pre-fix behavior for parser-disagreement cases; severity differed (MAJOR vs NIT), so the higher severity is used.\n- .claude/scripts/permission_prompts.py:392-403 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When heredoc counts disagree, passing every body to every command segment can misclassify an unrelated segment as an inline write.\n  WHY: The fallback restores the pre-fix behavior for parser-disagreement cases.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/permission_prompts.py:127 | severity=MAJOR | confidence=4\n  PROBLEM: The balanced-paren regex `_OPEN_ARGUMENT_TEXT` relies on a fixed depth of nested parentheses.\n  WHY: Calls deeper than 3 levels (e.g., open(os.path.join(str(p.replace('/', '_')), 'x'), 'w')) fail to match. The regex will fail to identify the write mode, causing the tool to erroneously classify the write as a read, leading to new issues being filed instead of joining the existing class issue.\n- workflow-templates/.claude/scripts/permission_prompts.py:389-406 | severity=MAJOR | confidence=3\n  PROBLEM: The heredoc body binding uses a fallback to the full `bodies` list when `sum(counts) != len(bodies)`.\n  WHY: This fallback reverts to the pre-fix behavior for complex commands where the parser cannot align heredoc bodies to segments. If a command contains heredocs not parsed correctly by the segmenter, every segment sees every body, potentially leading to misclassifying segments as inline writes.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/permission_prompts.py:392-403 (also lines 392-403 in workflow-templates/.claude/scripts/permission_prompts.py) | severity=NIT | confidence=3\n  PROBLEM: When `_command_segments` and `heredoc_bodies` disagree on the count of `<<` operators, the loop falls back to passing the entire `bodies` list to every command segment.\n  WHY: `heredoc_bodies` can count a heredoc-like string inside a quoted argument that `_command_segments` does not count as a redirect. With the fallback in place, every segment sees every body and a write in the misplaced heredoc body can still mis-classify an unrelated segment.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cb24051e30c98b7bce7d4ed074d98a382f38ce3b7836d0c56c15596f17f14710",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5073,
+    "run_id": "36534098117",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36534098117",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929074607_c7cd34892b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5073,
+    "run_id": "36534098117"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T07:46:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
