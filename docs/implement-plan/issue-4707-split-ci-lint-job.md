@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4707-split-ci-lint-job-plan.md
 - Source issue: shubhodeep1/coding-workflows#4707
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4707-split-ci-lint-job   Final PR: (pending)
+- Project branch: claude/implement-plan-issue-4707-split-ci-lint-job   Final PR: #4874 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened; implementing phase 1.
+- Last note: phase 1 implemented and verified locally (step parity vs main: 122 steps once each; all ci.yml-reading tests pass; actionlint + yamllint clean); phase PR opened.
 
 ## Phases
-1. [ ] Phase 1 — split `ci.yml` into parallel jobs behind an aggregate `lint`, raise release `validate-scripts` budget, update tests and docs
+1. [ ] Phase 1 — split `ci.yml` into parallel jobs behind an aggregate `lint`, raise release `validate-scripts` budget, update tests and docs   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -23,6 +23,7 @@
 ## Validation
 
 ## Completion
+- Final PR #4874 draft
 
 ## Activation
 
@@ -35,6 +36,7 @@
 - AD-6 [plan, 2026-09-29] New job budgets? — Picked: A — 15 minutes for `static-checks`, 20 for each test job and poll group, 5 for `lint`. Alternatives: B — 30 for every job; C — 10 for every job. Why: about 3x the measured runtime per job, and the whole run still ends well under the old 45. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] When splitting a long CI job, move steps as verbatim text blocks and verify parity (every old step name exactly once, bodies byte-identical) against the base branch's workflow before editing anything else; YAML round-trips reformat run blocks. (files: .github/workflows/ci.yml)
 
 ## Notes
 - Issue mode; security pass: run (`security_pass_skip.py`: no skip label).
