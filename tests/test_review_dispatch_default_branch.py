@@ -262,20 +262,21 @@ def _api_calls(calls: list[list[str]]) -> list[list[str]]:
 class PrNamedReviewDispatchRuns(_ShellHarness):
 	functions = ((POLLER_SCRIPT, "_pr_named_review_dispatch_runs"),)
 
-	def _call(self, pr: str, runs: list[dict] | None = None, **env: str) -> subprocess.CompletedProcess:
+	def _call(self, pr: str, runs: list[dict] | None = None, *, lookback: str | None = None, **env: str) -> subprocess.CompletedProcess:
 		env.setdefault("GH_WRAPPER_RUNS", _wrapper_runs(runs or []))
+		lookback_arg = "" if lookback is None else f' "{lookback}"'
 		return self.run_bash(
 			f"""
 			rc=0
-			out="$(_pr_named_review_dispatch_runs "{pr}")" || rc=$?
+			out="$(_pr_named_review_dispatch_runs "{pr}"{lookback_arg})" || rc=$?
 			printf '%s\n' "${{out}}"
 			echo "rc=${{rc}}"
 			""",
 			**env,
 		)
 
-	def _runs(self, pr: str, runs: list[dict] | None = None, *, expect_rc: int = 0, **env: str) -> list[dict]:
-		result = self._call(pr, runs, **env)
+	def _runs(self, pr: str, runs: list[dict] | None = None, *, expect_rc: int = 0, lookback: str | None = None, **env: str) -> list[dict]:
+		result = self._call(pr, runs, lookback=lookback, **env)
 		lines = result.stdout.strip().splitlines()
 		self.assertEqual(lines[-1], f"rc={expect_rc}", result.stderr)
 		return json.loads(lines[0])
@@ -324,6 +325,45 @@ class PrNamedReviewDispatchRuns(_ShellHarness):
 		cutoff = datetime.strptime(re.search(r"created=>=([^&]+)", path).group(1), "%Y-%m-%dT%H:%M:%SZ")
 		age = datetime.now(timezone.utc).replace(tzinfo=None) - cutoff
 		self.assertAlmostEqual(age.total_seconds(), 250 * 60, delta=5)
+
+	def _cutoff_age_minutes(self) -> list[float]:
+		ages = []
+		for call in _api_calls(self.gh_calls()):
+			cutoff = datetime.strptime(re.search(r"created=>=([^&]+)", call[3]).group(1), "%Y-%m-%dT%H:%M:%SZ")
+			ages.append((datetime.now(timezone.utc).replace(tzinfo=None) - cutoff).total_seconds() / 60)
+		return ages
+
+	def test_lookback_argument_sets_the_cutoff(self) -> None:
+		# The failed-autofix redispatch passes the review budget plus one
+		# stall threshold (conformance fix 2, AD-8).
+		self._runs("12", [], lookback="370", REVIEW_RUN_MAX_RUNTIME_MINUTES="240")
+		ages = self._cutoff_age_minutes()
+		self.assertEqual(len(ages), 2, self.gh_calls())
+		for age in ages:
+			self.assertAlmostEqual(age, 370, delta=0.1)
+
+	def test_invalid_lookback_falls_back_to_the_review_window(self) -> None:
+		for lookback in ("", "0", "-5", "12m", "3 60"):
+			with self.subTest(lookback=lookback):
+				self.gh_log.write_text("", encoding="utf-8")
+				self._runs("12", [], lookback=lookback, REVIEW_RUN_MAX_RUNTIME_MINUTES="240")
+				ages = self._cutoff_age_minutes()
+				self.assertEqual(len(ages), 2, self.gh_calls())
+				for age in ages:
+					self.assertAlmostEqual(age, 240, delta=0.1)
+
+	def test_invalid_review_window_env_falls_back_to_250(self) -> None:
+		# The env fallback is checked like the argument: a misconfigured
+		# REVIEW_RUN_MAX_RUNTIME_MINUTES never yields an unusable cutoff.
+		for window in ("0", "-3", "abc", "1.5", "0250"):
+			for lookback in (None, "x"):
+				with self.subTest(window=window, lookback=lookback):
+					self.gh_log.write_text("", encoding="utf-8")
+					self._runs("12", [], lookback=lookback, REVIEW_RUN_MAX_RUNTIME_MINUTES=window)
+					ages = self._cutoff_age_minutes()
+					self.assertEqual(len(ages), 2, self.gh_calls())
+					for age in ages:
+						self.assertAlmostEqual(age, 250, delta=0.1)
 
 	def test_pages_until_every_reported_run_is_read(self) -> None:
 		# 150 unrelated wrapper runs are newer than the one for PR 12; the

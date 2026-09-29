@@ -1719,6 +1719,9 @@ if ! [[ "${STALL_THRESHOLD_MINUTES}" =~ ^[0-9]+$ ]] || [ "${STALL_THRESHOLD_MINU
   echo "::warning::STALL_THRESHOLD_MINUTES must be a positive integer; defaulting to 120"
   STALL_THRESHOLD_MINUTES="120"
 fi
+# Strip leading zeros: bash arithmetic reads "0120" as octal and fails on
+# "08", while `[ -lt ]` reads both as decimal.
+STALL_THRESHOLD_MINUTES="$(( 10#${STALL_THRESHOLD_MINUTES} ))"
 
 # Review-run freshness window for the in-flight / zombie guards.
 #
@@ -1746,6 +1749,8 @@ if ! [[ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" =~ ^[0-9]+$ ]] || [ "${REVIEW_RUN_MA
   echo "::warning::REVIEW_RUN_MAX_RUNTIME_MINUTES must be a positive integer; defaulting to 250"
   REVIEW_RUN_MAX_RUNTIME_MINUTES="250"
 fi
+# Decimal, as for STALL_THRESHOLD_MINUTES above.
+REVIEW_RUN_MAX_RUNTIME_MINUTES="$(( 10#${REVIEW_RUN_MAX_RUNTIME_MINUTES} ))"
 if [ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" -lt "${STALL_THRESHOLD_MINUTES}" ]; then
   echo "::warning::REVIEW_RUN_MAX_RUNTIME_MINUTES (${REVIEW_RUN_MAX_RUNTIME_MINUTES}) is below STALL_THRESHOLD_MINUTES (${STALL_THRESHOLD_MINUTES}); raising it to the stall threshold so review runs are never treated as zombies sooner than other runs."
   REVIEW_RUN_MAX_RUNTIME_MINUTES="${STALL_THRESHOLD_MINUTES}"
@@ -13809,10 +13814,19 @@ STALL_EOF
           # An incomplete listing (issue #4927) can neither show the newest
           # PR-named run nor rule out a live one, so this cycle neither
           # redispatches nor pushes; the next poll cycle retries.
+          # The lookback is the review budget plus one stall threshold, not
+          # the in-flight guards' REVIEW_RUN_MAX_RUNTIME_MINUTES: a review run
+          # that hit the codex-agent job's 240-minute timeout ends only
+          # minutes before it would leave that window, so a later poll cycle
+          # would miss the failure and push an empty commit instead of
+          # redispatching. Both terms are positive decimal integers by now:
+          # the startup block validates them, strips leading zeros, and
+          # floors REVIEW_RUN_MAX_RUNTIME_MINUTES at STALL_THRESHOLD_MINUTES.
           if [ -z "${_rtr_failed_conclusion}" ]; then
             local _rtr_pr_named_row _rtr_pr_named_conclusion _rtr_pr_named_created_at
             local _rtr_pr_named_json="" _rtr_pr_named_rc=0
-            _rtr_pr_named_json="$(_pr_named_review_dispatch_runs "${pr_num}")" || _rtr_pr_named_rc=$?
+            local _rtr_pr_named_lookback_min=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES + STALL_THRESHOLD_MINUTES ))
+            _rtr_pr_named_json="$(_pr_named_review_dispatch_runs "${pr_num}" "${_rtr_pr_named_lookback_min}")" || _rtr_pr_named_rc=$?
             if [ "${_rtr_pr_named_rc}" -ne 0 ]; then
               echo "  Issue #${issue_num} PR #${pr_num} review dispatch run listing incomplete (PR-named lookup); skipping redispatch and empty-commit push this cycle, the next poll cycle retries."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
@@ -17443,6 +17457,14 @@ _has_active_autofix_run()
 # recovery then pushed an empty commit under that run and discarded it.
 #
 # Input:     $1 = PR number. Anything but ^[1-9][0-9]*$ prints [] with no call.
+#            $2 = optional lookback in minutes (default and fallback for
+#            anything but ^[1-9][0-9]*$: REVIEW_RUN_MAX_RUNTIME_MINUTES,
+#            itself replaced by 250 when it is not ^[1-9][0-9]*$).
+#            The in-flight guards keep the default, which is the poller's
+#            own active-run window. The failed-autofix redispatch passes
+#            REVIEW_RUN_MAX_RUNTIME_MINUTES + STALL_THRESHOLD_MINUTES: a run
+#            that used its whole 240-minute job budget and then failed would
+#            otherwise leave the default window minutes after it ended.
 # Output:    one JSON array on stdout, newest first, of the matching runs:
 #            [{databaseId, event, status, conclusion, displayTitle, createdAt, startedAt}]
 # Returns:   0 = the listing is complete: an empty array means no run named
@@ -17453,14 +17475,16 @@ _has_active_autofix_run()
 #            retries.
 # API calls: for each wrapper (internal-review.yml, ai-review.yml), one
 #            `GET actions/workflows/<wrapper>/runs?event=workflow_dispatch&created=>=<cutoff>&per_page=100&page=<p>`
-#            per page, where <cutoff> is now minus REVIEW_RUN_MAX_RUNTIME_MINUTES
-#            (default 250; older review runs are zombies to the poller).
+#            per page, where <cutoff> is now minus the lookback ($2, else
+#            REVIEW_RUN_MAX_RUNTIME_MINUTES, default 250; older active review
+#            runs are zombies to the poller).
 #            Pages continue until the distinct runs read reach the listing's
 #            total_count, at most 10 pages (GitHub serves at most 1,000
 #            results for a filtered run listing). A wrapper this repo does
 #            not have answers 404 on its first page and counts as complete
 #            and empty. In coding-workflows that is 3 calls (two
-#            internal-review.yml pages, one ai-review.yml 404). REST only;
+#            internal-review.yml pages, one ai-review.yml 404), and 4 with the
+#            redispatch's 370-minute lookback (measured 2026-09-29). REST only;
 #            callers issue it only after their head-branch lookups found
 #            nothing (§15).
 # Incomplete: a page that failed after gh_retry (other than that first-page
@@ -17470,11 +17494,15 @@ _has_active_autofix_run()
 #            logged once on stderr (CLAUDE.md §8):
 #            PR_NAMED_REVIEW_RUNS pr=<N> outcome=incomplete reason=<cutoff_unavailable|page_failed|malformed_page|listing_shifted|truncated|filter_failed> wrapper=<file> page=<p> read=<n> total=<n>
 #
-# Usage: _pr_named_review_dispatch_runs <pr_number>
+# Usage: _pr_named_review_dispatch_runs <pr_number> [lookback_minutes]
 _pr_named_review_dispatch_runs()
 {
 	local pr_number="$1"
-	local _pnr_window_min="${REVIEW_RUN_MAX_RUNTIME_MINUTES:-250}"
+	local _pnr_window_min="${2:-}"
+	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min="${REVIEW_RUN_MAX_RUNTIME_MINUTES:-250}"
+	# The env fallback gets the same check: anything but a positive integer
+	# (0, negative, non-numeric, a leading zero) becomes the 250 default.
+	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min=250
 	local _pnr_max_pages=10
 	local _pnr_now="" _pnr_cutoff="" _pnr_err_file="" _pnr_reason=""
 	local _pnr_wrapper="" _pnr_page=0 _pnr_page_json="" _pnr_page_rc=0 _pnr_page_len=0
@@ -17483,7 +17511,6 @@ _pr_named_review_dispatch_runs()
 		printf '[]\n'
 		return 0
 	fi
-	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min=250
 	_pnr_now="$(date +%s 2>/dev/null || echo "")"
 	if [[ "${_pnr_now}" =~ ^[0-9]+$ ]]; then
 		_pnr_cutoff="$(jq -nr --argjson t "$(( _pnr_now - _pnr_window_min * 60 ))" '$t | todate' 2>/dev/null || echo "")"

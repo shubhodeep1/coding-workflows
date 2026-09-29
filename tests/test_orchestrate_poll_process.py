@@ -2711,6 +2711,7 @@ if args[0] == 'api':
 					'run_started_at': run.get('startedAt', run.get('createdAt', '')),
 				})
 			result = {'workflow_runs': runs[(page - 1) * per_page:page * per_page], 'total_count': len(runs)}
+			save()
 			if jq:
 				import subprocess as _sp
 				p = _sp.run(['jq', '-c', jq], input=json.dumps(result), capture_output=True, text=True)
@@ -16810,6 +16811,126 @@ def test_retrigger_review_redispatches_when_pr_named_dispatch_run_failed():
 	assert all(d.get("ref") is None for d in dispatches_for_pr), dispatches_for_pr
 	assert result.get("git_push_calls", []) == []
 	assert "review run dispatched for PR #92" in result["stdout"]
+
+
+def test_retrigger_review_pr_named_failure_lookup_reaches_past_the_review_window():
+	# Conformance fix 2 (AD-8): a review run that hit the codex-agent job's
+	# 240-minute timeout ends only minutes before it leaves the 250-minute
+	# in-flight window. The failed-autofix redispatch lookup therefore reads
+	# back REVIEW_RUN_MAX_RUNTIME_MINUTES + STALL_THRESHOLD_MINUTES
+	# (250 + 120 by default), while the in-flight guards keep 250.
+	import calendar
+
+	state, prs = _retrigger_review_pr_state(95, "claude/retrigger-review-pr-named-lookback")
+	started = time.time()
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 95},
+		prs=prs,
+		active_autofix_runs=[
+			{
+				"workflow": "internal-review.yml",
+				"branch": "main",
+				"event": "workflow_dispatch",
+				"displayTitle": "Internal: AI Review & Autofix [pr:95]",
+				"status": "completed",
+				"conclusion": "timed_out",
+				"createdAt": "2026-09-28T01:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	finished = time.time()
+	ages = []
+	for path in result.get("api_calls", []):
+		if "actions/workflows/internal-review.yml/runs?event=workflow_dispatch" not in path:
+			continue
+		m = re.search(r"created=>=(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)", path)
+		assert m, path
+		cutoff = calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%SZ"))
+		# Cutoff age in minutes, bounded by the poller's start and end times.
+		# The helper takes "now" between those two instants, so the lookback
+		# lies in [low, high] however long the poller runs; the 0.1-minute
+		# slack only absorbs the cutoff's truncation to whole seconds.
+		ages.append(((started - cutoff) / 60, (finished - cutoff) / 60))
+	assert ages, result.get("api_calls", [])
+	# The first PR-named lookup is the redispatch's (370 minutes); the
+	# dispatch guard that follows keeps the in-flight window (250 minutes).
+	low, high = ages[0]
+	assert low - 0.1 <= 370 <= high + 0.1, ages
+	assert any(low - 0.1 <= 250 <= high + 0.1 for low, high in ages[1:]), ages
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "95"]
+	assert dispatches_for_pr, result.get("review_dispatches")
+	assert result.get("git_push_calls", []) == []
+
+
+def _assert_retrigger_review_pr_named_lookback_is_decimal(
+	review_window_env, stall_threshold_env, expected_lookback
+):
+	# PR #5098 review round 2: the redispatch lookback sums
+	# REVIEW_RUN_MAX_RUNTIME_MINUTES and STALL_THRESHOLD_MINUTES with bash
+	# arithmetic. The startup check accepts leading zeros, so it also strips
+	# them; otherwise the sum reads them as octal (a shorter window) or
+	# aborts the recovery action.
+	import calendar
+
+	state, prs = _retrigger_review_pr_state(96, "claude/retrigger-review-pr-named-lookback-decimal")
+	started = time.time()
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 96},
+		prs=prs,
+		active_autofix_runs=[
+			{
+				"workflow": "internal-review.yml",
+				"branch": "main",
+				"event": "workflow_dispatch",
+				"displayTitle": "Internal: AI Review & Autofix [pr:96]",
+				"status": "completed",
+				"conclusion": "timed_out",
+				"createdAt": "2026-09-28T01:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+		env_overrides={
+			"REVIEW_RUN_MAX_RUNTIME_MINUTES": review_window_env,
+			"STALL_THRESHOLD_MINUTES": stall_threshold_env,
+		},
+	)
+	finished = time.time()
+	combined = result.get("stdout", "") + result.get("stderr", "")
+	assert "value too great for base" not in combined
+	ages = []
+	for path in result.get("api_calls", []):
+		if "actions/workflows/internal-review.yml/runs?event=workflow_dispatch" not in path:
+			continue
+		m = re.search(r"created=>=(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)", path)
+		assert m, path
+		cutoff = calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%SZ"))
+		# Bounded as in the test above: "now" falls between the two instants.
+		ages.append(((started - cutoff) / 60, (finished - cutoff) / 60))
+	assert ages, result.get("api_calls", [])
+	low, high = ages[0]
+	assert low - 0.1 <= expected_lookback <= high + 0.1, ages
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "96"]
+	assert dispatches_for_pr, result.get("review_dispatches")
+	assert result.get("git_push_calls", []) == []
+
+
+def test_retrigger_review_pr_named_lookback_reads_leading_zero_env_as_decimal():
+	# Octal would read these as 168 + 80 = 248, under the 250 window.
+	_assert_retrigger_review_pr_named_lookback_is_decimal("0250", "0120", 370)
+
+
+def test_retrigger_review_pr_named_lookback_survives_non_octal_leading_zero_env():
+	# Octal arithmetic fails on "08" ("value too great for base").
+	_assert_retrigger_review_pr_named_lookback_is_decimal("250", "08", 258)
 
 
 def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_branch_run():
