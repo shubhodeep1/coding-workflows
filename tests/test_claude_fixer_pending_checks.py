@@ -456,6 +456,17 @@ def test_a_fresh_review_of_the_new_base_merges_again(fake_gh):
 	assert fake_gh.merges() == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
 
 
+def test_a_retarget_back_to_an_earlier_reviewed_base_is_not_merged_on_the_older_marker(fake_gh):
+	"""The latest marker (bound to main) wins even when an older one matches the restored base; the gate follows the same comment, so the head is reviewed again."""
+	old = _comment(5, _pending_body())
+	fresh = _comment(9, _pending_body(round_number=1, base_ref="main", base_sha=OTHER_BASE_SHA))
+	fake_gh.set(pr=_pr(), comments=[old, fresh], check_runs=GREEN)
+	result = _evaluate()
+	assert result["state"] == "base_changed"
+	assert _reads_after_the_marker(fake_gh) == []
+	assert fake_gh.merges() == []
+
+
 def test_enable_auto_merge_variable_reads(fake_gh):
 	for stored, expected in ((None, "true"), ("true", "true"), ("false", "false"), ("forbidden", None)):
 		fake_gh.set(enable_auto_merge=stored)

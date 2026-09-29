@@ -1477,7 +1477,10 @@ carries the review run's `base.sha` and the sha256 of its `base.ref`, and a
 the head unchanged), the sweep enables nothing (`pending_checks ...
 state=base_changed`, or `base_unbound` for a comment without the v2 line),
 and the gate stops skipping dispatched re-runs on that head, so the next
-30-minute review sweep reviews the PR again against its new base. A review
+30-minute review sweep reviews the PR again against its new base. The gate
+and the sweep both read only the latest pending-checks comment for the head,
+so a PR retargeted back to a base an older comment reviewed is reviewed
+again rather than left with neither a merge nor a review. A review
 run whose PR snapshot has no valid base posts the ordinary findings hand-off
 instead of a pending-checks comment.
 

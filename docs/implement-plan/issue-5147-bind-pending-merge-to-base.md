@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
 - Project branch: claude/implement-plan-issue-5147-bind-pending-merge-to-base   Final PR: #5179 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3 — review round
 - Activation: not started
-- Waiting on: PR #5186
+- Waiting on: PR #5213
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01Pv1NrebS3urzs5D9gF6Dy4
 - Last updated: 2026-09-29
-- Last note: review round 1 on PR #5186: 1 consensus finding (lone-surrogate base ref crashed `base_ref_digest`) accepted and fixed with an injective `surrogatepass` encoding plus tests.
+- Last note: review round 1 on PR #5213: the CRLF finding was accepted. The gate now splits comment lines as `splitlines()` does and picks the latest comment exactly as `find_pending_marker` does (header on the first line, one v1 line, one run line), with a parity test. The `capture()` finding was rejected because jq's `and` short-circuits.
 
 ## Phases
-1. [ ] Phase 1 — bind the pending-checks marker to the reviewed base   — PR #5186 open (waiting); review rounds: 1; interventions: 0
+1. [x] Phase 1 — bind the pending-checks marker to the reviewed base   — PR #5186 merged 2026-09-29 (c1a616e); review rounds: 1; interventions: 0
    - Hand-off step posts an `ai:claude-fixer-pending-checks:v2` line bound to `PR_PAYLOAD_FILE`'s `base.ref` (sha256) and `base.sha`; no pending comment without a valid base
    - `scripts/claude_fixer_pending_checks.py` returns `base_changed` / `base_unbound` and never merges on a missing or mismatched binding
    - Gate skips dispatched re-runs only for a marker bound to the current base (fresh review on retarget)
@@ -22,6 +22,7 @@
    - Done: the plan's phase 1 "done" condition. Protected paths: none.
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT (Step 3 COMPLETE, Step 4 CONCERNS) — fix PR from `claude/implement-plan-issue-5147-bind-pending-merge-to-base-conformance-fix-1` (pre-security), PR #5213 (review rounds: 1): `gate_claude_pending_checks_on_head` now reads only the latest trusted pending-checks comment for the head, as `find_pending_marker` does; checks: 259 pytest passed across the five plan suites, actionlint, shellcheck, `bash -n`.
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue).
@@ -40,9 +41,12 @@
 - AD-5 [plan, 2026-09-29] What does the hand-off step do without a valid payload base? — Picked: A — no pending-checks comment; fall through to the existing fail-closed path. Alternatives: B — post the v1 line only. Why: an unbound marker could never merge and would leave the head without an owner. Applied in: phase 1. Status: pending review
 - AD-6 [plan, 2026-09-29] How are v1-only pending-checks comments treated? — Picked: A — unbound: no merge, no gate skip. Alternatives: B — accept v1 when the base looks unchanged. Why: fail closed; no v1 comment exists outside the unreleased #4900 branch. Applied in: phase 1. Status: pending review
 - AD-7 [plan, 2026-09-29] Should the in-run zero-findings auto-merge also be base-bound? — Picked: A — no, out of scope. Alternatives: B — add a base re-read to the workflow's auto-merge step. Why: §5; the finding is about the sweep's delayed authorization. Applied in: no code change. Status: pending review
+- AD-8 [conformance 1/3, 2026-09-29] The gate skips on any trusted pending-checks comment bound to the current base, but the sweep evaluates only the latest one; which should both follow? — Picked: A — the gate reads only the latest trusted pending-checks comment for the head (selected as `find_pending_marker` selects it) and requires its single v2 line, with the v1 line's round and ledger, to match the current base. Alternatives: B — the sweep merges on any trusted comment bound to the current base. Why: §1, fail closed; a retarget back to an earlier reviewed base costs one fresh review instead of merging on an older review, and keeps the plan's "latest trusted marker wins" rule. Applied in: conformance fix PR (branch …-conformance-fix-1). Status: pending review
 
 ## Lessons
+- [source:intervention] A jq filter that must agree with a Python reader on comment text has to split lines the way `str.splitlines()` does (CRLF, lone CR, and the Unicode line boundaries), not with `split("\n")`, and a test should run both readers over the same comments. (files: .github/workflows/review_autofix.yml, scripts/claude_fixer_pending_checks.py)
 - [source:security] A marker that authorizes a delayed merge must bind everything the review depended on (head and base); the REST PR `base.sha` changes on a retarget or PR sync but not on every base push, so binding it costs no call and no extra reviews. (files: scripts/claude_fixer_pending_checks.py, scripts/review_autofix_step_claude_fixer_handoff.sh, .github/workflows/review_autofix.yml)
+- [source:conformance] When two readers act on the same marker (a gate that skips re-reviews and a sweep that merges), they must select the same comment; `any()` in one and latest-wins in the other lets them disagree, and the PR stalls with neither a merge nor a review. (files: .github/workflows/review_autofix.yml, scripts/claude_fixer_pending_checks.py)
 
 ## Notes
 - Started 2026-09-29 by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#5147: deliver`) in session_01C1BNRjR2aajP3S6bUTQGn2 (Auto mode). The session had no GitHub MCP tools and no `gh` until the repo's SessionStart hook was run by hand after attaching the repo; GitHub writes use `gh api` routine calls.
