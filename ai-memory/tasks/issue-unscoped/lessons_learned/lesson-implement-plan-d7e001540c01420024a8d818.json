@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T16:18:59Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fix to a `.claude/hooks/**` file ships in two steps while Q40 is in force: the stage edits the `workflow-templates/.claude/` twin and its tests, and the tests that load `.claude/` (including template parity) only pass after the supervising session's `[claude-twin-sync]` commit, so verify the twin in a scratch copy with the twin placed at `.claude/` first.",
+  "phase": "implement_plan",
+  "pr_number": 5004,
+  "record_id": "lesson-implement-plan-d7e001540c01420024a8d818",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4619-gh-api-guard-file-backed-fields",
+    "file:workflow-templates/.claude/hooks/gh_api_write_guard.py",
+    "file:tests/test_gh_api_write_guard.py"
+  ]
+}
