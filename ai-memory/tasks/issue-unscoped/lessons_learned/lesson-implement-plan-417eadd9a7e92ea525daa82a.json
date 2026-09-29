@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T06:36:55Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Under the interim twin-first rule a `hold` claim does not stop the phase PR from merging; the twin sync must land on the phase branch before the PR can merge, or be carried to the project branch in a follow-up PR when it lands after the merge.",
+  "phase": "implement_plan",
+  "pr_number": 5029,
+  "record_id": "lesson-implement-plan-417eadd9a7e92ea525daa82a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4911-unattended-question-guard",
+    "file:.claude/scripts/claude_fix_claim.py",
+    "file:docs/operations/master-session.md"
+  ]
+}
