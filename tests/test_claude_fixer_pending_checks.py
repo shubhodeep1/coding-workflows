@@ -446,6 +446,32 @@ def test_sweep_pending_pass_fails_open_per_pr(monkeypatch, capsys):
 	assert "pending_checks_failed repo=o/r pr=#1" in capsys.readouterr().out
 
 
+def test_sweep_pending_pass_survives_an_unwritable_snapshot_dir(fake_gh, monkeypatch, capsys):
+	# The real pass: a live marker reaches read_check_snapshot, whose temp
+	# directory fails on the first candidate (disk full). The sweep logs it
+	# and still evaluates the next one instead of ending the run for every
+	# later PR and repo. The fake gh serves one PR, so it is listed twice.
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", AUTHOR)
+	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: [{"number": PR, "head_ref": REF}, {"number": PR, "head_ref": REF}])
+	monkeypatch.setattr(sweeper.check_in_status, "check_pr_hand_back", lambda *a, **k: {"done": False, "state": "open"})
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN)
+	real_tempfile = sweeper.claude_fixer_pending_checks.tempfile
+	calls = []
+
+	def temporary_directory():
+		calls.append(1)
+		if len(calls) == 1:
+			raise OSError(28, "No space left on device")
+		return real_tempfile.TemporaryDirectory()
+
+	monkeypatch.setattr(sweeper.claude_fixer_pending_checks, "tempfile",
+		type("FakeTempfile", (), {"TemporaryDirectory": staticmethod(temporary_directory)}))
+	summary = _sweep()
+	assert summary["errors"] == 1 and summary["pending_checks_merged"] == 1
+	assert f"pending_checks_failed repo=o/r pr=#{PR} error=[Errno 28] No space left on device" in capsys.readouterr().out
+	assert len(fake_gh.merges()) == 1
+
+
 def test_sweep_without_a_pending_pass_behaves_as_before(monkeypatch):
 	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: [{"number": 1, "head_ref": REF}])
 	monkeypatch.setattr(sweeper.check_in_status, "check_pr_hand_back", lambda *a, **k: {"done": False, "state": "open"})

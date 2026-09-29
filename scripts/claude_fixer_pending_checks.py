@@ -309,7 +309,8 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 	`checks_failed`, `snapshot_invalid`, `run_unverified`,
 	`auto_merge_setting_unreadable`, `auto_merge_disabled`, `ready` (dry run),
 	`merge_enabled`, `merge_failed`. Only `merge_enabled` changed anything.
-	Raises `check_in_status.ReadError` when a read fails.
+	Raises `check_in_status.ReadError` when a read fails, and `OSError` when
+	the snapshot's temp directory cannot be written; the sweep logs both per PR.
 	"""
 	pr = check_in_status.gh_api(f"repos/{repo}/pulls/{number}")
 	head = pr.get("head") if isinstance(pr.get("head"), dict) else {}

@@ -1007,8 +1007,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   `scripts/review_enable_auto_merge.sh` for that head
   (`--match-head-commit`). It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
-  running); a failed read logs `pending_checks_failed` and
-  moves on. Tests: `tests/test_check_in_status_hand_back.py`,
+  running); a failed read, or a snapshot whose temp directory cannot be
+  written (`OSError`), logs `pending_checks_failed` and moves on. Tests:
+  `tests/test_check_in_status_hand_back.py`,
   `tests/test_claude_pr_sweep.py`, `tests/test_claude_fixer_pending_checks.py`.
 
 - Hook: `.claude/hooks/pr_check_in_reminder.py`, a `PostToolUse` hook wired

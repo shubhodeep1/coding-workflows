@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #4942
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_011Tb3U5tZETVFkPYfdpNYmZ   safety net pending   hand-back pending (re-armed by the review-round stage)
+- Check-in: checker session_011Tb3U5tZETVFkPYfdpNYmZ   safety net pending   hand-back pending (re-armed by the round 2 stage, session_01GHrkv6CoPPy11cf8eoiTLi)
 - Last updated: 2026-09-29
-- Last note: review round 1 on PR #4942 (head 00faa29): 5 findings + 1 task gap fixed in one `[claude-autofix]` commit, 3 rejected; project branch synced with main (a4b0f83).
+- Last note: review round 2 on PR #4942 (head c7c3359): 1 finding fixed (the sweep's pending-checks pass now also catches `OSError` from the snapshot's temp directory), 5 findings / task gaps rejected as already fixed in round 1.
 
 ## Phases
-1. [ ] Phase 1 — pending-checks marker, gate skip, and sweep auto-merge   — PR #4942 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — pending-checks marker, gate skip, and sweep auto-merge   — PR #4942 open (waiting); review rounds: 2; interventions: 0
    - Hand-off step posts `ai:claude-fixer-pending-checks:v1` for a clean ledger with only incomplete checks
    - Gate skips dispatched re-runs on such a head (`claude_fixer_pending_checks`)
    - `scripts/claude_fixer_pending_checks.py` + `scripts/claude_pr_sweep.py` enable head-bound auto-merge once the head's checks are ready
@@ -46,6 +46,7 @@
 ## Lessons
 - [source:intervention] When a workflow jq gate and a Python parser both match the same marker comment, give them the same round and header regexes (rounds start at 1) and cover the edge value in both test files, or a marker one side accepts can stall the other. (files: .github/workflows/review_autofix.yml, scripts/claude_fixer_pending_checks.py)
 - [source:plan-deviation] When a clean Claude-fixer outcome needs a later action, record it as its own workflow-owned marker rather than a `kind=findings` hand-off: `check_in_status.py` treats every findings hand-off as a review round, so a 0-entry hand-off wakes a fixer with nothing to fix. (files: scripts/review_autofix_step_claude_fixer_handoff.sh, scripts/claude_fixer_pending_checks.py)
+- [source:intervention] A per-item fail-open loop must catch every exception class the item's code can raise, including `OSError` from temp files and subprocess setup, not only the API read errors; one uncaught item ends the run for every later item. (files: scripts/claude_pr_sweep.py, scripts/claude_fixer_pending_checks.py)
 
 ## Notes
 - Issue-mode project started by the Claude issue dispatcher routine (trigger trig_01REPcAnL9kSG6T8m3G2hkpn) in session session_01VGQb3cJVEoX1uoX989DUaJ (Auto mode). Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4900#issuecomment-5882051076
