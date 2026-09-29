@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T23:25:56Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A \"conflict only outside `.claude/`\" rule for a guard-sync merge must never abort and continue on the unsynced head: the sync's source is the PR's base, so resolve the conflict inside that merge (the merged `.claude/` files are already in the working tree) or abort and stop.",
+  "phase": "implement_plan",
+  "pr_number": 5291,
+  "record_id": "lesson-implement-plan-f53c82523e182e6b796b0215",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-5258-asset-sync-outside-conflict-fail-closed",
+    "file:.claude/commands/fix-claude-pr.md",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
