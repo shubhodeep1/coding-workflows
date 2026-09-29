@@ -1,17 +1,17 @@
 # Implement-Plan Log — Claude-fixer review: prove a failed reviewer slot from the runner's own output line
 
-- Plan: docs/plans/issue-4885-failed-slot-runner-line-check-plan.md
+- Plan: docs/completed/issue-4885-failed-slot-runner-line-check-plan.md (was docs/plans/issue-4885-failed-slot-runner-line-check-plan.md)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4885-failed-slot-runner-line-check   Final PR: #4918 draft
 - Source issue: shubhodeep1/coding-workflows#4885   Base branch: claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote   Security pass: skip (ai:security: automation-produced issue)
-- Status: BLOCKED
-- Stage: validation cycle 1/3 (blocked before dispatch)
-- Activation: not started
-- Waiting on: none (answer on #4885, then `/reclarify`)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote)
+- Waiting on: completion PR (claude/implement-plan-issue-4885-failed-slot-runner-line-check-complete)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_0194bHyqD8cWSnZbw18P8kbx (idle, kept for the resumed project)   safety net none   hand-back none
+- Check-in: checker session_0194bHyqD8cWSnZbw18P8kbx (project checker, reused)
 - Last updated: 2026-09-29
-- Last note: conformance run 1 CONFORMANT with no fix PR; security pass skipped per the plan header; runtime validation cannot run: validate.yml authorizes an explicit target_ref only through an open PR into the default branch, and final PR #4918 targets the #4835 project branch. Asked on #4885.
+- Last note: Q1 answered A on #4885 (standing decision Q17): validation skipped, covered by the #4835 project's validation; completion PR moves the plan to docs/completed/, then the final merge of #4918 into the #4835 project branch.
 
 ## Phases
 1. [x] Phase 1 — Bind failed reviewer slots to the runner's output line
@@ -29,8 +29,11 @@
 
 ## Validation
 - Cycle 1 — 2026-09-29: not dispatched. `validate.yml` ("Authorize explicit validation target") accepts `target_ref` only when exactly one open PR has that head and `base=<default branch>`. Final PR #4918 targets `claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote`, so the same listing returns 0 PRs and the run would fail before validating. Validating the default branch or the base branch in its place is not allowed, so this is a stop (CLAUDE.md §28.C), asked on #4885.
+- Validation: skipped (covered by #4835's project validation). Q1: A answered on #4885 (comment 5885304060, 2026-09-29) under the master session's standing decision Q17; the #4835 project runs its security audit and runtime validation on a branch carrying this change before anything reaches `main`. Long-term fix: #4734.
 
 ## Completion
+- Completion PR (branch claude/implement-plan-issue-4885-failed-slot-runner-line-check-complete) opened 2026-09-29 — doc moved to docs/completed/issue-4885-failed-slot-runner-line-check-plan.md
+- Final PR #4918 draft (into the #4835 project branch)
 
 ## Activation
 - n/a (base claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote)
@@ -52,3 +55,4 @@
 - Base branch check (2026-09-29): PR #4847 (head = the base branch) is an open draft into main, so the base has not moved.
 - security_pass_skip.py: {"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}.
 - This session had no mcp__github__* tools; GitHub reads and routine writes went through gh api (REST).
+- 2026-09-29: blocked at validation (comment 5885103667, `ai:claude-blocked`); answered Q1: A by the repo owner (comment 5885304060, standing decision Q17 in docs/operations/master-session.md); label removed and the stage continued in the same session.
