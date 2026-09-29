@@ -33,9 +33,11 @@ Shell drivers:
     1c).
   * When the pickup starts the session for a ``reclarify`` queue item, it runs
     ``replaced-sessions`` to pick the old blocked sessions of that issue to
-    archive (issue #4817): the one the latest trusted ``ai:claude-blocked:v1``
-    comment names, plus blocked sessions whose title belongs to the issue,
-    never a checker, ``/deploy-activate``, pickup, or poller session.
+    archive (issue #4817): blocked sessions whose title belongs to the issue,
+    the one the latest ``ai:claude-blocked:v1`` comment a Claude session
+    posted names first, never a checker, ``/deploy-activate``, pickup, or
+    poller session. A named session needs the same blocked evidence as the
+    others, so a forged name archives nothing more (issue #5063).
 
 Queue binding (issue #4621): the creator of a queue issue says nothing about
 its current title and body, which anyone who can edit the issue can change.
@@ -194,6 +196,10 @@ BLOCKED_MARKER = "<!-- ai:claude-blocked:v1 -->"
 # it in prose or a diff (as #4817's did) still names exactly one session.
 BLOCKED_SESSION_MARKER_RE = re.compile(r"(?m)^[ \t]*<!-- ai:claude-blocked-session:v1 id=(\S+) -->[ \t]*\r?$")
 SESSION_ID_RE = re.compile(r"^session_[A-Za-z0-9]{10,64}$")
+# Blocked comments name a session only when a Claude session posted them
+# (issue #5063): the Claude GitHub App, which the MCP tools and the web agent
+# proxy post through. A collaborator's own comment carries no app.
+BLOCKED_COMMENT_APP_SLUG = "claude"
 SESSIONS_JSON_START_RE = re.compile(r"[\[{]")
 REPLACED_SESSIONS_LIMIT = 5
 SESSION_STATUS_IDLE = "SESSION_STATUS_IDLE"
@@ -345,6 +351,20 @@ def is_trusted_issue_author(item: dict[str, Any]) -> bool:
 	if user_type == "User":
 		return item.get("author_association") in TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS
 	return user_type == "Bot" and _user_field(item, "login") == TRUSTED_ISSUE_BOT_AUTHOR
+
+
+def is_claude_session_comment(item: dict[str, Any]) -> bool:
+	"""True when a trusted author posted this REST comment through the Claude GitHub App.
+
+	``is_trusted_issue_author`` holds and ``performed_via_github_app.slug`` is
+	``BLOCKED_COMMENT_APP_SLUG``. Claude sessions post issue comments through
+	the app, while a collaborator commenting by hand does not, so only such a
+	comment may name a session for ``replaced-sessions`` (issue #5063). Pure.
+	"""
+	if not is_trusted_issue_author(item):
+		return False
+	app = item.get("performed_via_github_app")
+	return isinstance(app, dict) and app.get("slug") == BLOCKED_COMMENT_APP_SLUG
 
 
 def has_trusted_reclarify(comments: list[Any]) -> bool:
@@ -1048,11 +1068,13 @@ def _normalize_session_id(value: Any) -> str:
 
 
 def blocked_comment_session(comments: list[Any]) -> dict[str, Any]:
-	"""The session named by the issue's latest trusted blocked comment.
+	"""The session named by the issue's latest blocked comment from a Claude session.
 
-	Input: the issue's comment array (REST). Only comments by a trusted author
-	(``is_trusted_issue_author``) whose body starts with ``BLOCKED_MARKER``
-	count, so an outsider's comment can neither name a session nor hide one.
+	Input: the issue's comment array (REST). Only comments a trusted author
+	posted through the Claude GitHub App (``is_claude_session_comment``, issue
+	#5063) whose body starts with ``BLOCKED_MARKER`` count, so an outsider's
+	or a collaborator's hand-written comment can neither name a session nor
+	hide one.
 	The latest of them names a session only when it carries exactly one
 	``<!-- ai:claude-blocked-session:v1 id=session_… -->`` line with a valid id.
 
@@ -1063,7 +1085,7 @@ def blocked_comment_session(comments: list[Any]) -> dict[str, Any]:
 	blocked = [
 		comment for comment in comments or []
 		if isinstance(comment, dict)
-		and is_trusted_issue_author(comment)
+		and is_claude_session_comment(comment)
 		and isinstance(comment.get("body"), str)
 		and comment["body"].lstrip().startswith(BLOCKED_MARKER)
 	]
@@ -1165,8 +1187,8 @@ def select_replaced_sessions(
 	"""Pick the sessions the pickup archives after starting an issue's replacement.
 
 	Input: the session objects of one ``list_sessions`` page, the issue, the
-	session ``named`` by its latest trusted blocked comment (or ``""``), and
-	session ids never to archive (the new session and the pickup itself).
+	session ``named`` by its latest Claude-session blocked comment (or ``""``),
+	and session ids never to archive (the new session and the pickup itself).
 
 	A session is archived only when all of these hold (issue #4817):
 	its source repository is ``repo``; its title belongs to this issue
@@ -1174,10 +1196,11 @@ def select_replaced_sessions(
 	(``PROTECTED_SESSION_TITLE_RE``: checkers, ``/deploy-activate``, the
 	pickup, pollers); it is not excluded; its ``session_status`` is
 	``SESSION_STATUS_IDLE`` (never ``RUNNING``, ``REQUIRES_ACTION``, or
-	``ARCHIVED``); and it is either the ``named`` session (``match: named``)
-	or visibly blocked, with ``status_bucket`` BLOCKED or ``BLOCKED`` in its
-	title (``match: title``). At most ``limit`` are returned, the named one
-	first.
+	``ARCHIVED``); and it is visibly blocked, with ``status_bucket`` BLOCKED or
+	``BLOCKED`` in its title. The ``named`` session needs that evidence too
+	(issue #5063: a forged blocked comment could name an idle, working
+	session); being named only puts it first (``match: named``, the others
+	``match: title``). At most ``limit`` are returned.
 
 	Output: ``{"archive": [{"id", "title", "match"}], "kept": [{"id", "title",
 	"reason"}]}``. ``kept`` lists only sessions of this issue (and the named
@@ -1212,7 +1235,7 @@ def select_replaced_sessions(
 			reason = "other_repository"
 		elif session.get("session_status") != SESSION_STATUS_IDLE:
 			reason = f"status {session.get('session_status') or 'unknown'}"
-		elif not is_named and session.get("status_bucket") != SESSION_BUCKET_BLOCKED and not re.search(r"\bBLOCKED\b", title):
+		elif session.get("status_bucket") != SESSION_BUCKET_BLOCKED and not re.search(r"\bBLOCKED\b", title):
 			reason = "not_blocked"
 		else:
 			candidates.append((0 if is_named else 1, {**entry, "match": "named" if is_named else "title"}))
