@@ -71,7 +71,10 @@ Prints one JSON line. Exit 0 (including a partial run, whose failures are
 listed under `errors`, and a `duplicate-check` that decided either way), 1 on
 an invalid argument, 2 when the issue list (or a `duplicate-check` read)
 could not be read; exit 1 and 2 of `duplicate-check` print
-`"eligible": false`.
+`"eligible": false`. An argparse usage error (a missing option, or a
+non-numeric `--issue`, `--target`, or `--fix-pr`) exits 2 with the usage on
+stderr and prints no JSON line, so a caller treats any non-zero exit as
+not eligible.
 """
 
 from __future__ import annotations
@@ -117,11 +120,19 @@ DUPLICATE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # A program that writes a file (issue #4858 item 1): a write call, `open(`
 # with a write mode, or a file move/removal. The mode is the argument after a
 # comma or `mode=` (`open(p, "w")`), or `Path.open`'s first one
-# (`.open("a")`), never a file name such as `open("a")`.
+# (`.open("a")`), never a file name such as `open("a")`. `open(` calls are
+# scanned by `_open_call_writes`, which tracks brackets and string literals, so
+# the path argument may nest calls to any depth
+# (`open(os.path.join(str(p.replace("/", "_")), "f"), "w")`) and a comma inside
+# one of them (`open(os.path.join(d, "w"))`) is not the mode's comma.
 _OPEN_WRITE_MODE = r"['\"](?:[wax]|r[bt]?\+)[bt+]*['\"]"
+_OPEN_CALL_RE = re.compile(r"\bopen\s*\(")
+# The mode at the start of an `open(` argument: `mode=` names it anywhere, a
+# bare literal only after the first comma.
+_OPEN_KEYWORD_MODE_RE = re.compile(r"\s*mode\s*=\s*" + _OPEN_WRITE_MODE)
+_OPEN_MODE_ARGUMENT_RE = re.compile(r"\s*(?:mode\s*=\s*)?" + _OPEN_WRITE_MODE)
 _PROGRAM_WRITE_RE = re.compile(
 	r"\bwrite_text\s*\(|\bwrite_bytes\s*\("
-	r"|\bopen\s*\([^)]*?(?:,\s*|\bmode\s*=\s*)" + _OPEN_WRITE_MODE +
 	r"|\.open\s*\(\s*" + _OPEN_WRITE_MODE +
 	r"|\bos\.replace\s*\("
 	r"|\bshutil\.(?:copy(?:file|2|tree|mode|stat)?|move|rmtree|chown|make_archive|unpack_archive)\s*\("
@@ -349,7 +360,45 @@ def _split_redirects(args: list[str]) -> tuple[list[str], list[str]]:
 	return kept, redirects
 
 
-def _segment_is_inline_write(segment: list[str], command: str) -> bool:
+def _open_call_writes(text: str) -> bool:
+	"""Whether an `open(` call in `text` passes a write mode, at any nesting depth of its arguments."""
+	for call in _OPEN_CALL_RE.finditer(text):
+		mode_pattern = _OPEN_KEYWORD_MODE_RE
+		index = call.end()
+		depth = 0
+		quote = ""
+		while index < len(text):
+			if mode_pattern is not None:
+				if mode_pattern.match(text, index):
+					return True
+				mode_pattern = None
+			char = text[index]
+			index += 1
+			if quote:
+				if char == "\\":
+					index += 1
+				elif char == quote:
+					quote = ""
+			elif char in "'\"":
+				quote = char
+			elif char in "([{":
+				depth += 1
+			elif char in ")]}":
+				if depth == 0:
+					break
+				depth -= 1
+			elif char == "," and depth == 0:
+				mode_pattern = _OPEN_MODE_ARGUMENT_RE
+	return False
+
+
+def _program_writes(text: str) -> bool:
+	"""Whether a program's text writes a file (`_PROGRAM_WRITE_RE` or a write-mode `open(`)."""
+	return bool(_PROGRAM_WRITE_RE.search(text)) or _open_call_writes(text)
+
+
+def _segment_is_inline_write(segment: list[str], segment_bodies: list[str]) -> bool:
+	"""Whether one simple command is an inline-interpreter write; `segment_bodies` are its own heredoc bodies."""
 	index = 0
 	while index < len(segment) and _ASSIGNMENT_RE.match(segment[index]):
 		index += 1
@@ -360,10 +409,10 @@ def _segment_is_inline_write(segment: list[str], command: str) -> bool:
 	if _PYTHON_RE.match(name):
 		position = next((index for index, arg in enumerate(args) if _PYTHON_C_RE.match(arg)), -1)
 		if position >= 0:
-			return position + 1 < len(args) and bool(_PROGRAM_WRITE_RE.search(args[position + 1]))
+			return position + 1 < len(args) and _program_writes(args[position + 1])
 		reads_stdin = "-" in args or not any(not arg.startswith("-") for arg in args)
 		has_heredoc = any(redirect.startswith("<<") for redirect in redirects)
-		return reads_stdin and has_heredoc and any(_PROGRAM_WRITE_RE.search(body) for body in heredoc_bodies(command))
+		return reads_stdin and has_heredoc and any(_program_writes(body) for body in segment_bodies)
 	if name == "sed":
 		return any(_SED_IN_PLACE_RE.match(arg) for arg in args)
 	if name == "perl":
@@ -382,8 +431,19 @@ def command_class(record: dict) -> str:
 		return ""
 	tool_input = record.get("tool_input") if isinstance(record.get("tool_input"), dict) else {}
 	command = str(tool_input.get("command") or "")
-	if any(_segment_is_inline_write(segment, command) for segment in _command_segments(command)):
-		return INLINE_INTERPRETER_WRITE_CLASS
+	segments = _command_segments(command)
+	bodies = heredoc_bodies(command)
+	# Heredoc bodies follow their `<<` operators in order, so each segment gets
+	# only its own (a write in `cat <<EOF` after a reading `python3 - <<EOF` is
+	# not the interpreter's). When the counts disagree (a `<<` inside quotes),
+	# no body can be bound to its command, so none is: the pattern is then
+	# filed on its own signature rather than routed to a class issue.
+	counts = [sum(1 for token in segment if _is_redirect(token) and token.startswith("<<")) for segment in segments]
+	offsets = [sum(counts[:position]) for position in range(len(segments))]
+	aligned = sum(counts) == len(bodies)
+	for segment, count, offset in zip(segments, counts, offsets):
+		if _segment_is_inline_write(segment, bodies[offset : offset + count] if aligned else []):
+			return INLINE_INTERPRETER_WRITE_CLASS
 	return ""
 
 
