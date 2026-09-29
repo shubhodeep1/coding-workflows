@@ -1151,6 +1151,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   (except issue mode, which records the mode), and a phase touching
   `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
   §28.C) until a `Protected-path approval: phase <n>` line is recorded.
+  Interim until #4785 (issue #4948): in a repo that has
+  `workflow-templates/.claude/`, the stage records
+  `Protected-path approval: phase <n> — twin-first (automatic, interim until
+  #4785) (<date>)` itself, edits only the twins, and stops only for the
+  `[claude-twin-sync]` copy (a `hold` claim plus the twin-sync blocker). The
+  question remains for an edit denied in the twin tree and for a phase whose
+  plan needs a watched session, and a recorded answer is never overwritten.
+  The PR that makes #4785's sync live removes this default.
 - The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
   and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
   three scripts live under `workflow-templates/.claude/`. Tests:
