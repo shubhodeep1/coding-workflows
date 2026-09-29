@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T19:08:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a fix adds a special case at one call site of a shared helper (a step-back over `env`'s options after the tokenizer's prefix skip), move it into a helper every call site uses, and test it behind each wrapper, not only at the start of the command.",
+  "phase": "implement_plan",
+  "pr_number": 5216,
+  "record_id": "lesson-implement-plan-169304ecb886c83ac8f40ff8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4858-inline-edit-guard",
+    "file:.claude/hooks/inline_edit_guard.py",
+    "file:tests/test_inline_edit_guard.py"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T19:08:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A regex that matches a call's arguments must allow nested calls at realistic depth (`open(os.path.join(os.path.dirname(p), 'x'), 'w')` is three deep), and a test must pin both a nested write and a nested read.",
+  "phase": "implement_plan",
+  "pr_number": 5216,
+  "record_id": "lesson-implement-plan-5e5d161567c8481a4fba9ead",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4858-inline-edit-guard",
+    "file:.claude/hooks/inline_edit_guard.py",
+    "file:tests/test_inline_edit_guard.py"
+  ]
+}
