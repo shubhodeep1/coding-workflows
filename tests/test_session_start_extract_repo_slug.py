@@ -187,6 +187,67 @@ printf '%s' "${SESSION_START_TEST_ANON_STATUS:-000}"
         return result.stdout
 
 
+def run_install_gh(
+    hook_path: Path,
+    *,
+    apt_available: bool = True,
+    uid: int = 1000,
+    sudo_available: bool = True,
+    curl_exit: int = 0,
+    apt_install_exit: int = 0,
+    gh_preinstalled: bool = False,
+    stale_marker: bool = False,
+) -> tuple[str, str | None]:
+    """Run the hook's main() with stubbed apt/sudo/curl on an isolated PATH.
+
+    Returns (stdout, marker file content or None). Issue #4938: a failed gh
+    install must say why, in a structured log line and in a marker file.
+    """
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        root = Path(temporary_directory)
+        shim_directory = root / "bin"
+        shim_directory.mkdir()
+        marker = root / "home" / ".claude-session-start-gh-install"
+        marker.parent.mkdir()
+        if stale_marker:
+            marker.write_text("gh_install=failed reason=stale exit_code=1 at=then\n")
+        for tool in ("date", "rm", "head", "cat"):
+            real = subprocess.run(["bash", "-c", f"command -v {tool}"], capture_output=True, text=True).stdout.strip()
+            (shim_directory / tool).symlink_to(real)
+        shims = {
+            "id": f"#!/bin/bash\necho {uid}\n",
+            "tee": "#!/bin/bash\n/bin/cat >/dev/null\n",
+            "dpkg": "#!/bin/bash\necho amd64\n",
+            "install": "#!/bin/bash\nexit 0\n",
+            "chmod": "#!/bin/bash\nexit 0\n",
+            "curl": f"#!/bin/bash\n[ {curl_exit} -eq 0 ] || exit {curl_exit}\necho key\n",
+        }
+        if sudo_available:
+            shims["sudo"] = '#!/bin/bash\n[ "$1" = "-n" ] && shift\n[ "$1" = "true" ] && exit 0\nexec "$@"\n'
+        if apt_available:
+            shims["apt-get"] = f'#!/bin/bash\n[ "$1" = "install" ] && exit {apt_install_exit}\nexit 0\n'
+        if gh_preinstalled:
+            shims["gh"] = "#!/bin/bash\necho 'gh version 9.9.9'\n"
+        for shim_name, shim_body in shims.items():
+            shim_path = shim_directory / shim_name
+            shim_path.write_text(shim_body)
+            shim_path.chmod(0o755)
+        result = subprocess.run(
+            ["/bin/bash", str(hook_path)],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={
+                "PATH": str(shim_directory),
+                "HOME": str(marker.parent),
+                "CLAUDE_CODE_REMOTE": "true",
+                "GH_TOKEN": "",
+                "GITHUB_TOKEN": "",
+            },
+        )
+        return result.stdout, marker.read_text() if marker.exists() else None
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -280,6 +341,30 @@ def main() -> int:
                     f"verify_token {probe_case_name}: unexpected output {forbidden_fragment!r}"
                 )
 
+    install_cases = [
+        ("apt-install-failed", {"apt_install_exit": 100}, "reason=apt_install_failed exit_code=100"),
+        ("keyring-download-failed", {"curl_exit": 22}, "reason=keyring_download_failed exit_code=22"),
+        ("apt-unavailable", {"apt_available": False}, "reason=apt_unavailable exit_code=127"),
+        ("no-privileges", {"sudo_available": False}, "reason=no_privileges exit_code=1"),
+        ("gh-missing-after-install", {"uid": 0}, "reason=gh_missing_after_install exit_code=127"),
+    ]
+    for hook in (HOOK, TEMPLATE_HOOK):
+        hook_name = hook.relative_to(REPO_ROOT)
+        for install_case_name, install_arguments, reason_fragment in install_cases:
+            install_output, marker_text = run_install_gh(hook, **install_arguments)
+            expected_line = f"[session-start] gh_install=failed {reason_fragment} at="
+            if expected_line not in install_output:
+                failures.append(f"{hook_name} install_gh {install_case_name}: missing {expected_line!r}")
+            if "gh install failed (non-fatal)" not in install_output:
+                failures.append(f"{hook_name} install_gh {install_case_name}: missing the non-fatal line")
+            if "gh installed:" in install_output:
+                failures.append(f"{hook_name} install_gh {install_case_name}: reported a failed install as installed")
+            if marker_text is None or not marker_text.startswith(f"gh_install=failed {reason_fragment} at="):
+                failures.append(f"{hook_name} install_gh {install_case_name}: marker file is {marker_text!r}")
+        install_output, marker_text = run_install_gh(hook, gh_preinstalled=True, stale_marker=True)
+        if "gh already installed: gh version 9.9.9" not in install_output or marker_text is not None:
+            failures.append(f"{hook_name} install_gh success: stale marker kept or success not logged ({marker_text!r})")
+
     if failures:
         for line in failures:
             print(f"FAIL: {line}", file=sys.stderr)
@@ -289,6 +374,7 @@ def main() -> int:
         f"PASS: extract_repo_slug across {len(CASES)} URL shapes in "
         f"{HOOK.relative_to(REPO_ROOT)} and {TEMPLATE_HOOK.relative_to(REPO_ROOT)}; "
         f"verify_token across {len(probe_cases)} auth outcomes; "
+        f"install_gh across {len(install_cases) + 1} outcomes; "
         f"hook and settings.json parity checks passed"
     )
     return 0

@@ -229,8 +229,6 @@ Phase 1:
 - `tests/test_claude_issue_route.py`
 - `tests/test_implement_issue_claude_command.py`
 - `tests/test_session_start_extract_repo_slug.py`
-- `tests/test_claude_issue_queue_watchdog_env_requeue.py` [new] (wired into `ci.yml`)
-- `.github/workflows/ci.yml` (test wiring only)
 - `README.md`, `agents.md`
 - `changelog.d/4938-environment-blocker-self-heal.md` [new]
 - `docs/implement-plan/issue-4938-environment-blocker-self-heal.md` [new] (progress log)
@@ -257,8 +255,8 @@ Phase 1:
   text (ToolSearch, the session-start re-run, the three reasons, no
   `AskUserQuestion`, closed → no blocker) in the issue, plan, fix, and
   dispatch twins, and that the plain marker text readers still match.
-- Watchdog (`tests/test_claude_issue_queue_watchdog_env_requeue.py`, new):
-  runs the script in `env-requeue` mode with a fake `gh` and canned JSON.
+- Watchdog (`tests/test_claude_issue_route.py`, next to the existing
+  watchdog stub tests, already run by `ci.yml`): runs the script in `env-requeue` mode with a fake `gh` and canned JSON.
   Asserts the dispatch body (`trigger: reclarify`), the marker comment, the
   alert comment plus one Telegram call, no action on a plain blocker, closing
   a queue item for a closed target, and exit 0 when reads fail.

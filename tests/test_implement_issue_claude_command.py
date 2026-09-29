@@ -293,3 +293,75 @@ def test_pickup_starts_fixer_sessions_for_pr_fix_items(pickup_cmd):
 	assert "`item_type` `pr_fix`" in pickup_cmd
 	assert "title `PR <repo>#<N> — fix <kind>`" in pickup_cmd
 	assert "`/fix-claude-pr` re-reads the PR and stops when the fix is no longer due" in pickup_cmd
+
+
+# --- environment self-heal and environment blockers (issue #4938) -------------------------
+# These read the workflow-templates twins, which the phase edits first (Q40 twin-first);
+# test_template_parity above keeps the synced .claude/ copies identical.
+
+
+def _twin(name: str) -> str:
+	return _flat(TEMPLATE_COMMANDS / name)
+
+
+@pytest.mark.parametrize(
+	("name", "step_one"),
+	(
+		("implement-issue-claude.md", "1. **Resolve and read the issue.**"),
+		("implement-plan-claude.md", "1. **Resolve the plan doc.**"),
+		("fix-claude-pr.md", "1. **Read the live state.**"),
+	),
+)
+def test_unattended_commands_self_heal_before_declaring_tools_missing(name, step_one):
+	text = _twin(name)
+	assert "issue #4938" in text
+	assert "with ToolSearch before checking whether they exist" in text
+	assert "run `bash .claude/hooks/session-start.sh` once" in text
+	assert "`~/.claude-session-start-gh-install`" in text
+	assert "shaped per CLAUDE.md §23.D" in text
+	assert "`AskUserQuestion` (#4911)" in text
+	# The self-heal is part of step 0, before any step that uses a tool it repairs.
+	assert text.index("with ToolSearch before checking whether they exist") < text.index(step_one)
+
+
+def test_issue_command_posts_machine_readable_environment_blockers():
+	text = _twin("implement-issue-claude.md")
+	assert "**An environment failure is not a question.**" in text
+	assert "starting `<!-- ai:claude-blocked:v1 reason=<reason> -->`" in text
+	for reason in ("environment-checkout-missing", "environment-remote-tools-missing", "environment-tools-missing"):
+		assert f"`{reason}`" in text
+		assert reason.startswith(route.ENVIRONMENT_REASON_PREFIX)
+		assert route.parse_blocker_marker(f"<!-- ai:claude-blocked:v1 reason={reason} -->") == (True, reason)
+	assert "If the issue is closed, post nothing" in text
+	assert "with no comment, label, or blocker" in text
+	assert "the hourly queue watchdog re-queues environment blockers automatically" in text
+	# The checkout repair runs before the tools are loaded, and every chain guard stays.
+	assert text.index("1. **Checkout.**") < text.index("2. **claude-code-remote tools.**") < text.index("4. **`gh`.**")
+	assert "**The chain needs the claude-code-remote tools**" in text
+	assert "never replace the chain, its conformance audit, security pass, or validation with a smaller change" in text
+	assert "stop and ask" not in text
+
+
+def test_plan_command_tags_issue_mode_tool_stops_and_keeps_the_plain_marker():
+	text = _twin("implement-plan-claude.md")
+	assert "`<!-- ai:claude-blocked:v1 reason=environment-remote-tools-missing -->` instead of the plain marker" in text
+	assert "`reason=environment-tools-missing`" in text
+	assert "Every other stop keeps the plain marker and waits for a human." in text
+	assert "`<!-- ai:claude-blocked:v1 -->`" in text
+	assert "always available, but often deferred: load them with ToolSearch" in text
+
+
+def test_fix_command_ends_without_asking_and_leaves_the_retry_to_the_sweep():
+	text = _twin("fix-claude-pr.md")
+	assert "report what is missing (with the marker file's reason) and end the turn" in text
+	assert "post nothing on the PR" in text
+	assert "the CLAUDE.md §26.H catch-all queues a fresh fixer" in text
+
+
+def test_dispatch_start_prompts_handle_a_missing_checkout_without_asking():
+	text = _twin("claude-issue-dispatch.md")
+	assert "If the working directory has no git checkout of <repo> at all, attach <repo> to this session with push access, clone it once" in text
+	assert "<!-- ai:claude-blocked:v1 reason=environment-checkout-missing -->" in text
+	assert "never ask anything" in text
+	# The dispatcher itself still never attaches repositories (issue #4525).
+	assert "`add_repo`" not in text
