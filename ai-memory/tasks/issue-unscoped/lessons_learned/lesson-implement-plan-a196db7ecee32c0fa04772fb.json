@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T13:25:47Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fallback that replaces a refused search must not keep the search's result cap: scan every page of the repository-scoped list, or answer \"unknown\", never \"not found\".",
+  "phase": "implement_plan",
+  "pr_number": 5165,
+  "record_id": "lesson-implement-plan-a196db7ecee32c0fa04772fb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-5126-lookup-full-label-scan",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}
