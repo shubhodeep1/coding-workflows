@@ -103,3 +103,72 @@ These are run-level segments, not a linked end-to-end task trace; their medians 
 | Serena, no target observed; disabled in recent review **36504129211** | **0; 0 response bytes** | 0 | **0 / 0 / 0 recorded** |
 
 Serena tool-call count and per-tool breakdown are **0 / none observed**; there is no basis for an availability or replacement-efficiency rate. Semble’s contract-test fallbacks have **no meaningful runtime fallback rate** denominator. **Other MCP servers observed:** none in inspected deep-dive logs; unknown servers outside available logs remain a collection gap.
+
+## Deep Audit — Workflows & Scripts (2026-09-29)
+
+### Section 1: Bug & Correctness Sweep
+
+- **BUG-001** — **File:** `scripts/label_helpers.sh:209-235`. **Severity:** High. **Category:** `bug`. **Description:** `set_issue_phase_label_resilient` reads an issue’s labels, computes a replacement list, then sends `PUT /labels`. A label added by another actor between the GET and PUT is absent from the replacement list and can be erased. This is a read–write race; the consequence is an inference from the two operations. **Recommended fix:** Add the target label with `POST`, then remove only obsolete phase labels by name. Do not replace the complete label set; reconcile the result if phase exclusivity is required.
+
+- **BUG-002** — **Files:** `scripts/claude_issue_queue_watchdog.sh:60-80`; `scripts/claude_issue_route.py:1107-1127`. **Severity:** Medium. **Category:** `bug`. **Description:** Both queue readers request only `per_page=100` without pagination. If more than 100 matching queue issues remain open, later items are invisible to the watchdog and to `fetch_open_queue`. Whether this volume occurs needs measurement. **[NEEDS VERIFICATION]** **Recommended fix:** Paginate both reads and validate the combined array before passing it to the existing queue-selection code.
+
+- **BUG-003** — **File:** `.github/workflows/orchestrate_poll.yml:199-210`. **Severity:** Medium. **Category:** `bug`. **Description:** “Find all open” tracking issues uses `gh issue list --limit 20`. If 20 long-lived projects occupy that result, additional open projects cannot enter the tick’s tracking-issue file. The operational frequency is unknown. **[NEEDS VERIFICATION]** **Recommended fix:** Fetch all matching issues with pagination, or introduce an explicit, rotating per-tick cursor and record deferred issue numbers.
+
+- **BUG-004** — **Files:** `scripts/workflow_retro_fanout.sh:313-324`; `.github/workflows/workflow-log-analysis.yml:580-590`. **Severity:** Medium. **Category:** `bug`. **Description:** Both retro-comment upserts POST a new comment when PATCH fails. A PATCH that succeeded remotely but lost its response can therefore leave two comments with the same weekly marker; this is an inference from the failure branches. **Recommended fix:** After an ambiguous PATCH failure, re-read the comment ID and compare its body before considering a POST. Keep the existing marker-based selection.
+
+- **BUG-005** — **File:** `.github/workflows/workflow-log-analysis.yml:566-575`. **Severity:** Medium. **Category:** `bug`. **Description:** The source-repository retro upsert reads one `per_page=100` comment page, whereas the consumer fan-out paginates its corresponding read at `scripts/workflow_retro_fanout.sh:301-302`. Once the source tracker has more than 100 comments in the queried window, an existing marker can be missed. **[NEEDS VERIFICATION]** **Recommended fix:** Use `gh api --paginate` and flatten the pages before the existing marker lookup, as the fan-out does.
+
+- **SEC-001** — **Files:** `.github/workflows/orchestrate_poll.yml:241-250`; `.github/workflows/implement.yml:4414-4422`; `.github/workflows/review_autofix.yml:6108-6124`. **Severity:** High. **Category:** `security`. **Description:** These steps put a PAT into `origin`’s URL; the implement and review steps additionally interpolate the secret directly into `run:` text. The credential consequently remains in local Git remote configuration until changed or the workspace is removed. Exposure through a later diagnostic or artifact is **[NEEDS VERIFICATION]**. **Recommended fix:** Authenticate Git operations with a short-lived credential mechanism that does not persist the token in the remote URL, and remove secret interpolation from `run:` bodies. Preserve authentication for the poller’s memory-helper clones.
+
+The 52 workflow YAML files parsed, and all 159 scoped shell/Python scripts passed the shell-syntax/Python-AST checks performed. Those checks do not establish runtime correctness.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are **logical calls on the identified path**, not measured run totals; pagination and retries can increase HTTP requests. The existing report already identifies the poller’s duplicate final-PR `.state`/`.merged_at` fetch, so it is not repeated as a finding.
+
+- **API-001** — **Files:** `scripts/orchestrate_poll_process.sh:15707-15714`; `scripts/orchestrate_poll_process.sh:14601-14622`. **Severity:** Medium. **Category:** `api-batching`. **Description:** Each standalone-stall tick lists open issues separately for seven phase labels. **Current:** seven `gh issue list` logical calls. **Proposed:** one aliased GraphQL request when each label result fits a page, with paginated or REST fallback when it does not. **Recommended fix:** Extend the aliased-search pattern in `_fetch_standalone_marker_issues_graphql` with seven label-specific aliases; retain the existing seven reads as the fail-open fallback and check result completeness before using the batch.
+
+- **API-002** — **Files:** `scripts/orchestrate_poll_process.sh:17526-17535`; `scripts/orchestrate_poll_process.sh:15681-15697`; `scripts/orchestrate_poll_process.sh:23160`. **Severity:** Medium. **Category:** `api-redundancy`. **Description:** The main tracking-issue loop fetches and validates each tracker’s comments. Later in the same tick, `run_standalone_stall_recovery` fetches those trackers’ comments again to derive managed issue numbers. **Current:** two paginated logical fetches per tracker, or **2N** for N trackers. **Proposed:** **N** on a successful first fetch, retaining one fallback fetch per missing snapshot. **Recommended fix:** Store validated comments by tracking-issue number in a tick-local cache and pass it to the standalone sweep, following the cycle-local cache pattern already used for actions runs in this script.
+
+- **API-003** — **File:** `scripts/gh_helpers.sh:964-980`. **Severity:** Medium. **Category:** `api-batching`. **Description:** The REST fallback for issue cross-references fetches the timeline and then makes one PR GET inside a loop for each distinct referenced PR URL. **Current:** **1 + N** logical reads for N PRs. **Proposed:** **1 + ceil(N/25)** using batches of aliased `pullRequest(number:)` lookups, subject to query and permission checks. **[NEEDS VERIFICATION]** **Recommended fix:** Extend the aliased GraphQL batching approach used by `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh`; preserve the per-PR REST path for failed or incomplete batches and its existing URL-scope check.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001** — **Files:** `.github/workflows/mark-stable.yml:656-805`; `.github/workflows/test-and-mark-stable.yml:5641-5790`. **Severity:** Low. **Category:** `duplication`. **Description:** Both release workflows contain the same 150-line `publish_tag_with_remote_verification` run-block function. A retry or verification correction must be applied twice. **Recommended fix:** Put `publish_tag_with_remote_verification <tag-ref> <immutable|moving>` in a new `scripts/release_tag_helpers.sh`, source it after each workflow’s trusted checkout, and update both callers without changing their tag-publication order.
+
+- **DUP-002** — **Files:** `.github/workflows/review_autofix.yml:5690-5722`; `.github/workflows/review_autofix.yml:5875-5906`; `scripts/label_helpers.sh:193-241`. **Severity:** Medium. **Category:** `duplication`. **Description:** Review steps repeat inline `ensure_label_exists` and `set_issue_phase_label_resilient` fallbacks. Their POST-only phase-label behavior also differs from the shared helper’s full-list PUT, complicating the **BUG-001** correction. **Recommended fix:** Make the verified `scripts/label_helpers.sh` own `set_issue_phase_label_resilient <issue-number> <target-label> <repo>` and `ensure_label_exists <label> <repo>`. Update the cited review callers to source that verified module, retaining a single documented compatibility fallback only where older support commits require one.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **EXPR-001** — **File:** `.github/workflows/implement.yml:984-1342`. **Severity:** Medium. **Category:** `expression-limit`. **Description:** “Stage workflow support files” has a **16,985-character parsed `run:` value** containing three `${{ }}` interpolations: **4,015 characters** of headroom against the requested 21,000-character whole-block proxy. Its indentation-inclusive source body is approximately 20,326 characters. The longest *individual* expression measured is only 59 characters, so whether the whole-block proxy predicts runner rejection needs verification. **[NEEDS VERIFICATION]** **Recommended fix:** If retaining the conservative block budget, move the stage body to a trusted script under `scripts/`, pass GitHub expression values through step `env:`, and keep the step’s conditions and outputs in the workflow.
+
+Across the parsed workflows, no other interpolated `run:` value reached 15,000 characters; the longest measured `if:` value was 859 characters. Uninterpolated run bodies were excluded. No workflow exceeds the requested 800 KB flag threshold. The repository’s **stricter** documented guard is 480,000 bytes: `.github/workflows/review_autofix.yml` is 454,700 bytes, leaving **25,300 bytes** before that guard (`CLAUDE.md:2106-2131`).
+
+### Section 5: Cross-Cutting Concerns
+
+- **DEAD-001** — **File:** `scripts/orchestrate_poll_process.sh:13173-13180`. **Severity:** Low. **Category:** `dead-code`. **Description:** `read_standalone_state_json` has no static caller in the scoped workflows or scripts; the nearby write path instead receives a previously extracted comment ID. A dynamic caller outside those files has not been ruled out. **[NEEDS VERIFICATION]** **Recommended fix:** Confirm the sourcing/test contract, then remove the unused wrapper or route an actual caller through it.
+
+- **SHELL-001** — **File:** `scripts/orchestrate_poll_process.sh:9263-9273`. **Severity:** Low. **Category:** `shellcheck`. **Description:** ShellCheck reports **SC2155** for `local now_epoch="$(date +%s)"` in `check_integration_branch_staleness`: declaration masks the command-substitution status. **Recommended fix:** Declare `now_epoch` separately, assign it in a checked command, and take the existing safe warning/return path if the clock read fails.
+
+No `TODO`, `FIXME`, or `HACK` debt marker was found in the scoped workflow and script files. The `set_issue_phase_label_resilient` inconsistency is covered by **BUG-001** and **DUP-002**, rather than counted a third time.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, SEC-001 |
+| Medium | 9 | BUG-002, BUG-003, BUG-004, BUG-005, API-001, API-002, API-003, DUP-002, EXPR-001 |
+| Low | 3 | DUP-001, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 4 workflow/script files | Medium |
+| API call optimization | 2 scripts | Medium |
+| Code modularization | 2 workflows, shared helper, and one new module; review callers additionally | Medium |
+| Expression size reduction | 1 workflow and 1 extracted script | Medium |
+| Medium/Low fixes | Approximately 8 existing workflow/script files | Medium |
