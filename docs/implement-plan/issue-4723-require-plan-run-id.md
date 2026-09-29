@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01SN9XdEWdK9hLtuWFjcG31M (hand-back and safety net re-armed each stage)
 - Last updated: 2026-09-29
-- Last note: conformance 2/3, review round 1 on #5035 (head e286b24): 1 finding fixed (empty `ISSUE_TITLE` guard in `wait-clarify` / `wait-implement`, AD-9), the rest rejected (the missing guard in `wait-plan` exists as `require_plan_run_id`; `exit 1` after an appended `$GITHUB_OUTPUT` line is safe; consolidating the copies is an out-of-scope refactor, AD-10)
+- Last note: conformance 2/3, review round 2 on #5035 (head 41fc6fb): 1 of 2 findings fixed (changelog contributor note now lists the empty-title test), 1 rejected (a whitespace-only `ISSUE_TITLE` cannot occur: `create-issue` builds the title as a fixed non-blank literal, and the guard already rejects an empty output)
 
 ## Phases
 1. [x] Phase 1 — paginate the scoped Plan run lookup and require the ID before success (`.github/workflows/test-and-mark-stable.yml` `wait-plan` step, `tests/test_test_and_mark_stable_plan_polling_guard.py`, `changelog.d/4723-require-plan-run-id.md`)
@@ -20,7 +20,7 @@
 
 ## Conformance
 - Run 1 — 2026-09-28: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR #4875 (pre-security): a failed or malformed runs page made `latest_scoped_run_field` end the walk as a short page (exit 0) instead of returning 1; no behaviour change for its callers, which retry on both. Review round 1 (2026-09-29): 2 NITs rejected with evidence, 0 fixed; the round could not converge without a verdict bot (`CLAUDE_FIXER_VERDICT_BOT_LOGIN` unset), so the project stopped at `Status: BLOCKED` (issue comment 5882150855). The maintainer answered Q1: A and merged #4875 into the project branch as `6d682f6` on 2026-09-29.
-- Run 2 — 2026-09-29: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR from `claude/implement-plan-issue-4723-require-plan-run-id-conformance-fix-2` (pre-security): `wait-clarify` and `wait-implement` captured run IDs from one 100-run page with no issue-title filter and wrote `status=success` without an ID; run 36504041362's Implement run sat at index 137 of the window (`Implement: run ID not found`), and the alt-model job's newer runs were in the same window. Fixed per AD-8. Review round 1 (2026-09-29, head e286b24): 1 of 5 findings fixed (empty-title guard, AD-9), 4 rejected (AD-10 for the refactor).
+- Run 2 — 2026-09-29: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR from `claude/implement-plan-issue-4723-require-plan-run-id-conformance-fix-2` (pre-security): `wait-clarify` and `wait-implement` captured run IDs from one 100-run page with no issue-title filter and wrote `status=success` without an ID; run 36504041362's Implement run sat at index 137 of the window (`Implement: run ID not found`), and the alt-model job's newer runs were in the same window. Fixed per AD-8. Review round 1 (2026-09-29, head e286b24): 1 of 5 findings fixed (empty-title guard, AD-9), 4 rejected (AD-10 for the refactor). Review round 2 (2026-09-29, head 41fc6fb): 1 of 2 findings fixed (changelog test list), 1 rejected (whitespace-only title is unreachable).
 
 ## Security pass
 - Skipped (ai:workflow-heal: automation-produced issue, verified by `.claude/scripts/security_pass_skip.py`)
