@@ -80,6 +80,15 @@ keyed by session id in `session-meta.json` under `filing.lock`.
 Issue text is untrusted data: the tool name, the prompt reason, and the
 command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
 token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
+Before any of that, a Bash command is parsed fail-closed (issue #5124): the
+values of credential-named assignments, credential headers, credential long
+flags (`--user`, `--password`, `--token`, …), and per-command credential
+short flags (`curl -u`, `mysql -p`, …) become `***`. A command that cannot
+be parsed, or whose credential does not occur verbatim or is shorter than
+MIN_MASKED_VALUE_CHARS, is withheld and only its shape is shown; the shape
+itself keeps no raw text (an unparseable command keeps only its command
+word, an attached credential short flag becomes `-u*`). Non-Bash tool input
+shows `***` for every key that names a credential.
 
 API calls (CLAUDE.md §15), REST only, none when nothing is new:
   - `file`: one read of the `ai:permission-prompt` issues per 100 issues,
@@ -161,6 +170,8 @@ _ISSUE_BRANCH_RE = re.compile(r"^claude/implement-plan-issue-([0-9]+)(?:-|$)")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 REDACTION_PATTERNS = (
+	# URL userinfo first (issue #5124), so `https://x-access-token:<t>@host/…` keeps its host.
+	(re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@'\"]+@"), r"\1***@"),
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
 	(re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "github_pat_***"),
 	(re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"), "sk-***"),
@@ -168,11 +179,50 @@ REDACTION_PATTERNS = (
 	(re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AKIA***"),
 	(re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer ***"),
 	(re.compile(r"(?i)\b(token|secret|password|passwd|api[_-]?key)(\s*[=:]\s*)[^\s'\"]+"), r"\1\2***"),
+	# Credentials in headers, flags, and assignments (issue #5124): a Basic
+	# credential, credential header values, `-u name:secret`, credential query
+	# parameters, and `<NAME>_TOKEN=`-style assignments.
+	(re.compile(r"(?i)\bbasic\s+(?=[A-Za-z0-9+/]*[0-9+/])[A-Za-z0-9+/]{8,}={0,2}"), "Basic ***"),
+	(re.compile(r"(?i)\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|x-auth-token|private-token|x-access-token)(\s*:\s*)[^'\"\n]+"), r"\1\2***"),
+	(re.compile(r"(?<!\S)(-u|-U|--user|--proxy-user)(\s+|=)(['\"]?)[^\s'\":]*:[^\s'\"]+"), r"\1\2\3***"),
+	(re.compile(r"(?i)([?&](?:access_token|token|api_key|apikey|key|sig|signature|secret|password|client_secret|auth)=)[^&\s#'\"]+"), r"\1***"),
+	(re.compile(r"(?i)\b([a-z0-9_]*(?:token|secret|passwd|password|api_?key|access_key|private_key|credentials?))=(?!\*\*\*)[^\s'\"]+"), r"\1=***"),
 	# Long random-looking strings (hex keys, base64 secrets): 40+ letters,
 	# digits, `+`, `_`, `=` with both letters and digits. `/` and `-` are left
 	# out so API paths and branch names survive.
 	(re.compile(r"(?<![A-Za-z0-9+_=])(?=[A-Za-z0-9+_=]*[0-9])(?=[A-Za-z0-9+_=]*[A-Za-z])[A-Za-z0-9+_=]{40,}"), "***"),
 )
+
+# Fail-closed command sanitizing before a command is posted (issue #5124).
+# A value shorter than this cannot be masked without mangling the rest of the
+# text, so the command is withheld instead.
+MIN_MASKED_VALUE_CHARS = 4
+WITHHELD_COMMAND_TEMPLATE = "<command withheld: it could not be parsed, or a credential in it could not be masked exactly; shape: {shape}>"
+# Names of assignments, header fields, and tool-input keys that carry a credential (`auth` and `authorization`, but not `author`).
+_CREDENTIAL_NAME_RE = re.compile(r"(?i)(token|secret|passw|pwd|api[_-]?key|apikey|auth(?!or(?!iz))|credential|cookie|private[_-]?key|access[_-]?key|signature)")
+# Long flags whose value is a credential (`--user`, `--password`, `--token`, `--cookie`, `--auth`, `--api-key`, …).
+_CREDENTIAL_LONG_FLAG_RE = re.compile(r"(?i)^--[a-z0-9-]*(user|pass|pwd|token|secret|auth(?!or(?!iz))|cookie|credential|bearer|api-?key|private-?key|access-?key)[a-z0-9-]*$")
+# curl's boolean short flags, which may precede a credential flag in one cluster (`-sSu name:pw`).
+_CLUSTER_BOOLEAN_LETTERS = frozenset("sSvkLfiIgGNjJOqnB")
+# Short flags (letters) whose value is a credential, by command or `command subcommand`.
+_CREDENTIAL_SHORT_FLAGS = {
+	"curl": "uUbE",
+	"mysql": "p",
+	"mysqldump": "p",
+	"mysqladmin": "p",
+	"mariadb": "p",
+	"sshpass": "p",
+	"http": "a",
+	"https": "a",
+	"redis-cli": "a",
+	"docker login": "p",
+	"podman login": "p",
+}
+# Commands whose `-H` takes a header; an attached header value is cut from the shape.
+_HEADER_SHORT_FLAG_TOOLS = frozenset({"curl", "gh", "http", "https"})
+_HEADER_WORD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(\S.*?)\s*$", re.DOTALL)
+_CREDENTIAL_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)=(.*)$", re.DOTALL)
+_URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@")
 
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>()"
 _HEREDOC_RE = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
@@ -221,8 +271,52 @@ def redact(text: str) -> str:
 	return text
 
 
+def _strip_url_userinfo(text: str) -> str:
+	"""`scheme://***@host…` for a URL with userinfo; any other text unchanged."""
+	return _URL_USERINFO_RE.sub(r"\1***@", text)
+
+
+def _attached_value_letters(command: str, subcommand: str) -> str:
+	"""The short-flag letters whose attached value is cut from a shape: credential flags, plus `-H` for header tools."""
+	letters = _CREDENTIAL_SHORT_FLAGS.get(command, "") + _CREDENTIAL_SHORT_FLAGS.get(f"{command} {subcommand}", "")
+	return letters + ("H" if command in _HEADER_SHORT_FLAG_TOOLS else "")
+
+
+def _credential_flag_position(token: str, letters: str) -> int | None:
+	"""Index in `token` of a flag from `letters` in a `-abc` cluster: the first letter, or one preceded only by boolean flags; else None.
+
+	`-XPUT` is None for curl: `X` takes a value, so the `U` inside it is not `-U`.
+	"""
+	if not letters or token.startswith("--") or not re.match(r"^-[A-Za-z]", token):
+		return None
+	for position, letter in enumerate(token[1:], start=1):
+		if letter in letters:
+			return position
+		if letter not in _CLUSTER_BOOLEAN_LETTERS:
+			return None
+	return None
+
+
+def _cut_attached_value(token: str, letters: str) -> str | None:
+	"""`-u*` for a short-flag cluster whose flag in `letters` has an attached value (`-udeploy:pwd`, `-sSuname:pw`); else None."""
+	position = _credential_flag_position(token, letters)
+	if position is None or len(token) == position + 1:
+		return None
+	return token[: position + 1] + "*"
+
+
+def _first_command_word(text: str) -> str:
+	"""The first command word of the first line (assignments skipped), or `?` when it is not a plain name."""
+	for word in text.split("\n", 1)[0].split():
+		if _ASSIGNMENT_RE.match(word):
+			continue
+		name = word.rsplit("/", 1)[-1]
+		return name if re.fullmatch(r"[A-Za-z0-9_.+-]{1,40}", name) else "?"
+	return "?"
+
+
 def _normalize_endpoint(endpoint: str) -> str:
-	path, _, query = endpoint.lstrip("/").partition("?")
+	path, _, query = _strip_url_userinfo(endpoint).lstrip("/").partition("?")
 	path = re.sub(r"^repos/[^/]+/[^/]+", "repos/*/*", path)
 	path = re.sub(r"\b[0-9]+\b", "N", path)
 	return path + ("?*" if query else "")
@@ -239,6 +333,7 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 	command = tokens[index].rsplit("/", 1)[-1] if not tokens[index].startswith(".") else tokens[index]
 	shape.append(command)
 	positionals = 0
+	subcommand = ""
 	seen_flags: set[str] = set()
 	index += 1
 	while index < len(tokens):
@@ -248,7 +343,9 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			shape.append(token[1:])
 			continue
 		if token.startswith("-") and len(token) > 1:
-			flag = token.split("=", 1)[0] + ("=*" if "=" in token else "")
+			# An attached credential or header value (`-udeploy:pwd`) never reaches the shape.
+			cut = _cut_attached_value(token, _attached_value_letters(command, subcommand))
+			flag = cut if cut is not None else token.split("=", 1)[0] + ("=*" if "=" in token else "")
 			if flag in ("-X", "--method") and index < len(tokens):
 				flag = f"{flag} {tokens[index].upper()}"
 				index += 1
@@ -260,7 +357,9 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 		if command == "gh" and positionals == 2 and len(shape) >= 2 and shape[1] == "api":
 			shape.append(_normalize_endpoint(token))
 		elif positionals == 1 and ((command in _SUBCOMMAND_TOOLS and _SUBCOMMAND_RE.match(token)) or _SCRIPT_RE.search(token)):
-			shape.append(token)
+			if command in _SUBCOMMAND_TOOLS and _SUBCOMMAND_RE.match(token):
+				subcommand = token
+			shape.append(_strip_url_userinfo(token))
 		elif shape[-1] != "*":
 			shape.append("*")
 	return shape
@@ -276,7 +375,8 @@ def command_shape(command: str) -> str:
 	try:
 		tokens = list(lexer)
 	except ValueError:
-		return "unparseable: " + re.sub(r"[0-9]+", "N", stripped.split("\n", 1)[0])[:60]
+		# Fail closed: an unparseable line can carry a credential, so only its command word is kept (issue #5124).
+		return "unparseable: " + _first_command_word(stripped)
 	parts: list[str] = []
 	segment: list[str] = []
 	redirect_target = False
@@ -323,17 +423,121 @@ def signature(event: str, tool: str, shape: str) -> str:
 	return hashlib.sha1(f"{event}\n{tool}\n{shape}".encode("utf-8")).hexdigest()[:12]
 
 
+def _word_credentials(word: str) -> set[str]:
+	"""Credential values one shell word carries: a credential-named `NAME=value`, or a credential header (`Authorization: …`, also attached to `-H` or a `--flag=`)."""
+	values: set[str] = set()
+	assignment = _CREDENTIAL_ASSIGNMENT_RE.match(word)
+	if assignment and _CREDENTIAL_NAME_RE.search(assignment.group(1)):
+		values.add(assignment.group(2))
+	candidates = [word]
+	if word.startswith("-H") and len(word) > 2:
+		candidates.append(word[2:])
+	if word.startswith("--") and "=" in word:
+		candidates.append(word.partition("=")[2])
+	for candidate in candidates:
+		header = _HEADER_WORD_RE.match(candidate)
+		if header and _CREDENTIAL_NAME_RE.search(header.group(1)):
+			values.add(header.group(2))
+	return values
+
+
+def _segment_credentials(words: list[str]) -> set[str]:
+	"""Credential values in one simple command: word credentials, credential long flags, and the command's credential short flags."""
+	values: set[str] = set()
+	start = next((position for position, word in enumerate(words) if not _ASSIGNMENT_RE.match(word)), len(words))
+	command = words[start].rsplit("/", 1)[-1] if start < len(words) else ""
+	subcommand = words[start + 1] if start + 1 < len(words) else ""
+	letters = _CREDENTIAL_SHORT_FLAGS.get(command, "") + _CREDENTIAL_SHORT_FLAGS.get(f"{command} {subcommand}", "")
+	index = 0
+	while index < len(words):
+		word = words[index]
+		index += 1
+		following = words[index] if index < len(words) and not words[index].startswith("-") else None
+		values.update(_word_credentials(word))
+		if word.startswith("--"):
+			name, has_value, value = word.partition("=")
+			if _CREDENTIAL_LONG_FLAG_RE.match(name):
+				if has_value:
+					values.add(value)
+				elif following is not None:
+					values.add(following)
+					index += 1
+		else:
+			position = _credential_flag_position(word, letters)
+			if position is None:
+				continue
+			if len(word) > position + 1:
+				values.add(word[position + 1 :])
+			elif index < len(words):
+				# These flags always take a value, so the next word is it even when it starts with `-`.
+				values.add(words[index])
+				index += 1
+	return {value for value in values if value}
+
+
+def _sanitize_bash_command(display: str, parse_text: str) -> str | None:
+	"""`display` with every credential value masked as `***`, or None when that cannot be done safely.
+
+	Fail closed (issue #5124): `parse_text` (the same command without heredoc
+	bodies or delimiters) is split into shell words with the lexer
+	`command_shape` uses. Credential values are the values of credential-named
+	assignments, credential header fields, credential long flags, and the
+	`_CREDENTIAL_SHORT_FLAGS` of the segment's command. Returns None when the
+	text cannot be tokenized, or when a value is shorter than
+	MIN_MASKED_VALUE_CHARS or does not occur verbatim in `display` (quoting or
+	escapes changed it), so the caller posts the shape instead.
+	"""
+	lexer = shlex.shlex(parse_text.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer.commenters = ""
+	lexer.whitespace = " \t\r"
+	lexer.whitespace_split = True
+	try:
+		tokens = list(lexer)
+	except ValueError:
+		return None
+	values: set[str] = set()
+	segment: list[str] = []
+	for token in tokens + [";"]:
+		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
+			values.update(_segment_credentials(segment))
+			segment = []
+		else:
+			segment.append(token)
+	ordered = sorted(values, key=len, reverse=True)
+	if any(len(value) < MIN_MASKED_VALUE_CHARS or value not in display for value in ordered):
+		return None
+	for value in ordered:
+		display = display.replace(value, "***")
+	return display
+
+
+def _mask_credential_keys(value):
+	"""A copy of JSON-like tool input with `***` for every value whose key names a credential."""
+	if isinstance(value, dict):
+		return {key: ("***" if isinstance(key, str) and _CREDENTIAL_NAME_RE.search(key) else _mask_credential_keys(item)) for key, item in value.items()}
+	if isinstance(value, list):
+		return [_mask_credential_keys(item) for item in value]
+	return value
+
+
 def record_example(record: dict) -> str:
-	"""The redacted, truncated command (or tool input) for the issue text."""
+	"""The sanitized, redacted, truncated command (or tool input) for the issue text.
+
+	A Bash command goes through `_sanitize_bash_command`; when that fails
+	closed, the command is withheld and only its shape is shown (issue #5124).
+	"""
 	tool_input = record.get("tool_input") if isinstance(record.get("tool_input"), dict) else {}
 	if record.get("tool_name") == "Bash":
-		text = strip_heredocs(str(tool_input.get("command") or ""), placeholder="<heredoc body omitted>")
+		command = str(tool_input.get("command") or "")
+		display = strip_heredocs(command, placeholder="<heredoc body omitted>")
+		sanitized = _sanitize_bash_command(display, strip_heredocs(command, keep_delimiter=False))
+		text = WITHHELD_COMMAND_TEMPLATE.format(shape=command_shape(command)) if sanitized is None else sanitized
 	else:
 		shown = {
 			key: (f"<{len(value) if isinstance(value, str) else 'n'} chars omitted>" if key in _BULKY_INPUT_KEYS else value)
 			for key, value in tool_input.items()
 		}
-		text = json.dumps(shown, ensure_ascii=False, indent=1)
+		text = json.dumps(_mask_credential_keys(shown), ensure_ascii=False, indent=1)
 	text = redact(text)
 	if len(text) > MAX_COMMAND_CHARS:
 		text = text[:MAX_COMMAND_CHARS] + "\n… [truncated]"
