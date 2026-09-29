@@ -51,11 +51,15 @@ def _pr(ref=REF, **overrides):
 	return pr
 
 
-def _runs(ref=REF, queued=0, in_progress=0, pending=0):
+DISPATCH_RUNS = "repos/o/r/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=100"
+
+
+def _runs(ref=REF, queued=0, in_progress=0, pending=0, dispatched=()):
 	return {
 		f"repos/o/r/actions/runs?branch={ref}&status=queued&per_page=1": {"total_count": queued},
 		f"repos/o/r/actions/runs?branch={ref}&status=in_progress&per_page=1": {"total_count": in_progress},
 		f"repos/o/r/actions/runs?branch={ref}&status=pending&per_page=1": {"total_count": pending},
+		DISPATCH_RUNS: {"workflow_runs": list(dispatched)},
 	}
 
 
@@ -495,6 +499,99 @@ def test_ignoring_one_claimant_still_respects_another(monkeypatch, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, comments)
 	_, out = _run(capsys, "--ignore-claim-by", "sweep-run-77")
 	assert out["state"] == "claimed" and out["claim"]["by"] == "session_01other"
+
+
+# Issue #4618: review_autofix_sweep.yml dispatches internal-review.yml from the
+# default branch, so the run's head_branch is `main` and its head_sha a main
+# commit. The exact run title binds it to the PR instead.
+DEFAULT_BASE = {"repo": {"default_branch": "main"}}
+DISPATCH_TITLE = "Internal: AI Review & Autofix [pr:7]"
+
+
+def _dispatched_run(**overrides):
+	run = {"path": ".github/workflows/internal-review.yml", "event": "workflow_dispatch",
+		"head_branch": "main", "head_sha": OTHER_HEAD, "display_title": DISPATCH_TITLE}
+	run.update(overrides)
+	return _review_run(**run)
+
+
+def test_review_handoff_from_a_sweep_dispatch_on_the_default_branch_is_due(monkeypatch, capsys):
+	responses = {"repos/o/r/pulls/7": _pr(base=DEFAULT_BASE), **_dispatched_run(), **_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	code, out = _run(capsys)
+	assert code == 0 and out["done"] is True and out["state"] == "review-round"
+	assert not any("/compare/" in call for call in calls)
+
+
+def test_conflict_handoff_from_a_sweep_dispatch_on_the_default_branch_is_due(monkeypatch, capsys):
+	responses = {"repos/o/r/pulls/7": _pr(base=DEFAULT_BASE, mergeable_state="dirty"), **_dispatched_run(), **_runs()}
+	_stub(monkeypatch, responses, [_handoff(kind="conflict")])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "conflict"
+
+
+@pytest.mark.parametrize("pr_base, run_change", [
+	(DEFAULT_BASE, {"display_title": "Internal: AI Review & Autofix [pr:8]"}),
+	(DEFAULT_BASE, {"display_title": "Internal: AI Review & Autofix [pr:7] "}),
+	(DEFAULT_BASE, {"head_branch": "claude/other-branch"}),
+	(DEFAULT_BASE, {"event": "pull_request"}),
+	(DEFAULT_BASE, {"path": ".github/workflows/review_autofix.yml"}),
+	(DEFAULT_BASE, {"conclusion": "failure"}),
+	(None, {}),
+	({"repo": {"default_branch": ""}}, {}),
+])
+def test_sweep_dispatch_that_does_not_bind_to_the_pr_fails_closed(monkeypatch, capsys, pr_base, run_change):
+	pr = _pr(base=pr_base) if pr_base is not None else _pr()
+	responses = {"repos/o/r/pulls/7": pr, **_dispatched_run(**run_change), **_compare(OTHER_HEAD, "diverged"), **_runs()}
+	_stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "waiting for verified completed review run" in out["reason"]
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress", "pending"])
+def test_active_sweep_dispatch_for_the_pr_keeps_the_handoff_waiting(monkeypatch, capsys, status):
+	active = [{"status": status, "display_title": DISPATCH_TITLE}]
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=active)}
+	_stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
+
+
+def test_sweep_dispatch_for_another_pr_or_finished_does_not_count(monkeypatch, capsys):
+	other = [{"status": "in_progress", "display_title": "Internal: AI Review & Autofix [pr:8]"},
+		{"status": "completed", "display_title": DISPATCH_TITLE}]
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=other)}
+	_stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "review-round"
+
+
+def test_dispatch_listing_404_counts_zero_and_other_errors_raise(monkeypatch):
+	def missing(path):
+		if "internal-review.yml" in path:
+			raise checker.ReadError(f"gh api {path} failed: gh: Not Found (HTTP 404)")
+		return {"total_count": 0}
+	monkeypatch.setattr(checker, "gh_api", missing)
+	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 0
+
+	def broken(path):
+		if "internal-review.yml" in path:
+			raise checker.ReadError(f"gh api {path} failed: HTTP 502")
+		return {"total_count": 0}
+	monkeypatch.setattr(checker, "gh_api", broken)
+	with pytest.raises(checker.ReadError):
+		checker._active_run_count(REPO, REF, include_pending=True, pr_number=7)
+
+
+def test_branch_active_run_skips_the_dispatch_listing(monkeypatch):
+	calls = []
+
+	def fake(path):
+		calls.append(path)
+		return {"total_count": 1}
+	monkeypatch.setattr(checker, "gh_api", fake)
+	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 3
+	assert not any("internal-review.yml" in call for call in calls)
 
 
 # --- Routing: `action` for the CLAUDE.md §26 checker ---------------------------
