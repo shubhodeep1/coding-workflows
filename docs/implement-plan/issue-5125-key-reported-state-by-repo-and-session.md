@@ -3,15 +3,15 @@
 - Plan: docs/plans/issue-5125-key-reported-state-by-repo-and-session-plan.md
 - Source issue: shubhodeep1/coding-workflows#5125 (https://github.com/shubhodeep1/coding-workflows/issues/5125)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4755-report-blocking-permission-prompts
-- Project branch: claude/implement-plan-issue-5125-key-reported-state-by-repo-and-session   Final PR: pending (draft)
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5125-key-reported-state-by-repo-and-session   Final PR: #5159 (draft)
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5184: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: none (no wait armed while BLOCKED on the twin sync)
 - Last updated: 2026-09-29
-- Last note: Project branch opened from the issue base; phase 1 starting.
+- Last note: Phase 1 PR #5184 opened (twin-first); held for the operator's [claude-twin-sync] of .claude/scripts/permission_prompts.py, then /reclarify on #5125.
 
 ## Phases
 1. [ ] Phase 1 — key reported state by repository and log session   — protected paths: .claude/scripts/permission_prompts.py
@@ -19,6 +19,7 @@
    - tests/test_permission_prompts.py: load the twin; tests for consumer-repo reports, other sessions, own-session skip, legacy entries, new entry fields
    - CLAUDE.md §23.I (both copies), agents.md, changelog.d/5125-permission-prompt-report-scope.md
    - Done: new tests pass against the twin; only test_template_parity red until the twin sync
+   - PR #5184 open (hold claim, waiting on twin sync); review rounds: 0; interventions: 0
 
 ## Conformance
 
