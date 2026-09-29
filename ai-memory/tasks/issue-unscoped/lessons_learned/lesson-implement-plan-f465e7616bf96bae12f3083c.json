@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T07:23:27Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a safety check is skipped because an optional argument is empty, put the argument's value on the helper's summary log line, so a caller that drops it shows up in the log instead of silently losing the check.",
+  "phase": "implement_plan",
+  "pr_number": 5036,
+  "record_id": "lesson-implement-plan-f465e7616bf96bae12f3083c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4898-retrigger-dispatch-default-branch",
+    "file:scripts/gh_helpers.sh"
+  ]
+}

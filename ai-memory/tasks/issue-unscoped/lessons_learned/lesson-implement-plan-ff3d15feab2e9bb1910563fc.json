@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T07:23:27Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A loop bound that recognises its own retry by run name must fail closed when the current run carries no such name: a retry dispatched under a fallback name is invisible to the next run, and the bound silently disappears.",
+  "phase": "implement_plan",
+  "pr_number": 5036,
+  "record_id": "lesson-implement-plan-ff3d15feab2e9bb1910563fc",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4898-retrigger-dispatch-default-branch",
+    "file:scripts/gh_helpers.sh",
+    "file:scripts/review_autofix_step_changes_lost_redispatch.sh"
+  ]
+}
