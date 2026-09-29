@@ -1245,7 +1245,7 @@ def _run_review_tier_harness(
 			"REVIEW_TIER_LITE_MAX_LOC": "50",
 			"REVIEW_TIER_LITE_REVIEWER_SLUG": "qwen/qwen3.7-plus",
 			"REVIEW_TIER_STANDARD_MAX_LOC": "200",
-			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna",
 			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
@@ -2696,7 +2696,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
 		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -2757,7 +2757,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
 		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -4176,7 +4176,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert standard_result["active_models"] == [
 		"minimax/minimax-m3",
 		"deepseek/deepseek-v4-pro",
-		"x-ai/grok-4.20",
+		"openai/gpt-6-luna",
 	]
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" not in standard_result["github_env"]
 
@@ -4457,22 +4457,137 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 
 	assert sorted(mapped) == [
 		"deepseek/deepseek-v4-pro",
-		"google/gemini-3.1-flash-lite",
+		"google/gemini-3.8-flash",
 		"minimax/minimax-m3",
+		"openai/gpt-6-luna",
 		"qwen/qwen3.7-plus",
-		"x-ai/grok-4.20",
 		"z-ai/glm-5.2",
 	]
 	assert sorted(unmapped) == []
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
-	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
+	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
+	assert chains["openai/gpt-6-luna"] == ["openai/gpt-5.6-luna"]
 	assert chains["qwen/qwen3.7-plus"] == ["qwen/qwen3.6-plus"]
-	assert chains["x-ai/grok-4.20"] == ["x-ai/grok-4.3"]
 	assert chains["z-ai/glm-5.2"] == ["z-ai/glm-5.3-flashx"]
 	# Retired-roster mappings stay for operator overrides (CLAUDE.md §6).
 	assert chains["moonshotai/kimi-k3"] == ["moonshotai/kimi-k2.7-code"]
 	assert chains["x-ai/grok-4.6"] == ["x-ai/grok-4.20"]
+	assert chains["x-ai/grok-4.20"] == ["x-ai/grok-4.3"]
+	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
+	# Grok left the default roster after single-tool-call loops (2026-09-29).
+	assert not any(model.startswith("x-ai/") for model in reviewer_models)
+
+
+def _run_reviewer_loop_guard_function(function_names: list[str], script_body: str) -> subprocess.CompletedProcess[str]:
+	reviewers_text = REVIEWERS.read_text(encoding="utf-8")
+	definitions = []
+	for function_name in function_names:
+		match = re.search(rf"(?ms)^{re.escape(function_name)}\(\) \{{\n.*?^\}}\n", reviewers_text)
+		assert match, f"missing shell function {function_name}"
+		definitions.append(match.group(0))
+	return subprocess.run(
+		["bash", "-c", "set -uo pipefail\n" + "\n".join(definitions) + "\n" + script_body],
+		text=True,
+		capture_output=True,
+		check=False,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+
+
+def _reviewer_tool_use_event(tool: str, tool_input: dict[str, object]) -> str:
+	# Shape of an OpenCode 1.18.23 `run --format json` completed tool call.
+	return json.dumps(
+		{
+			"type": "tool_use",
+			"timestamp": 1790672547390,
+			"sessionID": "ses_test",
+			"part": {
+				"type": "tool",
+				"tool": tool,
+				"callID": "call_1",
+				"state": {"status": "completed", "input": tool_input, "output": "Found 1 matches"},
+			},
+		},
+		separators=(",", ":"),
+	)
+
+
+def test_reviewer_tool_repeat_detected_flags_only_identical_consecutive_calls() -> None:
+	grep_event = _reviewer_tool_use_event("grep", {"pattern": "### Zombie-checker cleanup"})
+	step_event = json.dumps({"type": "step_start", "part": {"type": "step-start"}}, separators=(",", ":"))
+	paging_events = [
+		_reviewer_tool_use_event("read", {"filePath": "/w/review_autofix.yml", "offset": offset, "limit": 200})
+		for offset in range(1, 2201, 200)
+	]
+	reordered_event = json.dumps(
+		{"type": "tool_use", "part": {"state": {"input": {"pattern": "### Zombie-checker cleanup"}}, "tool": "grep"}},
+		separators=(",", ":"),
+	)
+	cases = {
+		"loop": ([grep_event, step_event] * 10, 0),
+		"nine_repeats": ([grep_event] * 9, 1),
+		"broken_by_other_call": ([grep_event] * 10 + [_reviewer_tool_use_event("grep", {"pattern": "other"})], 1),
+		"paging_same_file": (paging_events, 1),
+		"key_order_ignored": ([grep_event] * 9 + [reordered_event], 0),
+		"partial_last_line": ([grep_event] * 9 + [grep_event[:60]], 1),
+	}
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		for name, (lines, expected_rc) in cases.items():
+			events = root / f"{name}.jsonl"
+			events.write_text("\n".join(lines) + "\n", encoding="utf-8")
+			result = _run_reviewer_loop_guard_function(
+				["reviewer_tool_repeat_detected"],
+				f'reviewer_tool_repeat_detected "{events}" 10',
+			)
+			assert result.returncode == expected_rc, (name, result.stdout, result.stderr)
+			if expected_rc == 0:
+				assert result.stdout.strip() == "grep", name
+		missing = _run_reviewer_loop_guard_function(
+			["reviewer_tool_repeat_detected"],
+			f'reviewer_tool_repeat_detected "{root / "absent.jsonl"}" 10',
+		)
+		assert missing.returncode == 1
+
+
+def test_reviewer_positive_int_or_default_falls_back_on_invalid_values() -> None:
+	cases = [("", "120", ""), ("80", "80", ""), ("010", "10", ""), ("0", "120", "::warning::"), ("abc", "120", "::warning::"), ("-3", "120", "::warning::")]
+	for raw_value, expected, warning in cases:
+		result = _run_reviewer_loop_guard_function(
+			["reviewer_positive_int_or_default"],
+			f"reviewer_positive_int_or_default '{raw_value}' 120 1 REVIEWER_MAX_STEPS",
+		)
+		assert result.returncode == 0
+		assert result.stdout.strip() == expected, raw_value
+		assert (warning in result.stderr) if warning else result.stderr == "", raw_value
+	repeat_floor = _run_reviewer_loop_guard_function(
+		["reviewer_positive_int_or_default"],
+		"reviewer_positive_int_or_default 1 10 2 REVIEWER_TOOL_REPEAT_LIMIT",
+	)
+	assert repeat_floor.stdout.strip() == "10"
+
+
+def test_reviewer_classify_retryable_failure_maps_tool_repeat() -> None:
+	result = _run_reviewer_loop_guard_function(
+		["reviewer_classify_retryable_failure"],
+		"reviewer_classify_retryable_failure 143 tool_repeat /dev/null ''",
+	)
+	assert result.returncode == 0
+	assert result.stdout.strip() == "tool_repeat"
+
+
+def test_reviewer_loop_guards_are_wired_for_the_review_panel_only() -> None:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert "REVIEWER_MAX_STEPS: ${{ vars.REVIEWER_MAX_STEPS || '120' }}" in workflow
+	assert "REVIEWER_TOOL_REPEAT_LIMIT: ${{ vars.REVIEWER_TOOL_REPEAT_LIMIT || '10' }}" in workflow
+	reviewers_text = REVIEWERS.read_text(encoding="utf-8")
+	assert '--max-steps "${REVIEWER_MAX_STEPS_EFFECTIVE}"' in reviewers_text
+	assert reviewers_text.count('--max-steps "') == 1
+	assert 'reviewer_tool_repeat_detected "${tmp_structured_output}" "${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}"' in reviewers_text
+	assert "printf 'tool_repeat' > \"${wd_reason_file}\"" in reviewers_text
+	for other_caller in ("review_run_judge_interim.sh", "review_synthesise_smoke.sh", "summarize_reviewer_consensus.sh"):
+		assert "--max-steps" not in (REPO_ROOT / "scripts" / other_caller).read_text(encoding="utf-8")
 
 
 def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models() -> None:

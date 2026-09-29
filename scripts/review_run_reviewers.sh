@@ -109,6 +109,64 @@ PY
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 
+# Print $1 when it is an integer >= $3, else warn and print the default $2.
+reviewer_positive_int_or_default() {
+  local raw_value="${1:-}"
+  local default_value="$2"
+  local minimum_value="$3"
+  local setting_name="$4"
+
+  if [ -z "${raw_value}" ]; then
+    printf '%s\n' "${default_value}"
+    return 0
+  fi
+  if [[ "${raw_value}" =~ ^[0-9]{1,6}$ ]] && [ "${raw_value}" -ge "${minimum_value}" ]; then
+    printf '%s\n' "$((10#${raw_value}))"
+    return 0
+  fi
+  echo "::warning::${setting_name}='${raw_value}' is not an integer >= ${minimum_value}; using ${default_value}." >&2
+  printf '%s\n' "${default_value}"
+}
+
+# Reviewer loop guards. REVIEWER_MAX_STEPS caps OpenCode turns per reviewer
+# attempt (write_opencode_config.sh --max-steps). REVIEWER_TOOL_REPEAT_LIMIT
+# ends an attempt once that many consecutive tool calls are identical (same
+# tool, same input). Real reviewer passes peaked at 101 turns; x-ai/grok-4.20
+# looped for 2,205 turns on one repeated grep (run 35949371968).
+REVIEWER_MAX_STEPS_EFFECTIVE="$(reviewer_positive_int_or_default "${REVIEWER_MAX_STEPS:-}" 120 1 REVIEWER_MAX_STEPS)"
+REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE="$(reviewer_positive_int_or_default "${REVIEWER_TOOL_REPEAT_LIMIT:-}" 10 2 REVIEWER_TOOL_REPEAT_LIMIT)"
+
+# Succeeds (and prints the tool name) when the last $2 completed tool calls in
+# the OpenCode JSON event stream $1 are identical: same tool, same input. The
+# input comparison mirrors OpenCode's own doom-loop check, which only looks
+# inside a single model response and so missed one-call-per-turn loops.
+# Unreadable or partial events never count as a repeat (fail open).
+reviewer_tool_repeat_detected() {
+  local structured_file="$1"
+  local repeat_limit="$2"
+
+  [ -s "${structured_file}" ] || return 1
+  grep -F '"type":"tool_use"' "${structured_file}" 2>/dev/null \
+    | tail -n "${repeat_limit}" \
+    | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json
+import sys
+
+limit = int(sys.argv[1])
+keys = []
+for raw_line in sys.stdin:
+	try:
+		event = json.loads(raw_line)
+		part = event["part"]
+		keys.append((part["tool"], json.dumps(part["state"].get("input"), sort_keys=True)))
+	except (ValueError, KeyError, TypeError, AttributeError):
+		sys.exit(1)
+if len(keys) < limit or len(set(keys)) != 1:
+	sys.exit(1)
+print(keys[0][0])
+' "${repeat_limit}"
+}
+
 emit_run_budget_gate_note() {
   local budget_scope="$1"
   local minimum_required_secs="${2:-1}"
@@ -1447,7 +1505,7 @@ resolve_review_tier_active_models() {
       selected_raw="${REVIEW_TIER_LITE_REVIEWER_SLUG:-qwen/qwen3.7-plus}"
       ;;
     standard)
-      selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20}"
+      selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna}"
       ;;
     *)
       reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
@@ -3598,6 +3656,10 @@ reviewer_classify_retryable_failure() {
       printf 'timeout\n'
       return 0
       ;;
+    tool_repeat)
+      printf 'tool_repeat\n'
+      return 0
+      ;;
   esac
 
   case "${cmd_rc}" in
@@ -3796,7 +3858,8 @@ execute_reviewer_attempt() {
     --model "${effective_model}" \
     --project-path "${reviewer_opencode_workspace}" \
     --config-path "${reviewer_opencode_config_path}" \
-    --serena off; then
+    --serena off \
+    --max-steps "${REVIEWER_MAX_STEPS_EFFECTIVE}"; then
     echo "Reviewer slot ${slot_model} (${effective_model}) failed to generate its OpenCode config on ${attempt_label}." | tee -a "${log_file}" >&2
     REVIEWER_ATTEMPT_OUTCOME="failed"
     REVIEWER_ATTEMPT_CMD_RC=1
@@ -3903,6 +3966,14 @@ execute_reviewer_attempt() {
         _reviewer_kill_pid "${cpid}"
         rm -f "${hb_file}"
         exit 143
+      fi
+      if repeat_tool="$(reviewer_tool_repeat_detected "${tmp_structured_output}" "${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}")"; then
+        echo "Reviewer ${effective_model} killed — ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE} consecutive identical '${repeat_tool}' tool calls (repeat limit: ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE})." | tee -a "${log_file}" >&2
+        printf 'tool_repeat' > "${wd_reason_file}"
+        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        _reviewer_kill_pid "${cpid}"
+        rm -f "${hb_file}"
+        exit 145
       fi
 
       wd_iter=$((wd_iter + 1))
@@ -4104,6 +4175,9 @@ execute_reviewer_attempt() {
         max_wall)
           echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (max wall ${reviewer_max_wall}s, exit=${cmd_rc})." | tee -a "${log_file}"
           ;;
+        tool_repeat)
+          echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (tool repeat limit ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}, exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
         *)
           echo "Reviewer slot ${slot_model} (${effective_model}) execution failed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
           ;;
@@ -4126,7 +4200,7 @@ execute_reviewer_attempt() {
   REVIEWER_ATTEMPT_WD_REASON="${wd_reason}"
   REVIEWER_ATTEMPT_CMD_RC="${cmd_rc}"
   case "${stall_state}:${wd_reason}:${cmd_rc}" in
-    killed:*:*|*:idle_timeout:*|*:*:137)
+    killed:*:*|*:idle_timeout:*|*:tool_repeat:*|*:*:137)
       emit_reviewer_substate "Stalled" "${attempt_number}" "${tmp_stderr}"
       ;;
     *:max_wall:*|*:*:124|*:*:143)
@@ -4969,8 +5043,8 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   # "primary review target" — most recent AI-generated changes).
   #
   # Both PASS2_REASONING_SMALL and PASS2_REASONING_LARGE fall back to
-  # xhigh here (reviewer slots are non-GPT models, outside the gpt-6-sol
-  # `high` default), so the size gate is a no-op at script-default settings. The gate structure is retained so
+  # xhigh here (reviewer slots, including openai/gpt-6-luna, sit outside the
+  # gpt-6-sol editor `high` default), so the size gate is a no-op at script-default settings. The gate structure is retained so
   # operators can override REVIEWER_PASS2_REASONING_SMALL and/or
   # REVIEWER_PASS2_REASONING_LARGE per-repo to differentiate small vs
   # large diffs (e.g. drop small-diff effort to medium for cost).

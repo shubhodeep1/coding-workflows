@@ -40,3 +40,4 @@ Rows with pinned override fields are marked `(frozen)` in `notes`.
 | z-ai/glm-5.3-flashx | null | false | freeform | — |
 | x-ai/grok-4.3 | null | false | function | — |
 | google/gemini-3.1-flash-lite | null | false | freeform | — |
+| google/gemini-3.8-flash | null | false | freeform | — |
