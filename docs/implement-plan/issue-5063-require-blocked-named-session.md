@@ -3,18 +3,22 @@
 - Plan: docs/plans/issue-5063-require-blocked-named-session-plan.md
 - Source issue: shubhodeep1/coding-workflows#5063
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4817-archive-replaced-blocked-session
-- Project branch: claude/implement-plan-issue-5063-require-blocked-named-session   Final PR: pending (draft)
+- Project branch: claude/implement-plan-issue-5063-require-blocked-named-session   Final PR: #5071 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5077
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01KoYuCT4FdfwnaPdn9fkiqc   safety net trig_015Da2b1D9Vuaybpgq14DzEB   hand-back trig_017g6P85kvxgbiteiFYMP8vH
 - Last updated: 2026-09-29
-- Last note: project branch opened from the issue base; phase 1 starting.
+- Last note: phase 1 implemented and verified (441 tests in the relevant CI groups, ruff clean); PR #5077 opened into the project branch; waiting on the Claude-fixer review.
 
 ## Phases
-1. [ ] Phase 1 — named-session blocked check and Claude-app provenance in `replaced-sessions`
+1. [ ] Phase 1 — named-session blocked check and Claude-app provenance in `replaced-sessions`   — PR #5077 open (waiting); review rounds: 0; interventions: 0
+   - [x] `scripts/claude_issue_route.py`: `BLOCKED_COMMENT_APP_SLUG` (:202), `is_claude_session_comment` (:356), `blocked_comment_session` filter (:1088), named session needs blocked evidence (:1238), docstrings
+   - [x] `tests/test_claude_issue_route.py`: exploit, provenance, and CLI tests (:1706, :1711, :1718, :1814, :1823, :1873); the 13 new or changed assertions fail on the unfixed code
+   - [x] `README.md`, `agents.md`: both rules documented
+   - [x] `changelog.d/5063-require-blocked-named-session.md` (`security`)
 
 ## Conformance
 
@@ -39,4 +43,5 @@
 ## Notes
 - Issue mode (CLAUDE.md §28.A), started by the Claude issue dispatcher routine in session session_016c1EzZWwVAwndmHzJ6SRof. Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5063#issuecomment-5885057190
 - The base branch is not the default branch: the final-merge stage closes #5063 with `ai:merged`, and steps 12–13 are skipped (`Activation: n/a`).
+- Test environment: the container runs Python 3.11, so `tests/test_workflow_retro.py` fails to collect (a 3.12-only f-string in `scripts/workflow_retro.py`, unrelated); the full suite exceeds 10 minutes here, so the `ci.yml` groups this change touches were run instead.
 - Observed gap (AD-5): sessions titled `Issue #<N> — implement` are not matched by `issue_session_title`.
