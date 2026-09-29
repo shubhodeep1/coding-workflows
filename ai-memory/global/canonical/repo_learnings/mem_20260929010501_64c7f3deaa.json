@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Changes to reusable validation templates may need synchronized updates to their renderer, templates, and runtime regression tests.",
   "timestamps": {
     "created_at": "2026-09-29T01:05:01Z",
