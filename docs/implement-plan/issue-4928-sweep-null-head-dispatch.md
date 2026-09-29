@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-4928-sweep-null-head-dispatch-plan.md
 - Source issue: shubhodeep1/coding-workflows#4928
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4701-review-dispatch-default-branch
-- Project branch: claude/implement-plan-issue-4928-sweep-null-head-dispatch   Final PR: pending (draft)
+- Project branch: claude/implement-plan-issue-4928-sweep-null-head-dispatch   Final PR: #4961 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from the issue base; phase 1 in progress.
+- Last note: phase 1 implemented and verified locally (380 sweep-related tests, 52 changelog tests, yamllint, actionlint; the full suite did not finish within 50 minutes locally, so CI is the full-suite check); phase PR opened against the project branch.
 
 ## Phases
 1. [ ] Phase 1 — keep PR-keyed dispatch runs with a null head branch in the sweep snapshot
