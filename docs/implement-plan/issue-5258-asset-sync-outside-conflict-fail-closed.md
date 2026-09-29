@@ -7,14 +7,14 @@
 - Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: phase 1 PR: twin sync
+- Waiting on: PR #5291: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
 - Last note: phase 1 implemented twin-first (workflow-templates/.claude/commands/{fix-claude-pr,implement-plan-claude}.md); PR held for the [claude-twin-sync] copy into .claude/
 
 ## Phases
-1. [ ] Phase 1 — resolve or fail closed on an outside-`.claude/` Claude-asset sync conflict — protected paths: .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md — PR open (held: twin sync); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — resolve or fail closed on an outside-`.claude/` Claude-asset sync conflict — protected paths: .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md — PR #5291 open (held: twin sync); review rounds: 0; interventions: 0
 
 ## Conformance
 
