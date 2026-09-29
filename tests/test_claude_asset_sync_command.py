@@ -71,10 +71,55 @@ def test_claude_conflict_aborts_and_blocks(commands):
 	assert "$(" not in section
 
 
-def test_settings_change_applies_from_the_next_session(commands):
-	section = _section(commands["implement-plan-claude.md"], "### Claude-asset sync", "### Permission prompt report")
+def test_settings_change_is_verified_before_any_further_work(commands):
+	"""Issue #5259: a merged settings.json is checked, never assumed active."""
+	section = _section(commands["implement-plan-claude.md"], "### Claude-asset sync", "### Settings restart")
 	assert "Hook scripts are re-read on every call" in section
-	assert "new hook wiring applies from the next session" in section
+	# The old claim contradicted Claude Code's documented file watcher.
+	assert "reads `settings.json` only at session start" not in section
+	assert "new hook wiring applies from the next session" not in section
+	assert "the watcher can miss a change" in section
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py" in section
+	assert "as its own Bash call before any other tool call" in section
+	assert "including no record, which fails closed" in section
+	assert "run it once more" in section
+	assert "make no further commit, push, claim, comment, label change, or dispatch for this work" in section
+	assert "[Settings restart](#settings-restart)" in section
+	assert "$(" not in section
+
+
+def test_settings_restart_hands_the_work_to_a_fresh_session_once(commands):
+	plan = commands["implement-plan-claude.md"]
+	assert plan.count("### Settings restart") == 1
+	restart = _section(plan, "### Settings restart", "### Permission prompt report")
+	assert "The sync merge stays local and unpushed" in restart
+	assert "No push, commit, claim, comment, label change, dispatch, or wait." in restart
+	# One restart per stage; a second miss is a failure escalation.
+	assert "do not restart again: that is a failure escalation (CLAUDE.md §28.C), never auto-decided" in restart
+	assert "`ai:claude-blocked:v1` comment on the issue" in restart
+	assert "post a hold claim" in restart
+	# This command: same stage, fresh session, marked as a restart.
+	assert "[two-step start](#two-step-start)" in restart
+	assert "`implement-plan <slug> — <stage> — settings restart`" in restart
+	assert "`Asset-sync restart: <this session's id>`" in restart
+	assert "`Previous stage session:` = this session's id" in restart
+	# /fix-claude-pr: fresh fixer that looks past this session's claim.
+	assert "/fix-claude-pr <PR URL> — kind <kind> — head <head_sha> — claim <this session's id> — settings restart" in restart
+	assert "`PR #<N> status check-in: fixer start`" in restart
+	assert "never continue here instead" in restart
+	assert "$(" not in restart
+	template = _section(plan, "## Stage Sessions", "### Claims")
+	assert "<Asset-sync restart: <session id>, only in a [settings restart](#settings-restart)>" in template
+	claims = _section(plan, "### Claims", "### Two-step start")
+	assert "add `--ignore-claim-by <id>` for the `Asset-sync restart:` session, whose claim you inherit" in claims
+	assert "a fixer, and a [settings restart](#settings-restart) of its own stage." in plan
+
+
+def test_fixer_routes_an_unconfirmed_settings_load_to_the_restart(commands):
+	fixer = commands["fix-claude-pr.md"]
+	step5 = _section(fixer, "5. **Fix it.**", "- **`claude/implement-plan-*` head**")
+	assert "do not fix or push here: follow its [Settings restart](.claude/commands/implement-plan-claude.md#settings-restart)" in step5
+	assert "`— claim <session id> — settings restart`" in fixer
 
 
 def test_every_checkout_runs_the_sync(commands):

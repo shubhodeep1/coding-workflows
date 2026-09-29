@@ -1180,6 +1180,29 @@ reviews, comments, and conflicts stay a direct §12 request.
   when shallow history has no merge base (stable log prefixes). Tests:
   `tests/test_claude_asset_sync_command.py`,
   `tests/test_session_start_claude_assets_drift.py` (one `ci.yml` step).
+- **Settings check and restart after the asset sync** (issue #5259,
+  [Settings restart](.claude/commands/implement-plan-claude.md#settings-restart)).
+  Claude Code's file watcher normally reloads a changed
+  `.claude/settings.json`, but it can miss a change, so a merged hook
+  registration is never assumed active.
+  `.claude/hooks/settings_load_recorder.py` (wired under `SessionStart` and
+  under `ConfigChange` with matcher `project_settings`) writes the sha256 of
+  the `settings.json` the session loaded to
+  `~/.claude/loaded-settings/<session id>.json`, outside the repository: at
+  `startup`, `resume`, and `fork`, and at every detected change (`clear` and
+  `compact` keep the earlier record). It prints nothing, never blocks, and
+  must stay the only `ConfigChange` hook. When a sync merge changed
+  `settings.json`, the sync's step 6 runs the allowlisted
+  `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py`
+  (one JSON line; exit 0 current, 1 not current, 2 usage error; the session
+  id defaults to `CLAUDE_CODE_SESSION_ID`; a missing record is not current).
+  Still not current after one re-run → the session writes nothing more for
+  that work and hands it to a fresh session: a `— settings restart` stage
+  session carrying `Asset-sync restart: <id>`, or a fresh `/fix-claude-pr`
+  with `— claim <id> — settings restart`. A restarted session that is still
+  not current stops as a §28.C escalation. No GitHub API calls. Tests:
+  `tests/test_settings_load_recorder.py` (in the Claude-asset sync `ci.yml`
+  step) and `tests/test_claude_asset_sync_command.py`.
 - The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
   and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
   three scripts live under `workflow-templates/.claude/`. Tests:

@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5259-restart-after-settings-sync-plan.md
 - Source issue: shubhodeep1/coding-workflows#5259
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5259-restart-after-settings-sync   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5259-restart-after-settings-sync   Final PR: #5283 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5301: twin sync (`[claude-twin-sync]` of the six `workflow-templates/.claude/` twins), then `/reclarify` on #5259
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: none (twin-first hold; the stage `/reclarify` resumes arms the wait on PR #5301)
 - Last updated: 2026-09-29
-- Last note: project branch opened from `claude/implement-plan-issue-4952-sync-claude-assets-at-session-start`; phase 1 starting twin-first.
+- Last note: phase 1 implemented twin-first and opened as PR #5301; hold claim posted and the twin-sync blocker posted on #5259.
 
 ## Phases
-1. [ ] Phase 1 — record, check, and restart — protected paths: `.claude/hooks/settings_load_recorder.py`, `.claude/scripts/loaded_settings_check.py`, `.claude/settings.json`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/seed-repo.md`
+1. [ ] Phase 1 — record, check, and restart — PR #5301 open (twin sync pending); review rounds: 0; interventions: 0 — protected paths: `.claude/hooks/settings_load_recorder.py`, `.claude/scripts/loaded_settings_check.py`, `.claude/settings.json`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/seed-repo.md`
    - Recorder hook `settings_load_recorder.py` (SessionStart `startup`/`resume`/`fork`, ConfigChange `project_settings`) writing `~/.claude/loaded-settings/<session id>.json`.
    - Allowlisted check `loaded_settings_check.py` (exit 0 current, 1 not current, 2 usage error).
    - `settings.json`: recorder wiring and the check's allow rules.
@@ -45,9 +45,13 @@
 - AD-8 [plan, 2026-09-29] #4952's step 6 says the harness reads `settings.json` only at session start, which the docs contradict. Fix the text here? — Picked: A — yes, rewrite it accurately in the same step. Alternatives: B — leave it. Why: stale docs that mislead readers are a §12.B fix, and the step is being rewritten anyway. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] Check the harness's documented reload behaviour before designing around "read only at session start": Claude Code's file watcher hot-reloads `settings.json` (hooks and permissions) and runs `ConfigChange` per detected change, so a load check must follow `ConfigChange`, not just SessionStart. (files: .claude/hooks/settings_load_recorder.py, .claude/commands/implement-plan-claude.md)
 
 ## Notes
 - Started by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#5259: start`, trig_01S9RqpmwPtkyb24Ypi2gKzk) into session `session_01He3eCz8uiMKn6xvEm4y8Lu` (permission mode `auto`).
 - Base branch: `claude/implement-plan-issue-4952-sync-claude-assets-at-session-start` (the issue's `Integration branch:` line); its final PR #4995 is an open draft into `main`, so this project ends after its own final merge (`Activation: n/a (base …)`) and the issue is closed explicitly by the final-merge stage.
 - Security pass: skip (`security_pass_skip.py`: `ai:security: created and labelled by the issue automation`).
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-29)
+- Twin-first verification (2026-09-29): in a scratch copy with the six twins copied over `.claude/`, the 60 test files that reference the changed paths ran one file at a time with the same result as the unmodified base branch: `test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean` fails on both, `test_orchestrate_poll_process.py` exceeds the 600 s per-file timeout on both, everything else passes. `tests/inventory_parity.py` and `tests/test_session_start_extract_repo_slug.py` pass. On the branch as pushed, only the 37 `.claude/` copy and parity cases fail, as expected until the sync.
+- Plan deviation: the plan's first draft recorded the hash only at SessionStart through `CLAUDE_ENV_FILE`; Claude Code's documented file watcher reloads `settings.json` on checkout and merge, so the recorder also runs on `ConfigChange` and writes `~/.claude/loaded-settings/<session id>.json` (AD-2). The committed plan already carries the revised design.
+
