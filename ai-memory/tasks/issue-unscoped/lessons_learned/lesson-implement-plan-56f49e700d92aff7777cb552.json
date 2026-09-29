@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T17:06:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A jq filter that matches a whole comment line (`split(\"\\n\")` + an anchored `test`) must strip `\\r` first (`gsub(\"\\r\"; \"\")`): comments edited in the GitHub web UI are stored with CRLF, and the Python (`splitlines`) and awk parsers of the same marker already ignore it.",
+  "phase": "implement_plan",
+  "pr_number": 5056,
+  "record_id": "lesson-implement-plan-56f49e700d92aff7777cb552",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4985-skip-marker-review-stall",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

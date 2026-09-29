@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-29T17:06:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Adding a workflow to `dispatch_workflow.py`'s allowlist also means adding it to the `.claude/settings.json` allow rules and to `gh_api_write_guard.py`'s `DISPATCHABLE_WORKFLOWS`; tests keep all three equal, and the settings and hook changes need the operator's approval window.",
+  "phase": "implement_plan",
+  "pr_number": 5056,
+  "record_id": "lesson-implement-plan-78352f82970c1190e0850e4b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4985-skip-marker-review-stall",
+    "file:.claude/scripts/dispatch_workflow.py",
+    "file:.claude/settings.json",
+    "file:.claude/hooks/gh_api_write_guard.py"
+  ]
+}
