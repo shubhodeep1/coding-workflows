@@ -257,6 +257,10 @@ def test_unresolved_protected_conflict_fallback_step_follows_the_resolver():
 	fallback = "Hand unresolved protected conflict to Claude session"
 	assert names.index("Run Codex resolver, validate, stage, commit") < names.index(fallback) < names.index("Enable auto-merge on PR")
 	assert AGENT_STEPS[fallback]["if"] == "always() && env.CLAUDE_FIXER_PROTECTED_CONFLICT == 'true' && env.CONFLICT_RESOLVED != 'true' && env.PR_CLOSED != 'true'"
+	# Fails open like the other always() Claude-fixer steps (the evidence uploads).
+	assert AGENT_STEPS[fallback]["continue-on-error"] is True
+	# PR_NUMBER comes from the codex-agent job env, as for the hand-off step.
+	assert "PR_NUMBER" in WORKFLOW["jobs"]["codex-agent"]["env"]
 
 
 def test_handoff_skips_a_protected_conflict_until_the_resolver_fails():

@@ -5773,6 +5773,7 @@ jobs:
       # kind=conflict hand-off naming the protected paths.
       - name: Hand unresolved protected conflict to Claude session
         if: always() && env.CLAUDE_FIXER_PROTECTED_CONFLICT == 'true' && env.CONFLICT_RESOLVED != 'true' && env.PR_CLOSED != 'true'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
