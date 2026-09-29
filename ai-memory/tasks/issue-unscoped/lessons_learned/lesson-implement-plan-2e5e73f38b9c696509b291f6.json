@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T03:43:19Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`tests/test_log_prefix_regressions.sh` pins the exact `AUTOFIX_PEER_CHECK` line, so a new field on a pinned log line is a breaking change; keep the line and surface new detail elsewhere.",
+  "phase": "implement_plan",
+  "pr_number": 4982,
+  "record_id": "lesson-implement-plan-2e5e73f38b9c696509b291f6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4898-retrigger-dispatch-default-branch",
+    "file:scripts/gh_helpers.sh",
+    "file:tests/test_log_prefix_regressions.sh"
+  ]
+}

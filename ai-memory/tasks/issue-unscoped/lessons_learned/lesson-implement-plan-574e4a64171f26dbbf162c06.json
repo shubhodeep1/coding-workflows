@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T03:43:19Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Moving a dispatch off the head ref also blinds any head-SHA loop bound keyed on that dispatch's runs; extend the bound (here, PR-named runs since the push) in the same change, or the retry loop loses its limit.",
+  "phase": "implement_plan",
+  "pr_number": 4982,
+  "record_id": "lesson-implement-plan-574e4a64171f26dbbf162c06",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4898-retrigger-dispatch-default-branch",
+    "file:scripts/gh_helpers.sh",
+    "file:scripts/review_autofix_step_changes_lost_redispatch.sh"
+  ]
+}
