@@ -7,14 +7,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5005 (review round 3)
+- Waiting on: PR #5005 (review round 4)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01SLVShEKcrHxQinLPTfHkTx (project checker, reused)   safety net and hand-back: see the round 2 stage report
+- Check-in: checker session_01SLVShEKcrHxQinLPTfHkTx (project checker, reused)   safety net and hand-back: see the round 3 stage report
 - Last updated: 2026-09-29
-- Last note: review round 2 (session_01YWrkAoszijrhN4Bbc1Dech): the high finding rejected (extract_integration_branch returns "" for both cited bodies; parity test passes); the low finding accepted in substance: the parser comments overstated when the whole-body regex returns "", so both comments now state the per-line contract, and two bodies where the whole-body regex takes the next line are pinned in the line-bounded test.
+- Last note: review round 3 (session_014LGGF95s21LL7YHoGwDQGL): all findings rejected (INTEGRATION_BRANCH_LINE_RE matches the lone label line "Integration branch: `" with group ' ', so the line-bounded reference also returns ""; the test already pins that body and passes). The step 2 sync brought #4957's issue_body_orchestrator_project_branch into the project branch, which conflicted with the phase PR's test module; resolved by a [claude-merge-resolve] merge keeping both sides, and that push starts review round 4.
 
 ## Phases
-1. [ ] Phase 1 — linear-time parser for `issue_body_integration_branch` (`scripts/gh_helpers.sh`, its test, changelog fragment)   — PR #5005 open (waiting); review rounds: 2; interventions: 0
+1. [ ] Phase 1 — linear-time parser for `issue_body_integration_branch` (`scripts/gh_helpers.sh`, its test, changelog fragment)   — PR #5005 open (waiting); review rounds: 3; interventions: 0
 
 ## Conformance
 
