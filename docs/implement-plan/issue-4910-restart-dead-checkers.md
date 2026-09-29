@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4910-restart-dead-checkers-plan.md
 - Source issue: shubhodeep1/coding-workflows#4910 (https://github.com/shubhodeep1/coding-workflows/issues/4910)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4910-restart-dead-checkers   Final PR: draft (opened right after this commit; number in the issue progress comment)
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-4910-restart-dead-checkers   Final PR: #4965 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: the supervising session `[claude-twin-sync]` on PR #4984 + `/reclarify` (interim twin-first rule, Q40: A)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened; implementing phase 1 under the interim twin-first rule.
+- Last note: phase 1 implemented and pushed as PR #4984 (hold claim on its head); stopped BLOCKED for the twin sync: `workflow-templates/.claude/settings.json` → `.claude/settings.json`, and the pickup diff in the `ai:claude-blocked` comment on #4910.
 
 ## Phases
-1. [ ] Phase 1 — restart script, pickup step 3b, settings twin, docs   — protected paths: `.claude/settings.json` (edited through its `workflow-templates/.claude/` twin), `.claude/commands/claude-issue-pickup.md` (no twin; exact edit in the blocked comment)
+1. [ ] Phase 1 — restart script, pickup step 3b, settings twin, docs   — PR #4984 open (hold: twin sync); review rounds: 0; interventions: 0   — protected paths: `.claude/settings.json` (edited through its `workflow-templates/.claude/` twin), `.claude/commands/claude-issue-pickup.md` (no twin; exact edit in the blocked comment)
    - `scripts/claude_checker_restart.py` [new] (`scan`, `decide`) + `tests/test_claude_checker_restart.py` [new] + `ci.yml` step
    - `settings.json` twin: allow the two subcommands and `set_session_tags`
    - pickup step 3b (restart + re-queue), step 0 tools, step 1 `limit: 100`, step 2 exits, step 4 report, Rules, Tool Access
