@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T22:41:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An issue-mode project stacked on another project's branch cannot run runtime validation until `validate.yml` authorizes non-default targets (#4734); ask once and record the parent project's validation as the cover instead of dispatching a run that is bound to fail.",
+  "phase": "implement_plan",
+  "pr_number": 5289,
+  "record_id": "lesson-implement-plan-46b2ccace2af376cb9aaa305",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4927-paginate-review-dispatch-runs",
+    "file:.github/workflows/validate.yml",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
