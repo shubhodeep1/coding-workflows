@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:12 (new bullet), 187 (cleanup header) | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The cleanup is described as a Step 0 action even though its predicate requires the Source issue identifier, which is only resolved in Step 1.\n  WHY: An unattended session may attempt cleanup before the Source issue identifier is available, leaving the stopped stage session unarchived.\n- .claude/commands/implement-plan-claude.md:108 (rename instruction), 161 (cleanup label-read) | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The stop and cleanup sequences lack failure-handling paths for transient errors in set_session_title or mcp__github__issue_read.\n  WHY: Rename failures can leave a session with an old title that cleanup does not match, and label-read failures can skip archival without reporting.\n- .claude/commands/implement-plan-claude.md:12 (new bullet) | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When a plan lacks a Source issue header line, the instructions direct the session to skip cleanup without logging or reporting the skip.\n  WHY: Operators cannot distinguish an intentional project-mode skip from cleanup that was silently dropped.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: A contract test must pin the issue-mode cleanup trigger's placement after Step 1 reads the plan and verify the cleanup-section header distinguishes issue-mode timing, so a future edit cannot silently regress the trigger.\n  expected_change_site: tests/test_implement_plan_claude_command.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The existing test (test_issue_mode_archives_stopped_stage_sessions) only checks text-string existence. It does not assert placement relative to Step 1, verify the header distinguishes issue-mode timing, or pin the deferred trigger's placement outside the strict Step 0 invariant.\n- requirement: The lint check (tests/inventory_parity.py) must pass for the PR to merge; scripts/claude_pr_sweep.py must be documented in the docs/INVENTORY.md Scripts section.\n  expected_change_site: docs/INVENTORY.md Scripts section\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not touch docs/INVENTORY.md to include scripts/claude_pr_sweep.py; tests/inventory_parity.py fails on the PR head, blocking the merge.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/implement-plan-claude.md:12 (new bullet), 187 (cleanup header) | severity=critical | confidence=[5]\n  PROBLEM: The Zombie-checker cleanup logic is described as a Step 0 (Preflight) action, but the cleanup's predicate requires the Source issue identifier that is only resolved in Step 1 (Plan resolution).\n  WHY: An unattended session walking the Step 0 bullets in order will attempt cleanup before the Source issue identifier is available from the plan header. The label check will fail or be skipped, leaving the stopped stage session unarchived, re-introducing the bug this PR aims to fix.\n- .claude/commands/implement-plan-claude.md:108 (rename instruction), 161 (cleanup label-read) | severity=high | confidence=[4]\n  PROBLEM: The stop and cleanup sequences lack robust failure-handling paths for transient errors in set_session_title or mcp__github__issue_read.\n  WHY: Rename failures can leave the session with its old title (which the cleanup does not match), and label-read failures can skip archival without reporting. This requires manual operator intervention for sessions that should have been archived automatically.\n- .claude/commands/implement-plan-claude.md:12 (new bullet) | severity=low | confidence=[4]\n  PROBLEM: When a plan lacks a Source issue header line, the instructions direct the session to skip cleanup without logging or reporting the skip.\n  WHY: Operators cannot distinguish an intentional project-mode skip from cleanup that was silently dropped, making it impossible to troubleshoot unarchived sessions.\n- TASK_GAP\n  Requirement: A contract test must pin the issue-mode cleanup trigger's placement after Step 1 reads the plan and verify the cleanup-section header distinguishes issue-mode timing, so a future edit cannot silently regress the trigger.\n  Expected change site: tests/test_implement_plan_claude_command.py\n  Evidence of absence: The existing test (test_issue_mode_archives_stopped_stage_sessions) only checks text-string existence. It does not assert placement relative to Step 1, verify the header distinguishes issue-mode timing, or pin the deferred trigger's placement outside the strict Step 0 invariant.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: The lint check (tests/inventory_parity.py) must pass for the PR to merge; scripts/claude_pr_sweep.py must be documented in the docs/INVENTORY.md Scripts section.\n  Expected change site: docs/INVENTORY.md Scripts section\n  Evidence of absence: The PR diff does not touch docs/INVENTORY.md to include scripts/claude_pr_sweep.py; tests/inventory_parity.py fails on the PR head, blocking the merge.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "82d047aeca68a726fecce5b101c8dd50fa3c685553a0089fd2349029cfdb115f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4594,
+    "run_id": "36501066657",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36501066657",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929001538_635c8aff2f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4594,
+    "run_id": "36501066657"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T00:15:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
