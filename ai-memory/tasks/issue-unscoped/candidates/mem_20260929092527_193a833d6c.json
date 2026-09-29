@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:14702-14715 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test `test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr` adds the `ai:orchestrator-managed` label but still implies it tests a standalone ready-to-merge scenario.\n  WHY: It exercises the managed-child path instead of the standalone-ready-to-merge path, potentially allowing a future regression in that path to go unnoticed.\n- scripts/orchestrate_poll_process.sh:3995 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `echo \"${issues_json}\"` is used to extract `_sweep_issue_body`.\n  WHY: `echo` can interpret leading `-n` as an option, mangling JSON and producing empty issue bodies that cause incorrect managed status classification.\n- .github/workflows/issue_pr_status.yml:241 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `record_issue_integration_branches` interpolates its `jq_nodes` parameter directly into a bash string passed to `jq` without quoting or validation.\n  WHY: A future caller passing unvalidated input could cause unintended jq syntax or command evaluation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:14702-14715 | severity=NIT | confidence=4\n  PROBLEM: The test `test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr` was modified to add the `ai:orchestrator-managed` label, but the test name and description still imply it is testing a \"standalone\" ready-to-merge scenario.\n  WHY: The test now exercises the managed-child path instead of the standalone-ready-to-merge path it was intended to test. This obscures the standalone-ready-to-merge logic, potentially allowing a future regression in that path to go unnoticed.\n- scripts/orchestrate_poll_process.sh:3995 | severity=NIT | confidence=3\n  PROBLEM: `echo \"${issues_json}\"` is used to extract `_sweep_issue_body`.\n  WHY: `echo` can interpret leading `-n` as an option, leading to mangled JSON and empty issue bodies, causing incorrect managed status classification. While rare, it is fragile.\n- .github/workflows/issue_pr_status.yml:241 | severity=NIT | confidence=2\n  PROBLEM: `record_issue_integration_branches` interpolates its `jq_nodes` parameter directly into a bash string that is passed to `jq` without quoting or validation.\n  WHY: While current callers pass hard-coded jq paths, the helper is designed for reuse. A future caller passing unvalidated input could lead to unintended jq syntax or command evaluation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5fd7f84c67fad9e1d4e258eee632ceb691dd29b63cdca62aece3e20d92a36cee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4999,
+    "run_id": "36546907570",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36546907570",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929092527_193a833d6c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4999,
+    "run_id": "36546907570"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T09:25:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
