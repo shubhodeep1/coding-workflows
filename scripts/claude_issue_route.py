@@ -1305,10 +1305,10 @@ def _scan_issue_comments(read: Any, repo: str, number: int, state: dict[str, Any
 	duplicates a comment, because only ids above ``last_id`` are consumed.
 	Then it reads forward, keeping only comments newer than
 	``last_id``, until a short page ends the thread or ``budget`` reads were
-	spent. Calls: at most ``budget`` comment-page reads, and never fewer than
-	two, because the resume read of a full cursor page adds nothing new and a
-	one-read budget would never advance. Raises RuntimeError on a failed read
-	or a non-array answer.
+	spent. Calls: at most ``max(2, budget)`` comment-page reads; a budget
+	below two is raised to two, because the resume read of a full cursor page
+	adds nothing new and a one-read budget would never advance. Raises
+	RuntimeError on a failed read or a non-array answer.
 	"""
 	state["complete"] = False
 	page = state["page"]
