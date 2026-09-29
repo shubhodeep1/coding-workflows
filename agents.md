@@ -91,8 +91,17 @@ Phases of the unattended pipeline (each is a separate workflow file under
    with a clean check snapshot auto-merge in the run; at the cap the PR itself
    is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
-   (`claude_fixer_awaiting_session`). `[claude-intervention]` and
-   `[claude-merge-resolve]` commits end the counted run, like `[judge-fix]`
+   (`claude_fixer_awaiting_session`). Doc-only and small-diff `claude/*`
+   PRs take the gate's deterministic skip (`deterministic-skip-merge`, no
+   reviewer panel, no hand-off) like any other PR, with two exceptions.
+   An accepted `claude_fixer_converged_head` verification run
+   (`CLAUDE_FIXER_VERIFY`) never skips, so a verdict is always followed by
+   a fresh review. A head with a pending hand-off runs the review instead
+   of skipping (`reason=claude_fixer_pending_handoff`); when the hand-off
+   lookup fails, the gate logs `reason=claude_fixer_handoff_unverified`
+   and runs the review too.
+   `[claude-intervention]` and `[claude-merge-resolve]` commits end the
+   counted run, like `[judge-fix]`
    and `[ai-merge-resolve]`. The consolidator / floor stages live inside the
    editor step, so they do not run in this mode.
 8. **conflict resolver** (`prompts/conflict-resolver.txt`,
@@ -222,16 +231,43 @@ Phases of the unattended pipeline (each is a separate workflow file under
     A Claude route skips Codex clarify, claims the issue with `ai:claude`, and
     sends a `claude-issue` `repository_dispatch` (`claude_issue.v1`, ≤ 10
     top-level keys) to coding-workflows. The intake validates the repo against
-    `.github/ai/consumer_repos.json` plus coding-workflows and queues it as one
+    `.github/ai/consumer_repos.json` plus coding-workflows, then authorizes
+    it (#4620, `claude_issue_route.py authorize-target`): every dispatcher
+    login of the run (env `CLAUDE_ISSUE_DISPATCHER` = `github.actor`,
+    `CLAUDE_ISSUE_TRIGGERING_ACTOR` = `github.triggering_actor`, default empty
+    = refused) must have `admin`/`write` on the target repo (one
+    `collaborators/<login>/permission` read each), the target must be an open
+    issue in that repo (one issue read; PRs and transferred issues refused),
+    and its author must pass clarify's gate or a trusted `User` must have
+    commented `/reclarify` (comments read only for an untrusted author). A
+    refusal (`CLAUDE_ISSUE_INTAKE rejected reason=<dispatcher_unknown |
+    dispatcher_not_authorized | target_not_issue | target_repo_mismatch |
+    issue_closed | untrusted_issue_author | authorization_read_failed>`)
+    queues nothing, writes nothing to the target issue, sends a Telegram
+    ERROR, and exits 1. Otherwise it queues it as one
     `ai:claude-issue-queue` issue in coding-workflows (title
     `[claude-issue-queue] <repo>#<N>`, body = marker + fixed-key payload, no
     issue prose), opened with the job's `GITHUB_TOKEN` so no workflow reacts;
-    an open item for the same target is reused. The **Claude issue pickup**
-    (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 3,
+    an open item for the same target is reused, its body rewritten with the
+    fresh payload and this run's URL. Each producer run (the intake, and the
+    `claude-pr-catch-all` sweep job) records every item it opens or rewrites
+    (number, exact title and payload) in `CLAUDE_ISSUE_QUEUE_BINDING_FILE` /
+    `CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE` (default under the run's temp dir)
+    and uploads it as the `claude-issue-queue-binding` artifact
+    (`if: always()`, 30 days); the pickup starts an item only when the run
+    named by its `Intake run:` / `Sweep run:` line is a completed
+    default-branch run of that producer workflow and event (for every event,
+    its head commit must be on `refs/heads/<default branch>`) and its artifact
+    lists the item unchanged, and the body must be exactly the producer's
+    rendering of that payload and run, so an edited queue issue is refused (#4621;
+    fails closed: `unbound`, `binding_mismatch`, `binding_untrusted`,
+    `binding_pending`, `binding_unavailable` under `ignored`). The **Claude issue pickup**
+    (`/claude-issue-pickup`), one Auto-mode session at session depth ≤ 1,
     woken hourly by the cron trigger `Claude issue pickup: hourly` bound to
     itself (no new session per wake, so no lineage-depth growth), reads the
     queue with
-    `claude_issue_route.py queue-pending --fetch-repo` (one REST read; only
+    `claude_issue_route.py queue-pending --fetch-repo` (one queue read plus
+    the batched binding reads `fetch_queue_bindings` documents; only bound
     items by `github-actions[bot]` for registered repos; ≤ 10 per wake),
     starts one Opus session per target issue via `claude-issue-dispatch.md`
     step 2, and closes the queue issues with a `Dispatched:` line (no
@@ -245,7 +281,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `/implement-issue-claude`: a single-phase plan
     `docs/plans/issue-<N>-<topic>-plan.md` (header `Source issue:`,
     `Base branch:` from the issue's `Integration branch:` / `Target branch:`
-    line else the default branch, `Security pass: run|skip`), then continues
+    line else the default branch, `Security pass: run|skip`; `skip` only when
+    `.claude/scripts/security_pass_skip.py` verifies the issue was created and
+    labelled at creation by the issue automation — `github-actions[bot]` or
+    the `OWNER` account — and carries its marker/tracker link; a label alone
+    or any read failure keeps `run`; see #4623), then continues
     as `/implement-plan-claude` issue mode: project branch
     `claude/implement-plan-<slug>` forked from the base branch, final PR into
     it with `Fixes #N` (default base) or an explicit close + `ai:merged` after
@@ -756,8 +796,13 @@ alone, then a one-shot `create_trigger` into it carrying the instructions,
 because `/effort low` is not applied when more text follows it in one prompt
 (CLAUDE.md §26.B). It runs `.claude/scripts/check_in_status.py`, re-arms
 itself with `send_later` every 60 minutes, and, when the wait is over, starts
-the next **stage session** on the model the operator picked. There is **one
-checker per project** (`implement-plan <slug> — checker`), created by the
+the next **stage session** on the model the operator picked. It routes on
+the verdict's `action` field alone, never on `state`: `wait`, `retry`,
+`hand_back` (a blocked, closed, or stuck PR), or `next_stage` with
+`next_stage` = `success`, `review`, or `block`. A review round or a
+conflict is always `next_stage` + `review`, never a hand-back (the
+PR #4596 checker misrouted one on 2026-09-27 while it still read
+`state`). There is **one checker per project** (`implement-plan <slug> — checker`), created by the
 first stage and reused for every wait: each later stage hands it the next
 wait through a one-shot trigger instead of creating a new checker, because
 claude-code-remote refuses `create_session`, `send_later`, and
@@ -772,7 +817,10 @@ to a session-local cron. Every stage (a
 phase, a review round, the conformance
 audit (`/verify-activation — scope conformance`, run after the last phase
 and before the security pass, and again after any Claude-written
-validation fix), a security or validation read, the completion PR, the
+validation fix; at most 3 runs, and when the third opens a fix PR that PR
+gets one narrower `/verify-activation — scope fix-check #<PR>` of its own
+diff instead of a fourth audit, blocking only when the fix itself is
+defective), a security or validation read, the completion PR, the
 final merge, a `/verify-activation — scope activation` cycle, the
 `/deploy-activate` hand-off) runs in its own fresh session titled
 `implement-plan <slug> — <stage>`, which archives the previous stage session
@@ -850,9 +898,10 @@ its own id, `run_once_at` = now + 7 days, named `PR #<n> hand-back`, with
 the PR URL in its prompt). The checker runs
 `.claude/scripts/check_in_status.py --hand-back` (one REST read for a
 non-`claude/*` head; on a `claude/*` head also the comment and check-run
-pages and at most five further reads), renews every subscriber's
-hand-back 7 days ahead, and re-arms itself with `send_later` every 60
-minutes while nothing is due. A PR has one checker: a second interested
+pages and at most six further reads) and routes on its `action` field
+(`wait`, `retry`, `hand_back_fixer`, `hand_back_all`), renews every
+subscriber's hand-back 7 days ahead, and re-arms itself with `send_later`
+every 60 minutes while nothing is due. A PR has one checker: a second interested
 session registers with it (`PR #<n> status check-in: subscriber` one-shot
 trigger) as `fixer` (it pushed to the PR) or `notify`, instead of creating
 another. When a Claude fix is due on a `claude/*` head (block label,
@@ -887,14 +936,36 @@ by that command's own checker. Without `create_session` the session falls
 back to a `send_later` self check-in with a Sonnet subagent doing the read.
 The checker itself never fixes anything; outside `claude/*` PRs, CI,
 reviews, comments, and conflicts stay a direct §12 request.
+- Session depth (CLAUDE.md §26.B step 1c): the claude-code-remote tools
+  refuse `create_session`, `create_trigger`, `update_trigger`, and
+  `send_later` from a session 8 parent links below its root (`caller
+  session is at lineage depth 8 (limit 8)`), so a checker must sit at depth
+  6 or less for its fresh fixer to still work. Before creating a checker the
+  session counts its depth *d* with `get_session` along `parent_session_id`
+  (at most 8 calls; a walk that cannot finish counts as depth 6). At *d* ≤ 5 it creates the checker itself. At *d* 6 or 7
+  it sends the Claude issue pickup a one-shot `PR #<n> status check-in: arm
+  request` trigger with arguments `— arm-check-in <owner>/<repo>#<n> for
+  <session id>`. The pickup parses them offline with `claude_issue_route.py
+  arm-check-in-request` (registered repos only), creates the checker one
+  link below itself, and wakes the requester with `PR #<n> status check-in:
+  checker ready`, which names the checker; the requester then sends the
+  instructions itself. At *d* ≥ 8, with no pickup, or on any `lineage
+  depth` refusal, no checker is armed: the session keeps its hand-back
+  Routine (the 7-day dead-man's switch), relies on the §26.H sweep, and
+  sends one `PushNotification`. A checker whose fresh fixer is refused for
+  depth notifies and leaves the fix to the sweep. Incident: the PR #4601
+  checker was created at depth 8 on 2026-09-27 and could not re-arm.
 - Claude-fixer claims and the catch-all (CLAUDE.md §26.H): a fixer claims
   the PR's current head with one comment ending in
   `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`
   (`.claude/scripts/claude_fix_claim.py post`: one PR read to refuse a moved
   head, one comment POST). `check_in_status.py --hand-back`
-  (`read_fix_claims`) counts only owner / member / collaborator claims,
-  times them by the comment's `created_at`, treats a claim on the current
-  head as live for `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3) and a `hold`
+  (`read_fix_claims`) counts only owner / member / collaborator claims
+  posted as the PR's author or as `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`
+  (`_fix_claim_trusted_logins`, case-insensitive; neither known → no claim
+  counts; issue #4622), times them by the comment's `created_at`, treats
+  a claim on the current head as live for `CLAUDE_FIX_CLAIM_LEASE_HOURS`
+  (default 3) and a `hold`
   as live until the head moves, and reports `hand_backs` (distinct
   head/kind pairs of conflict, ci, and blocked claims) against
   `CLAUDE_FIX_HAND_BACK_CAP` (default 3). The `claude-pr-catch-all` job of
@@ -931,7 +1002,19 @@ reviews, comments, and conflicts stay a direct §12 request.
   `--terminal-only`, or `--hand-back` — / run / issue-list modes, REST only,
   one JSON line, exit 2 on a failed read), shared with the
   `/implement-plan-claude` checker; `workflow-templates/.claude/scripts/`
-  holds a byte-identical copy.
+  holds a byte-identical copy. Every verdict carries an additive `action`
+  field, derived by `route_verdict` from the data already read (no extra
+  API call), and the checkers route on it alone: plain PR mode →
+  `wait` / `hand_back` (blocked, closed, stuck) / `next_stage` with
+  `next_stage` `success` (merged) or `review` (review-round, conflict —
+  never `hand_back`); run and issue-list modes → `wait` / `next_stage`
+  with `success` (completed, resolved) or `block` (failed, blocked);
+  `--hand-back` → `wait` (open, claimed, held) / `hand_back_fixer`
+  (conflict, review-round, ci-failed, blocked) / `hand_back_all` (merged,
+  closed); exit 2 → `retry`. `done`, `state`, `reason`, the hand-back
+  fields, and the exit codes are unchanged, and `scripts/claude_pr_sweep.py`
+  (which calls `check_pr_hand_back` directly) sees no new field. An
+  unmapped done state exits 2 with `retry` rather than guessing.
 - Stale Routine sweep (CLAUDE.md §26.G): `.claude/scripts/stale_routines.py`
   reads a `list_triggers` result (`include_completed: true`) from a file (the
   harness usually saves that large result to a file itself) and
@@ -987,6 +1070,54 @@ reviews, comments, and conflicts stay a direct §12 request.
 - Consumers receive the hook, the settings entry, and the §26 prose through
   the existing `.claude/` and root `CLAUDE.md` syncs and the `/seed-repo`
   asset set.
+
+## Unattended helpers and permission prompt reports (CLAUDE.md §23.I)
+
+- Helpers, each allowlisted in `.claude/settings.json` (plain and
+  `PYTHONDONTWRITEBYTECODE=1` forms) and used by `/implement-plan-claude`
+  ([Helpers](.claude/commands/implement-plan-claude.md#helpers)):
+  - `.claude/scripts/dispatch_workflow.py --repo --workflow [--ref] [--input
+    K=V …]`: dispatches one of `DISPATCHABLE_WORKFLOWS` (kept equal to the
+    `gh workflow run <file> *` allow rules by a test), records the recent
+    `workflow_dispatch` run ids first, and polls every 5 s (90 s max) for a
+    run that was not there before. Replaces `gh workflow run` +
+    `gh run list -L 1`, which could return the previous run. Exit 0 with
+    `run_id`, 1 on a refused workflow or bad argument, 2 on a failed call or
+    timeout. On exit 2, `dispatched` is `false` only when GitHub refused the
+    POST with a 4xx or `gh` could not start; a POST that timed out, got a
+    5xx, or failed without an HTTP status reports `true`, like a failed or
+    timed-out poll, so the caller checks `gh run list` instead of
+    dispatching a duplicate.
+  - `.claude/scripts/edit_comment.py --repo --comment-id (--replacements
+    FILE | --body-file FILE) [--dry-run]`: one read and one PATCH; each
+    `old` must occur exactly once or nothing is written.
+  - `.claude/scripts/permission_prompts.py report | file`: see below.
+- `.claude/hooks/permission_prompt_logger.py` on `PermissionRequest` and
+  `PermissionDenied`: appends one JSON line per event to
+  `~/.claude/permission-prompts/<session id>.jsonl` (string values over
+  8,000 characters truncated). Prints nothing, so it never changes a
+  decision; no API calls, no environment reads; every error is swallowed.
+- `permission_prompts.py file --session-label <id>` runs at the end of each
+  stage (step 14). It groups the log by event, tool, and command shape
+  (signature = 12 hex of SHA-1), and only when the local checkout is
+  `shubhodeep1/coding-workflows` reads the `ai:permission-prompt` issues
+  (one REST call per 100) and opens one issue per new pattern with labels
+  `ai:permission-prompt` + `ai:claude` (clarify routes it to the Claude issue
+  implementer) or comments on the issue carrying its
+  `<!-- ai:permission-prompt:v1 sig=… -->` marker, open or closed.
+  `filed-state.json` next to the logs keeps a later run in the same session
+  from filing the same occurrences again. No cap on open issues. Issue text
+  masks token-like strings, removes heredoc bodies, and truncates commands to
+  2,000 characters. In consumer repos it only reports.
+- `/implement-plan-claude` step 0 now refuses to run outside Auto mode
+  (except issue mode, which records the mode), and a phase touching
+  `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
+  §28.C) until a `Protected-path approval: phase <n>` line is recorded.
+- The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
+  and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
+  three scripts live under `workflow-templates/.claude/`. Tests:
+  `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`,
+  `tests/test_permission_prompts.py` (one `ci.yml` step).
 
 ---
 
@@ -1870,9 +2001,9 @@ depend on it.
 - `scripts/codex_heartbeat.sh` wraps long-running `codex exec` calls in reviewer, consolidator, review-blocked judge, conflict-resolver, and validate/self-heal paths, emitting `CODEX_HEARTBEAT: phase=<phase> elapsed_secs=<n>` during silent periods.
 - `REVIEW_APPROVAL_RUBRIC_ENABLED` lets the review-blocked judge emit logical `review_state` values (`APPROVE`, `APPROVE_WITH_COMMENTS`, `COMMENT`, `REQUEST_CHANGES`) that `scripts/post_review_comment.sh --review-state` maps to outbound PR reviews. With `REVIEW_BREAK_GLASS_ENABLED`, a human comment anchored as `@codex break-glass` downgrades only the outbound `REQUEST_CHANGES` event to comment-only and logs `BREAK_GLASS`, while preserving the judge's written review body.
 - Every `gh pr merge` call owned by `review_autofix.yml` is bound with `--match-head-commit` to the head that authorized it. Deterministic skips use the gate's `head_sha`, normal review paths use the checked-out `INITIAL_HEAD_SHA` captured before read-only/fork exits, and `scripts/review_rb_judge.sh` uses the checked-out `RB_JUDGED_HEAD_SHA` embedded in the judge prompt. Unknown or moved heads fail closed, and linked issues do not advance to `ai:ready-to-merge` after a rejected bound merge.
-- The `CI / lint` job shards the 307-test post-fast-fail subset of `tests/test_orchestrate_poll_process.py` across `CI_POLL_TEST_SHARDS` workers (default 4). That module is CI's critical path: most tests in the subset spawn the real poller as a bash subprocess inside a throwaway sandbox, costing seconds each rather than milliseconds, and run sequentially it took roughly 35 minutes on a 4-core box. That alone overran the job's `timeout-minutes: 30`, so every CI run — on `main` as well as on pull requests — was cancelled mid-suite and the repo had no completing full-test gate. Each test allocates its own tempdir sandbox in `_make_poller_sandbox`, so the module shards with no shared state; the split is `NR % total == n`, a true partition verified by `tests/test_ci_poll_test_sharding.py`. A failing shard fails the step, and a shard whose exit code was never recorded counts as failed rather than passing silently. The job budget is 45 minutes, leaving headroom over the sharded runtime for a cold runner. The release gates carry the same sharded step: the `validate-scripts` job in `mark-stable.yml` and `test-and-mark-stable.yml` shards the full module (no fast-fail subset) under the same `CI_POLL_TEST_SHARDS` var and a 45-minute budget, after release v1.27.0 (run 33073743283) was lost to the serial module overrunning that job's previous 30-minute cap — the cancelled job skipped `validate`/`release`. `tests/test_ci_poll_test_sharding.py` pins the ported step's partition expression, failure handling, and budget in both workflows.
+- The `CI / lint` job shards the 307-test post-fast-fail subset of `tests/test_orchestrate_poll_process.py` across `CI_POLL_TEST_SHARDS` workers (default 4). That module is CI's critical path: most tests in the subset spawn the real poller as a bash subprocess inside a throwaway sandbox, costing seconds each rather than milliseconds, and run sequentially it took roughly 35 minutes on a 4-core box. That alone overran the job's `timeout-minutes: 30`, so every CI run — on `main` as well as on pull requests — was cancelled mid-suite and the repo had no completing full-test gate. Each test allocates its own tempdir sandbox in `_make_poller_sandbox`, so the module shards with no shared state; the split is `NR % total == n`, a true partition verified by `tests/test_ci_poll_test_sharding.py`. A failing shard fails the step, and a shard whose exit code was never recorded counts as failed rather than passing silently. The job budget is 60 minutes (raised from 45 on 2026-09-28, PR #4706, after the suite grew to 40–45 minutes and `main` runs 36367681221 and 36368393442 were cancelled at 45 with every test still passing); it is a stopgap until the job is split into parallel jobs. The release gates carry the same sharded step: the `validate-scripts` job in `mark-stable.yml` and `test-and-mark-stable.yml` shards the full module (no fast-fail subset) under the same `CI_POLL_TEST_SHARDS` var and a 45-minute budget, after release v1.27.0 (run 33073743283) was lost to the serial module overrunning that job's previous 30-minute cap — the cancelled job skipped `validate`/`release`. `tests/test_ci_poll_test_sharding.py` pins the ported step's partition expression, failure handling, and budget in both workflows.
 - `scripts/review_resolve_review_threads.sh` closes the loop on PR review comments. The pipeline has always *read* them — `scripts/review_collect_pr_metadata.sh` fetches `issues/<pr>/comments` and `pulls/<pr>/comments` into `PR_ALL_COMMENTS_CONTEXT_FILE`, which both `review_run_reviewers.sh` and `review_apply_fixes.sh` inline, and the editor must audit each one under `PR comment audit:` — but nothing marked the thread resolved, so a fixed comment looked identical to an unread one. The `Resolve addressed PR review threads` step in `review_autofix.yml` now runs after the editor summary and its persisted-change/no-op safety checks, then resolves each validated audited thread; an `applied` disposition additionally requires a productive commit. Mapping is keyed on the comment **id** carried by the audited `entry[N]`, resolved through `PR_ALL_COMMENTS_CONTEXT_FILE`, never on a path/line pair: an entry the editor never listed, an index whose audited path disagrees with the real comment's path, a non-`review_comment` kind, and an already-resolved thread are all skipped. That is what keeps two contradictory comments at one file:line from resolving each other. `ignored` entries are resolved too, but only after the editor's stated reason is posted as a thread reply, so the reviewer sees the disagreement and can reopen. Thread lookup is one paginated GraphQL query per run (§15); GraphQL is used because REST exposes no resolve-review-thread endpoint, and the §21.D/§23.D REST preference addresses the Claude Code Web proxy in interactive sessions, not this Actions-side caller. Every failure path warns and exits 0.
-- `.github/workflows/review_autofix_sweep.yml` skips a PR whose head ref already has a `queued` or `in_progress` review run, so a 30-minute tick cannot stomp a synchronize-fired run mid-edit. That guard now distinguishes the two states. `in_progress` suppresses indefinitely — the codex-agent job legitimately runs over an hour. `queued` suppresses only until `SWEEP_STALE_QUEUED_MINUTES` (default 120, above the ~94-minute longest observed legitimate concurrency wait), because GitHub can wedge a run in `queued` with zero jobs and then reject both `cancel` (409 `Cannot cancel a workflow run that has not been queued yet`) and `rerun` (403 `This workflow is already running`). With no cutoff such a run suppressed the sweep forever, and the sweep is the PR's only recovery path, so the guard deadlocked the mechanism it protects — PR #3841 sat unreviewed for 11+ hours behind run `32984498460`. Discounted runs are logged as `AUTOFIX_SWEEP_STALE_QUEUED`, never dropped silently; a run with a missing or unparseable `created_at` still counts as active, and `SWEEP_STALE_QUEUED_MINUTES=0` restores the previous behaviour exactly. The guard also counts `pending` runs — a duplicate dispatch held back by `review_autofix.yml`'s `cancel-in-progress: false` concurrency group reports `pending`, not `queued`, and the same is true for the poller's `_has_active_autofix_run` guard in `scripts/orchestrate_poll_process.sh`. `pending` suppresses indefinitely, like `in_progress` (it is bounded by the running peer's 240-minute job timeout), and is never subject to the stale-queued cutoff. To keep every review run visible to these head-branch-keyed lookups, the sweep and `forward-merge-stable-to-main.yml`'s fallback-PR review dispatch both pass `--ref <head branch>` for same-repo PRs (the sweep falls back to the default branch for fork PRs, whose head ref does not exist in the repo). Before this, the PR #3895 incident (2026-08-29) accumulated 10 duplicate dispatches and 6+ duplicate Telegram conflict warnings in ~95 minutes while the one real resolver — dispatched on `main`'s ref, invisible to both guards — ran to success.
+- `.github/workflows/review_autofix_sweep.yml` skips a PR whose head ref already has a `queued` or `in_progress` review run, so a 30-minute tick cannot stomp a synchronize-fired run mid-edit. That guard now distinguishes the two states. `in_progress` suppresses indefinitely — the codex-agent job legitimately runs over an hour. `queued` suppresses only until `SWEEP_STALE_QUEUED_MINUTES` (default 120, above the ~94-minute longest observed legitimate concurrency wait), because GitHub can wedge a run in `queued` with zero jobs and then reject both `cancel` (409 `Cannot cancel a workflow run that has not been queued yet`) and `rerun` (403 `This workflow is already running`). With no cutoff such a run suppressed the sweep forever, and the sweep is the PR's only recovery path, so the guard deadlocked the mechanism it protects — PR #3841 sat unreviewed for 11+ hours behind run `32984498460`. Discounted runs are logged as `AUTOFIX_SWEEP_STALE_QUEUED`, never dropped silently; a run with a missing or unparseable `created_at` still counts as active, and `SWEEP_STALE_QUEUED_MINUTES=0` restores the previous behaviour exactly. The guard also counts `pending` runs — a duplicate dispatch held back by `review_autofix.yml`'s `cancel-in-progress: false` concurrency group reports `pending`, not `queued`, and the same is true for the poller's `_has_active_autofix_run` guard in `scripts/orchestrate_poll_process.sh`. `pending` suppresses indefinitely, like `in_progress` (it is bounded by the running peer's 240-minute job timeout), and is never subject to the stale-queued cutoff. To keep every review run visible to these guards, `forward-merge-stable-to-main.yml`'s fallback-PR review dispatch passes `--ref <head branch>` (its branch is cut from `stable` by the workflow itself), while the sweep always dispatches from the default branch (issue #4618: a same-repo `--ref <PR head branch>` dispatch ran the unmerged branch's copy of `internal-review.yml` with the sweep's secrets) and passes only a validated PR number. `internal-review.yml` names every `workflow_dispatch` run `Internal: AI Review & Autofix [pr:<N>]` (`run-name`; every other event keeps GitHub's default name), the sweep's snapshot keys a `workflow_dispatch` run with that exact name by `pr:<N>` instead of its head branch, and the poller's `_has_active_autofix_run` adds one `gh run list --workflow internal-review.yml --event workflow_dispatch --limit 100` lookup for the name, issued only when its head-branch lookups found nothing. Before the head-ref dispatch, the PR #3895 incident (2026-08-29) accumulated 10 duplicate dispatches and 6+ duplicate Telegram conflict warnings in ~95 minutes while the one real resolver — dispatched on `main`'s ref, invisible to both guards — ran to success.
 - `AUTOFIX_SKIP_TERMINAL_SAME_HEAD` defaults to `true` and lets the reusable review gate stop `workflow_dispatch` reruns after the newest trusted `REVIEW_AUTOFIX_PARTIAL_V1` marker for the current head sets `resume_should_continue=false`. Reusable workflows retain the caller's `github` context, so sweep dispatches through `internal-review.yml` still expose `github.event_name=workflow_dispatch`; pull-request events remain ineligible. The gate resolves the account authenticated through `GH_PAT` with one `/user` read, accepts marker comments only from that account, and then reads the paginated PR comments. Identity, comment, or parser failures emit `AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED` and fail open; rejected current-head markers are counted in `AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD`. A conflicted PR (`mergeable` not `true`) is never skipped, and inside `codex-agent` a terminal same-head resume (`AUTOFIX_RESUME_TERMINAL=true`) still runs `Detect merge conflicts`, the resolver steps, and `Push all pending commits` for a resolved merge; the editor and `Commit changes` keep skipping that path.
 - `scripts/pr_checks_lib.sh` is the single source of truth for the PR check-runs merge gate (`_pr_checks_completed` + `_pr_required_check_names_for_base`). Both `scripts/orchestrate_poll_process.sh` (the final integration-merge gate **and** all four review-blocked merge gates) and `scripts/review_rb_judge.sh` (the standalone judge's `merge_with_followup` gate) source it, so the required-checks filter (branch protection ∪ `ORCH_FINAL_MERGE_REQUIRED_CHECKS`, with `*`=block-on-any and `""`=allow-all sentinels) can never drift between paths. Pending check-runs always block; a FAILED check-run blocks only when its name is in the required set, so a non-required/environmental red (e.g. CodeQL when code scanning is disabled) no longer deadlocks a judge-approved review-blocked merge. The library carries the `_is_self_check_run` exclusion (gated by `PR_CHECKS_SELF_RUN_ID`) the rb_judge needs to skip its own in-progress host job; the orchestrator leaves it unset so the exclusion is a no-op there. `ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT` is declared in both the library (set-if-unset) and `orchestrate_poll_process.sh` (a fail-safe so a sourcing failure can never reach the empty-string allow-all sentinel); `tests/test_pr_checks_lib_required_filter.py` pins the two literals equal. The library is staged into `SUPPORT_SCRIPTS_DIR`/`scripts/` everywhere the two callers run (`REQUIRED_BOOTSTRAP_SCRIPTS`, `orchestrate_poll.yml`, `review_autofix.yml`); a missing library leaves `_pr_checks_completed` undefined and every gate fails closed (no merge) — the safe direction.
 

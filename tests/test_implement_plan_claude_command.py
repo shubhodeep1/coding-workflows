@@ -142,15 +142,15 @@ def test_review_rounds_are_fixed_by_claude(text):
 	assert "<!-- ai:claude-fixer-verdict:v2 head=<sha> round=<r> ledger=<64hex> -->" in text
 	assert "CLAUDE_FIXER_VERDICT_BOT_LOGIN" in text
 	assert "one fresh reviewer panel on that head" in text
-	assert "-f claude_fixer_converged_head=<sha>" in text
+	assert "--input claude_fixer_converged_head=<sha>" in text
 	assert "`[claude-merge-resolve] merge <base branch>`" in text
 	assert "`[claude-intervention] <summary>`" in text
 	assert "the workflow never runs the GPT review-blocked judge" in text
-	assert "if `state` is review-round / conflict use `<next stage on review round>`" in text
+	assert "`review` → `<next stage on review round>`" in text
 
 
 def test_security_dispatch_targets_project_branch(text):
-	assert "`-f ref=claude/implement-plan-<slug>`" in text
+	assert "`--input ref=claude/implement-plan-<slug>`" in text
 	# The audit files every finding (no weekly cap), so no bypass input exists.
 	assert "bypass_weekly_cap" not in text
 	assert "deferred_by_weekly_cap" not in text
@@ -160,14 +160,16 @@ def test_convergence_dispatch_goes_straight_to_review_autofix_here(text):
 	# internal-review.yml pins review_autofix.yml@main; forwarding a new input
 	# through it made every run on the PR adding the input a startup_failure
 	# (run 36095647423).
-	assert "`gh workflow run review_autofix.yml -R <owner>/<repo> -f pr_number=<N> -f claude_fixer_converged_head=<sha>`" in text
+	assert "`--workflow review_autofix.yml --input pr_number=<N> --input claude_fixer_converged_head=<sha>`" in text
 	assert "gh workflow run internal-review.yml" not in text
+	assert "--workflow internal-review.yml" not in text
 
 
 def test_validation_dispatch_inputs(text):
-	assert "plus `-f pr_number=0` for `internal-validate.yml` only" in text
-	assert "`-f target_ref=claude/implement-plan-<slug>`" in text
+	assert "plus `--input pr_number=0` for `internal-validate.yml` only" in text
+	assert "`--input target_ref=claude/implement-plan-<slug>`" in text
 	assert "-f tracking_issue=0 -f pr_number=0" not in text
+	assert "--input tracking_issue=0 --input pr_number=0" not in text
 
 
 def test_checker_starts_with_effort_low_then_one_shot_instructions(text):
@@ -207,6 +209,12 @@ def test_checker_ignores_superseded_waits(text):
 	assert "end the turn without re-arming: the next stage hands you its own wait" in text
 
 
+def test_stage_sessions_start_no_side_sessions(text):
+	"""A stage's side session and its §26 checker add two links (PR #4601's checker hit depth 8)."""
+	assert "- **No side sessions.** A stage session calls `create_session` only where this command says so: the project checker, the next stage, the `/deploy-activate` session, and a fixer." in text
+	assert "When a separate fix is wanted, file it as a GitHub issue: the Claude issue route starts it from the pickup, at depth 2 or less." in text
+
+
 def test_depth_limit_refusal_is_loud_not_a_session_local_cron(text):
 	assert "**Refused at the depth limit.**" in text
 	assert "do **not** fall back to `CronCreate` or any other session-local loop" in text
@@ -238,3 +246,62 @@ def test_issue_mode_follows_a_base_branch_that_merged(text):
 	assert '`gh api "repos/<owner>/<repo>/pulls?state=closed&head=<owner>:<issue base>"`' in text
 	assert "retarget the final PR (`mcp__github__update_pull_request` with `base` = `<new base>`)" in text
 	assert "a move onto the default branch switches the final PR's body to `Fixes #<N>`" in text
+
+
+def test_checker_routes_on_action_not_state(text):
+	"""PR #4596: a low-effort checker read `state: review-round` and handed the
+	PR back; the checker prompt now follows the script's `action` field."""
+	prompt = text[text.index("### Checker prompt"):text.index("### Hand-back")]
+	assert "Route on the JSON's `action` field only, never on `state`" in prompt
+	assert "A review round or a conflict never uses the hand-back: it is always `next_stage` + `review` (step 5)" in prompt
+	# The explicit state → action table, one row per mapping.
+	for row in (
+		"| PR | merged | next_stage | success | 5 |",
+		"| PR | review-round, conflict | next_stage | review | 5 |",
+		"| PR | blocked, closed, stuck | hand_back | — | 4 |",
+		"| run | completed | next_stage | success | 5 |",
+		"| run | failed | next_stage | block | 5 |",
+		"| issue list | resolved | next_stage | success | 5 |",
+		"| issue list | blocked | next_stage | block | 5 |",
+		"| anything | not done | wait | — | 2 |",
+		"| anything | read failed (exit 2) | retry | — | 3 |",
+	):
+		assert row in prompt, row
+	assert "2. `action` is `wait` →" in prompt
+	# A checker reused across the change refreshes its older script first.
+	assert "git checkout FETCH_HEAD -- .claude/scripts/check_in_status.py` once and run step 1 again" in prompt
+	assert "3. `action` is `retry` (exit 2, the JSON carries `error`) →" in prompt
+	assert "4. `action` is `hand_back` (only a blocked, closed, or stuck PR) →" in prompt
+	assert "Never take this step for any other `action`." in prompt
+	assert "5. `action` is `next_stage` (or a step 3 / 4 / 4b fallback, which uses `block`) → pick the next stage from the JSON's `next_stage` field alone" in prompt
+	assert "`success` → `<next stage on success>`; `review` → `<next stage on review round>`; `block` → `<next stage on block>`" in prompt
+	# The old state-reading branches are gone.
+	assert "`state` is blocked / closed / stuck and a hand-back trigger is given" not in prompt
+	assert "if `state` is merged / completed / resolved use" not in prompt
+
+
+def test_done_waiting_documents_action(text):
+	section = text[text.index("**What counts as \"done waiting\"**"):text.index("### Checker prompt")]
+	assert "`action`, and `next_stage` when `action` is `next_stage`" in section
+	assert "exit 2 means the read failed and carries `action: retry`" in section
+	assert "A review round or a conflict is **never** `hand_back`" in section
+
+
+def test_hand_back_section_routes_on_action(text):
+	section = text[text.index("### Hand-back"):text.index("### Fallbacks")]
+	assert "and routes on its `action`" in section
+	assert "If `action` is `hand_back` (blocked, closed, or stuck), the stage session:" in section
+
+
+def test_third_conformance_fix_gets_a_fix_check_not_a_fourth_run(text):
+	# Issue #4545's chain stopped at "conformance 4/3": the third run opened a
+	# fix PR, and re-auditing it would have been a fourth run.
+	assert "3 conformance runs per project" in text
+	assert "the next stage is `conformance 3/3 — fix check` instead" in text
+	assert "`docs/plans/<slug>-plan.md — scope fix-check #<fix PR> — unattended`" in text
+	assert "opens no fix PR, and does not count toward the cap" in text
+	assert "**FIX-VERIFIED** → continue as **CONFORMANT with no fix PR** below" in text
+	assert "**FIX-DEFECTIVE**" in text and "never auto-decided (§28.C)" in text
+	assert "after the third run's fix PR merges, the fix check replaces it" in text
+	assert "`Outside fix-check scope`" in text
+	assert "conformance 3/3 — fix check | security-pass" in text

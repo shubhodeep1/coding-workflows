@@ -13,11 +13,15 @@ env:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    # 45, not 30: the orchestrate-poll module below is the critical path
-    # and its shards can be slower on a cold runner than on a warm one.
-    # At 30 every run — on main as well as on PRs — was cancelled
-    # mid-suite, so the repo had no completing full-test gate at all.
-    timeout-minutes: 45
+    # 60 minutes, raised in two steps. 30 → 45: the orchestrate-poll module
+    # below is the critical path and its shards can be slower on a cold
+    # runner than on a warm one. At 30 every run — on main as well as on
+    # PRs — was cancelled mid-suite, so the repo had no completing full-test
+    # gate at all. 45 → 60 (2026-09-28): the suite grew to 40–45 minutes,
+    # and main's runs 36367681221 and 36368393442 were cancelled at 45 with
+    # every test still passing. This is a stopgap until the job is split
+    # into parallel jobs.
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -431,6 +435,14 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stale_routines.py
 
+      - name: Unattended helper and permission prompt report tests (CLAUDE.md §23.I)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_dispatch_workflow.py \
+            tests/test_edit_comment.py \
+            tests/test_permission_prompts.py
+
       - name: Claude-fixer hand-back, claim and catch-all sweep tests (CLAUDE.md §26.C, §26.H)
         run: |
           set -euo pipefail
@@ -444,7 +456,7 @@ jobs:
       - name: Claude issue implementer tests (routing, handoff, intake, §28 command contract)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_issue_route.py tests/test_implement_issue_claude_command.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_issue_route.py tests/test_implement_issue_claude_command.py tests/test_security_pass_skip.py
 
       - name: CLAUDE.md section numbering guard (§6 identifiers)
         run: |

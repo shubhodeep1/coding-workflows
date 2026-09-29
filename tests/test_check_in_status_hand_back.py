@@ -34,6 +34,7 @@ REF = "claude/fix-something"
 PLAN_REF = "claude/implement-plan-demo-phase-1"
 RUN_ID = 42
 RUN_URL = f"https://github.com/{REPO}/actions/runs/{RUN_ID}"
+PR_AUTHOR = "pr-author"
 
 
 def _pr(ref=REF, **overrides):
@@ -44,16 +45,21 @@ def _pr(ref=REF, **overrides):
 		"mergeable_state": "clean",
 		"updated_at": "2026-09-26T08:00:00Z",
 		"head": {"sha": HEAD, "ref": ref},
+		"user": {"login": PR_AUTHOR, "type": "User"},
 	}
 	pr.update(overrides)
 	return pr
 
 
-def _runs(ref=REF, queued=0, in_progress=0, pending=0):
+DISPATCH_RUNS = "repos/o/r/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=100"
+
+
+def _runs(ref=REF, queued=0, in_progress=0, pending=0, dispatched=()):
 	return {
 		f"repos/o/r/actions/runs?branch={ref}&status=queued&per_page=1": {"total_count": queued},
 		f"repos/o/r/actions/runs?branch={ref}&status=in_progress&per_page=1": {"total_count": in_progress},
 		f"repos/o/r/actions/runs?branch={ref}&status=pending&per_page=1": {"total_count": pending},
+		DISPATCH_RUNS: {"workflow_runs": list(dispatched)},
 	}
 
 
@@ -69,33 +75,40 @@ def _commit(date):
 	return {f"repos/o/r/commits/{HEAD}": {"commit": {"committer": {"date": date}}}}
 
 
-def _claim(head=HEAD, kind="ci", by="session_01x", created_at="2026-09-26T11:00:00Z", association="OWNER", comment_id=None):
+def _claim(head=HEAD, kind="ci", by="session_01x", created_at="2026-09-26T11:00:00Z", association="OWNER", comment_id=None,
+	login=PR_AUTHOR):
 	body = claimer.claim_body(head, kind, by)
-	comment = {"body": body, "author_association": association, "created_at": created_at, "user": {"login": "u", "type": "User"}}
+	comment = {"body": body, "author_association": association, "created_at": created_at, "user": {"login": login, "type": "User"}}
 	if comment_id is not None:
 		comment["id"] = comment_id
 	return comment
 
 
-def _handoff(kind="findings", created_at="2026-09-26T09:30:00Z"):
+def _handoff(kind="findings", created_at="2026-09-26T09:30:00Z", head=HEAD):
 	if kind == "findings":
 		intro = ("## Review round 1: findings handed to the Claude session\n\n"
-			f"Reviewed head: `{HEAD}` ([workflow run]({RUN_URL})).")
-		ledger = f"\n<!-- ai:claude-fixer-handoff:v2 head={HEAD} round=1 ledger={'a' * 64} -->"
+			f"Reviewed head: `{head}` ([workflow run]({RUN_URL})).")
+		ledger = f"\n<!-- ai:claude-fixer-handoff:v2 head={head} round=1 ledger={'a' * 64} -->"
 	else:
 		intro = ("## Review round 1: merge conflict, handed to the Claude session\n\n"
-			f"The head `{HEAD}` conflicts with its base branch, so the reviewer panel did not run ([workflow run]({RUN_URL})).")
+			f"The head `{head}` conflicts with its base branch, so the reviewer panel did not run ([workflow run]({RUN_URL})).")
 		ledger = ""
-	body = f"{intro}\n<!-- ai:claude-fixer-handoff:v1 kind={kind} head={HEAD} round=1 -->{ledger}"
+	body = f"{intro}\n<!-- ai:claude-fixer-handoff:v1 kind={kind} head={head} round=1 -->{ledger}"
 	return {"body": body, "author_association": "OWNER", "created_at": created_at, "user": {"login": "workflow-bot", "type": "User"}}
 
 
-def _review_run(ref=REF):
-	return {f"repos/o/r/actions/runs/{RUN_ID}": {
+def _review_run(ref=REF, **overrides):
+	run = {
 		"id": RUN_ID, "html_url": RUN_URL, "repository": {"full_name": REPO},
 		"path": ".github/workflows/ai-review.yml@stable", "head_sha": HEAD, "head_branch": ref,
 		"status": "completed", "conclusion": "success",
-	}}
+	}
+	run.update(overrides)
+	return {f"repos/o/r/actions/runs/{RUN_ID}": run}
+
+
+def _compare(run_head, status):
+	return {f"repos/o/r/compare/{run_head}...{HEAD}?per_page=1": {"status": status}}
 
 
 def _stub(monkeypatch, responses, comments=()):
@@ -191,6 +204,77 @@ def test_review_handoff_is_due_with_the_comment_time(monkeypatch, capsys):
 	assert out["since"] == "2026-09-26T09:30:00Z"
 
 
+def test_review_handoff_on_the_run_head_needs_no_compare_read(monkeypatch, capsys):
+	calls = _stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs()}, [_handoff()])
+	_, out = _run(capsys)
+	assert out["state"] == "review-round"
+	assert not any("/compare/" in call for call in calls)
+
+
+def test_review_handoff_from_a_run_triggered_by_an_older_push_is_due(monkeypatch, capsys):
+	# PR #4594: pushes a59fc87 then d1c6f92; run 36290049170 was triggered by
+	# a59fc87 (its head_sha) but reviewed d1c6f92, the head its hand-off names.
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_compare(OTHER_HEAD, "ahead"), **_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	code, out = _run(capsys)
+	assert code == 0 and out["done"] is True and out["state"] == "review-round" and out["kind"] == "review"
+	assert out["head_sha"] == HEAD and out["since"] == "2026-09-26T09:30:00Z"
+	assert calls[:4] == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments", f"repos/o/r/actions/runs/{RUN_ID}",
+		f"repos/o/r/compare/{OTHER_HEAD}...{HEAD}?per_page=1"]
+
+
+def test_conflict_handoff_from_a_run_triggered_by_an_older_push_is_due(monkeypatch, capsys):
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_compare(OTHER_HEAD, "ahead"), **_runs()}
+	_stub(monkeypatch, responses, [_handoff(kind="conflict")])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "conflict" and out["kind"] == "conflict"
+
+
+@pytest.mark.parametrize("run_change", [
+	{"head_branch": "claude/other-branch"},
+	{"status": "in_progress", "conclusion": None},
+	{"status": "queued", "conclusion": None},
+	{"conclusion": "failure"},
+	{"conclusion": "cancelled"},
+	{"path": ".github/workflows/unrelated.yml@main"},
+	{"repository": {"full_name": "other/repo"}},
+	{"head_sha": "not-a-sha"},
+])
+def test_review_handoff_with_an_unverified_run_fails_closed(monkeypatch, capsys, run_change):
+	# The run is triggered by an older push, so only the other checks decide;
+	# every one of them still fails closed before any compare read.
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(**{"head_sha": OTHER_HEAD, **run_change}),
+		**_compare(OTHER_HEAD, "ahead"), **_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "waiting for verified completed review run" in out["reason"]
+	assert calls[-1] == f"repos/o/r/actions/runs/{RUN_ID}"
+
+
+@pytest.mark.parametrize("status", ["diverged", "behind"])
+def test_review_handoff_from_a_run_off_the_head_history_fails_closed(monkeypatch, capsys, status):
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_compare(OTHER_HEAD, status), **_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "waiting for verified completed review run" in out["reason"]
+	assert calls[-1] == f"repos/o/r/compare/{OTHER_HEAD}...{HEAD}?per_page=1"
+
+
+@pytest.mark.parametrize("reviewed_head", [None, "", "not-a-sha", HEAD.upper(), HEAD[:39]])
+def test_run_head_helper_rejects_a_malformed_reviewed_head_without_a_read(monkeypatch, reviewed_head):
+	monkeypatch.setattr(checker, "gh_api", lambda path: pytest.fail(f"unexpected read: {path}"))
+	assert checker._review_run_head_on_branch_history(REPO, OTHER_HEAD, reviewed_head) is False
+
+
+def test_review_handoff_for_a_head_that_is_not_the_pr_head_is_ignored(monkeypatch, capsys):
+	# The hand-off reviewed OTHER_HEAD, but the PR has moved on to HEAD.
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_check_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff(head=OTHER_HEAD)])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open"
+	assert f"repos/o/r/actions/runs/{RUN_ID}" not in calls and not any("/compare/" in call for call in calls)
+
+
 def test_conflict_without_handoff_uses_the_head_commit_time(monkeypatch, capsys):
 	responses = {"repos/o/r/pulls/7": _pr(mergeable_state="dirty"), **_runs(), **_commit("2026-09-25T12:00:00Z")}
 	_stub(monkeypatch, responses)
@@ -241,6 +325,71 @@ def test_untrusted_claims_are_ignored(monkeypatch, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, [_claim(association="NONE")])
 	_, out = _run(capsys)
 	assert out["done"] is True and out["claim"] == {"state": "none"} and out["hand_backs"] == 0
+
+
+def test_a_collaborators_forged_hold_is_ignored(monkeypatch, capsys):
+	# Issue #4622: a collaborator who is neither the PR's author nor the
+	# workflow account cannot park the PR with a hold marker.
+	forged = _claim(kind="hold", by="session_01x", association="COLLABORATOR", login="mallory", created_at="2026-09-01T00:00:00Z")
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, [forged])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "blocked" and out["claim"] == {"state": "none"}
+
+
+def test_a_collaborators_forged_claims_do_not_reach_the_cap(monkeypatch, capsys):
+	forged = [
+		_claim(head=head, kind=kind, association="COLLABORATOR", login="mallory", comment_id=index)
+		for index, (head, kind) in enumerate((("d" * 40, "ci"), ("e" * 40, "conflict"), ("f" * 40, "blocked"), (HEAD, "ci")), 1)
+	]
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, forged)
+	_, out = _run(capsys)
+	assert out["done"] is True and out["claim"] == {"state": "none"}
+	assert out["hand_backs"] == 0 and out["cap_reached"] is False
+
+
+def test_the_workflow_accounts_sweep_reservation_counts(monkeypatch, capsys):
+	reservation = _claim(kind="blocked", by="sweep-run-77", login="workflow-bot")
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, [reservation])
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "workflow-bot")
+	_, out = _run(capsys)
+	assert out["state"] == "claimed" and out["claim"]["by"] == "sweep-run-77" and out["hand_backs"] == 1
+
+
+def test_claim_logins_match_case_insensitively(monkeypatch, capsys):
+	comments = [_claim(kind="hold", login="PR-Author", comment_id=1)]
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, comments)
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "Workflow-Bot")
+	_, out = _run(capsys)
+	assert out["state"] == "held"
+	assert checker._fix_claim_trusted_logins({"user": {"login": "PR-Author"}}) == ("pr-author", "workflow-bot")
+
+
+def test_without_a_pr_author_only_the_workflow_account_counts(monkeypatch, capsys):
+	comments = [_claim(kind="hold", comment_id=1), _claim(kind="ci", by="sweep-run-5", login="workflow-bot", comment_id=2)]
+	pr = _pr(labels=[{"name": "ai:review-blocked"}])
+	del pr["user"]
+	_stub(monkeypatch, {"repos/o/r/pulls/7": pr}, comments)
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "workflow-bot")
+	_, out = _run(capsys)
+	assert out["state"] == "claimed" and out["claim"]["by"] == "sweep-run-5"
+
+
+def test_trusted_logins_tolerate_a_non_object_pr(monkeypatch):
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "Workflow-Bot")
+	for pr in (None, [], "PR-Author"):
+		assert checker._fix_claim_trusted_logins(pr) == ("workflow-bot",)
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "")
+	assert checker._fix_claim_trusted_logins(None) == ()
+
+
+def test_no_trusted_login_counts_no_claim(monkeypatch, capsys):
+	pr = _pr(labels=[{"name": "ai:review-blocked"}])
+	pr["user"] = None
+	_stub(monkeypatch, {"repos/o/r/pulls/7": pr}, [_claim(kind="hold"), _claim(kind="ci", login="workflow-bot")])
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "")
+	_, out = _run(capsys)
+	assert out["done"] is True and out["claim"] == {"state": "none"} and out["hand_backs"] == 0
+	assert checker.read_fix_claims([_claim(kind="hold")], HEAD, NOW)["claim"] == {"state": "none"}
 
 
 def test_hand_backs_count_distinct_head_and_kind(monkeypatch, capsys):
@@ -350,3 +499,223 @@ def test_ignoring_one_claimant_still_respects_another(monkeypatch, capsys):
 	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, comments)
 	_, out = _run(capsys, "--ignore-claim-by", "sweep-run-77")
 	assert out["state"] == "claimed" and out["claim"]["by"] == "session_01other"
+
+
+# Issue #4618: review_autofix_sweep.yml dispatches internal-review.yml from the
+# default branch, so the run's head_branch is `main` and its head_sha a main
+# commit. The exact run title binds it to the PR instead.
+DEFAULT_BASE = {"repo": {"default_branch": "main"}}
+DISPATCH_TITLE = "Internal: AI Review & Autofix [pr:7]"
+
+
+def _dispatched_run(**overrides):
+	run = {"path": ".github/workflows/internal-review.yml", "event": "workflow_dispatch",
+		"head_branch": "main", "head_sha": OTHER_HEAD, "display_title": DISPATCH_TITLE}
+	run.update(overrides)
+	return _review_run(**run)
+
+
+def test_review_handoff_from_a_sweep_dispatch_on_the_default_branch_is_due(monkeypatch, capsys):
+	responses = {"repos/o/r/pulls/7": _pr(base=DEFAULT_BASE), **_dispatched_run(), **_runs()}
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	code, out = _run(capsys)
+	assert code == 0 and out["done"] is True and out["state"] == "review-round"
+	assert not any("/compare/" in call for call in calls)
+
+
+def test_conflict_handoff_from_a_sweep_dispatch_on_the_default_branch_is_due(monkeypatch, capsys):
+	responses = {"repos/o/r/pulls/7": _pr(base=DEFAULT_BASE, mergeable_state="dirty"), **_dispatched_run(), **_runs()}
+	_stub(monkeypatch, responses, [_handoff(kind="conflict")])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "conflict"
+
+
+@pytest.mark.parametrize("pr_base, run_change", [
+	(DEFAULT_BASE, {"display_title": "Internal: AI Review & Autofix [pr:8]"}),
+	(DEFAULT_BASE, {"display_title": "Internal: AI Review & Autofix [pr:7] "}),
+	(DEFAULT_BASE, {"head_branch": "claude/other-branch"}),
+	(DEFAULT_BASE, {"event": "pull_request"}),
+	(DEFAULT_BASE, {"path": ".github/workflows/review_autofix.yml"}),
+	(DEFAULT_BASE, {"conclusion": "failure"}),
+	(None, {}),
+	({"repo": {"default_branch": ""}}, {}),
+])
+def test_sweep_dispatch_that_does_not_bind_to_the_pr_fails_closed(monkeypatch, capsys, pr_base, run_change):
+	pr = _pr(base=pr_base) if pr_base is not None else _pr()
+	responses = {"repos/o/r/pulls/7": pr, **_dispatched_run(**run_change), **_compare(OTHER_HEAD, "diverged"), **_runs()}
+	_stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "waiting for verified completed review run" in out["reason"]
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress", "pending"])
+def test_active_sweep_dispatch_for_the_pr_keeps_the_handoff_waiting(monkeypatch, capsys, status):
+	active = [{"status": status, "display_title": DISPATCH_TITLE}]
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=active)}
+	_stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
+
+
+def test_sweep_dispatch_for_another_pr_or_finished_does_not_count(monkeypatch, capsys):
+	other = [{"status": "in_progress", "display_title": "Internal: AI Review & Autofix [pr:8]"},
+		{"status": "completed", "display_title": DISPATCH_TITLE}]
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=other)}
+	_stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "review-round"
+
+
+def test_dispatch_listing_404_counts_zero_and_other_errors_raise(monkeypatch):
+	def missing(path):
+		if "internal-review.yml" in path:
+			raise checker.ReadError(f"gh api {path} failed: gh: Not Found (HTTP 404)")
+		return {"total_count": 0}
+	monkeypatch.setattr(checker, "gh_api", missing)
+	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 0
+
+	def broken(path):
+		if "internal-review.yml" in path:
+			raise checker.ReadError(f"gh api {path} failed: HTTP 502")
+		return {"total_count": 0}
+	monkeypatch.setattr(checker, "gh_api", broken)
+	with pytest.raises(checker.ReadError):
+		checker._active_run_count(REPO, REF, include_pending=True, pr_number=7)
+
+
+def test_branch_active_run_skips_the_dispatch_listing(monkeypatch):
+	calls = []
+
+	def fake(path):
+		calls.append(path)
+		return {"total_count": 1}
+	monkeypatch.setattr(checker, "gh_api", fake)
+	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 3
+	assert not any("internal-review.yml" in call for call in calls)
+
+
+# --- Routing: `action` for the CLAUDE.md §26 checker ---------------------------
+# The §26 checker branches on `action` only: `wait`, `hand_back_fixer` (a due
+# Claude fix goes to the fixer subscriber), `hand_back_all` (terminal, every
+# subscriber), or `retry` (exit 2).
+
+def test_merged_hands_back_to_all(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(merged=True, merged_at="t", merge_commit_sha="m")})
+	_, out = _run(capsys)
+	assert out["action"] == "hand_back_all" and "next_stage" not in out
+
+
+def test_closed_hands_back_to_all(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(state="closed", closed_at="t")})
+	_, out = _run(capsys)
+	assert out["state"] == "closed" and out["action"] == "hand_back_all"
+
+
+def test_ci_failed_hands_back_to_the_fixer(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_check_runs(_failed()), **_runs()})
+	_, out = _run(capsys)
+	assert out["state"] == "ci-failed" and out["action"] == "hand_back_fixer"
+	# Additive: every existing field is still present.
+	for key in ("done", "state", "reason", "kind", "head_sha", "claim", "hand_backs", "cap", "cap_reached", "since"):
+		assert key in out, key
+
+
+def test_block_label_hands_back_to_the_fixer(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:needs-human"}])})
+	_, out = _run(capsys)
+	assert out["state"] == "blocked" and out["action"] == "hand_back_fixer"
+
+
+def test_review_handoff_hands_back_to_the_fixer(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs()}, [_handoff()])
+	_, out = _run(capsys)
+	assert out["state"] == "review-round" and out["action"] == "hand_back_fixer"
+
+
+def test_conflict_hands_back_to_the_fixer(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(mergeable_state="dirty"), **_runs(), **_commit("2026-09-25T12:00:00Z")})
+	_, out = _run(capsys)
+	assert out["state"] == "conflict" and out["action"] == "hand_back_fixer"
+
+
+@pytest.mark.parametrize("pr, comments, state", [
+	(_pr(), (), "open"),
+	(_pr(labels=[{"name": "ai:review-blocked"}]), (_claim(created_at="2026-09-26T10:30:00Z"),), "claimed"),
+	(_pr(labels=[{"name": "ai:review-blocked"}]), (_claim(kind="hold", created_at="2026-09-01T00:00:00Z"),), "held"),
+])
+def test_open_claimed_and_held_wait(monkeypatch, capsys, pr, comments, state):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": pr, **_check_runs()}, comments)
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == state and out["action"] == "wait"
+
+
+def test_non_claude_head_waits(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(ref="ai/issue-9", mergeable_state="dirty")})
+	_, out = _run(capsys)
+	assert out["action"] == "wait"
+
+
+def test_a_young_due_fix_under_min_age_waits(monkeypatch, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_check_runs(_failed(completed_at="2026-09-26T11:00:00Z")), **_runs()})
+	_, out = _run(capsys, "--min-age-hours", "2")
+	assert out["due_state"] == "ci-failed" and out["action"] == "wait"
+
+
+def test_read_failure_is_retry(monkeypatch, capsys):
+	def boom(path):
+		raise checker.ReadError("HTTP 503")
+
+	_stub(monkeypatch, {})
+	monkeypatch.setattr(checker, "gh_api", boom)
+	code, out = _run(capsys)
+	assert code == 2 and out == {"done": False, "error": "HTTP 503", "action": "retry"}
+
+
+def test_hand_back_without_pr_is_retry(capsys):
+	code = checker.main(["--repo", REPO, "--run", "5", "--hand-back"], now=NOW)
+	assert code == 2 and json.loads(capsys.readouterr().out)["action"] == "retry"
+
+
+def test_direct_callers_get_the_verdict_unchanged(monkeypatch):
+	# scripts/claude_pr_sweep.py calls check_pr_hand_back directly; routing is
+	# added only by main(), so that caller's verdict shape does not change.
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])})
+	verdict = checker.check_pr_hand_back(REPO, 7, checker.DEFAULT_STUCK_HOURS, 0.0, NOW)
+	assert verdict["state"] == "blocked" and "action" not in verdict
+
+
+def _flat_text(path):
+	return " ".join(path.read_text(encoding="utf-8").split())
+
+
+def test_claude_md_26c_routes_on_action():
+	text = _flat_text(ROOT / "CLAUDE.md")
+	section = text[text.index("### C) What each check-in does"):text.index("### D) What the pushing session does")]
+	assert "**Route on `action` only, never on `state`**" in section
+	for row in (
+		"| `open`, `claimed`, `held`, or waiting on a run | `wait` | 2 |",
+		"| read failed (exit 2) | `retry` | 3 |",
+		"| `conflict`, `review-round`, `ci-failed`, `blocked` | `hand_back_fixer` | 4 |",
+		"| `merged`, `closed` | `hand_back_all` | 4 |",
+	):
+		assert row in section, row
+	assert "2. **`action` is `wait`**" in section
+	assert "3. **`action` is `retry`**" in section
+	assert "4. **`action` is `hand_back_fixer`**" in section
+	assert "**`action` is `hand_back_all`** (terminal: `merged` / `closed`)" in section
+	assert "**Due fix** (`state` is" not in section
+	pushing = text[text.index("### D) What the pushing session does"):text.index("### E) Enforcement")]
+	assert "Then, by `action` (§26.C step 1):" in pushing
+
+
+def test_fix_claude_pr_routes_on_action():
+	for path in (ROOT / ".claude" / "commands" / "fix-claude-pr.md",
+		ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md"):
+		text = _flat_text(path)
+		assert "2. **Route on `action`**" in text
+		assert "- `hand_back_fixer` (`conflict`, `review-round`, `ci-failed`, `blocked`) → continue." in text
+		assert "- `hand_back_all` (`merged` / `closed`) → nothing to fix." in text
+		assert "- `retry` (exit 2) → the read failed" in text
+		assert "2. **Route on `state`.**" not in text
+	assert ((ROOT / ".claude" / "commands" / "fix-claude-pr.md").read_bytes()
+		== (ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md").read_bytes())
