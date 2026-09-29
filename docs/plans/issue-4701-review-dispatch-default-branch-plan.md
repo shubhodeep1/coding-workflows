@@ -1,7 +1,7 @@
 # Dispatch the remaining review runs from the default branch, and find PR-named runs in the poller's lookups
 
 Source issue: shubhodeep1/coding-workflows#4701 (https://github.com/shubhodeep1/coding-workflows/issues/4701)
-Base branch: claude/implement-plan-issue-4618-sweep-dispatch-default-branch
+Base branch: main (was claude/implement-plan-issue-4618-sweep-dispatch-default-branch, which merged into main as #4634 on 2026-09-29)
 Security pass: run
 
 ## Summary
