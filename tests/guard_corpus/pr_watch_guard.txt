@@ -1,0 +1,13 @@
+# Adversarial corpus for .claude/hooks/pr_watch_guard.py (CLAUDE.md §25).
+# Run by scripts/guard_differential.py (issue #5174) through the base and the
+# PR's hook in the default scenario. Every `subscribe_pr_activity` call, from
+# any MCP server, must keep blocking. A hook change that allows one silently
+# fails the check unless the PR body lists it under `Intended loosening:`.
+
+json: {"tool_name": "mcp__github__subscribe_pr_activity", "tool_input": {"owner": "o", "repo": "r", "pullNumber": 1}}
+json: {"tool_name": "mcp__Claude_Code_Remote__subscribe_pr_activity", "tool_input": {"owner": "o", "repo": "r", "pullNumber": 1}}
+json: {"tool_name": "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__subscribe_pr_activity", "tool_input": {"owner": "o", "repo": "r", "pullNumber": 1}}
+json: {"tool_name": "mcp__some_other_server__subscribe_pr_activity", "tool_input": {}}
+json: {"tool_name": "subscribe_pr_activity", "tool_input": {"owner": "o", "repo": "r", "pullNumber": 1}}
+json: {"tool_name": "mcp__github__subscribe_pr_activity"}
+json: {"tool_name": "mcp__github__subscribe_pr_activity", "tool_input": "not an object"}

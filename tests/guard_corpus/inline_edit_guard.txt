@@ -1,0 +1,40 @@
+# Adversarial corpus for .claude/hooks/inline_edit_guard.py (issue #4858,
+# CLAUDE.md §23.I). The hook is not on the default branch yet; the check runs
+# this corpus as soon as the hook exists on either side of a PR, and skips it
+# until then. Default scenario: a checkout of `o/r` at @@REPO@@. One shape per
+# line; `json:` lines are whole PreToolUse payloads (heredocs need them).
+#
+# File edits through an inline interpreter must keep being denied. A hook
+# change that lets one through silently fails the check unless the PR body
+# lists it under `Intended loosening:`.
+
+# Python programs from -c.
+python3 -c "open('f.txt', 'w').write('x')"
+python3 -c "from pathlib import Path; Path('f.txt').write_text('x')"
+python -c "import os; os.remove('f.txt')"
+python3.12 -c "import shutil; shutil.rmtree('d')"
+env -i python3 -c "open('f.txt', 'a').write('x')"
+env python3 -c "open('f.txt', 'w').write('x')"
+sudo python3 -c "open('f.txt', 'w').write('x')"
+timeout 10 python3 -c "open('f.txt', 'w').write('x')"
+nice python3 -c "open('f.txt', 'w').write('x')"
+FOO=1 python3 -c "open('f.txt', 'w').write('x')"
+cd @@REPO@@ && python3 -c "open('f.txt', 'w').write('x')"
+
+# Python programs from a heredoc on stdin.
+json: {"tool_name": "Bash", "tool_input": {"command": "python3 - <<'EOF'\nfrom pathlib import Path\nPath('f.txt').write_text('x')\nEOF"}}
+json: {"tool_name": "Bash", "tool_input": {"command": "python3 <<'EOF'\nopen('f.txt', 'w').write('x')\nEOF"}}
+json: {"tool_name": "Bash", "tool_input": {"command": "python3 - <<EOF\nimport os\nos.replace('a', 'b')\nEOF"}}
+json: {"tool_name": "Bash", "tool_input": {"command": "env -i python3 - <<'EOF'\nopen('f.txt', 'w').write('x')\nEOF"}}
+json: {"tool_name": "Bash", "tool_input": {"command": "cd /tmp && python3 - <<'EOF'\nPath('f.txt').unlink()\nEOF"}}
+
+# In-place editors.
+sed -i 's/a/b/' f.txt
+sed --in-place 's/a/b/' f.txt
+sed -i.bak 's/a/b/' f.txt
+perl -pi -e 's/a/b/' f.txt
+perl -i -pe 's/a/b/' f.txt
+ruby -i -pe 'gsub(/a/, "b")' f.txt
+awk -i inplace '{print}' f.txt
+gawk -i inplace '{print}' f.txt
+sudo sed -i 's/a/b/' f.txt

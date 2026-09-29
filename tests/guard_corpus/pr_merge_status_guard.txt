@@ -1,0 +1,68 @@
+# Adversarial corpus for .claude/hooks/pr_merge_status_guard.py (CLAUDE.md §21).
+# Run by scripts/guard_differential.py (issue #5174) through the base and the
+# PR's hook in the `merged_checkout_scenario`: the session checkout @@REPO@@
+# sits on `feature/x`, whose PR #41 merged with no open PR; @@WORKTREE@@ is a
+# detached worktree with fresh work; `gh` answers `feature/open` with an open
+# PR. One shape per line; `json:` lines are whole PreToolUse payloads.
+#
+# Every shape here must block, deny, or ask on the session checkout, or fall
+# back with a warning. A hook change that allows one silently fails the check
+# unless the PR body lists it under `Intended loosening:`.
+
+# Plain commit and push on the stranded checkout.
+git commit -m 'next'
+git commit --amend --no-edit
+git push
+git push origin HEAD
+git push -u origin feature/x
+git push origin feature/x
+git push origin HEAD:feature/x
+git push origin HEAD:refs/heads/feature/x
+git push --force-with-lease origin feature/x
+git add -A && git commit -m x && git push
+/usr/bin/git push origin HEAD
+GIT_AUTHOR_NAME=bot git commit -m x
+git -c user.name=bot commit -m x
+git push origin HEAD:feature/x 2>&1
+
+# Refspec shapes from the PR #5173 review (issue comment 5891249253).
+git push origin HEAD:heads/feature/x
+git push origin HEAD:tags/v1
+git push origin HEAD:remotes/origin/x
+git push origin HEAD:$B
+git push origin "$B"
+git push origin ${B}
+B=feature/x; git push origin $B
+git push origin HEAD:`echo feature/x`
+git push origin HEAD:$(echo feature/x)
+git push origin 'refs/heads/*:refs/heads/*'
+git push origin 'refs/heads/merged*:refs/heads/merged*'
+git push origin HEAD:feature/[x]
+git push origin HEAD:feature/?
+git push origin HEAD:{a,b}
+git push origin HEAD:~x
+git push origin -- -x:feature/x
+git push origin -- HEAD:-x
+
+# A `cd` that may not run, or runs in a subshell, before the push.
+cd @@WORKTREE@@ || git push origin HEAD:feature/open
+cd @@WORKTREE@@ & git push origin HEAD:feature/open
+cd @@WORKTREE@@ | cat; git push origin HEAD:feature/open
+echo x | cd @@WORKTREE@@; git push origin HEAD:feature/open
+false || cd @@WORKTREE@@; git push origin HEAD:feature/open
+cd @@WORKTREE@@ 2>/dev/null && git push origin HEAD:feature/open
+
+# Directories the guard cannot resolve: keep the session checkout's verdict.
+cd missing-dir || git push
+cd missing-dir & git push
+(cd missing-dir && git push)
+git -C missing-dir push
+GIT_DIR=missing-dir/.git git push
+GIT_DIR=$D git push
+git -C "$WT" push origin HEAD:feature/open
+cd $WT && git push origin HEAD:feature/open
+cd "$(git rev-parse --show-toplevel)" && git push
+
+# GitHub MCP push tools onto the merged branch.
+json: {"tool_name": "mcp__github__push_files", "tool_input": {"owner": "o", "repo": "r", "branch": "feature/x", "files": [{"path": "f.txt", "content": "x"}], "message": "m"}}
+json: {"tool_name": "mcp__github__create_or_update_file", "tool_input": {"owner": "o", "repo": "r", "branch": "feature/x", "path": "f.txt", "content": "x", "message": "m"}}
