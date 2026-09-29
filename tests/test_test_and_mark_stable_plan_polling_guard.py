@@ -42,6 +42,9 @@ if path == issue_path:
 	payload = {"labels": [{"name": name} for name in labels.split(",") if name]}
 elif path.startswith(issue_path + "/comments"):
 	payload = []
+elif "/pulls?" in path:
+	# wait-implement's PR lookup: one open PR when STUB_PR_NUMBER is set.
+	payload = [{"number": int(os.environ["STUB_PR_NUMBER"])}] if os.environ.get("STUB_PR_NUMBER") else []
 elif "/actions/runs?" in path and os.environ.get("STUB_UNPAGED_RUNS_INVALID") and "&page=" not in path:
 	# The other-active check's page-1 read (fetch_plan_runs_json) is the only
 	# runs request without &page=; this makes just that read unreadable.
@@ -376,6 +379,148 @@ def test_other_active_plan_runs_is_numeric_before_arithmetic_comparison() -> Non
 	assert "OTHER_ACTIVE_PLAN_RUNS=0" in wf
 	assert comparison in wf
 	assert wf.index(numeric_guard) < wf.index(comparison)
+
+
+IMPL_CREATED_AFTER_EXPR = "${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"
+APPROVED_AT = "2026-09-29T00:48:40Z"
+
+
+def _phase_step_script(step_id: str) -> str:
+	doc = yaml.safe_load(_read_workflow())
+	for step in doc["jobs"]["e2e-smoke-test"]["steps"]:
+		if step.get("id") == step_id:
+			script = step["run"].replace(IMPL_CREATED_AFTER_EXPR, APPROVED_AT)
+			return script.replace("${{ steps.create-issue.outputs.created_after }}", CREATED_AFTER)
+	raise AssertionError(f"{step_id} step not found")
+
+
+def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE) -> tuple[int, dict[str, str], list[list[str]], str]:
+	# Runs the real wait-clarify / wait-implement script against the stub gh
+	# and returns its exit code, GITHUB_OUTPUT, gh calls, and combined output.
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir()
+		gh = bin_dir / "gh"
+		gh.write_text(STUB_GH, encoding="utf-8")
+		gh.chmod(0o755)
+		sleep = bin_dir / "sleep"
+		sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+		sleep.chmod(0o755)
+		pages_file = tmp_path / "pages.json"
+		pages_file.write_text(json.dumps(pages), encoding="utf-8")
+		log_file = tmp_path / "gh.log"
+		log_file.touch()
+		output_file = tmp_path / "github_output"
+		output_file.touch()
+		env = dict(os.environ)
+		env.update({
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			"TEST_REPO": "owner/repo",
+			"ISSUE_NUMBER": ISSUE_NUMBER,
+			"ISSUE_TITLE": issue_title,
+			"PHASE_TIMEOUT": "60",
+			"POLL_INTERVAL": "0",
+			"GITHUB_OUTPUT": str(output_file),
+			"STUB_GH_LOG": str(log_file),
+			"STUB_RUN_PAGES": str(pages_file),
+			"STUB_LABELS": labels,
+		})
+		if pr_number is not None:
+			env["STUB_PR_NUMBER"] = str(pr_number)
+		proc = subprocess.run(["bash", "-c", _phase_step_script(step_id)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60)
+		outputs: dict[str, str] = {}
+		for line in output_file.read_text(encoding="utf-8").splitlines():
+			key, _, value = line.partition("=")
+			outputs[key] = value
+		calls = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+		return proc.returncode, outputs, calls, proc.stdout + proc.stderr
+
+
+ALT_TITLE = "[E2E Smoke Test alt-model] update canary (run 1)"
+
+
+def test_clarify_capture_pages_past_page_one_and_skips_other_issues() -> None:
+	# The parallel alt-model job's Clarify run is newer and on page 1; ours is
+	# on page 2. Before issue #4723's sibling fix the capture read one page
+	# without a title filter and took the other job's run.
+	pages = [[_run(501, name="Internal: AI Clarify", title=ALT_TITLE, created_at="2026-09-28T03:49:00Z")] + _noise_page(1000, count=99), [_run(444, name="Internal: AI Clarify")]]
+	rc, outputs, calls, log = _run_phase_step("wait-clarify", pages, labels="ai:planning")
+	assert rc == 0, log
+	assert outputs.get("run_id") == "444", outputs
+	assert outputs.get("status") == "success", outputs
+	requested = _run_pages_requested(calls)
+	assert ["&page=1&" in path for path in requested] == [True, False], requested
+	assert "&page=2&" in requested[1] and f"created=>{CREATED_AFTER}" in requested[1], requested
+
+
+def test_clarify_without_a_captured_run_id_fails_at_clarify_capture() -> None:
+	pages = [[_run(501, name="Internal: AI Clarify", title=ALT_TITLE), _run(502, name="Internal: AI Clarify", conclusion="skipped")]]
+	rc, outputs, calls, log = _run_phase_step("wait-clarify", pages, labels="ai:planning")
+	assert rc == 1, log
+	assert outputs.get("status") == "run_id_missing", outputs
+	assert "run_id" not in outputs, outputs
+	assert "::error::Issue #4712 completed Clarify but no non-skipped Clarify run titled" in log, log
+	# A short window may still be missing a not-yet-indexed run: 5 one-page attempts.
+	assert len(_run_pages_requested(calls)) == 5, _run_pages_requested(calls)
+
+
+def test_implement_capture_finds_our_run_behind_newer_runs() -> None:
+	# Run 36504041362: when the PR appeared our Implement run sat at index 137
+	# of the window, behind a newer alt-model Implement run and skipped runs.
+	pages = [
+		[_run(601, name="Internal: AI Implement", title=ALT_TITLE, created_at="2026-09-29T00:49:25Z")] + _noise_page(1000, count=99),
+		_noise_page(2000, count=37) + [_run(36504892608, name="Internal: AI Implement", created_at="2026-09-29T00:48:42Z")],
+	]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, pr_number=42)
+	assert rc == 0, log
+	assert outputs.get("run_id") == "36504892608", outputs
+	assert outputs.get("pr_number") == "42", outputs
+	assert outputs.get("status") == "success", outputs
+	requested = _run_pages_requested(calls)
+	assert len(requested) == 2 and all(f"created=>{APPROVED_AT}" in path for path in requested), requested
+
+
+def test_implement_without_a_captured_run_id_fails_at_implement_capture() -> None:
+	pages = [[_run(601, name="Internal: AI Implement", title=ALT_TITLE)]]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, pr_number=42)
+	assert rc == 1, log
+	assert outputs.get("status") == "run_id_missing", outputs
+	assert "run_id" not in outputs and "pr_number" not in outputs, outputs
+	assert "::error::Issue #4712 completed Implement but no non-skipped Implement run titled" in log, log
+
+
+def test_implement_capture_is_bounded_and_a_full_walk_is_not_retried() -> None:
+	pages = [_noise_page(1000 + 100 * i) for i in range(12)]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, pr_number=42)
+	assert rc == 1, log
+	assert outputs.get("status") == "run_id_missing", outputs
+	requested = _run_pages_requested(calls)
+	assert len(requested) == 10, len(requested)
+	assert "&page=10&" in requested[-1], requested[-1]
+
+
+def test_implement_capture_retries_an_unreadable_page() -> None:
+	# A failed read is retried (5 attempts), never treated as the end of the window.
+	pages = [_noise_page(1000), None]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, pr_number=42)
+	assert rc == 1, log
+	assert outputs.get("status") == "run_id_missing", outputs
+	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 5, _run_pages_requested(calls)
+
+
+def test_clarify_and_implement_fail_before_polling_without_an_issue_title() -> None:
+	# PR #5035 review: the captures match runs by display_title, so an empty
+	# title fails the step up front, as wait-plan does, instead of polling the
+	# phase and then failing at capture (or matching a run with an empty title).
+	for step_id, phase, kwargs in (("wait-clarify", "Clarify", {"labels": "ai:planning"}), ("wait-implement", "Implement", {"pr_number": 42})):
+		pages = [[_run(444, name=f"Internal: AI {phase}", title="")]]
+		rc, outputs, calls, log = _run_phase_step(step_id, pages, issue_title="", **kwargs)
+		assert rc == 1, log
+		assert outputs.get("status") == "run_id_missing", outputs
+		assert "run_id" not in outputs, outputs
+		assert f"::error::Missing issue title for {phase} run scoping" in log, log
+		assert calls == [], calls
 
 
 def main() -> int:
