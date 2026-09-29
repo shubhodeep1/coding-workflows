@@ -5,18 +5,19 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4750-classifier-outage-get-session   Final PR: #4770 draft
 - Status: BLOCKED
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #4821 (phase 1, review round 2 fix) — twin sync by the supervising session, then /reclarify
+- Waiting on: PR #4932 (conformance fix 1) — twin sync by the supervising session, then /reclarify
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (project checker session_01SDx9eEYSDcok29Jq6jwD3m kept idle for reuse; set IN_PROGRESS with it when the wait is re-armed)
-- Last updated: 2026-09-28
-- Last note: review round on head 198cd19 (hand-off round 1, ledger 7bf13dbb…) fixed twin-first in PR #4821: outage regex drops re.DOTALL (no-verdict phrase and `classifier` must share a line), step 0 says how a resume stage reads `Permission mode:` before step 2, plan lists `summarize_permission_records`; the report-line template finding rejected (already fixed in a6a8a96). Hold claim posted; BLOCKED until the supervising session copies the two workflow-templates/.claude twins into .claude/ as [claude-twin-sync] and comments /reclarify. On resume, arm the wait on PR #4821 — do not re-fix this round.
+- Check-in: none (project checker session_01SDx9eEYSDcok29Jq6jwD3m kept idle for reuse; on resume arm the wait on PR #4932 with it, next stage conformance 2/3)
+- Last updated: 2026-09-29
+- Last note: PR #4821 merged into the project branch (3c0a88b, operator Q43 A); main merged in (cad0951). Conformance run 1 (session session_01KTYYNVM25WQWJucNxJciAG): CONFORMANT, Correctness CONCERNS — one EVIDENCE-BASED CONCERN (outage_denials first_ts/last_ts follow file order, not time order) fixed twin-only in PR #4932. Hold claim posted; BLOCKED until the supervising session copies workflow-templates/.claude/scripts/permission_prompts.py into .claude/ as [claude-twin-sync] and comments /reclarify. On resume, arm the wait on PR #4932 (next stages: conformance 2/3 on merge, conformance 1/3 — review round on a hand-off, conformance 1/3 — blocked PR on a block) — do not re-fix.
 
 ## Phases
-1. [ ] Phase 1 — classifier-outage handling: filer split, CLAUDE.md §23.J retry rule, and outage-tolerant step 0 — protected paths: .claude/commands/implement-plan-claude.md, .claude/scripts/permission_prompts.py (edited only in their workflow-templates/.claude/ twins, Q40) — PR #4821 open (hold: awaiting [claude-twin-sync] of the round-2 fix); review rounds: 2; interventions: 0
+1. [x] Phase 1 — classifier-outage handling: filer split, CLAUDE.md §23.J retry rule, and outage-tolerant step 0 — protected paths: .claude/commands/implement-plan-claude.md, .claude/scripts/permission_prompts.py (edited only in their workflow-templates/.claude/ twins, Q40) — PR #4821 merged 2026-09-28 (3c0a88b; merged by the operator under Q43 A after an all-rejected round with no verdict bot); review rounds: 3; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT (Correctness: CONCERNS) — fix PR #4932 (pre-security): `classifier_outage_summary` first_ts/last_ts taken in file order; twin-only fix, awaiting [claude-twin-sync]
 
 ## Security pass
 
@@ -40,6 +41,7 @@
 - [source:intervention] When a report-template line gains an optional clause, use the file's `[...]` optional-suffix convention and test the whole line, not just the new substring: a substring test passed while the line read `<error>><; …>`. (files: .claude/commands/implement-plan-claude.md, tests/test_permission_prompts.py)
 - [source:intervention] A reason regex that exempts records from filing must be anchored on the subsystem's own word (here `classifier`); a bare phrase like `did not return a verdict` would silently hide real denials from another source. (files: .claude/scripts/permission_prompts.py)
 - [source:intervention] Do not compile a filing-exemption regex with `re.DOTALL`: `.*` between two anchor words then spans lines, so debug text on another line of a real denial can exempt it. Keep both anchors on one line. (files: .claude/scripts/permission_prompts.py)
+- [source:conformance] A summary field named first/last over records loaded from several per-session log files must take the min/max of the timestamps, not the first/last record: file-name order is not time order. (files: .claude/scripts/permission_prompts.py)
 
 ## Notes
 - Issue mode: started by `/implement-issue-claude` (session session_0153HZR3zNiEzJdUt3bfrVtz, dispatcher trigger trig_01MnhEevbsHWJSKe9KgXQRAJ).
@@ -50,3 +52,4 @@
 - Local test run: python3 here is 3.11, so `tests/test_workflow_retro.py` cannot be collected (an f-string with a backslash in `scripts/workflow_retro.py`, fine on CI's newer Python); unrelated to this project.
 - Review round 1 (2026-09-28, session session_01VpEWZrNVBtCNysdGtCgmJV): project branch already up to date with main (f92848d); fixes pushed twin-only per Q40 A.
 - Review round on 198cd19 (2026-09-28, session session_01J9Q8KLpY6Y7SwhKV1Y3Qpy): project branch already up to date with main; 3 of 4 findings fixed twin-only per Q40 A, 1 rejected (verdict on #4821). Tests: 147 passed in a scratch tree with the twins copied (permission-prompts, command, changelog-fragment, lessons-ingest); in this checkout only the parity checks and the new assertions that read `.claude/**` fail until the twin sync.
+- Conformance run 1 (2026-09-29, session session_01KTYYNVM25WQWJucNxJciAG): verified PR #4821 merged (3c0a88b) and the operator's Q43 A (comment 5880820773); the `.claude/` and `workflow-templates/.claude/` copies were identical at 3c0a88b. The fix edits the twin only (Q40 A still applies: #4785 is open). No new auto-decisions.
