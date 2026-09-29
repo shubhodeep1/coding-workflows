@@ -2370,7 +2370,8 @@ repo that receives this file via the `@stable` sync.
 - **How it starts.** The stage that hits a failure escalation writes the
   blocker to the progress log and posts one comment starting
   `<!-- ai:claude-blocked:v1 kind=escalation stop=<stop id> -->` (on the
-  source issue in issue mode, otherwise on the final PR). Then, instead of
+  source issue in issue mode, otherwise on the final PR; a legacy-mode
+  project has no final PR, so its blocker stays in the report). Then, instead of
   ending the turn for a human, it hands its project checker an
   `escalation` wait. The checker starts `/escalation-judge`
   (`.claude/commands/escalation-judge.md`) as the next stage session,
@@ -2412,7 +2413,8 @@ repo that receives this file via the `@stable` sync.
   `ES-<n>` numbers run across the project and are never reused (§6). The
   judge also posts
   `<!-- ai:claude-escalation:v1 stop=<stop id> fp=<fp> choice=<choice> -->`
-  next to the blocker and removes `ai:claude-blocked` in issue mode.
+  next to the blocker (in legacy mode, in its report and the log) and
+  removes `ai:claude-blocked` in issue mode.
 - **Human-only stops (Q8), never judged.** §22.B / §23.C / §24.D
   operations, a session with no claude-code-remote tools, and a depth-limit
   refusal with no pickup to route through. The start-up checks and the

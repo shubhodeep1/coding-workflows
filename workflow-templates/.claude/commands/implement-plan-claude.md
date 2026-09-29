@@ -317,7 +317,7 @@ A CLAUDE.md §28.C failure escalation (a cap reached, a security or validation r
 
 When the wait cannot be armed (the claude-code-remote tools are missing, or a call is refused), the stop stays a plain `Status: BLOCKED` for a human, as [Refused at the depth limit](#check-in-loop) and [Fallbacks](#fallbacks) describe.
 
-**The judge's choice comes back as a stage.** The judge adds an `ES-<n>` line to the log's `## Escalations` section, posts `<!-- ai:claude-escalation:v1 stop=<stop id> fp=<fingerprint> choice=<choice> -->` next to the blocker, removes `ai:claude-blocked` in issue mode, and hands the checker an escalation wait for the next stage, whose `— resume.` block carries `Escalation: ES-<n> <budget | descope> — <the narrower fix | the de-scoped part>`:
+**The judge's choice comes back as a stage.** The judge adds an `ES-<n>` line to the log's `## Escalations` section, posts `<!-- ai:claude-escalation:v1 stop=<stop id> fp=<fingerprint> choice=<choice> -->` next to the blocker (in legacy mode, where the blocker is in the report only, it writes the marker into its report and the log's `## Notes`), removes `ai:claude-blocked` in issue mode, and hands the checker an escalation wait for the next stage, whose `— resume.` block carries `Escalation: ES-<n> <budget | descope> — <the narrower fix | the de-scoped part>`:
 - **`budget`** → the stage that stopped runs again, titled `<stage> — budget ES-<n>` (for example `security-pass 5/5 — budget ES-1`). It runs one more round past the cap and applies the narrower fix the entry names. Every cap in this file counts one extra round for each `ES-<n>` entry with `choice=budget` or `choice=descope` for the same stop id (for `intervention-cap`, only entries whose `why=` names the same PR). If the stop fires again it is an escalation stop again, and the same failure (the same fingerprint) gets only the choices not used yet.
 - **`descope`** → stage `descope ES-<n>`. For `intervention-cap`, remove the failing part from the blocked PR's own branch in one `[claude-intervention] descope ES-<n>` commit (after [claiming the head](#claims)) and re-arm the wait on that PR as in step 7. Otherwise open a revert PR from `claude/implement-plan-<slug>-descope-<n>`, branched from the base branch, that removes exactly the de-scoped part. List the judge's `AD-<n>` entry in its body, and wait on it as in step 7, with the stage that stopped as the next stage on merge. After a security or validation stop, that stage re-runs the pass on the de-scoped branch: a pass is never waived. For a security stop, the revert may remove only the code that introduced the finding, never a fix for one.
 - **`close`** → no next stage. The judge closes the project itself (`.claude/commands/escalation-judge.md`) and sets `Status: CLOSED (not planned, ES-<n>)`.
@@ -341,7 +341,7 @@ The `ES-<n>` entry rides the PR in flight, like an auto-decision. When no PR is 
 - Repo: <owner>/<repo>   Default branch: <branch>
 - Project branch: claude/implement-plan-<slug>   Final PR: #F <draft | ready | merged <date>>   (legacy projects omit this line)
 - Status: IN_PROGRESS | BLOCKED | COMPLETE | CLOSED (not planned, ES-<n>)
-- Stage: phase <n>/<total> | phase <n>/<total> — review round | conformance <k>/3 | conformance 3/3 — fix check | security-pass cycle <k>/5 | validation cycle <k>/3 | completion | final-merge | verify-activation <k>/3 | deploy-activate | escalation judge — <stop id> | descope ES-<n>
+- Stage: phase <n>/<total> | phase <n>/<total> — review round | conformance <k>/3 | conformance 3/3 — fix check | security-pass cycle <k>/5 | validation cycle <k>/3 | completion | final-merge | verify-activation <k>/3 | deploy-activate | escalation judge — <stop id> | <stage> — budget ES-<n> | descope ES-<n>
 - Activation: not started | pending verify-activation | LIVE | deploy-activate started (<session id>)
 - Waiting on: PR #N | run <id> | issues #a, #b | none
 - Stage model: <model>   Permission mode: <mode>
@@ -399,7 +399,7 @@ The `## Lessons` section is how the project teaches the AI pipeline. When a stag
 ```
 Plan: <title>  (docs/plans/<slug>-plan.md)
 Status: IN_PROGRESS / BLOCKED / COMPLETE / CLOSED
-Stage: phase <n>/<total> [— review round] | conformance <k>/3 [— fix check] | security-pass cycle <k>/5 | validation cycle <k>/3 | completion | final-merge | verify-activation <k>/3 | deploy-activate | escalation judge — <stop id> | descope ES-<n>
+Stage: phase <n>/<total> [— review round] | conformance <k>/3 [— fix check] | security-pass cycle <k>/5 | validation cycle <k>/3 | completion | final-merge | verify-activation <k>/3 | deploy-activate | escalation judge — <stop id> | <stage> — budget ES-<n> | descope ES-<n>
 Project branch: claude/implement-plan-<slug> → final PR #F (<draft | ready | merged>)   (or: legacy — PRs straight to <default>)
 
 Phases:

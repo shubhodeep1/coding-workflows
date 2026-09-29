@@ -6,14 +6,14 @@
 - Status: BLOCKED
 - Stage: phase 1/4
 - Activation: not started
-- Waiting on: phase 1 PR: twin sync (the `[claude-twin-sync]` copy of four `workflow-templates/.claude/` twins, including `settings.json`, which goes through the operator under Q9: A)
+- Waiting on: PR #5164: twin sync after review round 1 (the `[claude-twin-sync]` copy of two changed `workflow-templates/.claude/commands/` twins; no `settings.json` change this round)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (not armed while the twin-sync hold stands; the stage `/reclarify` resumes arms it)
+- Check-in: checker session_01PxYwa7Rwnpb7RYbmsURfQ9 (idle, no pending check-in while the twin-sync hold stands; the stage `/reclarify` resumes arms it)
 - Last updated: 2026-09-29
-- Last note: Phase 1 (escalation judge) implemented twin-first and opened as its phase PR with a `hold` claim; stopped for the `[claude-twin-sync]` copy.
+- Last note: Review round 1 on PR #5164: fixed the legacy-mode comment target of the judge and the missing `budget ES-<n>` Stage value (twins and CLAUDE.md), rejected the two `escalation_ledger.py` findings; stopped for the `[claude-twin-sync]` copy.
 
 ## Phases
-1. [ ] Phase 1 — Escalation judge   — protected paths: `.claude/commands/escalation-judge.md` (new), `.claude/scripts/escalation_ledger.py` (new), `.claude/commands/implement-plan-claude.md`, `.claude/settings.json` (edited only in their `workflow-templates/.claude/` twins) — PR open, waiting on the twin sync; review rounds: 0; interventions: 0
+1. [ ] Phase 1 — Escalation judge   — protected paths: `.claude/commands/escalation-judge.md` (new), `.claude/scripts/escalation_ledger.py` (new), `.claude/commands/implement-plan-claude.md`, `.claude/settings.json` (edited only in their `workflow-templates/.claude/` twins) — PR #5164 open (twins first synced in c315b2e), waiting on the round-1 twin sync; review rounds: 1; interventions: 0
    - [x] `workflow-templates/.claude/scripts/escalation_ledger.py` (`fingerprint`, `allowed`, `record`; exit 1 bad arguments, exit 2 unreadable or malformed log), allowlisted in the `settings.json` twin in both forms — `tests/test_escalation_ledger.py` (48 tests)
    - [x] `workflow-templates/.claude/commands/escalation-judge.md` (inputs, steps 0–9, menu, never-list)
    - [x] `implement-plan-claude.md` twin: the ten stops name `escalation stop <id>` (lines 55, 66, 68, 69, 75, 76, 78, 81, 82, 89, 92, 273); new `## Escalations` section (line 292: stop-id table, human-only list, the 3-step stop procedure with the `kind=escalation stop=<id>` marker, `budget` / `descope` / `close` stages); checker step 0a (line 235) and Arming the wait step 3 for the `escalation` wait; `— resume.` template lines; `## Escalations` in the log template; Status `CLOSED`; recap, Issue Mode bullet, "Read first", Rules, Tool Access, Output Format updated
@@ -63,6 +63,7 @@
 - AD-10 [phase 1/4, 2026-09-29] How is evidence passed to `fingerprint`? — Picked: A — `--evidence <json>` as planned, plus `--evidence-file <path>`, which the judge uses. Alternatives: B — `--evidence` only. Why: a JSON argument in a shell command risks quoting prompts in an unwatched session; a file written with the Write tool does not. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:intervention] A command step that posts "on the blocker's thread" or "next to the blocker" must say what happens in a mode where the blocker has no GitHub thread (legacy mode keeps it in the report only), or the step has no valid target. (files: .claude/commands/escalation-judge.md, CLAUDE.md)
 
 ## Notes
 - Started by the master session (session_01Qt5nTTqhWxcYA4NciTC6DL) through trigger trig_013zGktPPtmZYGZbgKEos3qv, with start-up answers on the operator's behalf: Auto mode (step 0), plan `docs/plans/retire-master-session-plan.md` on `main` at f736cad (step 1), 4 phases (step 3). Operator decisions Q1–Q14 (2026-09-29) are recorded in the plan. There is no source issue: blockers go in the stage report and on the final PR.
@@ -72,3 +73,7 @@
 - `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` in every status check and in the checker instructions (#5057).
 - Twins to sync for phase 1 (`workflow-templates/.claude/<path>` → `.claude/<path>`), sha256 of the twin: `commands/escalation-judge.md` (new) `c06f187f51fc0e9da2f84e4f4b13f8e70a1cbec952a78caacd8b9357430865a3`; `commands/implement-plan-claude.md` `f5a811fbe7e25cb11e361ddad0ea5d36353afb702fbd20618a749295c514a47c`; `scripts/escalation_ledger.py` (new) `c989bd6b28fbe01d5fd39f9c4de20f08d97c0a9c86006fbb3e6f5beba331ac8a`; `settings.json` (two added `allow` rules; a guard change under Q9: A, so the operator syncs it) `287fc56a4bd91c32b552dad08a50f36e8919bb8f4d7eea3f993cb42295e9e961`. No `.claude/` path without a twin is changed. Before the sync, `.claude/settings.json` and `.claude/commands/implement-plan-claude.md` equal their twins on `main`, so the copy is exact.
 - Test runs for phase 1 are recorded in the phase PR body.
+- Final PR #5132 (draft). Phase 1 PR #5164; the master session synced its four twins in c315b2e (option A of blocker comment 5890621641 on #5132; all four sha256 values matched).
+- Stage sessions make file edits with Edit/Write, not `python3` heredocs (#4858); a refused `delete_trigger` or `archive_session` call is skipped, not retried (#5068); a stage never ends its turn on an in-session question (#4911).
+- Review round 1 (2026-09-29, head c315b2e, ledger `389434df…`): fixed the judge's missing legacy-mode comment target (steps 1, 3, 6, 8, 9 of `escalation-judge.md`; `implement-plan-claude.md` "Escalations"; CLAUDE.md §28.G) and added `<stage> — budget ES-<n>` to both Stage templates of `implement-plan-claude.md`. Rejected: the whitespace-only evidence omission (intended normalisation, pinned by `test_fingerprint_ignores_empty_values`; a blank value carries no information, so it cannot separate two failures) and the `UnicodeDecodeError` exit 2 (the documented fail-closed contract: a ledger that cannot be read exactly must never offer a choice already used).
+- Twins to sync after review round 1 (`workflow-templates/.claude/<path>` → `.claude/<path>`), sha256 of the twin: `commands/escalation-judge.md` `46ebabe32c8018a92da627a50e29bd1cf7df5cbbb459000cb43308e0f65b9837`; `commands/implement-plan-claude.md` `a58554274c97502168b05acfd5c1fd33d997a6171e922dded67fa3289ffbd052`. No `settings.json` or no-twin `.claude/` path changes. Before this round both `.claude/` files equalled their twins at c315b2e, so the copy is exact.
