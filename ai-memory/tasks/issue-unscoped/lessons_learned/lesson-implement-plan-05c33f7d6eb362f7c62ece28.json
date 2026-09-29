@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T04:48:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Shell code that accumulates GitHub API JSON across pages must feed jq through stdin, never `--argjson`: about 1,000 runs exceed the kernel's 128 KiB single-argument limit, and a failed `x=\"$(jq \u2026)\"` aborts a `set -e` script.",
+  "phase": "implement_plan",
+  "pr_number": 4987,
+  "record_id": "lesson-implement-plan-05c33f7d6eb362f7c62ece28",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4927-paginate-review-dispatch-runs",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}

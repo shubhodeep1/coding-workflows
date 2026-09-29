@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T04:48:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When moving a workflow dispatch off a head ref, grep every `gh workflow run \u2026 --ref` for the same workflows, including the reusable workflow's own retrigger step and its peer check, before scoping the issue.",
+  "phase": "implement_plan",
+  "pr_number": 4987,
+  "record_id": "lesson-implement-plan-ba6208fe6182ce1cba7aed4f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4701-review-dispatch-default-branch",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/gh_helpers.sh"
+  ]
+}
