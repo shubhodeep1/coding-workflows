@@ -1,0 +1,17 @@
+<!-- changelog: changed -->
+- **`/implement-plan-claude` failure escalations are now answered by an escalation judge instead of waiting for a human.** A used-up cap, a security or validation run that did not succeed, a terminal validation class, a security follow-up closed unmerged, or a defective fix check now starts a fresh `/escalation-judge` session within one checker cycle.
+
+Until now, each of these stops left the project at `Status: BLOCKED` until someone answered on the issue and commented `/reclarify`. In practice that someone was the master session, which will not exist for future projects. The stop now posts `<!-- ai:claude-blocked:v1 kind=escalation stop=<stop id> -->` (on the source issue in issue mode, otherwise on the final PR) and hands its project checker an `escalation` wait. The checker starts the judge (Opus 5.5, high effort) about two minutes later. The judge picks one choice: `budget` (one more round past the cap with a narrower fix it names), `descope` (a reviewed revert PR plus an `AD-<n>` entry), or `close` (the chain's own PRs and the source issue closed as not planned). It records the choice as `ES-<n>` in the progress log's new `## Escalations` section and posts `<!-- ai:claude-escalation:v1 … -->` next to the blocker.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Escalation stops handed to the judge | 10 (`intervention-cap`, `conformance-cap`, `fix-check-defective`, `security-run-failed`, `security-cap`, `security-followup-unmerged`, `validation-run-failed`, `validation-cap`, `validation-terminal`, `verify-activation-cap`) |
+| Time from stop to judge | one checker cycle, about 2 minutes |
+| Choices per failure fingerprint | each of `budget` and `descope` at most once; `close` always available |
+| Notifications | one `PushNotification`, only for `close` |
+
+What this means for operators: you are no longer asked to settle a failed security run, an exhausted validation loop, or a blocked PR past its cap. The judge never skips or waives a security or validation pass, never merges, and never merges past a failing required check. You hear from it only when it closes a project, and a trusted comment plus `/reclarify` reopens one. Ask-first operations (§22.B / §23.C / §24.D), a session without claude-code-remote tools, and a depth-limit refusal still stop for you.
+
+### For contributors
+
+The ledger is `.claude/scripts/escalation_ledger.py` (`fingerprint`, `allowed`, `record`; no API calls; exit 2 on a malformed `## Escalations` line). The rule is CLAUDE.md §28.G, and the stop ids, the escalation wait (checker step 0a), and the `budget` / `descope` stages are in the "Escalations" section of `/implement-plan-claude`. New tests: `tests/test_escalation_ledger.py` and `tests/test_escalation_judge_command.py`, each with its own `ci.yml` step.

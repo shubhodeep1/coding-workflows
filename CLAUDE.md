@@ -2251,7 +2251,9 @@ This is an explicit carve-out from §0 and §2 (including §2's
   delivered on the source issue: one comment naming the blocker, the
   options, and the recommended one, the `ai:claude-blocked` label, and one
   `PushNotification`. A human answers there and comments `/reclarify` to
-  resume.
+  resume. These stops are not auto-decided, but they no longer wait for a
+  human: the escalation judge answers them under the operator's standing
+  decision (§28.G).
 - **Ask-first operations** — §22.B (DigitalOcean mutations), §23.C
   (destructive and administrative GitHub writes, merges included), and
   §24.D (Cloudflare destructive and account-level writes). The chain never
@@ -2354,6 +2356,72 @@ The unattended pipelines read `unattended_system_instructions.md` and
 never see this file. §28 changes nothing about the orchestrator's own
 clarify auto-answer (`[auto-answered-by-orchestrator]`), which keeps its
 own policy.
+
+### G) Escalation Judge
+
+The §28.C failure escalations are not auto-decided (§28.B), but they do
+not wait for a human either. Under the operator's standing decision
+(2026-09-29, Q4: A, Q6: A, Q7: A, Q8: A;
+`docs/plans/retire-master-session-plan.md`), a fresh **escalation judge**
+session answers them. It covers every `/implement-plan-claude` project,
+in issue mode and operator-started, in this repo and in every consumer
+repo that receives this file via the `@stable` sync.
+
+- **How it starts.** The stage that hits a failure escalation writes the
+  blocker to the progress log and posts one comment starting
+  `<!-- ai:claude-blocked:v1 kind=escalation stop=<stop id> -->` (on the
+  source issue in issue mode, otherwise on the final PR). Then, instead of
+  ending the turn for a human, it hands its project checker an
+  `escalation` wait. The checker starts `/escalation-judge`
+  (`.claude/commands/escalation-judge.md`) as the next stage session,
+  Opus 5.5 at high effort, within one checker cycle. The judge never
+  starts a session itself, so the session chain stays at the depth §26.B
+  step 1c requires.
+- **The stops.** Ten stop ids, listed in the "Escalations" section of
+  `/implement-plan-claude`: `intervention-cap`, `conformance-cap`,
+  `fix-check-defective`, `security-run-failed`, `security-cap`,
+  `security-followup-unmerged`, `validation-run-failed`,
+  `validation-cap`, `validation-terminal`, `verify-activation-cap`.
+- **The menu.** The judge picks exactly one:
+  - `budget`: the stage that stopped runs once more past its cap, with a
+    narrower fix the judge names;
+  - `descope`: the failing part leaves the project through a reviewed
+    revert PR, recorded as an `AD-<n>` entry (§28.D), allowed only when the
+    rest of the project still meets the plan's core goal;
+  - `close`: the chain's own open PRs and the source issue are closed as
+    not planned, with a report. The operator approved these closes in
+    advance (Q4: A), so they are not a §23.C ask here. The judge never
+    deletes a branch and never closes anything the chain did not open.
+- **The fingerprint rule.** A failure is its stop id plus a fingerprint:
+  the SHA-1 (first 12 hex characters) of the normalised failing check
+  names, finding ids, follow-up issue numbers, and validation class and
+  status (`.claude/scripts/escalation_ledger.py fingerprint`). The judge
+  never picks a choice already recorded for the same stop and fingerprint
+  (`escalation_ledger.py allowed`); `close` is always available. A
+  different failure starts with the full menu.
+- **Invariants.** The judge never skips, waives, or marks passed a
+  security pass or a validation run (a `descope` after a security or
+  validation stop is followed by the same pass on the de-scoped branch; a
+  security `descope` removes only the code that introduced the finding,
+  never a fix for one). It never merges, never enables auto-merge, never
+  merges past a failing required check, never posts a verdict marker, and
+  never dispatches a convergence run.
+- **Recording.** Each decision is one line in the `## Escalations` section
+  of the progress log:
+  `- ES-<n> [<stop id>, <YYYY-MM-DD>] fingerprint=<fp> choice=<budget|descope|close> why=<one line>`.
+  `ES-<n>` numbers run across the project and are never reused (§6). The
+  judge also posts
+  `<!-- ai:claude-escalation:v1 stop=<stop id> fp=<fp> choice=<choice> -->`
+  next to the blocker and removes `ai:claude-blocked` in issue mode.
+- **Human-only stops (Q8), never judged.** §22.B / §23.C / §24.D
+  operations, a session with no claude-code-remote tools, and a depth-limit
+  refusal with no pickup to route through. The start-up checks and the
+  other §28.C stops that are not failure escalations (the protected-path
+  question, a question with no option that satisfies §28.B, whether to run
+  the chain at all) also stay with a human.
+- **Notifications.** A blocked stage sends no `PushNotification` for an
+  escalation stop. The judge sends exactly one, and only for `close`;
+  `budget` and `descope` are recorded but not pushed.
 
 ---
 

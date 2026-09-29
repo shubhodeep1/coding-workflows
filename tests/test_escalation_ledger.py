@@ -1,0 +1,307 @@
+"""Contract for `.claude/scripts/escalation_ledger.py`, the escalation judge's
+ledger (CLAUDE.md §28.G, plan `retire-master-session` phase 1).
+
+The judge must never pick the same choice twice for the same failure, and
+`close` must always stay available. These tests read the
+`workflow-templates/.claude/` twin, which the phase edits first (twin-first);
+`.claude/` catches up through the `[claude-twin-sync]` copy, which the parity
+tests check.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+TEMPLATE_SCRIPT = ROOT / "workflow-templates" / ".claude" / "scripts" / "escalation_ledger.py"
+SCRIPT = ROOT / ".claude" / "scripts" / "escalation_ledger.py"
+TODAY = dt.date(2026, 9, 29)
+
+
+def _load():
+	spec = importlib.util.spec_from_file_location("escalation_ledger", TEMPLATE_SCRIPT)
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+ledger = _load()
+
+
+def _run(capsys, *argv):
+	code = ledger.main(list(argv), today=TODAY)
+	out = capsys.readouterr().out.strip()
+	return code, json.loads(out)
+
+
+def _log(tmp_path, entries="", extra_sections=True):
+	body = "# Implement-Plan Log — demo\n\n- Status: BLOCKED\n\n## Phases\n1. [x] Phase 1\n\n"
+	body += "## Escalations\n" + entries + "\n"
+	if extra_sections:
+		body += "## Auto-decisions\n- AD-1 [plan, 2026-09-29] q — Picked: A — x. Status: pending review\n\n## Notes\n- note\n"
+	path = tmp_path / "log.md"
+	path.write_text(body, encoding="utf-8")
+	return path
+
+
+FP = "0123456789ab"
+OTHER_FP = "ba9876543210"
+
+
+def _entry(n, stop="security-cap", fp=FP, choice="budget", why="narrower fix"):
+	return f"- ES-{n} [{stop}, 2026-09-29] fingerprint={fp} choice={choice} why={why}\n"
+
+
+# --- fingerprint -----------------------------------------------------------
+
+
+def test_fingerprint_is_stable_across_order_case_and_whitespace():
+	a = ledger.fingerprint("security-cap", {"findings": ["B", " a  "], "issues": [12, "7"]})
+	b = ledger.fingerprint("security-cap", {"issues": ["7", 12, 12], "findings": ["a", "b", "A"]})
+	assert a == b
+	assert len(a) == 12 and all(c in "0123456789abcdef" for c in a)
+
+
+def test_fingerprint_depends_on_stop_and_evidence():
+	evidence = {"checks": ["lint"]}
+	assert ledger.fingerprint("validation-cap", evidence) != ledger.fingerprint("security-cap", evidence)
+	assert ledger.fingerprint("validation-cap", evidence) != ledger.fingerprint("validation-cap", {"checks": ["test"]})
+	assert ledger.fingerprint("validation-terminal", {"validation_class": "Harness_Error"}) == ledger.fingerprint(
+		"validation-terminal", {"validation_class": "harness_error"}
+	)
+
+
+def test_fingerprint_ignores_empty_values():
+	assert ledger.fingerprint("security-cap", {}) == ledger.fingerprint(
+		"security-cap", {"checks": [], "findings": [" "], "validation_class": None}
+	)
+
+
+def test_fingerprint_cli_accepts_json_and_file(tmp_path, capsys):
+	evidence = {"checks": ["lint", "unit"]}
+	code, out = _run(capsys, "fingerprint", "--stop", "validation-cap", "--evidence", json.dumps(evidence))
+	assert code == 0
+	path = tmp_path / "evidence.json"
+	path.write_text(json.dumps(evidence), encoding="utf-8")
+	code, out_file = _run(capsys, "fingerprint", "--stop", "validation-cap", "--evidence-file", str(path))
+	assert code == 0
+	assert out == out_file == {"stop": "validation-cap", "fingerprint": ledger.fingerprint("validation-cap", evidence)}
+
+
+@pytest.mark.parametrize(
+	"argv",
+	[
+		["fingerprint", "--stop", "security-cap", "--evidence", '{"unknown": [1]}'],
+		["fingerprint", "--stop", "security-cap", "--evidence", '{"checks": "lint"}'],
+		["fingerprint", "--stop", "security-cap", "--evidence", "[1]"],
+		["fingerprint", "--stop", "security-cap", "--evidence", "not json"],
+		["fingerprint", "--stop", "security-cap"],
+		["fingerprint", "--stop", "security-cap", "--evidence", "{}", "--evidence-file", "x"],
+		["fingerprint", "--stop", "no-such-stop", "--evidence", "{}"],
+	],
+)
+def test_bad_fingerprint_arguments_exit_1(capsys, argv):
+	code, out = _run(capsys, *argv)
+	assert code == 1 and "error" in out
+
+
+@pytest.mark.parametrize("stop", ["ask-first", "no-tools", "depth-limit"])
+def test_human_only_stops_are_refused(capsys, stop):
+	code, out = _run(capsys, "fingerprint", "--stop", stop, "--evidence", "{}")
+	assert code == 1
+	assert "human-only" in out["error"]
+
+
+# --- allowed ---------------------------------------------------------------
+
+
+def test_empty_ledger_offers_the_full_menu_in_order(tmp_path, capsys):
+	code, out = _run(capsys, "allowed", "--log", str(_log(tmp_path)), "--stop", "security-cap", "--fingerprint", FP)
+	assert code == 0
+	assert out["allowed"] == ["budget", "descope", "close"]
+	assert out["used"] == []
+
+
+def test_log_without_escalations_section_has_no_entries(tmp_path, capsys):
+	path = tmp_path / "old.md"
+	path.write_text("# Log\n\n## Phases\n1. [x] Phase 1\n\n## Notes\n- n\n", encoding="utf-8")
+	code, out = _run(capsys, "allowed", "--log", str(path), "--stop", "validation-cap", "--fingerprint", FP)
+	assert code == 0 and out["allowed"] == ["budget", "descope", "close"]
+
+
+@pytest.mark.parametrize(
+	"recorded, expected",
+	[
+		(["budget"], ["descope", "close"]),
+		(["descope"], ["budget", "close"]),
+		(["budget", "descope"], ["close"]),
+		(["close"], ["budget", "descope", "close"]),
+		(["budget", "descope", "close"], ["close"]),
+	],
+)
+def test_allowed_never_returns_a_used_choice_and_close_is_always_there(tmp_path, capsys, recorded, expected):
+	entries = "".join(_entry(i + 1, choice=choice) for i, choice in enumerate(recorded))
+	code, out = _run(capsys, "allowed", "--log", str(_log(tmp_path, entries)), "--stop", "security-cap", "--fingerprint", FP)
+	assert code == 0
+	assert out["allowed"] == expected
+	assert "close" in out["allowed"]
+	for choice in recorded:
+		if choice != "close":
+			assert choice not in out["allowed"]
+
+
+def test_a_different_failure_starts_with_the_full_menu(tmp_path, capsys):
+	entries = _entry(1, choice="budget") + _entry(2, choice="descope")
+	log = str(_log(tmp_path, entries))
+	code, out = _run(capsys, "allowed", "--log", log, "--stop", "security-cap", "--fingerprint", OTHER_FP)
+	assert code == 0 and out["allowed"] == ["budget", "descope", "close"]
+	code, out = _run(capsys, "allowed", "--log", log, "--stop", "validation-cap", "--fingerprint", FP)
+	assert code == 0 and out["allowed"] == ["budget", "descope", "close"]
+
+
+def test_entries_outside_the_section_are_ignored(tmp_path, capsys):
+	path = tmp_path / "log.md"
+	path.write_text(
+		"# Log\n\n## Notes\n" + _entry(1, choice="budget") + "\n## Escalations\n\n## Lessons\n" + _entry(2, choice="descope"),
+		encoding="utf-8",
+	)
+	code, out = _run(capsys, "allowed", "--log", str(path), "--stop", "security-cap", "--fingerprint", FP)
+	assert code == 0 and out["allowed"] == ["budget", "descope", "close"]
+
+
+# --- malformed logs exit 2 -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+	"bad_line",
+	[
+		"- ES-1 [security-cap, 2026-09-29] fingerprint=XYZ choice=budget why=x\n",
+		"- ES-1 [security-cap, 2026-09-29] fingerprint=0123456789ab choice=skip why=x\n",
+		"- ES-1 [ask-first, 2026-09-29] fingerprint=0123456789ab choice=close why=x\n",
+		"- ES-1 [security-cap] fingerprint=0123456789ab choice=budget why=x\n",
+		"- ES-1 [security-cap, 2026-09-29] fingerprint=0123456789ab choice=budget why=\n",
+		"- something else\n",
+		"ES-1 [security-cap, 2026-09-29] fingerprint=0123456789ab choice=budget why=x\n",
+	],
+)
+def test_malformed_log_line_exits_2(tmp_path, capsys, bad_line):
+	code, out = _run(capsys, "allowed", "--log", str(_log(tmp_path, bad_line)), "--stop", "security-cap", "--fingerprint", FP)
+	assert code == 2 and "malformed" in out["error"]
+
+
+def test_repeated_entry_id_exits_2(tmp_path, capsys):
+	entries = _entry(1, choice="budget") + _entry(1, choice="descope", fp=OTHER_FP)
+	code, out = _run(capsys, "allowed", "--log", str(_log(tmp_path, entries)), "--stop", "security-cap", "--fingerprint", FP)
+	assert code == 2 and "repeated ES-1" in out["error"]
+
+
+def test_unreadable_log_exits_2(tmp_path, capsys):
+	code, out = _run(capsys, "allowed", "--log", str(tmp_path / "missing.md"), "--stop", "security-cap", "--fingerprint", FP)
+	assert code == 2
+
+
+def test_indented_and_blank_lines_are_allowed(tmp_path, capsys):
+	entries = _entry(1) + "  continuation of ES-1\n\n"
+	code, out = _run(capsys, "allowed", "--log", str(_log(tmp_path, entries)), "--stop", "security-cap", "--fingerprint", FP)
+	assert code == 0 and out["used"] == ["budget"]
+
+
+@pytest.mark.parametrize("fingerprint", ["0123", "0123456789AB", "0123456789abc", "zzzzzzzzzzzz"])
+def test_malformed_fingerprint_argument_exits_1(tmp_path, capsys, fingerprint):
+	code, _ = _run(capsys, "allowed", "--log", str(_log(tmp_path)), "--stop", "security-cap", "--fingerprint", fingerprint)
+	assert code == 1
+
+
+# --- record ----------------------------------------------------------------
+
+
+def test_record_prints_the_next_line_and_writes_nothing(tmp_path, capsys):
+	path = _log(tmp_path, _entry(1, stop="validation-cap", fp=OTHER_FP) + _entry(3, choice="descope"))
+	before = path.read_text(encoding="utf-8")
+	code, out = _run(
+		capsys, "record", "--log", str(path), "--stop", "security-cap", "--fingerprint", FP,
+		"--choice", "budget", "--why", "retry the  audit\nafter the runner fix",
+	)
+	assert code == 0
+	assert out == {
+		"id": "ES-4",
+		"line": "- ES-4 [security-cap, 2026-09-29] fingerprint=0123456789ab choice=budget why=retry the audit after the runner fix",
+	}
+	assert path.read_text(encoding="utf-8") == before
+	# The printed line parses back as an entry.
+	assert ledger.parse_entries("## Escalations\n" + out["line"] + "\n")[0]["id"] == 4
+
+
+def test_record_starts_at_one_and_takes_an_explicit_date(tmp_path, capsys):
+	code, out = _run(
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "intervention-cap", "--fingerprint", FP,
+		"--choice", "close", "--why", "PR #12: budget and descope both used", "--date", "2026-10-01",
+	)
+	assert code == 0 and out["id"] == "ES-1"
+	assert out["line"].startswith("- ES-1 [intervention-cap, 2026-10-01] ")
+
+
+def test_record_refuses_a_used_choice(tmp_path, capsys):
+	path = _log(tmp_path, _entry(1, choice="budget"))
+	code, out = _run(capsys, "record", "--log", str(path), "--stop", "security-cap", "--fingerprint", FP, "--choice", "budget", "--why", "again")
+	assert code == 1 and "already recorded" in out["error"]
+	# `close` may be recorded again (it is always available).
+	path = _log(tmp_path, _entry(1, choice="close"))
+	code, _ = _run(capsys, "record", "--log", str(path), "--stop", "security-cap", "--fingerprint", FP, "--choice", "close", "--why", "reopened and failed")
+	assert code == 0
+
+
+@pytest.mark.parametrize(
+	"extra",
+	[
+		["--choice", "skip-security", "--why", "x"],
+		["--choice", "budget", "--why", "   "],
+		["--choice", "budget", "--why", "x", "--date", "29-09-2026"],
+	],
+)
+def test_record_rejects_bad_arguments(tmp_path, capsys, extra):
+	code, _ = _run(capsys, "record", "--log", str(_log(tmp_path)), "--stop", "security-cap", "--fingerprint", FP, *extra)
+	assert code == 1
+
+
+def test_menu_and_stop_ids_are_the_documented_ones():
+	assert ledger.CHOICES == ("budget", "descope", "close")
+	assert ledger.STOP_IDS == (
+		"intervention-cap",
+		"conformance-cap",
+		"fix-check-defective",
+		"security-run-failed",
+		"security-cap",
+		"security-followup-unmerged",
+		"validation-run-failed",
+		"validation-cap",
+		"validation-terminal",
+		"verify-activation-cap",
+	)
+	assert set(ledger.HUMAN_ONLY_KINDS).isdisjoint(ledger.STOP_IDS)
+
+
+# --- wiring ----------------------------------------------------------------
+
+
+def test_script_makes_no_network_calls():
+	source = TEMPLATE_SCRIPT.read_text(encoding="utf-8")
+	for needle in ("subprocess", "urllib", "requests", "gh api", "socket"):
+		assert needle not in source, needle
+
+
+def test_template_parity():
+	# Red until the [claude-twin-sync] copy lands the twin in .claude/.
+	assert SCRIPT.read_bytes() == TEMPLATE_SCRIPT.read_bytes()
+
+
+@pytest.mark.parametrize("path", [ROOT / "workflow-templates" / ".claude" / "settings.json", ROOT / ".claude" / "settings.json"])
+def test_settings_allow_the_script(path):
+	allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]
+	assert "Bash(python3 .claude/scripts/escalation_ledger.py *)" in allow
+	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/escalation_ledger.py *)" in allow
