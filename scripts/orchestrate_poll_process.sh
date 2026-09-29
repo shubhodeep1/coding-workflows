@@ -17231,6 +17231,12 @@ _CONFLICT_DISPATCH_TRACKER="${TMPDIR:-/tmp}/.conflict_dispatch_$$"
 # dispatch, so every poll cycle re-dispatched — each new run replaced
 # the pending predecessor and re-fired the conflict Telegram warning.
 #
+# Default-branch dispatches: review_autofix_sweep.yml dispatches from the
+# default branch (issue #4618), so the guard also counts active
+# internal-review.yml workflow_dispatch runs named
+# "Internal: AI Review & Autofix [pr:<pr_number>]" (one extra call, only
+# when the head-branch lookups found nothing).
+#
 # Usage: _has_active_autofix_run <pr_number> <head_ref>
 # Returns 0 if an active run exists (skip dispatch), 1 otherwise.
 _has_active_autofix_run()
@@ -17253,6 +17259,29 @@ _has_active_autofix_run()
 			return 0
 		fi
 	done
+
+	# review_autofix_sweep.yml dispatches internal-review.yml from the
+	# default branch (issue #4618), so its runs never match the
+	# head-branch lookups above. internal-review.yml names each dispatched
+	# run "Internal: AI Review & Autofix [pr:<N>]"; match that exact name
+	# on workflow_dispatch runs. One extra call, issued only when the
+	# head-branch lookups found nothing (§15: they filter by --branch and
+	# cannot return a default-branch run). A repo without
+	# internal-review.yml gets a non-retryable error and counts 0.
+	if [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+		local pr_named_active
+		pr_named_active="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+			--workflow internal-review.yml \
+			--event workflow_dispatch \
+			--limit 100 \
+			--json status,displayTitle \
+			--jq "[.[] | select(.status == \"in_progress\" or .status == \"queued\" or .status == \"pending\") | select(.displayTitle == \"Internal: AI Review & Autofix [pr:${pr_number}]\")] | length" \
+			2>/dev/null || echo "0")"
+		if [ "${pr_named_active:-0}" -gt 0 ] 2>/dev/null; then
+			echo "  ${log_prefix} Active autofix run found (workflow=internal-review.yml, dispatched for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."
+			return 0
+		fi
+	fi
 
 	return 1
 }
@@ -23238,6 +23267,16 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 	if _linked_pr_is_merge_queued "${S_PR_JSON}"; then
 		echo "  PR #${S_PR} is ai:merge-queued (merge train); skipping standalone conflict recovery until released."
+		continue
+	fi
+
+	# A draft claude/* PR (an /implement-plan-claude project integration PR)
+	# is synced with its base by its own chain at final merge, and
+	# Claude-fixer mode owns claude/* conflicts (CLAUDE.md §26.H). An
+	# update-branch push or review dispatch here only burns runs and posts a
+	# conflict alert on every tick. Uses the PR object fetched above.
+	if [[ "${S_HEAD_REF}" == claude/* ]] && [ "$(echo "${S_PR_JSON}" | jq -r '.draft // false')" = "true" ]; then
+		echo "  PR #${S_PR} is a draft claude/* PR; its own chain resolves conflicts. Skipping standalone conflict recovery."
 		continue
 	fi
 
