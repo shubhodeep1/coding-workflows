@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T22:44:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In Claude-fixer mode, a review round whose findings are all rejected converges only through the dedicated verdict bot (`CLAUDE_FIXER_VERDICT_BOT_LOGIN` plus its private credentials). Without them the phase stops BLOCKED until an operator merges the PR, so provision the bot before relying on unattended convergence.",
+  "phase": "implement_plan",
+  "pr_number": 5284,
+  "record_id": "lesson-implement-plan-e996e5d777b2565b6e3c6cc3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4985-skip-marker-review-stall",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

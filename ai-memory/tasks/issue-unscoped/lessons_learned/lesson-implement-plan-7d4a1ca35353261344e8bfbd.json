@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T22:44:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A stop with no PR in flight leaves the committed progress log at `Status: IN_PROGRESS`. A resuming session must check the issue's `ai:claude-blocked` comment and the checker's pending triggers, not the log's `Status:` alone, before it concludes a chain is still running.",
+  "phase": "implement_plan",
+  "pr_number": 5284,
+  "record_id": "lesson-implement-plan-7d4a1ca35353261344e8bfbd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4985-skip-marker-review-stall",
+    "file:.claude/commands/implement-issue-claude.md"
+  ]
+}

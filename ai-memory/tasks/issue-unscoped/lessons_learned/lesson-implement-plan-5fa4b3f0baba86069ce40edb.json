@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T22:44:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Plan steps that only change wording (workflow input descriptions, helper docstrings) are the easiest to drop. Pin them with a contract assertion in the same phase.",
+  "phase": "implement_plan",
+  "pr_number": 5284,
+  "record_id": "lesson-implement-plan-5fa4b3f0baba86069ce40edb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4985-skip-marker-review-stall",
+    "file:.github/workflows/review_autofix.yml",
+    "file:tests/test_skip_ai_marker_rule.py"
+  ]
+}
