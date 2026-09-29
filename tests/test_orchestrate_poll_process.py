@@ -14657,6 +14657,9 @@ def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
 	backfilled before close, so concurrent readers (wave-status resolver,
 	validation fix-up loop) see the same terminal label as the
 	merged_label-origin path always produced.
+
+	This is the orchestrator-managed child case; the standalone case is
+	test_close_merged_issues_sweep_closes_standalone_ready_to_merge_on_default_branch_merge.
 	"""
 	# Project is already complete so the wave loop is benign and the only
 	# late side-effect on the orchestrator-managed child issue (#10) is the
@@ -14902,6 +14905,32 @@ def test_close_merged_issues_sweep_closes_on_default_branch_merge():
 		f"A default-branch merge must close the issue; closed_issues={result.get('closed_issues')}"
 	)
 	assert "CLOSE_MERGED_SWEEP issue=10 pr=961 origin=merged_label status=closed" in result["stdout"]
+
+
+def test_close_merged_issues_sweep_closes_standalone_ready_to_merge_on_default_branch_merge():
+	"""Issue #4957 review: since #4813,
+	test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
+	covers the ready_label origin for an orchestrator-managed child only. A
+	standalone issue (no ai:orchestrator-managed label, no metadata) carrying
+	ai:ready-to-merge whose closing PR merged into the default branch must
+	still get ai:merged backfilled, lose ai:ready-to-merge, and close."""
+	default_pr = _sweep_standalone_closing_pr(966, "main", "claude/standalone-final")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 966},
+		prs=[default_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	final_labels = result["issues"]["10"]["labels"]
+	assert "ai:merged" in final_labels, f"Expected ai:merged backfilled on #10; got {final_labels}"
+	assert "ai:ready-to-merge" not in final_labels, f"Expected ai:ready-to-merge stripped from #10; got {final_labels}"
+	assert 10 in result.get("closed_issues", []), (
+		f"A default-branch merge must close the standalone issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=966 origin=ready_label status=closed" in result["stdout"]
 
 
 def test_close_merged_issues_sweep_closes_on_declared_integration_branch_merge():
