@@ -23241,6 +23241,16 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		continue
 	fi
 
+	# A draft claude/* PR (an /implement-plan-claude project integration PR)
+	# is synced with its base by its own chain at final merge, and
+	# Claude-fixer mode owns claude/* conflicts (CLAUDE.md §26.H). An
+	# update-branch push or review dispatch here only burns runs and posts a
+	# conflict alert on every tick. Uses the PR object fetched above.
+	if [[ "${S_HEAD_REF}" == claude/* ]] && [ "$(echo "${S_PR_JSON}" | jq -r '.draft // false')" = "true" ]; then
+		echo "  PR #${S_PR} is a draft claude/* PR; its own chain resolves conflicts. Skipping standalone conflict recovery."
+		continue
+	fi
+
 	S_MERGEABLE_STATE="$(echo "${S_PR_JSON}" | jq -r '.mergeable_state // ""')"
 	if [ -z "${S_MERGEABLE_STATE}" ] || [ "${S_MERGEABLE_STATE}" = "unknown" ]; then
 		continue
