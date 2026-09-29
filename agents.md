@@ -1179,13 +1179,19 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   is copied. One that matches no twin version (an operator changed it
   directly) or is a symlink is a **conflict**: listed in the PR, never
   overwritten. Paths with `..`, `.`,
-  empty segments, a backslash, or a leading `/` are rejected.
+  empty segments, a backslash, a control character, or a leading `/` are
+  rejected, and the CI check escapes every path it prints in an `::error`
+  line, so a file name cannot inject a workflow command.
 - **The sync PR:** branch `claude/claude-twin-sync-<main sha[:12]>` (a
   `-2`…`-9` suffix when a closed PR left that name), built on a temporary
   git index so no path touches the working tree. The body carries
   `[skip ai]`, the copied files, and the conflicts. An open sync PR is
   updated with a forward-only commit (the ruleset forbids non-fast-forward
-  pushes), never duplicated; extra open sync PRs are closed as superseded,
+  pushes), never duplicated, and only when its `.claude/` tree no longer
+  equals `main`'s plus the copies: a `main` commit elsewhere leaves the head
+  alone, so its CI run and any owner approval stay valid (CI takes about 45
+  minutes, and a rebuild on every `main` commit would keep a sync PR from
+  ever merging on a busy day); extra open sync PRs are closed as superseded,
   and an open one is closed when the twins already match. With only
   conflicts, the PR carries an empty marker commit.
 - **Merge rule by path:**

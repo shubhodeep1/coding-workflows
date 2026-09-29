@@ -89,6 +89,10 @@ def repo(tmp_path: Path) -> Path:
 	("commands/./a.md", True),
 	("commands//a.md", True),
 	("commands\\a.md", True),
+	("commands/a\n::warning::x.md", True),
+	("commands/a\r.md", True),
+	("commands/a\t.md", True),
+	("commands/a\x7f.md", True),
 ])
 def test_unsafe_path_reason(rel, unsafe):
 	assert bool(sync.unsafe_path_reason(rel)) is unsafe
@@ -323,6 +327,25 @@ def test_check_cli_exit_codes(repo, capsys):
 	assert sync.main(["check", "--repo-root", str(repo), "--base", "no-such-ref"]) == 2
 
 
+def test_check_cli_cannot_inject_workflow_commands_through_a_path(repo, capsys):
+	"""A `.claude/` file name with a newline must not start a workflow command line."""
+	base = git(repo, "rev-parse", "HEAD")
+	write(repo, claude("commands/x\n::warning title=INJECTED::pwned"), "x\n")
+	commit(repo, "crafted name")
+	assert sync.main(["check", "--repo-root", str(repo), "--base", base]) == 1
+	captured = capsys.readouterr()
+	lines = (captured.out + captured.err).splitlines()
+	assert not [line for line in lines if line.startswith("::warning")], lines
+	errors = [line for line in lines if line.startswith("::error ")]
+	assert len(errors) == 1 and "%0A" in errors[0] and "%3A%3Awarning" in errors[0]
+
+
+def test_log_escapes_line_breaks(capsys):
+	sync.log("rejected path=a\n::warning::x\rb")
+	err = capsys.readouterr().err
+	assert err.count("\n") == 1 and "\r" not in err and "::warning" not in err.splitlines()[0][:10]
+
+
 # --- merge rules -------------------------------------------------------------
 
 
@@ -539,6 +562,44 @@ def test_run_updates_an_open_pr_forward_when_main_moves(repo):
 	assert git(repo, "merge-base", "--is-ancestor", main, new_head) == ""
 	assert sorted(git(repo, "diff", "--name-only", main, new_head).splitlines()) == [claude("commands/a.md"), claude("scripts/s.py")]
 	assert summary["merge"] == "waiting for checks on the new head"
+
+
+def test_run_keeps_an_open_pr_when_main_moves_outside_claude_and_its_twins(repo):
+	"""A main commit that leaves `.claude/` and the copies alone does not rebuild the
+	sync PR: the head keeps its CI run (and an owner approval), and the PR merges."""
+	_twin_ahead(repo)
+	branch = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")["branch"]
+	git(repo, "fetch", "-q", "origin")
+	pr = _pr_from_origin(repo, branch, body=sync.render_body(sync.plan_sync(str(repo), "HEAD")))
+	write(repo, "README.md", "unrelated\n")
+	commit(repo, "unrelated main change")
+	git(repo, "push", "-q", "origin", "main")
+	files = [{"filename": claude("commands/a.md"), "status": "modified"}]
+	gh = FakeGitHub(prs=[pr], files=files, runs=[_run("lint")])
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["action"] == "unchanged" and summary["head"] == pr["head"]["sha"]
+	git(repo, "fetch", "-q", "origin")
+	assert git(repo, "rev-parse", f"origin/{branch}") == pr["head"]["sha"]
+	assert summary["merge"] == "merged"
+	assert ["pr", "merge", "40", "--repo", "o/r", "--squash", "--match-head-commit", pr["head"]["sha"]] in gh.writes
+
+
+def test_run_rebuilds_an_open_pr_when_main_changes_claude(repo):
+	"""A `.claude/` change on main that the head does not carry still rebuilds it."""
+	_twin_ahead(repo)
+	branch = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")["branch"]
+	git(repo, "fetch", "-q", "origin")
+	pr = _pr_from_origin(repo, branch)
+	write(repo, claude("commands/b.md"), "b\n")
+	write(repo, twin("commands/b.md"), "b\n")
+	main = commit(repo, "new twinned command on main")
+	git(repo, "push", "-q", "origin", "main")
+	summary = sync.run_sync(str(repo), FakeGitHub(prs=[pr]), "HEAD", "main", "owner", "77")
+	assert summary["action"] == "updated"
+	git(repo, "fetch", "-q", "origin")
+	new_head = git(repo, "rev-parse", f"origin/{branch}")
+	assert git(repo, "merge-base", "--is-ancestor", main, new_head) == ""
+	assert git(repo, "diff", "--name-only", main, new_head) == claude("commands/a.md")
 
 
 def test_run_guard_pr_is_labelled_alerted_and_never_merged(repo):

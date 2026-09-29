@@ -112,7 +112,19 @@ class SyncError(Exception):
 
 
 def log(message: str) -> None:
+	"""One stderr line; line breaks in `message` (a path) cannot start a workflow command."""
+	message = message.replace("\r", "\\r").replace("\n", "\\n")
 	print(f"CLAUDE_TWIN_SYNC {message}", file=sys.stderr, flush=True)
+
+
+def escape_command_data(value: str) -> str:
+	"""Escape a GitHub workflow command message (`%`, CR, LF)."""
+	return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def escape_command_property(value: str) -> str:
+	"""Escape a GitHub workflow command property value (data escapes plus `:` and `,`)."""
+	return escape_command_data(value).replace(":", "%3A").replace(",", "%2C")
 
 
 # --- paths -------------------------------------------------------------------
@@ -124,6 +136,8 @@ def unsafe_path_reason(rel: str) -> str | None:
 		return "empty path"
 	if "\\" in rel or "\x00" in rel:
 		return "backslash or NUL in path"
+	if any(ord(char) < 0x20 or char == "\x7f" for char in rel):
+		return "control character in path"
 	if rel.startswith("/"):
 		return "absolute path"
 	for segment in rel.split("/"):
@@ -289,6 +303,11 @@ def build_tree(repo: str, ref: str, copies: list[dict]) -> str:
 
 def tree_of(repo: str, commit: str) -> str:
 	return run_git(repo, ["rev-parse", f"{commit}^{{tree}}"]).strip()
+
+
+def claude_tree_of(repo: str, treeish: str) -> str:
+	"""The tree id of `.claude/` in `treeish` (a commit or a tree), or "" without one."""
+	return run_git(repo, ["rev-parse", "--verify", "--quiet", f"{treeish}:{CLAUDE_ROOT}"], check=False).strip()
 
 
 def is_ancestor(repo: str, ancestor: str, descendant: str) -> bool:
@@ -642,7 +661,12 @@ def run_sync(repo_root: str, gh: GitHub, ref: str, default_branch: str, owner: s
 		run_git(repo_root, ["fetch", "--no-tags", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"], env=git_auth_env(gh.read_token))
 		if resolve_commit(repo_root, f"refs/remotes/origin/{branch}") != head:
 			raise SyncError(f"{branch} moved while this run read it; the next run retries")
-		if tree_of(repo_root, head) != tree or not is_ancestor(repo_root, ref_sha, head):
+		# Rebuild only when the head's `.claude/` no longer equals the default
+		# branch's plus the copies. A default-branch commit anywhere else
+		# changes neither the PR's diff nor what it merges, and a new head
+		# restarts CI (about 45 minutes) and voids an owner approval, so on a
+		# busy default branch the PR would never merge.
+		if claude_tree_of(repo_root, head) != claude_tree_of(repo_root, tree):
 			parents = [head] if is_ancestor(repo_root, ref_sha, head) else [head, ref_sha]
 			head = commit_tree(repo_root, tree, parents, f"[claude-twin-sync] sync .claude/ with {TWIN_ROOT}/ at {short}")
 			push_commit(repo_root, head, branch, gh.write_token, gh.dry_run)
@@ -770,7 +794,11 @@ def main(argv: list[str] | None = None) -> int:
 				return 0
 			result = check_not_ahead(args.repo_root, resolve_commit(args.repo_root, base), resolve_commit(args.repo_root, args.head))
 			for item in result["violations"]:
-				print(f"::error file={item['path']}::.claude/ is ahead of its twin: {item['reason']} (CLAUDE.md §28.C)", flush=True)
+				# The path comes from the checked commit range (a PR's content):
+				# escaped, so a line break in a file name cannot start a command.
+				path = escape_command_property(item["path"])
+				message = escape_command_data(f".claude/ is ahead of its twin: {item['reason']} (CLAUDE.md §28.C)")
+				print(f"::error file={path}::{message}", flush=True)
 			_print(result)
 			return 0 if result["ok"] else 1
 		if args.command == "merge-check":
