@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T07:07:49Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An issue-mode project whose base is another project's branch cannot run runtime validation, because validate.yml authorizes `target_ref` only through an open final PR into the default branch; its plan should state up front that the parent project's validation covers it.",
+  "phase": "implement_plan",
+  "pr_number": 5080,
+  "record_id": "lesson-implement-plan-efbcc14180690f2e92953827",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4957-managed-status-from-label-and-lineage",
+    "file:.github/workflows/validate.yml"
+  ]
+}
