@@ -1043,9 +1043,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   repository (routine includes dispatching the six workflows allowed as
   `gh workflow run <file> *`, kept equal by a test), allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
-  `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
-  to the allow list or the Auto-mode classifier beside anything else (loops,
-  `python3`, `$VAR`, file redirects). It fails closed (asks) on an unreadable payload or an
+  `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), also allows a
+  read-only `for` loop over literal IDs (`for r in 1 2; do gh run view $r
+  --json status; done`: `gh api` reads with `$r` only in the endpoint path,
+  `gh run view` / `gh run list` / `gh pr view` with allowlisted flags and
+  `$r` only as a positional, `echo`; issue #4786), and leaves them to the
+  allow list or the Auto-mode classifier beside anything else (other loops,
+  `python3`, other `$VAR` uses, file redirects). A write in any loop still
+  asks. It fails closed (asks) on an unreadable payload or an
   internal error; `tests/test_gh_api_write_guard.py` has its own `ci.yml`
   step and `workflow-templates/.claude/hooks/` holds a byte-identical copy.
   Do not re-add `gh api` ask rules: an ask rule prompts even when a hook
