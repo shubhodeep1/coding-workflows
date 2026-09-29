@@ -1193,3 +1193,383 @@ def test_claude_md_documents_the_history_fallback() -> None:
 	assert "first-parent" in text
 	assert "git history" in text
 	assert "permissionDecision" in text or "asks" in text
+
+
+# ──────────────────────────────────────────────────────────────────
+# Effective repository and push target ref (issue #5144)
+#
+# These tests read the workflow-templates twin: the hook is a protected path,
+# so the change lands there first and reaches .claude/hooks/ through a
+# `[claude-twin-sync]` commit, after which both copies are identical.
+# ──────────────────────────────────────────────────────────────────
+
+
+def _load_guard_module(path: Path):
+	spec = importlib.util.spec_from_file_location("pr_merge_status_guard_twin", path)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+twin_guard = _load_guard_module(TEMPLATE_GUARD_PATH)
+
+
+def _targets(command: str, cwd: Path) -> list[tuple]:
+	return [
+		(t.subcommand, t.cwd, t.branch, t.tip, t.reaches_remote, bool(t.fallback_reason))
+		for t in twin_guard.guard_targets(command, str(cwd))
+	]
+
+
+def test_cd_into_a_worktree_judges_the_worktree_and_the_target_ref(tmp_path: Path) -> None:
+	worktree = tmp_path / "wt"
+	worktree.mkdir()
+	assert _targets(f"cd {worktree} && git push origin HEAD:feature/open", tmp_path / "..") == [
+		("push", str(worktree), "feature/open", "HEAD", True, False)
+	]
+
+
+def test_relative_cd_chain_and_cd_options_are_followed(tmp_path: Path) -> None:
+	(tmp_path / "a" / "b").mkdir(parents=True)
+	assert _targets("cd a; cd -P -- b && git commit -m x", tmp_path) == [
+		("commit", str(tmp_path / "a" / "b"), "", "HEAD", False, False)
+	]
+	assert _targets("cd a/b && cd .. && git commit -m x", tmp_path) == [
+		("commit", str(tmp_path / "a"), "", "HEAD", False, False)
+	]
+
+
+def test_git_dash_c_is_followed_and_composes(tmp_path: Path) -> None:
+	(tmp_path / "a" / "b").mkdir(parents=True)
+	assert _targets("git -C a -C b push origin HEAD:x", tmp_path) == [
+		("push", str(tmp_path / "a" / "b"), "x", "HEAD", True, False)
+	]
+
+
+def test_git_dir_prefix_and_option_select_the_repository(tmp_path: Path) -> None:
+	git_dir = tmp_path / "other" / ".git"
+	git_dir.mkdir(parents=True)
+	assert _targets(f"GIT_DIR={git_dir} git push origin src:dst", tmp_path) == [
+		("push", str(git_dir), "dst", "src", True, False)
+	]
+	assert _targets("git --git-dir=other/.git commit -m x", tmp_path) == [
+		("commit", str(git_dir), "", "HEAD", False, False)
+	]
+	assert _targets("git -C other --git-dir .git commit -m x", tmp_path) == [
+		("commit", str(git_dir), "", "HEAD", False, False)
+	]
+
+
+def test_git_work_tree_does_not_change_the_judged_repository(tmp_path: Path) -> None:
+	(tmp_path / "tree").mkdir()
+	assert _targets("GIT_WORK_TREE=tree git commit -m x", tmp_path) == [
+		("commit", str(tmp_path), "", "HEAD", False, False)
+	]
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"cd $WORKTREE && git push origin HEAD:x",
+		'cd "$(git rev-parse --show-toplevel)/wt" && git push origin HEAD:x',
+		"cd missing-dir && git push origin HEAD:x",
+		"cd - && git push origin HEAD:x",
+		"cd ~someone && git push origin HEAD:x",
+		"cd wt w2 && git push origin HEAD:x",
+		"pushd wt && git push origin HEAD:x",
+		"(cd wt; git push origin HEAD:x)",
+		"if cd wt; then true; fi; git push origin HEAD:x",
+		"export GIT_DIR=wt/.git; git push origin HEAD:x",
+		"GIT_DIR=wt/.git; git push origin HEAD:x",
+		"git -C $WORKTREE push origin HEAD:x",
+		"GIT_DIR=$DIR git push origin HEAD:x",
+	],
+)
+def test_unresolvable_directory_falls_back_to_the_session_checkout(tmp_path: Path, command: str) -> None:
+	(tmp_path / "wt").mkdir()
+	(tmp_path / "w2").mkdir()
+	targets = twin_guard.guard_targets(command, str(tmp_path))
+	assert targets, command
+	for target in targets:
+		assert target.cwd == str(tmp_path)
+		assert target.branch == ""
+		assert target.tip == "HEAD"
+		assert target.fallback_reason
+
+
+def test_a_subshell_only_affects_later_commands(tmp_path: Path) -> None:
+	"""A subshell's own `git push)` is not a guarded call (as in git_subcommands),
+	but the directory after it is unknown, so later calls fall back."""
+	(tmp_path / "wt").mkdir()
+	targets = twin_guard.guard_targets("(cd wt && git commit -m x) ; git push origin HEAD:y", str(tmp_path))
+	assert [(t.subcommand, t.branch, bool(t.fallback_reason)) for t in targets] == [
+		("commit", "", True),
+		("push", "", True),
+	]
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git push origin --delete feature/x",
+		"git push -d origin feature/x",
+		"git push origin :feature/x",
+		"git push origin refs/tags/v1.0",
+		"git push origin v1.0:refs/tags/v1.0",
+		"git status",
+		"git log -1",
+	],
+)
+def test_deletions_tags_and_unguarded_calls_yield_no_target(tmp_path: Path, command: str) -> None:
+	assert twin_guard.guard_targets(command, str(tmp_path)) == []
+
+
+@pytest.mark.parametrize(
+	("command", "branch", "tip"),
+	[
+		("git push", "", "HEAD"),
+		("git push -u origin", "", "HEAD"),
+		("git push --tags origin", "", "HEAD"),
+		("git push origin HEAD", "", "HEAD"),
+		("git push origin :", "", "HEAD"),
+		("git push origin feature/y", "feature/y", "feature/y"),
+		("git push origin +HEAD:refs/heads/feature/y", "feature/y", "HEAD"),
+		("git push -o ci.skip --repo origin origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push --force-with-lease=feature/y origin @:feature/y", "feature/y", "HEAD"),
+		("git push origin -- HEAD:feature/y", "feature/y", "HEAD"),
+	],
+)
+def test_push_refspecs_name_the_judged_branch_and_tip(tmp_path: Path, command: str, branch: str, tip: str) -> None:
+	assert _targets(command, tmp_path) == [("push", str(tmp_path), branch, tip, True, False)]
+
+
+def test_every_guarded_call_in_a_command_is_a_target(tmp_path: Path) -> None:
+	(tmp_path / "wt").mkdir()
+	assert _targets("git commit -m x && cd wt && git push origin HEAD:a HEAD:b", tmp_path) == [
+		("commit", str(tmp_path), "", "HEAD", False, False),
+		("push", str(tmp_path / "wt"), "a", "HEAD", True, False),
+		("push", str(tmp_path / "wt"), "b", "HEAD", True, False),
+	]
+
+
+def test_guard_targets_agree_with_git_subcommands_on_unreadable_input(tmp_path: Path) -> None:
+	assert twin_guard.guard_targets("git commit -m 'unterminated", str(tmp_path)) == []
+	assert twin_guard.guard_targets("echo 'cd /tmp && git push'", str(tmp_path)) == []
+
+
+_OPEN_PR_REST = {
+	"number": 42,
+	"state": "open",
+	"html_url": "https://github.com/o/r/pull/42",
+	"title": "the live one",
+	"merged_at": None,
+	"head": {"sha": "cafebabe"},
+}
+
+
+@pytest.fixture()
+def worktree_repo(tmp_path: Path):
+	"""A main checkout stranded on `feature/x` (PR #41 merged, no open PR) and a
+	detached scratch worktree with fresh work on top of main.
+
+	The `gh` stub answers `feature/x` with the merged PR, `feature/open` with an
+	open PR, anything else with no PR, and logs every call to `gh-calls.log`.
+	"""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q", "-b", "main")
+	_git(repo, "config", "user.email", "test@example.com")
+	_git(repo, "config", "user.name", "Test")
+	_git(repo, "remote", "add", "origin", "https://github.com/o/r.git")
+	(repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "seed")
+	seed_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "update-ref", "refs/remotes/origin/main", seed_sha)
+	_git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+	_git(repo, "checkout", "-q", "-b", "feature/x")
+	(repo / "work.txt").write_text("work\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "merged work")
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+
+	worktree = tmp_path / "wt"
+	_git(repo, "worktree", "add", "-q", "--detach", str(worktree), seed_sha)
+	(worktree / "fresh.txt").write_text("fresh\n", encoding="utf-8")
+	_git(worktree, "add", "-A")
+	_git(worktree, "commit", "-q", "-m", "fresh work in a scratch worktree")
+
+	stub_bin = tmp_path / "bin"
+	stub_bin.mkdir()
+	calls_log = tmp_path / "gh-calls.log"
+	merged_json = _merged_pr_payload(merged_sha)
+	open_json = json.dumps([_OPEN_PR_REST])
+	(stub_bin / "gh").write_text(
+		"#!/bin/sh\n"
+		f'echo "$*" >> "{calls_log}"\n'
+		'for arg in "$@"; do\n'
+		'  case "$arg" in\n'
+		f"    head=o:feature/x) cat <<'EOF'\n{merged_json}\nEOF\n      exit 0;;\n"
+		f"    head=o:feature/open) cat <<'EOF'\n{open_json}\nEOF\n      exit 0;;\n"
+		"  esac\n"
+		"done\n"
+		"echo '[]'\n",
+		encoding="utf-8",
+	)
+	(stub_bin / "gh").chmod(0o755)
+	return repo, worktree, stub_bin, merged_sha, calls_log
+
+
+def _run_twin_hook(cwd: Path, stub_bin: Path, command: str) -> subprocess.CompletedProcess:
+	env = _git_env()
+	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '')}"
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env.pop("CLAUDE_PR_MERGE_GUARD", None)
+	cache_dir = stub_bin.parent / "cache"
+	cache_dir.mkdir(exist_ok=True)
+	env["TMPDIR"] = str(cache_dir)
+	return subprocess.run(
+		[sys.executable, str(TEMPLATE_GUARD_PATH)],
+		input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}),
+		capture_output=True,
+		text=True,
+		env=env,
+		timeout=120,
+	)
+
+
+def test_e2e_worktree_push_to_an_open_pr_branch_is_allowed_from_a_stranded_checkout(worktree_repo) -> None:
+	"""The observed false block: the main checkout sits on a merged branch, the
+	push runs from a detached worktree onto an open PR's branch."""
+	repo, worktree, stub_bin, _, _ = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, f"cd {worktree} && git push origin HEAD:feature/open")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None
+
+
+def test_e2e_worktree_commit_is_not_judged_by_the_stranded_checkout(worktree_repo) -> None:
+	repo, worktree, stub_bin, _, _ = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, f"cd {worktree} && git commit -m fresh")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("main_checkout", ["stranded", "rebuilt", "detached"])
+def test_e2e_push_of_merged_history_to_a_merged_branch_is_blocked(worktree_repo, main_checkout: str) -> None:
+	"""The missed block: whatever the main checkout is on, a worktree pushing
+	merged history to a merged branch with no open PR is blocked."""
+	repo, worktree, stub_bin, merged_sha, _ = worktree_repo
+	if main_checkout == "rebuilt":
+		_git(repo, "checkout", "-q", "-B", "feature/x", "main")
+	elif main_checkout == "detached":
+		_git(repo, "checkout", "-q", "--detach", "main")
+	_git(worktree, "checkout", "-q", "--detach", merged_sha)
+	proc = _run_twin_hook(repo, stub_bin, f"cd {worktree} && git push origin HEAD:feature/x")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+	assert f"Judged in: {worktree}" in proc.stderr
+
+
+def test_e2e_fresh_worktree_push_to_a_merged_branch_is_allowed(worktree_repo) -> None:
+	"""Self-clearing still holds for the target ref: fresh work rebuilt from
+	main does not stack on the merged head, so the push is allowed."""
+	repo, worktree, stub_bin, _, _ = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, f"cd {worktree} && git push origin HEAD:feature/x")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_e2e_git_dash_c_behaves_like_cd(worktree_repo) -> None:
+	repo, worktree, stub_bin, merged_sha, _ = worktree_repo
+	allowed = _run_twin_hook(repo, stub_bin, f"git -C {worktree} push origin HEAD:feature/open")
+	assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+	_git(worktree, "checkout", "-q", "--detach", merged_sha)
+	_git(repo, "checkout", "-q", "--detach", "main")
+	blocked = _run_twin_hook(repo, stub_bin, f"git -C {worktree} push origin HEAD:feature/x")
+	assert blocked.returncode == 2, blocked.stdout + blocked.stderr
+
+
+def test_e2e_git_dir_prefix_is_judged_even_from_outside_any_repository(worktree_repo, tmp_path: Path) -> None:
+	repo, _, stub_bin, _, _ = worktree_repo
+	elsewhere = tmp_path / "elsewhere"
+	elsewhere.mkdir()
+	proc = _run_twin_hook(elsewhere, stub_bin, f"GIT_DIR={repo / '.git'} git push origin HEAD:feature/x")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+
+
+def test_e2e_unresolvable_directory_keeps_todays_behaviour_and_warns(worktree_repo) -> None:
+	repo, worktree, stub_bin, _, _ = worktree_repo
+	# The session checkout is stranded, so today's behaviour blocks.
+	blocked = _run_twin_hook(repo, stub_bin, 'cd "$WORKTREE" && git push origin HEAD:feature/open')
+	assert blocked.returncode == 2, blocked.stdout + blocked.stderr
+	assert "could not resolve where `git push` runs" in blocked.stderr
+	# After a rebuild, today's behaviour allows, and the warning still shows.
+	_git(repo, "checkout", "-q", "-B", "feature/x", "main")
+	allowed = _run_twin_hook(repo, stub_bin, 'cd "$WORKTREE" && git push origin HEAD:feature/open')
+	assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+	message = json.loads(allowed.stdout)["systemMessage"]
+	assert "could not resolve where `git push` runs" in message
+	assert "needs shell expansion" in message
+
+
+def test_e2e_one_api_call_per_slug_and_branch_pair(worktree_repo) -> None:
+	"""§21.D: two targets on the same (slug, branch) share one REST call."""
+	repo, worktree, stub_bin, _, calls_log = worktree_repo
+	proc = _run_twin_hook(
+		repo,
+		stub_bin,
+		f"git -C {worktree} push origin HEAD:feature/open && git -C {worktree} push origin HEAD~1:feature/open",
+	)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	calls = calls_log.read_text(encoding="utf-8").splitlines()
+	assert len(calls) == 1, calls
+	assert "head=o:feature/open" in calls[0]
+
+
+def test_e2e_several_asks_merge_into_one_hook_result(worktree_repo) -> None:
+	"""With GitHub gated, two inconclusive pushes produce one JSON object."""
+	repo, worktree, stub_bin, _, _ = worktree_repo
+	_git(repo, "checkout", "-q", "-B", "feature/x", "main")
+	_stub_gh(stub_bin, None)
+	proc = _run_twin_hook(
+		repo, stub_bin, f"git -C {worktree} push origin HEAD:feature/a HEAD:feature/b"
+	)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	lines = [line for line in proc.stdout.splitlines() if line.strip()]
+	assert len(lines) == 1, proc.stdout
+	decision = _ask_decision(proc)
+	assert decision is not None
+	assert "feature/a" in decision["systemMessage"] and "feature/b" in decision["systemMessage"]
+
+
+def test_single_directory_commands_keep_their_output_shape(monkeypatch, tmp_path: Path, capsys) -> None:
+	"""A plain `git commit` in the session checkout prints exactly what it did
+	before: one `merged-PR guard skipped:` warning when GitHub is unreachable."""
+	def _unavailable(slug, branch, cwd):
+		raise twin_guard.LookupUnavailable("gh: not found")
+
+	for name, value in {
+		"current_branch": lambda cwd: "feature/x",
+		"default_branch": lambda cwd: "main",
+		"repo_slug": lambda cwd: "o/r",
+		"query_pull_requests": _unavailable,
+		"_read_cache": lambda slug, branch: None,
+		"_write_cache": lambda slug, branch, prs: None,
+	}.items():
+		monkeypatch.setattr(twin_guard, name, value)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+	code, message = twin_guard.evaluate(
+		{"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}, "cwd": str(tmp_path)}
+	)
+	assert (code, message) == (0, "")
+	system_message = json.loads(capsys.readouterr().out)["systemMessage"]
+	assert system_message.startswith("merged-PR guard skipped: could not reach GitHub")
+	assert "\n" not in system_message
+
+
+def test_claude_md_documents_the_effective_repository_rule() -> None:
+	text = CLAUDE_MD.read_text(encoding="utf-8")
+	assert "effective repository" in text
+	assert "`git push <remote> <src>:<dst>`" in text
+	assert "one API call per `(slug, branch)` pair" in text

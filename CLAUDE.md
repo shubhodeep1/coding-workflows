@@ -903,6 +903,26 @@ still sitting on the merged commits (block). Squash- and rebase-merged PRs
 never put the merged head into the default branch, so plain ancestry
 already decides for them.
 
+"The current branch" and `HEAD` are those of the **effective repository**
+each guarded git call runs in, not the session's own checkout (issue #5144).
+The guard replays the command line: the hook's working directory, moved by
+every earlier `cd <path>` in the same command, then by `git -C <path>`, then
+by a `GIT_DIR=<path>` prefix or `--git-dir` option. A push that names a
+refspec is judged on the branch it writes to: for
+`git push <remote> <src>:<dst>` (and `HEAD:<dst>`) the conditions are checked
+for `<dst>`, with `<src>` taking the role of `HEAD`. A detached scratch
+worktree pushing to an open PR's branch is therefore allowed, and a worktree
+pushing merged history to a merged branch with no open PR is blocked,
+whatever the main checkout is on. Deletions and tag refspecs land no commits
+on a branch and are not judged; a push without a refspec judges the current
+branch. When the directory cannot be resolved (a variable or command
+substitution, a subshell, `pushd`/`popd`, `export GIT_DIR`, a path that does
+not exist yet), that call is judged on the session checkout as before and the
+guard emits a warning naming the reason; it never fails open silently.
+Several guarded calls in one command are each judged: any block blocks,
+otherwise the warnings and at most one confirmation prompt are merged into one
+hook result.
+
 The same hook guards the GitHub MCP push tools — `mcp__github__push_files`
 and `mcp__github__create_or_update_file` — through a second `PreToolUse`
 matcher in `.claude/settings.json`. Those tools write to a remote branch
@@ -947,7 +967,10 @@ confirmation safeguard remains active in both cases.
 
 Per §15, the guard issues **one** API call per guarded command — a single
 `state=all` request answers both the merged and the open question — and
-caches the result for 300 seconds keyed on `<slug>/<branch>`. Cached data may
+caches the result for 300 seconds keyed on `<slug>/<branch>`. A command whose
+guarded calls judge several branches or repositories (§21.B) issues at most
+one API call per `(slug, branch)` pair it judges, and none for a pair the
+cache already holds. Cached data may
 satisfy an *allow*; a *block* is always re-verified against a live call first,
 so opening a new PR clears the guard immediately instead of after the TTL.
 
