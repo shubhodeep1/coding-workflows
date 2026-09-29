@@ -1204,8 +1204,11 @@ your own judgement.
 4. **Shape `gh api` calls so the §23.H guard can approve them.** Put GET
    parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
    pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
-   send a POST). Keep `gh api` calls out of loops, `$(...)`, `$VAR` paths,
-   file redirects, and heredoc scripts, and edit a PR's title or body with
+   send a POST). Keep `gh api` calls out of `$(...)`, `$VAR` paths, file
+   redirects, and heredoc scripts, and out of loops, except that a `for`
+   loop over literal IDs whose body holds only reads is approved (§23.H:
+   `for r in 1 2; do gh run view $r --json status; done`). Edit a PR's
+   title or body with
    `mcp__github__update_pull_request`. Post or edit an issue or PR comment
    with `mcp__github__add_issue_comment` / `mcp__github__update_issue_comment`,
    never with `gh api … --input <file>`, `-F body=@<file>`, or a heredoc that
@@ -1324,9 +1327,20 @@ holds nothing else but safe helpers (items joined by `;` or `&&`, each a
 `gh api` call, optionally piped into `head`/`tail -n N`, `wc -l`, or
 `sort -n -r -u -k K -t C`, or a standalone `cd <path>`, `sleep <n>`,
 `echo <text>`, or `true`; `2>&1` as the only redirect; no `$`, backticks,
-globs, subshells, or loops); otherwise **no decision**, so the allow list
-or the Auto-mode classifier decides, because an allow would also approve
-code the guard has not read (a loop, a `python3` heredoc, a `$VAR`
+globs, subshells, or loops); **allow** as well for a read-only `for` loop
+over literal IDs, exactly `for VAR in TOKEN...; do BODY; done` (issue
+#4786): `VAR` a lowercase shell name without `proxy` in it, each `TOKEN` a literal
+`[A-Za-z0-9._-]+` not starting with `-`, and each `BODY` item (joined by
+`;` or `&&`) a `gh api` read with `$VAR` / `${VAR}` only in the endpoint
+path (never its first segment or after `?`), or `gh run view`,
+`gh run list`, `gh pr view` with allowlisted flags (never `--web`) and
+`$VAR` only as a positional argument, each optionally piped into the
+filters above, or `echo <literal or $VAR>`; `2>&1` as the only redirect,
+and no other `$`, backslash, backtick, glob, subshell, file redirect, or
+nested loop. A write in the loop still asks, and a routine write in it
+gets no decision. Otherwise **no decision**, so the allow list or the
+Auto-mode classifier decides, because an allow would also approve code
+the guard has not read (any other loop, a `python3` heredoc, a `$VAR`
 redirect). `gh api` text that is only data (`git commit -m`, `grep`,
 `echo`) is ignored.
 
