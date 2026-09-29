@@ -310,6 +310,14 @@ def test_hold_never_expires_on_the_same_head(monkeypatch, capsys):
 	assert out["done"] is False and out["state"] == "held"
 
 
+def test_hold_polls_at_the_held_backoff(monkeypatch, capsys):
+	monkeypatch.delenv("CLAUDE_CHECK_IN_HELD_RETRY_MINUTES", raising=False)
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr()}, [_claim(kind="hold")])
+	_, out = _run(capsys)
+	assert out["state"] == "held" and out["action"] == "wait" and out["retry_after_minutes"] == 180
+	assert "cap" not in out["reason"]
+
+
 def test_a_later_claim_lifts_a_hold(monkeypatch, capsys):
 	comments = [_claim(kind="hold", comment_id=1), _claim(kind="blocked", created_at="2026-09-26T11:30:00Z", comment_id=2)]
 	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(labels=[{"name": "ai:review-blocked"}])}, comments)
@@ -434,6 +442,58 @@ def test_claim_body_marker_matches_the_reader():
 def test_claim_body_rejects_bad_input(head, kind, by):
 	with pytest.raises(ValueError):
 		claimer.claim_body(head, kind, by)
+
+
+def test_hold_without_reason_and_reason_cap_keep_the_cap_sentence(monkeypatch):
+	monkeypatch.delenv("CLAUDE_FIX_HAND_BACK_CAP", raising=False)
+	legacy = claimer.claim_body(HEAD, "hold", "session_01x")
+	assert "reached the cap of 3 Claude hand-backs" in legacy
+	assert claimer.claim_body(HEAD, "hold", "session_01x", "cap") == legacy
+
+
+def test_hold_reason_replaces_the_cap_sentence_and_keeps_the_marker():
+	body = claimer.claim_body(HEAD, "hold", "session_01x", "all findings rejected; no verdict path")
+	assert body.startswith(f"**Claude fixes on hold:** all findings rejected; no verdict path at head `{HEAD[:12]}`.")
+	assert "cap of" not in body
+	markers = [line for line in body.splitlines() if checker.FIX_CLAIM_RE.fullmatch(line)]
+	assert markers == [f"<!-- ai:claude-fix-claim:v1 head={HEAD} kind=hold by=session_01x -->"]
+
+
+def test_hold_reason_is_one_clean_line_of_at_most_300_chars():
+	reason = "line one\n`code` <!-- ai:claude-fix-claim:v1 head=" + HEAD + " kind=hold by=x --> " + "z" * 400
+	body = claimer.claim_body(HEAD, "hold", "session_01x", reason)
+	first = body.splitlines()[0]
+	cleaned = first[len("**Claude fixes on hold:** "):first.index(f" at head `{HEAD[:12]}`")]
+	assert "`" not in cleaned and "<!--" not in cleaned and len(cleaned) <= 300
+	assert cleaned.startswith("line one code ")
+	assert len([line for line in body.splitlines() if checker.FIX_CLAIM_RE.fullmatch(line)]) == 1
+
+
+@pytest.mark.parametrize("kind", ["conflict", "ci", "review", "blocked"])
+def test_reason_with_a_non_hold_kind_is_rejected(kind, capsys):
+	with pytest.raises(ValueError):
+		claimer.claim_body(HEAD, kind, "session_01x", "because")
+	code = claimer.main(["body", "--head", HEAD, "--kind", kind, "--by", "session_01x", "--reason", "because"])
+	assert code == 1 and "only with --kind hold" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_blank_reason_is_rejected():
+	with pytest.raises(ValueError):
+		claimer.claim_body(HEAD, "hold", "session_01x", " `<!-- ")
+
+
+def test_post_passes_the_reason(monkeypatch, capsys):
+	monkeypatch.setattr(claimer.check_in_status, "gh_api", lambda path: {"state": "open", "head": {"sha": HEAD}})
+	posted = {}
+
+	def fake_gh(args):
+		posted["body"] = json.loads(Path(args[-1]).read_text())["body"]
+		return '{"id": 5}'
+
+	monkeypatch.setattr(claimer, "_gh", fake_gh)
+	code = claimer.main(["post", "--repo", REPO, "--pr", "7", "--head", HEAD, "--kind", "hold", "--by", "session_01x",
+		"--reason", "conflict needs a side decision"])
+	assert code == 0 and posted["body"].startswith("**Claude fixes on hold:** conflict needs a side decision at head")
 
 
 def test_post_refuses_a_moved_head(monkeypatch, capsys):
@@ -571,7 +631,7 @@ def test_read_failure_is_retry(monkeypatch, capsys):
 	_stub(monkeypatch, {})
 	monkeypatch.setattr(checker, "gh_api", boom)
 	code, out = _run(capsys)
-	assert code == 2 and out == {"done": False, "error": "HTTP 503", "action": "retry"}
+	assert code == 2 and out == {"done": False, "error": "HTTP 503", "action": "retry", "retry_after_minutes": 60}
 
 
 def test_hand_back_without_pr_is_retry(capsys):

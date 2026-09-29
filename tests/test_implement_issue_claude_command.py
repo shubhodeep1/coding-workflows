@@ -293,3 +293,14 @@ def test_pickup_starts_fixer_sessions_for_pr_fix_items(pickup_cmd):
 	assert "`item_type` `pr_fix`" in pickup_cmd
 	assert "title `PR <repo>#<N> — fix <kind>`" in pickup_cmd
 	assert "`/fix-claude-pr` re-reads the PR and stops when the fix is no longer due" in pickup_cmd
+
+
+def test_issue_base_defaults_to_the_default_branch(issue_cmd):
+	"""Plan D13: build on the default branch unless the code lives only on the named branch."""
+	step = issue_cmd[issue_cmd.index("6a. **Pick the project base (plan D13).**"):issue_cmd.index("7. **Post the progress comment.**")]
+	assert "The issue is an **`ai:security` follow-up** → keep the named base" in step
+	assert "for every file the plan **changes** (not one it creates), run `git cat-file -e origin/<default>:<path>`" in step
+	assert "**All present** → use the default branch as `<issue base>` and record `AD-<n>` `Base: <default> instead of <named> (D13)`" in step
+	assert "**Any missing** → keep the named base" in step
+	assert "before the project branch is created" in step
+	assert "**Build on the default branch unless the code lives only on the named branch**" in issue_cmd

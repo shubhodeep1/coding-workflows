@@ -40,6 +40,8 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Hand review round to Claude session (Claude-fixer mode)": ("review_autofix_step_claude_fixer_handoff.sh", "error"),
 	"Claude-fixer merge check": ("review_autofix_step_claude_fixer_merge_check.sh", "error"),
 	"Prepare Claude-fixer judge": ("review_autofix_step_claude_fixer_judge.sh", "error"),
+	"Hand unresolved protected conflict to Claude session": ("review_autofix_step_claude_fixer_protected_conflict.sh", "warning"),
+	"Re-trigger review via workflow_dispatch": ("review_autofix_step_retrigger_review.sh", "error"),
 }
 
 _WRAPPER_START_RE = re.compile(

@@ -14,6 +14,13 @@
 #
 #   * pre-review content conflict (AUTOFIX_PRE_REVIEW_RESOLVE=true)
 #       -> one comment carrying `kind=conflict` and the unmerged paths;
+#   * pre-review conflict in a protected `.claude/**` path
+#     (CLAUDE_FIXER_PROTECTED_CONFLICT=true, set by the merge-topology gate;
+#     plan D14) -> no comment here: the GPT resolver tail runs instead. The
+#     step "Hand unresolved protected conflict to Claude session" sources
+#     this file again with CLAUDE_FIXER_PROTECTED_CONFLICT_FALLBACK=true when
+#     the resolver failed or escalated, and the conflict hand-off then names
+#     the protected paths so the Claude session stops at once;
 #   * reviewer findings or failing check runs
 #       -> the consensus ledger through scripts/post_review_comment.sh
 #          (chunked PR comments), then one comment carrying `kind=findings`;
@@ -156,6 +163,13 @@ claude_fixer_upsert_checks_pending_comment()
   rm -f "${payload_file}"
 }
 
+if [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" = "true" ] \
+  && [ "${CLAUDE_FIXER_PROTECTED_CONFLICT:-false}" = "true" ] \
+  && [ "${CLAUDE_FIXER_PROTECTED_CONFLICT_FALLBACK:-false}" != "true" ]; then
+  echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=none reason=protected_conflict_to_resolver"
+  exit 0
+fi
+
 if [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" = "true" ]; then
   if [ "${CLAUDE_FIXER_VERIFICATION:-false}" = "true" ]; then
     echo "CLAUDE_FIXER_VERIFICATION_FAILED=true" >> "$GITHUB_ENV"
@@ -168,6 +182,10 @@ if [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" = "true" ]; then
     if [ -n "${AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED:-}" ]; then
       echo
       echo "Unmerged paths: \`${AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED//,/\`, \`}\`"
+    fi
+    if [ "${CLAUDE_FIXER_PROTECTED_CONFLICT_FALLBACK:-false}" = "true" ]; then
+      echo
+      echo "Protected paths: \`${CLAUDE_FIXER_PROTECTED_CONFLICT_PATHS//,/\`, \`}\`. The GPT resolver could not resolve this conflict (it failed or escalated), and an unattended Claude session cannot edit \`.claude/**\`: hold the head and ask a human to resolve it in a watched session."
     fi
     echo
     echo "<!-- ai:claude-fixer-handoff:v1 kind=conflict head=${HEAD_SHA} round=${claude_fixer_round} -->"

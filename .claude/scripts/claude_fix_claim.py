@@ -7,15 +7,18 @@ current head with one comment. The §26 checker and the catch-all sweep read
 the claims through `.claude/scripts/check_in_status.py --hand-back`
 (`read_fix_claims`) and leave a claimed head alone until the head moves or
 the lease (CLAUDE_FIX_CLAIM_LEASE_HOURS, default 3) ends. A `hold` claim parks
-the head for a human decision when the hand-back cap is reached; it never
-expires while the head stays the same. The reader counts a claim only when it
+the head for a human decision; it never expires while the head stays the
+same. `--reason` (hold only) names why: `--reason cap` gives the hand-back cap
+sentence, any other value is shown as the hold's cause (one line, at most 300
+characters, backticks and `<!--` removed), and no `--reason` keeps the
+cap sentence older callers post (plan D15). The marker line never changes. The reader counts a claim only when it
 was posted as the PR's author or as CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN (issue
 #4622), so post it with the identity whose sessions own the PR.
 
 Usage:
 
-  claude_fix_claim.py body --head SHA --kind KIND --by ID
-  claude_fix_claim.py post --repo OWNER/REPO --pr N --head SHA --kind KIND --by ID
+  claude_fix_claim.py body --head SHA --kind KIND --by ID [--reason TEXT]
+  claude_fix_claim.py post --repo OWNER/REPO --pr N --head SHA --kind KIND --by ID [--reason TEXT]
 
 KIND is one of conflict, ci, review, blocked, hold. ID names the claimant:
 the session id (`session_…`) or `sweep-run-<run id>` for the sweep.
@@ -53,19 +56,46 @@ KIND_LABELS = {
 CLAIMANT_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 HEAD_RE = re.compile(r"^[0-9a-f]{40}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+HOLD_REASON_CAP = "cap"
+HOLD_REASON_MAX_CHARS = 300
 
 
-def claim_body(head: str, kind: str, by: str) -> str:
-	"""Return the claim comment body; the last line is the marker the checker reads."""
+def clean_hold_reason(reason: str) -> str:
+	"""Return `reason` as one safe line for a hold comment, or raise ValueError.
+
+	Whitespace (newlines included) collapses to single spaces, backticks and
+	`<!--` are removed so the text can neither break the comment's formatting
+	nor start a marker, and the result is cut to 300 characters. An empty
+	result is rejected.
+	"""
+	cleaned = " ".join(str(reason).replace("`", "").replace("<!--", "").split())
+	cleaned = cleaned[:HOLD_REASON_MAX_CHARS].rstrip()
+	if not cleaned:
+		raise ValueError("--reason must contain text")
+	return cleaned
+
+
+def claim_body(head: str, kind: str, by: str, reason: str | None = None) -> str:
+	"""Return the claim comment body; the last line is the marker the checker reads.
+
+	`reason` is allowed only with `kind="hold"` (see the module docstring).
+	"""
 	if not HEAD_RE.fullmatch(head or ""):
 		raise ValueError("--head must be 40 lowercase hex characters")
 	if kind not in CLAIM_KINDS:
 		raise ValueError(f"--kind must be one of {', '.join(CLAIM_KINDS)}")
 	if not CLAIMANT_RE.fullmatch(by or ""):
 		raise ValueError("--by must be 1-80 characters of letters, digits, '_' or '-'")
+	if reason is not None and kind != "hold":
+		raise ValueError("--reason is allowed only with --kind hold")
+	hold_reason = clean_hold_reason(reason) if reason is not None else None
 	lease = check_in_status._env_positive_float("CLAUDE_FIX_CLAIM_LEASE_HOURS", check_in_status.DEFAULT_FIX_CLAIM_LEASE_HOURS)
 	cap = int(check_in_status._env_positive_float("CLAUDE_FIX_HAND_BACK_CAP", check_in_status.DEFAULT_FIX_HAND_BACK_CAP))
-	if kind == "hold":
+	if kind == "hold" and hold_reason is not None and hold_reason != HOLD_REASON_CAP:
+		text = (f"**Claude fixes on hold:** {hold_reason} at head `{head[:12]}`. `{by}` has asked a human how to "
+			"continue. The §26 checker and the catch-all sweep skip this head until someone pushes or that session "
+			"resumes (CLAUDE.md §26.H).")
+	elif kind == "hold":
 		text = (f"**Claude fixes on hold:** this PR reached the cap of {cap} Claude hand-backs (conflict, CI, or block) "
 			f"at head `{head[:12]}`. `{by}` has asked a human how to continue. The §26 checker and the catch-all sweep "
 			"skip this head until someone pushes or that session resumes (CLAUDE.md §26.H).")
@@ -90,13 +120,13 @@ def _gh(args: list[str]) -> str:
 	return proc.stdout
 
 
-def post_claim(repo: str, number: int, head: str, kind: str, by: str) -> tuple[int, dict]:
+def post_claim(repo: str, number: int, head: str, kind: str, by: str, reason: str | None = None) -> tuple[int, dict]:
 	"""Post one claim on `repo`#`number` after confirming `head` is its open head."""
 	if not REPO_RE.fullmatch(repo or ""):
 		raise ValueError("--repo must be OWNER/REPO")
 	if number <= 0:
 		raise ValueError("--pr must be a positive integer")
-	body = claim_body(head, kind, by)
+	body = claim_body(head, kind, by, reason)
 	pr = check_in_status.gh_api(f"repos/{repo}/pulls/{number}")
 	if pr.get("state") != "open" or pr.get("merged"):
 		return 1, {"posted": False, "reason": f"PR #{number} is not open"}
@@ -128,6 +158,8 @@ def build_parser() -> argparse.ArgumentParser:
 		command.add_argument("--head", required=True)
 		command.add_argument("--kind", required=True, choices=CLAIM_KINDS)
 		command.add_argument("--by", required=True)
+		command.add_argument("--reason", default=None,
+			help="hold only: why the head is held (`cap` for the hand-back cap)")
 	return parser
 
 
@@ -135,9 +167,9 @@ def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
 	try:
 		if args.command == "body":
-			sys.stdout.write(claim_body(args.head, args.kind, args.by))
+			sys.stdout.write(claim_body(args.head, args.kind, args.by, args.reason))
 			return 0
-		code, result = post_claim(args.repo, args.pr, args.head, args.kind, args.by)
+		code, result = post_claim(args.repo, args.pr, args.head, args.kind, args.by, args.reason)
 	except ValueError as exc:
 		print(json.dumps({"posted": False, "error": str(exc)}))
 		return 1

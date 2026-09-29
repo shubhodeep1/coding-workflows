@@ -489,6 +489,65 @@ def test_fixer_blocking_label_still_wins(monkeypatch, capsys):
 	assert out["done"] is True and out["state"] == "blocked"
 
 
+def _fix_claim(kind="hold", head=FIXER_HEAD, by="session_01x", login="workflow-bot", association="OWNER"):
+	comment = _comment(f"Claude fixes on hold.\n<!-- ai:claude-fix-claim:v1 head={head} kind={kind} by={by} -->",
+		association=association, login=login)
+	comment["created_at"] = "2026-09-23T11:00:00Z"
+	return comment
+
+
+def test_fixer_hold_on_current_head_waits_at_the_held_backoff(monkeypatch, capsys):
+	# Plan D11: a BLOCKED stage arms the project checker on its held PR; the
+	# plain-mode checker keeps waiting instead of starting a review round.
+	calls = _stub_fixer(monkeypatch, _fixer_responses(), [_comment(_handoff()), _fix_claim()])
+	code, out = _run(["--pr", "7"], capsys)
+	assert code == 0 and out["done"] is False and out["state"] == "held" and out["action"] == "wait"
+	assert out["retry_after_minutes"] == 180 and out["claim"]["by"] == "session_01x"
+	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments"]
+
+
+def test_fixer_hold_wins_over_a_block_label(monkeypatch, capsys):
+	_stub_fixer(monkeypatch, _fixer_responses(pr=_fixer_pr(labels=[{"name": "ai:needs-human"}])), [_fix_claim()])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["state"] == "held" and out["action"] == "wait"
+
+
+@pytest.mark.parametrize("claim", [
+	_fix_claim(head="b" * 40),
+	_fix_claim(kind="review"),
+	_fix_claim(login="mallory", association="COLLABORATOR"),
+])
+def test_fixer_non_hold_or_untrusted_claim_does_not_hold(monkeypatch, capsys, claim):
+	_stub_fixer(monkeypatch, _fixer_responses(), [_comment(_handoff()), claim])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["state"] == "review-round" and out["retry_after_minutes"] == 60
+
+
+def test_fixer_later_claim_lifts_the_hold(monkeypatch, capsys):
+	_stub_fixer(monkeypatch, _fixer_responses(), [_fix_claim(), _comment(_handoff()), _fix_claim(kind="review")])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["state"] == "review-round"
+
+
+@pytest.mark.parametrize(("raw", "expected"), [
+	(None, 180), ("", 180), ("240", 240), ("30", 60), ("5000", 1440), ("abc", 180), ("90.5", 90),
+])
+def test_held_retry_minutes_env_override_and_clamp(monkeypatch, raw, expected):
+	if raw is None:
+		monkeypatch.delenv("CLAUDE_CHECK_IN_HELD_RETRY_MINUTES", raising=False)
+	else:
+		monkeypatch.setenv("CLAUDE_CHECK_IN_HELD_RETRY_MINUTES", raw)
+	assert checker.retry_after_minutes({"state": "held"}) == expected
+	assert checker.retry_after_minutes({"state": "open"}) == 60
+
+
+def test_every_verdict_carries_retry_after_minutes(monkeypatch, capsys):
+	monkeypatch.setenv("CLAUDE_CHECK_IN_HELD_RETRY_MINUTES", "600")
+	_stub(monkeypatch, {"repos/o/r/pulls/7": _pr(merged=True, merged_at="t", merge_commit_sha="m")})
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["retry_after_minutes"] == 60
+
+
 def test_non_fixer_pr_never_reads_comments(monkeypatch, capsys):
 	calls = _stub(monkeypatch, {
 		"repos/o/r/pulls/7": _pr(),
@@ -678,7 +737,8 @@ def test_route_verdict_rejects_an_unmapped_done_state(mode, state):
 def test_unmapped_done_state_exits_2_with_retry(monkeypatch, capsys):
 	monkeypatch.setattr(checker, "check_run", lambda repo, run_id: {"done": True, "state": "mystery", "reason": "x"})
 	code, out = _run(["--run", "9"], capsys)
-	assert code == 2 and out == {"done": False, "error": "no checker route for mode 'run' state 'mystery'", "action": "retry"}
+	assert code == 2 and out == {"done": False, "error": "no checker route for mode 'run' state 'mystery'", "action": "retry",
+		"retry_after_minutes": 60}
 
 
 def test_main_adds_action_for_merged_pr(monkeypatch, capsys):
@@ -768,7 +828,7 @@ def test_read_failure_carries_retry_in_every_mode(monkeypatch, capsys, argv):
 		"repos/o/r/issues/1": checker.ReadError("HTTP 502"),
 	})
 	code, out = _run(argv, capsys)
-	assert code == 2 and out == {"done": False, "error": "HTTP 502", "action": "retry"}
+	assert code == 2 and out == {"done": False, "error": "HTTP 502", "action": "retry", "retry_after_minutes": 60}
 
 
 def test_bad_repo_carries_retry(capsys):

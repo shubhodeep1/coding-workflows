@@ -21,6 +21,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -183,8 +184,120 @@ def test_topology_gate_hands_conflicts_to_claude_regardless_of_resolver_toggle()
 	text = TOPOLOGY_SCRIPT.read_text(encoding="utf-8")
 	block = text.split('if [ "${CLAUDE_FIXER_MODE:-false}" = "true" ]; then', 1)[1].split("fi\n", 1)[0]
 	assert 'echo "AUTOFIX_PRE_REVIEW_RESOLVE=true" >> "$GITHUB_ENV"' in block
-	assert "CAN_PUSH" not in block
+	# The hand-off itself never depends on this run's push permission; only
+	# the D14 protected-conflict route asks whether the resolver could push.
+	handoff_part = block.split("# Plan D14", 1)[0]
+	assert "CAN_PUSH" not in handoff_part
 	assert "action=claude_fixer_handoff" in block
+
+
+PROTECTED_CONFLICT_STEPS = (
+	"Detect merge conflicts",
+	"Prepare merge-conflict resolver prompt and pre-snapshot",
+	"Run Codex resolver, validate, stage, commit",
+	"Telegram conflict resolution message",
+	"Push all pending commits",
+	"Re-trigger review via workflow_dispatch",
+)
+PROTECTED_CONFLICT_CLAUSE = "(env.CLAUDE_FIXER_MODE != 'true' || env.CLAUDE_FIXER_PROTECTED_CONFLICT == 'true')"
+
+
+def _protected_route(unmerged: str, enabled: str | None = None, can_push: str = "true") -> tuple[str, str]:
+	"""Run the D14 route of the topology gate's Claude-fixer branch."""
+	text = TOPOLOGY_SCRIPT.read_text(encoding="utf-8")
+	snippet = text.split("    # Plan D14", 1)[1].split("    unset _protected_conflict_paths\n", 1)[0]
+	snippet = "    # Plan D14" + snippet + "    unset _protected_conflict_paths\n"
+	with tempfile.TemporaryDirectory() as td:
+		github_env = Path(td) / "github_env"
+		github_env.write_text("", encoding="utf-8")
+		env = {**os.environ, "GITHUB_ENV": str(github_env), "PR_NUMBER": "42", "LOCAL_HEAD_SHA": HEAD, "CAN_PUSH": can_push,
+			"_pre_review_unmerged": unmerged}
+		env.pop("CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED", None)
+		if enabled is not None:
+			env["CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED"] = enabled
+		proc = subprocess.run(["bash", "-c", "set -euo pipefail\n_pre_review_unmerged=\"${_pre_review_unmerged}\"\n" + snippet],
+			env=env, capture_output=True, text=True)
+		assert proc.returncode == 0, proc.stderr
+		return proc.stdout, github_env.read_text(encoding="utf-8")
+
+
+def test_protected_conflict_routes_to_the_resolver():
+	out, github_env = _protected_route("src/a.py,.claude/settings.json,.claude/commands/x.md")
+	assert "CLAUDE_FIXER_PROTECTED_CONFLICT=true" in github_env
+	assert "CLAUDE_FIXER_PROTECTED_CONFLICT_PATHS=.claude/settings.json,.claude/commands/x.md" in github_env
+	assert f"AUTOFIX_GATE_CLAUDE_FIXER_PROTECTED_CONFLICT pr=42 head={HEAD} paths=2 resolver=ran" in out
+
+
+@pytest.mark.parametrize("unmerged", ["src/a.py,README.md", "", "workflow-templates/.claude/settings.json"])
+def test_unprotected_conflict_keeps_the_claude_handoff(unmerged):
+	out, github_env = _protected_route(unmerged)
+	assert github_env == "" and "PROTECTED_CONFLICT" not in out
+
+
+@pytest.mark.parametrize(("enabled", "can_push", "resolver"), [("false", "true", "skipped_switch_off"), ("FALSE", "true", "skipped_switch_off"), ("true", "false", "skipped_cannot_push")])
+def test_protected_conflict_switch_off_or_no_push_keeps_the_handoff(enabled, can_push, resolver):
+	out, github_env = _protected_route(".claude/settings.json", enabled=enabled, can_push=can_push)
+	assert github_env == ""
+	assert f"paths=1 resolver={resolver}" in out
+
+
+def test_resolver_chain_runs_for_a_protected_conflict_only():
+	for name in PROTECTED_CONFLICT_STEPS:
+		assert AGENT_STEPS[name]["if"].endswith(PROTECTED_CONFLICT_CLAUSE), name
+	for name in set(EDITOR_TAIL_STEPS) - set(PROTECTED_CONFLICT_STEPS):
+		assert "CLAUDE_FIXER_PROTECTED_CONFLICT" not in AGENT_STEPS[name]["if"], name
+	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge", "Hand review round to Claude session (Claude-fixer mode)"):
+		assert "CLAUDE_FIXER_PROTECTED_CONFLICT" not in AGENT_STEPS[name]["if"], name
+	gate_env = AGENT_STEPS["Pre-review deterministic merge-topology gate"]["env"]
+	assert gate_env["CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED"] == "${{ vars.CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED || 'true' }}"
+
+
+def test_unresolved_protected_conflict_fallback_step_follows_the_resolver():
+	names = list(AGENT_STEPS)
+	fallback = "Hand unresolved protected conflict to Claude session"
+	assert names.index("Run Codex resolver, validate, stage, commit") < names.index(fallback) < names.index("Enable auto-merge on PR")
+	assert AGENT_STEPS[fallback]["if"] == "always() && env.CLAUDE_FIXER_PROTECTED_CONFLICT == 'true' && env.CONFLICT_RESOLVED != 'true' && env.PR_CLOSED != 'true'"
+	# Fails open like the other always() Claude-fixer steps (the evidence uploads).
+	assert AGENT_STEPS[fallback]["continue-on-error"] is True
+	# PR_NUMBER comes from the codex-agent job env, as for the hand-off step.
+	assert "PR_NUMBER" in WORKFLOW["jobs"]["codex-agent"]["env"]
+
+
+def test_handoff_skips_a_protected_conflict_until_the_resolver_fails():
+	extra = {"CLAUDE_FIXER_PROTECTED_CONFLICT": "true", "CLAUDE_FIXER_PROTECTED_CONFLICT_PATHS": ".claude/settings.json"}
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, _env = _run_handoff(Path(td), ledger=None, pre_review_resolve=True, unmerged=".claude/settings.json", extra_env=extra)
+	assert proc.returncode == 0, proc.stderr
+	assert calls == [] and "reason=protected_conflict_to_resolver" in proc.stdout
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, _env = _run_handoff(Path(td), ledger=None, pre_review_resolve=True, unmerged="src/a.py,.claude/settings.json",
+			extra_env={**extra, "CLAUDE_FIXER_PROTECTED_CONFLICT_FALLBACK": "true"})
+	assert proc.returncode == 0, proc.stderr
+	body = [call for call in calls if call["payload"]][0]["payload"]["body"]
+	assert f"<!-- ai:claude-fixer-handoff:v1 kind=conflict head={HEAD} round=2 -->" in body
+	assert "Protected paths: `.claude/settings.json`." in body and "watched session" in body
+
+
+def test_plain_conflict_handoff_names_no_protected_paths():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, _env = _run_handoff(Path(td), ledger=None, pre_review_resolve=True, unmerged="src/a.py")
+	assert proc.returncode == 0, proc.stderr
+	body = [call for call in calls if call["payload"]][0]["payload"]["body"]
+	assert "kind=conflict" in body and "Protected paths" not in body
+
+
+def test_fallback_step_script_posts_the_protected_handoff():
+	script = REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_protected_conflict.sh"
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		support = tmp / "support"
+		support.mkdir()
+		(support / "review_autofix_step_claude_fixer_handoff.sh").write_text(
+			'echo "fallback=${CLAUDE_FIXER_PROTECTED_CONFLICT_FALLBACK}"\n', encoding="utf-8")
+		proc = subprocess.run(["bash", "-c", f'source "{script}"'], env={**os.environ, "SUPPORT_SCRIPTS_DIR": str(support),
+			"PR_NUMBER": "42", "HEAD_SHA": HEAD, "CLAUDE_FIXER_PROTECTED_CONFLICT_PATHS": ".claude/x"}, capture_output=True, text=True)
+	assert proc.returncode == 0, proc.stderr
+	assert "fallback=true" in proc.stdout and "resolver=unresolved" in proc.stdout
 
 
 # ---- gate jq predicates, executed against sample comment payloads ----
