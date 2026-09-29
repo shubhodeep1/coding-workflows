@@ -19,11 +19,15 @@
 # smoke_review_pr_named_runs <repo> <workflow_file> <dispatch_ref> <pr_number>
 #
 # Lists the workflow_dispatch runs of <workflow_file> on <dispatch_ref> whose
-# run name ends with " [pr:<pr_number>]". GitHub can report head_branch as
-# null (or leave it empty) on a workflow_dispatch run (issue #4928), so such a
-# run is kept too, and the listing is not narrowed with the API's branch
-# filter, which would drop it server-side. A run on any other branch is
-# dropped.
+# run name ends with " [pr:<pr_number>]". The run name alone proves nothing:
+# GitHub evaluates run-name from the workflow file at the dispatched ref, so
+# any writer can dispatch a run named for this PR from their own branch
+# (issue #5094), and that run writes its own codex-agent log, the evidence
+# the callers correlate on. Only head_branch == <dispatch_ref> shows the run
+# executed the reviewed default-branch wrapper, so a run whose head_branch is
+# another branch, null, or empty is dropped (fail closed; none of the 200
+# most recent dispatch runs in coding-workflows had a null head_branch). The
+# branch is checked here rather than with the API's branch filter.
 #   Input:   owner/repo; a workflow basename (*.yml); the dispatch branch;
 #            a positive PR number.
 #   Output:  a JSON array, oldest id first, of
@@ -78,7 +82,7 @@ smoke_review_pr_named_runs()
 			[
 				.workflow_runs[]
 				| select(.event == "workflow_dispatch")
-				| select((.head_branch // "") == "" or .head_branch == $ref)
+				| select(.head_branch == $ref)
 				| select((.name // "") != (.path // ""))
 				| select((.display_title | type == "string")
 					and (.display_title | endswith(" [pr:" + $pr + "]")))

@@ -197,15 +197,15 @@ def test_pr_named_runs_keeps_only_this_prs_dispatch_runs_on_the_dispatch_ref() -
 		assert RUNS_PATH in call
 		for field in ("event=workflow_dispatch", "per_page=100"):
 			assert field in call and call[call.index(field) - 1] == "-f", call
-		# The API's branch filter would drop a run whose head_branch is null
-		# server-side, so the listing is never narrowed by branch.
+		# The head branch is checked client-side, not with the API's branch
+		# filter.
 		assert not any(arg.startswith("branch=") for arg in call), call
 	finally:
 		stub.cleanup()
 
 
-def test_pr_named_runs_keeps_dispatch_runs_whose_head_branch_is_null_missing_or_empty() -> None:
-	"""GitHub can report head_branch as null on a workflow_dispatch run (issue #4928)."""
+def test_pr_named_runs_drops_dispatch_runs_whose_head_branch_is_null_missing_or_empty() -> None:
+	"""A run with no head_branch has no evidence it ran the default-branch wrapper (#5093 AD-11, #5094)."""
 	stub = GhStub()
 	try:
 		missing = _run(id=312)
@@ -220,12 +220,13 @@ def test_pr_named_runs_keeps_dispatch_runs_whose_head_branch_is_null_missing_or_
 					_run(id=314, head_branch=None, display_title="Internal: AI Review & Autofix [pr:13]"),
 					_run(id=315, head_branch=None, event="pull_request"),
 					_run(id=316, head_branch="ai/issue-7"),
+					_run(id=317),
 				]
 			},
 		)
 		rc, out = _call_helper(stub, "smoke_review_pr_named_runs", REPO, "internal-review.yml", "main", "12")
 		assert rc == 0, out
-		assert [run["id"] for run in json.loads(out)] == [311, 312, 313]
+		assert [run["id"] for run in json.loads(out)] == [317]
 	finally:
 		stub.cleanup()
 
