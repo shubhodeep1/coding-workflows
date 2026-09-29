@@ -1387,9 +1387,14 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   session=<id> sig=<sig> -->` marker. In coding-workflows it lands on the
   pattern's issue as above. Elsewhere it goes to the open PR for the
   session's branch, else to issue `<N>` for a
-  `claude/implement-plan-issue-<N>-` branch, else nowhere. Each signature is
-  reported once per session and at most 5 per session, and a later `file`
-  skips the reported signatures (`already_reported`). The operator's poller
+  `claude/implement-plan-issue-<N>[-…]` branch, else nowhere. Each signature
+  is reported once per session and at most 5 per session (kept per session
+  id, so sessions sharing a home directory never suppress each other), and a
+  later `file` skips the reported signatures (`already_reported`). The hook
+  passes the SHA-256 of the line it logged, so the report is about that
+  prompt even when another one is logged first. `CLAUDE_PERMISSION_PROMPT_REPORT=off`
+  in the session environment turns `report-now` off (default: unset, on);
+  `file` still files at the end of the stage. The operator's poller
   gets the command and the link for a stuck session with the read-only
   `permission_prompts.py lookup --session <id>`.
 

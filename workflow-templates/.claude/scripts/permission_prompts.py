@@ -12,7 +12,7 @@ Usage:
 
   permission_prompts.py report [--log-dir DIR]
   permission_prompts.py file [--log-dir DIR] [--session-label ID] [--dry-run]
-  permission_prompts.py report-now --log-file FILE [--cwd DIR]
+  permission_prompts.py report-now --log-file FILE [--cwd DIR] [--record-sha256 HEX]
   permission_prompts.py lookup --session ID [--repo OWNER/REPO]
   permission_prompts.py session-meta --title TITLE [--log-dir DIR]
 
@@ -40,22 +40,34 @@ so a prompt is reported once per session.
 `report-now` is the immediate report (issue #4755). The logger hook starts it
 detached on every `PermissionRequest`, so it prints nothing, always exits 0,
 and swallows every error: the prompt is never blocked, delayed, or changed.
+The hook passes `--record-sha256`, the SHA-256 of the log line it just wrote,
+so the report is about that prompt even when a later prompt was logged
+before the child started (without it, the last line is used). Setting
+REPORT_NOW_SWITCH_ENV (`CLAUDE_PERMISSION_PROMPT_REPORT`) to `off` turns
+`report-now` off; unset (the default) it is on.
 It reports only in an unattended session, meaning a cloud session
 (CLAUDE_CODE_REMOTE_SESSION_ID set) whose prompt came in `auto` or
 `bypassPermissions` mode. Each signature is reported at most once per
-session, and at most MAX_IMMEDIATE_REPORTS times in all, under `filing.lock`,
-which `file` takes too. The report holds the event, the tool, the command
+session, and at most MAX_IMMEDIATE_REPORTS times per session, under
+`filing.lock`, which `file` takes too; `immediate-state.json` keeps these per
+session id, so sessions sharing a home directory never suppress each other.
+The report holds the event, the tool, the command
 sanitized as below, the session id and its claude.ai link, the title that
-`session-meta` recorded (else `not recorded`), the signature, and the marker
+`session-meta` recorded for this session (else `not recorded`), the
+signature, and the marker
 `<!-- ai:permission-prompt-session:v1 session=<id> sig=<sig> -->`.
   - In FILING_REPO it comments on the pattern's `ai:permission-prompt` issue,
     or opens one, exactly as `file` would.
   - Elsewhere it comments on the open PR whose head is the checkout's branch,
-    else on issue <N> for a `claude/implement-plan-issue-<N>-…` branch, else
-    posts nothing.
-Only a successful POST is recorded (`immediate-state.json`, and
-`filed-state.json` as `file` would record it); after a failure, `file` still
-files the pattern at the end of the stage.
+    else on issue <N> for a `claude/implement-plan-issue-<N>[-…]` branch,
+    else posts nothing.
+The signature is reserved in `immediate-state.json` (target `pending`)
+before the POST, so a local write failure after a successful POST can never
+make `report-now` post it again; no reservation, no POST. A failed POST, or
+no target, removes the reservation. A reservation still `pending` counts
+toward the cap but not as reported for `file`, so after any failure `file`
+still files the pattern at the end of the stage. A successful POST records
+its target, and `filed-state.json` as `file` would record it.
 
 `lookup` is read-only and serves the operator's poller: it finds the newest
 session marker for a session and prints the sanitized command and the issue
@@ -68,7 +80,7 @@ token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
 API calls (CLAUDE.md §15), REST only, none when nothing is new:
   - `file`: one read of the `ai:permission-prompt` issues per 100 issues,
     then one POST per pattern filed or commented.
-  - `report-now`: none when the session is not unattended, the signature was
+  - `report-now`: none when it is switched off, the session is not unattended, the signature was
     already reported, or the cap is reached. In FILING_REPO, the same issue
     read as `file` plus one POST. Elsewhere, one read of the branch's open
     PRs plus at most one POST. At most MAX_IMMEDIATE_REPORTS reports per
@@ -130,13 +142,18 @@ MAX_IMMEDIATE_REPORTS = 5
 MAX_SESSION_TITLE_CHARS = 200
 LOOKUP_MAX_HITS = 3
 REMOTE_SESSION_ENV = "CLAUDE_CODE_REMOTE_SESSION_ID"
+# Kill switch for `report-now`: `off` disables it; unset (the default) or any other value leaves it on.
+REPORT_NOW_SWITCH_ENV = "CLAUDE_PERMISSION_PROMPT_REPORT"
+# Target of a signature reserved in immediate-state.json while its POST is in flight.
+PENDING_TARGET = "pending"
 UNATTENDED_MODES = frozenset({"auto", "bypassPermissions"})
 SESSION_URL_TEMPLATE = "https://claude.ai/code/{session}"
 IMMEDIATE_HEADING = "**Immediate report:** an unattended session is waiting on this permission prompt now."
 SESSION_MARKER_TEMPLATE = "<!-- ai:permission-prompt-session:v1 session={session} sig={sig} -->"
 SESSION_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-session:v1 session=(session_[A-Za-z0-9_-]{1,120}) sig=([0-9a-f]{12}) -->")
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,120}")
-_ISSUE_BRANCH_RE = re.compile(r"^claude/implement-plan-issue-([0-9]+)-")
+_ISSUE_BRANCH_RE = re.compile(r"^claude/implement-plan-issue-([0-9]+)(?:-|$)")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 REDACTION_PATTERNS = (
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
@@ -324,7 +341,9 @@ def load_records(log_dir: Path) -> list[dict]:
 		return records
 	for path in sorted(log_dir.glob("*.jsonl")):
 		try:
-			lines = path.read_text(encoding="utf-8").splitlines()
+			# Split on "\n" only: the hook writes JSON with ensure_ascii=False, so a
+			# command can hold U+2028 or U+0085, which splitlines() would also split on.
+			lines = path.read_text(encoding="utf-8").split("\n")
 		except OSError:
 			continue
 		for line in lines:
@@ -515,15 +534,26 @@ def _filing_lock(log_dir: Path):
 
 
 def _load_immediate_state(log_dir: Path) -> dict:
-	"""`{"reports": {sig: {...}}, "count": n}` from `immediate-state.json`; empty when missing or invalid."""
+	"""`{"sessions": {label: {"reports": {sig: {...}}, "count": n}}}` from `immediate-state.json`; empty when missing or invalid."""
 	try:
 		state = json.loads((log_dir / IMMEDIATE_STATE_FILE).read_text(encoding="utf-8"))
 	except (OSError, ValueError):
 		state = {}
-	reports = state.get("reports") if isinstance(state, dict) else None
-	reports = {key: value for key, value in reports.items() if isinstance(key, str) and isinstance(value, dict)} if isinstance(reports, dict) else {}
-	count = state.get("count") if isinstance(state, dict) else None
-	return {"reports": reports, "count": count if isinstance(count, int) and count >= len(reports) else len(reports)}
+	sessions = state.get("sessions") if isinstance(state, dict) else None
+	loaded: dict[str, dict] = {}
+	for label, bucket in (sessions.items() if isinstance(sessions, dict) else ()):
+		if not isinstance(label, str) or not isinstance(bucket, dict):
+			continue
+		reports = bucket.get("reports")
+		reports = {key: value for key, value in reports.items() if isinstance(key, str) and isinstance(value, dict)} if isinstance(reports, dict) else {}
+		count = bucket.get("count")
+		loaded[label] = {"reports": reports, "count": count if isinstance(count, int) and count >= len(reports) else len(reports)}
+	return {"sessions": loaded}
+
+
+def _session_reports(immediate: dict, session_label: str) -> dict:
+	"""This session's `{"reports": {...}, "count": n}` bucket in a loaded immediate state, created empty when missing."""
+	return immediate["sessions"].setdefault(session_label, {"reports": {}, "count": 0})
 
 
 def _save_immediate_state(log_dir: Path, state: dict) -> None:
@@ -561,19 +591,21 @@ def _inline_code(text: str) -> str:
 	return " ".join(text.replace("`", "'").split())
 
 
-def read_session_title(log_dir: Path) -> str:
-	"""The title `session-meta` recorded, redacted; "" when none was recorded."""
+def read_session_title(log_dir: Path, session_label: str = "") -> str:
+	"""The title `session-meta` recorded for this session, redacted; "" when none was, or another session wrote it last."""
 	try:
 		meta = json.loads((log_dir / SESSION_META_FILE).read_text(encoding="utf-8"))
 	except (OSError, ValueError):
 		return ""
-	title = meta.get("title") if isinstance(meta, dict) else None
+	if not isinstance(meta, dict) or str(meta.get("session") or "") != session_label:
+		return ""
+	title = meta.get("title")
 	return _inline_code(redact(title))[:MAX_SESSION_TITLE_CHARS] if isinstance(title, str) else ""
 
 
-def write_session_meta(log_dir: Path, title: str) -> None:
+def write_session_meta(log_dir: Path, title: str, session_label: str = "") -> None:
 	log_dir.mkdir(parents=True, exist_ok=True)
-	(log_dir / SESSION_META_FILE).write_text(json.dumps({"title": title[:MAX_SESSION_TITLE_CHARS]}), encoding="utf-8")
+	(log_dir / SESSION_META_FILE).write_text(json.dumps({"title": title[:MAX_SESSION_TITLE_CHARS], "session": session_label}), encoding="utf-8")
 
 
 def immediate_block(pattern: dict, record: dict, session_label: str, title: str) -> str:
@@ -625,7 +657,14 @@ def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | 
 def _file_pending(log_dir: Path, patterns: list[dict], summary: dict, session_label: str, dry_run: bool, slug: str) -> tuple[int, dict]:
 	"""The filing half of `file_patterns`, run under `filing.lock`."""
 	state = _load_state(log_dir)
-	reported = _load_immediate_state(log_dir)["reports"]
+	# `file` covers every session in the log directory, so a signature any session reported counts;
+	# a `pending` reservation does not, because its POST may never have landed.
+	reported = {
+		sig: entry
+		for bucket in _load_immediate_state(log_dir)["sessions"].values()
+		for sig, entry in bucket["reports"].items()
+		if entry.get("target") != PENDING_TARGET
+	}
 	pending = []
 	for pattern in patterns:
 		sig = pattern["signature"]
@@ -672,11 +711,28 @@ def _file_pending(log_dir: Path, patterns: list[dict], summary: dict, session_la
 def _last_record(log_file: Path) -> dict | None:
 	"""The last JSON line of one session log (the prompt the hook just appended), or None."""
 	try:
-		lines = log_file.read_text(encoding="utf-8").splitlines()
+		lines = log_file.read_text(encoding="utf-8").split("\n")
 	except OSError:
 		return None
 	for line in reversed(lines):
 		if not line.strip():
+			continue
+		try:
+			record = json.loads(line)
+		except ValueError:
+			return None
+		return record if isinstance(record, dict) else None
+	return None
+
+
+def _record_by_digest(log_file: Path, record_digest: str) -> dict | None:
+	"""The newest log line whose SHA-256 (of the line without its newline) is `record_digest`, or None."""
+	try:
+		lines = log_file.read_text(encoding="utf-8").split("\n")
+	except OSError:
+		return None
+	for line in reversed(lines):
+		if hashlib.sha256(line.encode("utf-8")).hexdigest() != record_digest:
 			continue
 		try:
 			record = json.loads(line)
@@ -702,7 +758,7 @@ def _report_to_filing_repo(slug: str, pattern: dict, block: str, session_label: 
 
 
 def _report_to_own_thread(slug: str, cwd: str | None, block: str) -> str:
-	"""Outside FILING_REPO: comment on the branch's open PR, else on a `claude/implement-plan-issue-<N>-` issue; "" when neither exists."""
+	"""Outside FILING_REPO: comment on the branch's open PR, else on a `claude/implement-plan-issue-<N>[-…]` issue; "" when neither exists."""
 	branch = _git_output(["branch", "--show-current"], cwd)
 	if not branch:
 		return ""
@@ -724,30 +780,38 @@ def _report_to_own_thread(slug: str, cwd: str | None, block: str) -> str:
 	return f"{kind} #{number}"
 
 
-def report_now(log_file: Path, cwd: str | None, session_label: str | None = None, now: datetime | None = None) -> str:
+def report_now(log_file: Path, cwd: str | None, session_label: str | None = None, now: datetime | None = None, record_digest: str | None = None) -> str:
 	"""Report the prompt the hook just logged, at most once per signature per session; see the module docstring.
 
 	Never raises: the hook runs it detached and nobody reads its result. The
-	returned outcome string exists for the tests. Nothing is recorded unless a
-	POST succeeded.
+	returned outcome string exists for the tests. `record_digest` is the
+	SHA-256 of the logged line to report; without it the last line is used.
 	"""
 	try:
-		return _report_now(log_file, cwd, session_label_from_env() if session_label is None else session_label, now or datetime.now(timezone.utc))
+		if os.environ.get(REPORT_NOW_SWITCH_ENV, "").strip().lower() == "off":
+			return "skipped: switched off"
+		return _report_now(log_file, cwd, session_label_from_env() if session_label is None else session_label, now or datetime.now(timezone.utc), record_digest)
 	except Exception as exc:  # noqa: BLE001 - the immediate report must fail open
 		return f"error: {exc}"
 
 
-def _report_now(log_file: Path, cwd: str | None, session_label: str, now: datetime) -> str:
-	record = _last_record(log_file)
+def _report_now(log_file: Path, cwd: str | None, session_label: str, now: datetime, record_digest: str | None = None) -> str:
+	if record_digest:
+		if not _SHA256_RE.fullmatch(record_digest):
+			return "skipped: invalid record digest"
+		record = _record_by_digest(log_file, record_digest)
+	else:
+		record = _last_record(log_file)
 	if record is None or not is_unattended(record, session_label):
 		return "skipped: not an unattended permission prompt"
 	log_dir = log_file.parent
 	sig = signature(str(record.get("event")), str(record.get("tool_name") or ""), record_shape(record))
 	with _filing_lock(log_dir):
 		immediate = _load_immediate_state(log_dir)
-		if sig in immediate["reports"]:
+		bucket = _session_reports(immediate, session_label)
+		if sig in bucket["reports"]:
 			return "skipped: already reported"
-		if immediate["count"] >= MAX_IMMEDIATE_REPORTS:
+		if bucket["count"] >= MAX_IMMEDIATE_REPORTS:
 			return "skipped: cap reached"
 		pattern = next((item for item in group_patterns(load_records(log_dir)) if item["signature"] == sig), None)
 		if pattern is None:
@@ -755,19 +819,37 @@ def _report_now(log_file: Path, cwd: str | None, session_label: str, now: dateti
 		slug = local_repo_slug(cwd)
 		if not slug:
 			return "skipped: unknown repository"
-		block = immediate_block(pattern, record, session_label, read_session_title(log_dir))
+		block = immediate_block(pattern, record, session_label, read_session_title(log_dir, session_label))
 		filing_repo = slug.lower() == FILING_REPO
-		target = _report_to_filing_repo(slug, pattern, block, session_label, log_dir) if filing_repo else _report_to_own_thread(slug, cwd, block)
+		# Reserve before the POST: when this write fails nothing is posted, and a
+		# write failure after the POST can no longer lead to a second report.
+		entry = {"target": PENDING_TARGET, "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "session": session_label}
+		bucket["reports"][sig] = entry
+		bucket["count"] += 1
+		_save_immediate_state(log_dir, immediate)
+		try:
+			target = _report_to_filing_repo(slug, pattern, block, session_label, log_dir) if filing_repo else _report_to_own_thread(slug, cwd, block)
+		except Exception:
+			_release_reservation(log_dir, immediate, bucket, sig)
+			raise
 		if not target:
+			_release_reservation(log_dir, immediate, bucket, sig)
 			return "skipped: no target"
-		immediate["reports"][sig] = {"target": target, "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "session": session_label}
-		immediate["count"] += 1
+		entry["target"] = target
 		_save_immediate_state(log_dir, immediate)
 		if filing_repo:
 			state = _load_state(log_dir)
 			state[sig] = max(state.get(sig, 0), pattern["count"])
 			_save_state(log_dir, state)
 		return f"reported: {target}"
+
+
+def _release_reservation(log_dir: Path, immediate: dict, bucket: dict, sig: str) -> None:
+	"""Undo a `pending` reservation whose POST failed or had no target; a failed write leaves it `pending`, which `file` ignores."""
+	bucket["reports"].pop(sig, None)
+	bucket["count"] = max(bucket["count"] - 1, 0)
+	with contextlib.suppress(OSError):
+		_save_immediate_state(log_dir, immediate)
 
 
 _TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -835,6 +917,7 @@ def build_parser() -> argparse.ArgumentParser:
 	report_now_command = sub.add_parser("report-now")
 	report_now_command.add_argument("--log-file", required=True)
 	report_now_command.add_argument("--cwd", default="")
+	report_now_command.add_argument("--record-sha256", default="")
 	lookup_command = sub.add_parser("lookup")
 	lookup_command.add_argument("--session", required=True)
 	lookup_command.add_argument("--repo", default="")
@@ -847,11 +930,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
 	if args.command == "report-now":
-		report_now(Path(args.log_file), args.cwd or None)
+		report_now(Path(args.log_file), args.cwd or None, record_digest=args.record_sha256 or None)
 		return 0
 	if args.command == "session-meta":
 		try:
-			write_session_meta(Path(args.log_dir), args.title)
+			write_session_meta(Path(args.log_dir), args.title, session_label_from_env())
 		except OSError as exc:
 			print(json.dumps({"ok": False, "error": str(exc)}))
 			return 0

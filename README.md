@@ -1081,7 +1081,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > `permission_prompts.py report-now` that reports the sanitized command, the
 > session, and the pattern right away (once per signature per session, at
 > most 5), and `permission_prompts.py lookup --session <id>` gives the
-> operator's poller that command and its issue link. `/implement-plan-claude` now
+> operator's poller that command and its issue link. Set
+> `CLAUDE_PERMISSION_PROMPT_REPORT=off` in the session environment to turn
+> the immediate report off (default: on). `/implement-plan-claude` now
 > requires Auto mode, and stops before any phase that must edit `.claude/**`
 > to ask how to run it.
 

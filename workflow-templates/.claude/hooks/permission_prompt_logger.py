@@ -20,7 +20,9 @@ swallowed and the event is simply not logged.
 After logging a `PermissionRequest` it starts one detached
 `permission_prompts.py report-now` (issue #4755) and returns without waiting:
 stdio goes to /dev/null and the child runs in its own session, so the prompt
-is never delayed. The child decides whether the session is unattended and
+is never delayed. It passes the SHA-256 of the line it wrote
+(`--record-sha256`), so the child reports this prompt even when another one
+is logged before it starts. The child decides whether the session is unattended and
 reports the prompt to GitHub right away, because a session stuck on a prompt
 never reaches the end-of-stage `permission_prompts.py file`. A spawn failure
 is swallowed like any other error. `PermissionDenied` starts nothing.
@@ -34,6 +36,7 @@ MAX_VALUE_CHARS are truncated), `reason` (from `reason` or
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -87,20 +90,33 @@ def build_record(payload: dict, now: datetime) -> dict | None:
 	}
 
 
+def serialize_record(record: dict) -> str:
+	"""The log line for a record, without its newline; `record_digest` hashes exactly this text."""
+	return json.dumps(record, ensure_ascii=False)
+
+
+def record_digest(record: dict) -> str:
+	"""SHA-256 hex of the record's log line, which `permission_prompts.py report-now --record-sha256` looks up."""
+	return hashlib.sha256(serialize_record(record).encode("utf-8")).hexdigest()
+
+
 def append_record(record: dict, directory: Path) -> Path:
 	directory.mkdir(parents=True, exist_ok=True)
 	path = directory / f"{_SESSION_FILE_RE.sub('_', record['session_id'])[:120]}.jsonl"
 	with path.open("a", encoding="utf-8") as handle:
-		handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+		handle.write(serialize_record(record) + "\n")
 	return path
 
 
-def spawn_reporter(log_path: Path, cwd: str) -> None:
+def spawn_reporter(log_path: Path, cwd: str, digest: str = "") -> None:
 	"""Start `permission_prompts.py report-now` detached and return at once; never waits on the child."""
 	if not REPORTER_PATH.is_file():
 		return
+	args = [sys.executable, "-B", str(REPORTER_PATH), "report-now", "--log-file", str(log_path), "--cwd", cwd]
+	if digest:
+		args += ["--record-sha256", digest]
 	subprocess.Popen(
-		[sys.executable, "-B", str(REPORTER_PATH), "report-now", "--log-file", str(log_path), "--cwd", cwd],
+		args,
 		stdin=subprocess.DEVNULL,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
@@ -118,7 +134,7 @@ def main() -> int:
 			if record is not None:
 				path = append_record(record, log_dir())
 				if record["event"] == "PermissionRequest":
-					spawn_reporter(path, record["cwd"])
+					spawn_reporter(path, record["cwd"], record_digest(record))
 	except Exception:  # noqa: BLE001 - logging must never affect the permission flow
 		pass
 	return 0

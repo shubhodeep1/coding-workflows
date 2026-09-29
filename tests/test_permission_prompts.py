@@ -161,7 +161,9 @@ def test_hook_spawns_one_detached_reporter_for_a_prompt(monkeypatch, tmp_path, f
 	assert capsys.readouterr().out == ""
 	assert len(fake_popen.calls) == 1
 	args, kwargs = fake_popen.calls[0]
-	assert args[1:] == ["-B", str(logger.REPORTER_PATH), "report-now", "--log-file", str(tmp_path / "log" / "sess-1.jsonl"), "--cwd", "/home/user/coding-workflows"]
+	log_file = tmp_path / "log" / "sess-1.jsonl"
+	digest = __import__("hashlib").sha256(log_file.read_text(encoding="utf-8").splitlines()[-1].encode("utf-8")).hexdigest()
+	assert args[1:] == ["-B", str(logger.REPORTER_PATH), "report-now", "--log-file", str(log_file), "--cwd", "/home/user/coding-workflows", "--record-sha256", digest]
 	assert logger.REPORTER_PATH == SCRIPT_PATH
 	assert kwargs["start_new_session"] is True and kwargs["close_fds"] is True
 	for stream in ("stdin", "stdout", "stderr"):
@@ -458,6 +460,8 @@ class FakeGitHub:
 
 @pytest.fixture
 def github(monkeypatch):
+	monkeypatch.delenv(pp.REPORT_NOW_SWITCH_ENV, raising=False)
+
 	def install(slug=FILING, branch="claude/some-branch", **kwargs):
 		fake = FakeGitHub(**kwargs)
 		monkeypatch.setattr(pp.check_in_status, "gh_api_list", fake.gh_api_list)
@@ -501,7 +505,7 @@ def test_report_now_skips_attended_sessions_and_denials(tmp_path, github, sessio
 def test_report_now_opens_a_routed_issue_in_coding_workflows(tmp_path, github, mode):
 	fake = github()
 	log_file = _session_log(tmp_path, [_payload("gh api -X GET search/issues -f q=a | sort -n", permission_mode=mode, reason="needs approval")])
-	pp.write_session_meta(log_file.parent, "implement-issue-claude — #4707")
+	pp.write_session_meta(log_file.parent, "implement-issue-claude — #4707", SESSION)
 	assert _report(log_file) == "reported: issue #901"
 	path, body = fake.posts[0]
 	assert path == "repos/shubhodeep1/coding-workflows/issues"
@@ -514,7 +518,8 @@ def test_report_now_opens_a_routed_issue_in_coding_workflows(tmp_path, github, m
 	assert "- **Event:** PermissionRequest (permission prompt)" in body["body"]
 	assert "- **Tool:** `Bash`" in body["body"]
 	state = json.loads((log_file.parent / pp.IMMEDIATE_STATE_FILE).read_text())
-	assert state["count"] == 1 and state["reports"][sig]["target"] == "issue #901"
+	bucket = state["sessions"][SESSION]
+	assert bucket["count"] == 1 and bucket["reports"][sig]["target"] == "issue #901"
 	assert json.loads((log_file.parent / pp.STATE_FILE).read_text()) == {sig: 1}
 
 
@@ -533,7 +538,7 @@ def test_report_now_sanitizes_the_command_and_title(tmp_path, github):
 	fake = github()
 	secret = "ghp_abcdefghijklmnopqrstuvwxyz0123"
 	log_file = _session_log(tmp_path, [_payload(f"curl -H 'Authorization: Bearer {secret}' x && python3 - <<'EOF'\nprint('{secret}')\nEOF")])
-	pp.write_session_meta(log_file.parent, f"stage `x` token={secret}\nsecond line")
+	pp.write_session_meta(log_file.parent, f"stage `x` token={secret}\nsecond line", SESSION)
 	_report(log_file)
 	body = fake.posts[0][1]["body"]
 	assert secret not in body
@@ -590,7 +595,8 @@ def test_report_now_fails_open_and_records_nothing(tmp_path, github, failure, kw
 	github(**kwargs)
 	log_file = _session_log(tmp_path, [_payload("ls")])
 	assert _report(log_file).startswith("error:")
-	assert not (log_file.parent / pp.IMMEDIATE_STATE_FILE).exists()
+	# The reservation made before the read and POST is released again.
+	assert pp._load_immediate_state(log_file.parent)["sessions"][SESSION] == {"reports": {}, "count": 0}
 	assert not (log_file.parent / pp.STATE_FILE).exists()
 	fake = github()
 	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
@@ -626,7 +632,7 @@ def test_report_now_elsewhere_without_a_target_posts_nothing(tmp_path, github):
 	fake = github(slug="someone/consumer", branch="feature/x")
 	log_file = _session_log(tmp_path, [_payload("ls")])
 	assert _report(log_file) == "skipped: no target"
-	assert fake.posts == [] and not (log_file.parent / pp.IMMEDIATE_STATE_FILE).exists()
+	assert fake.posts == [] and pp._load_immediate_state(log_file.parent)["sessions"][SESSION] == {"reports": {}, "count": 0}
 
 
 def test_report_now_main_prints_nothing_and_exits_0(tmp_path, capsys, monkeypatch):
@@ -635,6 +641,166 @@ def test_report_now_main_prints_nothing_and_exits_0(tmp_path, capsys, monkeypatc
 	assert pp.main(["report-now", "--log-file", str(log_file), "--cwd", str(tmp_path)]) == 0
 	assert pp.main(["report-now", "--log-file", str(tmp_path / "missing.jsonl")]) == 0
 	assert capsys.readouterr().out == ""
+
+
+def _digest(record):
+	return logger.record_digest(record)
+
+
+def test_hook_digest_matches_the_line_it_wrote(tmp_path):
+	record = logger.build_record(_payload("ls é"), NOW)
+	path = logger.append_record(record, tmp_path / "log")
+	line = path.read_text(encoding="utf-8").splitlines()[-1]
+	assert _digest(record) == __import__("hashlib").sha256(line.encode("utf-8")).hexdigest()
+
+
+def test_report_now_reports_the_record_that_spawned_it(tmp_path, github):
+	# Review round 1: a later prompt logged before the child starts must not replace the one that spawned it.
+	fake = github()
+	log_file = _session_log(tmp_path, [])
+	first = logger.build_record(_payload("ls first"), NOW)
+	logger.append_record(first, log_file.parent)
+	logger.append_record(logger.build_record(_payload("cat later", tool="Bash"), NOW), log_file.parent)
+	assert pp.report_now(log_file, "/x", session_label=SESSION, now=NOW, record_digest=_digest(first)).startswith("reported")
+	assert "ls first" in fake.posts[0][1]["body"] and "cat later" not in fake.posts[0][1]["body"]
+
+
+def test_unicode_line_separators_stay_in_one_record(tmp_path, github):
+	# U+2028 / U+0085 are not escaped by json.dumps(ensure_ascii=False); splitlines() would cut the record.
+	fake = github()
+	log_file = _session_log(tmp_path, [])
+	record = logger.build_record(_payload("echo 'a\u2028b\x85c'"), NOW)
+	logger.append_record(record, log_file.parent)
+	assert len(pp.load_records(log_file.parent)) == 1
+	assert pp._last_record(log_file) == record
+	assert pp.report_now(log_file, "/x", session_label=SESSION, now=NOW, record_digest=_digest(record)).startswith("reported")
+	assert len(fake.posts) == 1
+
+
+def test_report_now_skips_a_bad_or_unknown_digest(tmp_path, github):
+	fake = github()
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert pp.report_now(log_file, "/x", session_label=SESSION, now=NOW, record_digest="zz") == "skipped: invalid record digest"
+	assert pp.report_now(log_file, "/x", session_label=SESSION, now=NOW, record_digest="0" * 64).startswith("skipped: not an unattended")
+	assert fake.reads == [] and fake.posts == []
+
+
+def test_report_now_main_passes_the_digest(tmp_path, monkeypatch):
+	seen = {}
+	monkeypatch.setattr(pp, "report_now", lambda log_file, cwd, **kwargs: seen.update(kwargs) or "x")
+	assert pp.main(["report-now", "--log-file", str(tmp_path / "a.jsonl"), "--record-sha256", "a" * 64]) == 0
+	assert seen == {"record_digest": "a" * 64}
+
+
+def test_report_now_state_is_per_session(tmp_path, github):
+	# Review round 1: one session's report or cap never suppresses another session's report.
+	fake = github()
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	other = "session_01OTHER"
+	assert _report(log_file).startswith("reported")
+	assert _report(log_file, other).startswith("reported")
+	assert len(fake.posts) == 2
+	state = json.loads((log_file.parent / pp.IMMEDIATE_STATE_FILE).read_text())
+	assert set(state["sessions"]) == {SESSION, other}
+	for index in range(pp.MAX_IMMEDIATE_REPORTS):
+		logger.append_record(logger.build_record(_payload(f"tool{index} x"), NOW), log_file.parent)
+		outcome = _report(log_file)
+	# SESSION used its 5 reports (ls, tool0-tool3); `other` has used 1 and still reports.
+	assert outcome == "skipped: cap reached"
+	assert _report(log_file, other).startswith("reported")
+	assert len(fake.posts) == pp.MAX_IMMEDIATE_REPORTS + 2
+
+
+def test_report_now_reserves_before_posting(tmp_path, github, monkeypatch):
+	# Review round 1: a state write failing after a successful POST must not lead to a second report.
+	fake = github()
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	real_save = pp._save_immediate_state
+	calls = []
+
+	def save(log_dir, state):
+		calls.append(json.loads(json.dumps(state)))
+		if len(calls) == 2:
+			raise OSError("disk full")
+		real_save(log_dir, state)
+
+	monkeypatch.setattr(pp, "_save_immediate_state", save)
+	assert _report(log_file).startswith("error:")
+	sig = pp.group_patterns(pp.load_records(log_file.parent))[0]["signature"]
+	assert calls[0]["sessions"][SESSION]["reports"][sig]["target"] == pp.PENDING_TARGET
+	assert len(fake.posts) == 1
+	monkeypatch.setattr(pp, "_save_immediate_state", real_save)
+	assert _report(log_file) == "skipped: already reported"
+	assert len(fake.posts) == 1
+	# A reservation left `pending` is not "reported" for `file`, which still files the pattern.
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and summary["already_reported"] == [] and len(summary["filed"]) == 1
+
+
+def test_report_now_posts_nothing_when_the_reservation_cannot_be_saved(tmp_path, github, monkeypatch):
+	fake = github()
+	log_file = _session_log(tmp_path, [_payload("ls")])
+
+	def save(log_dir, state):
+		raise OSError("read-only")
+
+	monkeypatch.setattr(pp, "_save_immediate_state", save)
+	assert _report(log_file).startswith("error:")
+	assert fake.posts == [] and fake.reads == []
+
+
+def test_report_now_releases_the_reservation_after_a_failed_post(tmp_path, github):
+	github(fail_post=True)
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert _report(log_file).startswith("error:")
+	state = json.loads((log_file.parent / pp.IMMEDIATE_STATE_FILE).read_text())
+	assert state["sessions"][SESSION] == {"reports": {}, "count": 0}
+	fake = github()
+	assert _report(log_file).startswith("reported")
+	assert len(fake.posts) == 1
+
+
+@pytest.mark.parametrize("value", ["off", "OFF", " off "])
+def test_report_now_kill_switch(tmp_path, github, monkeypatch, value):
+	fake = github()
+	monkeypatch.setenv(pp.REPORT_NOW_SWITCH_ENV, value)
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert _report(log_file) == "skipped: switched off"
+	assert fake.reads == [] and fake.posts == []
+	monkeypatch.setenv(pp.REPORT_NOW_SWITCH_ENV, "on")
+	assert _report(log_file).startswith("reported")
+
+
+def test_report_now_elsewhere_matches_a_bare_issue_branch(tmp_path, github):
+	fake = github(slug="someone/consumer", branch="claude/implement-plan-issue-12")
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert _report(log_file) == "reported: issue #12"
+	assert fake.posts[0][0] == "repos/someone/consumer/issues/12/comments"
+	assert pp._ISSUE_BRANCH_RE.match("claude/implement-plan-issue-12x") is None
+
+
+def test_report_now_ignores_another_sessions_title(tmp_path, github):
+	fake = github()
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	pp.write_session_meta(log_file.parent, "someone else's stage", "session_01OTHER")
+	_report(log_file)
+	assert "**Session title:** not recorded" in fake.posts[0][1]["body"]
+
+
+def test_filing_lock_excludes_another_process(tmp_path):
+	# Review round 1: flock on separately opened descriptions of one file does exclude another process.
+	script = (
+		"import fcntl, sys\n"
+		"with open(sys.argv[1], 'a') as h:\n"
+		"\ttry:\n"
+		"\t\tfcntl.flock(h.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+		"\t\tprint('acquired')\n"
+		"\texcept BlockingIOError:\n"
+		"\t\tprint('blocked')\n"
+	)
+	with pp._filing_lock(tmp_path):
+		out = subprocess.run([sys.executable, "-c", script, str(tmp_path / pp.LOCK_FILE)], capture_output=True, text=True, check=True).stdout
+	assert out.strip() == "blocked"
 
 
 @pytest.mark.parametrize(
@@ -646,10 +812,13 @@ def test_session_label_normalization(monkeypatch, raw, label):
 	assert pp.session_label_from_env() == label
 
 
-def test_session_meta_writes_the_title(tmp_path, capsys):
+def test_session_meta_writes_the_title(tmp_path, capsys, monkeypatch):
+	monkeypatch.setenv(pp.REMOTE_SESSION_ENV, "cse_01ABC")
 	assert pp.main(["session-meta", "--title", "implement-plan x — phase 1/1", "--log-dir", str(tmp_path / "log")]) == 0
 	assert json.loads(capsys.readouterr().out) == {"ok": True}
-	assert pp.read_session_title(tmp_path / "log") == "implement-plan x — phase 1/1"
+	assert pp.read_session_title(tmp_path / "log", "session_01ABC") == "implement-plan x — phase 1/1"
+	# Another session sharing the log directory never shows this title (review round 1).
+	assert pp.read_session_title(tmp_path / "log", "session_01OTHER") == ""
 
 
 def test_session_meta_never_fails(tmp_path, capsys):
@@ -662,7 +831,7 @@ def test_session_meta_never_fails(tmp_path, capsys):
 def _reported_body(tmp_path, github):
 	fake = github()
 	log_file = _session_log(tmp_path, [_payload("gh api repos/o/r/issues --jq '.[]'")])
-	pp.write_session_meta(log_file.parent, "implement-issue-claude — #4707")
+	pp.write_session_meta(log_file.parent, "implement-issue-claude — #4707", SESSION)
 	_report(log_file)
 	return fake.posts[0][1]["body"]
 

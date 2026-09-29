@@ -1106,24 +1106,36 @@ reviews, comments, and conflicts stay a direct §12 request.
   2,000 characters. In consumer repos it only reports. Signatures that
   `report-now` already reported are skipped and listed under
   `already_reported`.
-- `permission_prompts.py report-now --log-file F --cwd D` (issue #4755)
-  reports a prompt the moment it blocks an unattended session, because a
-  stuck session never reaches step 14. Unattended means a cloud session
+- `permission_prompts.py report-now --log-file F --cwd D [--record-sha256 H]`
+  (issue #4755) reports a prompt the moment it blocks an unattended session,
+  because a stuck session never reaches step 14. The hook passes `H`, the
+  SHA-256 of the line it just logged, so the child reports that prompt even
+  when a later one was logged before it started (without `H`, the last line).
+  Unattended means a cloud session
   (`CLAUDE_CODE_REMOTE_SESSION_ID` set) whose prompt came in `auto` or
   `bypassPermissions` mode. It prints nothing, always exits 0, and holds
   `filing.lock` (which `file` takes too). It reports each signature once
-  per session, at most 5 per session (`immediate-state.json`). The report
+  per session, at most 5 per session (`immediate-state.json`, keyed by
+  session id, so sessions sharing a home directory never suppress each
+  other). The report
   carries the event, tool, sanitized command, session id and claude.ai link,
-  session title (from `session-meta.json`, else `not recorded`), signature,
+  session title (from `session-meta.json` when this session wrote it, else
+  `not recorded`), signature,
   and a `<!-- ai:permission-prompt-session:v1 session=<id> sig=<sig> -->`
   marker. In coding-workflows it comments on or opens the pattern's issue
   (the same read as `file`, plus 1 POST) and updates `filed-state.json`.
   Elsewhere it reads the branch's open PRs (1 call) and comments on that PR,
-  else on issue `<N>` for a `claude/implement-plan-issue-<N>-` branch, else
-  posts nothing. A failed read or POST records nothing, so step 14 still
-  files the pattern.
-- `permission_prompts.py session-meta --title <t>` records the session title
-  at step 0 of `/implement-plan-claude` and `/implement-issue-claude`.
+  else on issue `<N>` for a `claude/implement-plan-issue-<N>[-…]` branch,
+  else posts nothing. The signature is reserved (`pending`) before the POST,
+  so no local write failure can make `report-now` post it twice; a failed
+  read or POST releases the reservation, and `file` ignores `pending`
+  entries, so step 14 still files the pattern.
+  Kill switch: `CLAUDE_PERMISSION_PROMPT_REPORT=off` in the session
+  environment makes `report-now` do nothing (default: unset, on). The hook
+  still logs every prompt and `file` still files at step 14.
+- `permission_prompts.py session-meta --title <t>` records the session title,
+  with this session's id, at step 0 of `/implement-plan-claude` and
+  `/implement-issue-claude`.
 - `permission_prompts.py lookup --session <id> [--repo <slug>]` is
   read-only, for the operator's poller: one search read plus one comments
   read per hit (at most 3). Only bodies and comments by an OWNER, MEMBER, or
