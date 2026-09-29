@@ -584,7 +584,7 @@ def test_run_keeps_an_open_pr_when_main_moves_outside_claude_and_its_twins(repo)
 	assert ["pr", "merge", "40", "--repo", "o/r", "--squash", "--match-head-commit", pr["head"]["sha"]] in gh.writes
 
 
-def test_run_rebuilds_an_open_pr_that_carries_a_commit_outside_claude(repo):
+def test_run_rebuilds_an_open_pr_that_carries_a_commit_outside_claude(repo, capsys):
 	"""A foreign push onto the sync branch (here a README.md edit) is rebuilt away:
 	the PR diff is only the copies again, and the next run leaves the head alone."""
 	main = _twin_ahead(repo)
@@ -600,8 +600,10 @@ def test_run_rebuilds_an_open_pr_that_carries_a_commit_outside_claude(repo):
 	assert sync.changes_outside_claude(str(repo), main, foreign) == ["README.md"]
 	files = [{"filename": claude("commands/a.md"), "status": "modified"}, {"filename": "README.md", "status": "added"}]
 	gh = FakeGitHub(prs=[pr], files=files, runs=[_run("lint")])
+	capsys.readouterr()
 	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
 	assert summary["action"] == "updated" and summary["merge"] == "waiting for checks on the new head"
+	assert f"CLAUDE_TWIN_SYNC rebuild pr=#{pr['number']} reason=head_changes_outside_claude count=1\n" in capsys.readouterr().err
 	assert gh.merges() == []
 	git(repo, "fetch", "-q", "origin")
 	new_head = git(repo, "rev-parse", f"origin/{branch}")
@@ -619,7 +621,27 @@ def test_changes_outside_claude_treats_unrelated_history_as_foreign(repo):
 	write(repo, "other.txt", "x\n")
 	unrelated = commit(repo, "unrelated root")
 	git(repo, "checkout", "-q", "main")
-	assert sync.changes_outside_claude(str(repo), "main", unrelated) == ["(no merge-base with the default branch)"]
+	assert sync.changes_outside_claude(str(repo), "main", unrelated) is None
+
+
+def test_run_rebuilds_an_open_pr_with_unrelated_history_and_logs_an_unknown_count(repo, capsys):
+	"""A sync branch force-replaced by unrelated history is rebuilt, and the log
+	says the path count is unknown instead of reporting one foreign path."""
+	_twin_ahead(repo)
+	branch = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")["branch"]
+	git(repo, "checkout", "-q", "--orphan", "unrelated")
+	write(repo, "other.txt", "x\n")
+	unrelated = commit(repo, "unrelated root")
+	git(repo, "push", "-q", "-f", "origin", f"HEAD:refs/heads/{branch}")
+	git(repo, "checkout", "-q", "-f", "main")
+	pr = _pr_from_origin(repo, branch, body=sync.render_body(sync.plan_sync(str(repo), "HEAD")))
+	assert pr["head"]["sha"] == unrelated
+	capsys.readouterr()
+	summary = sync.run_sync(str(repo), FakeGitHub(prs=[pr]), "HEAD", "main", "owner", "77")
+	assert summary["action"] == "updated"
+	err = capsys.readouterr().err
+	assert f"CLAUDE_TWIN_SYNC rebuild pr=#{pr['number']} reason=head_changes_outside_claude count=unknown no_merge_base=true\n" in err
+	assert "count=1" not in err
 
 
 def test_run_rebuilds_an_open_pr_when_main_changes_claude(repo):
