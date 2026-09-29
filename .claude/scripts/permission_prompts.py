@@ -345,12 +345,16 @@ def classifier_outage_summary(outages: list[dict]) -> dict:
 		tool = str(record.get("tool_name") or "")
 		if tool and tool not in tools:
 			tools.append(tool)
+	# Records come in log-file order (one file per session, sorted by name), not
+	# time order, so take the earliest and latest stamp. The logger writes a
+	# fixed UTC format (`%Y-%m-%dT%H:%M:%SZ`), so string order is time order.
+	outage_stamps = sorted(str(record["ts"]) for record in outages if record.get("ts"))
 	return {
 		"label": CLASSIFIER_OUTAGE_LABEL,
 		"count": len(outages),
 		"tools": tools,
-		"first_ts": outages[0].get("ts") if outages else None,
-		"last_ts": outages[-1].get("ts") if outages else None,
+		"first_ts": outage_stamps[0] if outage_stamps else None,
+		"last_ts": outage_stamps[-1] if outage_stamps else None,
 	}
 
 
