@@ -4,20 +4,20 @@
 - Source issue: shubhodeep1/coding-workflows#5082 (https://github.com/shubhodeep1/coding-workflows/issues/5082)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5082-verify-blocked-comment-evidence   Final PR: #5088 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: Q40 twin sync of `.claude/hooks/unattended_question_guard.py` on the phase 1 PR (hold claim posted)
+- Waiting on: PR #5099
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (a blocked stop arms no wait)
+- Check-in: project checker (ids in the stage report and the checker's `— resume.` block)
 - Last updated: 2026-09-29
-- Last note: phase 1 built twin-first (Q40): the `workflow-templates/.claude/` twin, tests, and docs are on the phase 1 PR; the stage stopped BLOCKED with a twin-sync request on #5082.
+- Last note: the master synced the twin (`ea56517`, #5082 Q2: A); phase 1 PR #5099 is in review.
 
 ## Phases
-1. [ ] Phase 1 — verified blocked-comment evidence (MCP / `gh api` comment on the marker's repo#issue, body starts with the marker, result carries the comment URL, plus the `ai:claude-blocked` label write) — protected paths: `.claude/hooks/unattended_question_guard.py` (via its `workflow-templates/.claude/` twin)
+1. [ ] Phase 1 — verified blocked-comment evidence (MCP / `gh api` comment on the marker's repo#issue, body starts with the marker, result carries the comment URL, plus the `ai:claude-blocked` label write)   — PR #5099 open (waiting); review rounds: 0; interventions: 0 — protected paths: `.claude/hooks/unattended_question_guard.py` (via its `workflow-templates/.claude/` twin)
    - [x] `workflow-templates/.claude/hooks/unattended_question_guard.py`: `_blocked_comment_targets`, `_blocked_label_targets`, `_gh_api_calls`, `_and_chain_segments`, `_result_text`, `_result_names_comment`, `blocked_comment_posted(turn, marker)`, `_instructions()` text
    - [x] `tests/test_unattended_question_guard.py`: updated positives, new negatives (echo, other issue/repo, marker not first, no label, no URL, compound command, `-F body=@file`, `--input`), `&&` chains and the `cd` prefix
-   - [ ] `.claude/hooks/unattended_question_guard.py`: Q40 twin sync (the operator's approval window, Q62/Q64)
+   - [x] `.claude/hooks/unattended_question_guard.py`: Q40 twin sync (the operator's approval window, Q62/Q64) — `ea56517` by the master session, sha256 `6f539653…` matches the twin
    - [x] CLAUDE.md §28.G (`workflow-templates/CLAUDE.md` is a symlink to it), `agents.md`, `README.md`, `changelog.d/5082-verify-blocked-comment-evidence.md`
    - Done: every plan Goal has a passing test with the twin synced; related hook suites still pass
 
@@ -52,5 +52,7 @@
 - 2026-09-29 07:5xZ: phase 1 stopped before any code: it must edit `.claude/hooks/unattended_question_guard.py`, and #4948 / #4785 are still open, so the stage asked on #5082 (comment 5885870678).
 - Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29) (master session, #5082 comment 5886502707: "Q1: A"). The phase edits only the `workflow-templates/.claude/` twin, opens the phase PR into the project branch, posts a `hold` claim, and stops BLOCKED with a twin-sync request; the hook copy goes through the operator's approval window (Q62/Q64).
 - 2026-09-29 08:4xZ: resumed in the same session by trigger `trig_01GXVCBWpT728TxkNitH7Qho`; `ai:claude-blocked` removed; the project branch was synced with its base (clean merge of `a54a4a3f`).
+- 2026-09-29 09:10Z: stopped BLOCKED for the Q40 twin sync (#5082 comment 5887174798, Q2), with a `hold` claim on `c1b258f`. 10:33Z: the master answered Q2: A by pushing `[claude-twin-sync]` `ea56517` onto the PR #5099 branch (#5082 comment 5888451061). At 10:39Z it woke this session in place of `/reclarify`; `ai:claude-blocked` was removed. With the sync, the real checkout passes the same 5 suites (509 passed, `test_template_parity` included).
+- Operator instructions for later stages (master session, 2026-09-29): runtime validation is skipped under Q17, because the final PR #5088 targets another project's branch (`claude/implement-plan-issue-4911-unattended-question-guard`). Record `Validation: skipped (covered by #4964's project validation)`, and do not stop to ask. Pass `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` in every `check_in_status.py` call and checker prompt (#5057).
 - Plan deviations: `test_hook_makes_no_network_calls` no longer forbids the literal `gh api` (the hook parses it as data) and forbids `os.system` / `popen` / `os.exec` instead; the target helpers return sets (`_blocked_comment_targets` / `_blocked_label_targets`) so one `&&` chain can carry the comment and the label (AD-7).
 - Verification (2026-09-29, scratch copy with the twin synced into `.claude/`): `tests/test_unattended_question_guard.py` plus `test_gh_api_write_guard.py`, `test_pr_watch_guard.py`, `test_pr_check_in_reminder.py`, `test_update_workflows_guardrails.py`: 509 passed; `ruff check` clean. In the unsynced checkout only `test_template_parity[hooks/unattended_question_guard.py]` fails, as expected until the twin sync. Against this session's real transcript the new check accepts the #5082 blocker and rejects the same calls for #5083 and for another repo.
