@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T06:22:53Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A plan goal that asks for a measured runtime can only be met after the first real run; write pre-merge numbers as estimates and record the measured value (with the run id) once that run exists.",
+  "phase": "implement_plan",
+  "pr_number": 5052,
+  "record_id": "lesson-implement-plan-ee79ae7d528005d7d77af5e8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4707-split-ci-lint-job",
+    "file:agents.md",
+    "file:changelog.d/4707-split-ci-lint-job.md"
+  ]
+}
