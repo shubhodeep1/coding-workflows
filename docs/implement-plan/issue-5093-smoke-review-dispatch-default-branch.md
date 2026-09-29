@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5111
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01DeJ3bVofrAPjfdXYapCF43   safety net trig_01CxWnTqFZhNRvb8vRTi52Wm   hand-back trig_013VdxptFpDhK2Rs1cKMp4oF
+- Check-in: checker session_01DeJ3bVofrAPjfdXYapCF43   safety net trig_01HaH6KxmNMbExKmVVN1nVe6   hand-back trig_01AEpSHUFmAYrTxQR3gGLNr2
 - Last updated: 2026-09-29
-- Last note: review round 1 on PR #5111: fixed the null head_branch lookup and the stale #4898 changelog sentence; rejected 9 findings (details in the PR reply)
+- Last note: review round 2 on PR #5111: the one finding (timestamp-shaped log anchor) settled per AD-10 by accepting any single prefix token; first-match rule unchanged
 
 ## Phases
-1. [ ] Phase 1 — default-branch smoke review dispatch with checked-out-SHA correlation   — PR #5111 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — default-branch smoke review dispatch with checked-out-SHA correlation   — PR #5111 open (waiting); review rounds: 2; interventions: 0
    - [x] `scripts/smoke_review_dispatch.sh`: `smoke_review_pr_named_runs`, `smoke_review_checked_out_sha`, `smoke_review_sha_descends_from` (AD-1, AD-2, AD-9)
    - [x] "Validate prerequisites" (`id: prereqs`) outputs `test_repo_default_branch` from its existing `repos/${TEST_REPO}` read (AD-7)
    - [x] Phase 3c dispatches at `REVIEW_DISPATCH_REF`, registers `bug_b_run_id`, and stays fail-soft (AD-3)
@@ -44,6 +44,7 @@
 - AD-7 [plan, 2026-09-29] Where does the dispatch ref come from? — Picked: A — `default_branch` from the existing "Validate prerequisites" read. Alternatives: B — a new read per step; C — hardcode `main`. Why: §15; C breaks other default branches. Applied in: phase 1 PR. Status: pending review
 - AD-8 [plan, 2026-09-29] Is the Phase 6 poller-wrapper dispatch at `ai/issue-<N>` in scope? — Picked: A — no, recorded only. Alternatives: B — move it too. Why: not this finding; separate contract (§5). Applied in: no code change. Status: pending review
 - AD-9 [plan, 2026-09-29] Where do the new helpers live? — Picked: A — sourced `scripts/smoke_review_dispatch.sh`. Alternatives: B — inline. Why: one tested implementation for three sites. Applied in: phase 1 PR. Status: pending review
+- AD-10 [phase 1/1 — review round 2, 2026-09-29] One reviewer (1 of 6, NIT) re-raised round 1's rejected point: `smoke_review_checked_out_sha` requires an ISO-8601-shaped timestamp before `Captured INITIAL_HEAD_SHA=`, so a changed log timestamp format would fail a genuine run with rc=2. How? — Picked: A — accept any single non-whitespace prefix token, keep exactly one token required and the first match winning, and test other token shapes plus the lines that must still be ignored. Alternatives: B — reject again (fail-closed is correct), which needs the dedicated verdict bot this web session cannot post as, so the PR would block; C — make the prefix optional, which in a timestamp-less log would let `echo Captured …` match. Why: the first-match rule carries the security property, not the timestamp's shape, so A removes a false failure at no security cost (§1) with the smallest change (§5). Applied in: PR #5111 (review round 2 commit). Status: pending review
 
 ## Lessons
 - [source:intervention] A lookup of default-branch `workflow_dispatch` runs by PR run name must not pass the API's `branch=` filter or require `head_branch == <ref>`: GitHub can report `head_branch` as null on such runs, so keep null or empty head branches and drop only runs on another branch. (files: scripts/smoke_review_dispatch.sh)

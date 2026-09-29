@@ -101,6 +101,10 @@ smoke_review_pr_named_runs()
 # `Captured INITIAL_HEAD_SHA=<sha> for stale-base detection.` before any
 # reviewer or editor reads PR content, so the FIRST line-anchored match is
 # the genuine one; a later line printed from reviewed content cannot win.
+# "Line-anchored" means the text follows the line's single prefix token (the
+# runner's timestamp) and nothing else. The token's shape is not checked:
+# the first-match rule carries the security property, so a change to the
+# timestamp format must not turn a genuine run into a false rc=2.
 #   Input:   owner/repo; a positive run id.
 #   Output:  the 40-hex SHA.
 #   Calls:   1 REST read of the run's jobs (per_page=100), then at most 1 read
@@ -154,7 +158,7 @@ smoke_review_checked_out_sha()
 		return 1
 	fi
 	line=$(tr -d '\r' < "${log_file}" \
-		| grep -aE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z Captured INITIAL_HEAD_SHA=[0-9a-f]{40} for stale-base detection\.$' \
+		| grep -aE '^[^[:space:]]+ Captured INITIAL_HEAD_SHA=[0-9a-f]{40} for stale-base detection\.$' \
 		| head -n 1 || true)
 	rm -f "${log_file}"
 	if [ -z "${line}" ]; then

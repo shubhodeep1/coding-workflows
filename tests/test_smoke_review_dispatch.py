@@ -308,6 +308,29 @@ def test_checked_out_sha_takes_the_first_anchored_checkout_line() -> None:
 			stub.cleanup()
 
 
+def test_checked_out_sha_accepts_any_single_prefix_token_but_nothing_looser() -> None:
+	# The first-match rule carries the security property, so the timestamp's
+	# shape is not checked: a changed format must not become a false rc=2.
+	# Exactly one prefix token is still required, so an unprefixed line or a
+	# mention after a second token never matches.
+	for prefix in ("2026-09-29T10:00:02Z", "2026-09-29T10:00:02.123+00:00", "1790686283", "﻿2026-09-29T10:00:02.1234567Z"):
+		stub = GhStub()
+		try:
+			stub.serve(JOBS_PATH, JOBS)
+			stub.serve(
+				LOG_PATH,
+				_log(
+					f"Captured INITIAL_HEAD_SHA={OTHER} for stale-base detection.",
+					f"{prefix} echo Captured INITIAL_HEAD_SHA={OTHER} for stale-base detection.",
+					f"{prefix}  Captured INITIAL_HEAD_SHA={OTHER} for stale-base detection.",
+					f"{prefix} Captured INITIAL_HEAD_SHA={BAIT} for stale-base detection.",
+				),
+			)
+			assert _call_helper(stub, "smoke_review_checked_out_sha", REPO, "100") == (0, BAIT), prefix
+		finally:
+			stub.cleanup()
+
+
 def test_checked_out_sha_return_codes() -> None:
 	cases = [
 		("missing line", JOBS, _log("2026-09-29T10:00:01Z nothing here"), 2),
