@@ -31,6 +31,7 @@ SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 AGENTS_MD = REPO_ROOT / "agents.md"
+README_MD = REPO_ROOT / "README.md"
 SEED_REPO_COMMAND = REPO_ROOT / ".claude" / "commands" / "seed-repo.md"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -446,6 +447,15 @@ def test_claude_md_documents_the_guard():
 def test_agents_md_documents_the_guard():
 	text = AGENTS_MD.read_text(encoding="utf-8")
 	assert "inline_edit_guard.py" in text and "CLAUDE_INLINE_EDIT_GUARD" in text
+
+
+def test_readme_lists_the_guard_among_the_synced_hooks():
+	text = README_MD.read_text(encoding="utf-8")
+	start = text.index("**Interactive session hooks delivered by the `.claude/` sync:**")
+	section = text[start : text.index("\n\n", start)]
+	assert "`hooks/inline_edit_guard.py`" in section
+	assert "CLAUDE_INLINE_EDIT_GUARD=off" in section
+	assert "ships five `PreToolUse`" in section
 
 
 def test_seed_repo_command_ships_the_hook():
