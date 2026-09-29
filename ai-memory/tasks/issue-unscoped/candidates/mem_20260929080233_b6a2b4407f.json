@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_unattended_question_guard.py:{around the \"no subprocess\" assertion} | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test forbids subprocess and API-related strings in the hook source, so it will fail when the documented #5083 follow-up intentionally adds `subprocess.run` for `gh api`.\n  WHY: This is a forward-compatibility hazard that can block the follow-up's CI despite its planned behavior being intentional.\n- .claude/hooks/unattended_question_guard.py:{evaluate, \"Cap allows the third stop\" branch} | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The cap message says nothing was posted on the issue, which will be false if the planned #5083 follow-up posts the blocker.\n  WHY: Future cap events would produce misleading operator-facing status about whether the blocker was sent.\n- .claude/hooks/unattended_question_guard.py:{blocked_comment_posted / _contains_marker} | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The check treats any successful tool call whose input contains `<!-- ai:claude-blocked:v1 -->` as proof that the blocker comment was posted, without verifying the tool or comment body.\n  WHY: In unattended issue mode, a session can satisfy the check without posting on the issue and silently stall the chain at the cap.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Only sessions marked unattended are affected. ... A session without CLAUDE_CODE_REMOTE_SESSION_ID, or without a marker for that id, is never blocked or denied.\" (CLAUDE.md \u00a728.A / \u00a728.G body)\n  expected_change_site: .claude/commands/implement-plan-claude.md step 1\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Step 1 calls mark on every plan with a `Source issue:` line, including project-mode plans; no diff hunk or test verifies the call is skipped for project-mode plans.\n- requirement: \"The hook makes no GitHub API calls (\u00a715)\" (per CLAUDE.md \u00a728.G body, the agents.md note, and the changelog fragment's \"GitHub API calls from the hook | 0\" row).\n  expected_change_site: docs/plans/issue-5083-guard-cap-source-issue-blocker-plan.md + agents.md + CLAUDE.md + changelog.d/4911-unattended-question-guard.md\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The plan describes adding `subprocess.run` for `gh api` inside the same hook, contradicting the no-API-calls claim in the docs; no diff hunk updates those docs or marks the claim as \"until #5083 lands.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_unattended_question_guard.py:{around the \"no subprocess\" assertion} | severity=NIT | confidence=4\n  PROBLEM: The test forbids \"subprocess\", \"urllib\", \"http.client\", \"requests\", \"socket\", and \"gh api\" in the hook source, so it will fail when the documented #5083 follow-up intentionally adds `subprocess.run` for `gh api`.\n  WHY: This forward-compatibility hazard can block the follow-up's CI despite its planned behavior being intentional and documented.\n\n- .claude/hooks/unattended_question_guard.py:{evaluate, \"Cap allows the third stop\" branch} | severity=NIT | confidence=3\n  PROBLEM: The cap message says \"the stop is allowed and nothing was posted on the issue,\" which will be false if the planned #5083 follow-up posts the blocker.\n  WHY: Future cap events would produce misleading status that operators and the session read as \"no blocker was sent.\"\n\n- .claude/hooks/unattended_question_guard.py:{blocked_comment_posted / _contains_marker} | severity=NIT | confidence=3\n  PROBLEM: The check returns True when any successful tool call in the current turn has `<!-- ai:claude-blocked:v1 -->` anywhere in its input, without verifying that it was a comment-posting tool, that the marker was in the comment body, or that the label was added.\n  WHY: A session can dodge the \u00a728 guard at the cap without posting on the issue, leaving the chain stalled silently.\n\n- Requirement: \"Only sessions marked unattended are affected. ... A session without CLAUDE_CODE_REMOTE_SESSION_ID, or without a marker for that id, is never blocked or denied.\" (CLAUDE.md \u00a728.A / \u00a728.G body)\n  Expected change site: .claude/commands/implement-plan-claude.md step 1 (\"When the plan's header carries a Source issue: <owner>/<repo>#<N> line, run ... mark ...\") plus a Project-mode guard\n  Evidence of absence: Step 1 in the new implement-plan-claude.md now calls mark on every plan with a `Source issue:` line, including **project-mode** plans (which the issue mode lives in addition to project mode, see Step 2 of the same file). \u00a728.A / \u00a728.G scope the guard to *issue mode*, but the step-1 wording \"every session of the chain\" reads as a global gate. No diff hunk or test narrows the step-1 invocation to issue mode. The companion doc and the test only assert that step 1 contains the mark command; there is no test or contract that verifies the call is skipped for project-mode plans.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n\n- Requirement: \"The hook makes no GitHub API calls (\u00a715)\" (per CLAUDE.md \u00a728.G body, the agents.md note, and the changelog fragment's \"GitHub API calls from the hook | 0\" row).\n  Expected change site: docs/plans/issue-5083-guard-cap-source-issue-blocker-plan.md + agents.md + CLAUDE.md + changelog.d/4911-unattended-question-guard.md.\n  Evidence of absence: The docs/plans/issue-5083-...-plan.md describes adding `subprocess.run` for `gh api` inside the same hook, contradicting the no-API-calls claim the same PR bakes into three separate docs. No diff hunk updates those docs to flag the conflict or marks the no-API-calls claim as \"until #5083 lands.\" A reader of just the agents.md or changelog fragment will be misled.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3751e7422d94ebb82f06445cb3f079111c01a0bf400862618e014769e165277d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36538077245",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36538077245",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929080233_b6a2b4407f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36538077245"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T08:02:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
