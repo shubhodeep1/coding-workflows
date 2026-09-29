@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:350-352 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: `_is_heredoc_operator` documents `<<-` support, but `_is_redirect` rejects `<<-`, so the function returns False for that operator.\n  WHY: This is a misleading docstring rather than a runtime regression: `<<-` was already dropped by redirect tokenization, and the PR describes it as out of scope.\n- workflow-templates/.claude/scripts/permission_prompts.py:350-352 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: `_is_heredoc_operator` documents `<<-` support, but `_is_redirect` rejects `<<-`, so the function returns False for that operator.\n  WHY: This is a misleading docstring rather than a runtime regression: `<<-` was already dropped by redirect tokenization, and the PR describes it as out of scope.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/permission_prompts.py:350-352 | severity=NIT | confidence=5\n  PROBLEM: Same misleading docstring as the twin copy.\n  WHY: Same as above; misleading documentation of API capability.\n- workflow-templates/.claude/scripts/permission_prompts.py:350-352 | severity=NIT | confidence=5\n  PROBLEM: The docstring for _is_heredoc_operator claims: \"\"\"A << or <<- heredoc operator; a <<< herestring has no heredoc body.\"\"\"\n  WHY: The implementation of _is_redirect (used within _is_heredoc_operator) checks set(token) <= set(\"<>&\"). The \"-\" in \"<<-\" is not in the set {\"<\", \">\", \"&\"}, so _is_redirect(\"<<-\") always returns False, meaning _is_heredoc_operator(\"<<-\") also always returns False. The docstring documents a capability the function does not possess, which may mislead future maintainers into assuming <<- heredoc bodies are handled when they are silently ignored, creating an API contract mismatch.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: .claude/scripts/permission_prompts.py and workflow-templates/.claude/scripts/permission_prompts.py\n  Line or code reference: the new `_is_heredoc_operator` function (around line 350 in both twin files; `def` line + docstring + single-statement return)\n  severity=NIT | confidence=5\n  PROBLEM: The docstring reads `\"\"\"A `<<` or `<<-` heredoc operator; a `<<<` herestring has no heredoc body.\"\"\"`, but the implementation returns `_is_redirect(token) and token.startswith(\"<<\") and not token.startswith(\"<<<\")`. `_is_redirect` rejects `<<-` because `set(\"<<-\") = {\"<\", \"-\"}` is not a subset of `set(\"<>&\") = {\"<\", \">\", \"&\"}` (`-` is not in the allowed character set). So `_is_heredoc_operator(\"<<-\")` always returns False despite the docstring's claim that `<<-` is supported.\n  WHY: No immediate runtime failure today (no caller passes `<<-` tokens through this function, since `_split_redirects` already drops them \u2014 the same `set(token) <= set(\"<>&\")` check filters redirect tokens there). The defect is that the docstring, newly introduced by this PR, documents a capability the function does not have. A future maintainer wiring `<<-` handling into `_is_redirect` or `_split_redirects` would then assume `_is_heredoc_operator` counts and binds `<<-` heredoc bodies, when they are silently dropped, triggering the `aligned = sum(counts) == len(bodies)` \"bind nothing\" fail-safe. The PR description explicitly notes that `<<-` is out of project scope (\"Out of project scope and unchanged\"), so the docstring overstates what was shipped.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: workflow-templates/.claude/scripts/permission_prompts.py (and byte-identical twin .claude/scripts/permission_prompts.py)\n  Location: line 351, `_is_heredoc_operator` docstring\n  ISSUE_CONFIDENCE: 5\n  PROBLEM: The docstring says \"A `<<` or `<<-` heredoc operator\" but `_is_heredoc_operator(\"<<-\")` always returns False because `_is_redirect` (line 347) checks `set(token) <= set(\"<>&\")` and `'-'` is not in that set.\n  WHY: No runtime behavior change \u2014 `<<-` was never handled by `_split_redirects` or the old `command_class` counts either, so this is purely a misleading docstring. A future reader relying on it would assume `<<-` heredoc bodies are counted and bound when they are silently dropped.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: workflow-templates/.claude/scripts/permission_prompts.py\n  Line or code reference: 350-352\n  severity=NIT | confidence=5\n  PROBLEM: _is_heredoc_operator docstring claims `<<` or `<<-` support but _is_redirect rejects `-` so function never returns True for `<<-`.\n  WHY: No runtime change (pre-PR behavior unchanged) but docstring misleads maintainers; PR left `<<-` explicitly out of scope.\n- (same finding for twin in .claude/scripts/permission_prompts.py)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: workflow-templates/.claude/scripts/permission_prompts.py (and the byte-identical twin .claude/scripts/permission_prompts.py)\n  Location: line 351, `_is_heredoc_operator` docstring\n  ISSUE_CONFIDENCE: 5\n  PROBLEM: The docstring claims \"A `<<` or `<<-` heredoc operator\", but `_is_redirect` (line 347) checks `set(token) <= set(\"<>&\")`, which excludes `-`. So `_is_heredoc_operator(\"<<-\")` always returns False \u2014 `<<-` is silently dropped (same as pre-PR behavior, no runtime regression). The newly-introduced docstring documents a capability the function does not have and contradicts the PR description, which lists `<<-` as out of scope. A future reader could rely on it and assume `<<-` heredoc bodies are counted/bound when they trigger the fail-safe \"bind nothing\" path.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1d7195c7e05d47f12c918d8d494b951dfa79d2901299c21431bfd87961cb9163",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5133,
+    "run_id": "36572388743",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36572388743",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929135041_a44389373c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5133,
+    "run_id": "36572388743"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T13:50:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
