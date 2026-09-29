@@ -684,6 +684,9 @@ def test_command_twins_say_edit_the_twin(name):
 	text = _flat_doc(ROOT / sync.TWIN_ROOT / "commands" / name)
 	assert "**Edit the twin, never `.claude/**`.**" in text
 	assert "claude-twin-sync.yml" in text
+	# The twins ship to consumers, which have no workflow-templates/.claude/ and keep the protected-path stop (G1).
+	assert "`workflow-templates/.claude/` (coding-workflows)" in text
+	assert "(a consumer" in text
 
 
 def test_approval_label_is_in_the_label_contract():
