@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T12:01:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A shell variable that the script fills with a guessed fallback (`DEFAULT_BRANCH=... || echo \"main\"`) must not feed a security check; resolve the value separately and fail closed when it is unknown.",
+  "phase": "implement_plan",
+  "pr_number": 5109,
+  "record_id": "lesson-implement-plan-ccff2ca7901607e61b8cb8f1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5094-verify-pr-named-review-run-provenance",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}
