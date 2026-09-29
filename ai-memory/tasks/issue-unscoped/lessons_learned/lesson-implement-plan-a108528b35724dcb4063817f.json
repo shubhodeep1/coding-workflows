@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T09:30:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A guard that finds a segment's real command must skip each wrapper's own options, `env` included: a shared tokenizer that skips a bare `env` stops at `env -i` or `env -u NAME`, which hides the command after it. Test every wrapper with an option.",
+  "phase": "implement_plan",
+  "pr_number": 5103,
+  "record_id": "lesson-implement-plan-a108528b35724dcb4063817f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4858-inline-edit-guard",
+    "file:.claude/hooks/inline_edit_guard.py",
+    "file:tests/test_inline_edit_guard.py"
+  ]
+}
