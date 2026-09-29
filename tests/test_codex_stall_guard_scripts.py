@@ -72,6 +72,8 @@ CALLER_CONTRACTS = [
 # the status file path from argv[2] and exits once the guard has written
 # state=observed. The deadline stays under the 20 s subprocess timeout, so a
 # guard that never observes still fails the assertions instead of hanging.
+# Only a missing file is retried: the guard writes the status file atomically,
+# so any other read error is a setup bug and fails the child at once.
 OBSERVED_STATUS_WAIT_SECS = 15
 WAIT_FOR_OBSERVED_STATUS_SNIPPET = (
 	"guard_status_path = pathlib.Path(sys.argv[2])\n"
@@ -80,7 +82,7 @@ WAIT_FOR_OBSERVED_STATUS_SNIPPET = (
 	"\ttry:\n"
 	"\t\tif 'state=observed' in guard_status_path.read_text(encoding='utf-8').splitlines():\n"
 	"\t\t\tbreak\n"
-	"\texcept OSError:\n"
+	"\texcept FileNotFoundError:\n"
 	"\t\tpass\n"
 	"\ttime.sleep(0.05)\n"
 )
