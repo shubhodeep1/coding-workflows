@@ -478,6 +478,8 @@ jobs:
           pr_mergeable=""
           pr_mergeable_state=""
           pr_head_sha_gate=""
+          pr_base_ref_gate=""
+          pr_base_sha_gate=""
           pr_title_cached="${PR_TITLE:-}"
           pr_body_cached="${PR_BODY:-}"
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -505,12 +507,14 @@ jobs:
             # suppression below), and changed_files (to verify the paginated
             # path list before either skip branch can run).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), base_ref: (.base.ref // ""), base_sha: (.base.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
               pr_head_ref="$(printf '%s' "${_pr_gate}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
               pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
+              pr_base_ref_gate="$(printf '%s' "${_pr_gate}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
+              pr_base_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.base_sha // ""' 2>/dev/null || echo "")"
               pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
               pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
               pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
@@ -733,16 +737,27 @@ jobs:
           }
 
           # True when the hand-off step found a clean review with only check
-          # runs still running on the current head (issue #4900). The
-          # claude-pr-catch-all sweep enables auto-merge once they finish, so
-          # a dispatched re-run would only repeat the reviewer panel. Same
-          # cached file and trust rule as gate_claude_handoff_on_head.
+          # runs still running on the current head (issue #4900) AND that
+          # review ran against the PR's current base: the comment's v2 line
+          # must carry the PR's current base.sha and sha256 of its base.ref
+          # (issue #5147). The claude-pr-catch-all sweep enables auto-merge
+          # once the checks finish, so a dispatched re-run would only repeat
+          # the reviewer panel. A retargeted PR (or a marker with no base
+          # binding) is not skipped, so the review sweep's dispatch reviews
+          # it again against its new base. Same cached file and trust rule
+          # as gate_claude_handoff_on_head.
           gate_claude_pending_checks_on_head()
           {
-            jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
+            local gate_base_ref_digest=""
+            if ! [[ "${pr_base_sha_gate}" =~ ^[0-9a-f]{40}$ ]] || [ -z "${pr_base_ref_gate}" ]; then
+              return 1
+            fi
+            gate_base_ref_digest="$(printf '%s' "${pr_base_ref_gate}" | sha256sum | cut -d ' ' -f 1)"
+            jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" \
+              --arg base_sha "${pr_base_sha_gate}" --arg base_digest "${gate_base_ref_digest}" '
                 any(.[]; .author_login == $author and
                   ((.body // "") | test("^## Review round [1-9][0-9]*: clean review, waiting for check runs\\n")) and
-                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-pending-checks:v1 head=" + $head + " round=[1-9][0-9]* ledger=[0-9a-f]{64} -->$"))))
+                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-pending-checks:v2 head=" + $head + " round=[1-9][0-9]* ledger=[0-9a-f]{64} base_sha=" + $base_sha + " base_ref_sha256=" + $base_digest + " -->$"))))
               ' "${gate_marker_comments_file}" >/dev/null 2>&1
           }
 
@@ -761,7 +776,8 @@ jobs:
           #     waits on the session, and a rerun would only repeat the panel.
           #     A head with a pending-checks marker (clean review, checks
           #     still running) is skipped the same way
-          #     (claude_fixer_pending_checks; issue #4900).
+          #     (claude_fixer_pending_checks; issue #4900), but only while
+          #     the marker is bound to the PR's current base (issue #5147).
           # force_rb_judge dispatches and the force-review label / title
           # marker bypass the second rule. vars.CLAUDE_FIXER_ENABLED=false
           # turns the mode off (such PRs then take the GPT editor path).

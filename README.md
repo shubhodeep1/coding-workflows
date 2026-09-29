@@ -1469,6 +1469,18 @@ variable (unset means `true`; `GH_PAT` needs Actions-variables read, or the
 PR is left alone). A check that fails instead is a `ci-failed` Claude fix,
 and a push starts a new review round.
 
+The comment is bound to the base it reviewed (issue #5147): a second line,
+`<!-- ai:claude-fixer-pending-checks:v2 head=<sha> round=<n> ledger=<sha256> base_sha=<sha> base_ref_sha256=<sha256> -->`,
+carries the review run's `base.sha` and the sha256 of its `base.ref`, and a
+`Reviewed base:` line shows both. If the PR's base changes before the merge
+(for example a phase PR retargeted from its project branch to `main` with
+the head unchanged), the sweep enables nothing (`pending_checks ...
+state=base_changed`, or `base_unbound` for a comment without the v2 line),
+and the gate stops skipping dispatched re-runs on that head, so the next
+30-minute review sweep reviews the PR again against its new base. A review
+run whose PR snapshot has no valid base posts the ordinary findings hand-off
+instead of a pending-checks comment.
+
 **Claims** (`.claude/scripts/claude_fix_claim.py`) stop two fixers racing:
 one PR comment ending in
 `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`,

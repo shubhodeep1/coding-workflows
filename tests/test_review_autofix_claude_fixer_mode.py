@@ -21,6 +21,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -39,6 +40,10 @@ HEAD = "c" * 40
 AUTHOR = "workflow-bot"
 FIXER_BOT = "dedicated-fixer[bot]"
 DIGEST = "a" * 64
+# The base the review ran against (issue #5147): the phase PR into its project branch.
+BASE_REF = "claude/implement-plan-demo"
+BASE_SHA = "e" * 40
+BASE_REF_DIGEST = hashlib.sha256(BASE_REF.encode("utf-8")).hexdigest()
 
 EDITOR_TAIL_STEPS = (
 	"Pre-editor stale-base gate",
@@ -300,9 +305,13 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 """
 
 
-def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, fresh_context: str | None = None):
+def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, fresh_context: str | None = None, payload: dict | None = None):
 	support = tmp / "support"
 	support.mkdir()
+	# PR_PAYLOAD_FILE: the review run's REST PR snapshot (its base binds a pending-checks marker).
+	payload_path = tmp / "pr_payload.json"
+	payload_path.write_text(json.dumps({"head": {"sha": HEAD, "ref": "claude/implement-plan-demo-phase-1"},
+		"base": {"ref": BASE_REF, "sha": BASE_SHA}} if payload is None else payload), encoding="utf-8")
 	calls = tmp / "calls.jsonl"
 	(support / "post_review_comment.sh").write_text(
 		f"#!/usr/bin/env bash\necho post_review_comment \"$REVIEWER_CONSENSUS_FILE\" \"$PR_NUMBER\" >> {tmp / 'posts.log'}\n",
@@ -355,6 +364,7 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		"GITHUB_ENV": str(github_env),
 		"CLAUDE_FIXER_VERIFICATION": "true" if verification else "false",
 		"REVIEWERS_SUCCESSFUL": "2",
+		"PR_PAYLOAD_FILE": str(payload_path),
 	}
 	proc = subprocess.run(["bash", "-c", f'source "{HANDOFF_SCRIPT}"'], env=env, capture_output=True, text=True)
 	gh_calls = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
@@ -511,7 +521,7 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 			{"id": i, "user": {"login": c["author_login"], "type": c["author_type"]}, "author_association": c["author_association"], "created_at": "2026-09-25T00:00:00Z", "body": c["body"]}
 			for i, c in enumerate(comments, 1)
 		],
-		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1", **(pr_overrides or {})},
+		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "base": {"ref": BASE_REF, "sha": BASE_SHA}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1", **(pr_overrides or {})},
 		"files": files,
 		"comments_fail": comments_fail,
 	}), encoding="utf-8")
@@ -789,7 +799,9 @@ def _pending_context(status: str = "timeout", *, head: str = HEAD, total: int = 
 	return body + extra
 
 
-PENDING = f"<!-- ai:claude-fixer-pending-checks:v1 head={HEAD} round=1 ledger={DIGEST} -->"
+PENDING_V1 = f"<!-- ai:claude-fixer-pending-checks:v1 head={HEAD} round=1 ledger={DIGEST} -->"
+PENDING_V2 = f"<!-- ai:claude-fixer-pending-checks:v2 head={HEAD} round=1 ledger={DIGEST} base_sha={BASE_SHA} base_ref_sha256={BASE_REF_DIGEST} -->"
+PENDING = PENDING_V1 + "\n" + PENDING_V2
 
 
 def _pending_comment(body: str = PENDING, author: str = AUTHOR) -> dict:
@@ -809,6 +821,11 @@ def test_handoff_clean_review_with_running_checks_posts_pending_checks_not_findi
 		assert body.startswith("## Review round 2: clean review, waiting for check runs\n")
 		digest = hashlib.sha256(LEDGER_EMPTY.encode()).hexdigest()
 		assert f"<!-- ai:claude-fixer-pending-checks:v1 head={HEAD} round=2 ledger={digest} -->" in body.splitlines()
+		# Issue #5147: bound to the base the review ran against.
+		assert (f"<!-- ai:claude-fixer-pending-checks:v2 head={HEAD} round=2 ledger={digest} "
+			f"base_sha={BASE_SHA} base_ref_sha256={BASE_REF_DIGEST} -->") in body.splitlines()
+		assert f"Reviewed base: `{BASE_REF}` at `{BASE_SHA}`." in body.splitlines()
+		assert f"base_sha={BASE_SHA}" in proc.stdout
 		assert f"Reviewed head: `{HEAD}` ([workflow run](https://github.com/o/r/actions/runs/99))." in body.splitlines()
 		assert "`ci / lint`" in body
 		assert "ai:claude-fixer-handoff" not in body
@@ -875,7 +892,7 @@ def test_gate_pending_checks_skip_needs_the_workflow_marker_for_this_head():
 		"untrusted author": [_pending_comment(author="someone")],
 		"other head": [_pending_comment(PENDING.replace(HEAD, "d" * 40))],
 		"marker without the issued header": [{**_pending_comment(), "body": PENDING}],
-		"quoted marker": [_pending_comment("> " + PENDING)],
+		"quoted marker": [_pending_comment("\n".join("> " + line for line in PENDING.splitlines()))],
 		# Same round contract as scripts/claude_fixer_pending_checks.py: rounds start at 1.
 		"round zero": [{**_pending_comment(), "body": "## Review round 0: clean review, waiting for check runs\n"
 			+ PENDING.replace(" round=1 ", " round=0 ")}],
@@ -892,3 +909,75 @@ def test_gate_pull_request_event_on_a_pending_checks_head_is_not_skipped():
 		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_pending_comment()], event_name="pull_request")
 	assert proc.returncode == 0, proc.stderr
 	assert out["skip_reason"] != "claude_fixer_pending_checks"
+
+
+# ---- issue #5147: the pending-checks marker is bound to the reviewed base ----
+
+def test_handoff_without_a_payload_base_hands_off_instead_of_pending():
+	cases = {
+		"no payload file content": {},
+		"base missing": {"head": {"sha": HEAD}},
+		"base sha missing": {"base": {"ref": BASE_REF}},
+		"base sha not hex": {"base": {"ref": BASE_REF, "sha": "E" * 40}},
+		"base ref empty": {"base": {"ref": "", "sha": BASE_SHA}},
+		"base not an object": {"base": "main"},
+	}
+	for label, payload in cases.items():
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_context=_pending_context(), payload=payload)
+		assert proc.returncode == 0, (label, proc.stderr)
+		body = calls[0]["payload"]["body"]
+		assert "ai:claude-fixer-pending-checks" not in body, label
+		assert "kind=findings" in body, label
+		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env, label
+		assert "pending-checks marker disabled: the review run's PR snapshot has no valid base" in proc.stdout, label
+
+
+def test_handoff_binds_any_valid_ref_name_by_digest():
+	"""A ref may contain characters that would end the HTML comment; only its sha256 enters the marker."""
+	ref = "claude/odd-->name"
+	digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, _env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_context=_pending_context(),
+			payload={"base": {"ref": ref, "sha": BASE_SHA}})
+	assert proc.returncode == 0, proc.stderr
+	lines = calls[0]["payload"]["body"].splitlines()
+	marker = next(line for line in lines if line.startswith("<!-- ai:claude-fixer-pending-checks:v2 "))
+	assert marker.endswith(f" base_sha={BASE_SHA} base_ref_sha256={digest} -->") and ref not in marker
+
+
+def test_gate_pr_read_carries_the_base_binding_fields():
+	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
+	assert 'base_ref: (.base.ref // ""), base_sha: (.base.sha // "")' in gate_run
+	helper = gate_run.split("gate_claude_pending_checks_on_head()", 1)[1].split("\n          }\n", 1)[0]
+	assert "pending-checks:v2 head=" in helper and "pending-checks:v1" not in helper
+
+
+@pytest.mark.parametrize("label, pr_base, comments", [
+	# The finding's exploit: clean review into the project branch, then the
+	# author retargets the PR to main without pushing (same head).
+	("retargeted to main", {"ref": "main", "sha": "f" * 40}, [_pending_comment()]),
+	("retargeted, base sha unchanged", {"ref": "main", "sha": BASE_SHA}, [_pending_comment()]),
+	("same ref, base sha changed", {"ref": BASE_REF, "sha": "f" * 40}, [_pending_comment()]),
+	("PR base without a sha", {"ref": BASE_REF}, [_pending_comment()]),
+	("PR base without a ref", {"sha": BASE_SHA}, [_pending_comment()]),
+	("marker without a base binding", {"ref": BASE_REF, "sha": BASE_SHA}, [_pending_comment(PENDING_V1)]),
+	("binding for another head", {"ref": BASE_REF, "sha": BASE_SHA},
+		[_pending_comment(PENDING_V1 + "\n" + PENDING_V2.replace(f"head={HEAD}", "head=" + "d" * 40))]),
+])
+def test_gate_reviews_again_when_the_base_is_not_the_reviewed_one(label, pr_base, comments):
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=comments, pr_overrides={"base": pr_base})
+	assert proc.returncode == 0, (label, proc.stderr)
+	assert out["should_run"] == "true", (label, out)
+	assert "reason=claude_fixer_pending_checks" not in proc.stdout, label
+
+
+def test_gate_skips_again_once_a_fresh_review_binds_the_new_base():
+	new_base = {"ref": "main", "sha": "f" * 40}
+	fresh = PENDING_V1 + "\n" + (f"<!-- ai:claude-fixer-pending-checks:v2 head={HEAD} round=1 ledger={DIGEST} base_sha={'f' * 40} "
+		f"base_ref_sha256={hashlib.sha256(b'main').hexdigest()} -->")
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_pending_comment(), _pending_comment(fresh)], pr_overrides={"base": new_base})
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_pending_checks"

@@ -23,12 +23,19 @@
 #          finds nothing to commit;
 #   * nothing but check runs still running on the same head (clean ledger,
 #     `ready` or `timeout` snapshot, none failed; issue #4900)
-#       -> one comment carrying the pending-checks marker
+#       -> one comment carrying the pending-checks markers
 #            <!-- ai:claude-fixer-pending-checks:v1 head=<sha> round=<n> ledger=<sha256> -->
+#            <!-- ai:claude-fixer-pending-checks:v2 head=<sha> round=<n> ledger=<sha256> base_sha=<sha> base_ref_sha256=<sha256> -->
 #          which is not a hand-off: the gate skips dispatched re-runs on
-#          that head, and the claude-pr-catch-all sweep
-#          (scripts/claude_fixer_pending_checks.py) enables head-bound
-#          auto-merge once the checks finish green.
+#          that head while the PR's base still matches the v2 line, and the
+#          claude-pr-catch-all sweep (scripts/claude_fixer_pending_checks.py)
+#          enables head-bound auto-merge once the checks finish green. The
+#          v2 line binds the clean review to the base it reviewed
+#          (PR_PAYLOAD_FILE's base.sha, and sha256 of its base.ref, since a
+#          ref name may contain `-->`); a retargeted PR fails that binding,
+#          so it is never merged on this marker and gets a fresh review
+#          (issue #5147). Without a valid payload base the step posts no
+#          pending-checks comment and hands off as below.
 #
 # The hand-off marker is
 #   <!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->
@@ -41,8 +48,9 @@
 # [claude-autofix] commits on the head; round = index + 1),
 # AUTOFIX_PRE_REVIEW_RESOLVE,
 # AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED, REVIEWER_CONSENSUS_FILE,
-# PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR, GITHUB_RUN_ID,
-# GITHUB_SERVER_URL, RUNTIME_DIR.
+# PR_CHECK_RUNS_CONTEXT_FILE, PR_PAYLOAD_FILE (the review run's REST PR
+# object; base.ref / base.sha bind a pending-checks marker), SUPPORT_SCRIPTS_DIR,
+# GITHUB_RUN_ID, GITHUB_SERVER_URL, RUNTIME_DIR.
 # API calls: on a clean candidate, the existing check-run collector refreshes
 # its paginated check-runs GET; on findings, the ledger chunks from
 # post_review_comment.sh and one hand-off comment are posted; on pending
@@ -167,7 +175,25 @@ if [ "${claude_fixer_clean_ledger}" = "true" ] && [ -z "${claude_fixer_failed_ch
   # sweep (scripts/claude_fixer_pending_checks.py) enables head-bound
   # auto-merge once the checks finish green. A check that fails later is a
   # `ci-failed` Claude fix, as for any claude/* head.
+  # Issue #5147: the marker is also bound to the base this run reviewed
+  # (the PR snapshot's base.ref and base.sha), so a PR retargeted after the
+  # review is never merged on it. No valid base, no pending-checks comment.
+  claude_fixer_base_ref=""
+  claude_fixer_base_sha=""
+  claude_fixer_base_ref_digest=""
+  if [ -s "${PR_PAYLOAD_FILE:-}" ]; then
+    claude_fixer_base_ref="$(jq -r '.base.ref // "" | if type == "string" then . else "" end' "${PR_PAYLOAD_FILE}" 2>/dev/null || true)"
+    claude_fixer_base_sha="$(jq -r '.base.sha // "" | if type == "string" then . else "" end' "${PR_PAYLOAD_FILE}" 2>/dev/null || true)"
+  fi
+  if [ -n "${claude_fixer_base_ref}" ] && [[ "${claude_fixer_base_ref}" != *$'\n'* ]]; then
+    claude_fixer_base_ref_digest="$(printf '%s' "${claude_fixer_base_ref}" | sha256sum | cut -d ' ' -f 1)"
+  fi
+  if ! [[ "${claude_fixer_base_sha}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${claude_fixer_base_ref_digest}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "::warning::Claude-fixer pending-checks marker disabled: the review run's PR snapshot has no valid base (PR_PAYLOAD_FILE base.ref / base.sha), so a clean review cannot be bound to the reviewed base (issue #5147)."
+  fi
   if [ "${claude_fixer_checks_refreshed}" = "true" ] \
+    && [[ "${claude_fixer_base_sha}" =~ ^[0-9a-f]{40}$ ]] \
+    && [[ "${claude_fixer_base_ref_digest}" =~ ^[0-9a-f]{64}$ ]] \
     && [ -s "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ] \
     && [ "$(sed -n '1p' "${PR_CHECK_RUNS_CONTEXT_FILE}")" = "PR_CHECK_RUNS_CONTEXT" ] \
     && [ "$(sed -n '2p' "${PR_CHECK_RUNS_CONTEXT_FILE}")" = "head_sha: ${HEAD_SHA}" ] \
@@ -181,15 +207,17 @@ if [ "${claude_fixer_clean_ledger}" = "true" ] && [ -z "${claude_fixer_failed_ch
       echo "## Review round ${claude_fixer_round}: clean review, waiting for check runs"
       echo
       echo "Reviewed head: \`${HEAD_SHA}\` ([workflow run](${claude_fixer_run_url}))."
+      echo "Reviewed base: \`${claude_fixer_base_ref}\` at \`${claude_fixer_base_sha}\`."
       echo "Reviewer ledger entries: 0. Check runs still running on this head: \`${claude_fixer_incomplete_checks:-unnamed}\`."
       echo "Ledger SHA-256: \`${claude_fixer_ledger_digest}\`."
       echo
-      echo "Claude-fixer mode: the reviewer panel found nothing, so no Claude session is needed. Auto-merge waits for the check runs above: the hourly \`claude-pr-catch-all\` sweep re-reads this head's check runs and enables head-bound auto-merge once every one has completed without a failure. The reviewers do not run again. A check that fails is handed to the Claude session as a \`ci-failed\` fix, and a push starts a new review round."
+      echo "Claude-fixer mode: the reviewer panel found nothing, so no Claude session is needed. Auto-merge waits for the check runs above: the hourly \`claude-pr-catch-all\` sweep re-reads this head's check runs and enables head-bound auto-merge once every one has completed without a failure. The reviewers do not run again. A check that fails is handed to the Claude session as a \`ci-failed\` fix, and a push starts a new review round. If the PR's base changes before then, this review no longer counts: nothing is merged on it, and the next review sweep reviews the PR again."
       echo
       echo "<!-- ai:claude-fixer-pending-checks:v1 head=${HEAD_SHA} round=${claude_fixer_round} ledger=${claude_fixer_ledger_digest} -->"
+      echo "<!-- ai:claude-fixer-pending-checks:v2 head=${HEAD_SHA} round=${claude_fixer_round} ledger=${claude_fixer_ledger_digest} base_sha=${claude_fixer_base_sha} base_ref_sha256=${claude_fixer_base_ref_digest} -->"
     } > "${claude_fixer_body_file}"
     claude_fixer_post_marker_comment
-    echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=pending-checks findings=0 failed_checks=0 incomplete_checks=${claude_fixer_incomplete_checks:-unnamed} action=wait_for_checks"
+    echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=pending-checks findings=0 failed_checks=0 incomplete_checks=${claude_fixer_incomplete_checks:-unnamed} base_sha=${claude_fixer_base_sha} action=wait_for_checks"
     exit 0
   fi
   echo "::warning::Claude-fixer clean review has no fresh ready same-head check-run snapshot; auto-merge disabled."
