@@ -72,6 +72,10 @@ HEREDOC_OPEN_WRITE = "cd /repo && python3 - <<'PY' 2>&1\nwith open('CLAUDE.md', 
 		"python3 <<EOF\nimport os\nos.replace('a', 'b')\nEOF",
 		"python3 -c \"open('a.txt', 'w').write('x')\"",
 		"python -c 'import shutil; shutil.copy(\"a\", \"b\")'",
+		"python3 - <<'EOF'\nimport shutil\nshutil.move('a', 'b')\nEOF",
+		"python3 - <<'EOF'\nimport shutil\nshutil.rmtree('build')\nEOF",
+		"python3 -c \"open('a.bin', 'rb+').write(b'x')\"",
+		"python3 -c \"open('a.bin', 'r+b').write(b'x')\"",
 		"sed -i 's/a/b/' README.md",
 		"sed -i.bak -e 's/a/b/' README.md",
 		"sed --in-place 's/a/b/' README.md",
@@ -91,6 +95,9 @@ def test_inline_interpreter_writes_are_classed(command):
 	[
 		"python3 - <<'EOF'\nimport json\nprint(json.load(open('a.json')))\nEOF",
 		"python3 -c \"print(open('a.txt').read())\"",
+		"python3 -c \"print(open('a.bin', 'rb').read())\"",
+		"python3 - <<'EOF'\nimport shutil\nprint(shutil.which('gh'))\nEOF",
+		"python3 -c \"import shutil; print(shutil.get_terminal_size().columns)\"",
 		"python3 -m pytest -q tests/test_permission_prompts.py",
 		"python3 scripts/x.py --write",
 		"python3 .claude/scripts/permission_prompts.py file <<EOF\nwrite_text(\nEOF",
@@ -291,6 +298,12 @@ def test_pipeline_filed_duplicate_of_an_open_fix_is_eligible():
 	assert verdict["fix_pr"] == 4684 and verdict["fix_pr_state"] == "open"
 
 
+def test_issue_payloads_with_a_null_pull_request_key_are_issues():
+	# The REST schema marks `pull_request` optional; a null value is still an issue.
+	verdict = _decide(issue=_issue(pull_request=None), target=_target(pull_request=None))
+	assert verdict["eligible"] is True and verdict["reasons"] == []
+
+
 def test_closed_completed_target_with_a_fix_merged_into_the_default_branch_is_eligible():
 	verdict = _decide(target=_target(state="closed", state_reason="completed"), fix=_fix(state="closed", merged_at="2026-09-28T20:00:00Z"))
 	assert verdict["eligible"] is True and verdict["fix_pr_state"] == "merged"
@@ -311,10 +324,10 @@ def test_closed_completed_target_with_a_fix_merged_into_the_default_branch_is_el
 		({"events": None}, "events could not be read"),
 		({"events": _events() * 100}, "not verifiable in one page"),
 		({"issue": _issue(state="closed")}, "#4843 is not open"),
-		({"issue": _issue(pull_request={})}, "is a pull request"),
+		({"issue": _issue(pull_request={"url": f"https://api.github.com/repos/{SLUG}/pulls/4843"})}, "is a pull request"),
 		# Condition 2: the target and its fix.
 		({"target": _target(state="closed", state_reason="not_planned")}, "closed as not_planned, not completed"),
-		({"target": _target(pull_request={})}, "#4678 is a pull request"),
+		({"target": _target(pull_request={"url": f"https://api.github.com/repos/{SLUG}/pulls/4678"})}, "#4678 is a pull request"),
 		({"target_number": 4843}, "the target is the issue itself"),
 		({"fix": _fix(state="closed")}, "closed without merging"),
 		({"fix": _fix(body="Unrelated", title="Other", head={"ref": "claude/other"})}, "does not reference #4678"),
@@ -387,6 +400,21 @@ def test_main_rejects_bad_arguments(argv, capsys):
 
 def test_file_still_validates_the_session_label():
 	assert pp.main(["file", "--session-label", "bad label"]) == 1
+
+
+def test_missing_security_pass_skip_only_disables_duplicate_check(tmp_path, monkeypatch, capsys):
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "permission_prompts.py").write_bytes(TEMPLATE_SCRIPT_PATH.read_bytes())
+	(scripts / "check_in_status.py").write_bytes((TEMPLATE_SCRIPT_PATH.parent / "check_in_status.py").read_bytes())
+	module = _load("permission_prompts_without_skip_check", scripts / "permission_prompts.py")
+	assert module.security_pass_skip is None and "security_pass_skip.py" in module._SKIP_CHECK_ERROR
+	assert module.main(["report", "--log-dir", str(_log(tmp_path, [_record("ls -la")]))]) == 0
+	capsys.readouterr()
+	monkeypatch.setattr(module.check_in_status, "gh_api", lambda path: pytest.fail("no read expected"))
+	assert module.main(["duplicate-check", "--repo", SLUG, "--issue", "4843", "--target", "4678", "--fix-pr", "4684"]) == 2
+	verdict = json.loads(capsys.readouterr().out)
+	assert verdict["eligible"] is False and "security_pass_skip.py" in verdict["reasons"][0]
 
 
 # ──────────────────────────────────────────────────────────────────

@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4867-close-permission-prompt-duplicates   Final PR: #4883 draft
 - Status: BLOCKED
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: twin sync of `workflow-templates/.claude/{commands/implement-issue-claude.md,scripts/permission_prompts.py}` into `.claude/**` on the phase 1 PR (hold claim on its head), then `/reclarify`
+- Waiting on: twin sync of `workflow-templates/.claude/scripts/permission_prompts.py` into `.claude/scripts/` on PR #4903 (review round 1 fixes; hold claim on its head), then `/reclarify`
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified (71 new tests; with the twins copied, the related suites pass); phase PR opened against the project branch with a hold claim; stopped BLOCKED for the twin sync.
+- Last note: review round 1 on PR #4903 (head c7a25d1): 4 findings fixed in the `permission_prompts.py` twin, 3 rejected; stopped BLOCKED for the second twin sync (session_019stfdgFtBaLtGT93crWq6z).
 
 ## Phases
-1. [ ] Phase 1 — duplicate-close carve-out, duplicate-check, and class routing   — protected paths: `.claude/commands/implement-issue-claude.md`, `.claude/scripts/permission_prompts.py` (edited through their `workflow-templates/.claude/` twins)
+1. [ ] Phase 1 — duplicate-close carve-out, duplicate-check, and class routing   — protected paths: `.claude/commands/implement-issue-claude.md`, `.claude/scripts/permission_prompts.py` (edited through their `workflow-templates/.claude/` twins)   — PR #4903 open; review rounds: 1 (twin sync 1 `c7a25d1`, 2026-09-29); interventions: 0
    - CLAUDE.md §23.C carve-out → §23.I "Closing pipeline-filed duplicates" (conditions 1–4) → §28.C exception
    - `/implement-issue-claude` twin: step 5a duplicate check, Rules bullet
    - `permission_prompts.py` twin: `inline-interpreter-write` class, class marker, class routing to an open issue, `duplicate-check` subcommand
@@ -42,6 +42,8 @@
 - AD-8 [plan, 2026-09-29] Which module do the new tests load? — Picked: A — the `workflow-templates/.claude/` twins, in a new test file. Alternatives: B — extend `tests/test_permission_prompts.py` against `.claude/scripts`. Why: the twin leads under twin-first; parity tests keep `.claude` equal to it. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] Under the interim twin-first rule every review round that touches `.claude/**` needs another supervising-session twin sync, so a project that edits `.claude/` should expect one BLOCKED stop per such round. (files: workflow-templates/.claude/scripts/permission_prompts.py)
+- [source:intervention] `check_in_status.py` fails closed and reports a Claude-fixer PR as plain `open` when `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` is unset, so a resuming session must pass it (the review workflow's comment account) or it misses the pending review round. (files: .claude/scripts/check_in_status.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher (trigger `trig_01Q2f2oDN3xSbvfenGBa8jLC`, `dispatch shubhodeep1/coding-workflows#4867: deliver`) in session `session_01Kpbk3DLYNswrp2GkQ573Wa`; permission mode auto.
@@ -50,3 +52,4 @@
 - The session container had no `gh`; it was installed from the Ubuntu archive (`gh` 2.45.0) so the helper scripts run.
 - Phase 1 (2026-09-29): edits only the twins. Expected red until the twin sync: `tests/test_permission_prompts.py::test_template_parity` and `tests/test_implement_issue_claude_command.py::test_template_parity[implement-issue-claude.md]` (2 failed, 204 passed locally). With both twins copied into `.claude/**` in a scratch tree: 526 passed across the permission-prompt, issue-command, plan-command, section-number, security-skip, check-in, and stale-Routine suites.
 - `duplicate-check` smoke test against live data: #4843 (already closed as a duplicate of #4678, fix PR #4684) passes every pipeline-filed check and is refused only as `#4843 is not open`.
+- Resumed 2026-09-29 by `session_019stfdgFtBaLtGT93crWq6z` (dispatcher trigger `trig_01TiPwwXSzJYbrQmXRtLCDsm`) after the twin sync `c7a25d1` and `/reclarify`. No checker was armed at the BLOCKED stop, so the round-1 hand-off (02:24 UTC) waited for this session.
