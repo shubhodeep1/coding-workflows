@@ -3,15 +3,15 @@
 - Plan: docs/plans/issue-4891-deny-gh-api-jq-cli-flags-plan.md
 - Source issue: shubhodeep1/coding-workflows#4891 (https://github.com/shubhodeep1/coding-workflows/issues/4891)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4891-deny-gh-api-jq-cli-flags   Final PR: (opened after this commit) draft
+- Project branch: claude/implement-plan-issue-4891-deny-gh-api-jq-cli-flags   Final PR: #4920 draft
 - Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: an operator answer to the protected-path question on #4891, then `/reclarify`
+- Waiting on: `[claude-twin-sync]` of `workflow-templates/.claude/hooks/gh_api_write_guard.py` → `.claude/hooks/gh_api_write_guard.py` (Q40, Q62/Q64 approval window), then `/reclarify`
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (blocked before phase 1 started; no PR to wait on)
+- Check-in: none (phase 1 stops for the twin sync)
 - Last updated: 2026-09-29
-- Last note: plan written; phase 1 edits `.claude/hooks/gh_api_write_guard.py` (protected path) and the log has no `Protected-path approval: phase 1` line, so the phase stops before it starts (CLAUDE.md §28.C)
+- Last note: phase 1 implemented twin-first (Q1: A); the root hook copy is left for the supervising session's `[claude-twin-sync]`
 
 ## Phases
 1. [ ] Phase 1 — deny jq CLI options passed to `--jq` in the gh api guard (hook + twin, tests, CLAUDE.md §23.H, agents.md, changelog)   — protected paths: `.claude/hooks/gh_api_write_guard.py`
@@ -40,3 +40,7 @@
 - Started by the Claude issue dispatcher routine in session session_01GmnPyCgwEwn3qbbRKYFMfY (Auto mode).
 - Security pass: run (`security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}`).
 - Blocked before phase 1: protected path `.claude/hooks/gh_api_write_guard.py`; the question is on #4891 (`ai:claude-blocked`).
+- Protected-path approval: phase 1 — A, twin-first per Q40 (2026-09-29). Operator comment 5882155756 on #4891, reconfirmed in session session_011gNtd9qbns8WSKTLRvHP2g.
+- Resumed in session session_011gNtd9qbns8WSKTLRvHP2g (Auto mode). The Auto-mode classifier denied removing `ai:claude-blocked` and pushing the project-branch sync (`[Auto-Mode Bypass]`), even after the operator reconfirmed in the session; those steps are left to the operator.
+- AD-5 check: `.claude/hooks/permission_prompt_logger.py` records `PermissionDenied` only for classifier denials, and a `PreToolUse` hook deny is not one, so no logger or filer change (AD-5 stays A).
+- Phase 1 verification: `tests/test_gh_api_write_guard.py` in a twin overlay (root hook replaced by the twin) — 198 passed, 13 of them new. In the real tree 11 fail until the twin sync, as expected: `test_template_parity` and the 10 new deny cases, which load the root hook (187 passed).
