@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The plan's Phase 1 \"Done when\" condition requires \"the command text and twins carry the procedure and the three call sites; session-start.sh and its twin log the stale line; the new tests and the existing suites below pass\" (docs/plans/issue-4952-sync-claude-assets-at-session-start-plan.md, Phase 1).\n  expected_change_site: `.claude/commands/implement-plan-claude.md`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/hooks/session-start.sh`\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The PR diff only modifies the `workflow-templates/.claude/**` twins. The four `.claude/**` counterpart files are absent from the diff. The existing `.claude/hooks/session-start.sh` at line 226 has `verify_token || true` as the last call in `main()` with no `report_claude_assets_drift || true` line. Twin-parity tests will fail: (1) `tests/test_claude_asset_sync_command.py::test_twins_are_byte_identical` (3 variants, new in this PR's own CI step at ci.yml:878), (2) `tests/test_session_start_claude_assets_drift.py::test_hook_twins_are_byte_identical` (new), (3) `tests/test_implement_plan_claude_command.py::test_template_parity` at line 31 (existing CI step at ci.yml:454), (4) `tests/test_implement_issue_claude_command.py::test_template_parity` at line 47 for `implement-issue-claude.md` and `implement-plan-claude.md` variants (existing CI step at ci.yml:459), (5) `tests/test_check_in_status_hand_back.py::test_fix_claude_pr_routes_on_action` at lines 720-721 (existing CI step at ci.yml:449). The project log documents this as the twin-first state per Q40 (\"only the workflow-templates/.claude/** twins changed; the phase PR carries a hold claim and waits for the master's [claude-twin-sync]\"), but the PR as pushed cannot pass CI.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: The plan's Phase 1 \"Done when\" condition requires \"the command text and twins carry the procedure and the three call sites; session-start.sh and its twin log the stale line; the new tests and the existing suites below pass\" (docs/plans/issue-4952-sync-claude-assets-at-session-start-plan.md, Phase 1).\n  Expected change site: `.claude/commands/implement-plan-claude.md`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/hooks/session-start.sh`\n  Evidence of absence: The PR diff only modifies the `workflow-templates/.claude/**` twins. The four `.claude/**` counterpart files are absent from the diff. The existing `.claude/hooks/session-start.sh` at line 226 has `verify_token || true` as the last call in `main()` with no `report_claude_assets_drift || true` line. Twin-parity tests will fail: (1) `tests/test_claude_asset_sync_command.py::test_twins_are_byte_identical` (3 variants, new in this PR's own CI step at ci.yml:878), (2) `tests/test_session_start_claude_assets_drift.py::test_hook_twins_are_byte_identical` (new), (3) `tests/test_implement_plan_claude_command.py::test_template_parity` at line 31 (existing CI step at ci.yml:454), (4) `tests/test_implement_issue_claude_command.py::test_template_parity` at line 47 for `implement-issue-claude.md` and `implement-plan-claude.md` variants (existing CI step at ci.yml:459), (5) `tests/test_check_in_status_hand_back.py::test_fix_claude_pr_routes_on_action` at lines 720-721 (existing CI step at ci.yml:449). The project log documents this as the twin-first state per Q40 (\"only the workflow-templates/.claude/** twins changed; the phase PR carries a hold claim and waits for the master's [claude-twin-sync]\"), but the PR as pushed cannot pass CI.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e950758d9d4c88de1d4d03abd0fdb018bfd2a467d5df9acdb1ffa869237a3300",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36520323891",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36520323891",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929042953_98ff47bda5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36520323891"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T04:29:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
