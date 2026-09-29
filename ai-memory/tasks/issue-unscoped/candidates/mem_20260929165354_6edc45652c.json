@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1244 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_autofix_pr_named_review_runs` does not verify that a matching `workflow_dispatch` run's `head_branch` is the default branch, allowing a non-default-branch run to be treated as a peer run.\n  WHY: This can suppress legitimate re-dispatches or incorrectly consume the changes-lost budget.\n- scripts/review_merge_train.sh:413 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_mt_inflight_review_branches` does not verify that a matching `workflow_dispatch` run's `head_branch` is the default branch.\n  WHY: A forged dispatch run named for a queued PR prevents the merge train from releasing that PR.\n- .github/workflows/review_autofix_sweep.yml:205-209 | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `dispatch_pr` matches `workflow_dispatch` runs by event and display title without verifying that the run came from the default branch.\n  WHY: A forged dispatch from another branch prevents the sweep from dispatching review for the targeted PR.\n- scripts/gh_helpers.sh:~line 1233\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The path regex matches any path ending in `internal-review.yml` or `ai-review.yml`, not specifically `.github/workflows/`.\n  WHY: A workflow file at a different location with the same basename could match; the reviewer identifies this as a known residual filed as #5152, out of scope per #5094 AD-1.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The #5094 security finding (issue 5094) states \"the poller trusts an unverified review run name\" and the fix verifies identity and provenance for every PR-named match in the poller only.\n  expected_change_site: scripts/gh_helpers.sh `_autofix_pr_named_review_runs`; scripts/review_merge_train.sh `_mt_inflight_review_branches`; .github/workflows/review_autofix_sweep.yml `dispatch_pr`; .claude/scripts/check_in_status.py\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: These sites match on display_title and event but do not verify head_branch equals the default branch, unlike _pr_named_review_dispatch_runs which was fixed under #5094; the #5094 completed plan Notes section states these are filed as follow-up #5152.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh:1244 | severity=MAJOR | confidence=[4]\n  PROBLEM: _autofix_pr_named_review_runs checks the workflow path and event but does NOT check that head_branch equals the default branch. Anyone who can push a branch can edit their copy of internal-review.yml and dispatch a workflow_dispatch run at that branch. The run will have path=.github/workflows/internal-review.yml and event=workflow_dispatch, so this helper matches it even though it did not run from the default branch.\n  WHY: A spoofed dispatch from a non-default branch incorrectly appears as a peer run for autofix_retrigger_has_inflight_peer, suppressing legitimate re-dispatches, or incorrectly appears as consuming the changes-lost budget in autofix_changes_lost_head_retry_consumed.\n- scripts/review_merge_train.sh:413 | severity=MAJOR | confidence=[4]\n  PROBLEM: _mt_inflight_review_branches emits pr:<N> keys for workflow_dispatch runs that have the correct display_title and event, but does not verify head_branch is the default branch. Same spoof vector as above, now affecting merge-train release: a forged PR-named active run keeps a queued PR from being released by the train.\n  WHY: A forged dispatch run named for a queued PR prevents the merge train from releasing that PR.\n- .github/workflows/review_autofix_sweep.yml:205-209 | severity=MAJOR | confidence=[3]\n  PROBLEM: The dispatch_pr jq function matches by event==workflow_dispatch and exact display_title pattern, but the sweep fetches runs with workflow filters (internal-review.yml, review_autofix.yml) rather than the REST path-based identity. While the workflow name + event combo provides some filtering, a run dispatched on a non-default branch that still carries the internal-review.yml workflow path would match here and suppress the sweep for that PR.\n  WHY: A forged dispatch from another branch prevents the sweep from dispatching review for the targeted PR.\n- TASK_GAP\n  Requirement: The #5094 security finding (issue 5094) states \"the poller trusts an unverified review run name\" and the fix verifies identity and provenance for every PR-named match in the poller only. The completed plan explicitly documents residual same-pattern matchers outside scope: _autofix_pr_named_review_runs in gh_helpers.sh, _mt_inflight_review_branches in review_merge_train.sh, review_autofix_sweep.yml, and .claude/scripts/check_in_status.py.\n  Expected change site: scripts/gh_helpers.sh _autofix_pr_named_review_runs, scripts/review_merge_train.sh _mt_inflight_review_branches, .github/workflows/review_autofix_sweep.yml dispatch_pr jq, .claude/scripts/check_in_status.py\n  Evidence of absence: These sites match on display_title and event but do not verify head_branch equals the default branch, unlike _pr_named_review_dispatch_runs which was fixed under #5094. The #5094 completed plan Notes section states these are filed as follow-up #5152.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/gh_helpers.sh:~line 1233\n  PROBLEM: The path check uses `test(\"(^|/)(internal-review|ai-review)\\\\.ya?ml$\")` which matches any path ending in those filenames, not specifically `.github/workflows/`.\n  WHY: A workflow file at a different location with the same basename could match. The reviewer identifies this as a known residual (filed as #5152, out of scope per #5094 AD-1); suggested minimal fix: Replace the regex with exact path matches mirroring the poller helper: `select((.path // \"\") == \".github/workflows/internal-review.yml\" or (.path // \"\") == \".github/workflows/ai-review.yml\")`\n=== END FINDINGS FROM z-ai_glm-5_2",
+  "fingerprint": "912878648ba2b964b7c01198fad26b5c871bcbef11cba36dd20b819b8f3cf92c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36599825456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36599825456",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929165354_6edc45652c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36599825456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T16:53:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
