@@ -3,24 +3,24 @@
 - Plan: docs/plans/issue-4938-environment-blocker-self-heal-plan.md
 - Source issue: shubhodeep1/coding-workflows#4938 (https://github.com/shubhodeep1/coding-workflows/issues/4938)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4938-environment-blocker-self-heal   Final PR: (opened after this commit)
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-4938-environment-blocker-self-heal   Final PR: #5000 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: twin sync of the phase 1 PR (master session, Q40), then `/reclarify`
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened; phase 1 starting (twin-first per Q40)
+- Last note: phase 1 implemented and verified on its twins; phase PR opened with a `hold` claim; stopped BLOCKED for the Q40 twin sync (see the `ai:claude-blocked` comment on #4938)
 
 ## Phases
 1. [ ] Phase 1 — environment self-heal, environment blockers, hourly re-queue, closed-target refusal   — protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md, .claude/commands/fix-claude-pr.md, .claude/commands/claude-issue-dispatch.md, .claude/hooks/session-start.sh (edited as workflow-templates/.claude/** twins only, Q40)
-   - [ ] session-start.sh twin: per-step gh install checks, `gh_install=failed reason=…` log line, marker file
-   - [ ] command twins: ToolSearch + session-start re-run self-heal, add_repo checkout self-heal, `environment-*` blocker reasons, no in-session questions / AskUserQuestion, gh REST fallback
-   - [ ] scripts/claude_issue_route.py: marker parsers, env re-queue decisions and plan, closed-target refusal in queue-pending, queue-closed-targets
-   - [ ] scripts/claude_issue_queue_watchdog.sh env-requeue mode + claude-issue-queue-watchdog.yml step
-   - [ ] tests (route, commands, hook, watchdog) + ci.yml wiring
-   - [ ] README.md, agents.md, changelog.d/4938-environment-blocker-self-heal.md
+   - [x] session-start.sh twin: per-step gh install checks, `gh_install=failed reason=…` log line, marker file
+   - [x] command twins: ToolSearch + session-start re-run self-heal, add_repo checkout self-heal, `environment-*` blocker reasons, no in-session questions / AskUserQuestion, gh REST fallback
+   - [x] scripts/claude_issue_route.py: marker parsers, env re-queue decisions and plan, closed-target refusal in queue-pending, queue-closed-targets
+   - [x] scripts/claude_issue_queue_watchdog.sh env-requeue mode + claude-issue-queue-watchdog.yml step
+   - [x] tests (route, commands, hook, watchdog); no ci.yml change needed (both suites already run)
+   - [x] README.md, agents.md, changelog.d/4938-environment-blocker-self-heal.md
 
 ## Conformance
 
@@ -44,9 +44,13 @@
 - AD-9 [plan, 2026-09-29] Marker file path and content for a failed gh install? — Picked: A — `${SESSION_START_GH_MARKER_FILE:-$HOME/.claude-session-start-gh-install}`, holding the same `gh_install=failed reason=… exit_code=… at=<UTC>` line, removed after a successful install. Alternatives: B — a JSON file under `~/.claude/`; C — no marker. Why: one grep-able format for the log and the file; outside `.claude/`; the env override (default set, §4) lets tests isolate it. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] Shell-driver tests for scripts/claude_issue_*.sh belong in the stub harness of tests/test_claude_issue_route.py, which ci.yml already runs; a new test file would also need its own ci.yml wiring (files: tests/test_claude_issue_route.py, scripts/claude_issue_queue_watchdog.sh)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #4938; start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
 - Protected-path approval: phase 1 — twin-first per Q40 (issue #4938 body, owner-authored: "edit the `workflow-templates/.claude/**` twins first, per Q40", 2026-09-29): the phase edits only the `workflow-templates/.claude/**` twins, opens the phase PR into the project branch, posts a `hold` claim, and stops BLOCKED; the master copies the twins into `.claude/` as `[claude-twin-sync]` (the hook needs the Q62/Q64 window), pushes (lifting the hold), and comments `/reclarify`.
 - Environment at start (2026-09-29, session_017rVpkNCRJsVb9D96UYxPpN): no checkout in `/home/user`, no `gh`, no `mcp__github__*` tools (not even deferred). Recovered with `add_repo` + clone + re-running `.claude/hooks/session-start.sh`; GitHub writes go through `gh api` REST (AD-8). This is the #4938 failure mode itself.
 - #4912 investigation (owner scope addition): queue item #4916 was created 2026-09-29T01:36:39Z, #4912 closed at 01:55:00Z, and the pickup dispatched #4916 at 02:33Z because `queue_pending` never re-reads the target issue (only the intake's `authorize_target` checks `issue_closed`, at queue time). Fixed by AD-7.
+- Plan deviation (phase 1): the watchdog tests went into `tests/test_claude_issue_route.py` (its existing stub harness) instead of a new `tests/test_claude_issue_queue_watchdog_env_requeue.py`, so no `ci.yml` wiring was needed; the plan's Files and Tests sections were updated in the phase PR.
+- Phase 1 verification (2026-09-29): on the phase branch, `tests/test_claude_issue_route.py` 226 passed; `tests/test_implement_issue_claude_command.py` 34 passed + the 3 `test_template_parity` cases failing as expected until the twin sync; `tests/test_session_start_extract_repo_slug.py` passes for the twin and fails only for the unsynced root hook. On a scratch copy with the twins copied into `.claude/` (the post-sync state): 1,199 passed across the route, command, plan-command, security-skip, guardrails, sweep, check-in, fixer-mode, gh-api guard, check-in reminder, stale-routines, checkout-audit, check-in status, lessons-ingest, permission-prompts, and merge-guard suites, and the hook test passes in full. `ruff check` and `shellcheck -S warning` are clean. Live read-only check: the 8 open `ai:claude-blocked` issues in this repo all resolve to `skip: not_environment` (plain blockers are never re-queued).
+- Twins to sync into `.claude/` (Q40): `commands/implement-issue-claude.md`, `commands/implement-plan-claude.md`, `commands/fix-claude-pr.md`, `commands/claude-issue-dispatch.md`, `hooks/session-start.sh` (hook: Q62/Q64 approval window).

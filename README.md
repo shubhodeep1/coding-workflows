@@ -1323,7 +1323,38 @@ claude-code-remote tools never implements an issue itself:
 exhausted cap, a failed security or validation run, an ask-first operation,
 a missing base branch) comments once on the issue, labels it
 `ai:claude-blocked`, and sends a push notification; answer there and comment
-`/reclarify` to resume. If `claude_issue_route.py`
+`/reclarify` to resume.
+
+**Environment failures recover on their own** (issue #4938). Before an
+unattended session calls a tool missing, it repairs its environment. It loads
+the deferred `mcp__github__*` and claude-code-remote tools with ToolSearch,
+re-runs `.claude/hooks/session-start.sh` once when `gh` is missing, and
+attaches and clones a missing checkout. The hook logs a failed `gh` install
+as `[session-start] gh_install=failed reason=<reason> exit_code=<n> at=<UTC>`
+and writes the same line to `~/.claude-session-start-gh-install`
+(`SESSION_START_GH_MARKER_FILE` overrides the path). A session that still
+lacks its environment never asks in session. It posts
+`<!-- ai:claude-blocked:v1 reason=environment-tools-missing -->`
+(or `environment-checkout-missing` / `environment-remote-tools-missing`)
+with `ai:claude-blocked`. The hourly `claude-issue-queue-watchdog.yml`
+re-queues such issues through the same `claude-issue` dispatch `/reclarify`
+sends, so the pickup starts a fresh session on a fresh container within
+about two hours. Each re-queue leaves
+`<!-- ai:claude-env-requeue:v1 blocker=<id> reason=<reason> -->` on the issue.
+After `CLAUDE_ISSUE_ENV_REQUEUE_MAX` (default 2) re-queues in
+`CLAUDE_ISSUE_ENV_REQUEUE_WINDOW_HOURS` (default 24), it posts
+`<!-- ai:claude-env-requeue-exhausted:v1 … -->`, sends one Telegram ERROR, and
+leaves the label in place. A re-queued issue whose label is still there after
+`CLAUDE_ISSUE_QUEUE_STALE_HOURS` counts as another failed retry. A plain
+`<!-- ai:claude-blocked:v1 -->` blocker (a real §28.C decision) is never
+re-queued. Only markers from owners, members, collaborators, and
+`github-actions[bot]` count. The same watchdog step closes queue items whose
+target issue was closed after queueing, and the pickup's `queue-pending`
+refuses them (`issue_closed: <repo>#<N>`), so a closed issue never starts a
+session. Log prefix: `CLAUDE_ISSUE_QUEUE_WATCHDOG` (`env_requeue requeued`,
+`env_requeue exhausted`, `env_requeue skip`, `closed_target`).
+
+If `claude_issue_route.py`
 itself errors, clarify falls back to the Codex pipeline with a warning, so no
 issue is dropped.
 
