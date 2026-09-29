@@ -2,19 +2,19 @@
 
 - Plan: docs/plans/issue-5114-verify-clean-votes-from-runner-output-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5114-verify-clean-votes-from-runner-output   Final PR: pending
+- Project branch: claude/implement-plan-issue-5114-verify-clean-votes-from-runner-output   Final PR: #5134 draft
 - Source issue: shubhodeep1/coding-workflows#5114   Base branch: claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote   Security pass: skip (ai:security: automation-produced issue)
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (head claude/implement-plan-issue-5114-verify-clean-votes-from-runner-output-phase-1; number in the stage report and the checker instructions)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from the issue base; phase 1 starting
+- Last note: phase 1 implemented and verified (82 Claude-fixer tests incl. 12 new, 342 review_autofix tests, changelog / plan / workflow-size contract tests, shellcheck, mawk and gawk); 10 new tests fail on the unfixed script; phase PR opened against the project branch; waiting on its review round or merge
 
 ## Phases
-1. [ ] Phase 1 — Clean votes verified against the runner output (runner-output classifier in the Claude-fixer failed-slot clean check, tests, docs, changelog)
+1. [ ] Phase 1 — Clean votes verified against the runner output (runner-output classifier in the Claude-fixer failed-slot clean check, tests, docs, changelog)   — PR open (waiting); review rounds: 0; interventions: 0
    - scripts/review_autofix_step_claude_fixer_handoff.sh: `clean:success` counts only when review_<slug>.txt is an unambiguous no-findings result (NONE present, no finding / task-gap field label, all nine lens verdicts NONE when the checklist is used); otherwise warn and hand off
    - tests/test_review_autofix_claude_fixer_mode.py: exploit case (ledger clean, runner finding), task gap, markdown labels, missing / empty / unreadable output, no NONE, lens with prose, missing lens, prose around verdicts, bare NONE, heading list pinned to the checklist prompt, mawk / gawk parity, no-failed-slot path unchanged
    - README.md, agents.md, changelog.d/5114-verify-clean-votes-from-runner-output.md
