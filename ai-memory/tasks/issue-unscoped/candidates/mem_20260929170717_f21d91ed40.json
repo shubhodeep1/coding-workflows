@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_checker_restart.py:433-444 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_project_trigger` relies on hardcoded ellipsis patterns to detect truncated trigger names.\n  WHY: If the truncation format changes, the requeue guard may fail to recognize an existing trigger and spawn a duplicate safety-net trigger.\n- scripts/claude_checker_restart.py:135-156 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: ReadError messages do not include the request path or command, and `_git` omits command arguments.\n  WHY: Missing context makes it difficult to identify which branch or endpoint failed during on-call triage.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_checker_restart.py (lines 433-444) | severity=high | confidence=3\n  PROBLEM: The truncation marker matching is brittle as it relies on hardcoded ellipsis patterns.\n  WHY: If the truncation format changes (e.g., number of dots, length truncation), the matching logic will fail to identify the existing trigger, causing the requeue guard to spawn duplicate safety-net triggers for an already-monitored project.\n- scripts/claude_checker_restart.py (lines 135-156) | severity=low | confidence=4\n  PROBLEM: ReadError messages do not include the request path or command, and _git omits command arguments.\n  WHY: During on-call triage, it is difficult to determine which branch or endpoint failed, delaying investigation of transient errors.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "61ffa39ee77d3a94b809c33f7f918ba64fa84014acb29e0307972d66f07efcb3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4984,
+    "run_id": "36598373633",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36598373633",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929170717_f21d91ed40",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4984,
+    "run_id": "36598373633"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T17:07:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
