@@ -20,7 +20,15 @@
 #   * nothing at all (no finding in any ledger block, fresh ready check snapshot)
 #       -> no comment; CLAUDE_FIXER_ZERO_FINDINGS=true is exported so the
 #          workflow's own auto-merge step runs, as it does when the editor
-#          finds nothing to commit.
+#          finds nothing to commit;
+#   * nothing but check runs still running on the same head (clean ledger,
+#     `ready` or `timeout` snapshot, none failed; issue #4900)
+#       -> one comment carrying the pending-checks marker
+#            <!-- ai:claude-fixer-pending-checks:v1 head=<sha> round=<n> ledger=<sha256> -->
+#          which is not a hand-off: the gate skips dispatched re-runs on
+#          that head, and the claude-pr-catch-all sweep
+#          (scripts/claude_fixer_pending_checks.py) enables head-bound
+#          auto-merge once the checks finish green.
 #
 # The hand-off marker is
 #   <!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->
@@ -37,7 +45,8 @@
 # GITHUB_SERVER_URL, RUNTIME_DIR.
 # API calls: on a clean candidate, the existing check-run collector refreshes
 # its paginated check-runs GET; on findings, the ledger chunks from
-# post_review_comment.sh and one hand-off comment are posted.
+# post_review_comment.sh and one hand-off comment are posted; on pending
+# checks, one pending-checks comment is posted (no ledger chunks).
 set -euo pipefail
 
 # shellcheck source=/dev/null
@@ -148,6 +157,39 @@ if [ "${claude_fixer_clean_ledger}" = "true" ] && [ -z "${claude_fixer_failed_ch
     && ! grep -Eq '^(failed|incomplete)\[[0-9]+\]\.' "${PR_CHECK_RUNS_CONTEXT_FILE}"; then
     echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=none findings=0 failed_checks=0 action=auto_merge"
     echo "CLAUDE_FIXER_ZERO_FINDINGS=true" >> "$GITHUB_ENV"
+    exit 0
+  fi
+  # Issue #4900: the reviewers often finish before CI (PR #4869). When the
+  # only obstacle is incomplete check runs (same head, well-formed snapshot,
+  # none failed), there is nothing for a Claude session to fix: post the
+  # pending-checks marker instead of a findings hand-off. It is not a
+  # hand-off, so check_in_status.py keeps waiting, and the claude-pr-catch-all
+  # sweep (scripts/claude_fixer_pending_checks.py) enables head-bound
+  # auto-merge once the checks finish green. A check that fails later is a
+  # `ci-failed` Claude fix, as for any claude/* head.
+  if [ "${claude_fixer_checks_refreshed}" = "true" ] \
+    && [ -s "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ] \
+    && [ "$(sed -n '1p' "${PR_CHECK_RUNS_CONTEXT_FILE}")" = "PR_CHECK_RUNS_CONTEXT" ] \
+    && [ "$(sed -n '2p' "${PR_CHECK_RUNS_CONTEXT_FILE}")" = "head_sha: ${HEAD_SHA}" ] \
+    && grep -Exq 'collection_status: (ready|timeout)' <(sed -n '3p' "${PR_CHECK_RUNS_CONTEXT_FILE}") \
+    && grep -Eq '^total_check_runs: [1-9][0-9]*$' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
+    && grep -Fxq 'failed_count: 0' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
+    && grep -Eq '^incomplete_count: [1-9][0-9]*$' "${PR_CHECK_RUNS_CONTEXT_FILE}" \
+    && ! grep -Eq '^failed\[[0-9]+\]\.' "${PR_CHECK_RUNS_CONTEXT_FILE}"; then
+    claude_fixer_incomplete_checks="$(sed -n 's/^incomplete\[[0-9]*\]\.name: //p' "${PR_CHECK_RUNS_CONTEXT_FILE}" | paste -sd, - || true)"
+    {
+      echo "## Review round ${claude_fixer_round}: clean review, waiting for check runs"
+      echo
+      echo "Reviewed head: \`${HEAD_SHA}\` ([workflow run](${claude_fixer_run_url}))."
+      echo "Reviewer ledger entries: 0. Check runs still running on this head: \`${claude_fixer_incomplete_checks:-unnamed}\`."
+      echo "Ledger SHA-256: \`${claude_fixer_ledger_digest}\`."
+      echo
+      echo "Claude-fixer mode: the reviewer panel found nothing, so no Claude session is needed. Auto-merge waits for the check runs above: the hourly \`claude-pr-catch-all\` sweep re-reads this head's check runs and enables head-bound auto-merge once every one has completed without a failure. The reviewers do not run again. A check that fails is handed to the Claude session as a \`ci-failed\` fix, and a push starts a new review round."
+      echo
+      echo "<!-- ai:claude-fixer-pending-checks:v1 head=${HEAD_SHA} round=${claude_fixer_round} ledger=${claude_fixer_ledger_digest} -->"
+    } > "${claude_fixer_body_file}"
+    claude_fixer_post_marker_comment
+    echo "CLAUDE_FIXER_HANDOFF pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} kind=pending-checks findings=0 failed_checks=0 incomplete_checks=${claude_fixer_incomplete_checks:-unnamed} action=wait_for_checks"
     exit 0
   fi
   echo "::warning::Claude-fixer clean review has no fresh ready same-head check-run snapshot; auto-merge disabled."

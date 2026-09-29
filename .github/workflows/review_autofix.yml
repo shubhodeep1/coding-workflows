@@ -732,6 +732,20 @@ jobs:
               ' "${gate_marker_comments_file}" >/dev/null 2>&1
           }
 
+          # True when the hand-off step found a clean review with only check
+          # runs still running on the current head (issue #4900). The
+          # claude-pr-catch-all sweep enables auto-merge once they finish, so
+          # a dispatched re-run would only repeat the reviewer panel. Same
+          # cached file and trust rule as gate_claude_handoff_on_head.
+          gate_claude_pending_checks_on_head()
+          {
+            jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
+                any(.[]; .author_login == $author and
+                  ((.body // "") | test("^## Review round [1-9][0-9]*: clean review, waiting for check runs\\n")) and
+                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-pending-checks:v1 head=" + $head + " round=[1-9][0-9]* ledger=[0-9a-f]{64} -->$"))))
+              ' "${gate_marker_comments_file}" >/dev/null 2>&1
+          }
+
           # ----- Claude-fixer mode (every PR-backed claude/* head) -----
           # Claude PRs (/implement-plan-claude stages, and any session's PR
           # under CLAUDE.md §26) keep the reviewer panel but hand the fixes to
@@ -745,6 +759,9 @@ jobs:
           #   * any other workflow_dispatch (sweep, continuation, orchestrator)
           #     on a head that already has a hand-off is skipped: the round
           #     waits on the session, and a rerun would only repeat the panel.
+          #     A head with a pending-checks marker (clean review, checks
+          #     still running) is skipped the same way
+          #     (claude_fixer_pending_checks; issue #4900).
           # force_rb_judge dispatches and the force-review label / title
           # marker bypass the second rule. vars.CLAUDE_FIXER_ENABLED=false
           # turns the mode off (such PRs then take the GPT editor path).
@@ -819,6 +836,10 @@ jobs:
               SHOULD_RUN="false"
               SKIP_REASON="claude_fixer_awaiting_session"
               echo "AUTOFIX_GATE_SKIP reason=claude_fixer_awaiting_session pr=${PR_NUMBER} head_sha=${pr_head_sha_gate}"
+            elif [ "${gate_marker_fetch_state}" = "ok" ] && gate_claude_pending_checks_on_head; then
+              SHOULD_RUN="false"
+              SKIP_REASON="claude_fixer_pending_checks"
+              echo "AUTOFIX_GATE_SKIP reason=claude_fixer_pending_checks pr=${PR_NUMBER} head_sha=${pr_head_sha_gate}"
             fi
           fi
           if [ "${CLAUDE_FIXER}" = "true" ]; then

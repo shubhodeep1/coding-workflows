@@ -1447,6 +1447,28 @@ next push is evaluated for the skip. Who fixes a PR that does get a hand-off:
    `claude/*` PRs that never had a checker. `/implement-plan-claude` PRs keep
    their chain's 6-hour window for failed checks.
 
+**A clean review that finishes before CI** (issue #4900). The reviewers
+often finish before the head's CI does (PR #4869: six reviewers clean at
+00:51Z, `lint` green at 00:55Z). When the ledger is clean, no check has
+failed, and check runs on the same head are still running, the review
+workflow posts a `## Review round <n>: clean review, waiting for check runs`
+comment ending in
+`<!-- ai:claude-fixer-pending-checks:v1 head=<sha> round=<n> ledger=<sha256> -->`
+instead of a findings hand-off. It is not a hand-off, so no Claude session
+is woken (`check_in_status.py` keeps reporting `wait`), and a dispatched
+re-run on that head skips the reviewer panel
+(`AUTOFIX_GATE_SKIP reason=claude_fixer_pending_checks`). On each hourly
+run the `claude-pr-catch-all` job
+(`scripts/claude_fixer_pending_checks.py`) re-reads the head's check runs
+once and, when every run has completed without a failure, enables
+head-bound auto-merge with `scripts/review_enable_auto_merge.sh`. It
+requires the marker from `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` for the
+current head with no later hand-off, a successful linked review run, no
+blocking label, no conflict, and the repository's `ENABLE_AUTO_MERGE`
+variable (unset means `true`; `GH_PAT` needs Actions-variables read, or the
+PR is left alone). A check that fails instead is a `ci-failed` Claude fix,
+and a push starts a new review round.
+
 **Claims** (`.claude/scripts/claude_fix_claim.py`) stop two fixers racing:
 one PR comment ending in
 `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`,
@@ -1467,7 +1489,8 @@ flags its items like any other queue item when the pickup stops.
 Stable log prefix: `CLAUDE_PR_SWEEP` (`start`, `skip`, `dry_run`,
 `queued`, `already_queued`, `claim`, `report_only`, `queue_failed`,
 `queue_read_failed`, `read_failed`, `list_failed`, `bound`,
-`binding_skipped`, `binding_failed`, `end`). A queued fix is bound to the
+`binding_skipped`, `binding_failed`, `pending_checks`,
+`pending_checks_failed`, `end`). A queued fix is bound to the
 sweep run like an intake item (see "Queue binding" under
 [Claude issue implementer](#claude-issue-implementer)).
 

@@ -32,6 +32,11 @@ Batching contract (CLAUDE.md §15):
           the head it reviewed, and 3 active-run reads); per queued fixer,
           1 queue-issue POST and the claim (1 PR read + 1 comment POST);
           the queue binding is a local file write (no call);
+          per `open` candidate (not claimed, held, or due), the pending-checks
+          reads of scripts/claude_fixer_pending_checks.py (1 PR read, 1 per
+          100 comments, and only with a live marker the check-run pages,
+          then only when ready 1 run read, 1 variable read and the
+          auto-merge helper's calls);
   output  one `CLAUDE_PR_SWEEP` log line per decision plus a summary line;
   failure fail open per PR and per repo: a read error is logged and the
           sweep moves on; nothing is retried in a tight loop. A failed queue
@@ -42,6 +47,13 @@ Queue issues are opened with the workflow's GITHUB_TOKEN
 only author the pickup trusts; reads and claims use `GH_TOKEN` (GH_PAT).
 Without the queue token the sweep only reports: each due PR is logged as
 `::warning::` and nothing is queued.
+
+The sweep also finishes clean Claude-fixer reviews that ended before CI did
+(issue #4900): for every `open` candidate it calls
+`scripts/claude_fixer_pending_checks.py`, which enables head-bound
+auto-merge once the head's check runs behind a trusted
+`ai:claude-fixer-pending-checks:v1` marker have all completed without a
+failure. `--dry-run` only logs what it would enable.
 
 Each queue issue it opens is also recorded (number, title, payload) in this
 run's binding file (`CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE`, default
@@ -79,6 +91,7 @@ def _load(name: str, path: Path):
 check_in_status = _load("check_in_status", _SCRIPTS / "check_in_status.py")
 claude_fix_claim = _load("claude_fix_claim", _SCRIPTS / "claude_fix_claim.py")
 claude_issue_route = _load("claude_issue_route", ROOT / "scripts" / "claude_issue_route.py")
+claude_fixer_pending_checks = _load("claude_fixer_pending_checks", ROOT / "scripts" / "claude_fixer_pending_checks.py")
 
 DUE_STATES = ("conflict", "review-round", "ci-failed", "blocked")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -196,10 +209,16 @@ def bind_pr_fix(binding_file: str, self_repo: str, run_id: str, queue_number: in
 
 def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: bool, self_repo: str, queue_token: str,
 	run_id: str, run_url: str = "", allowed: list[str] | None = None, queue=queue_pr_fix, queued=queued_pr_fixes,
-	binding_file: str = "") -> dict:
-	"""Decide and act for every candidate PR; returns the summary counters."""
+	binding_file: str = "", pending_checks=None) -> dict:
+	"""Decide and act for every candidate PR; returns the summary counters.
+
+	`pending_checks(repo, number, dry_run)` finishes a clean review that ended
+	before CI (issue #4900) for each `open` candidate; `main` passes
+	`evaluate_pending_checks`, and None skips that pass.
+	"""
 	claimant = f"sweep-run-{run_id}" if re.fullmatch(r"[0-9]{1,20}", run_id or "") else "sweep-run-local"
-	summary = {"repos": 0, "candidates": 0, "due": 0, "queued": 0, "already_queued": 0, "reported": 0, "skipped": 0, "errors": 0}
+	summary = {"repos": 0, "candidates": 0, "due": 0, "queued": 0, "already_queued": 0, "reported": 0, "skipped": 0, "errors": 0,
+		"pending_checks_merged": 0, "pending_checks_waiting": 0}
 	allowed = allowed if allowed is not None else repos
 	configured = bool(queue_token) and bool(REPO_RE.fullmatch(self_repo or ""))
 	already: set[tuple[str, int]] = set()
@@ -231,6 +250,25 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 			if not verdict.get("done") or state not in DUE_STATES:
 				summary["skipped"] += 1
 				log(f"skip repo={repo} pr=#{number} state={state} reason={json.dumps(verdict.get('reason', ''))}")
+				if pending_checks is not None and state == "open":
+					# Any exception: this pass is an add-on to the catch-all
+					# above, so nothing it raises (a failed read, a malformed
+					# payload, an unwritable snapshot temp directory, or a bug
+					# in the pass itself) may end the sweep for every later PR
+					# and repo and stop due fixers from being queued there.
+					try:
+						pending = pending_checks(repo, number, dry_run)
+					except Exception as exc:
+						summary["errors"] += 1
+						print(f"::warning::CLAUDE_PR_SWEEP pending_checks_failed repo={repo} pr=#{number} error={exc}")
+						continue
+					if pending.get("state") == "merge_enabled":
+						summary["pending_checks_merged"] += 1
+					elif pending.get("state") == "waiting":
+						summary["pending_checks_waiting"] += 1
+					if pending.get("state") not in ("not_eligible", "no_marker"):
+						log(f"pending_checks repo={repo} pr=#{number} state={pending.get('state')} "
+							f"head={str(pending.get('head_sha') or '')[:12]} reason={json.dumps(pending.get('reason', ''))}")
 				continue
 			summary["due"] += 1
 			kind = verdict["kind"]
@@ -266,6 +304,17 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 	return summary
 
 
+def evaluate_pending_checks(repo: str, number: int, dry_run: bool) -> dict:
+	"""The sweep's pending-checks pass for one PR (scripts/claude_fixer_pending_checks.py).
+
+	Trusts only the review workflow's comment account,
+	CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN (the workflow step resolves it from
+	GH_PAT when the repo variable is empty); unset, nothing is trusted.
+	"""
+	return claude_fixer_pending_checks.evaluate(repo, number,
+		author_login=os.environ.get("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "").strip(), dry_run=dry_run)
+
+
 def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	parser.add_argument("--registry", default=os.environ.get("CLAUDE_PR_SWEEP_REGISTRY", ".github/ai/consumer_repos.json"))
@@ -290,6 +339,7 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 		binding_file=os.environ.get("CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE", "") or str(
 			Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / "claude-issue-queue-binding" / claude_issue_route.QUEUE_BINDING_FILENAME
 		),
+		pending_checks=evaluate_pending_checks,
 	)
 	log("end " + " ".join(f"{key}={value}" for key, value in summary.items()))
 	return 0

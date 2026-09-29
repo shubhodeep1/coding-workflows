@@ -91,7 +91,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
    with a clean check snapshot auto-merge in the run; at the cap the PR itself
    is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
-   (`claude_fixer_awaiting_session`). Doc-only and small-diff `claude/*`
+   (`claude_fixer_awaiting_session`). Zero ledger entries whose refreshed,
+   same-head snapshot (`ready` or `timeout`) shows no failed and at least
+   one incomplete check run post
+   `<!-- ai:claude-fixer-pending-checks:v1 head=<sha> round=<n> ledger=<sha256> -->`
+   under `## Review round <n>: clean review, waiting for check runs`
+   instead of a hand-off (issue #4900); dispatch re-runs on that head are
+   skipped too (`claude_fixer_pending_checks`), and the `claude-pr-catch-all`
+   sweep enables head-bound auto-merge once those checks finish green. Doc-only and small-diff `claude/*`
    PRs take the gate's deterministic skip (`deterministic-skip-merge`, no
    reviewer panel, no hand-off) like any other PR, with two exceptions.
    An accepted `claude_fixer_converged_head` verification run
@@ -1014,8 +1021,23 @@ reviews, comments, and conflicts stay a direct §12 request.
   queue read fails, the job only logs `::warning::` lines. Read failures
   fail open per PR and per repo. `/implement-plan-claude` PRs
   keep their 6-hour stuck window, and their stage sessions claim the PRs
-  they fix. Tests: `tests/test_check_in_status_hand_back.py`,
-  `tests/test_claude_pr_sweep.py`.
+  they fix. For every candidate whose verdict is `open`, the same job runs
+  `scripts/claude_fixer_pending_checks.py` (issue #4900): with a live
+  `ai:claude-fixer-pending-checks:v1` marker by
+  `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` on the current head (no later
+  hand-off), it snapshots the head's check runs once through
+  `scripts/collect_pr_check_runs_context.py` (`CHECK_RUNS_WAIT_TIMEOUT_SECS=0`),
+  and when they are `ready` with none failed or incomplete, the linked review
+  run succeeded, the PR is not blocked, conflicted, a draft, or already
+  auto-merging, and the repo's `ENABLE_AUTO_MERGE` variable reads `true`
+  (404 = unset = `true`; any other read failure = no merge), it runs
+  `scripts/review_enable_auto_merge.sh` for that head
+  (`--match-head-commit`). It logs `pending_checks` and counts
+  `pending_checks_merged` and `pending_checks_waiting` (checks still
+  running); a failed read, or a snapshot whose temp directory cannot be
+  written (`OSError`), logs `pending_checks_failed` and moves on. Tests:
+  `tests/test_check_in_status_hand_back.py`,
+  `tests/test_claude_pr_sweep.py`, `tests/test_claude_fixer_pending_checks.py`.
 
 - Hook: `.claude/hooks/pr_check_in_reminder.py`, a `PostToolUse` hook wired
   in `.claude/settings.json` under the anchored matcher

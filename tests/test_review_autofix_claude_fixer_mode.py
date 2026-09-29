@@ -300,7 +300,7 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 """
 
 
-def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False):
+def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, fresh_context: str | None = None):
 	support = tmp / "support"
 	support.mkdir()
 	calls = tmp / "calls.jsonl"
@@ -308,9 +308,11 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		f"#!/usr/bin/env bash\necho post_review_comment \"$REVIEWER_CONSENSUS_FILE\" \"$PR_NUMBER\" >> {tmp / 'posts.log'}\n",
 		encoding="utf-8",
 	)
+	if fresh_context is None:
+		fresh_context = f"PR_CHECK_RUNS_CONTEXT\nhead_sha: {HEAD}\ncollection_status: {fresh_status}\ntotal_check_runs: 1\nfailed_count: 0\nincomplete_count: 0\n"
 	(support / "collect_pr_check_runs_context.py").write_text(
 		"import os\nfrom pathlib import Path\n"
-		f"Path(os.environ['PR_CHECK_RUNS_CONTEXT_FILE']).write_text('PR_CHECK_RUNS_CONTEXT\\nhead_sha: {HEAD}\\ncollection_status: {fresh_status}\\ntotal_check_runs: 1\\nfailed_count: 0\\nincomplete_count: 0\\n')\n",
+		f"Path(os.environ['PR_CHECK_RUNS_CONTEXT_FILE']).write_text({fresh_context!r})\n",
 		encoding="utf-8",
 	)
 	bin_dir = tmp / "bin"
@@ -776,3 +778,117 @@ def test_gate_disabled_by_repo_var():
 		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF)], extra_env={"CLAUDE_FIXER_ENABLED": "false"})
 	assert proc.returncode == 0, proc.stderr
 	assert out["claude_fixer"] == "false" and out["should_run"] == "true"
+
+
+# ---- issue #4900: a clean review that finishes before CI ----
+
+def _pending_context(status: str = "timeout", *, head: str = HEAD, total: int = 3, failed: int = 0, incomplete: int = 1, extra: str = "") -> str:
+	body = f"PR_CHECK_RUNS_CONTEXT\nhead_sha: {head}\ncollection_status: {status}\ntotal_check_runs: {total}\nfailed_count: {failed}\nincomplete_count: {incomplete}\n\n"
+	for index in range(incomplete):
+		body += f"incomplete[{index}].name: ci / lint{'' if index == 0 else f'-{index}'}\nincomplete[{index}].status: in_progress\n\n"
+	return body + extra
+
+
+PENDING = f"<!-- ai:claude-fixer-pending-checks:v1 head={HEAD} round=1 ledger={DIGEST} -->"
+
+
+def _pending_comment(body: str = PENDING, author: str = AUTHOR) -> dict:
+	return {"body": "## Review round 1: clean review, waiting for check runs\n" + body, "author_login": author,
+		"author_type": "User", "author_association": "OWNER"}
+
+
+def test_handoff_clean_review_with_running_checks_posts_pending_checks_not_findings():
+	"""PR #4869: reviewers clean, CI `lint` still running when the snapshot times out."""
+	for status in ("timeout", "ready"):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_context=_pending_context(status))
+		assert proc.returncode == 0, proc.stderr
+		assert posts == "", "no ledger chunks for a clean review"
+		assert len(calls) == 1
+		body = calls[0]["payload"]["body"]
+		assert body.startswith("## Review round 2: clean review, waiting for check runs\n")
+		digest = hashlib.sha256(LEDGER_EMPTY.encode()).hexdigest()
+		assert f"<!-- ai:claude-fixer-pending-checks:v1 head={HEAD} round=2 ledger={digest} -->" in body.splitlines()
+		assert f"Reviewed head: `{HEAD}` ([workflow run](https://github.com/o/r/actions/runs/99))." in body.splitlines()
+		assert "`ci / lint`" in body
+		assert "ai:claude-fixer-handoff" not in body
+		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+		assert "CLAUDE_FIXER_VERIFICATION_FAILED" not in github_env
+		assert "kind=pending-checks" in proc.stdout
+
+
+def test_handoff_verification_run_with_running_checks_pends_instead_of_blocking():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_context=_pending_context(), verification=True)
+	assert proc.returncode == 0, proc.stderr
+	assert "ai:claude-fixer-pending-checks:v1" in calls[0]["payload"]["body"]
+	assert "CLAUDE_FIXER_VERIFICATION_FAILED" not in github_env
+
+
+def test_handoff_pending_checks_keeps_every_fail_closed_rule():
+	cases = {
+		"failed check": _pending_context(failed=1, extra="failed[0].name: ci / test\n"),
+		"failed entry without count": _pending_context(extra="failed[0].name: ci / test\n"),
+		"other head": _pending_context(head="d" * 40),
+		"api error": _pending_context("api_error"),
+		"disabled": _pending_context("disabled"),
+		"no check runs": _pending_context(total=0),
+		"no incomplete runs": _pending_context("timeout", incomplete=0),
+		"missing header": _pending_context().replace("PR_CHECK_RUNS_CONTEXT\n", "", 1),
+	}
+	for label, context in cases.items():
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_context=context)
+		assert proc.returncode == 0, (label, proc.stderr)
+		body = calls[0]["payload"]["body"]
+		assert "ai:claude-fixer-pending-checks" not in body, label
+		assert "kind=findings" in body, label
+		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env, label
+
+
+def test_handoff_findings_with_running_checks_still_hand_off():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, _env = _run_handoff(Path(td), ledger=LEDGER_WITH_FINDINGS, fresh_context=_pending_context())
+	assert proc.returncode == 0, proc.stderr
+	assert "kind=findings" in calls[0]["payload"]["body"]
+	assert "ai:claude-fixer-pending-checks" not in calls[0]["payload"]["body"]
+
+
+def test_handoff_review_time_failed_check_is_not_pending():
+	context = "failed[0].name: ci / lint\nfailed[0].status: completed\n"
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, _env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, check_context=context, fresh_context=_pending_context())
+	assert proc.returncode == 0, proc.stderr
+	assert "kind=findings" in calls[0]["payload"]["body"]
+
+
+def test_gate_skips_dispatch_rerun_on_a_pending_checks_head():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_pending_comment()])
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_pending_checks"
+	assert "AUTOFIX_GATE_SKIP reason=claude_fixer_pending_checks pr=42" in proc.stdout
+
+
+def test_gate_pending_checks_skip_needs_the_workflow_marker_for_this_head():
+	cases = {
+		"untrusted author": [_pending_comment(author="someone")],
+		"other head": [_pending_comment(PENDING.replace(HEAD, "d" * 40))],
+		"marker without the issued header": [{**_pending_comment(), "body": PENDING}],
+		"quoted marker": [_pending_comment("> " + PENDING)],
+		# Same round contract as scripts/claude_fixer_pending_checks.py: rounds start at 1.
+		"round zero": [{**_pending_comment(), "body": "## Review round 0: clean review, waiting for check runs\n"
+			+ PENDING.replace(" round=1 ", " round=0 ")}],
+	}
+	for label, comments in cases.items():
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=comments)
+		assert proc.returncode == 0, (label, proc.stderr)
+		assert out["should_run"] == "true", label
+
+
+def test_gate_pull_request_event_on_a_pending_checks_head_is_not_skipped():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_pending_comment()], event_name="pull_request")
+	assert proc.returncode == 0, proc.stderr
+	assert out["skip_reason"] != "claude_fixer_pending_checks"
