@@ -19,7 +19,7 @@ Security pass: run
 | `time.sleep(1.3)` (today) | 0.7 s | 10 of 10 runs failed, same assertion as CI |
 | `time.sleep(2.5)` (the issue's example) | 0.7 s | 10 of 10 passed |
 | `time.sleep(2.5)` | 1.2 s | 2 of 8 runs failed |
-| wait for the guard's `state=observed` status file | 1.2 s | see Tests (acceptance evidence) |
+| wait for the guard's `state=observed` status file | 1.2 s | 20 of 20 passed (all three changed tests) |
 
 - Plain CPU load alone (8 burners on 4 CPUs, or 6 burners pinned to one CPU with the test) did not reproduce the failure in 20 runs: the kernel favours the sleeping guard, so the CI failure is a descheduled or steal-time stall, which the `SIGSTOP` helper models.
 - The same file has two more tests with a sleep-versus-interval window: `test_codex_stall_guard_observe_only_records_event_idle_without_killing_child` (child `time.sleep(2.4)` against the 1 s stall timeout, failed 1 of 15 runs under 1.2 s stalls) and `test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_present` (child `time.sleep(2.4)` against the 1 s heartbeat interval). The two kill-mode tests use a child that sleeps 1000 s and are killed by the guard, so they have no such window.
@@ -77,7 +77,7 @@ One phase. Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: the iss
 ## Tests
 
 - Unit: `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py` (the CI entry point) passes.
-- Acceptance stress (local, not committed): 20 consecutive runs of the three changed tests with 4 `yes > /dev/null` burners and a helper that `SIGSTOP`s the guard for 1.2 s at random moments; and 20 consecutive runs with CPU burners only. Both are expected to pass 20 of 20. The pre-fix baseline under 0.7 s stalls fails 10 of 10 with the CI assertion, which shows the harness reproduces the flake.
+- Acceptance stress (local, not committed): 20 consecutive runs of the three changed tests with 4 `yes > /dev/null` burners and a helper that `SIGSTOP`s the guard for 1.2 s at random moments; and 20 consecutive runs with CPU burners only. Both passed 20 of 20 on 2026-09-29. The pre-fix baseline under 0.7 s stalls fails 10 of 10 with the CI assertion, which shows the harness reproduces the flake.
 - Lint: `ruff check` and `pyflakes` on the file.
 - Diff check: no `assert` line changes.
 
