@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T07:54:51Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A filer state that stores cumulative per-pattern counts breaks silently when the grouping later drops records; key filed state by stable record identity (file + line for append-only logs) and migrate old counts by their load-order prefix.",
+  "phase": "implement_plan",
+  "pr_number": 5039,
+  "record_id": "lesson-implement-plan-aa8d68da7a4d49fb974988e2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-5012-legacy-outage-filed-counts",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}
