@@ -5,13 +5,13 @@
 - Project branch: claude/implement-plan-issue-4885-failed-slot-runner-line-check   Final PR: #4918 draft
 - Source issue: shubhodeep1/coding-workflows#4885   Base branch: claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote   Security pass: skip (ai:security: automation-produced issue)
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (head claude/implement-plan-issue-4885-failed-slot-runner-line-check-phase-1; number in the stage report and the checker instructions)
+- Waiting on: PR #4983
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified (68 Claude-fixer tests under mawk and gawk, 572 review_autofix contract tests, shellcheck, bash -n; the 5 new #4885 tests fail with action=auto_merge against the old script); phase PR opened against the project branch; waiting on its review round or merge
+- Last note: review round 1 on PR #4983: both consensus findings fixed (runner-file read repeats the slug and PREVIOUS_REVIEWS_DIR guards; an empty or unreadable runner file is named empty / unreadable in the warning), 2 tests added; 70 Claude-fixer tests and 326 review_autofix tests pass, shellcheck and bash -n clean
 
 ## Phases
 1. [ ] Phase 1 — Bind failed reviewer slots to the runner's output line
@@ -19,6 +19,7 @@
    - tests/test_review_autofix_claude_fixer_mode.py: runner output files in _run_handoff/_panel; new tests for a non-retryable runner line, a missing runner file, an extra runner line, and a different retry-exhaustion variant
    - README.md, agents.md, changelog.d/4885-failed-slot-runner-line-check.md
    - Done: new and existing Claude-fixer tests pass, bash -n and shellcheck clean, docs describe the runner-line match
+   - PR #4983 open; review rounds: 1 (2026-09-29: 2 consensus findings fixed, 0 rejected); interventions: 0
 
 ## Conformance
 
@@ -38,6 +39,7 @@
 - AD-3 [plan, 2026-09-29] Also cross-check clean blocks against the runner output? — Picked: A — no, failed blocks only. Alternatives: B — also require a clean block's runner output to be an empty review. Why: the finding and its recommendation are about failed blocks; clean votes already need a runner `success` status, and reviewer output formats vary (§5). Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:intervention] When a fail-closed check reads a file and reports why it rejected it, tell missing, unreadable, empty, and different apart: `$(cat f 2>/dev/null || true)` makes an unreadable file look empty, and an empty file look like a content mismatch. (files: scripts/review_autofix_step_claude_fixer_handoff.sh)
 
 ## Notes
 - Final PR #4918 opened as a draft into the base branch on 2026-09-29.

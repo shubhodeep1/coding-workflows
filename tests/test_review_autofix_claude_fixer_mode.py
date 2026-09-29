@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -763,6 +764,46 @@ def test_another_retry_exhaustion_line_than_the_runner_wrote_is_not_a_missing_vo
 	with tempfile.TemporaryDirectory() as td:
 		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={"minimax_minimax-m3": "Reviewer minimax/minimax-m3 failed after 4 attempts."})
 	_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "different")
+
+
+def test_empty_runner_output_is_reported_as_empty():
+	# PR #4983 review round 1: a zero-byte or newline-only runner file is
+	# rejected like any mismatch, but the warning names it empty.
+	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
+	for content in ("", "\n"):
+		with tempfile.TemporaryDirectory() as td:
+			tmp = Path(td)
+			reviews = tmp / "previous_reviews"
+			reviews.mkdir()
+			for slug, status in statuses.items():
+				(reviews / f"status_review_{slug}.txt").write_text(status + "\n", encoding="utf-8")
+			(reviews / "review_minimax_minimax-m3.txt").write_text(content, encoding="utf-8")
+			proc, calls, _posts, github_env = _run_handoff(tmp, ledger=_ledger(blocks), extra_env={"PREVIOUS_REVIEWS_DIR": str(reviews), "REVIEWERS_SUCCESSFUL": "5"})
+		_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "empty")
+
+
+def test_unreadable_runner_output_is_reported_as_unreadable():
+	# A runner file that exists but cannot be read is rejected and named
+	# unreadable, not empty. A cat wrapper fails for that one file, because a
+	# root test run can read a mode-000 file.
+	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
+	real_cat = shutil.which("cat")
+	assert real_cat
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		fake_bin = tmp / "fake_bin"
+		fake_bin.mkdir()
+		fake_cat = fake_bin / "cat"
+		fake_cat.write_text(
+			"#!/usr/bin/env bash\n"
+			'[ "${1##*/}" = "review_minimax_minimax-m3.txt" ] && exit 1\n'
+			f'exec {real_cat} "$@"\n',
+			encoding="utf-8",
+		)
+		fake_cat.chmod(0o755)
+		path = os.pathsep.join((str(fake_bin), str(tmp / "bin"), os.environ.get("PATH", "")))
+		proc, calls, _posts, github_env = _run_handoff(tmp, ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3",)), extra_env={"PATH": path})
+	_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "unreadable")
 
 
 def test_one_unverified_failed_slot_keeps_the_ledger_from_being_clean():

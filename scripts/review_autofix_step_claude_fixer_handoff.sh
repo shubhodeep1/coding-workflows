@@ -220,11 +220,22 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
           # does not prove the failure class (issue #4885). The runner writes
           # the slot's exact terminal line to review_<slug>.txt; the ledger
           # line must be that line, or the ledger is not clean.
+          # The status read above already required these guards; they are
+          # repeated so this read stays safe on its own.
           claude_fixer_block_runner_line=""
           claude_fixer_block_runner_state="missing"
-          if [ -f "${PREVIOUS_REVIEWS_DIR}/review_${claude_fixer_block_slug}.txt" ]; then
-            claude_fixer_block_runner_line="$(cat "${PREVIOUS_REVIEWS_DIR}/review_${claude_fixer_block_slug}.txt" 2>/dev/null || true)"
-            claude_fixer_block_runner_state="different"
+          if [[ "${claude_fixer_block_slug}" =~ ^[A-Za-z0-9_-]+$ ]] && [ -n "${PREVIOUS_REVIEWS_DIR:-}" ] \
+            && [ -f "${PREVIOUS_REVIEWS_DIR}/review_${claude_fixer_block_slug}.txt" ]; then
+            if claude_fixer_block_runner_line="$(cat "${PREVIOUS_REVIEWS_DIR}/review_${claude_fixer_block_slug}.txt" 2>/dev/null)"; then
+              if [ -n "${claude_fixer_block_runner_line}" ]; then
+                claude_fixer_block_runner_state="different"
+              else
+                claude_fixer_block_runner_state="empty"
+              fi
+            else
+              claude_fixer_block_runner_line=""
+              claude_fixer_block_runner_state="unreadable"
+            fi
           fi
           if [ -n "${claude_fixer_block_line}" ] && [ "${claude_fixer_block_runner_line}" = "${claude_fixer_block_line}" ]; then
             claude_fixer_failed_slots="${claude_fixer_failed_slots:+${claude_fixer_failed_slots},}${claude_fixer_block_slug}"
