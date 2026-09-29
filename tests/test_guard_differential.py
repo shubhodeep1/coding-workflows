@@ -396,10 +396,44 @@ def test_cli_fails_when_a_changed_guard_has_an_empty_corpus(hook_repo: Path) -> 
 	assert "shapes=0" in proc.stdout
 
 
-def test_cli_a_new_guard_needs_no_corpus_to_pass(hook_repo: Path) -> None:
+@pytest.mark.parametrize("staged", [False, True], ids=["untracked", "staged"])
+def test_cli_fails_when_a_new_guard_has_no_corpus(hook_repo: Path, staged: bool) -> None:
+	"""AD-9: without a shape, a new guard that answers `allow` is never run."""
+	(hook_repo / ".claude" / "hooks" / "brand_new_guard.py").write_text(FAKE_ALLOWING_HOOK, encoding="utf-8")
+	if staged:
+		_git(hook_repo, "add", "-A")
+	proc = _cli(hook_repo)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "missing_corpus path=.claude/hooks/brand_new_guard.py" in proc.stdout
+
+
+def test_cli_fails_when_a_committed_new_guard_has_no_corpus(hook_repo: Path) -> None:
+	_git(hook_repo, "checkout", "-q", "-b", "pr")
 	(hook_repo / ".claude" / "hooks" / "brand_new_guard.py").write_text(FAKE_BLOCKING_HOOK, encoding="utf-8")
+	_git(hook_repo, "add", "-A")
+	_git(hook_repo, "commit", "-q", "-m", "add guard")
+	_git(hook_repo, "checkout", "-q", "main")
+	proc = _cli(hook_repo, "--head-ref", "pr")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "missing_corpus path=.claude/hooks/brand_new_guard.py" in proc.stdout
+
+
+def test_cli_a_new_blocking_guard_with_a_corpus_passes(hook_repo: Path) -> None:
+	(hook_repo / ".claude" / "hooks" / "brand_new_guard.py").write_text(FAKE_BLOCKING_HOOK, encoding="utf-8")
+	(hook_repo / "tests" / "guard_corpus" / "brand_new_guard.txt").write_text("git push\n", encoding="utf-8")
 	proc = _cli(hook_repo)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "missing_corpus=0" in proc.stdout
+	assert "hook=brand_new_guard" not in proc.stdout
+
+
+def test_cli_a_new_allowing_guard_with_a_corpus_is_a_loosening(hook_repo: Path) -> None:
+	(hook_repo / ".claude" / "hooks" / "brand_new_guard.py").write_text(FAKE_ALLOWING_HOOK, encoding="utf-8")
+	(hook_repo / "tests" / "guard_corpus" / "brand_new_guard.txt").write_text("git push\n", encoding="utf-8")
+	proc = _cli(hook_repo)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "hook=brand_new_guard" in proc.stdout
+	assert "base=none (no hook) head=allow" in proc.stdout
 
 
 def test_cli_deleting_a_guard_is_a_loosening(hook_repo: Path) -> None:

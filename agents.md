@@ -1196,8 +1196,10 @@ side so that class cannot land unnoticed.
   strict than the base and the head emitted no `systemMessage` warning. A
   hook missing on one side counts as `none`, so deleting a guard fails, and
   a new hook fails only where it answers `allow`. A changed `*_guard.py`
-  present on both sides with no corpus, or with a corpus that holds no
-  shape (comments and blank lines only), fails too.
+  (new, edited, or deleted) with no corpus, or with a corpus that holds no
+  shape (comments and blank lines only), fails too, so a new guard ships
+  with its corpus. A local run without `--head-ref` counts untracked hook
+  files as changed.
 - **`Intended loosening:`** A PR that means to loosen lists each shape
   verbatim (the corpus line, placeholders included) under a heading or bold
   line `Intended loosening:` in its body, one list item per shape,

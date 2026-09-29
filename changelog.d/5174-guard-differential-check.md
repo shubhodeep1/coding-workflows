@@ -14,4 +14,4 @@ What this means for operators: a guard change that reaches `main`, including a #
 
 ### For contributors
 
-Decisions rank block = deny > ask > none > allow = error (a crashed hook does not block). A hook missing on one side counts as `none`, so deleting a guard fails and a new hook fails only where it answers `allow`. A changed guard with no corpus file, or with one that holds no shape, fails. Phase PRs into a `claude/implement-plan-*` project branch do not run `ci.yml`; the project's final PR into `main` does. Details are in `agents.md` under "Guard differential check".
+Decisions rank block = deny > ask > none > allow = error (a crashed hook does not block). A hook missing on one side counts as `none`, so deleting a guard fails and a new hook fails only where it answers `allow`. A changed guard, new ones included, with no corpus file, or with one that holds no shape, fails. Phase PRs into a `claude/implement-plan-*` project branch do not run `ci.yml`; the project's final PR into `main` does. Details are in `agents.md` under "Guard differential check".

@@ -33,9 +33,9 @@ the base and the head:
 
 A hook present on only one side runs as "no hook" (decision `none`) on the
 other, so deleting a guard is a loosening, and a new hook is one only where it
-answers `allow`. A changed
-`*_guard.py` that exists on both sides but has no corpus file fails the
-check: every guard must be covered.
+answers `allow`. A changed `*_guard.py` (new, edited, or deleted) with no
+corpus file, or with one that holds no shape, fails the check: every guard
+must be covered.
 
 Corpus format (one shape per line; blank lines and `#` comments skipped):
   <command>             a Bash `tool_input.command`;
@@ -490,7 +490,11 @@ def changed_paths(repo_root: Path, base_ref: str, head_ref: str | None) -> list[
 		args.append(head_ref)
 	args += ["--", *HOOK_TREES]
 	output = _repo_git(repo_root, *args).stdout
-	return [line for line in output.splitlines() if line.strip()]
+	if not head_ref:
+		# `git diff` does not list untracked files, but `materialize(None)`
+		# copies them, so a new hook that is not yet added still counts.
+		output += _repo_git(repo_root, "ls-files", "--others", "--exclude-standard", "--", *HOOK_TREES).stdout
+	return sorted({line for line in output.splitlines() if line.strip()})
 
 
 def materialize(repo_root: Path, ref: str | None, tree: str, target: Path) -> None:
@@ -624,14 +628,16 @@ def run_check(
 			for path in tree_changes:
 				stem = Path(path).stem
 				# An empty or comments-only corpus runs no comparison, so it
-				# counts as missing.
+				# counts as missing. A new guard needs one too (AD-9): without
+				# a shape, a new guard that answers `allow` is never run.
 				if (
 					stem.endswith("_guard")
 					and not corpora.get(stem)
-					and (base_dir / f"{stem}.py").is_file()
-					and (head_dir / f"{stem}.py").is_file()
+					and ((base_dir / f"{stem}.py").is_file() or (head_dir / f"{stem}.py").is_file())
 				):
 					report.missing_corpus.append(path)
+			# Each tree compares its own hook files (the twin is a separate
+			# file), so rows for the same shape in two trees are not duplicates.
 			report.results += compare_hook_dirs(base_dir, head_dir, corpora, scratch / "runs", listed, tree)
 	return report
 

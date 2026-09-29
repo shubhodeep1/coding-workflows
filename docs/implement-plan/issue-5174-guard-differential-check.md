@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_019rGgoLZBfTcYZUkbRAYsRN (project checker; per-wait safety net and hand-back ids are in the stage report)
 - Last updated: 2026-09-29
-- Last note: review round 3 on PR #5187: 1 finding fixed (an empty or comments-only corpus now counts as missing), 4 rejected (per-tree rows are separate hook files; the stub `gh` has no heredoc; allow+warning and the residual env are by design).
+- Last note: review round 4 on PR #5187: 1 finding fixed (a new or deleted guard with no corpus now fails, AD-9; untracked hook files count locally), 1 rejected (per-tree rows, the same misread as rounds 1-3; a code comment at the call now says so).
 
 ## Phases
-1. [ ] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog) — PR #5187 open; review rounds: 3; interventions: 0
+1. [ ] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog) — PR #5187 open; review rounds: 4; interventions: 0
 
 ## Conformance
 
@@ -35,10 +35,12 @@
 - AD-6 [plan, 2026-09-29] `ci.yml` runs only on PRs into `main` / `stable`. Widen it for project-branch phase PRs? — Picked: A — no; the final PR and every sync PR into `main` are gated. Alternatives: B — a separate workflow for every PR base. Why: §5, and the issue asks for a `ci.yml` step. Applied in: no code change. Status: pending review
 - AD-7 [plan, 2026-09-29] A changed guard with no corpus file? — Picked: A — fail when the guard exists on both sides; a new guard needs none to pass (it still fails where it answers `allow`). Alternatives: B — skip silently. Why: every guard stays covered. Applied in: phase 1 PR. Status: pending review
 - AD-8 [plan, 2026-09-29] Gaps the corpora show on `main` (plan Notes)? — Picked: A — record them, fix nothing in the hooks. Alternatives: B — fix them in this project (protected `.claude/**` edits, out of scope). Why: §5 and §28.C. Applied in: no code change. Status: pending review
+- AD-9 [phase 1/1 — review round 4, 2026-09-29] A changed `*_guard.py` that exists on only one side (new or deleted) and has no corpus? — Picked: A — fail it as `missing_corpus`, like a guard on both sides; a local run without `--head-ref` also counts untracked hook files as changed. Alternatives: B — keep AD-7's carve-out (a new guard needs no corpus). Why: §1; without a shape a new guard that answers `allow` (a loosening from `none`, AD-1) is never run, so a bypass moved into a new guard file would pass silently, and AD-7's own reason is that every guard stays covered. Applied in: PR #5187. Status: pending review
 
 ## Lessons
 - [source:intervention] When a test harness filters the caller's environment to isolate a subprocess, apply the same filter to every other source merged into that environment (scenario or fixture overrides). Otherwise a later override can undo the isolation. (files: scripts/guard_differential.py)
 - [source:intervention] A "required input is missing" gate must test for an empty parsed input, not only an absent key: a comments-only file parses to an empty list and otherwise passes the gate with zero checks run. (files: scripts/guard_differential.py)
+- [source:intervention] A coverage gate ("every X needs a test corpus") must apply to new X too, not only to X that existed before: an exemption for new items lets a loosening move into a new file and skip the check. In working-tree mode, `git diff <base>` omits untracked files, so add `git ls-files --others --exclude-standard` when the detector feeds a gate. (files: scripts/guard_differential.py)
 
 ## Notes
 - Session started with the repo attached mid-session, so `gh` came from running `.claude/hooks/session-start.sh` by hand. No `mcp__github__*` tools were available; GitHub writes use `gh api` routine calls (§23.B/§23.H).
