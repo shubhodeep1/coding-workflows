@@ -479,7 +479,7 @@ jobs:
       - name: Claude-fixer hand-back, claim and catch-all sweep tests (CLAUDE.md §26.C, §26.H)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status_hand_back.py tests/test_claude_pr_sweep.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status_hand_back.py tests/test_claude_pr_sweep.py tests/test_check_in_session_targeting.py
 
       - name: Claude twin sync tests (CLAUDE.md §28.C)
         run: |
