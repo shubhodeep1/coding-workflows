@@ -8,7 +8,9 @@ counts only when it names a finding ID from the run's manifest
 (rejection_ids_pass1.json), carries a reason, and is not in a code block.
 Since #4687 that ID binds to the finding by the pass-1 consensus_id the
 manifest records for it, never by file and line proximity, and every
-ambiguous match stays blocking.
+ambiguous match stays blocking. Since #4976 a vote also counts only when its
+``evidence: <file>:<range> | quote: <text>`` fields verify against the
+reviewed commit's source.
 """
 
 from __future__ import annotations
@@ -108,6 +110,37 @@ FLAGGER_CITES_BOTH = (
 # The run ID the manifest issues for the README pass-1 entry (issue #4688).
 FINDING_ID = "RF-0123456789abcdef"
 
+# The reviewed commit's README.md (issue #4976): line 1261 carries the
+# backtick the false positive says is missing.
+README_LINE = "Start it with `/implement-issue-claude <issue>` from a cloud session."
+README_LINES = [f"Line {number} of the README." for number in range(1, 1301)]
+README_LINES[1260] = README_LINE
+QUOTE = "`/implement-issue-claude <issue>`"
+EVIDENCE = f" | evidence: README.md:1261 | quote: {QUOTE}"
+SOURCE_FILES = {"README.md": README_LINES}
+
+
+def _source(path: str) -> list[str] | None:
+	"""A source reader over SOURCE_FILES, standing in for git_source."""
+	lines = SOURCE_FILES.get(path)
+	return list(lines) if lines is not None else None
+
+
+def _git_repo(tmp: Path, files: dict[str, list[str]] | None = None) -> tuple[Path, str]:
+	"""A real git repository with one commit holding ``files`` (default SOURCE_FILES)."""
+	root = tmp / "source_repo"
+	root.mkdir()
+	for name, lines in (files or SOURCE_FILES).items():
+		target = root / name
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+	git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+	subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+	subprocess.run([*git, "add", "-A"], check=True, capture_output=True)
+	subprocess.run([*git, "commit", "-q", "-m", "source"], check=True, capture_output=True)
+	sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+	return root, sha
+
 
 def _write_manifest(reviews: Path, entries: list[dict]) -> Path:
 	manifest = reviews / nonblocking.MANIFEST_NAME
@@ -124,8 +157,8 @@ def _manifest_entry(path: str = "README.md", line: str = "1261", flagger: str = 
 	return entry
 
 
-def _vote(finding_id: str = FINDING_ID, line: str = "1261", reason: str = "the backtick is present.") -> str:
-	return f"REJECTED_FINDING: {finding_id} | README.md:{line} | flagged_by: {FLAGGER} | reason: {reason}\n"
+def _vote(finding_id: str = FINDING_ID, line: str = "1261", reason: str = "the backtick is present.", evidence: str = EVIDENCE) -> str:
+	return f"REJECTED_FINDING: {finding_id} | README.md:{line} | flagged_by: {FLAGGER} | reason: {reason}{evidence}\n"
 
 
 def _reviews(tmp: Path, *, rejecters: list[str], line: str = "1261", flagger: str = FLAGGER, path: str = "README.md",
@@ -150,17 +183,17 @@ def _reviews(tmp: Path, *, rejecters: list[str], line: str = "1261", flagger: st
 		else:
 			text = "No issues found.\n"
 		if slug in rejecters:
-			text += f"REJECTED_FINDING: {FINDING_ID} | {path}:{line} | flagged_by: {flagger} | reason: the backtick is present.\n"
+			text += f"REJECTED_FINDING: {FINDING_ID} | {path}:{line} | flagged_by: {flagger} | reason: the backtick is present.{EVIDENCE}\n"
 		(reviews / f"review_{slug}.txt").write_text(text, encoding="utf-8")
 	return reviews
 
 
 def _run(tmp: Path, ledger: str, reviews: Path) -> tuple[str, list[dict]]:
-	return nonblocking.demote(ledger, reviews)
+	return nonblocking.demote(ledger, reviews, source_reader=_source)
 
 
 def _kept(ledger: str, reviews: Path) -> dict[str, str]:
-	_text, _demoted, kept, _legacy = nonblocking.demote_with_diagnostics(ledger, reviews)
+	_text, _demoted, kept, _legacy = nonblocking.demote_with_diagnostics(ledger, reviews, source_reader=_source)
 	return {f"{record['location'][0]}:{record['location'][1][0]}" if record["location"] else "unparsed": record["reason"]
 		for record in kept}
 
@@ -283,7 +316,7 @@ def test_id_less_rejections_are_ignored_and_counted(tmp_path):
 	ledger = _ledger(README_FINDING)
 	reviews = _reviews(tmp_path, rejecters=[])
 	_others_write(reviews, f"REJECTED_FINDING: README.md:1261 | flagged_by: {FLAGGER} | reason: the backtick is present.\n")
-	text, demoted, kept, legacy = nonblocking.demote_with_diagnostics(ledger, reviews)
+	text, demoted, kept, legacy = nonblocking.demote_with_diagnostics(ledger, reviews, source_reader=_source)
 	assert demoted == [] and text == ledger
 	assert legacy == 5
 	assert [record["reason"] for record in kept] == ["too_few_rejecters"]
@@ -294,7 +327,7 @@ def test_rejections_citing_a_consensus_id_instead_of_a_run_id_are_ignored_and_co
 	ledger = _ledger(README_FINDING)
 	reviews = _reviews(tmp_path, rejecters=[])
 	_others_write(reviews, f"REJECTED_FINDING: {RID} | README.md:1261 | flagged_by: {FLAGGER} | reason: the backtick is present.\n")
-	text, demoted, kept, legacy = nonblocking.demote_with_diagnostics(ledger, reviews)
+	text, demoted, kept, legacy = nonblocking.demote_with_diagnostics(ledger, reviews, source_reader=_source)
 	assert demoted == [] and text == ledger
 	assert legacy == 5
 	assert [record["reason"] for record in kept] == ["too_few_rejecters"]
@@ -657,12 +690,14 @@ def test_cli_writes_output_and_log_lines(tmp_path):
 	reviews = _reviews(tmp_path, rejecters=OTHERS)
 	(reviews / f"review_{OTHERS[0]}.txt").write_text(
 		(reviews / f"review_{OTHERS[0]}.txt").read_text() + f"REJECTED_FINDING: README.md:1400 | flagged_by: {FLAGGER} | reason: x\n")
-	proc = subprocess.run([sys.executable, str(SCRIPT), "--ledger", str(ledger_path), "--reviews-dir", str(reviews), "--output", str(out)],
-		capture_output=True, text=True, env=ENV)
+	root, sha = _git_repo(tmp_path)
+	proc = subprocess.run([sys.executable, str(SCRIPT), "--ledger", str(ledger_path), "--reviews-dir", str(reviews), "--output", str(out),
+		"--source-root", str(root), "--source-commit", sha], capture_output=True, text=True, env=ENV)
 	assert proc.returncode == 0, proc.stderr
 	lines = proc.stdout.splitlines()
 	assert lines[0] == "CLAUDE_FIXER_NONBLOCKING demoted=1 successful_reviewers=6"
 	assert lines[1] == "CLAUDE_FIXER_NONBLOCKING_VOTES manifest=present ids=1 votes=5"
+	assert lines[2] == f"CLAUDE_FIXER_NONBLOCKING_EVIDENCE source=ok commit={sha} verified=5 unverified=0"
 	assert f"CLAUDE_FIXER_NONBLOCKING_ENTRY file=README.md:1261 flagged_by={FLAGGER}" in proc.stdout
 	assert f"CLAUDE_FIXER_NONBLOCKING_KEPT file=README.md:1400 flagged_by={FLAGGER} reason=no_consensus_id" in lines
 	assert "CLAUDE_FIXER_NONBLOCKING_LEGACY_REJECTIONS count=1" in lines
@@ -690,7 +725,9 @@ def test_each_reviewer_output_is_read_once_and_statuses_scanned_once(tmp_path, m
 
 	monkeypatch.setattr(Path, "read_text", counting_read_text)
 	monkeypatch.setattr(nonblocking, "successful_reviewers", counting_successful_reviewers)
-	assert nonblocking.main(["--ledger", str(ledger_path), "--reviews-dir", str(reviews), "--output", str(tmp_path / "out.txt")]) == 0
+	root, sha = _git_repo(tmp_path)
+	assert nonblocking.main(["--ledger", str(ledger_path), "--reviews-dir", str(reviews), "--output", str(tmp_path / "out.txt"),
+		"--source-root", str(root), "--source-commit", sha]) == 0
 	assert scans == [reviews]
 	output_reads = [name for name in reads if name.startswith("review_")]
 	assert sorted(output_reads) == sorted(f"review_{slug}.txt" for slug in [FLAGGER, *OTHERS])
@@ -778,12 +815,14 @@ def test_a_vote_after_a_closed_fence_counts(tmp_path):
 
 
 @pytest.mark.parametrize("vote", [
-	f"REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER}\n",
-	f"REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER} | reason:\n",
-	f"REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER} | reason:    \n",
-	f"REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER} | reason: <one sentence>\n",
+	f"REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER}{EVIDENCE}\n",
+	f"REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER} | reason:{EVIDENCE}\n",
+	f"REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER} | reason:    {EVIDENCE}\n",
+	f"REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER} | reason: <one sentence>{EVIDENCE}\n",
+	# The reason must come before the evidence; after it, it is part of the quote.
+	f"REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER}{EVIDENCE} | reason: false positive\n",
 	f"REJECTED_FINDING: {FINDING_ID}\n",
-	f"REJECTED_FINDING: {FINDING_ID}x | reason: suffix makes it another token\n",
+	f"REJECTED_FINDING: {FINDING_ID}x | reason: suffix makes it another token{EVIDENCE}\n",
 ])
 def test_a_vote_needs_a_real_reason_and_a_well_formed_id(tmp_path, vote):
 	reviews = _reviews(tmp_path, rejecters=[])
@@ -794,11 +833,16 @@ def test_a_vote_needs_a_real_reason_and_a_well_formed_id(tmp_path, vote):
 
 
 @pytest.mark.parametrize("vote", [
-	f"REJECTED_FINDING: {FINDING_ID} | reason: false positive\n",
-	f"- REJECTED_FINDING: `{FINDING_ID}` | README.md:1261 | flagged_by: {FLAGGER} | reason: false positive\n",
-	f"   * REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER} | reason: false positive\n",
+	f"REJECTED_FINDING: {FINDING_ID} | reason: false positive{EVIDENCE}\n",
+	f"- REJECTED_FINDING: `{FINDING_ID}` | README.md:1261 | flagged_by: {FLAGGER} | reason: false positive{EVIDENCE}\n",
+	f"   * REJECTED_FINDING: {FINDING_ID} | README.md:1261 | flagged_by: {FLAGGER} | reason: false positive{EVIDENCE}\n",
 	# The echoed location is informational: the manifest decides what the ID matches.
-	f"REJECTED_FINDING: {FINDING_ID} | scripts/other.sh:9 | flagged_by: someone | reason: false positive\n",
+	f"REJECTED_FINDING: {FINDING_ID} | scripts/other.sh:9 | flagged_by: someone | reason: false positive{EVIDENCE}\n",
+	# Evidence variants (issue #4976): a range, backticked fields, extra spaces, the whole line as the quote.
+	f"REJECTED_FINDING: {FINDING_ID} | reason: false positive | evidence: README.md:1258-1264 | quote: {QUOTE}\n",
+	f"REJECTED_FINDING: {FINDING_ID} | reason: false positive | evidence: `README.md:1261` | quote: {README_LINE}\n",
+	f"REJECTED_FINDING: {FINDING_ID} | reason: false positive |evidence:./README.md:1261|quote:   Start  it with\t`/implement-issue-claude <issue>`  \n",
+	f"REJECTED_FINDING: {FINDING_ID} | reason: false positive | evidence: README.md:1261 | quote: `from a cloud session.`\n",
 ])
 def test_id_bound_votes_count_in_every_accepted_shape(tmp_path, vote):
 	reviews = _reviews(tmp_path, rejecters=[])
@@ -828,7 +872,7 @@ def test_an_explicit_manifest_path_is_used(tmp_path):
 	elsewhere = tmp_path / "elsewhere"
 	elsewhere.mkdir()
 	manifest = _write_manifest(elsewhere, [_manifest_entry()])
-	_text, demoted = nonblocking.demote(_ledger(README_FINDING), reviews, manifest)
+	_text, demoted = nonblocking.demote(_ledger(README_FINDING), reviews, manifest, source_reader=_source)
 	assert len(demoted) == 1
 
 
@@ -854,7 +898,9 @@ def test_cli_reports_votes_and_fails_on_an_invalid_manifest(tmp_path):
 	ledger_path = tmp_path / "ledger.txt"
 	ledger_path.write_text(_ledger(README_FINDING), encoding="utf-8")
 	reviews = _reviews(tmp_path, rejecters=OTHERS)
-	command = [sys.executable, str(SCRIPT), "--ledger", str(ledger_path), "--reviews-dir", str(reviews), "--output", str(tmp_path / "out.txt")]
+	root, sha = _git_repo(tmp_path)
+	command = [sys.executable, str(SCRIPT), "--ledger", str(ledger_path), "--reviews-dir", str(reviews), "--output", str(tmp_path / "out.txt"),
+		"--source-root", str(root), "--source-commit", sha]
 	proc = subprocess.run(command, capture_output=True, text=True, env=ENV)
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stdout.splitlines()[1] == "CLAUDE_FIXER_NONBLOCKING_VOTES manifest=present ids=1 votes=5"
@@ -875,6 +921,7 @@ def test_cli_without_a_manifest_reports_it_missing(tmp_path):
 	assert proc.stdout.splitlines() == [
 		"CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=6",
 		"CLAUDE_FIXER_NONBLOCKING_VOTES manifest=missing ids=0 votes=0",
+		"CLAUDE_FIXER_NONBLOCKING_EVIDENCE source=missing commit=none verified=0 unverified=0",
 		f"CLAUDE_FIXER_NONBLOCKING_KEPT file=README.md:1261 flagged_by={FLAGGER} reason=too_few_rejecters",
 	]
 
@@ -1066,7 +1113,8 @@ def test_cross_pollination_header_lists_issued_ids_and_shows_consensus_ids(tmp_p
 	assert proc.stdout.strip() == str(summary)
 	text = summary.read_text()
 	ids = [e["id"] for e in json.loads(manifest.read_text())["entries"]]
-	assert "  REJECTED_FINDING: <ID> | <file>:<line or start-end> | flagged_by: <slug> | reason: <one sentence>" in text
+	assert ("  REJECTED_FINDING: <ID> | <file>:<line or start-end> | flagged_by: <slug> | reason: <one sentence>"
+		" | evidence: <file>:<line or start-end> | quote: <text copied verbatim from those lines>\n") in text
 	assert f"  {ids[0]} -> README.md:1261 | flagged_by: {FLAGGER} | consensus_id: {RID}" in text
 	assert f"  {ids[1]} -> scripts/foo.sh:40-44 | flagged_by: {OTHERS[0]} | consensus_id: {_cid(REAL_FINDING)}" in text
 	assert text.index("Rejectable single-reviewer findings") < text.index("=== CONSENSUS FINDINGS ===")
@@ -1109,3 +1157,215 @@ def test_runner_and_summariser_prompts_describe_the_id_shape():
 	summariser = (REPO_ROOT / "scripts" / "summarize_reviewer_consensus.sh").read_text(encoding="utf-8")
 	assert "REJECTED_FINDING: <ID> | <file>:<line> | flagged_by: <slug>" in summariser
 	assert "consensus_id: p1-<12 hex digits>" in summariser
+
+
+# ── Issue #4976: votes need source-grounded evidence ──
+
+
+def _diagnostics(ledger: str, reviews: Path, source_reader=_source) -> tuple[str, list[dict], dict]:
+	stats: dict = {}
+	text, demoted, _kept_records, _legacy = nonblocking.demote_with_diagnostics(ledger, reviews, source_reader=source_reader, stats=stats)
+	return text, demoted, stats
+
+
+def test_issue_4976_reason_only_votes_never_demote(tmp_path):
+	"""The exploit: every other reviewer prints the ID with `reason: false positive` and nothing else."""
+	reviews = _reviews(tmp_path, rejecters=[])
+	_others_write(reviews, _vote(reason="false positive", evidence=""))
+	ledger = _ledger(README_FINDING)
+	text, demoted, stats = _diagnostics(ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert stats["votes"] == 0
+	assert sorted(stats["unverified"]) == sorted((slug, FINDING_ID, "no_evidence") for slug in OTHERS)
+	assert _kept(ledger, reviews) == {"README.md:1261": "too_few_rejecters"}
+
+
+@pytest.mark.parametrize(("evidence", "failure"), [
+	(f" | evidence: docs/README.md:1261 | quote: {QUOTE}", "wrong_file"),
+	(f" | evidence: README.md:1272 | quote: {QUOTE}", "out_of_range"),                 # 11 lines below the finding
+	(f" | evidence: README.md:1250 | quote: {QUOTE}", "out_of_range"),                 # 11 lines above it
+	(f" | evidence: README.md:0 | quote: {QUOTE}", "out_of_range"),
+	(f" | evidence: README.md:1261-1301 | quote: {QUOTE}", "span_too_long"),
+	(f" | evidence: README.md:1245-1265 | quote: {QUOTE}", "span_too_long"),          # 21 lines
+	(" | evidence: README.md:1261 | quote: `issue>`", "quote_too_short"),
+	(" | evidence: README.md:1261 | quote:", "quote_too_short"),
+	(" | evidence: README.md:1261 | quote: Line 1262 of the README.", "quote_mismatch"),  # real text, other line
+	(" | evidence: README.md:1262 | quote: `/implement-issue-claude <issue>`", "quote_mismatch"),
+	(" | evidence: README.md:1261 | quote: false positive, the backtick is present", "quote_mismatch"),
+	(" | evidence: README.md:1261 | quote: <text copied verbatim from those lines>", "quote_mismatch"),
+])
+def test_issue_4976_evidence_that_does_not_verify_is_not_a_vote(tmp_path, evidence, failure):
+	reviews = _reviews(tmp_path, rejecters=[])
+	_others_write(reviews, _vote(evidence=evidence))
+	ledger = _ledger(README_FINDING)
+	text, demoted, stats = _diagnostics(ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert {reason for _slug, _id, reason in stats["unverified"]} == {failure}
+
+
+def test_issue_4976_evidence_past_the_end_of_the_file_is_out_of_range(tmp_path):
+	reviews = _reviews(tmp_path, rejecters=[])
+	_others_write(reviews, _vote(evidence=f" | evidence: README.md:1261 | quote: {QUOTE}"))
+	short = {"README.md": README_LINES[:1255]}
+	text, demoted, stats = _diagnostics(_ledger(README_FINDING), reviews, source_reader=short.get)
+	assert demoted == []
+	assert {reason for _slug, _id, reason in stats["unverified"]} == {"out_of_range"}
+
+
+@pytest.mark.parametrize("source_reader", [None, {}.get])
+def test_issue_4976_without_the_reviewed_source_nothing_is_demoted(tmp_path, source_reader):
+	reviews = _reviews(tmp_path, rejecters=OTHERS)
+	ledger = _ledger(README_FINDING)
+	text, demoted, stats = _diagnostics(ledger, reviews, source_reader=source_reader)
+	assert demoted == [] and text == ledger
+	assert {reason for _slug, _id, reason in stats["unverified"]} == {"source_unavailable"}
+	assert nonblocking.demote(ledger, reviews) == (ledger, [])
+
+
+def test_issue_4976_only_verified_rejecters_count_toward_the_majority(tmp_path):
+	reviews = _reviews(tmp_path, rejecters=OTHERS[:2])
+	_others_write(reviews, _vote(evidence=""), OTHERS[2:])
+	ledger = _ledger(README_FINDING)
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	_others_write(reviews, _vote(), OTHERS[2:3])
+	_text, demoted = _run(tmp_path, ledger, reviews)
+	assert len(demoted) == 1 and demoted[0]["rejecters"] == sorted(OTHERS[:3])
+
+
+def test_issue_4976_a_quote_may_span_the_cited_lines():
+	lines = ["def guard(value):", "\tif value is None:", "\t\treturn DEFAULT", "\treturn value"]
+	entry = ("a.py", (2, 2), FLAGGER)
+	evidence = nonblocking.VOTE_EVIDENCE_RE.match(" reason: x | evidence: a.py:2-3 | quote: if value is None: return DEFAULT")
+	assert nonblocking._verify_evidence(entry, evidence, {"a.py": lines}.get) is None
+	evidence = nonblocking.VOTE_EVIDENCE_RE.match(" reason: x | evidence: a.py:2 | quote: if value is None: return DEFAULT")
+	assert nonblocking._verify_evidence(entry, evidence, {"a.py": lines}.get) == "quote_mismatch"
+
+
+def test_issue_4976_a_quote_may_contain_pipes():
+	lines = ["result=$(printf '%s' \"$x\" | tr -d '\\n' | head -c 40)"]
+	entry = ("a.sh", (1, 1), FLAGGER)
+	evidence = nonblocking.VOTE_EVIDENCE_RE.match(" | reason: quoted | evidence: a.sh:1 | quote: printf '%s' \"$x\" | tr -d '\\n' | head -c 40")
+	assert evidence is not None and "reason" in evidence.group("head")
+	assert nonblocking._verify_evidence(entry, evidence, {"a.sh": lines}.get) is None
+
+
+def test_issue_4976_git_source_reads_the_reviewed_commit_only(tmp_path):
+	root, sha = _git_repo(tmp_path, {"README.md": README_LINES, "docs/a.md": ["first", "second"]})
+	# A later working-tree edit and commit do not change what the reviewed commit reads.
+	(root / "README.md").write_text("rewritten\n", encoding="utf-8")
+	read = nonblocking.git_source(root, sha)
+	assert read("README.md")[1260] == README_LINE
+	assert read("docs/a.md") == ["first", "second"]
+	assert read("missing.md") is None
+	assert nonblocking.git_commit_available(root, sha)
+	assert not nonblocking.git_commit_available(root, "0" * 40)
+	assert not nonblocking.git_commit_available(tmp_path / "nope", sha)
+
+
+@pytest.mark.parametrize("path", ["../README.md", "./README.md", "/etc/passwd", "docs//a.md", "docs/../README.md", "", "a\nb", "a\\b",
+	"README.md\0", "foo:bar", "docs:v1/file.md", "a:b:c"])
+def test_issue_4976_git_source_refuses_unsafe_paths(tmp_path, path):
+	root, sha = _git_repo(tmp_path)
+	assert nonblocking.git_source(root, sha)(path) is None
+
+
+def test_issue_4976_git_source_refuses_a_colon_path_that_exists(tmp_path):
+	# Review round 1 on PR #5034: a path holding ``:`` is refused even when the
+	# reviewed commit tracks it, so the read never goes through git's
+	# ``<commit>:<path>`` parsing with a second colon.
+	root, sha = _git_repo(tmp_path, {"docs:a.md": ["colon", "named"], "docs/a.md": ["first", "second"]})
+	read = nonblocking.git_source(root, sha)
+	assert read("docs:a.md") is None
+	assert read("docs/a.md") == ["first", "second"]
+
+
+@pytest.mark.parametrize("commit", ["HEAD", "main", "abc123", "G" * 40, "a" * 41, "--output=x", "a" * 40 + "\n"])
+def test_issue_4976_git_source_refuses_anything_but_a_full_object_name(tmp_path, commit):
+	root, _sha = _git_repo(tmp_path)
+	assert nonblocking.git_source(root, commit)("README.md") is None
+	assert not nonblocking.git_commit_available(root, commit)
+
+
+def test_issue_4976_git_source_reads_each_path_once(tmp_path, monkeypatch):
+	root, sha = _git_repo(tmp_path)
+	calls: list[list[str]] = []
+	real_run = subprocess.run
+
+	def counting_run(command, *args, **kwargs):
+		calls.append(command)
+		return real_run(command, *args, **kwargs)
+
+	monkeypatch.setattr(nonblocking.subprocess, "run", counting_run)
+	read = nonblocking.git_source(root, sha)
+	assert read("README.md") == read("README.md")
+	assert read("nope.md") is None and read("nope.md") is None
+	assert len(calls) == 2
+
+
+def _cli(tmp_path: Path, reviews: Path, *extra: str) -> subprocess.CompletedProcess:
+	ledger_path = tmp_path / "ledger.txt"
+	ledger_path.write_text(_ledger(README_FINDING), encoding="utf-8")
+	return subprocess.run([sys.executable, str(SCRIPT), "--ledger", str(ledger_path), "--reviews-dir", str(reviews),
+		"--output", str(tmp_path / "out.txt"), *extra], capture_output=True, text=True, env=ENV)
+
+
+def test_issue_4976_cli_demotes_with_verified_evidence_end_to_end(tmp_path):
+	reviews = _reviews(tmp_path, rejecters=OTHERS)
+	root, sha = _git_repo(tmp_path)
+	proc = _cli(tmp_path, reviews, "--source-root", str(root), "--source-commit", sha)
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.splitlines()[:3] == [
+		"CLAUDE_FIXER_NONBLOCKING demoted=1 successful_reviewers=6",
+		"CLAUDE_FIXER_NONBLOCKING_VOTES manifest=present ids=1 votes=5",
+		f"CLAUDE_FIXER_NONBLOCKING_EVIDENCE source=ok commit={sha} verified=5 unverified=0",
+	]
+
+
+def test_issue_4976_cli_reports_every_unverified_vote(tmp_path):
+	reviews = _reviews(tmp_path, rejecters=[])
+	_others_write(reviews, _vote(evidence=""), OTHERS[:3])
+	_others_write(reviews, _vote(evidence=" | evidence: README.md:1261 | quote: Line 1262 of the README."), OTHERS[3:])
+	root, sha = _git_repo(tmp_path)
+	proc = _cli(tmp_path, reviews, "--source-root", str(root), "--source-commit", sha)
+	assert proc.returncode == 0, proc.stderr
+	lines = proc.stdout.splitlines()
+	assert lines[0] == "CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=6"
+	assert lines[2] == f"CLAUDE_FIXER_NONBLOCKING_EVIDENCE source=ok commit={sha} verified=0 unverified=5"
+	assert sorted(lines[3:8]) == sorted(
+		[f"CLAUDE_FIXER_NONBLOCKING_UNVERIFIED id={FINDING_ID} reviewer={slug} reason=no_evidence" for slug in OTHERS[:3]]
+		+ [f"CLAUDE_FIXER_NONBLOCKING_UNVERIFIED id={FINDING_ID} reviewer={slug} reason=quote_mismatch" for slug in OTHERS[3:]])
+	assert f"CLAUDE_FIXER_NONBLOCKING_KEPT file=README.md:1261 flagged_by={FLAGGER} reason=too_few_rejecters" in lines
+
+
+@pytest.mark.parametrize(("extra", "state", "commit"), [
+	((), "missing", "none"),
+	(("--source-commit", "c" * 40), "missing", "c" * 40),                     # no root
+	(("--source-root", "{root}"), "missing", "none"),                         # no commit
+	(("--source-root", "{root}", "--source-commit", "c" * 40), "unavailable", "c" * 40),
+	(("--source-root", "{root}", "--source-commit", "HEAD"), "unavailable", "none"),
+	(("--source-root", "{nowhere}", "--source-commit", "{sha}"), "unavailable", "{sha}"),
+])
+def test_issue_4976_cli_without_a_usable_source_demotes_nothing(tmp_path, extra, state, commit):
+	reviews = _reviews(tmp_path, rejecters=OTHERS)
+	root, sha = _git_repo(tmp_path)
+	values = {"root": str(root), "sha": sha, "nowhere": str(tmp_path / "nowhere")}
+	proc = _cli(tmp_path, reviews, *(item.format(**values) for item in extra))
+	assert proc.returncode == 0, proc.stderr
+	lines = proc.stdout.splitlines()
+	assert lines[0] == "CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=6"
+	assert lines[1] == "CLAUDE_FIXER_NONBLOCKING_VOTES manifest=present ids=1 votes=0"
+	assert lines[2] == f"CLAUDE_FIXER_NONBLOCKING_EVIDENCE source={state} commit={commit.format(**values)} verified=0 unverified=5"
+	assert (tmp_path / "out.txt").read_text() == _ledger(README_FINDING)
+
+
+def test_issue_4976_prompt_states_the_evidence_limits_the_gate_enforces():
+	function = _cross_pollination_function()
+	assert f"within {nonblocking.EVIDENCE_LINE_WINDOW} lines of the entry's lines" in function
+	assert f"at most {nonblocking.EVIDENCE_MAX_LINES} lines long" in function
+	assert f"at least {nonblocking.EVIDENCE_MIN_QUOTE_CHARS} non-space characters" in function
+
+
+def test_issue_4976_handoff_step_passes_the_reviewed_commit():
+	step = (REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_handoff.sh").read_text(encoding="utf-8")
+	assert '--source-root "${GITHUB_WORKSPACE:-${PWD}}" --source-commit "${HEAD_SHA:-}"' in step

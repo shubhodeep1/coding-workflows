@@ -32,7 +32,11 @@
 # PREVIOUS_REVIEWS_DIR/rejection_ids_pass1.json (issue #4688), so a line
 # quoted from the PR never counts and no manifest means no demotion. The ID
 # binds to the finding by its pass-1 consensus_id, never by file and line
-# proximity, and an ambiguous match stays blocking (issue #4687). The filtered
+# proximity, and an ambiguous match stays blocking (issue #4687). A rejection
+# also counts only when its `evidence: <file>:<range> | quote: <text>` fields
+# verify against the reviewed commit HEAD_SHA, read with local git from the
+# PR checkout in GITHUB_WORKSPACE (issue #4976); a free-text reason alone
+# never demotes a finding, and an unreadable commit demotes nothing. The filtered
 # copy is what this step counts, digests, and posts; a round whose only
 # entries are non-blocking still posts the ledger, then takes the
 # zero-findings path. A missing or failing filter keeps the original ledger,
@@ -50,7 +54,8 @@
 # AUTOFIX_PRE_REVIEW_RESOLVE,
 # AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED, REVIEWER_CONSENSUS_FILE,
 # PREVIOUS_REVIEWS_DIR, PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR,
-# GITHUB_RUN_ID, GITHUB_SERVER_URL, RUNTIME_DIR.
+# GITHUB_RUN_ID, GITHUB_SERVER_URL, RUNTIME_DIR, GITHUB_WORKSPACE (the PR
+# checkout that holds HEAD_SHA).
 # API calls: on a clean candidate, the existing check-run collector refreshes
 # its paginated check-runs GET; on findings, the ledger chunks from
 # post_review_comment.sh and one hand-off comment are posted; on a clean
@@ -136,7 +141,8 @@ if [[ "${REVIEWERS_SUCCESSFUL:-}" =~ ^[1-9][0-9]*$ ]] \
   elif [ -z "${PREVIOUS_REVIEWS_DIR:-}" ] || [ ! -d "${PREVIOUS_REVIEWS_DIR}" ]; then
     echo "::warning::PREVIOUS_REVIEWS_DIR is unset or missing; every ledger entry stays blocking."
   elif claude_fixer_nonblocking_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${claude_fixer_nonblocking_script}" \
-      --ledger "${REVIEWER_CONSENSUS_FILE}" --reviews-dir "${PREVIOUS_REVIEWS_DIR}" --output "${claude_fixer_filtered_ledger}")" \
+      --ledger "${REVIEWER_CONSENSUS_FILE}" --reviews-dir "${PREVIOUS_REVIEWS_DIR}" --output "${claude_fixer_filtered_ledger}" \
+      --source-root "${GITHUB_WORKSPACE:-${PWD}}" --source-commit "${HEAD_SHA:-}")" \
     && claude_fixer_ledger_well_formed "${claude_fixer_filtered_ledger}"; then
     printf '%s\n' "${claude_fixer_nonblocking_out}"
     claude_fixer_nonblocking_count="$(printf '%s\n' "${claude_fixer_nonblocking_out}" | sed -n 's/^CLAUDE_FIXER_NONBLOCKING demoted=\([0-9][0-9]*\) .*/\1/p' | head -n 1)"

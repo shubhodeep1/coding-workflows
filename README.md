@@ -1475,8 +1475,8 @@ with a `consensus_id: p1-<12 hex>` line on every consensus finding
 (`review_claude_fixer_nonblocking.py --annotate`, a hash of the entry's
 text), and that ID list, and can reject an entry it verified to be wrong
 with one line, `REJECTED_FINDING: <ID> | <file>:<line> | flagged_by: <slug>
-| reason: …`. A reviewer that re-reports the same defect adds
-`consensus_id: <id>` to it, and the summariser copies that line. Before the
+| reason: … | evidence: <file>:<line or start-end> | quote: …`. A reviewer
+that re-reports the same defect adds `consensus_id: <id>` to it, and the summariser copies that line. Before the
 hand-off step counts the ledger, the same script moves a consensus finding
 into a `NON-BLOCKING FINDINGS` block when it was raised by exactly one
 reviewer, carries one `consensus_id` that the flagger itself cited as a
@@ -1491,8 +1491,18 @@ same `consensus_id`. The rejections are read from each reviewer's raw
 output, not from the summariser's text.
 
 A vote counts only when it names an ID from this run's manifest and has a
-reason, and it must start a line outside any code block. The file, line,
-and slug it echoes are informational. A line quoted from the PR can never
+reason, and it must start a line outside any code block. It also needs
+source-grounded evidence (issue #4976): `evidence:` must cite lines of the
+entry's own file, at most 20 lines long and within 10 lines of the entry,
+and `quote:` (last on the line) must copy at least 10 non-space characters
+that the hand-off step finds at those lines of the reviewed commit. The step
+reads that commit (`HEAD_SHA`) from the PR checkout with local `git cat-file`,
+so no API call is added; a reason alone, a quote that is not there, or an
+unreadable commit means the vote does not count and the finding stays
+blocking. `CLAUDE_FIXER_NONBLOCKING_EVIDENCE source=<ok|missing|unavailable>
+… verified=<n> unverified=<n>` and one `CLAUDE_FIXER_NONBLOCKING_UNVERIFIED
+id=… reviewer=… reason=…` line per rejected vote show why in the run log.
+The file, line, and slug it echoes are informational. A line quoted from the PR can never
 carry an ID issued after the push, so it never counts, and neither does a
 line in an older shape: without an ID, or citing a `consensus_id`, which
 ledger text determines (issue #4688). Without a manifest nothing is

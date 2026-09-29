@@ -99,7 +99,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `rejection_ids_pass1.json`, which `--issue-ids` writes after pass 1. It
    also needs a non-empty reason and must sit outside any code block. Quoted
    PR text and lines without an ID (or citing only a `consensus_id`) never
-   count (issue #4688), and no manifest means no demotion. The manifest
+   count (issue #4688), and no manifest means no demotion. A vote also needs
+   `| evidence: <file>:<line or start-end> | quote: <text>` after its reason
+   (issue #4976): the entry's own file, at most 20 lines within 10 lines of
+   the entry, and a quote of at least 10 non-space characters that the step
+   finds at those lines of the reviewed commit, read with local
+   `git cat-file` from `GITHUB_WORKSPACE` at `HEAD_SHA`
+   (`--source-root` / `--source-commit`). A reason alone never counts, and an
+   unreadable commit demotes nothing
+   (`CLAUDE_FIXER_NONBLOCKING_EVIDENCE` / `_UNVERIFIED` log lines). The manifest
    records each ID's `consensus_id` (`p1-` + 12 hex digits of the SHA-256 of
    the pass-1 entry, added to the summary by `--annotate` and recomputed from
    the unchanged `consensus_pass1.txt`), and the vote binds by it, never by

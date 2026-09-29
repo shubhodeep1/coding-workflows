@@ -43,12 +43,20 @@ manifest (``<reviews-dir>/rejection_ids_pass1.json`` by default), and prints
 the list the cross-pollination header shows pass-2 reviewers. A vote is a
 line
 
-  REJECTED_FINDING: <ID> | <file>:<line> | flagged_by: <slug> | reason: <one sentence>
+  REJECTED_FINDING: <ID> | <file>:<line> | flagged_by: <slug> | reason: <one sentence> | evidence: <file>:<line or start-end> | quote: <text>
 
 and it counts only when the ID is in the manifest, the reason is not empty,
-and the line starts a line (at most 3 spaces, an optional ``-``/``*``
-bullet) outside any fenced code block. The file, line, and slug a reviewer
-echoes are informational: the match uses the manifest entry the ID names.
+the line starts a line (at most 3 spaces, an optional ``-``/``*`` bullet)
+outside any fenced code block, and its evidence verifies (issue #4976): the
+cited file is the manifest entry's file, the cited range is at most
+EVIDENCE_MAX_LINES long and within EVIDENCE_LINE_WINDOW lines of the entry's
+range, and the quote, at least EVIDENCE_MIN_QUOTE_CHARS non-whitespace
+characters (one pair of wrapping backticks may be dropped), occurs in those
+lines of the reviewed commit, whitespace runs collapsed. The commit is read
+with local ``git cat-file`` (--source-root / --source-commit); without it no
+vote counts. A free-text reason alone never demotes a finding. The file,
+line, and slug a reviewer echoes are informational: the match uses the
+manifest entry the ID names.
 No PR content can carry an ID issued after it was pushed, so a
 REJECTED_FINDING line quoted from the PR never counts, and neither does a
 line without an ID (the pre-#4688 shape) or one citing a consensus_id
@@ -85,13 +93,20 @@ parse stays blocking.
 Usage:
 
   review_claude_fixer_nonblocking.py --ledger FILE --reviews-dir DIR --output FILE [--ids-manifest FILE]
+      [--source-root DIR --source-commit SHA]
   review_claude_fixer_nonblocking.py --issue-ids --ledger PASS1_LEDGER --ids-manifest FILE
   review_claude_fixer_nonblocking.py --annotate --ledger PASS1_LEDGER --output FILE
 
 The first form always writes --output (an unchanged copy when nothing is
 demoted) and prints ``CLAUDE_FIXER_NONBLOCKING demoted=<n>
 successful_reviewers=<m>``, then ``CLAUDE_FIXER_NONBLOCKING_VOTES
-manifest=<present|missing> ids=<n> votes=<n>``, then one
+manifest=<present|missing> ids=<n> votes=<n>`` (votes whose evidence
+verified), then ``CLAUDE_FIXER_NONBLOCKING_EVIDENCE
+source=<ok|missing|unavailable> commit=<sha|none> verified=<n>
+unverified=<n>``, then one ``CLAUDE_FIXER_NONBLOCKING_UNVERIFIED id=<ID>
+reviewer=<slug> reason=<no_evidence|wrong_file|span_too_long|out_of_range|
+quote_too_short|source_unavailable|quote_mismatch>`` line per vote whose
+evidence did not verify, then one
 ``CLAUDE_FIXER_NONBLOCKING_ENTRY`` line per demoted entry, one
 ``CLAUDE_FIXER_NONBLOCKING_KEPT file=<file:span> flagged_by=<slug>
 reason=<reason>`` line per single-reviewer entry that stays blocking, and
@@ -113,7 +128,8 @@ rejection instructions.
 The third form prints ``CLAUDE_FIXER_CONSENSUS_IDS annotated=<n>``; any
 other exit means the caller shows the plain ledger.
 
-No network access and no GitHub API calls.
+No network access and no GitHub API calls; the reviewed commit is read with
+local ``git cat-file``.
 """
 
 from __future__ import annotations
@@ -124,6 +140,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import tempfile
 from collections import Counter
@@ -197,6 +214,18 @@ RECORD_CONSENSUS_ID_RE = re.compile(
 RECORD_BREAK_RE = re.compile(rf"^\s*{RECORD_ITEM}(?:{RECORD_MARKUP}Requirement{RECORD_MARKUP}\s*:|REJECTED_FINDING\s*:|#)",
 	re.IGNORECASE)
 RECORD_HEADING_RE = re.compile(r"^[A-Z][A-Z0-9 /&()-]*[A-Z)]$")
+
+# Source-grounded rejection evidence (issue #4976). A vote counts only when
+# its evidence citation and quote verify against the reviewed commit.
+EVIDENCE_LINE_WINDOW = 10
+EVIDENCE_MAX_LINES = 20
+EVIDENCE_MIN_QUOTE_CHARS = 10
+GIT_READ_TIMEOUT_SECONDS = 30
+SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
+VOTE_EVIDENCE_RE = re.compile(
+	r"^(?P<head>.*?)\|[ \t]*evidence:[ \t]*`?(?P<path>[^\s|`]+?)`?:(?P<start>\d+)(?:[ \t]*-[ \t]*(?P<end>\d+))?`?"
+	r"[ \t]*\|[ \t]*quote:[ \t]*(?P<quote>.*?)[ \t]*$"
+)
 
 
 def _norm_path(path: str) -> str:
@@ -527,19 +556,123 @@ def _fence_marker(line: str) -> str | None:
 	return match.group("fence") if match else None
 
 
-def reviewer_votes(output: Path, manifest: dict[str, tuple[str, tuple[int, int], str]]) -> set[str]:
+def _safe_source_path(path: str) -> bool:
+	"""A relative repository path with no empty, ``.`` or ``..`` segment, no control characters, and no ``:``.
+
+	Git reads everything after the commit's ``:`` in ``<commit>:<path>`` as a
+	literal path, but a ``:`` is refused anyway so the evidence read never
+	depends on git's revision syntax; no tracked path in this repository
+	contains one."""
+	if not path or path.startswith("/") or any(char in path for char in ("\0", "\n", "\r", "\\", ":")):
+		return False
+	return all(part not in ("", ".", "..") for part in path.split("/"))
+
+
+def git_commit_available(root: Path, commit: str) -> bool:
+	"""True when ``commit`` is a full hex object name of a commit present in the repository at ``root``."""
+	if not SOURCE_COMMIT_RE.match(commit):
+		return False
+	try:
+		proc = subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{commit}^{{commit}}"],
+			capture_output=True, timeout=GIT_READ_TIMEOUT_SECONDS, check=False)
+	except (OSError, subprocess.SubprocessError):
+		return False
+	return proc.returncode == 0
+
+
+def git_source(root: Path, commit: str):
+	"""Return a reader ``path -> list of lines | None`` for the files of ``commit`` in ``root``.
+
+	Each path is read once with ``git cat-file blob <commit>:<path>`` (local,
+	no network) and cached. An invalid commit, an unsafe path, a missing file,
+	or any git failure reads as None, so the evidence that cites it does not
+	verify (issue #4976)."""
+	cache: dict[str, list[str] | None] = {}
+
+	def read(path: str) -> list[str] | None:
+		if path in cache:
+			return cache[path]
+		lines = None
+		if SOURCE_COMMIT_RE.match(commit) and _safe_source_path(path):
+			try:
+				proc = subprocess.run(["git", "-C", str(root), "cat-file", "blob", f"{commit}:{path}"],
+					capture_output=True, timeout=GIT_READ_TIMEOUT_SECONDS, check=False)
+			except (OSError, subprocess.SubprocessError):
+				proc = None
+			if proc is not None and proc.returncode == 0:
+				lines = proc.stdout.decode("utf-8", errors="replace").splitlines()
+		cache[path] = lines
+		return lines
+
+	return read
+
+
+def _collapse_whitespace(text: str) -> str:
+	return " ".join(text.split())
+
+
+def _quote_candidates(quote: str) -> list[str]:
+	"""The quote with whitespace collapsed, and without one pair of wrapping backticks; short ones dropped."""
+	collapsed = _collapse_whitespace(quote)
+	candidates = [collapsed]
+	if len(collapsed) > 2 and collapsed.startswith("`") and collapsed.endswith("`"):
+		candidates.append(collapsed[1:-1].strip())
+	return [candidate for candidate in candidates
+		if len(candidate.replace(" ", "")) >= EVIDENCE_MIN_QUOTE_CHARS]
+
+
+def _verify_evidence(entry: tuple[str, tuple[int, int], str], evidence: re.Match | None, source_reader) -> str | None:
+	"""None when a vote's evidence verifies for the manifest ``entry``, else the reason it does not.
+
+	The cited file must be the entry's file, the cited range at most
+	EVIDENCE_MAX_LINES long and within EVIDENCE_LINE_WINDOW lines of the
+	entry's range, and the quote (at least EVIDENCE_MIN_QUOTE_CHARS
+	non-whitespace characters) must occur in those lines of the file as
+	``source_reader`` reads it, whitespace runs collapsed."""
+	if evidence is None:
+		return "no_evidence"
+	path, lines, _flagger = entry
+	if _norm_path(evidence.group("path")) != path:
+		return "wrong_file"
+	cited = _range(evidence.group("start"), evidence.group("end"))
+	if cited[1] - cited[0] + 1 > EVIDENCE_MAX_LINES:
+		return "span_too_long"
+	if cited[0] < 1 or max(cited[0], lines[0]) - min(cited[1], lines[1]) > EVIDENCE_LINE_WINDOW:
+		return "out_of_range"
+	quotes = _quote_candidates(evidence.group("quote"))
+	if not quotes:
+		return "quote_too_short"
+	file_lines = source_reader(path) if source_reader is not None else None
+	if file_lines is None:
+		return "source_unavailable"
+	if cited[1] > len(file_lines):
+		return "out_of_range"
+	cited_text = _collapse_whitespace(" ".join(file_lines[cited[0] - 1:cited[1]]))
+	if not any(quote in cited_text for quote in quotes):
+		return "quote_mismatch"
+	return None
+
+
+def reviewer_votes(output: Path, manifest: dict[str, tuple[str, tuple[int, int], str]], source_reader=None) -> set[str]:
 	"""Return the manifest IDs this reviewer voted to reject.
 
 	A vote is a REJECTION_VOTE_RE line outside any fenced code block, naming
 	an ID in the manifest, with a non-empty reason that is not the template
-	placeholder. Anything else (the pre-#4688 shape, quoted or fenced text,
-	an unknown ID) is ignored.
+	placeholder, followed by ``| evidence: <file>:<range> | quote: <text>``
+	that verifies against ``source_reader`` (see _verify_evidence, issue #4976).
+	Anything else (the pre-#4688 shape, quoted or fenced text, an unknown ID,
+	a vote without verified evidence) is ignored; without a reader no vote
+	counts.
 	"""
-	return _votes_in(output.read_text(encoding="utf-8", errors="replace"), manifest)
+	return _votes_in(output.read_text(encoding="utf-8", errors="replace"), manifest, source_reader)
 
 
-def _votes_in(text: str, manifest: dict[str, tuple[str, tuple[int, int], str]]) -> set[str]:
-	"""``reviewer_votes`` over an output already read into memory."""
+def _votes_in(text: str, manifest: dict[str, tuple[str, tuple[int, int], str]], source_reader=None,
+		unverified: list[tuple[str, str]] | None = None) -> set[str]:
+	"""``reviewer_votes`` over an output already read into memory.
+
+	When ``unverified`` is a list, each vote that has a reason but whose
+	evidence does not verify is appended to it as ``(id, reason)``."""
 	votes: set[str] = set()
 	open_fence: str | None = None
 	for line in text.splitlines():
@@ -554,9 +687,16 @@ def _votes_in(text: str, manifest: dict[str, tuple[str, tuple[int, int], str]]) 
 		match = REJECTION_VOTE_RE.match(line)
 		if not match or match.group("id") not in manifest:
 			continue
-		reason = VOTE_REASON_RE.search(match.group("rest"))
-		if reason and not VOTE_REASON_PLACEHOLDER_RE.match(reason.group("reason")):
-			votes.add(match.group("id"))
+		evidence = VOTE_EVIDENCE_RE.match(match.group("rest"))
+		reason = VOTE_REASON_RE.search(evidence.group("head") if evidence else match.group("rest"))
+		if not reason or VOTE_REASON_PLACEHOLDER_RE.match(reason.group("reason")):
+			continue
+		finding_id = match.group("id")
+		failure = _verify_evidence(manifest[finding_id], evidence, source_reader)
+		if failure is None:
+			votes.add(finding_id)
+		elif unverified is not None:
+			unverified.append((finding_id, failure))
 	return votes
 
 
@@ -639,7 +779,7 @@ def flagger_finding_records(text: str) -> list[dict]:
 
 
 def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: Path | None = None, *,
-		reviewers: dict[str, Path] | None = None, stats: dict | None = None) -> tuple[str, list[dict], list[dict], int]:
+		reviewers: dict[str, Path] | None = None, stats: dict | None = None, source_reader=None) -> tuple[str, list[dict], list[dict], int]:
 	"""Return the filtered ledger, the demoted records, the kept single-reviewer
 	records (with the reason each stays blocking), and the number of ignored
 	REJECTED_FINDING lines without a run ID (the id-less and consensus_id shapes).
@@ -647,9 +787,13 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 	manifest_path defaults to reviews_dir / MANIFEST_NAME; without a manifest
 	no vote counts and nothing is demoted. ``reviewers`` is
 	``successful_reviewers(reviews_dir)`` when the caller already has it; each
-	reviewer output is read once. When ``stats`` is a dict it receives
-	``manifest_present``, ``manifest_ids``, and ``votes`` (counted votes over
-	all successful reviewers) for the CLAUDE_FIXER_NONBLOCKING_VOTES log line."""
+	reviewer output is read once. ``source_reader`` reads the reviewed commit's
+	files (git_source); a vote counts only when its evidence verifies against it,
+	so without a reader nothing is demoted (issue #4976). When ``stats`` is a dict
+	it receives ``manifest_present``, ``manifest_ids``, ``votes`` (counted,
+	evidence-verified votes over all successful reviewers) for the
+	CLAUDE_FIXER_NONBLOCKING_VOTES log line, and ``unverified`` (one
+	``(slug, id, reason)`` per vote whose evidence did not verify)."""
 	segments = parse_ledger(ledger_text)
 	blocks = [segment for segment in segments if isinstance(segment, Block)]
 	consensus = _consensus_block(segments)
@@ -667,12 +811,17 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 	if reviewers is None:
 		reviewers = successful_reviewers(reviews_dir)
 	outputs = {slug: path.read_text(encoding="utf-8", errors="replace") for slug, path in reviewers.items()}
-	votes = {slug: (_votes_in(text, manifest) if manifest else set()) for slug, text in outputs.items()}
+	votes: dict[str, set[str]] = {}
+	unverified_votes: list[tuple[str, str, str]] = []
+	for slug, text in outputs.items():
+		failed_votes: list[tuple[str, str]] = []
+		votes[slug] = _votes_in(text, manifest, source_reader, failed_votes) if manifest else set()
+		unverified_votes.extend((slug, finding_id, failure) for finding_id, failure in failed_votes)
 	legacy_rejections = sum(len(_legacy_rejections_in(text)) + len(_bound_rejections_in(text)) for text in outputs.values())
 	per_reviewer = {block.name[len(PER_REVIEWER_PREFIX):]: block for block in blocks if block.name.startswith(PER_REVIEWER_PREFIX)}
 	if stats is not None:
 		stats.update(manifest_present=payload is not None, manifest_ids=len(manifest),
-			votes=sum(len(cast) for cast in votes.values()))
+			votes=sum(len(cast) for cast in votes.values()), unverified=unverified_votes)
 
 	pass1 = pass1_consensus_entries(reviews_dir)
 	pass1_id_counts = Counter(record["consensus_id"] for record in pass1)
@@ -786,7 +935,8 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 		nonblocking.end_line = f"=== END {NONBLOCKING_BLOCK} ==="
 		nonblocking.preamble.append(
 			"(Not handed to Claude: each entry below was raised by one reviewer and explicitly rejected with a "
-			"REJECTED_FINDING line citing this run's finding ID by a majority of the other reviewers. Kept for visibility; "
+			"REJECTED_FINDING line citing this run's finding ID, with a quote verified against the reviewed code, by a "
+			"majority of the other reviewers. Kept for visibility; "
 			"no fix or verdict is needed.)")
 		for record in demoted:
 			entry = list(record["entry"])
@@ -801,13 +951,15 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 	return (text if demoted else ledger_text), demoted, kept_records, legacy_rejections
 
 
-def demote(ledger_text: str, reviews_dir: Path, manifest_path: Path | None = None) -> tuple[str, list[dict]]:
+def demote(ledger_text: str, reviews_dir: Path, manifest_path: Path | None = None, *, source_reader=None) -> tuple[str, list[dict]]:
 	"""Return the filtered ledger text and one record per demoted entry.
 
 	manifest_path defaults to reviews_dir / MANIFEST_NAME; without a manifest
-	no vote counts and nothing is demoted.
+	no vote counts and nothing is demoted. ``source_reader`` reads the reviewed
+	commit's files (git_source); without it no vote's evidence verifies and
+	nothing is demoted (issue #4976).
 	"""
-	text, demoted, _kept, _legacy = demote_with_diagnostics(ledger_text, reviews_dir, manifest_path)
+	text, demoted, _kept, _legacy = demote_with_diagnostics(ledger_text, reviews_dir, manifest_path, source_reader=source_reader)
 	return text, demoted
 
 
@@ -850,6 +1002,10 @@ def main(argv: list[str] | None = None) -> int:
 		help="issue finding IDs for the pass-1 ledger given as --ledger and write --ids-manifest")
 	parser.add_argument("--annotate", action="store_true",
 		help="write --ledger (a pass-1 ledger) with a consensus_id line on each CONSENSUS FINDINGS entry")
+	parser.add_argument("--source-root", type=Path,
+		help="git checkout holding --source-commit; rejection evidence is read from it (issue #4976)")
+	parser.add_argument("--source-commit",
+		help="the reviewed commit (40 or 64 hex digits); without it and --source-root no vote counts")
 	args = parser.parse_args(argv)
 	if args.issue_ids and args.annotate:
 		parser.error("--issue-ids and --annotate are separate modes")
@@ -864,6 +1020,15 @@ def main(argv: list[str] | None = None) -> int:
 	if args.reviews_dir is None:
 		parser.error("--reviews-dir is required unless --annotate or --issue-ids is given")
 	manifest_path = args.ids_manifest if args.ids_manifest is not None else args.reviews_dir / MANIFEST_NAME
+	source_reader = None
+	source_state = "missing"
+	source_commit = args.source_commit or ""
+	if args.source_root is not None and source_commit:
+		if git_commit_available(args.source_root, source_commit):
+			source_reader = git_source(args.source_root, source_commit)
+			source_state = "ok"
+		else:
+			source_state = "unavailable"
 	stats: dict = {}
 	try:
 		ledger_text = args.ledger.read_text(encoding="utf-8")
@@ -871,7 +1036,7 @@ def main(argv: list[str] | None = None) -> int:
 			raise ValueError(f"reviews dir {args.reviews_dir} does not exist")
 		reviewers = successful_reviewers(args.reviews_dir)
 		filtered, demoted, kept_records, legacy_rejections = demote_with_diagnostics(ledger_text, args.reviews_dir,
-			manifest_path, reviewers=reviewers, stats=stats)
+			manifest_path, reviewers=reviewers, stats=stats, source_reader=source_reader)
 		args.output.write_text(filtered, encoding="utf-8")
 	except (OSError, ValueError) as exc:
 		print(f"CLAUDE_FIXER_NONBLOCKING error={exc}", file=sys.stderr)
@@ -879,6 +1044,11 @@ def main(argv: list[str] | None = None) -> int:
 	print(f"CLAUDE_FIXER_NONBLOCKING demoted={len(demoted)} successful_reviewers={len(reviewers)}")
 	print(f"CLAUDE_FIXER_NONBLOCKING_VOTES manifest={'present' if stats['manifest_present'] else 'missing'} "
 		f"ids={stats['manifest_ids']} votes={stats['votes']}")
+	print(f"CLAUDE_FIXER_NONBLOCKING_EVIDENCE source={source_state} "
+		f"commit={source_commit if SOURCE_COMMIT_RE.match(source_commit) else 'none'} "
+		f"verified={stats['votes']} unverified={len(stats['unverified'])}")
+	for slug, finding_id, failure in stats["unverified"]:
+		print(f"CLAUDE_FIXER_NONBLOCKING_UNVERIFIED id={finding_id} reviewer={slug} reason={failure}")
 	for record in demoted:
 		print(f"CLAUDE_FIXER_NONBLOCKING_ENTRY file={record['path']}:{_span(record['lines'])} flagged_by={record['flagger']} "
 			f"rejected_by={','.join(record['rejecters'])} others={record['others']}")

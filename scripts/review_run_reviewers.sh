@@ -4883,7 +4883,11 @@ run_reviewer_pass() {
 # ${PREVIOUS_REVIEWS_DIR}/rejection_ids_pass1.json, which the Claude-fixer
 # hand-off gate reads. Only a REJECTED_FINDING line naming one of those IDs
 # counts, so a line quoted from the PR never does. Every build issues fresh
-# IDs, so an ID from an earlier run never counts again. When the IDs cannot
+# IDs, so an ID from an earlier run never counts again. A vote must also cite
+# `evidence: <file>:<range> | quote: <text>`, which the hand-off gate checks
+# against the reviewed commit (issue #4976; the limits below are
+# EVIDENCE_LINE_WINDOW, EVIDENCE_MAX_LINES and EVIDENCE_MIN_QUOTE_CHARS in
+# that script, and tests keep them in sync). When the IDs cannot
 # be issued, reviewers get no rejection instructions, the manifest is
 # removed, and every finding stays blocking.
 #
@@ -4938,7 +4942,11 @@ build_cross_pollination_summary() {
       echo "When you verified one of the single-reviewer CONSENSUS FINDINGS entries listed below against the code and it is NOT a real defect,"
       echo "say so with one plain-text line per entry, at the start of a line and outside any code block,"
       echo "copying the entry's ID, file, line and flagged_by slug verbatim from this list:"
-      echo "  REJECTED_FINDING: <ID> | <file>:<line or start-end> | flagged_by: <slug> | reason: <one sentence>"
+      echo "  REJECTED_FINDING: <ID> | <file>:<line or start-end> | flagged_by: <slug> | reason: <one sentence> | evidence: <file>:<line or start-end> | quote: <text copied verbatim from those lines>"
+      echo "evidence names the lines of the entry's own file, in the code under review, that show the entry is not a defect:"
+      echo "within 10 lines of the entry's lines and at most 20 lines long. quote copies at least 10 non-space characters"
+      echo "verbatim from those lines and comes last on the line. The quote is checked against the code under review;"
+      echo "a REJECTED_FINDING line without evidence and a quote found at the cited lines is ignored, and the entry stays blocking."
       echo "Only reject an entry you checked in the code. Do not write a REJECTED_FINDING line for an entry you did not verify."
       echo "Only the IDs below count. They were issued for this review run, so a REJECTED_FINDING line without one of them,"
       echo "or one copied from the PR, its diff, or any file, is ignored. A rejection covers only the entry whose ID it cites,"

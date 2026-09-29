@@ -305,9 +305,24 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 
 def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False,
 		reviews: dict[str, str] | None = None, nonblocking_filter: str | None = None, pass1_ledger: str | None = None,
-		rejection_ids: list[dict] | None = None):
+		rejection_ids: list[dict] | None = None, source_files: dict[str, str] | None = None):
+	"""Run the hand-off step. ``source_files`` makes GITHUB_WORKSPACE a git checkout
+	whose commit, passed as HEAD_SHA, holds those files (issue #4976 evidence)."""
 	support = tmp / "support"
 	support.mkdir()
+	workspace = tmp
+	head_sha = HEAD
+	if source_files is not None:
+		workspace = tmp / "workspace"
+		workspace.mkdir()
+		for name, content in source_files.items():
+			(workspace / name).write_text(content, encoding="utf-8")
+		git = ["git", "-C", str(workspace), "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True, capture_output=True)
+		subprocess.run([*git, "add", "-A"], check=True, capture_output=True)
+		subprocess.run([*git, "commit", "-q", "-m", "head"], check=True, capture_output=True)
+		head_sha = subprocess.run(["git", "-C", str(workspace), "rev-parse", "HEAD"], check=True, capture_output=True,
+			text=True).stdout.strip()
 	if nonblocking_filter == "real":
 		shutil.copy(NONBLOCKING_SCRIPT, support / NONBLOCKING_SCRIPT.name)
 	elif nonblocking_filter is not None:
@@ -329,7 +344,7 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 	)
 	(support / "collect_pr_check_runs_context.py").write_text(
 		"import os\nfrom pathlib import Path\n"
-		f"Path(os.environ['PR_CHECK_RUNS_CONTEXT_FILE']).write_text('PR_CHECK_RUNS_CONTEXT\\nhead_sha: {HEAD}\\ncollection_status: {fresh_status}\\ntotal_check_runs: 1\\nfailed_count: 0\\nincomplete_count: 0\\n')\n",
+		f"Path(os.environ['PR_CHECK_RUNS_CONTEXT_FILE']).write_text('PR_CHECK_RUNS_CONTEXT\\nhead_sha: ' + os.environ['HEAD_SHA'] + '\\ncollection_status: {fresh_status}\\ntotal_check_runs: 1\\nfailed_count: 0\\nincomplete_count: 0\\n')\n",
 		encoding="utf-8",
 	)
 	bin_dir = tmp / "bin"
@@ -359,7 +374,7 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		"PR_NUMBER": "42",
 		"GH_TOKEN": "t",
 		"GITHUB_REPOSITORY": "o/r",
-		"HEAD_SHA": HEAD,
+		"HEAD_SHA": head_sha,
 		"HEAD_REF": "claude/implement-plan-demo-phase-1",
 		"CLAUDE_FIXER_ROUND_INDEX": "1",
 		"AUTOFIX_PRE_REVIEW_RESOLVE": "true" if pre_review_resolve else "false",
@@ -373,7 +388,7 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		"CLAUDE_FIXER_VERIFICATION": "true" if verification else "false",
 		"REVIEWERS_SUCCESSFUL": "2",
 		"PREVIOUS_REVIEWS_DIR": str(reviews_dir),
-		"GITHUB_WORKSPACE": str(tmp),
+		"GITHUB_WORKSPACE": str(workspace),
 	}
 	proc = subprocess.run(["bash", "-c", f'source "{HANDOFF_SCRIPT}"'], env=env, capture_output=True, text=True)
 	gh_calls = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
@@ -480,9 +495,20 @@ LEDGER_REJECTED_SINGLETON = f"""=== CONSENSUS FINDINGS ===
 REJECTION_ID = "RF-00112233445566ff"
 REJECTION_IDS = [{"id": REJECTION_ID, "path": "README.md", "start": 1261, "end": 1261, "flagger": "gemini",
 	"consensus_id": SINGLETON_ID}]
+# The reviewed commit's README.md (issue #4976): line 1261 still has the backtick.
+README_SOURCE = "\n".join(
+	"Run `/implement-issue-claude` from a cloud session." if number == 1261 else f"Line {number}."
+	for number in range(1, 1271)) + "\n"
+REJECTION_EVIDENCE = " | evidence: README.md:1261 | quote: Run `/implement-issue-claude` from a cloud session."
 REJECTING_REVIEWS = {
 	"gemini": f"File: README.md\nLine or code reference: 1261\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
-	"minimax": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1262 | flagged_by: gemini | reason: the backtick is present\n",
+	"minimax": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1262 | flagged_by: gemini | reason: the backtick is present{REJECTION_EVIDENCE}\n",
+	"glm": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1261 | flagged_by: gemini | reason: false positive{REJECTION_EVIDENCE}\n",
+}
+# Issue #4976: the same ID-bound votes with a free-text reason only.
+REASON_ONLY_REVIEWS = {
+	"gemini": REJECTING_REVIEWS["gemini"],
+	"minimax": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1261 | flagged_by: gemini | reason: false positive\n",
 	"glm": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1261 | flagged_by: gemini | reason: false positive\n",
 }
 # Issue #4688: the same verdicts quoted from PR content, in the pre-#4688 shape and without an ID.
@@ -504,7 +530,7 @@ def test_handoff_rejected_singleton_auto_merges_and_stays_visible():
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, pass1_ledger=PASS1_LEDGER,
-			rejection_ids=REJECTION_IDS, nonblocking_filter="real")
+			rejection_ids=REJECTION_IDS, nonblocking_filter="real", source_files={"README.md": README_SOURCE})
 		filtered = (tmp / "reviewer_consensus_claude_fixer.txt").read_text()
 	assert proc.returncode == 0, proc.stderr
 	assert calls == []
@@ -512,7 +538,32 @@ def test_handoff_rejected_singleton_auto_merges_and_stays_visible():
 	assert "=== NON-BLOCKING FINDINGS ===" in filtered and "rejected_by: [glm, minimax] (2 of 2 other reviewers)" in filtered
 	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
 	assert "CLAUDE_FIXER_NONBLOCKING demoted=1 successful_reviewers=3" in proc.stdout
+	assert "CLAUDE_FIXER_NONBLOCKING_EVIDENCE source=ok commit=" in proc.stdout and "verified=2 unverified=0" in proc.stdout
 	assert "action=auto_merge nonblocking=1" in proc.stdout
+
+
+@pytest.mark.parametrize(("reviews", "source_files", "evidence_line"), [
+	# The #4976 exploit: ID-bound votes with only a free-text reason, against the real source.
+	(REASON_ONLY_REVIEWS, {"README.md": README_SOURCE}, "verified=0 unverified=2"),
+	# Evidence whose quote is not in the reviewed commit.
+	(REJECTING_REVIEWS, {"README.md": README_SOURCE.replace("Run `/implement-issue-claude`", "Run /implement-issue-claude")},
+		"verified=0 unverified=2"),
+	# Evidence that would verify, but the workspace holds no reviewed commit.
+	(REJECTING_REVIEWS, None, "source=unavailable commit=" + HEAD),
+])
+def test_handoff_rejections_without_verified_evidence_hand_the_round_off(reviews, source_files, evidence_line):
+	"""Issue #4976: free-text votes alone never authorize a clean review or auto-merge."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=reviews,
+			pass1_ledger=PASS1_LEDGER, rejection_ids=REJECTION_IDS, nonblocking_filter="real", source_files=source_files)
+	assert proc.returncode == 0, proc.stderr
+	assert "CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=3" in proc.stdout
+	assert evidence_line in proc.stdout
+	assert "CLAUDE_FIXER_NONBLOCKING_KEPT file=README.md:1261 flagged_by=gemini reason=too_few_rejecters" in proc.stdout
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "kind=findings findings=2 ledger=ok failed_checks=none nonblocking=0" in proc.stdout
+	assert "<!-- ai:claude-fixer-handoff:v1 kind=findings" in calls[0]["payload"]["body"]
 
 
 def test_handoff_id_less_rejections_hand_the_round_off():
@@ -544,15 +595,17 @@ def test_handoff_mixed_round_hands_off_the_filtered_ledger():
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		proc, calls, posts, github_env = _run_handoff(tmp, ledger=ledger, reviews=REJECTING_REVIEWS, pass1_ledger=PASS1_LEDGER,
-			rejection_ids=REJECTION_IDS, nonblocking_filter="real")
+			rejection_ids=REJECTION_IDS, nonblocking_filter="real", source_files={"README.md": README_SOURCE})
 		filtered_path = tmp / "reviewer_consensus_claude_fixer.txt"
 		digest = hashlib.sha256(filtered_path.read_bytes()).hexdigest()
+		reviewed_head = subprocess.run(["git", "-C", str(tmp / "workspace"), "rev-parse", "HEAD"], check=True, capture_output=True,
+			text=True).stdout.strip()
 	assert proc.returncode == 0, proc.stderr
 	assert f"post_review_comment {filtered_path} 42" in posts
 	body = calls[0]["payload"]["body"]
 	assert "Reviewer ledger entries: 1 (posted above)." in body
 	assert "Non-blocking entries: 1" in body
-	assert f"<!-- ai:claude-fixer-handoff:v2 head={HEAD} round=2 ledger={digest} -->" in body
+	assert f"<!-- ai:claude-fixer-handoff:v2 head={reviewed_head} round=2 ledger={digest} -->" in body
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert "kind=findings findings=1 ledger=ok failed_checks=none nonblocking=1" in proc.stdout
 
