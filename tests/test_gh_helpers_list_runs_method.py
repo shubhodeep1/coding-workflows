@@ -44,6 +44,8 @@ GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 PROBES = (
 	"autofix_retrigger_has_inflight_peer",
 	"autofix_changes_lost_head_retry_consumed",
+	# The PR-named lookup both probes call since issue #4898.
+	"_autofix_pr_named_review_runs",
 )
 
 HEAD = "789e2f8a036f2236a5f10dcffab31019d328d77c"
@@ -91,7 +93,7 @@ def test_list_runs_probes_pin_the_get_method() -> None:
 
 _RUNNER = r"""
 extract_fn() {
-	awk -v fn="__FN__" '
+	awk -v fn="$1" '
 		BEGIN { in_fn=0 }
 		$0 ~ "^"fn"\\(\\)" { in_fn=1 }
 		in_fn { print }
@@ -133,7 +135,8 @@ gh() {
 	cat "${RUNS_FIXTURE}"
 }
 
-eval "$(extract_fn)"
+eval "$(extract_fn _autofix_pr_named_review_runs)"
+eval "$(extract_fn __FN__)"
 __FN__ "$@"
 """
 
@@ -177,6 +180,8 @@ def test_budget_probe_reaches_the_api_and_reports_budget_available() -> None:
 		BRANCH,
 		CURRENT_RUN,
 		HEAD,
+		# Head commit time, which the step passes since issue #4898.
+		"1790000000",
 	)
 	assert "reason=api_error" not in proc.stderr, proc.stderr
 	assert "prior_completed=0" in proc.stdout, proc.stdout

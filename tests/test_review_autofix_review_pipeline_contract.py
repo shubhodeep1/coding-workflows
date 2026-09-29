@@ -718,22 +718,18 @@ sys.exit(1)
 
 
 def _dispatch_fallback_chain_slice(step_name: str) -> str:
+	# The default-branch dispatch chain (issue #4898) sits between two marker
+	# comments in both retrigger step bodies.
 	block = _step_block(step_name)
 	lines = block.splitlines()
-	needle = 'if [ "${caller_workflow}" != "review_autofix.yml" ]; then'
-	for idx, line in enumerate(lines):
-		if line.strip() != needle:
-			continue
-		start_indent = len(line) - len(line.lstrip(" "))
-		for end_idx in range(idx + 1, len(lines)):
-			candidate = lines[end_idx]
-			if candidate.strip() != "fi":
-				continue
-			end_indent = len(candidate) - len(candidate.lstrip(" "))
-			if end_indent == start_indent:
-				return textwrap.dedent("\n".join(lines[idx : end_idx + 1])).strip()
-		break
-	assert False, f"missing redispatch fallback chain in step: {step_name}"
+	start_marker = "# --- default-branch review dispatch (issue #4898) ---"
+	end_marker = "# --- end default-branch review dispatch ---"
+	starts = [idx for idx, line in enumerate(lines) if line.strip() == start_marker]
+	ends = [idx for idx, line in enumerate(lines) if line.strip() == end_marker]
+	assert len(starts) == 1 and len(ends) == 1 and starts[0] < ends[0], (
+		f"missing redispatch dispatch chain in step: {step_name}"
+	)
+	return textwrap.dedent("\n".join(lines[starts[0] : ends[0] + 1])).strip()
 
 
 def _reviewer_iteration_scope_helper_block() -> str:
@@ -5040,10 +5036,21 @@ def test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain() -> 
 	changes_lost_block = _step_block("Re-dispatch review on editor-changes-lost")
 
 	for block in (post_commit_block, changes_lost_block):
-		assert 'if gh workflow run "review_autofix.yml" \\' in block
+		# Issue #4898: dispatch from the default branch (no --ref), PR-named
+		# wrappers first, review_autofix.yml last, validated PR number only.
+		assert 'if gh workflow run "${candidate}" \\' in block
 		assert '-f pr_number="${PR_NUMBER}" \\' in block
-		assert '-f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then' in block
+		assert '-f allow_workflow_edits="${retrigger_allow_workflow_edits}"; then' in block
 		assert 'caller_workflow="internal-review.yml"' in block
+		assert 'retrigger_candidates+=(review_autofix.yml)' in block
+		assert 'if ! [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then' in block
+		for line in block.splitlines():
+			if "gh workflow run" in line or line.strip().startswith("--ref"):
+				assert "--ref" not in line, line
+		# The caller ref reaches the sourced body through env, never as an
+		# expression (GitHub does not substitute ${{ }} in scripts/).
+		assert "REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}" in block
+		assert "${{ github.workflow_ref }}" not in block.split("run: |", 1)[1]
 
 	assert _dispatch_fallback_chain_slice("Re-trigger review via workflow_dispatch") == _dispatch_fallback_chain_slice(
 		"Re-dispatch review on editor-changes-lost"

@@ -29,7 +29,12 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-lines = path.read_text(encoding="utf-8").splitlines()
+# Read the workflow with the step bodies moved to scripts/review_autofix_step_*.sh
+# inlined again (the retrigger steps moved there in issue #4898).
+sys.path.insert(0, str(path.resolve().parents[2] / "tests"))
+from review_autofix_step_scripts import expand_review_autofix_step_scripts
+
+lines = expand_review_autofix_step_scripts(path.read_text(encoding="utf-8")).splitlines()
 prefixes = ("AUTOFIX_DISPATCH_SKIPPED", "AUTOFIX_DISPATCH_ISSUED")
 seen = {prefix: 0 for prefix in prefixes}
 

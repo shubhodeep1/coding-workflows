@@ -1349,6 +1349,20 @@ jobs:
           # itself, per the early checkout at line 316) instead of the
           # repo we just pushed the bait commit to, leaving Phase 4
           # still vulnerable to no_review_triggered.
+          #
+          # Dispatch ref (issue #4898, finding
+          # review-dispatches-unmerged-workflow): this site IS exposed. The
+          # dispatch runs BRANCH's copy of ${REVIEW_WORKFLOW_FILE} with
+          # TEST_REPO's secrets (secrets: inherit), and BRANCH is
+          # ai/issue-<N> of the smoke issue this job opened. It carries the
+          # E2E implement run's commits and the bait commit above, and any
+          # writer to TEST_REPO (by default this repository) can push to it.
+          # It stays at the branch ref because Phase 4 pins review runs to
+          # head_sha == BAIT_SHA, and only a dispatch at the branch
+          # produces that SHA; a default-branch dispatch carries the
+          # default branch's SHA and would never match. The retrigger in
+          # review_autofix.yml, the sweep, the poller, the merge train, and
+          # the forward-merge fallback all dispatch from the default branch.
           if gh workflow run "${REVIEW_WORKFLOW_FILE}" \
               --repo "${TEST_REPO}" \
               --ref "${BRANCH}" \
@@ -2390,6 +2404,13 @@ jobs:
             fi
             echo "✓ Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work"
           else
+            # Dispatch ref (issue #4898): exposed in the same way as the
+            # Phase 3c Bug B dispatch (BRANCH's copy of the wrapper, with
+            # TEST_REPO's secrets), and kept at the branch for the same
+            # reason: the retry registration lists runs with
+            # branch=${BRANCH} (RETRY_RUNS_QUERY) and adopts ones whose
+            # head_sha is BAIT_SHA or RETRY_DISPATCH_SHA; a default-branch
+            # dispatch appears in neither.
             if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
                 --repo "${TEST_REPO}" \
                 --ref "${BRANCH}" \

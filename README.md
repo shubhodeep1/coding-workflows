@@ -537,7 +537,13 @@ jobs:
 > pr=<n> current_run=<r>` and exits without dispatching. The probe fails open
 > (one `GET /repos/{repo}/actions/runs` call per retrigger, wrapped in
 > `gh_retry`): any API error falls through to the original unconditional
-> dispatch so the cycle is never silently broken. Look for
+> dispatch so the cycle is never silently broken. The retrigger dispatches
+> from the default branch, never the PR head (issue #4898), trying the
+> PR-named wrappers (`internal-review.yml`, `ai-review.yml`) before
+> `review_autofix.yml`. A default-branch run's head is the default branch, so
+> when the branch lookup finds no peer the probe makes one more call and
+> counts queued or running `workflow_dispatch` runs named
+> `Internal: AI Review & Autofix [pr:<N>]` or `AI Review [pr:<N>]`. Look for
 > `AUTOFIX_PEER_CHECK` / `AUTOFIX_DISPATCH_SKIPPED` / `AUTOFIX_DISPATCH_ISSUED`
 > lines when auditing collision behaviour in Actions logs.
 >
