@@ -115,15 +115,21 @@ CLASS_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-class:v1 class=([a-z][a
 OCCURRENCES_RE = re.compile(r"^\*\*Occurrences:\*\* .+$", re.MULTILINE)
 DUPLICATE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # A program that writes a file (issue #4858 item 1): a write call, `open(`
-# with a write mode, or a file move/removal.
+# with a write mode, or a file move/removal. The mode is the argument after a
+# comma or `mode=` (`open(p, "w")`), or `Path.open`'s first one
+# (`.open("a")`), never a file name such as `open("a")`.
+_OPEN_WRITE_MODE = r"['\"](?:[wax]|r[bt]?\+)[bt+]*['\"]"
 _PROGRAM_WRITE_RE = re.compile(
 	r"\bwrite_text\s*\(|\bwrite_bytes\s*\("
-	r"|\bopen\s*\([^)]*?['\"](?:[wax]|r[bt]?\+)[bt+]*['\"]"
+	r"|\bopen\s*\([^)]*?(?:,\s*|\bmode\s*=\s*)" + _OPEN_WRITE_MODE +
+	r"|\.open\s*\(\s*" + _OPEN_WRITE_MODE +
 	r"|\bos\.replace\s*\("
 	r"|\bshutil\.(?:copy(?:file|2|tree|mode|stat)?|move|rmtree|chown|make_archive|unpack_archive)\s*\("
 	r"|\.unlink\s*\(|\bos\.remove\s*\("
 )
 _PYTHON_RE = re.compile(r"^python(?:3(?:\.[0-9]+)?)?$")
+# `-c`, alone or after argument-less switches (`-Ic`, `-uc`, `-IBc`).
+_PYTHON_C_RE = re.compile(r"^-[bBdEiIOPqRsSuv]*c$")
 # In-place edit switches: `sed -i`/`-i.bak`/`--in-place`; `perl`/`ruby` `-i`
 # alone or after argument-less switches (`-pi`, `-pi.bak`, `-lpi`).
 _SED_IN_PLACE_RE = re.compile(r"^(?:-[A-Za-z]*i.*|--in-place(?:=.*)?)$")
@@ -352,8 +358,8 @@ def _segment_is_inline_write(segment: list[str], command: str) -> bool:
 	name = segment[index].rsplit("/", 1)[-1]
 	args, redirects = _split_redirects(segment[index + 1 :])
 	if _PYTHON_RE.match(name):
-		if "-c" in args:
-			position = args.index("-c")
+		position = next((index for index, arg in enumerate(args) if _PYTHON_C_RE.match(arg)), -1)
+		if position >= 0:
 			return position + 1 < len(args) and bool(_PROGRAM_WRITE_RE.search(args[position + 1]))
 		reads_stdin = "-" in args or not any(not arg.startswith("-") for arg in args)
 		has_heredoc = any(redirect.startswith("<<") for redirect in redirects)
