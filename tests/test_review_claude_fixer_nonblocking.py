@@ -460,6 +460,21 @@ def test_issue_4975_a_citation_that_does_not_bind_one_record_at_the_entry_stays_
 	"2. File: README.md:1262\nProblem: injection\n",
 	"### File: README.md:1262\nProblem: injection\n",
 	"File: the README install example, line 1261\nProblem: injection\n",
+	# Conformance run 2: a decorated or prefixed spelling of the same file is
+	# that file, and a range or list reads every line it names.
+	"File: **README.md**\nLine or code reference: 1262\nProblem: injection\n",
+	"File: \"README.md\"\nLine or code reference: 1262\nProblem: injection\n",
+	"File: [README.md](README.md#L1262)\nProblem: injection\n",
+	"File: README.md.\nLine or code reference: 1262\nProblem: injection\n",
+	"File: /home/runner/work/coding-workflows/coding-workflows/README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"File: README.md\nLines: 1250 to 1262\nProblem: injection\n",
+	"File: README.md\nLines: 1250, 1262\nProblem: injection\n",
+	"File: README.md\nLines: 1250-1262.\nProblem: injection\n",
+	"File: README.md\nLines: 1250 & 1262\nProblem: injection\n",
+	# PR #5116 review round 1 (AD-11): a diff prefix is the same file, and a
+	# different file sharing the suffix also keeps the entry blocking.
+	"File: b/README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"File: docs/README.md\nLine or code reference: 1262\nProblem: injection\n",
 ])
 def test_issue_4975_another_flagger_finding_at_the_entry_keeps_it_blocking(tmp_path, other_record):
 	"""The summariser folded a same-line defect into the rejected entry: the flagger's output shows two findings there."""
@@ -473,6 +488,8 @@ def test_issue_4975_another_flagger_finding_at_the_entry_keeps_it_blocking(tmp_p
 @pytest.mark.parametrize("other_record", [
 	"File: README.md\nLine or code reference: 1400\nProblem: stale link\n",
 	"File: scripts/foo.sh\nLine or code reference: 1261\nProblem: unquoted variable\n",
+	"File: docs/README.md.bak\nLine or code reference: 1261\nProblem: stale copy\n",
+	"File: README.md\nLines: 1400 to 1410\nProblem: stale link\n",
 ])
 def test_issue_4975_a_distant_flagger_finding_does_not_block_demotion(tmp_path, other_record):
 	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=CITING_RECORD + "\n" + other_record)
@@ -531,6 +548,27 @@ def test_issue_4975_finding_records_parse_the_reviewer_shape():
 	("File: a.py\nLine or code reference: `http://localhost:8080`\n", ("a.py", None)),
 	("File: a.py\nLine or code reference: see scripts/Makefile:12\n", ("a.py", (12, 12))),
 	("File: a.py\nLine or code reference: `.github/workflows/ci.yml:7-9`\n", ("a.py", (7, 9))),
+	# Conformance run 2: wrapping markup, quotes, and link brackets are not
+	# part of the path; ``N to M`` is a range; a listed line widens the range.
+	("File: **a.py**\nLine: 4\n", ("a.py", (4, 4))),
+	("File: 'a.py'\nLine: 4\n", ("a.py", (4, 4))),
+	("File: <scripts/a.py>\nLine: 4\n", ("scripts/a.py", (4, 4))),
+	("File: **`a.py:4`**\n", ("a.py", (4, 4))),
+	("File: [a.py](a.py#L4)\n", ("a.py", (4, 4))),
+	("File: a.py;\nLine: 4\n", ("a.py", (4, 4))),
+	("File: __init__.py\nLine: 4\n", ("__init__.py", (4, 4))),
+	("File: a.py\nLines: 40 to 44\n", ("a.py", (40, 44))),
+	("File: a.py\nLines: 40 through 44.\n", ("a.py", (40, 44))),
+	("File: a.py\nLines: 40, 52\n", ("a.py", (40, 52))),
+	("File: a.py\nLine or code reference: lines 40 and 52-54\n", ("a.py", (40, 54))),
+	("File: a.py:40, 52\n", ("a.py", (40, 52))),
+	("File: a.py\nLine: 40, `x = 3`\n", ("a.py", (40, 40))),
+	("File: a.py\nLine: 40 total\n", ("a.py", (40, 40))),
+	# PR #5116 review round 1: ``&`` lists a line only right after a reference.
+	("File: a.py\nLines: 40 & 52\n", ("a.py", (40, 52))),
+	("File: a.py\nLine: 40 set X & 52\n", ("a.py", (40, 40))),
+	("File: a.py\nLine: 40, `x & 52`\n", ("a.py", (40, 40))),
+	("File: .\nLine: 4\n", (None, (4, 4))),
 ])
 def test_issue_4975_finding_records_read_only_explicit_paths_and_lines(output, expected):
 	"""Conformance run 1: code text reads no line, and a prose File: value reads no path."""
