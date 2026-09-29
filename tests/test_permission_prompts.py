@@ -630,6 +630,23 @@ def test_file_is_not_suppressed_by_another_sessions_report(tmp_path, github):
 	assert code == 0 and summary["commented"] == [] and summary["filed"] == [] and len(fake.posts) == 2
 
 
+def test_file_is_not_suppressed_by_another_sessions_earlier_occurrence(tmp_path, github):
+	# Issue #5125: sess-2's occurrence is already in the shared log when sess-1 reports; the
+	# report marks only sess-1's occurrences as filed, so `file` still files sess-2's.
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	logger.append_record(logger.build_record(_payload("ls", session_id="sess-2"), NOW), log_file.parent)
+	sig = pp.group_patterns(pp.load_records(log_file.parent))[0]["signature"]
+	fake = github(issues=[{"number": 42, "state": "open", "body": f"x\n<!-- ai:permission-prompt:v1 sig={sig} -->"}])
+	assert _report(log_file) == "reported: issue #42"
+	assert pp._load_state(log_file.parent)[sig] == 1
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and summary["already_reported"] == []
+	assert summary["commented"] == [{"signature": sig, "issue": 42, "occurrences": 1}]
+	assert len(fake.posts) == 2
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and summary["commented"] == [] and summary["filed"] == [] and len(fake.posts) == 2
+
+
 def test_file_ignores_reports_without_a_repository_or_logged_session(tmp_path, github):
 	# Issue #5125: entries written before `repo` / `log_session` existed never suppress filing.
 	github()

@@ -71,9 +71,11 @@ make `report-now` post it again; no reservation, no POST. A failed POST, or
 no target, removes the reservation. A reservation still `pending` counts
 toward the cap but not as reported for `file`, so after any failure `file`
 still files the pattern at the end of the stage. A successful POST records
-its target, and `filed-state.json` as `file` would record it. The entry also
-records the repository (`repo`) and the logged session (`log_session`) the
-report is for, which `file` checks before it skips anything.
+its target, and, in the filing repository, `filed-state.json` counts the
+reporting session's occurrences as filed, never another session's already in
+the shared log (issue #5125). The entry also records the repository (`repo`)
+and the logged session (`log_session`) the report is for, which `file` checks
+before it skips anything.
 
 `lookup` is read-only and serves the operator's poller: it finds the newest
 session marker for a session and prints the sanitized command and the issue
@@ -888,7 +890,9 @@ def _report_now(log_file: Path, cwd: str | None, session_label: str, now: dateti
 		_save_immediate_state(log_dir, immediate)
 		if filing_repo:
 			state = _load_state(log_dir)
-			state[sig] = max(state.get(sig, 0), pattern["count"])
+			# Only this logged session's occurrences are covered: another session's, already in the
+			# shared log, stay unfiled so `file` still files them (issue #5125).
+			state[sig] = max(state.get(sig, 0), pattern["sessions"].get(entry["log_session"], 0))
 			_save_state(log_dir, state)
 		return f"reported: {target}"
 
