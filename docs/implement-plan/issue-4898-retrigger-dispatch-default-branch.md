@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4701-review-dispatch-default-branch
 - Project branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch   Final PR: #4923 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: none
+- Waiting on: conformance fix PR (branch claude/implement-plan-issue-4898-retrigger-dispatch-default-branch-conformance-fix-1)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01GWp9PnRZTCBZkQhCbRnyNw (project checker, reused)
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified locally; phase PR opened
+- Last note: conformance run 1 INCOMPLETE (1 EVIDENCE-BASED BLOCKER, 2 CONCERNs); fix PR opened against the project branch
 
 ## Phases
-1. [ ] Phase 1 — default-branch retrigger dispatch plus PR-named probes
+1. [x] Phase 1 — default-branch retrigger dispatch plus PR-named probes   — PR #4982 merged 2026-09-29
    - [x] both retrigger step bodies dispatch without `--ref`, with a validated PR number, wrappers first and `review_autofix.yml` last (AD-2, AD-3)
    - [x] `_autofix_pr_named_review_runs` helper (AD-5); `autofix_retrigger_has_inflight_peer` sees PR-named in-flight runs (fail open)
    - [x] `autofix_changes_lost_head_retry_consumed` counts PR-named completed runs since the head's push-time bound (fail closed, AD-4)
@@ -23,6 +23,7 @@
    - [x] tests, `README.md`, `agents.md`, `docs/INVENTORY.md`, `changelog.d/4898-retrigger-dispatch-default-branch.md`
 
 ## Conformance
+- Run 1 — 2026-09-29: INCOMPLETE (Step 4 FAIL) — fix PR from `claude/implement-plan-issue-4898-retrigger-dispatch-default-branch-conformance-fix-1` (pre-security). BLOCKER: the changes-lost budget could not see a retry dispatched under a name the PR-named match misses (renamed caller, `review_autofix.yml`, or a pre-#4701 `ai-review.yml`), so with the head's pull_request twin cancelled the retry looped without bound (fixed per AD-9). CONCERNs: stale `$1 pr_number` / dispatch comments in `scripts/gh_helpers.sh`; changelog size row no longer true after the base grew `review_autofix.yml` (fixed).
 
 ## Security pass
 
@@ -41,12 +42,15 @@
 - AD-6 [plan, 2026-09-29] What happens to the E2E dispatches in `test-and-mark-stable.yml`? — Picked: A — keep `--ref "${BRANCH}"` and document the exposure. Alternatives: B — dispatch from the default branch and re-key Phase 4 / 4b on PR-named runs. Why: the issue asks for a comment; B rewrites the E2E run matching. Applied in: phase 1 PR. Status: pending review
 - AD-7 [plan, 2026-09-29] Does the dispatch still pass `allow_workflow_edits`? — Picked: A — yes, normalised to `true` / `false`. Alternatives: B — pass only `pr_number`. Why: it is the run's own input, not PR data; dropping it changes consumer behaviour. Applied in: phase 1 PR. Status: pending review
 - AD-8 [plan, 2026-09-29] How does `review_autofix.yml` stay under §27 as the bodies grow? — Picked: A — move both retrigger step bodies whole into `scripts/review_autofix_step_<slug>.sh`. Alternatives: B — keep them inline; C — move only the shared dispatch chain. Why: the issue asks for the move; the registry keeps contract tests reading the same text. Applied in: phase 1 PR. Status: pending review
+- AD-9 [conformance 1/3, 2026-09-29] How does the changes-lost budget stay bounded when a retry runs under a name the PR-named match cannot see (a renamed caller, `review_autofix.yml`, or an `ai-review.yml` that predates the `[pr:<N>]` run name)? — Picked: A — fail closed when the current run is a `workflow_dispatch` run not among the PR-named runs (`reason=unnamed_dispatch_run`), reading the PR-named page without a status filter (same one call). Alternatives: B — restrict the changes-lost re-dispatch to the PR-named wrappers (a pre-#4701 `ai-review.yml` still loops, and the two chains stop being identical); C — leave it until consumer wrappers sync. Why: the only option that bounds every fallback path without an extra API call; an unnamed run loses one automated retry and falls back to today's terminal comment. Applied in: conformance fix PR. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] Moving a dispatch off the head ref also blinds any head-SHA loop bound keyed on that dispatch's runs; extend the bound (here, PR-named runs since the push) in the same change, or the retry loop loses its limit. (files: scripts/gh_helpers.sh, scripts/review_autofix_step_changes_lost_redispatch.sh)
 - [source:plan-deviation] `tests/test_log_prefix_regressions.sh` pins the exact `AUTOFIX_PEER_CHECK` line, so a new field on a pinned log line is a breaking change; keep the line and surface new detail elsewhere. (files: scripts/gh_helpers.sh, tests/test_log_prefix_regressions.sh)
+- [source:conformance] A loop bound that recognises its own retry by run name must fail closed when the current run carries no such name: a retry dispatched under a fallback name is invisible to the next run, and the bound silently disappears. (files: scripts/gh_helpers.sh, scripts/review_autofix_step_changes_lost_redispatch.sh)
 
 ## Notes
+- Conformance 1/3 (2026-09-29): project branch synced with the issue base (`claude/implement-plan-issue-4701-review-dispatch-default-branch`, not merged; final PR #4709 open into `main`) as merge `eb1fb86`; zombie checkers archived: 0.
 - Issue mode: plan written by /implement-issue-claude for #4898; start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
 - Security pass: `security_pass_skip.py` returned `skip: false` (`no skip label`), so the pass runs.
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4898#issuecomment-5882065747 (id 5882065747).
