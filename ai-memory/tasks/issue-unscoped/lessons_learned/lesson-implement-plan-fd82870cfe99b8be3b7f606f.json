@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:07:43Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a fix hardens one copy of a pattern that several workflow steps duplicate (per-step `capture_run_id`), check every sibling copy, and re-read a heal issue's occurrence comments before closing the scope: a later occurrence can fail on a sibling the plan left out",
+  "phase": "implement_plan",
+  "pr_number": 5035,
+  "record_id": "lesson-implement-plan-fd82870cfe99b8be3b7f606f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4723-require-plan-run-id",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:07:43Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a lookup starts filtering on an input (`display_title == $ISSUE_TITLE`), guard that input the way sibling steps do: an empty filter value can match a run instead of failing",
+  "phase": "implement_plan",
+  "pr_number": 5035,
+  "record_id": "lesson-implement-plan-9958c16135f9b6605bc513be",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4723-require-plan-run-id",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

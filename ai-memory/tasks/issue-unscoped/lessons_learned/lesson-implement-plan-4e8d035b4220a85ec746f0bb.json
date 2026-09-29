@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:07:43Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A run-ID lookup over the repo-wide `actions/runs` list must scope by `display_title` as well as by workflow name, or a parallel job's newer run of the same workflow is taken as ours",
+  "phase": "implement_plan",
+  "pr_number": 5035,
+  "record_id": "lesson-implement-plan-4e8d035b4220a85ec746f0bb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4723-require-plan-run-id",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}
