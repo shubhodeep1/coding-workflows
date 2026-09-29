@@ -861,18 +861,33 @@ def _reported_body(tmp_path, github):
 	return fake.posts[0][1]["body"]
 
 
-def test_lookup_finds_the_report_in_an_issue_body(tmp_path, github):
+# The lookup tests read the workflow-templates twin: under the interim twin-first
+# rule (CLAUDE.md §28.C) a lookup fix lands there before the [claude-twin-sync]
+# copy into .claude/, and test_template_parity keeps the two copies equal after it.
+pp_twin = _load("permission_prompts_twin", TEMPLATE_SCRIPT_PATH)
+
+
+@pytest.fixture
+def twin(monkeypatch):
+	"""The twin module, sharing `pp.check_in_status` so the `github` fixture's fakes and ReadError apply to it."""
+	monkeypatch.setattr(pp_twin, "check_in_status", pp.check_in_status)
+	return pp_twin
+
+
+def test_lookup_finds_the_report_in_an_issue_body(tmp_path, github, twin):
 	body = _reported_body(tmp_path, github)
 	fake = github(search={"items": [{"number": 901, "html_url": "https://github.com/x/y/issues/901", "author_association": "OWNER", "body": body}]})
-	result = pp.lookup(SESSION, FILING)
+	result = twin.lookup(SESSION, FILING)
 	assert result["found"] is True and result["issue_url"] == "https://github.com/x/y/issues/901"
 	assert result["command"] == "gh api repos/o/r/issues --jq '.[]'"
 	assert result["title"] == "implement-issue-claude — #4707"
 	assert result["event"] == "PermissionRequest" and result["tool_name"] == "Bash"
 	assert len(fake.reads) == 1 and "search/issues?q=repo%3Ashubhodeep1%2Fcoding-workflows%20%22" in fake.reads[0]
+	# Issue #5126: the search is read 100 hits per page, not a 3-hit window.
+	assert fake.reads[0].endswith("&sort=updated&order=desc&per_page=100&page=1")
 
 
-def test_lookup_finds_the_newest_trusted_comment(tmp_path, github):
+def test_lookup_finds_the_newest_trusted_comment(tmp_path, github, twin):
 	body = _reported_body(tmp_path, github)
 	comments = {
 		42: [
@@ -881,12 +896,12 @@ def test_lookup_finds_the_newest_trusted_comment(tmp_path, github):
 		]
 	}
 	fake = github(search={"items": [{"number": 42, "html_url": "i42", "author_association": "NONE", "body": body}]}, comments=comments)
-	result = pp.lookup(SESSION, FILING)
+	result = twin.lookup(SESSION, FILING)
 	assert result["found"] is True and result["comment_url"] == "c1" and "--forged" not in result["command"]
 	assert len(fake.reads) == 2
 
 
-def test_lookup_falls_back_to_the_pattern_issues_when_search_is_refused(tmp_path, github):
+def test_lookup_falls_back_to_the_pattern_issues_when_search_is_refused(tmp_path, github, twin):
 	# Claude Code Web's agent proxy answers search/issues with HTTP 403, and the poller runs there.
 	body = _reported_body(tmp_path, github)
 	issues = [
@@ -894,7 +909,7 @@ def test_lookup_falls_back_to_the_pattern_issues_when_search_is_refused(tmp_path
 		{"number": 901, "html_url": "i901", "author_association": "OWNER", "body": body},
 	]
 	fake = github(fail_search=True, issues=issues)
-	result = pp.lookup(SESSION, FILING)
+	result = twin.lookup(SESSION, FILING)
 	assert result["found"] is True and result["issue_url"] == "i901" and result["comment_url"] == ""
 	assert result["command"] == "gh api repos/o/r/issues --jq '.[]'"
 	assert fake.reads[0].startswith("search/issues?")
@@ -903,25 +918,70 @@ def test_lookup_falls_back_to_the_pattern_issues_when_search_is_refused(tmp_path
 	assert fake.reads[2:] == [f"repos/{FILING}/issues/7/comments"]
 
 
-def test_lookup_fallback_checks_comments_and_caps_the_hits(tmp_path, github):
+def test_lookup_fallback_finds_a_report_past_the_three_newest_issues(tmp_path, github, twin):
+	# Issue #5126: activity on three other pattern issues pushed the report's issue
+	# out of a 3-issue window, and lookup answered `found: false`.
 	body = _reported_body(tmp_path, github)
-	issues = [{"number": n, "html_url": f"i{n}", "author_association": "OWNER", "body": "other"} for n in (1, 2, 3, 4)]
+	issues = [{"number": n, "html_url": f"i{n}", "author_association": "OWNER", "body": "other", "comments": 1} for n in (1, 2, 3, 4)]
+	other = [{"html_url": "c", "author_association": "OWNER", "body": "another session"}]
+	comments = {1: other, 2: other, 3: other, 4: [{"html_url": "c4", "author_association": "OWNER", "body": body}]}
+	fake = github(fail_search=True, issues=issues, comments=comments)
+	result = twin.lookup(SESSION, FILING)
+	assert result["found"] is True and result["issue_url"] == "i4" and result["comment_url"] == "c4"
+	assert fake.reads[2:] == [f"repos/{FILING}/issues/{n}/comments" for n in (1, 2, 3, 4)]
+
+
+def test_lookup_fallback_checks_every_pattern_issue_before_not_found(tmp_path, github, twin):
+	body = _reported_body(tmp_path, github)
+	# 150 labelled issues: more than one page, none holding this session's report.
+	issues = [{"number": n, "html_url": f"i{n}", "author_association": "OWNER", "body": body.replace(SESSION, "session_01OTHER"), "comments": 1} for n in range(1, 151)]
+	fake = github(fail_search=True, issues=issues)
+	assert twin.lookup(SESSION, FILING) == {"found": False, "session": SESSION}
+	assert fake.reads[2:] == [f"repos/{FILING}/issues/{n}/comments" for n in range(1, 151)]
+
+
+def test_lookup_skips_the_comments_read_only_for_a_zero_count(tmp_path, github, twin):
+	body = _reported_body(tmp_path, github)
+	issues = [
+		{"number": 1, "html_url": "i1", "author_association": "OWNER", "body": "other", "comments": 0},
+		{"number": 2, "html_url": "i2", "author_association": "OWNER", "body": "other", "comments": False},
+		{"number": 3, "html_url": "i3", "author_association": "OWNER", "body": "other"},
+		{"number": 4, "html_url": "i4", "author_association": "OWNER", "body": "other", "comments": 2},
+	]
 	fake = github(fail_search=True, issues=issues, comments={4: [{"html_url": "c4", "author_association": "OWNER", "body": body}]})
-	# Issue 4 is past LOOKUP_MAX_HITS, so its report is not read.
-	assert pp.lookup(SESSION, FILING) == {"found": False, "session": SESSION}
-	assert len(fake.reads) == 2 + pp.LOOKUP_MAX_HITS
-	fake = github(fail_search=True, issues=issues[:1], comments={1: [{"html_url": "c1", "author_association": "OWNER", "body": body}]})
-	result = pp.lookup(SESSION, FILING)
-	assert result["found"] is True and result["issue_url"] == "i1" and result["comment_url"] == "c1"
+	result = twin.lookup(SESSION, FILING)
+	assert result["found"] is True and result["comment_url"] == "c4"
+	# Issue 1 says it has no comments; a missing or non-integer count is read anyway.
+	assert fake.reads[2:] == [f"repos/{FILING}/issues/{n}/comments" for n in (2, 3, 4)]
 
 
-def test_lookup_not_found_and_read_failure(tmp_path, github, capsys):
+def test_lookup_checks_every_search_hit(tmp_path, github, twin):
+	body = _reported_body(tmp_path, github)
+	hits = [{"number": n, "html_url": f"i{n}", "author_association": "OWNER", "body": "mentions the session", "comments": 1} for n in (11, 12, 13, 14, 15)]
+	fake = github(search={"total_count": 5, "incomplete_results": False, "items": hits}, comments={15: [{"html_url": "c15", "author_association": "OWNER", "body": body}]})
+	result = twin.lookup(SESSION, FILING)
+	assert result["found"] is True and result["issue_url"] == "i15" and result["comment_url"] == "c15"
+	assert len(fake.reads) == 1 + 5
+
+
+def test_lookup_incomplete_search_is_a_failed_read_not_a_negative(tmp_path, github, twin, capsys):
+	body = _reported_body(tmp_path, github)
+	hits = [{"number": 11, "html_url": "i11", "author_association": "OWNER", "body": "mentions the session", "comments": 0}]
+	github(search={"total_count": 1, "incomplete_results": True, "items": hits}, comments={11: [{"html_url": "c11", "author_association": "OWNER", "body": body}]})
+	with pytest.raises(pp.check_in_status.ReadError, match="incomplete results"):
+		twin.lookup(SESSION, FILING)
+	assert twin.main(["lookup", "--session", SESSION, "--repo", FILING]) == 2
+	output = json.loads(capsys.readouterr().out)
+	assert output["found"] is False and "incomplete results" in output["error"]
+
+
+def test_lookup_not_found_and_read_failure(tmp_path, github, twin, capsys):
 	github()
-	assert pp.lookup(SESSION, FILING) == {"found": False, "session": SESSION}
+	assert twin.lookup(SESSION, FILING) == {"found": False, "session": SESSION}
 	github(fail_read=True)
-	assert pp.main(["lookup", "--session", "cse_01Pqd1mbhdV8mCxriki9onge", "--repo", FILING]) == 2
+	assert twin.main(["lookup", "--session", "cse_01Pqd1mbhdV8mCxriki9onge", "--repo", FILING]) == 2
 	assert json.loads(capsys.readouterr().out)["error"] == "proxy 403"
-	assert pp.main(["lookup", "--session", "bad id", "--repo", FILING]) == 1
+	assert twin.main(["lookup", "--session", "bad id", "--repo", FILING]) == 1
 
 
 # ──────────────────────────────────────────────────────────────────
