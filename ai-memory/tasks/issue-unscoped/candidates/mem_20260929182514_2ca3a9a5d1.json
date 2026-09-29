@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:514-525 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_migrate_legacy_counts` iterates `keyed_records` in file-name/load order instead of timestamp-based logging order, which can mark never-filed denials as already filed.\n  WHY: A newer session log that sorts before an older log can have its real denials suppressed during migration; severity was reported as BLOCKER by two reviewers and MAJOR by one, so the highest severity is used.\n- .claude/scripts/permission_prompts.py:29-42 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The module docstring says \"load order\" without clarifying that migration should use logging order, unlike the workflow-templates twin.\n  WHY: The ambiguous documentation does not describe the intended timestamp-based ordering.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Plan Phase 1 \"Done\" criterion \u2014 \"the twins are byte-identical, and the full `tests/test_permission_prompts.py` suite passes\" (`docs/completed/issue-5012-legacy-outage-filed-counts-plan.md`, Phases & Merge Strategy).\n  expected_change_site: `.claude/scripts/permission_prompts.py`\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The two copies diverge in `_migrate_legacy_counts` (file-name iteration vs `ts`-sorted iteration), the module docstring (\"load order\" vs \"logging order\"), and the classifier-outage paragraph; the progress log documents the PR is BLOCKED waiting for the twin sync, and `test_template_parity` would fail on the current head.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/permission_prompts.py | severity=BLOCKER | confidence=5\n  PROBLEM: The implementation of _migrate_legacy_counts in the .claude/ copy iterates through keyed_records in load order (file-name order) rather than using the timestamp-based sorting used in its workflow-templates/.claude/ counterpart.\n  WHY: Because the migration logic is non-deterministic and depends on filesystem glob order, records that were never counted can be incorrectly marked as already filed. This suppresses real security-permission denials until the stale count is exceeded, violating the plan's requirement for an exact migration and reintroducing the #5012 defect class.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/scripts/permission_prompts.py:514-525 | severity=BLOCKER | confidence=5\n  PROBLEM: The `.claude/` copy iterates `keyed_records` in file-name order (from `load_keyed_records`), while the `workflow-templates/.claude/scripts/permission_prompts.py` twin sorts by record `ts` (logging order).\n  WHY: A session log created after the last legacy filing whose name sorts before an older log can have its never-filed real denials marked as filed during migration, suppressing them. This is the #5012 defect class the PR fixes in the twin but has not yet synced to `.claude/`.\n- .claude/scripts/permission_prompts.py:29-42 | severity=NIT | confidence=4\n  PROBLEM: The docstring says \"load order\" (ambiguous), while the twin explicitly says \"logging order (each record's `ts`, ties in load order)\" and explains why file-name order is unsafe.\n  WHY: Documentation divergence between the two copies; the `.claude/` docstring does not accurately describe the intended behavior after the fix.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/permission_prompts.py | severity=MAJOR | confidence=5\n  PROBLEM: The `.claude/` copy iterates `keyed_records` in file-name sort order (the order `load_keyed_records` returns), while the `workflow-templates/.claude/scripts/permission_prompts.py` twin sorts by record `ts` (`sorted(keyed_records, key=lambda keyed_record: str(keyed_record[1].get(\"ts\") or \"\"))`). This is the exact defect identified and fixed in review round 1: a session log created after the last legacy filing whose file name sorts before an older log can have its never-filed real denials marked as filed during migration, suppressing them \u2014 the #5012 defect class. The twin, `agents.md`, the changelog fragment, the plan's Risks section, and the regression test `test_legacy_migration_takes_its_prefix_in_logging_order_not_file_name_order` all describe or verify the logging-order fix, but the `.claude/` copy (the one that runs in this repo's Claude sessions) has not been synced. The module docstrings also diverge: the `.claude/` copy says \"in load order\" while the twin says \"in logging order (each record's `ts`, ties in load order)\" with an explicit warning about file-name order.\n  WHY: When `filed-state.json` carries a legacy `{signature: count}` entry and a newer session log's file name sorts before an older one, the migration marks the newer log's real denials as already filed, so `file_patterns` skips them \u2014 the exact suppression issue #5012 is supposed to prevent.\n- TASK_GAP\n  Requirement: Plan Phase 1 \"Done\" criterion \u2014 \"the twins are byte-identical, and the full `tests/test_permission_prompts.py` suite passes\" (`docs/completed/issue-5012-legacy-outage-filed-counts-plan.md`, Phases & Merge Strategy).\n  Expected change site: `.claude/scripts/permission_prompts.py` \u2014 should be byte-identical to `workflow-templates/.claude/scripts/permission_prompts.py` after the `[claude-twin-sync]` commit.\n  Evidence of absence: The two copies diverge in `_migrate_legacy_counts` (file-name iteration vs `ts`-sorted iteration), the module docstring (\"load order\" vs \"logging order\"), and the classifier-outage paragraph. The progress log documents the PR is BLOCKED waiting for the twin sync, and `test_template_parity` would fail on the current head.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4f2d827f7d1f8d8c51410c515dc4c288d4888257722adb792eb3b68411723d66",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5028,
+    "run_id": "36606779360",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36606779360",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929182514_2ca3a9a5d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5028,
+    "run_id": "36606779360"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T18:25:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
