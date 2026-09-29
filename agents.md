@@ -1068,7 +1068,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   (CLAUDE.md §23.H, a `PreToolUse` hook on `Bash`) forces the prompt for
   every `gh api` write that is not a §23.B routine write to the local
   repository (routine includes dispatching the six workflows allowed as
-  `gh workflow run <file> *`, kept equal by a test), allows reads and
+  `gh workflow run <file> *`, kept equal by a test) and for every call with
+  a file-backed `-F`/`--field` value (`@<file>` or `@-`) or `--input` on any
+  method, endpoint, or repository, GraphQL included, because `gh` reads that
+  file and sends it (issue #4619; `-f` values are literal, so post bodies
+  through the GitHub MCP tools or an inline `-f body=...`), allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
   to the allow list or the Auto-mode classifier beside anything else (loops,

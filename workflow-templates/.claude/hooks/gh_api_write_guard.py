@@ -18,7 +18,8 @@ command it works out the effective HTTP method the way `gh` does (`-X` /
 otherwise) and classifies the call:
 
   read     — GET / HEAD to any REST endpoint, or a GraphQL query that is not a
-             mutation. Never prompted by this hook.
+             mutation, with no file-backed field and no `--input`. Never
+             prompted by this hook.
   routine  — a CLAUDE.md §23.B write to the repository of the local checkout
              (or the `{owner}/{repo}` placeholders): create a PR, edit a PR's
              or issue's title/body, add or edit an issue/PR comment, reply to a
@@ -28,7 +29,12 @@ otherwise) and classifies the call:
              Each endpoint carries a field allowlist, so a `state` change
              (closing a PR or issue) is not routine. Never prompted by this
              hook.
-  write    — everything else, and any call the guard cannot read (unknown flag,
+  write    — everything else, including every call with a file-backed
+             `-F`/`--field` value (`@<file>`, or `@-` for stdin: `gh` reads
+             it and sends its contents) or with `--input`, whatever the
+             method, endpoint, or repository (issue #4619; `-f`/`--raw-field`
+             values are sent literally and read no file), and any call the
+             guard cannot read (unknown flag,
              missing or extra endpoint, a method-override header, or `gh api`
              that could run hidden: inside a backtick or double-quoted `$(...)`
              substitution Bash would run (single-quoted text is data), handed
@@ -731,6 +737,16 @@ def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 	for header in parsed["headers"]:
 		if not _SAFE_HEADER_RE.match(header):
 			return KIND_WRITE, f"{description} with header `{header.split(':', 1)[0].strip()}`"
+	# A file-backed `-F`/`--field` value (`@<file>`, or `@-` for stdin) and
+	# `--input` make `gh` read local data and send it, on every method and
+	# endpoint, GraphQL included (issue #4619). Checked before the GraphQL and
+	# read-method branches so a GET or a GraphQL variable cannot carry a file.
+	# `-f`/`--raw-field` values are sent literally, so `@` there reads nothing.
+	for field_role, field_key, field_value in parsed["fields"]:
+		if field_role == "field" and field_value.startswith("@"):
+			return KIND_WRITE, f"{description} with file-backed field `-F {field_key}=@...` (gh reads a local file)"
+	if parsed["input"] is not None:
+		return KIND_WRITE, f"{description} with --input"
 	path = endpoint.lstrip("/")
 	if path.split("?", 1)[0] == "graphql":
 		query_values = [value for _role, key, value in parsed["fields"] if key == "query"]
@@ -745,8 +761,6 @@ def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 		return KIND_WRITE, f"GraphQL call {endpoint} (mutation, file, or expanded query)"
 	if method in _READ_METHODS:
 		return KIND_READ, description
-	if parsed["input"] is not None:
-		return KIND_WRITE, f"{description} with --input"
 	if re.search(r"[?#$`\s]|\.\.", path):
 		return KIND_WRITE, description
 	match = re.match(r"^repos/([^/]+)/([^/]+)/(.+)$", path)
