@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T22:18:24Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A \"required input is missing\" gate must test for an empty parsed input, not only an absent key: a comments-only file parses to an empty list and otherwise passes the gate with zero checks run.",
+  "phase": "implement_plan",
+  "pr_number": 5187,
+  "record_id": "lesson-implement-plan-7a2f6a43a50d4f2e8ad44206",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5174-guard-differential-check",
+    "file:scripts/guard_differential.py"
+  ]
+}

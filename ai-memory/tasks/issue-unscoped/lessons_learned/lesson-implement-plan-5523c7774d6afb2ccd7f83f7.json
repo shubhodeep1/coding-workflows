@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T22:18:24Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A coverage gate (\"every X needs a test corpus\") must apply to new X too, not only to X that existed before: an exemption for new items lets a loosening move into a new file and skip the check. In working-tree mode, `git diff <base>` omits untracked files, so add `git ls-files --others --exclude-standard` when the detector feeds a gate.",
+  "phase": "implement_plan",
+  "pr_number": 5187,
+  "record_id": "lesson-implement-plan-5523c7774d6afb2ccd7f83f7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5174-guard-differential-check",
+    "file:scripts/guard_differential.py"
+  ]
+}

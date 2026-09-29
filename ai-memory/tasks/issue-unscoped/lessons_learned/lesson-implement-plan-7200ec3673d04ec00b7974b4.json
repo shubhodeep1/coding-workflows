@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T22:18:24Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a test harness filters the caller's environment to isolate a subprocess, apply the same filter to every other source merged into that environment (scenario or fixture overrides). Otherwise a later override can undo the isolation.",
+  "phase": "implement_plan",
+  "pr_number": 5187,
+  "record_id": "lesson-implement-plan-7200ec3673d04ec00b7974b4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5174-guard-differential-check",
+    "file:scripts/guard_differential.py"
+  ]
+}
