@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:_pnr_window_min=\"${REVIEW_RUN_MAX_RUNTIME_MINUTES:-250}\" | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The fallback value for `_pnr_window_min` is not validated, so an invalid `REVIEW_RUN_MAX_RUNTIME_MINUTES` can produce an invalid time window and hide active runs.\n  WHY: Gemini rates this MAJOR; Minimax identifies the same unvalidated environment-variable fallback.\n- tests/test_orchestrate_poll_process.py:assert low - 0.1 <= 370 <= high + 0.1 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The assertion's \u00b10.1-minute tolerance may be too narrow and cause the test to flake under heavy load.\n  WHY: The reviewer says elapsed time between the start timestamp and command execution can exceed six seconds.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:_pnr_window_min=\"${REVIEW_RUN_MAX_RUNTIME_MINUTES:-250}\" | severity=high | confidence=[4]\n  PROBLEM: The fallback value for `_pnr_window_min` is not validated.\n  WHY: If `REVIEW_RUN_MAX_RUNTIME_MINUTES` is set to 0, negative, or non-numeric, the lookback calculation will result in an invalid time window, causing `_pr_named_review_dispatch_runs` to return no results even when active runs exist, leading to incorrect fallback behavior in the orchestrator.\n- tests/test_orchestrate_poll_process.py:assert low - 0.1 <= 370 <= high + 0.1 | severity=low | confidence=[4]\n  PROBLEM: Assertion tolerance of \u00b10.1 minutes (6 seconds) for timestamp calculation.\n  WHY: Under heavy load, the time between `started = time.time()` and the execution of the command under test can easily exceed 6 seconds, causing the test to flake.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh\n  Location: _pr_named_review_dispatch_runs at the fallback line (after the regex check on $2)\n  Issue: The new optional `$2` argument is validated against `^[1-9][0-9]*$`, but the env-var fallback `${REVIEW_RUN_MAX_RUNTIME_MINUTES:-250}` is substituted verbatim without the same regex. If `REVIEW_RUN_MAX_RUNTIME_MINUTES` is misconfigured (e.g. exported as `0`, `abc`, or `1.5`), the helper uses that invalid value as the lookback, which then flows into `date -d \"... -<val> minutes\"` and produces an unparseable cutoff.\n  Suggested minimal fix: re-validate the env value with the same regex and only then fall back to the hard default.\n  HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "94e3e7485e71706caa00d5ab5131badb0b6c20531dc5906631cdf8367d7aa1f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5098,
+    "run_id": "36545545953",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36545545953",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929091510_eb3e2ecd56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5098,
+    "run_id": "36545545953"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T09:15:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
