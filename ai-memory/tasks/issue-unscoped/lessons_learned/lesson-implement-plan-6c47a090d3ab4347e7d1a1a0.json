@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T16:53:29Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Add a new rules paragraph to reflowed prose at the end of a complete thought, never between the two clauses of an existing sentence: splitting a `; \u2026` join into two sentences leaves the second clause reading as part of the new paragraph.",
+  "phase": "implement_plan",
+  "pr_number": 5009,
+  "record_id": "lesson-implement-plan-6c47a090d3ab4347e7d1a1a0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4886-numbered-session-titles",
+    "file:agents.md"
+  ]
+}

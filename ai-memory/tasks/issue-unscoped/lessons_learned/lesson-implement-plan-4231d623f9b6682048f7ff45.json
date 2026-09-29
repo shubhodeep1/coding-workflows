@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T16:53:29Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A link from one command file to another is a sibling link (`implement-plan-claude.md#anchor`): links resolve against the file's own directory, so `.claude/commands/<name>.md#\u2026` points nowhere from `.claude/commands/` or its `workflow-templates/.claude/commands/` twin.",
+  "phase": "implement_plan",
+  "pr_number": 5009,
+  "record_id": "lesson-implement-plan-4231d623f9b6682048f7ff45",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4886-numbered-session-titles",
+    "file:.claude/commands/implement-issue-claude.md",
+    "file:workflow-templates/.claude/commands/implement-issue-claude.md"
+  ]
+}

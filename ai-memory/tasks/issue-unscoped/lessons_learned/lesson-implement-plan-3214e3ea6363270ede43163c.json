@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T16:53:29Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A zero-finding Claude-fixer review can also hand off when the post-review check snapshot counts 0 check runs (total_check_runs: 0 fails the at-least-one-check rule), not only when checks are still running; with no verdict bot, a new head is the way to a fresh round.",
+  "phase": "implement_plan",
+  "pr_number": 5009,
+  "record_id": "lesson-implement-plan-3214e3ea6363270ede43163c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4886-numbered-session-titles",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh",
+    "file:scripts/collect_pr_check_runs_context.py"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T16:53:29Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A project that changes session titles must move every title check to its matcher rule, including checks that another project lands on the base while it is in flight: a base merge can bring an exact-title check (#4797's checker archive check) that never matches the new titles.",
+  "phase": "implement_plan",
+  "pr_number": 5009,
+  "record_id": "lesson-implement-plan-b12d9efa52926f393e7da3c5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4886-numbered-session-titles",
+    "file:.claude/commands/implement-plan-claude.md",
+    "file:tests/test_check_in_session_targeting.py"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T16:53:29Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When one qualifier applies to every item of an `A or B` list in a spec, state it once for all of them (\"either title with \u2026\") rather than as a parenthetical after the last item, and pin every item in the test; reviewers and readers attach a trailing parenthetical to the last item only.",
+  "phase": "implement_plan",
+  "pr_number": 5009,
+  "record_id": "lesson-implement-plan-53afcbac6674b950247ac3b4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4886-numbered-session-titles",
+    "file:CLAUDE.md",
+    "file:tests/test_session_titles.py"
+  ]
+}
