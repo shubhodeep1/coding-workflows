@@ -29,7 +29,9 @@ consensus ids by issue #4687):
     lines of the entry, and F reported no other finding record in the same
     file (a path that ends with ``/`` plus the other counts, see _same_file())
     within LINE_TOLERANCE lines of either range, in that file without a
-    readable line, or with an unreadable file;
+    readable line, or with an unreadable file, and no other paragraph of F's
+    output names that file with a number within LINE_TOLERANCE lines of
+    either range or with no number (see _flagger_mentions_near());
   * at least MIN_REJECTERS successful reviewers other than F each cast a
     rejection vote (below) for a manifest entry whose consensus_id is P's,
     whose file is P's, whose range overlaps P's, and whose flagger is F;
@@ -229,6 +231,11 @@ RECORD_CONSENSUS_ID_RE = re.compile(
 RECORD_BREAK_RE = re.compile(rf"^\s*{RECORD_ITEM}(?:{RECORD_MARKUP}Requirement{RECORD_MARKUP}\s*:|REJECTED_FINDING\s*:|#)",
 	re.IGNORECASE)
 RECORD_HEADING_RE = re.compile(r"^[A-Z][A-Z0-9 /&()-]*[A-Z)]$")
+# The fail-closed second-finding scan (conformance run 3): any path-like token
+# of the flagger's output, and any number in it (``1262``, ``:1262``, ``L1262``,
+# ``#L1262``; not the digits inside a word such as a hash or ``v2``).
+MENTION_PATH_TOKEN_RE = re.compile(r"[\w./\\-]+")
+MENTION_NUMBER_RE = re.compile(r"(?<![\w.])L?(?P<number>\d+)(?!\w)")
 
 # Source-grounded rejection evidence (issue #4976). A vote counts only when
 # its evidence citation and quote verify against the reviewed commit.
@@ -760,7 +767,46 @@ def _same_file(first: str, second: str) -> bool:
 	return first == second or first.endswith("/" + second) or second.endswith("/" + first)
 
 
-def flagger_finding_records(text: str) -> list[dict]:
+def _mention_names(token: str, path: str) -> bool:
+	"""Whether a path-like token of the flagger's output names ``path``:
+	backslashes read as ``/``, a leading ``./`` and a trailing ``.`` / ``;``
+	are dropped, case is ignored, and a prefixed spelling counts (see
+	_same_file())."""
+	mentioned = _norm_path(token.replace("\\", "/")).rstrip(".;").casefold()
+	return bool(mentioned) and _same_file(mentioned, path.casefold())
+
+
+def _flagger_mentions_near(text: str, skip: tuple[int, int], path: str, ranges: list[tuple[int, int]]) -> bool:
+	"""Whether the flagger's raw output names ``path`` anywhere outside the
+	cited record's ``skip`` lines in a way that may be a second finding at the
+	entry (conformance run 3).
+
+	The output is split into paragraphs (runs of non-blank lines, with the
+	cited record's lines acting as a break), fenced blocks included. A
+	paragraph that names ``path`` (see _mention_names()) counts when it holds
+	a number within LINE_TOLERANCE of one of ``ranges``, or no number at all.
+	This catches every spelling of a second finding the record parser does not
+	read (``File: README.md#L1262``, ``*File:*``, a quoted or fenced finding,
+	a ``Location:`` label) and fails toward blocking: prose that names the file
+	near the entry, or without a line, also keeps the entry blocking. A second
+	defect written inside the cited record itself is the flagger's own tie and
+	is not looked for here (plan: Risks & Mitigations)."""
+	paragraph: list[str] = []
+	for index, line in enumerate([*text.splitlines(), ""]):
+		if line.strip() and not skip[0] <= index < skip[1]:
+			paragraph.append(line)
+			continue
+		joined = "\n".join(paragraph)
+		paragraph = []
+		if not any(_mention_names(token, path) for token in MENTION_PATH_TOKEN_RE.findall(joined)):
+			continue
+		numbers = [int(match.group("number")) for match in MENTION_NUMBER_RE.finditer(joined)]
+		if not numbers or any(_near((number, number), lines) for number in numbers for lines in ranges):
+			return True
+	return False
+
+
+def flagger_finding_records(text: str, *, with_spans: bool = False) -> list[dict]:
 	"""Return the ``File:`` finding records of a reviewer's raw output (issue #4975).
 
 	A record starts at a ``File:`` line (plain, bulleted, numbered, or a
@@ -777,11 +823,14 @@ def flagger_finding_records(text: str) -> list[dict]:
 	``consensus_id:`` lines inside it. A consensus_id anywhere else in the
 	output (prose, a quote, a code block, a REJECTED_FINDING line, a line
 	after the record's blank line) belongs to no record and binds nothing.
+	With ``with_spans``, each record also carries ``span``, the ``(start,
+	end)`` indexes of the output lines it covers (end exclusive), which
+	_flagger_mentions_near() skips for the cited record.
 	"""
 	records: list[dict] = []
 	current: dict | None = None
 	open_fence: str | None = None
-	for line in text.splitlines():
+	for index, line in enumerate(text.splitlines()):
 		fence = _fence_marker(line)
 		if open_fence is not None:
 			if fence and fence[0] == open_fence[0] and len(fence) >= len(open_fence) and not line.strip()[len(fence):].strip():
@@ -805,7 +854,7 @@ def flagger_finding_records(text: str) -> list[dict]:
 			if path_match and path_match.group("start"):
 				lines = _widen_lines(_range(path_match.group("start"), path_match.group("end")), value, path_match.end())
 			current = {"path": path, "lines": lines, "consensus_ids": [], "line_field_seen": False,
-				"file_rest": value[path_match.end():] if path_match else value}
+				"file_rest": value[path_match.end():] if path_match else value, "span": [index, index + 1]}
 			records.append(current)
 			continue
 		if current is None:
@@ -813,6 +862,7 @@ def flagger_finding_records(text: str) -> list[dict]:
 		if not line.strip() or RECORD_BREAK_RE.match(line) or RECORD_HEADING_RE.match(line.strip()):
 			current = None
 			continue
+		current["span"][1] = index + 1
 		id_match = RECORD_CONSENSUS_ID_RE.match(line)
 		if id_match:
 			current["consensus_ids"].append(id_match.group("consensus_id"))
@@ -826,6 +876,10 @@ def flagger_finding_records(text: str) -> list[dict]:
 		if record["lines"] is None and not record["line_field_seen"]:
 			record["lines"] = _record_lines(record["file_rest"])
 		del record["line_field_seen"], record["file_rest"]
+		if with_spans:
+			record["span"] = tuple(record["span"])
+		else:
+			del record["span"]
 	return records
 
 
@@ -923,7 +977,7 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 		# consensus_id line inside one of its own File: records at P's
 		# location, never through the id quoted elsewhere (issue #4975).
 		if flagger not in records_by_flagger:
-			records_by_flagger[flagger] = flagger_finding_records(outputs[flagger])
+			records_by_flagger[flagger] = flagger_finding_records(outputs[flagger], with_spans=True)
 		flagger_records = records_by_flagger[flagger]
 		citing = [record for record in flagger_records if cid in record["consensus_ids"]]
 		if not citing:
@@ -943,8 +997,9 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 				for other_index, other in enumerate(ledger_locations)):
 			keep("ambiguous_nearby")
 			continue
-		if any(record is not cited and (record["path"] is None or (_same_file(record["path"], path) and (record["lines"] is None
-				or _near(record["lines"], source_lines) or _near(record["lines"], lines)))) for record in flagger_records):
+		if (any(record is not cited and (record["path"] is None or (_same_file(record["path"], path) and (record["lines"] is None
+				or _near(record["lines"], source_lines) or _near(record["lines"], lines)))) for record in flagger_records)
+				or _flagger_mentions_near(outputs[flagger], cited["span"], path, [source_lines, lines])):
 			keep("ambiguous_flagger_nearby")
 			continue
 		others = [slug for slug in reviewers if slug != flagger]
