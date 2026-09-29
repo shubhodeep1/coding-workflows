@@ -1423,6 +1423,15 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
 			'json': il_json_fields,
 		})
 		save()
+		# Opt-in raw output per label (set through mock_store_extra), so a
+		# test can hand close_merged_issues_sweep an unparseable list (issue
+		# #4955). Scoped to the sweep's `--json number,labels,body` field
+		# list, so other listings of the same label (stall recovery lists
+		# `--json number`) keep the normal response.
+		il_raw_by_label = store.get('mock_gh_issue_list_raw_by_label') or {}
+		if il_label is not None and il_label in il_raw_by_label and il_json_fields == 'number,labels,body':
+			print(il_raw_by_label[il_label])
+			sys.exit(0)
 		if il_state == 'open' and il_label is not None and il_json:
 			out = []
 			for inum, idata in store.get('issues', {}).items():
@@ -14995,6 +15004,75 @@ def test_close_merged_issues_sweep_closes_labelled_child_on_declared_integration
 		f"A labelled child must close on its integration branch; closed_issues={result.get('closed_issues')}"
 	)
 	assert "CLOSE_MERGED_SWEEP issue=10 pr=965 origin=merged_label status=closed" in result["stdout"]
+
+
+def test_close_merged_issues_sweep_closes_issues_with_large_bodies():
+	"""Issue #4955: the sweep's `gh issue list` payloads carry full issue
+	bodies (issue #4813). Three 60 KiB bodies make the `ai:merged` list larger
+	than the kernel's 128 KiB per-argument limit, so passing it to jq as
+	`--argjson` failed to exec and the fallback turned the queue into [],
+	silently skipping every closure. The lists must reach jq on stdin."""
+	large_body = "Security follow-up.\n\n" + ("x" * 61_440) + "\n"
+	issue_numbers = (10, 11, 12)
+	prs = []
+	for offset, issue_num in enumerate(issue_numbers):
+		prs.append({
+			"number": 970 + offset,
+			"state": "closed",
+			"merged": True,
+			"merged_at": "2026-09-29T02:00:00Z",
+			"baseRefName": "main",
+			"headRefName": f"claude/standalone-fix-{issue_num}",
+			"headRefFromApi": f"claude/standalone-fix-{issue_num}",
+			"body": f"Standalone fix.\n\nCloses #{issue_num}\n",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		})
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={issue_num: ["ai:merged"] for issue_num in issue_numbers},
+		issue_bodies={issue_num: large_body for issue_num in issue_numbers},
+		issue_linked_prs={issue_num: 970 + offset for offset, issue_num in enumerate(issue_numbers)},
+		prs=prs,
+		mock_gh_issue_list_label_filter=True,
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "queue_build_failed" not in output, "A valid large-body queue must build without a failure warning"
+	for offset, issue_num in enumerate(issue_numbers):
+		assert issue_num in result.get("closed_issues", []), (
+			f"Expected #{issue_num} closed despite its large body; closed_issues={result.get('closed_issues')}"
+		)
+		assert f"CLOSE_MERGED_SWEEP issue={issue_num} pr={970 + offset} origin=merged_label status=closed" in result["stdout"]
+
+
+def test_close_merged_issues_sweep_surfaces_unparseable_issue_list():
+	"""Issue #4955: when the queue cannot be built (here the ai:ready-to-merge
+	list is not JSON), the sweep must log a queue_build_failed warning and
+	skip the cycle, not silently process an empty queue. It returns 0, so the
+	`set -e` poller keeps running."""
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 961},
+		prs=[_sweep_standalone_closing_pr(961, "main", "claude/standalone-final")],
+		mock_gh_issue_list_label_filter=True,
+		mock_store_extra={"mock_gh_issue_list_raw_by_label": {"ai:ready-to-merge": "not json"}},
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "::warning::CLOSE_MERGED_SWEEP queue_build_failed merged_bytes=" in output, (
+		"An unbuildable queue must be surfaced as a queue_build_failed warning"
+	)
+	assert "skipping this cycle" in output
+	assert 10 not in result.get("closed_issues", []), (
+		f"A skipped cycle must not close anything; closed_issues={result.get('closed_issues')}"
+	)
+	assert "Close merged issues sweep complete." not in result["stdout"], (
+		"The sweep must stop after the queue_build_failed warning"
+	)
 
 
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():

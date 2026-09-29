@@ -3902,6 +3902,11 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # Per-issue cost is the existing single _issue_timeline_with_cross_refs_json
 # call (GraphQL-first with fail-open REST fallback) plus, in the ready_label-origin merged-PR
 # case, one `gh issue edit` to backfill ai:merged before close.
+#
+# Payload size (issue #4955): the two lists reach jq on stdin, because
+# issue bodies can push a list past the per-argument limit. A queue that
+# cannot be built is logged as `CLOSE_MERGED_SWEEP queue_build_failed` and
+# skips the cycle instead of being treated as empty.
 close_merged_issues_sweep() {
   if [ "${ENABLE_CLOSE_MERGED_ISSUES}" != "true" ]; then
     echo "Close merged issues sweep disabled by ENABLE_CLOSE_MERGED_ISSUES=${ENABLE_CLOSE_MERGED_ISSUES}."
@@ -3930,19 +3935,33 @@ close_merged_issues_sweep() {
   # Build a single deduplicated list of {number, labels, origin} entries.
   # When an issue carries BOTH labels (legitimate transition state), prefer
   # the merged_label origin so the strict alerting policy applies.
-  local issues_json
-  issues_json="$(jq -c -n \
-    --argjson merged "${merged_json:-[]}" \
-    --argjson ready "${ready_json:-[]}" '
+  #
+  # Both lists reach jq on stdin, never as --argjson arguments: they carry
+  # full issue bodies, and a few large bodies exceed the kernel's 128 KiB
+  # per-argument limit, which made jq fail to exec and the old
+  # `|| echo "[]"` fallback silently skip every closure (issue #4955). jq
+  # must read exactly two documents (merged list, then ready list); anything
+  # else is a queue_build_failed warning that skips this cycle. The sweep
+  # still returns 0 there, because the poller calls it bare under set -e.
+  local issues_json _sweep_queue_err
+  _sweep_queue_err="$(mktemp)"
+  if ! issues_json="$(printf '%s\n' "${merged_json:-[]}" "${ready_json:-[]}" | jq -c -n '
       def normalize($origin):
         map(
           select(type == "object" and (.number | type == "number"))
           | {number: .number, labels: (.labels // []), body: (.body // ""), origin: $origin}
         );
-      ($merged | normalize("merged_label")) as $m
-      | ($ready | normalize("ready_label")) as $r
+      [inputs] as $lists
+      | if ($lists | length) != 2 then error("expected 2 issue lists, got \($lists | length)") else . end
+      | ($lists[0] | normalize("merged_label")) as $m
+      | ($lists[1] | normalize("ready_label")) as $r
       | ($m + ($r | map(select(.number as $n | ($m | map(.number) | index($n)) == null))))
-    ' 2>/dev/null || echo "[]")"
+    ' 2>"${_sweep_queue_err}")"; then
+    echo "::warning::CLOSE_MERGED_SWEEP queue_build_failed merged_bytes=$(printf '%s' "${merged_json}" | wc -c | tr -d '[:space:]') ready_bytes=$(printf '%s' "${ready_json}" | wc -c | tr -d '[:space:]') — skipping this cycle. jq: $(head -c 300 "${_sweep_queue_err}" 2>/dev/null | tr '\n' ' ')"
+    rm -f "${_sweep_queue_err}"
+    return 0
+  fi
+  rm -f "${_sweep_queue_err}"
 
   local count
   count="$(echo "${issues_json}" | jq 'length' 2>/dev/null || echo "0")"
