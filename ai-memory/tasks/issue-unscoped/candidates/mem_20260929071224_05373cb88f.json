@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/4723-require-plan-run-id.md:19 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The contributor note omits the empty-ISSUE_TITLE test, and the PR description still reports 6 behavioural tests although the PR ships 7.\n  WHY: This documentation drift could cause a future reviewer auditing the changelog to undercount the test surface.\n- .github/workflows/test-and-mark-stable.yml:632-636, 1134-1138\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The empty-title guards accept whitespace-only ISSUE_TITLE values, allowing polling to proceed with a whitespace title.\n  WHY: The suggested guard `[ -z \"${ISSUE_TITLE// /}\" ]` removes spaces but not tabs; the wait-plan guard has the same property, so this is a parity issue rather than a regression.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/4723-require-plan-run-id.md | Line or code reference: line 19 (\"For contributors\" paragraph)\n  Problem: The contributor-note sentence \"tests/test_test_and_mark_stable_plan_polling_guard.py runs the real step scripts against a stubbed gh to cover the missing-ID, later-page, other-issue, page-cap, and unreadable-page cases for all three captures\" does not list the empty-ISSUE_TITLE case covered by `test_clarify_and_implement_fail_before_polling_without_an_issue_title` (the round-1 finding). The PR description's \"Files\" and \"Checks run\" sections also still say \"6 behavioural tests\" and \"6 of 6 fail\" even though the file ships 7 (the seventh is the new empty-title guard test). This is a doc-only drift between the originally-listed deliverables and the round-1 commit that addressed AD-9.\n  Why it fails at runtime: This is a documentation issue, not a runtime defect. A future reviewer auditing the contract from the changelog would undercount the test surface.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- .github/workflows/test-and-mark-stable.yml | Line or code reference: 632-636 (wait-clarify) and 1134-1138 (wait-implement)\n  Issue: The empty-title guard uses `[ -z \"${ISSUE_TITLE}\" ]`, which treats unset and empty as the same. The env block above sources the title from `${{ steps.create-issue.outputs.title }}`, so a whitespace-only title (e.g. from a future caller that supplies a title with leading/trailing spaces) would pass the guard and reach the `display_title == $title` filter, which would still match a run whose `display_title` is exactly that whitespace. The wait-plan guard at lines 799-803 has the same property, so this is a parity issue, not a regression.\n  Suggested minimal fix: tighten the guard to reject whitespace-only titles by trimming before the test, e.g. `if [ -z \"${ISSUE_TITLE// /}\" ]; then` (parameter expansion removes all spaces; tabs would still pass). Five lines per step if applied in both places; matches the spirit of the AD-9 reasoning.\n  Estimated lines changed: 4 (2 lines per step \u00d7 2 steps)\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3e5e851369d64d22f4cfbdc8bf137bdac2e774bbb3c91cfa6a926b1f1dd48352",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5035,
+    "run_id": "36530106655",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36530106655",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929071224_05373cb88f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5035,
+    "run_id": "36530106655"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T07:12:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
