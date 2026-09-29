@@ -3,7 +3,22 @@ set -euo pipefail
 
 log() { printf '[session-start] %s\n' "$*"; }
 
+# Why the last install_gh call failed; main() turns them into the structured
+# `gh_install=failed` line and the marker file (issue #4938).
+GH_INSTALL_FAILURE_REASON=""
+GH_INSTALL_FAILURE_EXIT=0
+
+gh_install_fail() {
+  GH_INSTALL_FAILURE_REASON="$1"
+  GH_INSTALL_FAILURE_EXIT="$2"
+  return 1
+}
+
+# Every step is checked explicitly: main() calls install_gh as a condition,
+# and bash ignores `set -e` inside a function called that way, so an
+# unchecked failure would fall through to the "gh installed" line.
 install_gh() {
+  local rc=0
   if command -v gh >/dev/null 2>&1; then
     log "gh already installed: $(gh --version | head -n1)"
     return 0
@@ -12,7 +27,8 @@ install_gh() {
   log "Installing gh CLI..."
   if ! command -v apt-get >/dev/null 2>&1; then
     log "apt-get not available; skipping gh install."
-    return 0
+    gh_install_fail apt_unavailable 127
+    return 1
   fi
 
   local sudo_cmd=()
@@ -21,19 +37,44 @@ install_gh() {
       sudo_cmd=(sudo -n)
     else
       log "Insufficient privileges (not root and no passwordless sudo); skipping gh install."
-      return 0
+      gh_install_fail no_privileges 1
+      return 1
     fi
   fi
 
-  "${sudo_cmd[@]}" install -d -m 0755 /etc/apt/keyrings
+  "${sudo_cmd[@]}" install -d -m 0755 /etc/apt/keyrings || { rc=$?; gh_install_fail apt_source_setup_failed "${rc}"; return 1; }
   curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-    | "${sudo_cmd[@]}" tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
-  "${sudo_cmd[@]}" chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+    | "${sudo_cmd[@]}" tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null \
+    || { rc=$?; gh_install_fail keyring_download_failed "${rc}"; return 1; }
+  "${sudo_cmd[@]}" chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg || { rc=$?; gh_install_fail apt_source_setup_failed "${rc}"; return 1; }
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-    | "${sudo_cmd[@]}" tee /etc/apt/sources.list.d/github-cli.list >/dev/null
-  "${sudo_cmd[@]}" apt-get update -y >/dev/null
-  "${sudo_cmd[@]}" apt-get install -y gh >/dev/null
+    | "${sudo_cmd[@]}" tee /etc/apt/sources.list.d/github-cli.list >/dev/null \
+    || { rc=$?; gh_install_fail apt_source_setup_failed "${rc}"; return 1; }
+  "${sudo_cmd[@]}" apt-get update -y >/dev/null || { rc=$?; gh_install_fail apt_update_failed "${rc}"; return 1; }
+  "${sudo_cmd[@]}" apt-get install -y gh >/dev/null || { rc=$?; gh_install_fail apt_install_failed "${rc}"; return 1; }
+  if ! command -v gh >/dev/null 2>&1; then
+    gh_install_fail gh_missing_after_install 127
+    return 1
+  fi
   log "gh installed: $(gh --version | head -n1)"
+}
+
+# Marker file a later step reads to report why `gh` is missing instead of
+# guessing (issue #4938). Removed again once gh is available.
+gh_install_marker_path() {
+  printf '%s\n' "${SESSION_START_GH_MARKER_FILE:-${HOME:-/tmp}/.claude-session-start-gh-install}"
+}
+
+record_gh_install_failure() {
+  local line marker
+  line="gh_install=failed reason=${GH_INSTALL_FAILURE_REASON:-unknown} exit_code=${GH_INSTALL_FAILURE_EXIT:-1} at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  log "${line}"
+  marker="$(gh_install_marker_path)"
+  printf '%s\n' "${line}" > "${marker}" 2>/dev/null || log "WARNING: could not write the gh install marker ${marker}"
+}
+
+clear_gh_install_marker() {
+  rm -f -- "$(gh_install_marker_path)" 2>/dev/null || true
 }
 
 # Trailing <owner>/<repo> from the remote URL, with trailing slash and
@@ -222,7 +263,12 @@ main() {
   if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
     return 0
   fi
-  install_gh || log "gh install failed (non-fatal)"
+  if install_gh; then
+    clear_gh_install_marker
+  else
+    log "gh install failed (non-fatal)"
+    record_gh_install_failure
+  fi
   verify_token || true
 }
 

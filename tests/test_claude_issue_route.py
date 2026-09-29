@@ -1186,6 +1186,9 @@ def test_cli_queue_pending_fetches_the_queue_and_its_bindings(tmp_path):
 		"api repos/shubhodeep1/coding-workflows/actions/artifacts?name=claude-issue-queue-binding&per_page=100",
 		f"api repos/shubhodeep1/coding-workflows/compare/{'a' * 40}...refs/heads/main?per_page=1 --jq .status",
 		"api repos/shubhodeep1/coding-workflows/actions/artifacts/501/zip",
+		# One state read per pending issue target (#4912); this stub answers 404,
+		# so the entry stays pending (fail open).
+		"api repos/shubhodeep1/digital_pa/issues/9",
 	]
 	# An edited item is refused through the CLI too.
 	edited = dict(item, body=item["body"].replace("issue: 9", "issue: 8").replace("issues/9", "issues/8"), title="[claude-issue-queue] shubhodeep1/digital_pa#8")
@@ -1598,3 +1601,568 @@ def test_intake_workflow_uploads_the_queue_binding_even_after_a_failure():
 	assert upload["with"]["name"] == route.QUEUE_BINDING_ARTIFACT
 	assert upload["with"]["path"] == binding_file
 	assert upload["with"]["if-no-files-found"] == "ignore"
+
+
+# --- environment blockers and their automatic re-queue (issue #4938) ---------------------
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+ENV_NOW = datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc)
+ENV_BLOCKED_LABELS = ["ai:claude", "ai:claude-blocked"]
+ENV_BLOCKER = "<!-- ai:claude-blocked:v1 reason=environment-tools-missing -->\nNo gh and no GitHub MCP tools after self-heal."
+PLAIN_BLOCKER = "<!-- ai:claude-blocked:v1 -->\nSecurity cycle cap reached."
+
+
+def _at(hours_ago):
+	return (ENV_NOW - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _env_comment(cid, body, hours_ago, assoc="OWNER", login="shubhodeep1", user_type="User"):
+	return {
+		"id": cid,
+		"body": body,
+		"created_at": _at(hours_ago),
+		"author_association": assoc,
+		"user": {"login": login, "type": user_type},
+	}
+
+
+def _requeue_marker(blocker, reason="environment-tools-missing"):
+	return f"<!-- ai:claude-env-requeue:v1 blocker={blocker} reason={reason} -->\n🔁 Re-queued automatically."
+
+
+def _exhausted_marker(blocker, reason="environment-tools-missing"):
+	return f"<!-- ai:claude-env-requeue-exhausted:v1 blocker={blocker} reason={reason} -->\n⚠️ stopped"
+
+
+@pytest.mark.parametrize(
+	("body", "expected"),
+	[
+		("<!-- ai:claude-blocked:v1 -->\ntext", (True, "")),
+		("<!-- ai:claude-blocked:v1 reason=environment-tools-missing -->", (True, "environment-tools-missing")),
+		("\n  <!-- ai:claude-blocked:v1 reason=environment-checkout-missing -->\nx", (True, "environment-checkout-missing")),
+		# A comment quoting the marker (a plan, a progress note) is not a blocker.
+		("Plan: post `<!-- ai:claude-blocked:v1 reason=environment-tools-missing -->`", (False, "")),
+		("<!-- ai:claude-blocked:v1 reason=Environment-X -->", (False, "")),
+		("<!-- ai:claude-blocked:v1 reason=environment-a | environment-b -->", (False, "")),
+		("<!-- ai:claude-blocked:v2 -->", (False, "")),
+		(None, (False, "")),
+	],
+)
+def test_parse_blocker_marker(body, expected):
+	assert route.parse_blocker_marker(body) == expected
+
+
+def test_plain_marker_readers_still_match_the_reason_form():
+	# §6: every reader of the plain marker matches on its prefix, which the reason form keeps.
+	assert "<!-- ai:claude-blocked:v1" in "<!-- ai:claude-blocked:v1 reason=environment-tools-missing -->"
+
+
+def test_env_decision_requeues_an_environment_blocker():
+	decision = route.env_requeue_decision([_env_comment(1, ENV_BLOCKER, 1)], ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "requeue"
+	assert decision["reason"] == "environment_blocker"
+	assert decision["blocker_id"] == 1 and decision["blocker_reason"] == "environment-tools-missing"
+	assert decision["retry"] == 1 and decision["stale_retry"] is False
+
+
+@pytest.mark.parametrize(
+	("comments", "labels", "reason"),
+	[
+		([_env_comment(1, PLAIN_BLOCKER, 1)], ENV_BLOCKED_LABELS, "not_environment"),
+		([_env_comment(1, "<!-- ai:claude-blocked:v1 reason=decision-needed -->", 1)], ENV_BLOCKED_LABELS, "not_environment"),
+		([], ENV_BLOCKED_LABELS, "no_blocker"),
+		([_env_comment(1, ENV_BLOCKER, 1)], ["ai:claude"], "not_blocked"),
+		# A later plain blocker (a real §28.C decision) wins over an earlier environment one.
+		([_env_comment(1, ENV_BLOCKER, 5), _env_comment(2, PLAIN_BLOCKER, 1)], ENV_BLOCKED_LABELS, "not_environment"),
+		# Untrusted authors can neither post a blocker nor count as one.
+		([_env_comment(1, ENV_BLOCKER, 1, assoc="NONE")], ENV_BLOCKED_LABELS, "no_blocker"),
+		([_env_comment(1, ENV_BLOCKER, 1, assoc="OWNER", user_type="Bot", login="evil[bot]")], ENV_BLOCKED_LABELS, "no_blocker"),
+		# Already re-queued and the fresh session is still within its window.
+		([_env_comment(1, ENV_BLOCKER, 2), _env_comment(2, _requeue_marker(1), 1)], ENV_BLOCKED_LABELS, "requeued_waiting"),
+	],
+)
+def test_env_decision_skips(comments, labels, reason):
+	decision = route.env_requeue_decision(comments, labels, ENV_NOW)
+	assert decision["action"] == "skip"
+	assert decision["reason"] == reason
+
+
+def test_env_decision_requeues_again_when_the_fresh_session_died_silently():
+	# The label is still on the issue 4h after the re-queue: the session never claimed it.
+	comments = [_env_comment(1, ENV_BLOCKER, 5), _env_comment(2, _requeue_marker(1), 4)]
+	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW, stale_hours=3)
+	assert decision["action"] == "requeue"
+	assert decision["reason"] == "stale_requeue" and decision["stale_retry"] is True
+	assert decision["retry"] == 2
+
+
+def test_env_decision_alerts_once_after_two_retries_in_24h():
+	comments = [
+		_env_comment(1, ENV_BLOCKER, 10),
+		_env_comment(2, _requeue_marker(1), 9),
+		_env_comment(3, ENV_BLOCKER, 6),
+		_env_comment(4, _requeue_marker(3), 5),
+		_env_comment(5, "<!-- ai:claude-blocked:v1 reason=environment-checkout-missing -->", 1),
+	]
+	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "alert"
+	assert decision["reason"] == "retries_exhausted"
+	assert decision["blocker_id"] == 5 and decision["retries_in_window"] == 2
+	alerted = [*comments, _env_comment(6, _exhausted_marker(5, "environment-checkout-missing"), 0.5)]
+	assert route.env_requeue_decision(alerted, ENV_BLOCKED_LABELS, ENV_NOW)["reason"] == "exhausted_alerted"
+
+
+def test_env_decision_alerts_once_per_issue_even_when_a_new_blocker_follows():
+	# Review round 1 (#5006): a new blocker after the alert (a human /reclarify
+	# that failed again) must not send a second Telegram ERROR in the window.
+	comments = [
+		_env_comment(1, ENV_BLOCKER, 10),
+		_env_comment(2, _requeue_marker(1), 9),
+		_env_comment(3, ENV_BLOCKER, 6),
+		_env_comment(4, _requeue_marker(3), 5),
+		_env_comment(5, ENV_BLOCKER, 3),
+		_env_comment(6, _exhausted_marker(5), 2.5),
+		_env_comment(7, "<!-- ai:claude-blocked:v1 reason=environment-checkout-missing -->", 1),
+	]
+	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "skip"
+	assert decision["reason"] == "exhausted_alerted" and decision["blocker_id"] == 7
+	# An untrusted exhausted marker cannot suppress the alert.
+	forged = [*comments[:5], _env_comment(6, _exhausted_marker(5), 2.5, assoc="NONE"), comments[6]]
+	assert route.env_requeue_decision(forged, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
+
+
+def test_env_decision_resumes_once_the_window_has_passed():
+	# The alert and both re-queues are older than 24h: retries start over,
+	# and the next exhaustion alerts again.
+	comments = [
+		_env_comment(1, ENV_BLOCKER, 40),
+		_env_comment(2, _requeue_marker(1), 39),
+		_env_comment(3, ENV_BLOCKER, 35),
+		_env_comment(4, _requeue_marker(3), 34),
+		_env_comment(5, ENV_BLOCKER, 30),
+		_env_comment(6, _exhausted_marker(5), 29.5),
+	]
+	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "requeue" and decision["retry"] == 1
+	later = [
+		*comments,
+		_env_comment(7, _requeue_marker(5), 5),
+		_env_comment(8, ENV_BLOCKER, 4),
+		_env_comment(9, _requeue_marker(8), 3),
+		_env_comment(10, ENV_BLOCKER, 1),
+	]
+	assert route.env_requeue_decision(later, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
+
+
+def test_env_decision_counts_only_the_rolling_window_and_trusted_markers():
+	comments = [
+		_env_comment(1, ENV_BLOCKER, 40),
+		_env_comment(2, _requeue_marker(1), 39),
+		_env_comment(3, ENV_BLOCKER, 30),
+		_env_comment(4, _requeue_marker(3), 29),
+		_env_comment(5, ENV_BLOCKER, 2),
+		# A forged re-queue marker from an outsider does not count toward the cap.
+		_env_comment(6, _requeue_marker(5), 1, assoc="NONE"),
+	]
+	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "requeue"
+	assert decision["retries_in_window"] == 0 and decision["retry"] == 1
+	# A tighter cap is honoured.
+	assert route.env_requeue_decision(comments[:5], ENV_BLOCKED_LABELS, ENV_NOW, max_retries=2, window_hours=48)["action"] == "alert"
+
+
+def test_env_search_queries_cover_every_repo_within_the_length_limit():
+	repos = [f"owner/repository-number-{i:02d}" for i in range(14)] + ["Owner/Repository-Number-00", "not a slug"]
+	queries = route.env_requeue_search_queries(repos)
+	assert all(len(query) <= route.ENV_REQUEUE_SEARCH_QUERY_MAX for query in queries)
+	assert all(query.startswith('is:issue is:open label:"ai:claude" label:"ai:claude-blocked"') for query in queries)
+	covered = [part[5:] for query in queries for part in query.split() if part.startswith("repo:")]
+	assert sorted(covered) == sorted({repo.lower() for repo in repos[:14]})
+	assert route.env_requeue_search_queries([]) == []
+
+
+def _search_item(repo, number, labels=ENV_BLOCKED_LABELS, state="open", **extra):
+	return {
+		"number": number,
+		"state": state,
+		"title": "Fix",
+		"body": "",
+		"repository_url": f"https://api.github.com/repos/{repo}",
+		"labels": [{"name": name} for name in labels],
+		**extra,
+	}
+
+
+def test_env_candidates_filter_registry_labels_and_route():
+	items = [
+		_search_item("shubhodeep1/digital_pa", 3),
+		_search_item("shubhodeep1/digital_pa", 3),
+		_search_item("stranger/repo", 4),
+		_search_item("shubhodeep1/digital_pa", 5, labels=["ai:claude", "ai:claude-blocked", "ai:codex"]),
+		_search_item("shubhodeep1/digital_pa", 6, labels=["ai:claude-blocked"]),
+		_search_item("shubhodeep1/digital_pa", 7, state="closed"),
+		_search_item("shubhodeep1/digital_pa", 8, pull_request={}),
+		_search_item("shubhodeep1/digital_pa", 9, labels=["ai:claude", "ai:claude-blocked", "ai:security"]),
+	]
+	result = route.env_requeue_candidates(items, REGISTRY_ALLOWED)
+	assert [(c["repo"], c["issue_number"]) for c in result["candidates"]] == [("shubhodeep1/digital_pa", 3), ("shubhodeep1/digital_pa", 9)]
+	assert result["candidates"][1]["skip_security_pass"] is True
+	reasons = {entry["issue_number"]: entry["reason"] for entry in result["skipped"]}
+	assert reasons == {4: "repo_not_registered", 5: "routed_to_codex: label_override", 6: "labels_missing"}
+
+
+def test_env_plan_reads_search_then_comments_and_fails_open():
+	calls = []
+
+	def read(path):
+		calls.append(path)
+		if path.startswith("search/issues?"):
+			return {"items": [_search_item("shubhodeep1/digital_pa", 3), _search_item("shubhodeep1/coding-workflows", 4)]}
+		if path.startswith("repos/shubhodeep1/digital_pa/issues/3/comments"):
+			return [_env_comment(1, ENV_BLOCKER, 1)]
+		raise RuntimeError("HTTP 500")
+
+	plan = route.env_requeue_plan(REGISTRY_ALLOWED, ENV_NOW, read)
+	assert plan["searches"] == 1
+	assert [(a["issue_number"], a["action"]) for a in plan["actions"]] == [(3, "requeue")]
+	assert plan["actions"][0]["issue_url"] == "https://github.com/shubhodeep1/digital_pa/issues/3"
+	assert "labels" not in plan["actions"][0]
+	assert plan["errors"] == ["comments shubhodeep1/coding-workflows#4: HTTP 500"]
+	assert calls[0].startswith("search/issues?q=is%3Aissue+is%3Aopen+label%3A%22ai%3Aclaude%22")
+	assert "per_page=100" in calls[0]
+
+	def failing(path):
+		raise RuntimeError("HTTP 403")
+
+	plan = route.env_requeue_plan(REGISTRY_ALLOWED, ENV_NOW, failing)
+	assert plan["actions"] == [] and plan["errors"] == ["search: HTTP 403"]
+
+
+def test_env_plan_paginates_comments():
+	pages = {1: [_env_comment(i, "chatter", 50) for i in range(100)], 2: [_env_comment(500, ENV_BLOCKER, 1)]}
+
+	def read(path):
+		if path.startswith("search/issues?"):
+			return {"items": [_search_item("shubhodeep1/digital_pa", 3)]}
+		return pages[int(path.rsplit("page=", 1)[1])]
+
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	assert plan["actions"][0]["blocker_id"] == 500 and plan["actions"][0]["action"] == "requeue"
+
+
+def test_env_plan_skips_an_issue_whose_comments_pass_the_read_cap():
+	# Comments are listed oldest first, so the latest blocker sits past the cap:
+	# deciding on the older environment blocker could re-queue a plain one.
+	calls = []
+
+	def read(path):
+		calls.append(path)
+		if path.startswith("search/issues?"):
+			return {"items": [_search_item("shubhodeep1/digital_pa", 3)]}
+		return [_env_comment(1, ENV_BLOCKER, 50)] + [_env_comment(i, "chatter", 40) for i in range(2, 101)]
+
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	assert plan["actions"] == []
+	assert plan["errors"] == ["comments shubhodeep1/digital_pa#3: shubhodeep1/digital_pa#3 has more than 1000 comments; the latest blocker is past the read cap"]
+	assert len(calls) == 1 + route.ENV_REQUEUE_COMMENT_PAGES_MAX
+
+
+def test_env_plan_pages_search_results_and_reports_truncation():
+	calls = []
+	total = {"value": 150}
+
+	def read(path):
+		calls.append(path)
+		if path.startswith("search/issues?"):
+			page = int(path.rsplit("page=", 1)[1]) if "&page=" in path else 1
+			start = (page - 1) * 100
+			count = max(0, min(100, total["value"] - start))
+			return {"total_count": total["value"], "incomplete_results": False, "items": [_search_item("shubhodeep1/digital_pa", start + i + 1) for i in range(count)]}
+		return []
+
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	searches = [path for path in calls if path.startswith("search/issues?")]
+	assert len(searches) == 2 and searches[1].endswith("&page=2") and "&page=" not in searches[0]
+	assert len(plan["actions"]) == 150 and plan["errors"] == []
+
+	calls.clear()
+	total["value"] = 1500
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	assert len([path for path in calls if path.startswith("search/issues?")]) == route.ENV_REQUEUE_SEARCH_PAGES_MAX
+	assert plan["errors"] == ["search: 1000 of 1500 results read; the rest are past the search API cap"]
+
+	def incomplete(path):
+		if path.startswith("search/issues?"):
+			return {"total_count": 3, "incomplete_results": True, "items": [_search_item("shubhodeep1/digital_pa", 3)]}
+		return [_env_comment(1, ENV_BLOCKER, 1)]
+
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, incomplete)
+	assert [a["issue_number"] for a in plan["actions"]] == [3]
+	assert plan["errors"] == ["search: incomplete results (1 of 3 read)"]
+
+
+# --- closed targets (issue #4912) -------------------------------------------------------
+
+
+def test_queue_targets_and_closed_filter():
+	queue = [
+		_queue_item(10),
+		_queue_item(11, _validated(number=12)),
+		_queue_item(13, author="someone"),
+		_queue_item(14, body="no payload"),
+	]
+	targets = route.queue_issue_targets(queue, REGISTRY_ALLOWED)
+	assert [(t["queue_issue"], t["issue_number"]) for t in targets] == [(10, 9), (11, 12)]
+	states = {"shubhodeep1/digital_pa#9": "closed", "shubhodeep1/digital_pa#12": "open"}
+	assert route.queue_closed_targets(queue, REGISTRY_ALLOWED, states) == [
+		{"queue_issue": 10, "repo": "shubhodeep1/digital_pa", "issue_number": 9}
+	]
+
+
+def test_read_target_states_dedupes_and_fails_open():
+	calls = []
+
+	def read(path):
+		calls.append(path)
+		if path.endswith("/12"):
+			raise RuntimeError("HTTP 404")
+		return {"state": "closed" if path.endswith("/9") else "open"}
+
+	states = route.read_target_states([("shubhodeep1/Digital_PA", 9), ("shubhodeep1/digital_pa", 9), ("shubhodeep1/digital_pa", 12), ("bad slug", 1)], read)
+	assert states == {"shubhodeep1/digital_pa#9": "closed"}
+	assert calls == ["repos/shubhodeep1/Digital_PA/issues/9", "repos/shubhodeep1/digital_pa/issues/12"]
+
+
+def test_drop_closed_targets_moves_every_queue_issue_to_ignored():
+	result = {
+		"pending": [
+			{"item_type": "issue", "repo": "shubhodeep1/digital_pa", "issue_number": 9, "queue_issues": [{"number": 10}, {"number": 15}]},
+			{"item_type": "issue", "repo": "shubhodeep1/digital_pa", "issue_number": 12, "queue_issues": [{"number": 11}]},
+			{"item_type": "pr_fix", "repo": "shubhodeep1/digital_pa", "pr_number": 9, "queue_issues": [{"number": 16}]},
+		],
+		"ignored": [{"queue_issue": 3, "reason": "untrusted_author"}],
+		"remaining": 0,
+		"deferred": 0,
+	}
+	dropped = route.drop_closed_targets(result, {"shubhodeep1/digital_pa#9": "closed"})
+	assert [entry.get("issue_number", entry.get("pr_number")) for entry in dropped["pending"]] == [12, 9]
+	assert dropped["ignored"][1:] == [
+		{"queue_issue": 10, "reason": "issue_closed: shubhodeep1/digital_pa#9"},
+		{"queue_issue": 15, "reason": "issue_closed: shubhodeep1/digital_pa#9"},
+	]
+	assert route.drop_closed_targets(result, {}) == result
+
+
+def test_cli_queue_pending_refuses_closed_targets_and_lists_them(tmp_path):
+	issues_file = tmp_path / "q.json"
+	issues_file.write_text(json.dumps([_queue_item(10)]))
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	bindings_file = tmp_path / "bindings.json"
+	bindings_file.write_text(json.dumps(_bindings({"1": _ok_record({10: _queue_item(10)})})))
+	states_file = tmp_path / "states.json"
+	states_file.write_text(json.dumps({"shubhodeep1/digital_pa#9": "closed"}))
+	out = _cli("queue-pending", "--issues-json", str(issues_file), "--registry", str(registry), "--bindings-json", str(bindings_file), "--target-states-json", str(states_file))
+	assert out.returncode == 0, out.stderr
+	result = json.loads(out.stdout)
+	assert result["pending"] == []
+	assert result["ignored"] == [{"queue_issue": 10, "reason": "issue_closed: shubhodeep1/digital_pa#9"}]
+	out = _cli("queue-closed-targets", "--issues-json", str(issues_file), "--registry", str(registry), "--target-states-json", str(states_file))
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout) == [{"queue_issue": 10, "repo": "shubhodeep1/digital_pa", "issue_number": 9}]
+	states_file.write_text("[]")
+	assert _cli("queue-closed-targets", "--issues-json", str(issues_file), "--registry", str(registry), "--target-states-json", str(states_file)).returncode == 2
+	assert _cli("env-requeue-plan", "--registry", str(registry), "--now", "yesterday").returncode == 2
+
+
+# --- watchdog env-requeue mode ------------------------------------------------------------
+
+
+@pytest.fixture()
+def env_stubs(tmp_path):
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	log = tmp_path / "gh.log"
+	_write_stub(
+		bin_dir / "gh",
+		f"""printf '%s|%s\\n' "${{GH_TOKEN:-}}" "$*" >> "{log}"
+case "$*" in
+  "api search/issues?"*)
+    [ -z "${{GH_STUB_FAIL_SEARCH:-}}" ] || {{ echo "HTTP 403" >&2; exit 1; }}
+    printf '%s' "${{GH_STUB_SEARCH_JSON:-[]}}" ;;
+  "api repos/"*"/issues/"*"/comments?per_page=100&page="*)
+    printf '%s' "${{GH_STUB_ENV_COMMENTS_JSON:-[]}}" ;;
+  "api repos/"*"/issues?labels=ai:claude-issue-queue"*)
+    printf '%s' "${{GH_STUB_QUEUE_JSON:-[]}}" ;;
+  "api -X POST repos/"*"/dispatches --input "*)
+    [ -z "${{GH_STUB_FAIL_DISPATCH:-}}" ] || {{ echo "HTTP 422" >&2; exit 1; }}
+    cp "${{@: -1}}" "{tmp_path}/dispatch_body.json" ;;
+  "api -X PATCH repos/"*) ;;
+  "api repos/"*"/issues/"*"/comments -f body="*) ;;
+  "api repos/"*"/issues/"[0-9]*)
+    printf '{{"state": "%s"}}' "${{GH_STUB_TARGET_STATE:-open}}" ;;
+esac
+exit 0
+""",
+	)
+	_write_stub(bin_dir / "curl", f"""printf '%s\\n' "$*" >> "{tmp_path}/curl.log"\nprintf '{{"ok":true,"result":{{"message_id":1}}}}'\n""")
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	env = {
+		**os.environ,
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"GH_RETRY_MAX_ATTEMPTS": "1",
+		"RUNTIME_DIR": str(tmp_path / "rt"),
+		"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
+		"GH_TOKEN": "pat-token",
+		"CLAUDE_ISSUE_QUEUE_TOKEN": "gha-token",
+		"CLAUDE_ISSUE_WATCHDOG_MODE": "env-requeue",
+		"CLAUDE_ISSUE_REGISTRY": str(registry),
+		"RUN_URL": "https://github.com/shubhodeep1/coding-workflows/actions/runs/7",
+		"TG_BOT_SECRET": "tg-secret",
+		"TG_ADMIN_CHAT_ID": "1",
+		"ALERT_MSG_LEVEL": "DEBUG",
+		"GH_STUB_SEARCH_JSON": json.dumps({"items": [_search_item("shubhodeep1/digital_pa", 3)]}),
+	}
+	return {"env": env, "log": log, "tmp": tmp_path}
+
+
+def _env_comments(comments):
+	return json.dumps([{**comment, "created_at": (datetime.now(timezone.utc) - (ENV_NOW - datetime.fromisoformat(comment["created_at"].replace("Z", "+00:00")))).strftime("%Y-%m-%dT%H:%M:%SZ")} for comment in comments])
+
+
+def test_watchdog_env_requeue_dispatches_like_reclarify_and_marks_the_issue(env_stubs):
+	env = {**env_stubs["env"], "GH_STUB_ENV_COMMENTS_JSON": _env_comments([_env_comment(501, ENV_BLOCKER, 1)])}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	body = json.loads((env_stubs["tmp"] / "dispatch_body.json").read_text())
+	assert body["event_type"] == "claude-issue"
+	payload = body["client_payload"]
+	assert (payload["repo"], payload["issue_number"], payload["trigger"]) == ("shubhodeep1/digital_pa", 3, "reclarify")
+	calls = env_stubs["log"].read_text()
+	assert "pat-token|api -X POST repos/shubhodeep1/coding-workflows/dispatches --input" in calls
+	assert "pat-token|api repos/shubhodeep1/digital_pa/issues/3/comments -f body=<!-- ai:claude-env-requeue:v1 blocker=501 reason=environment-tools-missing -->" in calls
+	assert "CLAUDE_ISSUE_QUEUE_WATCHDOG env_requeue requeued repo=shubhodeep1/digital_pa issue=3 blocker=501" in result.stdout
+	# The queue stale check does not run in this mode.
+	assert "checked open=" not in result.stdout
+
+
+def test_watchdog_env_requeue_never_requeues_a_plain_blocker(env_stubs):
+	env = {**env_stubs["env"], "GH_STUB_ENV_COMMENTS_JSON": _env_comments([_env_comment(501, PLAIN_BLOCKER, 1)])}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0
+	assert "dispatches" not in env_stubs["log"].read_text()
+	assert "env_requeue skip repo=shubhodeep1/digital_pa issue=3 reason=not_environment blocker_reason=plain" in result.stdout
+
+
+def test_watchdog_env_requeue_alerts_once_and_keeps_the_label(env_stubs):
+	comments = [
+		_env_comment(1, ENV_BLOCKER, 10),
+		_env_comment(2, _requeue_marker(1), 9),
+		_env_comment(3, ENV_BLOCKER, 6),
+		_env_comment(4, _requeue_marker(3), 5),
+		_env_comment(5, ENV_BLOCKER, 1),
+	]
+	env = {**env_stubs["env"], "GH_STUB_ENV_COMMENTS_JSON": _env_comments(comments)}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	calls = env_stubs["log"].read_text()
+	assert "dispatches" not in calls
+	assert "/labels" not in calls
+	assert "comments -f body=<!-- ai:claude-env-requeue-exhausted:v1 blocker=5 reason=environment-tools-missing -->" in calls
+	curl_log = (env_stubs["tmp"] / "curl.log").read_text()
+	assert "api.telegram.org" in curl_log and "Claude issue re-queue stopped for shubhodeep1/digital_pa#3" in curl_log
+	# Next run: the exhausted marker is there, so nothing more is sent.
+	(env_stubs["tmp"] / "curl.log").unlink()
+	env["GH_STUB_ENV_COMMENTS_JSON"] = _env_comments([*comments, _env_comment(6, _exhausted_marker(5), 0.5)])
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert "reason=exhausted_alerted" in result.stdout
+	assert not (env_stubs["tmp"] / "curl.log").exists()
+
+
+def test_watchdog_env_requeue_alert_has_no_dangling_run_line_without_a_run_url(env_stubs):
+	comments = [
+		_env_comment(1, ENV_BLOCKER, 10),
+		_env_comment(2, _requeue_marker(1), 9),
+		_env_comment(3, ENV_BLOCKER, 6),
+		_env_comment(4, _requeue_marker(3), 5),
+		_env_comment(5, ENV_BLOCKER, 1),
+	]
+	env = {**env_stubs["env"], "GH_STUB_ENV_COMMENTS_JSON": _env_comments(comments), "RUN_URL": ""}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	curl_log = (env_stubs["tmp"] / "curl.log").read_text()
+	assert "Claude issue re-queue stopped for shubhodeep1/digital_pa#3" in curl_log
+	assert "Run:" not in curl_log
+
+
+def test_watchdog_env_requeue_rejects_non_integer_retry_counts(env_stubs):
+	# Every field of the plan is re-validated before it reaches a comment or a message.
+	stub_route = env_stubs["tmp"] / "route_stub.py"
+	action = {
+		"action": "requeue", "repo": "shubhodeep1/digital_pa", "issue_number": 3, "reason": "environment_blocker",
+		"blocker_id": 501, "blocker_reason": "environment-tools-missing", "retry": "1 of 99", "retries_in_window": 0,
+		"skip_security_pass": False,
+	}
+	stub_route.write_text(
+		"import json, sys\n"
+		"if sys.argv[1] == 'env-requeue-plan':\n"
+		f"    print(json.dumps({{'actions': [{action!r}], 'skipped': [], 'errors': [], 'searches': 1}}))\n"
+		"else:\n"
+		"    print('[]')\n"
+	)
+	env = {**env_stubs["env"], "CLAUDE_ISSUE_ROUTE_PY": str(stub_route)}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn env_requeue_bad_action index=1" in result.stdout
+	calls = env_stubs["log"].read_text() if env_stubs["log"].exists() else ""
+	assert "dispatches" not in calls and "comments -f body=" not in calls
+
+
+def test_watchdog_env_requeue_closes_queue_items_for_closed_issues(env_stubs):
+	env = {
+		**env_stubs["env"],
+		"GH_STUB_QUEUE_JSON": json.dumps([_queue_item(10)]),
+		"GH_STUB_TARGET_STATE": "closed",
+		"GH_STUB_SEARCH_JSON": json.dumps({"items": []}),
+	}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	calls = env_stubs["log"].read_text()
+	# The queue item is closed with the queue token, never the PAT.
+	assert "gha-token|api -X PATCH repos/shubhodeep1/coding-workflows/issues/10 -f state=closed -f state_reason=not_planned" in calls
+	assert "closed_target queue_issue=10 target=shubhodeep1/digital_pa#9" in result.stdout
+
+
+def test_watchdog_env_requeue_fails_open(env_stubs):
+	env = {**env_stubs["env"], "GH_STUB_FAIL_SEARCH": "1"}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0
+	assert "warn env_requeue_read_failed detail=search:" in result.stdout
+	env = {**env_stubs["env"], "GH_TOKEN": ""}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0
+	assert "warn env_requeue_skipped reason=no_gh_token" in result.stdout
+	env = {**env_stubs["env"], "GH_STUB_FAIL_DISPATCH": "1", "GH_STUB_ENV_COMMENTS_JSON": _env_comments([_env_comment(501, ENV_BLOCKER, 1)])}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0
+	assert "warn env_requeue_dispatch_failed repo=shubhodeep1/digital_pa issue=3" in result.stdout
+	# No marker without a dispatch, so the next run retries.
+	assert "ai:claude-env-requeue:v1" not in env_stubs["log"].read_text()
+
+
+def test_watchdog_workflow_runs_env_requeue_before_the_stale_check():
+	workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "claude-issue-queue-watchdog.yml").read_text())
+	steps = workflow["jobs"]["watchdog"]["steps"]
+	names = [step["name"] for step in steps]
+	env_idx = names.index("Re-queue Claude issues blocked by an environment failure")
+	assert env_idx < names.index("Flag queue items nobody picked up")
+	step = steps[env_idx]
+	assert step["continue-on-error"] is True
+	assert step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
+	assert step["env"]["CLAUDE_ISSUE_QUEUE_TOKEN"] == "${{ github.token }}"
+	assert step["env"]["CLAUDE_ISSUE_WATCHDOG_MODE"] == "env-requeue"
+	assert "bash scripts/claude_issue_queue_watchdog.sh" in step["run"]

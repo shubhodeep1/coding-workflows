@@ -45,11 +45,13 @@ claim: sweep-run-<run id>
         ```
         /implement-issue-claude <url>
         If .claude/commands/implement-issue-claude.md is missing from this checkout (the repo has not synced the @stable .claude/ assets yet), read workflow-templates/.claude/commands/implement-issue-claude.md from shubhodeep1/coding-workflows at ref stable with mcp__github__get_file_contents and follow it with <url> as $ARGUMENTS.
+        If the working directory has no git checkout of <repo> at all, attach <repo> to this session with push access, clone it once, and run the command from the clone. If that is impossible, never ask anything: post one comment on <url> starting <!-- ai:claude-blocked:v1 reason=environment-checkout-missing -->, add the ai:claude-blocked label, and end the turn. The hourly queue watchdog re-queues it on a fresh session.
         ```
       - pull request:
         ```
         /fix-claude-pr <url> — kind <kind> — head <head> — claim <claim>
         If .claude/commands/fix-claude-pr.md is missing from this checkout (the repo has not synced the @stable .claude/ assets yet), read workflow-templates/.claude/commands/fix-claude-pr.md from shubhodeep1/coding-workflows at ref stable with mcp__github__get_file_contents and follow it with the same $ARGUMENTS.
+        If the working directory has no git checkout of <repo> and none can be attached and cloned, never ask anything: report it and end the turn. The sweep's claim lapses and the catch-all queues a fresh fixer.
         ```
    If `create_trigger` fails twice, archive the new session (`archive_session`): it would sit idle with no prompt. Count the entry as failed (the pickup leaves its queue issue open, so the next wake retries).
 

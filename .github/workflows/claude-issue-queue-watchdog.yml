@@ -10,7 +10,9 @@ name: Claude Issue Queue Watchdog
 # open after CLAUDE_ISSUE_QUEUE_STALE_HOURS (repo variable, default 3), the
 # pickup has stopped: scripts/claude_issue_queue_watchdog.sh labels the
 # item `ai:claude-issue-queue-stale` and sends one Telegram ERROR with the
-# restart command. It never starts sessions itself (Actions cannot).
+# restart command. It never starts sessions itself (Actions cannot). A
+# second step (issue #4938) re-queues issues whose Claude session stopped on
+# an environment failure and closes queue items for closed issues.
 
 "on":
   schedule:
@@ -50,6 +52,27 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+
+      # Issue #4938: re-queue Claude issues whose session stopped on an
+      # environment failure (`<!-- ai:claude-blocked:v1 reason=environment-… -->`)
+      # through the same `claude-issue` dispatch `/reclarify` sends, at most
+      # CLAUDE_ISSUE_ENV_REQUEUE_MAX (2) times per issue per 24h, then one
+      # Telegram ERROR. It also closes queue items whose target issue was
+      # closed after queueing (#4912), before the stale check below sees them.
+      # GH_PAT reads the registered consumer repos and sends the dispatch;
+      # queue-item writes use the GITHUB_TOKEN. Fail-open: never blocks the
+      # stale check.
+      - name: Re-queue Claude issues blocked by an environment failure
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          CLAUDE_ISSUE_QUEUE_TOKEN: ${{ github.token }}
+          CLAUDE_ISSUE_WATCHDOG_MODE: env-requeue
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="${RUNNER_TEMP}/claude-issue-env-requeue-${GITHUB_RUN_ID}"
+          export RUNTIME_DIR
+          bash scripts/claude_issue_queue_watchdog.sh
 
       - name: Flag queue items nobody picked up
         run: |

@@ -26,7 +26,10 @@ Shell drivers:
     ``create_session``. A claude.ai routine run cannot do this: it gets no
     claude-code-remote tools (issue #4525).
   * ``scripts/claude_issue_queue_watchdog.sh`` flags queue issues nobody picked
-    up (``queue-stale``).
+    up (``queue-stale``). In its ``env-requeue`` mode it closes queue issues
+    whose target was closed after queueing (``queue-closed-targets``) and
+    re-queues issues whose Claude session stopped on an environment failure
+    (``env-requeue-plan``, issue #4938).
   * A session too deep in the session lineage to create its own CLAUDE.md
     §26 checker asks the pickup for one with a one-shot trigger; the pickup
     parses that request with ``arm-check-in-request`` (CLAUDE.md §26.B step
@@ -60,6 +63,8 @@ Routing order (first match wins):
 
 All functions are pure except ``fetch_open_queue`` (one ``gh api`` read),
 ``fetch_queue_bindings`` (the batched binding reads it documents),
+``env_requeue_plan`` and ``read_target_states`` (the reads they document,
+through an injectable reader),
 ``append_queue_binding`` (writes the binding file it is given), and the CLI
 entrypoints, which read only the files they are given (or those reads) and
 write JSON or text to stdout.
@@ -75,9 +80,10 @@ import re
 import subprocess
 import sys
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 SCHEMA_VERSION = "claude_issue.v1"
 DISPATCH_EVENT_TYPE = "claude-issue"
@@ -966,6 +972,404 @@ def queue_stale(
 	return stale
 
 
+# Environment blockers and their automatic re-queue (issue #4938). A Claude
+# session that stops because its environment is broken (no GitHub tools, no
+# checkout, no claude-code-remote tools) adds a reason to its CLAUDE.md §28.C
+# blocker marker: `<!-- ai:claude-blocked:v1 reason=environment-… -->`. The
+# plain `<!-- ai:claude-blocked:v1 -->` stays a human decision and is never
+# re-queued. The queue watchdog (scripts/claude_issue_queue_watchdog.sh,
+# `env-requeue` mode) re-queues environment blockers through the same
+# `claude-issue` dispatch `/reclarify` sends, and counts its retries from the
+# markers it leaves on the issue.
+BLOCKER_MARKER_RE = re.compile(r"<!-- ai:claude-blocked:v1(?: reason=([a-z0-9][a-z0-9-]{0,63}))? -->")
+ENVIRONMENT_REASON_PREFIX = "environment-"
+ENV_REQUEUE_MARKER_RE = re.compile(
+	r"<!-- ai:claude-env-requeue:v1 blocker=([0-9]{1,20}) reason=([a-z0-9][a-z0-9-]{0,63}) -->"
+)
+ENV_REQUEUE_EXHAUSTED_MARKER_RE = re.compile(
+	r"<!-- ai:claude-env-requeue-exhausted:v1 blocker=([0-9]{1,20}) reason=([a-z0-9][a-z0-9-]{0,63}) -->"
+)
+ENV_REQUEUE_MAX_RETRIES_DEFAULT = 2
+ENV_REQUEUE_WINDOW_HOURS_DEFAULT = 24.0
+# GitHub rejects search queries longer than 256 characters, so the registered
+# repositories are searched in chunks of `repo:` qualifiers.
+ENV_REQUEUE_SEARCH_QUERY_MAX = 250
+ENV_REQUEUE_COMMENT_PAGES_MAX = 10
+# The search API serves at most 1,000 results (10 pages of 100) per query.
+ENV_REQUEUE_SEARCH_PAGES_MAX = 10
+
+
+def parse_blocker_marker(body: Any) -> tuple[bool, str]:
+	"""Return ``(True, reason)`` when ``body`` starts with a blocker marker.
+
+	Only a comment that starts with the marker counts, so a comment quoting
+	one (a plan, a progress note) is not a blocker. ``reason`` is ``""`` for
+	the plain ``<!-- ai:claude-blocked:v1 -->`` form.
+	"""
+	match = BLOCKER_MARKER_RE.match(body.lstrip()) if isinstance(body, str) else None
+	if not match:
+		return False, ""
+	return True, match.group(1) or ""
+
+
+def _comment_time(comment: dict[str, Any]) -> datetime | None:
+	return _parse_timestamp(comment.get("created_at"))
+
+
+def env_requeue_decision(
+	comments: list[Any],
+	labels: list[str],
+	now: datetime,
+	max_retries: int = ENV_REQUEUE_MAX_RETRIES_DEFAULT,
+	window_hours: float = ENV_REQUEUE_WINDOW_HOURS_DEFAULT,
+	stale_hours: float = QUEUE_STALE_HOURS_DEFAULT,
+) -> dict[str, Any]:
+	"""Decide what the watchdog does for one open ``ai:claude-blocked`` issue.
+
+	Input: the issue's comments (REST objects), its label names, and ``now``.
+	Only comments by trusted authors count (``is_trusted_issue_author``), so
+	nobody else can forge a blocker or a re-queue marker. Output:
+	``{"action": "requeue" | "alert" | "skip", "reason", "blocker_id",
+	"blocker_reason", "retries_in_window", "retry", "stale_retry"}``.
+
+	* The latest trusted comment that starts with a blocker marker decides.
+	  A plain marker or a reason outside ``environment-*`` → ``skip``.
+	* The watchdog already re-queued that blocker and its marker is younger
+	  than ``stale_hours`` → ``skip`` (the fresh session is on its way). Older,
+	  with the label still on the issue, means that session died before it
+	  claimed the issue, so it is re-queued again (``stale_retry``).
+	* ``max_retries`` re-queues within the last ``window_hours`` → ``alert``,
+	  then ``skip``. Retries and alerts are both counted per issue, not per
+	  blocker: every failed re-queued session posts a new blocker, so a
+	  per-blocker count would never reach the cap. An exhausted marker of any
+	  blocker inside the window therefore suppresses another alert, so one
+	  issue sends at most one Telegram ERROR per window.
+
+	Pure: no API calls.
+	"""
+	result: dict[str, Any] = {
+		"action": "skip",
+		"reason": "",
+		"blocker_id": 0,
+		"blocker_reason": "",
+		"retries_in_window": 0,
+		"retry": 0,
+		"stale_retry": False,
+	}
+	trusted = [
+		comment
+		for comment in comments or []
+		if isinstance(comment, dict) and is_trusted_issue_author(comment) and _comment_time(comment) is not None
+	]
+	trusted.sort(key=lambda comment: (_comment_time(comment), comment.get("id") if isinstance(comment.get("id"), int) else 0))
+	blocker: dict[str, Any] | None = None
+	blocker_reason = ""
+	for comment in trusted:
+		found, reason = parse_blocker_marker(comment.get("body"))
+		if found:
+			blocker, blocker_reason = comment, reason
+	if blocker is None:
+		result["reason"] = "no_blocker"
+		return result
+	blocker_id = blocker.get("id") if isinstance(blocker.get("id"), int) else 0
+	result["blocker_id"] = blocker_id
+	result["blocker_reason"] = blocker_reason
+	if not blocker_reason.startswith(ENVIRONMENT_REASON_PREFIX):
+		result["reason"] = "not_environment"
+		return result
+	if BLOCKED_LABEL not in (labels or []):
+		result["reason"] = "not_blocked"
+		return result
+	if blocker_id <= 0:
+		result["reason"] = "blocker_without_id"
+		return result
+	window_start = now - timedelta(hours=float(window_hours))
+	recent = 0
+	last_for_blocker: datetime | None = None
+	alerted = False
+	for comment in trusted:
+		body = (comment.get("body") or "").lstrip() if isinstance(comment.get("body"), str) else ""
+		created = _comment_time(comment)
+		requeued = ENV_REQUEUE_MARKER_RE.match(body)
+		if requeued:
+			if created >= window_start:
+				recent += 1
+			if int(requeued.group(1)) == blocker_id:
+				last_for_blocker = created
+			continue
+		if ENV_REQUEUE_EXHAUSTED_MARKER_RE.match(body) and created >= window_start:
+			alerted = True
+	result["retries_in_window"] = recent
+	if last_for_blocker is not None:
+		if (now - last_for_blocker).total_seconds() / 3600.0 < float(stale_hours):
+			result["reason"] = "requeued_waiting"
+			return result
+		result["stale_retry"] = True
+	if recent >= int(max_retries):
+		if alerted:
+			result["reason"] = "exhausted_alerted"
+			return result
+		result["action"] = "alert"
+		result["reason"] = "retries_exhausted"
+		return result
+	result["action"] = "requeue"
+	result["reason"] = "stale_requeue" if result["stale_retry"] else "environment_blocker"
+	result["retry"] = recent + 1
+	return result
+
+
+def env_requeue_search_queries(allowed_repos: list[str]) -> list[str]:
+	"""Search queries covering every registered repository (issue #4938).
+
+	Each query is ``is:issue is:open label:"ai:claude" label:"ai:claude-blocked"``
+	plus as many ``repo:`` qualifiers as fit in ``ENV_REQUEUE_SEARCH_QUERY_MAX``
+	characters, so N registered repos cost ``ceil(N / per-query)`` search
+	calls (4 for 14 repos). Pure.
+	"""
+	base = f'is:issue is:open label:"{CLAUDE_LABEL}" label:"{BLOCKED_LABEL}"'
+	repos = sorted({slug.lower() for slug in allowed_repos if isinstance(slug, str) and REPO_SLUG_RE.match(slug)})
+	queries: list[str] = []
+	current = base
+	for slug in repos:
+		qualifier = f" repo:{slug}"
+		if current != base and len(current) + len(qualifier) > ENV_REQUEUE_SEARCH_QUERY_MAX:
+			queries.append(current)
+			current = base
+		current += qualifier
+	if current != base:
+		queries.append(current)
+	return queries
+
+
+def _issue_repo(issue: dict[str, Any]) -> str:
+	url = issue.get("repository_url")
+	prefix = "https://api.github.com/repos/"
+	if not isinstance(url, str) or not url.startswith(prefix):
+		return ""
+	slug = url[len(prefix):]
+	return slug if REPO_SLUG_RE.match(slug) else ""
+
+
+def env_requeue_candidates(items: list[Any], allowed_repos: list[str]) -> dict[str, Any]:
+	"""Filter search results to the issues the watchdog may re-queue.
+
+	Input: search ``items`` (issue objects). Output:
+	``{"candidates": [{"repo", "issue_number", "issue_url", "labels",
+	"skip_security_pass"}], "skipped": [{"repo", "issue_number", "reason"}]}``.
+	An issue qualifies when it is an open issue in a registered repository,
+	carries ``ai:claude`` and ``ai:claude-blocked``, and still routes to Claude
+	(``route_issue``; an ``ai:codex`` label wins). Duplicates collapse. Pure.
+	"""
+	allowed = {slug.lower() for slug in allowed_repos if isinstance(slug, str)}
+	seen: set[tuple[str, int]] = set()
+	candidates: list[dict[str, Any]] = []
+	skipped: list[dict[str, Any]] = []
+	for item in items or []:
+		if not isinstance(item, dict) or "pull_request" in item or item.get("state") != "open":
+			continue
+		repo = _issue_repo(item)
+		number = item.get("number")
+		if not repo or isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+			continue
+		key = (repo.lower(), number)
+		if key in seen:
+			continue
+		seen.add(key)
+		if repo.lower() not in allowed:
+			skipped.append({"repo": repo, "issue_number": number, "reason": "repo_not_registered"})
+			continue
+		labels = _label_names(item)
+		if CLAUDE_LABEL not in labels or BLOCKED_LABEL not in labels:
+			skipped.append({"repo": repo, "issue_number": number, "reason": "labels_missing"})
+			continue
+		routed = route_issue(item, None)
+		if routed["implementer"] != IMPLEMENTER_CLAUDE:
+			skipped.append({"repo": repo, "issue_number": number, "reason": f"routed_to_codex: {routed['reason']}"})
+			continue
+		candidates.append(
+			{
+				"repo": repo,
+				"issue_number": number,
+				"issue_url": f"https://github.com/{repo}/issues/{number}",
+				"labels": labels,
+				"skip_security_pass": bool(routed["skip_security_pass"]),
+			}
+		)
+	return {"candidates": candidates, "skipped": skipped}
+
+
+def _read_issue_comments(read: Any, repo: str, number: int) -> list[Any]:
+	# The issue-comments endpoint lists oldest first and takes no sort or
+	# direction, so the latest blocker is on the last page. A read that stops
+	# at the page cap with a full page would decide on an older blocker (maybe
+	# re-queue a plain §28.C one), so it fails instead and the issue is skipped.
+	comments: list[Any] = []
+	for page in range(1, ENV_REQUEUE_COMMENT_PAGES_MAX + 1):
+		data = read(f"repos/{repo}/issues/{number}/comments?per_page=100&page={page}")
+		if not isinstance(data, list):
+			raise RuntimeError(f"comments of {repo}#{number} are not an array")
+		comments.extend(data)
+		if len(data) < 100:
+			return comments
+	raise RuntimeError(f"{repo}#{number} has more than {ENV_REQUEUE_COMMENT_PAGES_MAX * 100} comments; the latest blocker is past the read cap")
+
+
+def env_requeue_plan(
+	allowed_repos: list[str],
+	now: datetime,
+	read: Any = None,
+	max_retries: int = ENV_REQUEUE_MAX_RETRIES_DEFAULT,
+	window_hours: float = ENV_REQUEUE_WINDOW_HOURS_DEFAULT,
+	stale_hours: float = QUEUE_STALE_HOURS_DEFAULT,
+) -> dict[str, Any]:
+	"""Read the blocked Claude issues and decide what to do with each (issue #4938).
+
+	Batching contract (CLAUDE.md §15):
+	  input   the registered repositories (``load_allowed_repos``);
+	  calls   one search per ``env_requeue_search_queries`` chunk and per 100
+	          results (at most ``ENV_REQUEUE_SEARCH_PAGES_MAX`` pages; one
+	          call per chunk while fewer than 100 issues are blocked), then
+	          one comment read per 100 comments of each candidate only;
+	  output  ``{"actions": [candidate fields + env_requeue_decision fields],
+	          "skipped": [...], "errors": [...], "searches": <n>}``;
+	  failure fail open: a failed search or comment read is listed under
+	          ``errors`` and that chunk or issue waits for the next hourly run;
+	          a search the API reports as incomplete, or with more results
+	          than were read, is listed under ``errors`` too.
+
+	``read`` is a ``path -> parsed JSON`` callable (``_gh_api_read`` by
+	default) that raises RuntimeError on failure.
+	"""
+	read = read or _gh_api_read
+	errors: list[str] = []
+	items: list[Any] = []
+	queries = env_requeue_search_queries(allowed_repos)
+	for query in queries:
+		read_count = 0
+		for page in range(1, ENV_REQUEUE_SEARCH_PAGES_MAX + 1):
+			params: dict[str, Any] = {"q": query, "per_page": 100}
+			if page > 1:
+				params["page"] = page
+			try:
+				data = read("search/issues?" + urlencode(params))
+			except RuntimeError as exc:
+				errors.append(f"search: {exc}")
+				break
+			found = data.get("items") if isinstance(data, dict) else None
+			if not isinstance(found, list):
+				errors.append("search: answer has no items array")
+				break
+			items.extend(found)
+			read_count += len(found)
+			total = data.get("total_count")
+			total = total if isinstance(total, int) and not isinstance(total, bool) else read_count
+			if data.get("incomplete_results") is True:
+				errors.append(f"search: incomplete results ({read_count} of {total} read)")
+				break
+			if len(found) < 100 or read_count >= total:
+				break
+		else:
+			errors.append(f"search: {read_count} of {total} results read; the rest are past the search API cap")
+	filtered = env_requeue_candidates(items, allowed_repos)
+	actions: list[dict[str, Any]] = []
+	for candidate in filtered["candidates"]:
+		try:
+			comments = _read_issue_comments(read, candidate["repo"], candidate["issue_number"])
+		except RuntimeError as exc:
+			errors.append(f"comments {candidate['repo']}#{candidate['issue_number']}: {exc}")
+			continue
+		decision = env_requeue_decision(comments, candidate["labels"], now, max_retries, window_hours, stale_hours)
+		entry = {key: value for key, value in candidate.items() if key != "labels"}
+		entry.update(decision)
+		actions.append(entry)
+	return {"actions": actions, "skipped": filtered["skipped"], "errors": errors, "searches": len(queries)}
+
+
+def queue_issue_targets(
+	issues: list[Any],
+	allowed_repos: list[str],
+	trusted_author: str = QUEUE_TRUSTED_AUTHOR,
+) -> list[dict[str, Any]]:
+	"""The target issue of every trusted, well-formed open ``issue`` queue item.
+
+	Output: ``[{"queue_issue", "repo", "issue_number"}]`` in queue order. Pull
+	request fix items and anything ``queue_pending`` would ignore are left out.
+	Pure.
+	"""
+	allowed = {slug.lower() for slug in allowed_repos if isinstance(slug, str)}
+	targets: list[dict[str, Any]] = []
+	for issue in issues or []:
+		if not _is_queue_issue(issue) or _queue_author(issue) != trusted_author:
+			continue
+		try:
+			payload = queue_payload_text(issue.get("body") or "")
+			validated = parse_fire_text(payload)
+		except ValueError:
+			continue
+		if validated["repo"].lower() not in allowed:
+			continue
+		targets.append({"queue_issue": issue.get("number"), "repo": validated["repo"], "issue_number": validated["issue_number"]})
+	return targets
+
+
+def _target_key(repo: str, number: Any) -> str:
+	return f"{repo.lower()}#{number}"
+
+
+def read_target_states(targets: list[tuple[str, int]], read: Any = None) -> dict[str, str]:
+	"""Read the state of each distinct target issue (one REST GET each, §15).
+
+	Output: ``{"<repo lowercased>#<N>": "open" | "closed"}``. A failed read
+	leaves its key out, so callers fail open and treat the target as open.
+	"""
+	read = read or _gh_api_read
+	states: dict[str, str] = {}
+	for repo, number in targets:
+		key = _target_key(repo, number)
+		if key in states or not REPO_SLUG_RE.match(repo or ""):
+			continue
+		try:
+			data = read(f"repos/{repo}/issues/{number}")
+		except RuntimeError:
+			continue
+		state = data.get("state") if isinstance(data, dict) else None
+		if state in ("open", "closed"):
+			states[key] = state
+	return states
+
+
+def drop_closed_targets(result: dict[str, Any], states: dict[str, str]) -> dict[str, Any]:
+	"""Move pending issue entries whose target is closed to ``ignored`` (#4912).
+
+	An issue closed after it was queued must not start a session. Each of the
+	entry's queue issues is listed as ``issue_closed: <repo>#<N>``; the queue
+	watchdog closes them. Targets with no known state stay pending. Pure.
+	"""
+	pending: list[Any] = []
+	ignored = list(result.get("ignored") or [])
+	for entry in result.get("pending") or []:
+		if entry.get("item_type") == "issue" and states.get(_target_key(entry.get("repo") or "", entry.get("issue_number"))) == "closed":
+			for queued in entry.get("queue_issues") or []:
+				ignored.append({"queue_issue": queued.get("number"), "reason": f"issue_closed: {entry['repo']}#{entry['issue_number']}"})
+			continue
+		pending.append(entry)
+	return {**result, "pending": pending, "ignored": ignored}
+
+
+def queue_closed_targets(
+	issues: list[Any],
+	allowed_repos: list[str],
+	states: dict[str, str],
+	trusted_author: str = QUEUE_TRUSTED_AUTHOR,
+) -> list[dict[str, Any]]:
+	"""Open ``issue`` queue items whose target issue is closed. Pure."""
+	return [
+		target
+		for target in queue_issue_targets(issues, allowed_repos, trusted_author)
+		if states.get(_target_key(target["repo"], target["issue_number"])) == "closed"
+	]
+
+
 # CLAUDE.md §26.B step 1c: the arguments a deep session sends the pickup.
 ARM_CHECK_IN_REQUEST_RE = re.compile(
 	r"^— arm-check-in (?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?P<pr>[1-9][0-9]{0,9}) "
@@ -1329,7 +1733,58 @@ def _cmd_queue_pending(args: argparse.Namespace) -> int:
 			return 2
 	else:
 		bindings = {"repo": queue_repo, "runs": {}}
-	print(json.dumps(queue_pending(issues, allowed, args.trusted_author, args.limit, bindings=bindings)))
+	result = queue_pending(issues, allowed, args.trusted_author, args.limit, bindings=bindings)
+	# An issue closed after it was queued starts no session (#4912): one
+	# target read per pending issue entry (at most --limit), fail open.
+	if args.fetch_repo:
+		states = read_target_states([(entry["repo"], entry["issue_number"]) for entry in result["pending"] if entry.get("item_type") == "issue"])
+	elif args.target_states_json:
+		states = _read_json(args.target_states_json)
+	else:
+		states = {}
+	if not isinstance(states, dict):
+		print("target states JSON is not an object", file=sys.stderr)
+		return 2
+	print(json.dumps(drop_closed_targets(result, states)))
+	return 0
+
+
+def _cmd_queue_closed_targets(args: argparse.Namespace) -> int:
+	if args.fetch_repo:
+		try:
+			issues = fetch_open_queue(args.fetch_repo)
+		except RuntimeError as exc:
+			print(str(exc), file=sys.stderr)
+			return 3
+	elif args.issues_json:
+		issues = _read_json(args.issues_json)
+	else:
+		print("one of --fetch-repo or --issues-json is required", file=sys.stderr)
+		return 2
+	if not isinstance(issues, list):
+		print("issues JSON is not an array", file=sys.stderr)
+		return 2
+	allowed = load_allowed_repos(Path(args.registry), args.self_repo)
+	if args.target_states_json:
+		states = _read_json(args.target_states_json)
+	else:
+		targets = queue_issue_targets(issues, allowed, args.trusted_author)
+		states = read_target_states([(target["repo"], target["issue_number"]) for target in targets])
+	if not isinstance(states, dict):
+		print("target states JSON is not an object", file=sys.stderr)
+		return 2
+	print(json.dumps(queue_closed_targets(issues, allowed, states, args.trusted_author)))
+	return 0
+
+
+def _cmd_env_requeue_plan(args: argparse.Namespace) -> int:
+	now = _parse_timestamp(args.now) if args.now else datetime.now(timezone.utc)
+	if now is None:
+		print(f"invalid --now: {args.now!r}", file=sys.stderr)
+		return 2
+	allowed = load_allowed_repos(Path(args.registry), args.self_repo)
+	plan = env_requeue_plan(allowed, now, None, args.max_retries, args.window_hours, args.stale_hours)
+	print(json.dumps(plan))
 	return 0
 
 
@@ -1422,7 +1877,26 @@ def main(argv: list[str] | None = None) -> int:
 	p_pending.add_argument("--limit", type=int, default=QUEUE_PICKUP_LIMIT)
 	p_pending.add_argument("--bindings-json", default="", help="binding records (fetch_queue_bindings output) for --issues-json mode")
 	p_pending.add_argument("--default-branch", default="", help="skip the default-branch read of --fetch-repo")
+	p_pending.add_argument("--target-states-json", default="", help='{"<repo>#<N>": "open"|"closed"} for --issues-json mode (issue #4912)')
 	p_pending.set_defaults(func=_cmd_queue_pending)
+
+	p_closed = sub.add_parser("queue-closed-targets", help="list open queue issues whose target issue is closed (issue #4912)")
+	p_closed.add_argument("--issues-json", default="")
+	p_closed.add_argument("--fetch-repo", default="", help="read the open queue of this repo and each target issue with gh")
+	p_closed.add_argument("--registry", required=True)
+	p_closed.add_argument("--self-repo", default=DEFAULT_UPSTREAM_REPO)
+	p_closed.add_argument("--trusted-author", default=QUEUE_TRUSTED_AUTHOR)
+	p_closed.add_argument("--target-states-json", default="", help='{"<repo>#<N>": "open"|"closed"} instead of reading the targets')
+	p_closed.set_defaults(func=_cmd_queue_closed_targets)
+
+	p_env = sub.add_parser("env-requeue-plan", help="decide which environment-blocked Claude issues to re-queue (issue #4938)")
+	p_env.add_argument("--registry", required=True)
+	p_env.add_argument("--self-repo", default=DEFAULT_UPSTREAM_REPO)
+	p_env.add_argument("--now", default="")
+	p_env.add_argument("--max-retries", type=int, default=ENV_REQUEUE_MAX_RETRIES_DEFAULT)
+	p_env.add_argument("--window-hours", type=float, default=ENV_REQUEUE_WINDOW_HOURS_DEFAULT)
+	p_env.add_argument("--stale-hours", type=float, default=QUEUE_STALE_HOURS_DEFAULT)
+	p_env.set_defaults(func=_cmd_env_requeue_plan)
 
 	p_bind = sub.add_parser("add-queue-binding", help="record a queue issue in this run's binding file (issue #4621)")
 	p_bind.add_argument("--binding-file", required=True)

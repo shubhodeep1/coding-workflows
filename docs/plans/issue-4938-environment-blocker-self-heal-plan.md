@@ -81,7 +81,7 @@ after they were queued (owner scope addition, #4912).
   whose latest trusted blocker has an `environment-*` reason. It does this
   within its next hourly run, through the intake (`trigger: reclarify`), at
   most 2 times per issue per rolling 24 hours. After that it sends one
-  Telegram ERROR per blocker and leaves the label in place.
+  Telegram ERROR per issue per window and leaves the label in place.
 - A plain blocker, or any non-`environment-*` reason, is never re-queued.
 - The pickup starts no session for an issue that is closed when it wakes, and
   the watchdog closes queue items whose target issue is closed.
@@ -229,8 +229,6 @@ Phase 1:
 - `tests/test_claude_issue_route.py`
 - `tests/test_implement_issue_claude_command.py`
 - `tests/test_session_start_extract_repo_slug.py`
-- `tests/test_claude_issue_queue_watchdog_env_requeue.py` [new] (wired into `ci.yml`)
-- `.github/workflows/ci.yml` (test wiring only)
 - `README.md`, `agents.md`
 - `changelog.d/4938-environment-blocker-self-heal.md` [new]
 - `docs/implement-plan/issue-4938-environment-blocker-self-heal.md` [new] (progress log)
@@ -257,8 +255,8 @@ Phase 1:
   text (ToolSearch, the session-start re-run, the three reasons, no
   `AskUserQuestion`, closed → no blocker) in the issue, plan, fix, and
   dispatch twins, and that the plain marker text readers still match.
-- Watchdog (`tests/test_claude_issue_queue_watchdog_env_requeue.py`, new):
-  runs the script in `env-requeue` mode with a fake `gh` and canned JSON.
+- Watchdog (`tests/test_claude_issue_route.py`, next to the existing
+  watchdog stub tests, already run by `ci.yml`): runs the script in `env-requeue` mode with a fake `gh` and canned JSON.
   Asserts the dispatch body (`trigger: reclarify`), the marker comment, the
   alert comment plus one Telegram call, no action on a plain blocker, closing
   a queue item for a closed target, and exit 0 when reads fail.
@@ -278,7 +276,7 @@ Phase 1:
   count (`is_trusted_issue_author`), and the intake re-authorizes every
   dispatch (#4620).
 - Re-queue loops → capped at 2 per rolling 24 hours per issue from markers,
-  one alert per blocker, and the label stays.
+  one alert per issue per window, and the label stays.
 - A re-queued session dies silently (e.g. no sources and no working GitHub
   transport) → AD-4 re-queues again once the label is still present after
   `CLAUDE_ISSUE_QUEUE_STALE_HOURS`. This counts toward the cap, so it ends in

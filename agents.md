@@ -297,7 +297,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     on the issue). Issue-mode sessions auto-decide every question, start-up
     checks included (CLAUDE.md §28.A), but never whether to run the chain: a
     session without claude-code-remote tools stops with `ai:claude-blocked`
-    (§28.C).
+    (§28.C). Issue #4938: unattended commands self-heal first (ToolSearch for
+    deferred tools, one `session-start.sh` re-run for a missing `gh`, one
+    attach + clone for a missing checkout). An environment stop that remains
+    is posted as `<!-- ai:claude-blocked:v1 reason=environment-<kind> -->`,
+    and `claude-issue-queue-watchdog.yml` re-queues it hourly through the
+    `/reclarify` dispatch (`claude_issue_route.py env-requeue-plan`, at most
+    2 per issue per 24h, then one Telegram ERROR). Plain blockers are never
+    re-queued. The same step closes queue items for closed target issues, and
+    `queue-pending` refuses them (`issue_closed`).
     Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
