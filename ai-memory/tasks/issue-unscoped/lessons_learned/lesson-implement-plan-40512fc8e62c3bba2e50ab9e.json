@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-29T07:16:29Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change replaces a value that other text still describes (a \"mirrors X's budget\" comment, a stopgap PR's unreleased changelog fragment), grep for every mention of the old value and the old job before merging; fragments that ship in the same release must not contradict each other.",
+  "phase": "implement_plan",
+  "pr_number": 5078,
+  "record_id": "lesson-implement-plan-40512fc8e62c3bba2e50ab9e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4707-split-ci-lint-job",
+    "file:.github/workflows/mark-stable.yml",
+    "file:.github/workflows/test-and-mark-stable.yml",
+    "file:changelog.d/4707-split-ci-lint-job.md"
+  ]
+}
