@@ -22,6 +22,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -511,9 +512,38 @@ def _panel(failed: tuple[str, ...] = (), findings: tuple[str, ...] = ()):
 	return blocks, statuses
 
 
+# The nine lens headings of prompts/review-reviewer-checklist.txt, in order.
+CHECKLIST_LENSES = (
+	"SECURITY & INPUT VALIDATION",
+	"CORRECTNESS & LOGIC",
+	"CONCURRENCY / RACES / IDEMPOTENCY",
+	"ERROR PATHS & EDGE CASES",
+	"PERFORMANCE & RESOURCE USE",
+	"INDEX-CONTRACT / DB RULES",
+	"NAMING / BACKWARD COMPATIBILITY",
+	"IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS",
+	"TASK COMPLETENESS / INTENT GAPS",
+)
+
+
+def _checklist_output(verdicts: dict[str, str] | None = None) -> str:
+	"""A checklist-shaped reviewer output: NONE under every lens unless overridden."""
+	verdicts = verdicts or {}
+	return "\n\n".join(f"{lens}\n{verdicts.get(lens, 'NONE')}" for lens in CHECKLIST_LENSES)
+
+
+# What a clean reviewer writes to review_<slug>.txt with the checklist on.
+CLEAN_RUNNER_OUTPUT = _checklist_output()
+
+
 def _runner_outputs(failed: tuple[str, ...]) -> dict[str, str]:
-	"""The review_<slug>.txt lines the runner writes for the failed slots of _panel."""
-	return {_slug(model): SLOT_LIMIT_FAILURE.format(model=model) for model in failed}
+	"""The review_<slug>.txt files the runner writes for _panel: the failure line
+	for each failed slot and a clean checklist verdict for every other slot
+	(a clean vote needs its own runner output, issue #5114)."""
+	return {
+		_slug(model): SLOT_LIMIT_FAILURE.format(model=model) if model in failed else CLEAN_RUNNER_OUTPUT
+		for model in PANEL
+	}
 
 
 def test_five_clean_one_failed_slot_is_clean():
@@ -539,7 +569,7 @@ def test_every_retry_exhaustion_line_is_a_failed_slot():
 		blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 		blocks = [(slug, line if slug == "minimax_minimax-m3" else body) for slug, body in blocks]
 		with tempfile.TemporaryDirectory() as td:
-			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={"minimax_minimax-m3": line})
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={**_runner_outputs(("minimax/minimax-m3",)), "minimax_minimax-m3": line})
 		assert proc.returncode == 0, proc.stderr
 		assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env, line
 		assert calls == [], line
@@ -740,14 +770,16 @@ def test_non_retryable_failure_relabelled_as_retry_exhaustion_is_not_a_missing_v
 	# that slot must not turn five clean votes into an auto-merge.
 	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={"minimax_minimax-m3": NON_RETRYABLE_FAILURE})
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={**_runner_outputs(("minimax/minimax-m3",)), "minimax_minimax-m3": NON_RETRYABLE_FAILURE})
 	_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "different")
 
 
 def test_failed_slot_without_runner_output_is_not_a_missing_vote():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={})
+		outputs = _runner_outputs(("minimax/minimax-m3",))
+		del outputs["minimax_minimax-m3"]
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=outputs)
 	_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "missing")
 
 
@@ -755,14 +787,14 @@ def test_runner_output_with_more_than_the_failure_line_is_not_a_missing_vote():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 	line = SLOT_LIMIT_FAILURE.format(model="minimax/minimax-m3")
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={"minimax_minimax-m3": line + "\n- scripts/a.sh:10 | severity=high"})
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={**_runner_outputs(("minimax/minimax-m3",)), "minimax_minimax-m3": line + "\n- scripts/a.sh:10 | severity=high"})
 	_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "different")
 
 
 def test_another_retry_exhaustion_line_than_the_runner_wrote_is_not_a_missing_vote():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={"minimax_minimax-m3": "Reviewer minimax/minimax-m3 failed after 4 attempts."})
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={**_runner_outputs(("minimax/minimax-m3",)), "minimax_minimax-m3": "Reviewer minimax/minimax-m3 failed after 4 attempts."})
 	_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "different")
 
 
@@ -777,6 +809,8 @@ def test_empty_runner_output_is_reported_as_empty():
 			reviews.mkdir()
 			for slug, status in statuses.items():
 				(reviews / f"status_review_{slug}.txt").write_text(status + "\n", encoding="utf-8")
+			for slug, output in _runner_outputs(("minimax/minimax-m3",)).items():
+				(reviews / f"review_{slug}.txt").write_text(output + "\n", encoding="utf-8")
 			(reviews / "review_minimax_minimax-m3.txt").write_text(content, encoding="utf-8")
 			proc, calls, _posts, github_env = _run_handoff(tmp, ledger=_ledger(blocks), extra_env={"PREVIOUS_REVIEWS_DIR": str(reviews), "REVIEWERS_SUCCESSFUL": "5"})
 		_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "empty")
@@ -843,6 +877,210 @@ def test_all_clean_ledger_without_failed_slots_keeps_todays_rule():
 	assert calls == []
 	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
 	assert "CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS" not in proc.stdout
+
+
+# ---- a clean vote must come from the reviewer's own runner output (issue #5114) ----
+
+GLM = "z-ai_glm-5_2"
+LABELLED_FINDING = (
+	"File: scripts/a.sh\n"
+	"Line or code reference: 10\n"
+	"Problem: unquoted expansion\n"
+	"Why it fails at runtime: word splitting on paths with spaces\n"
+	"SEVERITY: MAJOR\n"
+	"ISSUE_CONFIDENCE: 4"
+)
+TASK_GAP = (
+	"Requirement: the issue asks for a timeout on the fetch\n"
+	"Expected change site: scripts/fetch.sh\n"
+	"Evidence of absence: no timeout flag in the diff\n"
+	"SEVERITY: MAJOR\n"
+	"ISSUE_CONFIDENCE: 4"
+)
+
+
+def _run_one_failed_slot(td: str, glm_output: str | None, *, extra_env: dict[str, str] | None = None):
+	"""Five clean ledger blocks and one verified failed slot (minimax); GLM's runner output replaced (None deletes it)."""
+	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
+	outputs = _runner_outputs(("minimax/minimax-m3",))
+	if glm_output is None:
+		del outputs[GLM]
+	else:
+		outputs[GLM] = glm_output
+	return _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=outputs, extra_env=extra_env)
+
+
+def _assert_clean_vote_rejected(proc, calls, github_env, reason: str):
+	assert proc.returncode == 0, proc.stderr
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS" not in proc.stdout
+	assert (
+		f"Claude-fixer ledger block '{GLM}' reads clean but the reviewer runner's review_{GLM}.txt is not an unambiguous no-findings result ({reason}); the ledger is not clean."
+		in proc.stdout
+	)
+	assert len(calls) == 1
+	assert f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=2 -->" in calls[0]["payload"]["body"]
+
+
+def test_clean_ledger_block_over_a_reviewer_finding_is_not_a_clean_vote():
+	# The issue's exploit: one genuine failed slot, and the consensus ledger
+	# labels a successful reviewer's block clean although that reviewer's own
+	# output reports a finding. Five success statuses must not auto-merge.
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_one_failed_slot(td, _checklist_output({"CORRECTNESS & LOGIC": LABELLED_FINDING}))
+	_assert_clean_vote_rejected(proc, calls, github_env, "reports a finding or task gap")
+	# The failed slot itself is still verified and reported as a missing vote.
+	assert "Reviewer slots that failed (missing votes, not findings): `minimax_minimax-m3`." in calls[0]["payload"]["body"]
+
+
+def test_clean_ledger_block_over_a_reviewer_task_gap_is_not_a_clean_vote():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_one_failed_slot(td, _checklist_output({"TASK COMPLETENESS / INTENT GAPS": TASK_GAP}))
+	_assert_clean_vote_rejected(proc, calls, github_env, "reports a finding or task gap")
+
+
+def test_markdown_decorated_finding_labels_are_findings():
+	for finding in (
+		"- **File:** scripts/a.sh",
+		"**Problem**: unquoted expansion",
+		"1. File: scripts/a.sh",
+		"> SEVERITY: BLOCKER",
+		"  `Requirement:` a timeout",
+		"### Evidence of absence: no hunk in scripts/fetch.sh",
+		"issue_confidence: 3",
+	):
+		# A NONE verdict elsewhere does not outweigh a finding field.
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, "NONE\n" + finding)
+		_assert_clean_vote_rejected(proc, calls, github_env, "reports a finding or task gap")
+
+
+def test_clean_ledger_block_needs_a_runner_output():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_one_failed_slot(td, None)
+	_assert_clean_vote_rejected(proc, calls, github_env, "missing")
+
+
+def test_empty_clean_runner_output_is_not_a_clean_vote():
+	for content in ("", "\n\n", "   "):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+		_assert_clean_vote_rejected(proc, calls, github_env, "empty")
+
+
+def test_unreadable_clean_runner_output_is_not_a_clean_vote():
+	real_cat = shutil.which("cat")
+	assert real_cat
+	with tempfile.TemporaryDirectory() as td:
+		fake_bin = Path(td) / "fake_bin"
+		fake_bin.mkdir()
+		fake_cat = fake_bin / "cat"
+		fake_cat.write_text(
+			"#!/usr/bin/env bash\n"
+			f'[ "${{1##*/}}" = "review_{GLM}.txt" ] && exit 1\n'
+			f'exec {real_cat} "$@"\n',
+			encoding="utf-8",
+		)
+		fake_cat.chmod(0o755)
+		path = os.pathsep.join((str(fake_bin), str(Path(td) / "bin"), os.environ.get("PATH", "")))
+		proc, calls, _posts, github_env = _run_one_failed_slot(td, CLEAN_RUNNER_OUTPUT, extra_env={"PATH": path})
+	_assert_clean_vote_rejected(proc, calls, github_env, "unreadable")
+
+
+def test_runner_output_without_a_none_verdict_is_not_a_clean_vote():
+	# Real outputs seen on 2026-09-29: a bare remark and a narration line.
+	for content in ("No changes are needed.", "Reading the current state of both files to verify parity.", "None."):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+		_assert_clean_vote_rejected(proc, calls, github_env, "has no NONE verdict")
+
+
+def test_checklist_lens_without_a_none_verdict_is_not_a_clean_vote():
+	prose_lens = _checklist_output({"TASK COMPLETENESS / INTENT GAPS": "The three pass-1 claims are false positives."})
+	missing_lens = "\n\n".join(f"{lens}\nNONE" for lens in CHECKLIST_LENSES[:-1])
+	trailing_heading = "\n\n".join(f"{lens}\nNONE" for lens in CHECKLIST_LENSES[:-1]) + f"\n\n{CHECKLIST_LENSES[-1]}\n"
+	two_headings = CLEAN_RUNNER_OUTPUT.replace("SECURITY & INPUT VALIDATION\nNONE", "SECURITY & INPUT VALIDATION\nCORRECTNESS & LOGIC\nNONE", 1)
+	for content in (prose_lens, missing_lens, trailing_heading, two_headings):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+		_assert_clean_vote_rejected(proc, calls, github_env, "leaves a checklist lens without a NONE verdict")
+
+
+def _assert_clean_with_one_failed_slot(proc, calls, github_env):
+	assert proc.returncode == 0, proc.stderr
+	assert calls == []
+	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
+	assert "failed_slots=minimax_minimax-m3 clean_reviewers=5 min=5" in proc.stdout
+
+
+def test_clean_votes_accept_the_reviewer_contract_shapes():
+	lenses = "\n\n".join(f"{lens}\nNONE" for lens in CHECKLIST_LENSES)
+	for content in (
+		# Checklist verdicts with narration before and a summary after (seen on real runs).
+		"Reading the actual files to verify the pass-1 claims.\n" + lenses + "\n\nThe diff implements all four findings correctly.",
+		# Markdown headings, CRLF line ends, and indentation.
+		"\r\n".join(f"## {lens}\r\n  NONE  " for lens in CHECKLIST_LENSES),
+		# Checklist off: the reviewer contract's bare NONE (prompts/_nag_reminders.txt).
+		"NONE",
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+		_assert_clean_with_one_failed_slot(proc, calls, github_env)
+
+
+def test_clean_runner_output_check_behaves_the_same_under_mawk_and_gawk():
+	cases = {
+		CLEAN_RUNNER_OUTPUT: None,
+		_checklist_output({"CORRECTNESS & LOGIC": "- **File:** scripts/a.sh"}): "reports a finding or task gap",
+		_checklist_output({"TASK COMPLETENESS / INTENT GAPS": "prose"}): "leaves a checklist lens without a NONE verdict",
+		"No changes are needed.": "has no NONE verdict",
+	}
+	for awk_name in ("mawk", "gawk"):
+		awk_path = shutil.which(awk_name)
+		if awk_path is None:
+			pytest.skip(f"{awk_name} not installed")
+		for content, reason in cases.items():
+			with tempfile.TemporaryDirectory() as td:
+				shim = Path(td) / "awk_shim"
+				shim.mkdir()
+				(shim / "awk").symlink_to(awk_path)
+				path = os.pathsep.join((str(shim), str(Path(td) / "bin"), os.environ.get("PATH", "")))
+				proc, calls, _posts, github_env = _run_one_failed_slot(td, content, extra_env={"PATH": path})
+			if reason is None:
+				_assert_clean_with_one_failed_slot(proc, calls, github_env)
+			else:
+				_assert_clean_vote_rejected(proc, calls, github_env, reason)
+
+
+def test_lens_headings_match_the_reviewer_checklist_prompt():
+	# The script's heading list must be the prompt's nine lens headings, in
+	# order: a renamed lens would otherwise silently loosen the lens rule.
+	script = HANDOFF_SCRIPT.read_text(encoding="utf-8")
+	match = re.search(r'^claude_fixer_checklist_lens_headings="([^"]*)"$', script, re.M)
+	assert match, "claude_fixer_checklist_lens_headings not found"
+	assert tuple(match.group(1).split("|")) == CHECKLIST_LENSES
+	prompt = (REPO_ROOT / "prompts" / "review-reviewer-checklist.txt").read_text(encoding="utf-8")
+	prompt_headings = tuple(
+		line
+		for line in prompt.splitlines()
+		if re.fullmatch(r"[A-Z][A-Z &/-]+", line) and line not in ("REVIEWER CHECKLIST", "WHAT TO FLAG", "WHAT NOT TO FLAG")
+	)
+	assert prompt_headings == CHECKLIST_LENSES
+	assert "nine lens headings" in prompt
+	assert "or the literal word NONE" in prompt
+
+
+def test_ledger_without_failed_slots_does_not_read_runner_outputs():
+	# AD-1: only the failed-slot path verifies clean votes against the runner
+	# output; a ledger with no failed slot keeps the every-block-clean rule.
+	blocks, statuses = _panel()
+	outputs = {_slug(model): "No changes are needed." for model in PANEL}
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=outputs)
+	assert proc.returncode == 0, proc.stderr
+	assert calls == []
+	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
+	assert "not an unambiguous no-findings result" not in proc.stdout
 
 
 def test_workflow_wires_the_minimum_clean_reviewers_variable():

@@ -99,12 +99,21 @@ Phases of the unattended pipeline (each is a separate workflow file under
    failure class). Such a ledger is clean when the consensus blocks are empty, no
    completed reviewer reported anything, and at least
    `CLAUDE_FIXER_MIN_CLEAN_REVIEWERS` (repo var, default 5) blocks read
-   `(No findings reported.)` from slots whose status file reads `success`; it
+   `(No findings reported.)` from slots whose status file reads `success`
+   and whose own `review_<slug>.txt` is an unambiguous no-findings result
+   (issue #5114: the ledger is model output and can read clean over a
+   reviewer's finding). That output needs at least one `NONE` line, no
+   finding or task-gap field (`File:`, `Line or code reference:`, `Problem:`,
+   `Why it fails at runtime:`, `Requirement:`, `Expected change site:`,
+   `Evidence of absence:`, `SEVERITY:`, `ISSUE_CONFIDENCE:`, markdown markers
+   ignored), and, when any lens heading of
+   `prompts/review-reviewer-checklist.txt` appears, all nine lenses each
+   followed by `NONE`; prose around the verdicts is allowed. It
    then takes the same clean path and logs
    `CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS pr=… head=… round=… failed_slots=… clean_reviewers=… min=…`.
    Fewer clean reviewers, any other text, or a status or output file that
-   does not match hands the round off, and the hand-off names the verified
-   failed slots. A ledger with
+   does not match hands the round off with a `::warning::` naming the block
+   and the reason, and the hand-off names the verified failed slots. A ledger with
    no failed slot keeps the every-block-clean rule, with no minimum. At the
    cap the PR itself
    is labelled `ai:review-blocked`; dispatch
