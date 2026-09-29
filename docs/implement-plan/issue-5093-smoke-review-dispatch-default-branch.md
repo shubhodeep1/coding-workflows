@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch
 - Project branch: claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch   Final PR: #5107 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #5111
+- Waiting on: conformance-fix PR from `claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch-conformance-fix-1`
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01DeJ3bVofrAPjfdXYapCF43   safety net trig_01HaH6KxmNMbExKmVVN1nVe6   hand-back trig_01AEpSHUFmAYrTxQR3gGLNr2
+- Check-in: checker session_01DeJ3bVofrAPjfdXYapCF43 (reused)   safety net and hand-back: new triggers armed by the conformance 1/3 stage (ids in its report and the next `— resume.` block)
 - Last updated: 2026-09-29
-- Last note: review round 2 on PR #5111: the one finding (timestamp-shaped log anchor) settled per AD-10 by accepting any single prefix token; first-match rule unchanged
+- Last note: conformance run 1: CONFORMANT (Correctness: CONCERNS); one plan divergence (null/empty head_branch accepted as provenance) fixed per AD-11 in the conformance-fix PR
 
 ## Phases
-1. [ ] Phase 1 — default-branch smoke review dispatch with checked-out-SHA correlation   — PR #5111 open (waiting); review rounds: 2; interventions: 0
+1. [x] Phase 1 — default-branch smoke review dispatch with checked-out-SHA correlation   — PR #5111 merged 2026-09-29 (as `c7ec923`, merged by hand per the answer to the round-3 block); review rounds: 3; interventions: 0
    - [x] `scripts/smoke_review_dispatch.sh`: `smoke_review_pr_named_runs`, `smoke_review_checked_out_sha`, `smoke_review_sha_descends_from` (AD-1, AD-2, AD-9)
    - [x] "Validate prerequisites" (`id: prereqs`) outputs `test_repo_default_branch` from its existing `repos/${TEST_REPO}` read (AD-7)
    - [x] Phase 3c dispatches at `REVIEW_DISPATCH_REF`, registers `bug_b_run_id`, and stays fail-soft (AD-3)
@@ -24,6 +24,7 @@
    - [x] `agents.md`, `docs/INVENTORY.md`, `changelog.d/5093-smoke-review-dispatch-default-branch.md`
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — fix PR from `claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch-conformance-fix-1` (AD-11) (pre-security)
 
 ## Security pass
 - Skipped: `Security pass: skip (ai:security: automation-produced issue)` in the plan header, verified by `.claude/scripts/security_pass_skip.py`.
@@ -45,9 +46,10 @@
 - AD-8 [plan, 2026-09-29] Is the Phase 6 poller-wrapper dispatch at `ai/issue-<N>` in scope? — Picked: A — no, recorded only. Alternatives: B — move it too. Why: not this finding; separate contract (§5). Applied in: no code change. Status: pending review
 - AD-9 [plan, 2026-09-29] Where do the new helpers live? — Picked: A — sourced `scripts/smoke_review_dispatch.sh`. Alternatives: B — inline. Why: one tested implementation for three sites. Applied in: phase 1 PR. Status: pending review
 - AD-10 [phase 1/1 — review round 2, 2026-09-29] One reviewer (1 of 6, NIT) re-raised round 1's rejected point: `smoke_review_checked_out_sha` requires an ISO-8601-shaped timestamp before `Captured INITIAL_HEAD_SHA=`, so a changed log timestamp format would fail a genuine run with rc=2. How? — Picked: A — accept any single non-whitespace prefix token, keep exactly one token required and the first match winning, and test other token shapes plus the lines that must still be ignored. Alternatives: B — reject again (fail-closed is correct), which needs the dedicated verdict bot this web session cannot post as, so the PR would block; C — make the prefix optional, which in a timestamp-less log would let `echo Captured …` match. Why: the first-match rule carries the security property, not the timestamp's shape, so A removes a false failure at no security cost (§1) with the smallest change (§5). Applied in: PR #5111 (review round 2 commit). Status: pending review
+- AD-11 [conformance 1/3, 2026-09-29] `smoke_review_pr_named_runs` keeps PR-named dispatch runs whose `head_branch` is null or empty (review round 1), where the plan and #5094's provenance rule require the dispatch ref; nothing shows such a run executed the reviewed wrapper, and its own log is the only correlation evidence. How? — Picked: A — keep only runs whose `head_branch` equals the dispatch ref, still checked client-side (no `branch=` filter). Alternatives: B — keep null/empty-branch runs but require their `head_sha` to be in the dispatch ref's history (one compare read per such run); C — leave as is and record the deviation. Why: fails closed (§1) and matches the plan and #5094; none of the 200 most recent dispatch runs in this repo had a null `head_branch`; Phase 3c stays fail-soft and Phase 4b fails visibly with `retry_dispatch_failed`; B adds a read path for a case never observed (§5). Applied in: conformance-fix PR (conformance-fix-1). Status: pending review
 
 ## Lessons
-- [source:intervention] A lookup of default-branch `workflow_dispatch` runs by PR run name must not pass the API's `branch=` filter or require `head_branch == <ref>`: GitHub can report `head_branch` as null on such runs, so keep null or empty head branches and drop only runs on another branch. (files: scripts/smoke_review_dispatch.sh)
+- [source:conformance] A PR-named `workflow_dispatch` run counts as trusted evidence only when its `head_branch` is the dispatch (default) branch: `run-name` is evaluated from the workflow file at the dispatched ref, so a null or empty `head_branch` proves nothing and must fail closed; tolerate null only where the run is used to suppress work, never to accept it. (files: scripts/smoke_review_dispatch.sh)
 
 ## Notes
 - Security pass skipped per the plan header (verified automation-produced `ai:security` issue).
@@ -55,3 +57,6 @@
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5093#issuecomment-5887705973 (id 5887705973)
 - Phase 1: `tests/test_test_and_mark_stable_review_blocked_budget.py` needed no change (its retry assertions still hold); the phantom filter test now extracts the `jq --argjson extra` form. Local runs also needed `pytest`, `gawk`, and `yamllint` installed in the session container.
 - Out of scope (AD-8): the Phase 6 poller-wrapper dispatch still runs at `ai/issue-<N>`.
+- Review round 3 on PR #5111 (head `99f48e5`): every finding was rejected with reasons, and convergence needed the dedicated verdict bot (`CLAUDE_FIXER_VERDICT_BOT_LOGIN` unset), so the project stopped BLOCKED (issue comment 5893188350). The owner answered C: PR #5111 was verified and merged by hand as `c7ec923` (issue comment 5894291806); the `/reclarify` that routed the resume is issue comment 5898554835.
+- Resume (2026-09-29, session_01YBuZoB6J3QZBSieDnAMR1Z): the log still read `Status: IN_PROGRESS` because the block was never committed, but the checker had no pending check-in and the round-3 stage session was archived, so the project resumed at conformance 1/3 instead of reporting `already in progress`.
+- Project branch synced with the base as `a3795f3`: `agents.md` conflict resolved by keeping the base's #5094 provenance text in the sweep/poller bullet and this project's #4898/#5093 bullets.
