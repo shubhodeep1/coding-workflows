@@ -160,6 +160,23 @@ def test_title_filter_ignores_other_issues_and_empty_title_matches_any() -> None
 	assert result.stdout == "7"
 
 
+def test_newer_run_for_another_issue_is_skipped() -> None:
+	# The run 36374918973 shape: the harness recorded Clarify run 36375238437,
+	# titled "Set second E2E smoke canary for run 36374918973", for its own
+	# smoke issue. With the title passed, only the smoke issue's run matches.
+	page1 = {
+		"workflow_runs": [
+			_run("Internal: AI Clarify", "2026-09-28T03:50:00Z", "success", 36375238437, "Set second E2E smoke canary for run 36374918973"),
+			_run("Internal: AI Clarify", "2026-09-28T03:46:30Z", "success", 36374999999, "[E2E Smoke Test] Update smoke-test canary (run 36374918973)"),
+		]
+	}
+	lookup = 'find_latest_scoped_run_field "owner/repo" "2026-09-28T03:46:08Z" "Clarif" "[E2E Smoke Test] Update smoke-test canary (run 36374918973)" "id"'
+	result, calls = _invoke({"page-1.json": page1}, lookup)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == "36374999999"
+	assert len(calls) == 1
+
+
 def test_scan_is_capped_at_five_pages() -> None:
 	result, calls = _invoke({"default.json": {"workflow_runs": _filler(100, 1000)}}, LOOKUP.format(title="Smoke"))
 	assert result.returncode == 0, result.stderr
@@ -182,6 +199,12 @@ def _workflow() -> str:
 def test_capture_sites_use_the_paged_lookup() -> None:
 	wf = _workflow()
 	assert wf.count('find_latest_scoped_run_field "${TEST_REPO}"') == 3
+	# Clarify and Implement scope by the smoke issue's title, like Plan does.
+	assert wf.count('"${name_re}" "${ISSUE_TITLE:-}" "id"') == 2
+	for step_id in ("wait-clarify", "wait-implement"):
+		step = re.search(rf"id: {step_id}\n        env:\n(.*?)\n        run: \|", wf, re.S)
+		assert step is not None, step_id
+		assert "ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}" in step.group(1), step_id
 	for body in re.findall(r"capture_run_id\(\) \{.*?\n          \}", wf, re.S):
 		assert "actions/runs?per_page=100" not in body
 	plan_field = re.search(r"latest_scoped_run_field\(\) \{.*?\n          \}", wf, re.S)

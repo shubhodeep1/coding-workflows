@@ -614,6 +614,10 @@ jobs:
         id: wait-clarify
         env:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          # ISSUE_TITLE scopes the run lookup to OUR issue's run (display_title
+          # equals the issue title for issues / issue_comment events). Release
+          # run 36374918973 recorded another issue's Clarify run without it.
+          ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
         run: |
           set -euo pipefail
           echo "Waiting for clarify to finish on issue #${ISSUE_NUMBER}..."
@@ -634,7 +638,7 @@ jobs:
             local result=""
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(find_latest_scoped_run_field "${TEST_REPO}" "${{ steps.create-issue.outputs.created_after }}" "${name_re}" "" "id" || echo "")
+              result=$(find_latest_scoped_run_field "${TEST_REPO}" "${{ steps.create-issue.outputs.created_after }}" "${name_re}" "${ISSUE_TITLE:-}" "id" || echo "")
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
                 return 0
@@ -932,6 +936,10 @@ jobs:
         id: wait-implement
         env:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          # ISSUE_TITLE scopes the run lookup to OUR issue's run (display_title
+          # equals the issue title for issues / issue_comment events). Release
+          # run 36374918973 recorded another issue's Clarify run without it.
+          ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
         run: |
           set -euo pipefail
           echo "Waiting for implementation PR on issue #${ISSUE_NUMBER}..."
@@ -965,7 +973,7 @@ jobs:
             local result=""
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(find_latest_scoped_run_field "${TEST_REPO}" "${IMPL_CREATED_AFTER}" "${name_re}" "" "id" || echo "")
+              result=$(find_latest_scoped_run_field "${TEST_REPO}" "${IMPL_CREATED_AFTER}" "${name_re}" "${ISSUE_TITLE:-}" "id" || echo "")
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
                 return 0
