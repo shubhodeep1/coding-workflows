@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T16:45:20Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An issue-mode project stacked more than one level below the default branch cannot run runtime validation, even after #4734; ask once and record the base chain's validation as the cover instead of dispatching a run that is bound to fail.",
+  "phase": "implement_plan",
+  "pr_number": 5210,
+  "record_id": "lesson-implement-plan-3f4c338d4942c3eae4ec93c8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5094-verify-pr-named-review-run-provenance",
+    "file:.github/workflows/validate.yml",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
