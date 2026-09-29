@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T08:39:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Before a plan names a new parameter, check the function body for a local of that name: the plan's `source` keyword would have collided with the `source = pass1_by_id.get(cid)` local in `demote_with_diagnostics`, so the implementation used `source_reader` (CLAUDE.md \u00a76 new-identifier uniqueness).",
+  "phase": "implement_plan",
+  "pr_number": 5091,
+  "record_id": "lesson-implement-plan-92c554eb96c7c19207f5e9d9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4976-source-grounded-rejection-votes",
+    "file:scripts/review_claude_fixer_nonblocking.py"
+  ]
+}
