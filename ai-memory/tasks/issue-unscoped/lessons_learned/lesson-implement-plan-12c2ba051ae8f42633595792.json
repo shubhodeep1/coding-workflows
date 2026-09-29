@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T05:25:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A detached child started by a hook must be told which event started it (an id or a digest of the line the hook wrote), never re-read \"the latest\" entry of a shared log, because a second event can land before the child starts.",
+  "phase": "implement_plan",
+  "pr_number": 4870,
+  "record_id": "lesson-implement-plan-12c2ba051ae8f42633595792",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4755-report-blocking-permission-prompts",
+    "file:.claude/hooks/permission_prompt_logger.py",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}

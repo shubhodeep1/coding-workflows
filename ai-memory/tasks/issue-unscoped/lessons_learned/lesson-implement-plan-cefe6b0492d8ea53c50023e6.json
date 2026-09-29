@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T05:25:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A hook that must never delay the event it observes should hand network work to a detached child (`start_new_session=True`, stdio to /dev/null, `python3 -B`) and keep every decision in the child.",
+  "phase": "implement_plan",
+  "pr_number": 4870,
+  "record_id": "lesson-implement-plan-cefe6b0492d8ea53c50023e6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4755-report-blocking-permission-prompts",
+    "file:.claude/hooks/permission_prompt_logger.py",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T05:25:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "State files under ~/.claude are shared by every session on a host (self-hosted runners), so once-per-session limits must be keyed by session id.",
+  "phase": "implement_plan",
+  "pr_number": 4870,
+  "record_id": "lesson-implement-plan-6cacc5405b2121feb7c78347",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4755-report-blocking-permission-prompts",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}
