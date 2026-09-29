@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:350-352 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `_is_heredoc_operator` docstring claims support for `<<-`, but the implementation rejects it.\n  WHY: There is no runtime behavior change today, but the misleading docstring could lead maintainers to incorrect assumptions.\n- .claude/scripts/permission_prompts.py:350-352 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `_is_heredoc_operator` docstring claims support for `<<-`, but the implementation rejects it.\n  WHY: There is no runtime behavior change today, but the misleading docstring could lead maintainers to incorrect assumptions.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: agents.md (\u00a723.I section) and README.md (unattended helpers callout): one short paragraph each on class routing and the duplicate-close carve-out.\n  expected_change_site: agents.md and README.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No diff hunk modifies agents.md or README.md.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/permission_prompts.py: lines 350-352 | severity=low | confidence=5\n  PROBLEM: The docstring for _is_heredoc_operator claims support for the <<- heredoc operator, but the implementation rejects it.\n  WHY: No runtime behavior change today as the operator was already dropped elsewhere, but it misleads maintainers about API capability, which could lead to incorrect usage or assumptions if the operator is wired in later.\n- .claude/scripts/permission_prompts.py: lines 350-352 | severity=low | confidence=5\n  PROBLEM: Same misleading docstring as the twin.\n  WHY: No runtime behavior change today, but misleads maintainers.\n- TASK_GAP\n  Requirement: agents.md (\u00a723.I section) and README.md (unattended helpers callout): one short paragraph each on class routing and the duplicate-close carve-out.\n  Expected change site: agents.md and README.md\n  Evidence of absence: No diff hunk modifies agents.md or README.md.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e42fd34283c3ca4c1554c77bcac240a42b9c55cae6967606d1a93ebc03de325c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5133,
+    "run_id": "36589417634",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36589417634",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929155024_1f2dc17f1d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5133,
+    "run_id": "36589417634"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T15:50:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
