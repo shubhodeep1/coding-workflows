@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:46:23Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A timing test for a search regex must use a body with no match: a match right after the blank lines returns on the first attempt and hides the quadratic scan.",
+  "phase": "implement_plan",
+  "pr_number": 5005,
+  "record_id": "lesson-implement-plan-05d1075eb9e638d622b11e00",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4956-linear-issue-branch-parser",
+    "file:tests/test_gh_helpers_issue_body_integration_branch.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:46:23Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A regex fix that only stops `\\s*` from spanning newlines is not enough when a lazy group is followed by adjacent optional whitespace runs: that backtracks cubically inside one line, so parse the value with string operations and test a long single whitespace run, not only many blank lines.",
+  "phase": "implement_plan",
+  "pr_number": 5005,
+  "record_id": "lesson-implement-plan-5c3f08ee030dec77bfa87751",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4956-linear-issue-branch-parser",
+    "file:scripts/gh_helpers.sh"
+  ]
+}

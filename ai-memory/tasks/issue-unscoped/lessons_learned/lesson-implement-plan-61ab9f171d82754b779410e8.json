@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T11:46:23Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "State a regex replacement's contract as \"the original regexes applied to each line on its own\" and check every comment claim about the whole-body regex against bodies whose next line has no backtick: under re.MULTILINE a `\\s*` after the label can take the next line as the value, so a \"returns an empty string\" claim holds only for some bodies.",
+  "phase": "implement_plan",
+  "pr_number": 5005,
+  "record_id": "lesson-implement-plan-61ab9f171d82754b779410e8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4956-linear-issue-branch-parser",
+    "file:scripts/gh_helpers.sh",
+    "file:tests/test_gh_helpers_issue_body_integration_branch.py"
+  ]
+}

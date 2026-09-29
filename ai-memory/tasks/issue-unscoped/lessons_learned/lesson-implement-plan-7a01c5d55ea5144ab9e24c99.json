@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T11:46:23Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a string parser replaces a regex for performance, keep the regex's empty-value matches and add the edge bodies reviewers doubt to the parity test against the reference parser, so the intentional \"\" result is documented by a test, not only by a comment.",
+  "phase": "implement_plan",
+  "pr_number": 5005,
+  "record_id": "lesson-implement-plan-7a01c5d55ea5144ab9e24c99",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4956-linear-issue-branch-parser",
+    "file:scripts/gh_helpers.sh",
+    "file:tests/test_gh_helpers_issue_body_integration_branch.py"
+  ]
+}
