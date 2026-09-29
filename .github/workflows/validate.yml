@@ -291,6 +291,8 @@ jobs:
                 { echo "::error::Explicit validation target is not authorized."; exit 1; }
               # Every events page is read, so the whole label history is
               # verified: one read per 100 events (one for a typical heal issue).
+              # --slurp wraps each page in an outer array, [[event, ...], ...],
+              # so any other shape (a bare event list included) fails closed.
               heal_events_json="$(gh api --method GET --paginate --slurp -f per_page=100 \
                 "repos/${GITHUB_REPOSITORY}/issues/${target_detail}/events")" || exit 1
               jq -e --arg author "${target_author}" --argjson created "${heal_issue_created}" '

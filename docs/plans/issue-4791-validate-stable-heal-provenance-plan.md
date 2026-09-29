@@ -54,8 +54,10 @@ provenance and the target PR was opened by the account that filed the issue.
       the first `Target branch:` line, parsed with the same patterns as
       `extract_integration_branch` in `scripts/resolve_integration_ref.sh`;
    5. had `ai:workflow-heal` applied only by its author, the first time within
-      120 s of creation, read from one 100-item events page (100 or more
-      events is unverifiable and fails).
+      120 s of creation. Every events page is read (`--paginate --slurp`, one
+      read per 100 events) and every `ai:workflow-heal` labeled event on every
+      page is checked (AD-5; this replaced the first draft's single 100-item
+      page, which failed any issue with 100 or more events).
 2. **PR binding.** The target PR's author login equals issue `<n>`'s author
    login, so only the account that filed the heal issue can open a `stable`
    target for it. The pinned 40-hex head SHA from the PR listing stays the
@@ -64,9 +66,10 @@ provenance and the target PR was opened by the account that filed the issue.
 4. Every failure keeps the existing
    `::error::Explicit validation target is not authorized.` and exits 1 before
    `sha=` is written.
-5. GitHub reads: 1 for a default base, 2 for a project-branch base, 3 for a
-   `stable` base (target listing, issue, events). The step comment documents
-   the count.
+5. GitHub reads: 1 for a default base, 2 for a project-branch base, and for a
+   `stable` base the target listing, the issue, and one read per 100 of its
+   events (3 for a typical heal issue; AD-5). The step comment documents the
+   count.
 
 ## Non-goals
 
@@ -84,8 +87,9 @@ provenance and the target PR was opened by the account that filed the issue.
   existing shell variables and jq defs are unchanged. New names
   (`target_author`, `heal_events_json`) were checked unused in `validate.yml`.
 - §9: YAML 2-space; Python tabs.
-- §15: two extra reads only for the `stable` case; no earlier call in the job
-  returns the issue's author, body, or label history.
+- §15: extra reads only for the `stable` case (the issue, plus one per 100
+  events; AD-5); no earlier call in the job returns the issue's author, body,
+  or label history.
 - §20: the #4734 fragment is amended in place (AD-3).
 - §27: `validate.yml` is 69,061 bytes; check `wc -c` after the change.
 
@@ -93,11 +97,14 @@ provenance and the target PR was opened by the account that filed the issue.
 
 1. The classifying jq pass emits `stable <sha> <n> <pr author login>` for the
    `stable` case, and fails when the PR author login is not a plain GitHub
-   login (`^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$`).
+   login: alphanumeric segments joined by single hyphens, an optional `[bot]`
+   suffix, at most 39 characters in all
+   (`^[A-Za-z0-9](?:-?[A-Za-z0-9])*(\[bot\])?$`; AD-6, AD-7).
 2. `stable`: read the issue, and in one jq pass require goals 1.1–1.4 and the
    author-login match (goal 2), emitting nothing on success.
-3. Read `repos/<repo>/issues/<n>/events` with `per_page=100` (no pagination)
-   and require goal 1.5, comparing timestamps with `fromdateiso8601`.
+3. Read every page of `repos/<repo>/issues/<n>/events` with `per_page=100`
+   (`--paginate --slurp`, which yields `[[event, ...], ...]`) and require goal
+   1.5 across all pages, comparing timestamps with `fromdateiso8601` (AD-5).
 4. Only then write `sha=<head sha>`.
 
 ## Phases & Merge Strategy
@@ -147,9 +154,12 @@ The step's `run:` body runs with a stub `gh`:
   `Target branch:` names another branch or is missing; an `Integration
   branch:` line naming another branch while `Target branch:` says `stable`;
   label applied by another account (even after the author's); label applied
-  more than 120 s after creation or before creation; no labeled event; 100
-  events; events read fails; unreadable timestamps; a PR author login with
-  spaces or other characters;
+  more than 120 s after creation or before creation; no labeled event; a
+  re-label by another account or a late first label on a later events page;
+  events output that is not an array of page arrays; events read fails;
+  unreadable timestamps; a PR author login with spaces or other characters,
+  double or edge hyphens, or over 39 characters with `[bot]` counted;
+- a label history over 100 events is read across pages and accepted (AD-5);
 - the bold and plain `Target branch:` forms and a `Target branch:` with
   trailing prose after the backticked name are accepted;
 - existing default and project-branch cases unchanged (one and two calls).

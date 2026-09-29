@@ -309,6 +309,7 @@ def test_stable_base_requires_verified_heal_issue(tmp_path: Path):
 		"re-labelled by someone else on a later page": [HEAL_EVENTS[:1] + filler, [late_relabel]],
 		"labelled first on a later page, too late": [filler, [_labeled("ai:workflow-heal", at="2026-09-27T18:00:01Z")]],
 		"pages not an array": {"pages": [HEAL_EVENTS]},
+		"a bare event list, not the --slurp page wrapper": HEAL_EVENTS,
 		"a page not an array": [HEAL_EVENTS, {"events": []}],
 		"no pages": [],
 	}
