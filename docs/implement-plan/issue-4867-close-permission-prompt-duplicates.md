@@ -3,15 +3,15 @@
 - Plan: docs/plans/issue-4867-close-permission-prompt-duplicates-plan.md
 - Source issue: shubhodeep1/coding-workflows#4867 (https://github.com/shubhodeep1/coding-workflows/issues/4867)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4867-close-permission-prompt-duplicates   Final PR: draft (opened right after this commit; number in the issue progress comment)
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-4867-close-permission-prompt-duplicates   Final PR: #4883 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: twin sync of `workflow-templates/.claude/{commands/implement-issue-claude.md,scripts/permission_prompts.py}` into `.claude/**` on the phase 1 PR (hold claim on its head), then `/reclarify`
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened; implementing phase 1 under the interim twin-first rule.
+- Last note: phase 1 implemented and verified (71 new tests; with the twins copied, the related suites pass); phase PR opened against the project branch with a hold claim; stopped BLOCKED for the twin sync.
 
 ## Phases
 1. [ ] Phase 1 — duplicate-close carve-out, duplicate-check, and class routing   — protected paths: `.claude/commands/implement-issue-claude.md`, `.claude/scripts/permission_prompts.py` (edited through their `workflow-templates/.claude/` twins)
@@ -48,3 +48,5 @@
 - Security pass: run (`security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}`).
 - Protected-path approval: phase 1 — interim twin-first rule (operator #4750 Q40: A, restated in the #4867 body: "Edit the `workflow-templates/.claude/commands/**` twins first (twin-first rule until #4785 lands; the supervising session syncs them)") (2026-09-29). The phase edits only the `workflow-templates/.claude/` twins, pushes, posts a `hold` claim, and stops BLOCKED listing the files to copy.
 - The session container had no `gh`; it was installed from the Ubuntu archive (`gh` 2.45.0) so the helper scripts run.
+- Phase 1 (2026-09-29): edits only the twins. Expected red until the twin sync: `tests/test_permission_prompts.py::test_template_parity` and `tests/test_implement_issue_claude_command.py::test_template_parity[implement-issue-claude.md]` (2 failed, 204 passed locally). With both twins copied into `.claude/**` in a scratch tree: 526 passed across the permission-prompt, issue-command, plan-command, section-number, security-skip, check-in, and stale-Routine suites.
+- `duplicate-check` smoke test against live data: #4843 (already closed as a duplicate of #4678, fix PR #4684) passes every pipeline-filed check and is refused only as `#4843 is not open`.
