@@ -221,7 +221,7 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - A replacement start path is live: an issue routed to Claude gets its `/implement-issue-claude` session (progress comment `<!-- ai:claude-issue-progress:v1 -->` plus a `claude/implement-plan-issue-<N>-*` branch) without an `ai:claude-issue-queue` item.
   - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=open"` returns `[]` (nothing is waiting for the pickup).
-  - `/claude-issue-pickup stop` reports its trigger deleted, and `list_triggers` shows no `Claude issue pickup: hourly` trigger.
+  - `/claude-issue-pickup stop` reports its trigger deleted, and `list_triggers` shows no enabled `Claude issue pickup: hourly` or `Claude issue pickup: catch-up` trigger.
   - `scripts/claude_issue_intake.sh` no longer opens queue issues (`rg -n 'queue-issue' scripts/claude_issue_intake.sh` returns nothing).
 - **Owner:** @shubhodeep1
 
