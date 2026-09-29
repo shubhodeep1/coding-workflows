@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-4927-paginate-review-dispatch-runs-plan.md
 - Source issue: shubhodeep1/coding-workflows#4927 (https://github.com/shubhodeep1/coding-workflows/issues/4927)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4927-paginate-review-dispatch-runs   Final PR: (opened next) draft
+- Project branch: claude/implement-plan-issue-4927-paginate-review-dispatch-runs   Final PR: #4966 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from claude/implement-plan-issue-4701-review-dispatch-default-branch (issue base); phase 1 starting
+- Last note: phase 1 implemented and verified (unit, contract, integration, shellcheck, drift check); phase PR opened, waiting on the Claude-fixer review
 
 ## Phases
-1. [ ] Phase 1 — paginated, completeness-aware PR-named review dispatch lookup (`scripts/orchestrate_poll_process.sh` helper + 3 call sites, tests, agents.md, README.md, changelog)
+1. [ ] Phase 1 — paginated, completeness-aware PR-named review dispatch lookup (`scripts/orchestrate_poll_process.sh` helper + 3 call sites, tests, agents.md, README.md, changelog)   — PR (this phase) open; review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -34,8 +34,10 @@
 - AD-4 [plan, 2026-09-29] How is "incomplete" signalled? — Picked: A — the helper keeps its stdout contract and returns 1; the direct guard prints the `listing-incomplete` sentinel; the skip paths reuse `retrigger_review_skipped_inflight`. Alternatives: B — a second helper beside the old one. Why: §6 and §5, one listing and no new state values. Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-09-29] Should the merge train's and the sweep's run snapshots change too? — Picked: A — no; poller only, recorded as a non-goal. Alternatives: B — also page the merge train's `_mt_inflight_review_branches`. Why: §5; the finding names the poller's empty-commit push, which neither of the others performs. Applied in: no code change. Status: pending review
 - AD-6 [plan, 2026-09-29] How is a 404 for a wrapper treated? — Picked: A — the wrapper is absent, so its listing is complete and empty. Alternatives: B — incomplete. Why: every repo lacks one of the two wrappers, so B would block every dispatch and push forever. Applied in: phase 1 PR. Status: pending review
+- AD-7 [phase 1/1, 2026-09-29] Should a failed branch listing in `_direct_inflight_review_run_on_branch` also skip the empty-commit push? — Picked: A — no; keep its documented fail-open (`outcome=listing_unavailable`, covered by `test_empty_or_non_array_payload_fails_open`). Alternatives: B — return `listing-incomplete` there too; C — still run the PR-named lookup before failing open. Why: §5; the branch listing is scoped to the PR's own branch, so the finding's crowding vector cannot reach it. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] Shell code that accumulates GitHub API JSON across pages must feed jq through stdin, never `--argjson`: about 1,000 runs exceed the kernel's 128 KiB single-argument limit, and a failed `x="$(jq …)"` aborts a `set -e` script. (files: scripts/orchestrate_poll_process.sh)
 
 ## Notes
 - Issue base `claude/implement-plan-issue-4701-review-dispatch-default-branch` is the head of open draft PR #4709 (into `claude/implement-plan-issue-4618-sweep-dispatch-default-branch`); checked 2026-09-29, not merged, so no base move.
