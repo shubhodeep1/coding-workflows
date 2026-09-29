@@ -446,6 +446,21 @@ def test_report_shows_outage_denials(tmp_path):
 	assert empty["outage_denials"] == {"label": "classifier outage", "count": 0, "tools": [], "first_ts": None, "last_ts": None}
 
 
+def test_outage_timestamps_are_earliest_and_latest_across_session_files(tmp_path):
+	# One log file per session, loaded in file-name order: the later session's
+	# file ("a-…") sorts first, so file order is not time order (conformance run 1).
+	directory = tmp_path / "log"
+	early = datetime(2026, 9, 28, 7, 0, tzinfo=timezone.utc)
+	late = datetime(2026, 9, 28, 9, 0, tzinfo=timezone.utc)
+	for session, when in (("a-later", late), ("b-earlier", early)):
+		payload = _payload("git status", event="PermissionDenied", reason=OUTAGE_REASON, session_id=session)
+		logger.append_record(logger.build_record(payload, when), directory)
+	outages = pp.report(directory)["outage_denials"]
+	assert outages["count"] == 2
+	assert outages["first_ts"] == "2026-09-28T07:00:00Z"
+	assert outages["last_ts"] == "2026-09-28T09:00:00Z"
+
+
 def test_outage_outside_coding_workflows_is_reported(tmp_path, issues):
 	issues()
 	directory = _log(tmp_path, [_payload("ls", event="PermissionDenied", reason=OUTAGE_REASON)])
