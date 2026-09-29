@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5258-asset-sync-outside-conflict-fail-closed-plan.md
 - Source issue: shubhodeep1/coding-workflows#5258 (https://github.com/shubhodeep1/coding-workflows/issues/5258)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4952-sync-claude-assets-at-session-start
-- Project branch: claude/implement-plan-issue-5258-asset-sync-outside-conflict-fail-closed   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5258-asset-sync-outside-conflict-fail-closed   Final PR: #5281 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from the issue base; phase 1 starting (twin-first)
+- Last note: phase 1 implemented twin-first (workflow-templates/.claude/commands/{fix-claude-pr,implement-plan-claude}.md); PR held for the [claude-twin-sync] copy into .claude/
 
 ## Phases
-1. [ ] Phase 1 — resolve or fail closed on an outside-`.claude/` Claude-asset sync conflict — protected paths: .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md
+1. [ ] Phase 1 — resolve or fail closed on an outside-`.claude/` Claude-asset sync conflict — protected paths: .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md — PR open (held: twin sync); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -35,6 +35,7 @@
 - AD-5 [plan, 2026-09-29] What happens to the report phrase `claude_assets=stale (conflict outside .claude/)`? — Picked: A — drop it. Alternatives: B — keep it documented as an alias. Why: the state no longer occurs, it never reached the default branch, and nothing parses it. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:security] A "conflict only outside `.claude/`" rule for a guard-sync merge must never abort and continue on the unsynced head: the sync's source is the PR's base, so resolve the conflict inside that merge (the merged `.claude/` files are already in the working tree) or abort and stop. (files: .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md)
 
 ## Notes
 - Issue mode: base branch `claude/implement-plan-issue-4952-sync-claude-assets-at-session-start` (open draft final PR #4995) is not the default branch, so the final-merge stage closes #5258 explicitly with `ai:merged`, and activation is `n/a (base …)` unless the base moves onto `main`.
