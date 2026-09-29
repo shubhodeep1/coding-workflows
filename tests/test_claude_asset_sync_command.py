@@ -165,3 +165,65 @@ def test_documented_merge_and_settings_commands_behave_as_described(directory: P
 	assert len(_git(clone, env, "log", "-1", "--format=%P").split()) == 2
 	changed = subprocess.run(["bash", "-c", settings], cwd=clone, env=env, check=True, capture_output=True, text=True)
 	assert changed.stdout.strip() == ".claude/settings.json"
+
+
+# Issue #5258: a sync merge that conflicts only outside `.claude/` is resolved
+# inside that merge (or aborted and stopped), never aborted to let the fix go on
+# under the old guards. These read the `workflow-templates/.claude/` twins: the
+# `.claude/` copies follow through the twin sync, and
+# `test_twins_are_byte_identical` covers them from then on.
+TWIN_DIR = DIRS[1]
+
+
+def test_outside_claude_conflict_never_continues_on_the_unsynced_head():
+	section = _section(_flat(TWIN_DIR / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	assert "continues its fix" not in section
+	assert "claude_assets=stale (conflict outside .claude/)" not in section
+	assert "On a PR head, resolve it inside the sync merge." in section
+	assert "The source is always the PR's base (step 3)" in section
+	assert "Git has already written the cleanly merged `.claude/` files into the working tree" in section
+	assert "`git commit --no-edit`, which keeps the step 4 subject" in section
+	assert "On the project branch, step 2 resolves it as before." in section
+	assert "run `git merge --abort` and stop the way the caller stops on a conflict it cannot resolve" in section
+	assert "Never continue the fix on the unsynced head." in section
+	fixer = _section(_flat(TWIN_DIR / "fix-claude-pr.md"), "5. **Fix it.**", "- **`claude/implement-plan-*` head**")
+	assert "the fix continues on the unsynced head" not in fixer
+	assert "is resolved inside the sync merge, never aborted to continue on the unsynced head" in fixer
+	assert "`git commit --no-edit` (the sync's subject stays)" in fixer
+	assert "For `conflict` that merge is the conflict fix" in fixer
+	assert "run `git merge --abort`, post a hold claim, ask in the §2 format which side wins, send one `PushNotification`, and end the turn" in fixer
+
+
+def test_outside_conflict_resolution_runs_under_the_merged_guards(tmp_path: Path):
+	"""A sync merge stopped on a conflict outside `.claude/` already has the
+	default branch's hook in the working tree, and resolving it with
+	`git commit --no-edit` keeps the sync subject."""
+	section = _section(_flat(TWIN_DIR / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	merge = _documented_command(section, r"`(git merge [^`]*origin/<source>)`")
+	assert "`git commit --no-edit`" in section
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/hooks/guard.sh", "old guard\n", "guard")
+	_commit(origin, env, "work.md", "base\n", "work")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "config", "core.logAllRefUpdates", "false")
+	_git(clone, env, "checkout", "-q", "-b", "work")
+	_commit(clone, env, "work.md", "branch side\n", "branch work")
+	_commit(origin, env, ".claude/hooks/guard.sh", "new guard\n", "guard fix")
+	_commit(origin, env, "work.md", "main side\n", "main work")
+	_git(clone, env, "fetch", "-q", "origin", "main")
+	stopped = subprocess.run(["bash", "-c", merge], cwd=clone, env=env, capture_output=True, text=True)
+	assert stopped.returncode != 0
+	assert _git(clone, env, "diff", "--name-only", "--diff-filter=U") == "work.md"
+	assert (clone / ".claude" / "hooks" / "guard.sh").read_text(encoding="utf-8") == "new guard\n"
+	(clone / "work.md").write_text("branch side\nmain side\n", encoding="utf-8")
+	_git(clone, env, "add", "work.md")
+	_git(clone, env, "commit", "--no-edit")
+	assert _git(clone, env, "log", "-1", "--format=%s") == "[claude-asset-sync] merge main for .claude/ guard updates"
+	assert len(_git(clone, env, "log", "-1", "--format=%P").split()) == 2
+	assert _git(clone, env, "show", "HEAD:.claude/hooks/guard.sh") == "new guard"
