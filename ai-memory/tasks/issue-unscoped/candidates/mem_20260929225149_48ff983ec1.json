@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: scripts/claude_issue_route.py\n  Location: _valid_scan_state\n  Issue: The validator does not check that the 'updated_at' field is a string. A checkpoint written by a different consumer or a corrupted file where 'updated_at' is an int or bool would pass validation and be saved back, which could confuse operators inspecting the cached file.\n  Suggested minimal fix: Add isinstance(state.get(\"updated_at\"), str) to the _valid_scan_state validator before returning True.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/claude_issue_route.py\n  Location: _valid_scan_state (~line 1268)\n  Issue: Validator checks page/last_id/relevant/complete but skips updated_at; an int/bool/missing updated_at passes today, and env_requeue_plan only overwrites it after the scan runs, so a corrupt checkpoint value persists across one round-trip and could mislead an operator inspecting the cached file.\n  Suggested minimal fix: add isinstance(state.get(\"updated_at\"), str) to the validator before returning True.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3e2c4dcb4f43e52559048090cb4e5926e381b2612039ca9a3c2242268679f5b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5177,
+    "run_id": "36638576543",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36638576543",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929225149_48ff983ec1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5177,
+    "run_id": "36638576543"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T22:51:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
