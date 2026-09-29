@@ -11,7 +11,7 @@
 | Hook failure line | `[session-start] gh_install=failed reason=<reason> exit_code=<n> at=<UTC>` |
 | Hook marker file | `~/.claude-session-start-gh-install` (`SESSION_START_GH_MARKER_FILE`) |
 
-What this means for operators: an issue that stopped on an environment failure recovers without a master session. You hear about it once, as a Telegram ERROR, only after two automatic retries in a day failed. A plain `<!-- ai:claude-blocked:v1 -->` blocker is still a decision for you and is never re-queued.
+What this means for operators: an issue that stopped on an environment failure recovers without a master session. You hear about it once, as a Telegram ERROR, only after two automatic retries in a day failed; the watchdog then leaves that issue alone until you fix the environment and comment `/reclarify`, which restarts the count. A plain `<!-- ai:claude-blocked:v1 -->` blocker is still a decision for you and is never re-queued.
 
 ### For contributors
 

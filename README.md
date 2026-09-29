@@ -1344,8 +1344,10 @@ about two hours. Each re-queue leaves
 After `CLAUDE_ISSUE_ENV_REQUEUE_MAX` (default 2) re-queues in
 `CLAUDE_ISSUE_ENV_REQUEUE_WINDOW_HOURS` (default 24), it posts
 `<!-- ai:claude-env-requeue-exhausted:v1 … -->`, sends one Telegram ERROR, and
-leaves the label in place. Retries and the alert are counted per issue, not per
-blocker: a new blocker inside the window sends no second alert. A re-queued
+leaves the label in place. It then stops re-queueing that issue, as #4938
+asks ("alerts once and stops"), until a trusted `/reclarify` comment, which
+restarts the count. Retries and the alert are counted per issue, not per
+blocker: a new blocker after the alert sends no second alert. A re-queued
 issue whose label is still there after `CLAUDE_ISSUE_QUEUE_STALE_HOURS` counts as another failed retry. A plain
 `<!-- ai:claude-blocked:v1 -->` blocker (a real §28.C decision) is never
 re-queued. Only markers from owners, members, collaborators, and

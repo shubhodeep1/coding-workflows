@@ -327,19 +327,21 @@ def is_trusted_issue_author(item: dict[str, Any]) -> bool:
 	return user_type == "Bot" and _user_field(item, "login") == TRUSTED_ISSUE_BOT_AUTHOR
 
 
+def _is_trusted_reclarify_comment(comment: Any) -> bool:
+	"""True when ``comment`` is a trusted ``User``'s ``/reclarify`` (clarify's comment gate)."""
+	if not isinstance(comment, dict) or _user_field(comment, "type") != "User":
+		return False
+	body = comment.get("body")
+	return (
+		isinstance(body, str)
+		and body.startswith(RECLARIFY_COMMAND_PREFIX)
+		and comment.get("author_association") in TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS
+	)
+
+
 def has_trusted_reclarify(comments: list[Any]) -> bool:
 	"""True when a trusted ``User`` commented ``/reclarify`` (clarify's comment gate)."""
-	for comment in comments or []:
-		if not isinstance(comment, dict) or _user_field(comment, "type") != "User":
-			continue
-		body = comment.get("body")
-		if (
-			isinstance(body, str)
-			and body.startswith(RECLARIFY_COMMAND_PREFIX)
-			and comment.get("author_association") in TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS
-		):
-			return True
-	return False
+	return any(_is_trusted_reclarify_comment(comment) for comment in comments or [])
 
 
 def authorize_target(
@@ -1038,12 +1040,17 @@ def env_requeue_decision(
 	  than ``stale_hours`` → ``skip`` (the fresh session is on its way). Older,
 	  with the label still on the issue, means that session died before it
 	  claimed the issue, so it is re-queued again (``stale_retry``).
-	* ``max_retries`` re-queues within the last ``window_hours`` → ``alert``,
-	  then ``skip``. Retries and alerts are both counted per issue, not per
-	  blocker: every failed re-queued session posts a new blocker, so a
-	  per-blocker count would never reach the cap. An exhausted marker of any
-	  blocker inside the window therefore suppresses another alert, so one
-	  issue sends at most one Telegram ERROR per window.
+	* ``max_retries`` re-queues within the last ``window_hours`` → ``alert``
+	  once, then ``skip`` for good: the issue's acceptance criterion is "after
+	  2 failed retries it alerts once and stops". Retries and alerts are both
+	  counted per issue, not per blocker: every failed re-queued session posts
+	  a new blocker, so a per-blocker count would never reach the cap. An
+	  exhausted marker of any blocker therefore stops the re-queue, however
+	  old it is, so one issue sends one Telegram ERROR.
+	* A trusted ``/reclarify`` (the way back the alert names) restarts the
+	  count: only markers after the latest one count. It also sends its own
+	  dispatch, so a ``/reclarify`` newer than the blocker counts as that
+	  blocker's latest re-queue for the ``stale_hours`` wait.
 
 	Pure: no API calls.
 	"""
@@ -1084,12 +1091,21 @@ def env_requeue_decision(
 		result["reason"] = "blocker_without_id"
 		return result
 	window_start = now - timedelta(hours=float(window_hours))
+	reclarify_at: datetime | None = None
+	for comment in trusted:
+		if _is_trusted_reclarify_comment(comment):
+			reclarify_at = _comment_time(comment)
 	recent = 0
 	last_for_blocker: datetime | None = None
+	blocker_time = _comment_time(blocker)
+	if reclarify_at is not None and blocker_time is not None and reclarify_at > blocker_time:
+		last_for_blocker = reclarify_at
 	alerted = False
 	for comment in trusted:
 		body = (comment.get("body") or "").lstrip() if isinstance(comment.get("body"), str) else ""
 		created = _comment_time(comment)
+		if reclarify_at is not None and created <= reclarify_at:
+			continue
 		requeued = ENV_REQUEUE_MARKER_RE.match(body)
 		if requeued:
 			if created >= window_start:
@@ -1097,18 +1113,18 @@ def env_requeue_decision(
 			if int(requeued.group(1)) == blocker_id:
 				last_for_blocker = created
 			continue
-		if ENV_REQUEUE_EXHAUSTED_MARKER_RE.match(body) and created >= window_start:
+		if ENV_REQUEUE_EXHAUSTED_MARKER_RE.match(body):
 			alerted = True
 	result["retries_in_window"] = recent
+	if alerted:
+		result["reason"] = "exhausted_alerted"
+		return result
 	if last_for_blocker is not None:
 		if (now - last_for_blocker).total_seconds() / 3600.0 < float(stale_hours):
 			result["reason"] = "requeued_waiting"
 			return result
 		result["stale_retry"] = True
 	if recent >= int(max_retries):
-		if alerted:
-			result["reason"] = "exhausted_alerted"
-			return result
 		result["action"] = "alert"
 		result["reason"] = "retries_exhausted"
 		return result
