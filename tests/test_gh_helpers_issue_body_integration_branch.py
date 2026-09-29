@@ -44,6 +44,13 @@ BODIES = [
 	"- Target branch: stable\n- Integration branch: `orchestrator/project-9`\n",
 	"Prose that mentions Integration branch: inline is not a line start? Integration branch: nope\n",
 	"Target branch: two words\n",
+	# A label line whose value is empty or whitespace-only still matches and
+	# ends the search as "", so a later valid line is not used (PR #5005
+	# review round 1).
+	"Integration branch: `\nTarget branch: `real/branch`\n",
+	"Integration branch:   \nTarget branch: `real/branch`\n",
+	"Integration branch: ` `\nTarget branch: real\n",
+	"Target branch: `  `\nTarget branch: real\n",
 ]
 
 

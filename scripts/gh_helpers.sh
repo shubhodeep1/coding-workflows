@@ -1767,6 +1767,9 @@ for labels, value_of in (
 		rest = value_after_label(line, labels)
 		if rest is None:
 			continue
+		# "" is a match, not a miss: the regexes accept a whitespace-only
+		# value, extract_integration_branch returns it as "", and the
+		# search stops there without reading a later Target line.
 		value = value_of(rest)
 		if value is not None:
 			print(value)
