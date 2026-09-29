@@ -38,9 +38,12 @@ Batching contract (CLAUDE.md §15), per `run`:
   input   a full-history checkout of the default branch;
   calls   reads (the workflow's GITHUB_TOKEN): 1 open-PR list per 100 PRs;
           for a PR that needs the owner's approval 1 review list per 100
-          reviews; for a merge attempt 1 file list per 100 files, 1 check-run
-          list per 100 runs, and 1 combined-status read. Writes (GH_PAT):
-          1 push, 1 PR create or body edit, at most 2 label writes, 1 status,
+          reviews; 1 combined-status read for a head this run did not push
+          (a merge attempt reuses it, and reads it again only after the
+          status changed); for a merge attempt 1 file list per 100 files and
+          1 check-run list per 100 runs. Writes (GH_PAT): 1 push, 1 PR create
+          or body edit, at most 2 label writes, 1 status only when its state
+          or description changes (GitHub allows 1000 per sha and context),
           1 merge, and 1 close plus 1 comment per stale, duplicate, or
           orphaned (head branch deleted) sync PR. Git: 1 `ls-remote` for the
           open sync PRs' branches when there is something to sync;
@@ -681,10 +684,17 @@ def run_sync(repo_root: str, gh: GitHub, ref: str, default_branch: str, owner: s
 		state, description = ("success", "Owner approved this head") if approved else ("pending", "Owner review and merge required")
 	else:
 		state, description = "success", "No hook or settings change"
-	gh.write([
-		"api", "-X", "POST", f"repos/{gh.repo}/statuses/{head}",
-		"-f", f"state={state}", "-f", f"context={APPROVAL_STATUS_CONTEXT}", "-f", f"description={description}",
-	])
+	# Post the status only when it changes (§15): GitHub refuses more than
+	# 1000 statuses per sha and context, and a guard PR waiting for the owner
+	# is revisited every hour. A head this run pushed has no status yet.
+	combined = {"state": "", "statuses": []} if pushed else (gh.get(f"repos/{gh.repo}/commits/{head}/status") or {})
+	current = next((item for item in combined.get("statuses") or [] if isinstance(item, dict) and item.get("context") == APPROVAL_STATUS_CONTEXT), None)
+	if current is None or current.get("state") != state or current.get("description") != description:
+		gh.write([
+			"api", "-X", "POST", f"repos/{gh.repo}/statuses/{head}",
+			"-f", f"state={state}", "-f", f"context={APPROVAL_STATUS_CONTEXT}", "-f", f"description={description}",
+		])
+		combined = None  # the combined state just changed; a merge attempt reads it again
 	summary["owner_approved"] = approved
 	if plan["needs_owner"]:
 		if pushed:
@@ -705,7 +715,8 @@ def run_sync(repo_root: str, gh: GitHub, ref: str, default_branch: str, owner: s
 		summary["merge"] = "refused: " + "; ".join(verdict["reasons"])
 		return summary
 	runs = gh.get_list(f"repos/{gh.repo}/commits/{head}/check-runs", key="check_runs")
-	combined = gh.get(f"repos/{gh.repo}/commits/{head}/status") or {}
+	if combined is None:
+		combined = gh.get(f"repos/{gh.repo}/commits/{head}/status") or {}
 	green, why = checks_green(runs, combined.get("state") or "", len(combined.get("statuses") or []), run_id)
 	if not green:
 		summary["merge"] = f"waiting: {why}"

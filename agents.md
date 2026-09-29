@@ -1224,9 +1224,12 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   SHA-pinned with `persist-credentials: false`; no session environment
   variable is read.
 - **API budget (§15):** one open-PR list per 100 PRs; for an owner-gated PR
-  one review list per 100 reviews; for a merge attempt one file list, one
-  check-run list per 100 runs, and one combined-status read; writes only on
-  change. No GraphQL except `gh pr merge`.
+  one review list per 100 reviews; one combined-status read for a head the
+  run did not push (reused by a merge attempt); for a merge attempt one file
+  list and one check-run list per 100 runs; writes only on change, so the
+  `claude-twin-sync/owner-approval` status is posted only when its state or
+  description changes (GitHub allows 1000 statuses per sha and context). No
+  GraphQL except `gh pr merge`.
 - **Consumers:** unaffected. `update_workflows.yml` already copies
   `workflow-templates/.claude/**` into consumer repos at `@stable`, so they
   never depend on a sync PR, and the workflow runs only in
