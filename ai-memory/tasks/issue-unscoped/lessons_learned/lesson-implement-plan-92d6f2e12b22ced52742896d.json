@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T04:21:10Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a shell script needs to move a JSON payload that can hold user-controlled text (issue or PR bodies) into jq or another command, stream it on stdin, never as an `--arg` / `--argjson` / `argv` value: Linux caps one argument at 128 KiB, and a failed exec behind a `|| echo \"[]\"` fallback silently empties the work queue.",
+  "phase": "implement_plan",
+  "pr_number": 5007,
+  "record_id": "lesson-implement-plan-92d6f2e12b22ced52742896d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4955-close-sweep-large-issue-bodies",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}
