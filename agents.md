@@ -823,8 +823,17 @@ diff instead of a fourth audit, blocking only when the fix itself is
 defective), a security or validation read, the completion PR, the
 final merge, a `/verify-activation — scope activation` cycle, the
 `/deploy-activate` hand-off) runs in its own fresh session titled
-`implement-plan <slug> — <stage>`, which archives the previous stage session
-unless it is waiting on the user; a finished stage session is not woken to
+`#<issue> · PR #<pr> — implement-plan <slug> — <stage>`, which archives the previous stage session
+unless it is waiting on the user. Titles lead with the numbers (issue #4886):
+`#<issue> · ` when the project has a source issue, then the PR the session works
+on, else the project's final PR (the checker is
+`#<issue> · PR #<final> — implement-plan <slug> — checker`). A stage renames
+itself when it opens a PR. The checker reuse check and the zombie-checker cleanup
+match any title that contains `implement-plan <slug> — checker`, so older and
+hand-renamed checkers still match. Issue sessions start as
+`#<N> · issue <repo>#<N> — implement`, a fresh `/fix-claude-pr` session adds
+`#<I> · ` when its head is `claude/implement-plan-issue-<I>-…`, and
+`PR #<n> status check-in` titles and Routine names are unchanged. A finished stage session is not woken to
 continue, because the gap between check-ins outlives the prompt cache and a
 wake would re-send the whole history at full price. The one exception is the
 **hand-back**: when a PR the chain waits on is blocked, closed, or stuck,

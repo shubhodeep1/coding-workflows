@@ -451,7 +451,7 @@ jobs:
       - name: /implement-plan-claude command contract tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py tests/test_session_titles.py
 
       - name: Claude issue implementer tests (routing, handoff, intake, §28 command contract)
         run: |

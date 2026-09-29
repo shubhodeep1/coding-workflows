@@ -49,7 +49,7 @@ $ARGUMENTS
    
    Later stages edit this same comment. Do not wait for approval.
 
-8. **Run the chain.** Follow `/implement-plan-claude` in this session from its step 0, with `docs/plans/<slug>-plan.md` as `$ARGUMENTS`, in issue mode. Its checker is the §26 check-in for every PR it opens; do not arm a second one.
+8. **Run the chain.** Follow `/implement-plan-claude` in this session from its step 0, with `docs/plans/<slug>-plan.md` as `$ARGUMENTS`, in issue mode. Its checker is the §26 check-in for every PR it opens; do not arm a second one. The dispatcher names this session `#<N> · issue <owner>/<repo>#<N> — implement`, and the chain renames it to add `PR #<pr> — ` when it opens the final and the phase PR ([Session titles](.claude/commands/implement-plan-claude.md#session-titles)).
 
 ## Rules
 

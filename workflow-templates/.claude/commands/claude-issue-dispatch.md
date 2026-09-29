@@ -38,7 +38,7 @@ claim: sweep-run-<run id>
       - `source_url`: `https://github.com/<repo>`
       - `model`: `claude-opus-5-5`
       - `permission_mode`: `auto` (if the call is refused as more permissive than this session, call it again without `permission_mode`)
-      - `title`: `issue <repo>#<N> — implement` for an issue, `PR <repo>#<N> — fix <kind>` for a pull request
+      - `title`: `#<N> · issue <repo>#<N> — implement` for an issue (the number first, because the claude.ai sidebar truncates the end; the session adds `PR #<pr> — ` when it opens its PR), `PR <repo>#<N> — fix <kind>` for a pull request (the fixer adds its issue number itself, `/fix-claude-pr` step 4)
       - `prompt`: `/effort high` **and nothing else**
    2. Call `create_trigger` with `persistent_session_id` = the new session's id, `run_once_at` = two minutes from now (Bash: `date -u -d '+2 minutes' +%Y-%m-%dT%H:%M:00Z`), `name` = `dispatch <repo>#<N>: start`, `initiation: own_followup`, and `prompt`:
       - issue:
