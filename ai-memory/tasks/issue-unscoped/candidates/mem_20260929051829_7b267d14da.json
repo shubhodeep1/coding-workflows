@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The Claude issue pickup drains its queue faster: 20 items per wake, one catch-up wake, and resumes first.\" (changelog.d/4990-pickup-throughput.md:2, mirrored in README.md and agents.md)\n  expected_change_site: `.claude/commands/claude-issue-pickup.md` \u2014 new `\u2014 wake. \u2014 catch-up` mode, `--wake` flag in the queue-pending command, catch-up scheduling via `send_later`, updated limit (20), resume ordering description, and report fields.\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  EVIDENCE: The PR diff contains no changes to `.claude/commands/claude-issue-pickup.md`; the current file (`.claude/commands/claude-issue-pickup.md:31`, `:48`, `:76`) still describes only the hourly `\u2014 wake.` mode and the legacy \"at most 10 are started per wake\" limit; the file still says \"at most 10 are started per wake\" (line 48) and \"first 30 targets\" (line 41) instead of 20 and 60; tests in `tests/test_implement_issue_claude_command.py` assert the missing pickup command text and will fail in CI; the implement-plan log marks this file as `[ ]` / waiting on the twin sync.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"The Claude issue pickup drains its queue faster: 20 items per wake, one catch-up wake, and resumes first.\" (changelog.d/4990-pickup-throughput.md:2, mirrored in README.md and agents.md). The pickup session itself must implement the catch-up wake scheduling, resume-first processing, the updated report format, and the new `--wake <hourly|catch-up>` CLI usage. Per the implement plan log, the protected `.claude/commands/claude-issue-pickup.md` diff goes through the Q40 sync blocker for the supervising session (not in this unattended PR).\n  Expected change site: `.claude/commands/claude-issue-pickup.md`\n  Evidence of absence: The PR diff contains no changes to `.claude/commands/claude-issue-pickup.md`. The current file (`.claude/commands/claude-issue-pickup.md:31`, `:48`, `:76`) still describes only the hourly `\u2014 wake.` mode and the legacy \"at most 10 are started per wake\" limit. Two new tests in `tests/test_implement_issue_claude_command.py` (`test_pickup_schedules_one_self_bound_catch_up_wake` at lines 239-256 and `test_pickup_reports_queue_age_limit_and_resume_order` at lines 259-265) assert specific text in the pickup command file: the `\u2014 wake. \u2014 catch-up` mode line, the `Catch-up wake.` section header, the `send_later with delay_minutes: 30` instruction, the \"Resumes come first: every `issue` entry whose `trigger` is `reclarify`\" rule, the `QUEUE_PICKUP_LIMIT` (20) / `CLAUDE_ISSUE_PICKUP_LIMIT` clamped to 1..30 wording, the `first 3 \u00d7 limit targets (60 at the default)` binding window, the `oldest_waiting=` / `catch_up=` report fields, and the negative assertion `\"at most 10 are started per wake\" not in pickup_cmd`. These assertions will fail in CI until the pickup command file is updated; the implement plan log (`docs/implement-plan/issue-4990-pickup-throughput.md:24`) explicitly marks this file as `[ ]` (not done, waiting on the Q40 twin sync). Without the pickup command update, the catch-up wake will never be scheduled at runtime, so the changelog's \"one catch-up wake\" / \"resumes first\" claims are not delivered by this PR alone.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The plan's Implementation Step 4 (docs/plans/issue-4990-pickup-throughput-plan.md:73) requires updating `.claude/commands/claude-issue-pickup.md` with the catch-up wake procedure, limit 20, resume ordering, and report fields (oldest_waiting, catch_up). The plan's Files & Modules list (line 84) includes `.claude/commands/claude-issue-pickup.md (protected; via the sync blocker)`.\n  Expected change site: `.claude/commands/claude-issue-pickup.md` \u2014 new `\u2014 wake. \u2014 catch-up` mode, `--wake` flag in the queue-pending command, catch-up scheduling via `send_later`, updated limit (20), resume ordering description, and report fields.\n  Evidence of absence: The PR diff contains zero changes to `.claude/commands/claude-issue-pickup.md`. The file still says \"at most 10 are started per wake\" (line 48) and \"first 30 targets\" (line 41) instead of 20 and 60. Two new tests committed in this PR \u2014 `test_pickup_schedules_one_self_bound_catch_up_wake` and `test_pickup_reports_queue_age_limit_and_resume_order` (tests/test_implement_issue_claude_command.py:239-265) \u2014 assert text that does not exist in the file (confirmed by grep: no matches for \"catch-up\" in the file). CI runs these tests (ci.yml:459: `pytest ... tests/test_implement_issue_claude_command.py`), so they will fail. The implement-plan log (docs/implement-plan/issue-4990-pickup-throughput.md:20) marks this as \"[ ] ... waiting on the twin sync\", and AD-9 records the deferral to the Q40 sync blocker. While the deferral is a deliberate design decision per \u00a728.C, the PR as committed ships failing tests.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cd2642d4183042ecb8ba63da91f8791c9697a18e0d5d15f8bb4b5e919fb9ad77",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36524207060",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36524207060",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929051829_7b267d14da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36524207060"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T05:18:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
