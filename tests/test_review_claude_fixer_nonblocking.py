@@ -492,6 +492,12 @@ def test_issue_4975_finding_records_parse_the_reviewer_shape():
 	("File: Makefile:12\n", ("Makefile", (12, 12))),
 	("File: Makefile (line 3)\n", (None, (3, 3))),
 	("1) File: a.py:4-6\n", ("a.py", (4, 6))),
+	# PR #5060 review round 1: a version or a URL's host:port is not path:N.
+	("File: a.py\nLine or code reference: see version 3.14:40 for context\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: `1.2.3:40`\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: `http://localhost:8080`\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: see scripts/Makefile:12\n", ("a.py", (12, 12))),
+	("File: a.py\nLine or code reference: `.github/workflows/ci.yml:7-9`\n", ("a.py", (7, 9))),
 ])
 def test_issue_4975_finding_records_read_only_explicit_paths_and_lines(output, expected):
 	"""Conformance run 1: code text reads no line, and a prose File: value reads no path."""

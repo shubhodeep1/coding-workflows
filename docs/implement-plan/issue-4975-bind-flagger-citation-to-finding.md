@@ -6,19 +6,19 @@
 - Base branch: claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason
 - Project branch: claude/implement-plan-issue-4975-bind-flagger-citation-to-finding   Final PR: #5026 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 1/3 — review round
 - Activation: not started
-- Waiting on: conformance fix PR (head claude/implement-plan-issue-4975-bind-flagger-citation-to-finding-conformance-fix-1)
+- Waiting on: PR #5060 (conformance fix 1, review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_014rdmhD1aoaX4meJcY3BWPS (project checker, reused)
 - Last updated: 2026-09-29
-- Last note: conformance run 1 INCOMPLETE (Step 4 FAIL: the record parser read code-text digits as lines, missed numbered/heading File: lines, and read prose File: values as paths, so a second same-line flagger finding escaped ambiguous_flagger_nearby); conformance fix PR opened (AD-6..AD-8).
+- Last note: PR #5060 review round 1: fixed the `path:N` reader so a version (`3.14:40`) or a URL's `host:port` reads no line; rejected the `:40` leading-colon finding (editor line shorthand, intended). Earlier: conformance run 1 INCOMPLETE (Step 4 FAIL: the record parser read code-text digits as lines, missed numbered/heading File: lines, and read prose File: values as paths, so a second same-line flagger finding escaped ambiguous_flagger_nearby); conformance fix PR opened (AD-6..AD-8).
 
 ## Phases
 1. [x] Phase 1 — bind the flagger citation to a structured finding record (scripts/review_claude_fixer_nonblocking.py, scripts/review_run_reviewers.sh header sentence, tests, README.md, agents.md, changelog fragment)   — PR #5032 merged 2026-09-29; review rounds: 0; interventions: 0
 
 ## Conformance
-- Run 1 — 2026-09-29: INCOMPLETE (Step 4 FAIL, 3 EVIDENCE-BASED findings in `flagger_finding_records()`) — fix PR (conformance-fix-1, waiting) (pre-security)
+- Run 1 — 2026-09-29: INCOMPLETE (Step 4 FAIL, 3 EVIDENCE-BASED findings in `flagger_finding_records()`) — fix PR #5060 (waiting; review rounds: 1) (pre-security)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue; `.claude/scripts/security_pass_skip.py` printed `"skip": true`).

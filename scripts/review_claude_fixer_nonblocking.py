@@ -184,10 +184,12 @@ RECORD_LINE_RE = re.compile(
 RECORD_PATH_RE = re.compile(r"^`?(?P<path>[^\s`|:,()]+)`?(?::L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?)?")
 RECORD_LINE_NUMBER_RE = re.compile(r"(?<![\w/.-])L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
 # Explicit line references inside a longer value: ``path:N[-M]`` (the path has a
-# ``.`` or ``/``) and ``line N`` / ``lines N-M`` / ``LN``. A bare number elsewhere
-# in the value is code text, not a line reference.
+# ``/`` or a file extension that starts with a letter) and ``line N`` /
+# ``lines N-M`` / ``LN``. A bare number elsewhere in the value is code text, not
+# a line reference, and so are a version (``3.14:40``, ``1.2.3:40``) and a URL's
+# ``//host:port``.
 RECORD_LINE_PATH_RE = re.compile(
-	r"(?<![\w/.-])`?[\w./-]*[./][\w./-]*`?:L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
+	r"(?<![\w/.:-])`?[\w./-]*(?:/[\w.-]*|\.[A-Za-z][\w-]*)`?:L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
 RECORD_LINE_WORD_RE = re.compile(r"(?<![\w-])(?:[Ll]ines?\s*|L)(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
 RECORD_LEADING_STRIP = " \t`(,;:—–-"
 RECORD_CONSENSUS_ID_RE = re.compile(
