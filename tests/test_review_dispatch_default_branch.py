@@ -497,6 +497,9 @@ class DirectInflightFallbackPrNamed(_ShellHarness):
 		self.assertEqual(result.stdout.strip(), "listing-incomplete")
 		self.assertIn("pr=55", result.stderr)
 		self.assertIn("outcome=pr_named_listing_incomplete", result.stderr)
+		# rc is the PR-named listing's return code, not the branch listing's
+		# (which succeeded to reach this path).
+		self.assertIn("STALL_INFLIGHT_DIRECT_CHECK branch=ai/issue-7 pr=55 rc=1 ", result.stderr)
 		self.assertIn("PR_NAMED_REVIEW_RUNS pr=55 outcome=incomplete reason=page_failed", result.stderr)
 
 	def test_without_a_pr_number_makes_no_extra_call(self) -> None:

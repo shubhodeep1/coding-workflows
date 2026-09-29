@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4927-paginate-review-dispatch-runs   Final PR: #4966 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #4987
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01S3zQzuBBZcAddUe4zJZ2NU   safety net (in the stage report)   hand-back (in the stage report)
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified (unit, contract, integration, shellcheck, drift check); phase PR opened, waiting on the Claude-fixer review
+- Last note: review round 1 (session_019qMjW6ytgJgYDJbAJKdfVf): fixed the `rc=` field of the `pr_named_listing_incomplete` log line and pinned it in a test; rejected the indentation nit; waiting on round 2
 
 ## Phases
-1. [ ] Phase 1 — paginated, completeness-aware PR-named review dispatch lookup (`scripts/orchestrate_poll_process.sh` helper + 3 call sites, tests, agents.md, README.md, changelog)   — PR #4987 open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — paginated, completeness-aware PR-named review dispatch lookup (`scripts/orchestrate_poll_process.sh` helper + 3 call sites, tests, agents.md, README.md, changelog)   — PR #4987 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -40,6 +40,7 @@
 - [source:plan-deviation] Shell code that accumulates GitHub API JSON across pages must feed jq through stdin, never `--argjson`: about 1,000 runs exceed the kernel's 128 KiB single-argument limit, and a failed `x="$(jq …)"` aborts a `set -e` script. (files: scripts/orchestrate_poll_process.sh)
 
 ## Notes
+- 2026-09-29 review round 1: issue base PR #4709 now targets `main` (its old base `claude/implement-plan-issue-4618-sweep-dispatch-default-branch` merged); #4709 itself is still open, so the issue base is unchanged. The project branch was synced with it (merge 4324aea).
 - Issue base `claude/implement-plan-issue-4701-review-dispatch-default-branch` is the head of open draft PR #4709 (into `claude/implement-plan-issue-4618-sweep-dispatch-default-branch`); checked 2026-09-29, not merged, so no base move.
 - The session that started this project had no `mcp__github__*` tools; GitHub writes use `gh api` REST through the session proxy instead.
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4927#issuecomment-5882676798

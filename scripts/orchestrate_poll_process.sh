@@ -12634,7 +12634,7 @@ _direct_inflight_review_run_on_branch()
 		local _di_pr_named_json="" _di_pr_named_rc=0
 		_di_pr_named_json="$(_pr_named_review_dispatch_runs "${_di_pr}")" || _di_pr_named_rc=$?
 		if [ "${_di_pr_named_rc}" -ne 0 ]; then
-			echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} pr=${_di_pr} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=pr_named_listing_incomplete" >&2
+			echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} pr=${_di_pr} rc=${_di_pr_named_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=pr_named_listing_incomplete" >&2
 			printf '%s\n' "listing-incomplete"
 			return 0
 		fi
