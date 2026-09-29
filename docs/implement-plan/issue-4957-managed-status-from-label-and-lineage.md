@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-4957-managed-status-from-label-and-lineage-plan.md
 - Source issue: shubhodeep1/coding-workflows#4957
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4957-managed-status-from-label-and-lineage   Final PR: (opening)
+- Project branch: claude/implement-plan-issue-4957-managed-status-from-label-and-lineage   Final PR: #4999 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from claude/implement-plan-issue-4813-close-sweep-target-branch-merges (d11bc76).
+- Last note: phase 1 implemented and verified (label-only managed status + project-branch match in the sweep and issue_pr_status.yml); phase PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — label-only managed status with a project-branch match (sweep + issue_pr_status.yml + helper + tests + docs + changelog)
+1. [ ] Phase 1 — label-only managed status with a project-branch match (sweep + issue_pr_status.yml + helper + tests + docs + changelog) — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
