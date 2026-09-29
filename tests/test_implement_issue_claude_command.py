@@ -120,6 +120,9 @@ def test_allowlisted_calls_run_standalone(commands_dir):
 	assert "--issue <N>` as its own Bash call, exactly as written: its exit status is in the tool result, so never append `; echo \"exit=$?\"`, a pipe, or other commands to it (issue #4798)." in issue_text
 	assert "Run each helper, and every other allowlisted script call this command names (`check_in_status.py`, `claude_fix_claim.py`, `stale_routines.py`, `security_pass_skip.py`), as its own Bash call, exactly as written" in plan_text
 	assert "chaining it with `;`, `&&`, `echo \"$?\"`, or other reads makes a command no allow rule matches, and the session stops at a prompt (issue #4798)." in plan_text
+	# The checker's env-prefixed `check_in_status.py` call matches no allow rule
+	# even when run alone, so the guidance must not claim it is allowlisted.
+	assert "the checker prompt's `check_in_status.py` call sets `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` and `CLAUDE_FIXER_VERDICT_BOT_LOGIN` before `python3`, which neither `check_in_status.py` rule in `.claude/settings.json` covers" in plan_text
 
 
 def test_issue_command_resumes_before_writing(issue_cmd):
