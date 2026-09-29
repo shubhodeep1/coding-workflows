@@ -2711,6 +2711,7 @@ if args[0] == 'api':
 					'run_started_at': run.get('startedAt', run.get('createdAt', '')),
 				})
 			result = {'workflow_runs': runs[(page - 1) * per_page:page * per_page], 'total_count': len(runs)}
+			save()
 			if jq:
 				import subprocess as _sp
 				p = _sp.run(['jq', '-c', jq], input=json.dumps(result), capture_output=True, text=True)
@@ -16810,6 +16811,57 @@ def test_retrigger_review_redispatches_when_pr_named_dispatch_run_failed():
 	assert all(d.get("ref") is None for d in dispatches_for_pr), dispatches_for_pr
 	assert result.get("git_push_calls", []) == []
 	assert "review run dispatched for PR #92" in result["stdout"]
+
+
+def test_retrigger_review_pr_named_failure_lookup_reaches_past_the_review_window():
+	# Conformance fix 2 (AD-8): a review run that hit the codex-agent job's
+	# 240-minute timeout ends only minutes before it leaves the 250-minute
+	# in-flight window. The failed-autofix redispatch lookup therefore reads
+	# back REVIEW_RUN_MAX_RUNTIME_MINUTES + STALL_THRESHOLD_MINUTES
+	# (250 + 120 by default), while the in-flight guards keep 250.
+	import calendar
+
+	state, prs = _retrigger_review_pr_state(95, "claude/retrigger-review-pr-named-lookback")
+	started = time.time()
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 95},
+		prs=prs,
+		active_autofix_runs=[
+			{
+				"workflow": "internal-review.yml",
+				"branch": "main",
+				"event": "workflow_dispatch",
+				"displayTitle": "Internal: AI Review & Autofix [pr:95]",
+				"status": "completed",
+				"conclusion": "timed_out",
+				"createdAt": "2026-09-28T01:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	finished = time.time()
+	ages = []
+	for path in result.get("api_calls", []):
+		if "actions/workflows/internal-review.yml/runs?event=workflow_dispatch" not in path:
+			continue
+		m = re.search(r"created=>=(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)", path)
+		assert m, path
+		cutoff = calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%SZ"))
+		# Cutoff age in minutes, bounded by the poller's start and end times.
+		ages.append(((started - cutoff) / 60, (finished - cutoff) / 60))
+	assert ages, result.get("api_calls", [])
+	# The first PR-named lookup is the redispatch's (370 minutes); the
+	# dispatch guard that follows keeps the in-flight window (250 minutes).
+	low, high = ages[0]
+	assert low - 0.1 <= 370 <= high + 0.1, ages
+	assert any(low - 0.1 <= 250 <= high + 0.1 for low, high in ages[1:]), ages
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "95"]
+	assert dispatches_for_pr, result.get("review_dispatches")
+	assert result.get("git_push_calls", []) == []
 
 
 def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_branch_run():
