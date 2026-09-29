@@ -88,6 +88,10 @@ HEREDOC_OPEN_WRITE = "cd /repo && python3 - <<'PY' 2>&1\nwith open('CLAUDE.md', 
 		"ruby -i -pe 'gsub(/a/, \"b\")' x.rb",
 		"awk -i inplace '{print}' x.txt",
 		"FOO=1 /usr/bin/python3 - <<'EOF'\nPath('x').unlink()\nEOF",
+		"python3 -c \"import os; open(os.path.join(d, 'x.json'), 'w').write('1')\"",
+		"python3 -c \"open(str(p), 'w').write('x')\"",
+		"python3 - <<'EOF'\nimport os\nwith open(os.path.join(str(d), 'f'), 'w') as f:\n    f.write('x')\nEOF",
+		"cat <<'A'\nnotes\nA\npython3 - <<'B'\nopen(p, 'w').write('x')\nB",
 	],
 )
 def test_inline_interpreter_writes_are_classed(command):
@@ -115,6 +119,8 @@ def test_inline_interpreter_writes_are_classed(command):
 		"perl -Mstrict -e 'print 1'",
 		"awk '{print $1}' x.txt",
 		"ls -la",
+		"python3 -c \"print(open(os.path.join(d, 'w')).read())\"",
+		"python3 - <<'A'\nprint(open('a').read())\nA\ncat <<'B'\nopen(p, 'w')\nB",
 	],
 )
 def test_reads_scripts_and_data_are_not_classed(command):
@@ -403,6 +409,14 @@ def test_main_prints_one_json_line(monkeypatch, capsys):
 def test_main_rejects_bad_arguments(argv, capsys):
 	assert pp.main(["duplicate-check", *argv]) == 1
 	assert json.loads(capsys.readouterr().out)["eligible"] is False
+
+
+def test_main_usage_error_exits_2_without_json(capsys):
+	with pytest.raises(SystemExit) as exc:
+		pp.main(["duplicate-check", "--repo", SLUG, "--issue", "abc", "--target", "2", "--fix-pr", "3"])
+	assert exc.value.code == 2
+	assert capsys.readouterr().out == ""
+	assert "usage error" in pp.__doc__ and "exits 2" in " ".join(pp.__doc__.split())
 
 
 def test_file_still_validates_the_session_label():
