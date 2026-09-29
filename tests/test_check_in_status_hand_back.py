@@ -843,3 +843,29 @@ def test_the_sweep_min_age_counts_from_the_head_commit(monkeypatch, capsys):
 	_stub(monkeypatch, _stalled_responses())
 	_, out = _run(capsys, "--min-age-hours", "2")
 	assert out["done"] is True and out["state"] == "review-stalled"
+
+
+@pytest.mark.parametrize("failing", [f"repos/o/r/commits/{HEAD}", f"repos/o/r/actions/runs?branch={REF}&status=queued&per_page=1"])
+def test_a_failed_read_in_the_stall_check_is_a_retry(monkeypatch, capsys, failing):
+	# Master-session review point on #4985: a read failure inside
+	# _review_stall_verdict must end as the structured exit-2 retry.
+	responses = _stalled_responses()
+	_stub(monkeypatch, responses)
+	fake = checker.gh_api
+
+	def failing_read(path):
+		if path == failing:
+			raise checker.ReadError(f"gh api {path} failed: HTTP 502")
+		return fake(path)
+
+	monkeypatch.setattr(checker, "gh_api", failing_read)
+	code, out = _run(capsys)
+	assert code == 2 and out["action"] == "retry" and out["done"] is False and "HTTP 502" in out["error"]
+
+
+def test_a_malformed_head_commit_in_the_stall_check_is_a_retry(monkeypatch, capsys):
+	responses = _stalled_responses()
+	responses[f"repos/o/r/commits/{HEAD}"] = {"commit": {}}
+	_stub(monkeypatch, responses)
+	code, out = _run(capsys)
+	assert code == 2 and out["action"] == "retry"

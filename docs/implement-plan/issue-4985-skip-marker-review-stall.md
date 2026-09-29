@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#4985 (https://github.com/shubhodeep1/coding-workflows/issues/4985)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4985-skip-marker-review-stall   Final PR: #5031 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: [claude-twin-sync] of the six `workflow-templates/.claude/` twins onto PR #5056 (operator's supervising session; the `settings.json` and `gh_api_write_guard.py` twins need the Q62/Q64 approval window), then `/reclarify` on #4985
+- Waiting on: PR #5056 (phase 1/1 review round or merge)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (blocked for the twin sync before the first wait; no checker armed)
+- Check-in: checker session_011mS4g4dN4yMqg1hT4BY67M   safety net trig_016iPBDe7BJj9m6pzj5JxWWu   hand-back trig_01Kr6BbNpiXo8K8ytJXhbd5C
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented twin-first (Q40) and opened as PR #5056 with a `hold` claim; against a scratch copy with the twins synced, the 19 related suites pass (1,059 tests), and the full suite's 114 failures all fail identically on a clean `main` checkout (this container lacks `gawk` and some language toolchains). Before the sync, the twin-parity checks and the tests that load the root `.claude/` copies fail, as expected.
+- Last note: twin sync 0e9976d landed (Q1: A, master session); blocked label removed; wait on PR #5056 armed. Added tests that a failed read inside `_review_stall_verdict` ends as exit-2 `retry` (master-session review point); 16 suites, 1,002 passed on the synced branch.
 
 ## Phases
-1. [ ] Phase 1 — intentional-marker rule, gate skip log and comment, review-stall detection and fixer re-dispatch   — PR #5056 open (hold for [claude-twin-sync]); review rounds: 0; interventions: 0; protected paths: `.claude/scripts/check_in_status.py`, `.claude/scripts/dispatch_workflow.py`, `.claude/settings.json`, `.claude/hooks/gh_api_write_guard.py`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/implement-plan-claude.md` (all edited through their `workflow-templates/.claude/` twins)
+1. [ ] Phase 1 — intentional-marker rule, gate skip log and comment, review-stall detection and fixer re-dispatch   — PR #5056 open (twin sync 0e9976d done); review rounds: 0; interventions: 0; protected paths: `.claude/scripts/check_in_status.py`, `.claude/scripts/dispatch_workflow.py`, `.claude/settings.json`, `.claude/hooks/gh_api_write_guard.py`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/implement-plan-claude.md` (all edited through their `workflow-templates/.claude/` twins)
    - gate: marker rule, `AUTOFIX_GATE_SKIP` line on every skip, one `claude/*` skip comment per head (`.github/workflows/review_autofix.yml`)
    - sweeps: same rule in `.github/workflows/review_autofix_sweep.yml` and `scripts/claude_pr_sweep.py`; `review-stalled` is due; `CLAUDE_REVIEW_STALL_HOURS` in the catch-all env
    - checker twin: `has_skip_ai_marker`, `review-stalled` → `hand_back_fixer`, `stall_redispatched`
@@ -56,3 +56,5 @@
 - The session started before the repository was cloned, so the SessionStart hook had not run; `bash .claude/hooks/session-start.sh` installed `gh` (2.101.0).
 - Issue progress comment: 5883835523.
 - 2026-09-29: phase 1 PR #5056 (head of the implementation commit `f992868`, then this log commit). Verification: `ruff check --select E,F --ignore E501` clean on changed Python; `yamllint -s` clean; actionlint and shellcheck findings unchanged before/after (only line numbers moved); `review_autofix.yml` 460,048 bytes.
+- Protected-path approval: phase 1 — Q1: A (2026-09-29), all six twins synced by the master session as `[claude-twin-sync]` 0e9976d (settings.json and the hook in the operator's approval window, Q62/Q64); summary comment 5887995914. The master's wake (trigger `trig_01LpkipHer3chPx5osbdjWfP`) stood in for `/reclarify`.
+- Every `check_in_status.py` call and checker prompt passes `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` (#5057).
