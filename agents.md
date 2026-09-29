@@ -1072,7 +1072,10 @@ reviews, comments, and conflicts stay a direct §12 request.
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
   to the allow list or the Auto-mode classifier beside anything else (loops,
-  `python3`, `$VAR`, file redirects). It fails closed (asks) on an unreadable payload or an
+  `python3`, `$VAR`, file redirects). A call that passes one of jq's own
+  command-line options to `--jq` (`--arg`, `-r`, `-c`; `gh api` has none) is
+  denied with a reason that says how to fix it, so the session corrects the
+  command instead of waiting at a prompt (#4891). It fails closed (asks) on an unreadable payload or an
   internal error; `tests/test_gh_api_write_guard.py` has its own `ci.yml`
   step and `workflow-templates/.claude/hooks/` holds a byte-identical copy.
   Do not re-add `gh api` ask rules: an ask rule prompts even when a hook
