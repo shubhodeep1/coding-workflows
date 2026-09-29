@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "Multiple merged changes touched validation target-ref handling, process isolation, sandboxing, or workspace hooks, with tests covering those boundaries. When validation or autofix code runs on repository-controlled inputs, preserve the isolation and ref-validation checks and add tests for the relevant workflow contract.",
+  "fingerprint": "d0d6e29449d838fc9fde5902245316c52227a2e6a16d1e38fcfd12c43d6a0f8f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36505685685",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36505685685",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4563",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4564",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4566",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4577",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4595",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4569",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4570",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4574",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4578",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4600"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260929010302_011f592c67",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep validation trust boundaries explicit and regression-tested.",
+  "timestamps": {
+    "created_at": "2026-09-29T01:03:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
