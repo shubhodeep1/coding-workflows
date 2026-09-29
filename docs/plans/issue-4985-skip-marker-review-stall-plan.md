@@ -122,8 +122,8 @@ and the §26 / project checkers waited about 16 hours because
   that `check_pr_hand_back` already budgets. The gate's per-head comment
   dedupe reuses `gate_fetch_marker_comments` (one `GET /user` plus one
   paginated comments call, shared with the Claude-fixer checks).
-- §27: `review_autofix.yml` is 454,700 bytes. The inline additions keep it
-  under 460,000, below the 480,000 guard.
+- §27: `review_autofix.yml` is 454,700 bytes. The inline additions bring it to
+  460,048 bytes, about 20 KB under the 480,000 guard.
 - §8: structured `AUTOFIX_GATE_SKIP` / `AUTOFIX_GATE_SKIP_NOTICE` lines.
 - §19: PR bodies use `Refs #4985` except the final PR (`Fixes #4985`).
   PR titles and bodies never carry the literal marker, because the gate on
@@ -221,6 +221,10 @@ every issue a single-phase plan. The pieces are also coupled:
 2. `workflow-templates/.claude/scripts/dispatch_workflow.py`: add
    `internal-review.yml`. `workflow-templates/.claude/settings.json`: add
    `Bash(gh workflow run internal-review.yml *)`.
+   `workflow-templates/.claude/hooks/gh_api_write_guard.py`: add it to
+   `DISPATCHABLE_WORKFLOWS`, which a test keeps equal to the allow rules.
+   `workflow-templates/.claude/commands/implement-plan-claude.md`: the
+   helper now allows seven workflows.
 3. `workflow-templates/.claude/commands/fix-claude-pr.md`: the
    `review-stalled` route (step 2), claim (step 4), and fix branch (step 5).
 4. `.github/workflows/review_autofix.yml` gate:
@@ -246,6 +250,9 @@ every issue a single-phase plan. The pieces are also coupled:
 - `workflow-templates/.claude/scripts/check_in_status.py` (twin of `.claude/scripts/check_in_status.py`)
 - `workflow-templates/.claude/scripts/dispatch_workflow.py` (twin)
 - `workflow-templates/.claude/settings.json` (twin; operator approval window for the sync)
+- `workflow-templates/.claude/hooks/gh_api_write_guard.py` (twin; its `DISPATCHABLE_WORKFLOWS` is kept equal to the settings allow rules by `tests/test_gh_api_write_guard.py`; operator approval window for the sync)
+- `workflow-templates/.claude/commands/implement-plan-claude.md` (twin; "six" → "seven" workflows in the dispatch helper description)
+- `.github/workflows/ci.yml` (a step for `tests/test_skip_ai_marker_rule.py`)
 - `workflow-templates/.claude/commands/fix-claude-pr.md` (twin)
 - `.github/workflows/review_autofix.yml`
 - `.github/workflows/review_autofix_sweep.yml`
@@ -342,7 +349,7 @@ every issue a single-phase plan. The pieces are also coupled:
 - AD-3 [plan, 2026-09-29] Do the two sweeps adopt the same rule? — Picked: A — yes: `review_autofix_sweep.yml` (awk, parity-tested) and `claude_pr_sweep.py` (shared Python function). Alternatives: B — gate only. Why: with B the §26.H catch-all still skips the very PR a checker would hand off (#4807 was skipped there too), and the review sweep never re-dispatches a PR the gate would now review. Applied in: phase 1. Status: pending review
 - AD-4 [plan, 2026-09-29] Add `ai:review-skipped` to a marker-skipped PR? — Picked: A — no; the hidden comment marker is the machine-readable signal. Alternatives: B — add the label. Why: the label contract defines it as the deterministic doc-only / size skip, and `docs/how-it-works.md` ties it to `ai:ready-to-merge`; the issue allows it only "if the label contract allows". Applied in: phase 1. Status: pending review
 - AD-5 [plan, 2026-09-29] Comment on drafts (`draft_or_skip_ai` because the PR is a draft)? — Picked: A — no: comment for `skip_ai_marker` and for `draft_or_skip_ai` only when the PR is not a draft (`pr_skip_ai=true`); drafts get the log line, and the checker never calls a draft stalled. Alternatives: B — comment on drafts too. Why: GitHub already shows the draft state, `ready_for_review` starts the review, and `/implement-plan-claude`'s draft final PR would get one comment per phase merge. Applied in: phase 1. Status: pending review
-- AD-6 [plan, 2026-09-29] Where do the skip log and comment live? — Picked: A — inline at the end of the gate step. Alternatives: B — a new `scripts/review_autofix_step_*.sh`. Why: the gate job has no support-script checkout; the addition keeps the file under 460,000 bytes (§27 guard 480,000). Applied in: phase 1. Status: pending review
+- AD-6 [plan, 2026-09-29] Where do the skip log and comment live? — Picked: A — inline at the end of the gate step. Alternatives: B — a new `scripts/review_autofix_step_*.sh`. Why: the gate job has no support-script checkout; the addition leaves the file at 460,048 bytes (§27 guard 480,000). Applied in: phase 1. Status: pending review
 - AD-7 [plan, 2026-09-29] What proves a head was reviewed or deliberately not reviewed? — Picked: A — any trusted hand-off for the head (answered or not), `auto_merge` set, a trusted gate-skip comment for the head, the intentional marker in the PR text, a draft, `ai:merge-queued`, or an active run. Alternatives: B — also match review check-run names. Why: all read from data `check_pr_hand_back` already fetches; check runs of dispatched runs do not attach to the PR head. Applied in: phase 1. Status: pending review
 - AD-8 [plan, 2026-09-29] What starts the stall clock? — Picked: A — the head commit's committer date, threshold `CLAUDE_REVIEW_STALL_HOURS` (default 2), which is also the verdict's `since`. Alternatives: B — the PR's `updated_at`. Why: `updated_at` moves on every comment; `since` = head time lets the catch-all act at 2 hours as the acceptance criterion asks. Applied in: phase 1. Status: pending review
 - AD-9 [plan, 2026-09-29] Which claim kind does `review-stalled` use? — Picked: A — the existing `review` kind. Alternatives: B — a new `stall` kind. Why: no change to the claim format, `claude_fix_claim.py`, or the `claude_pr_fix.v1` queue payload (§6, §5). Applied in: phase 1. Status: pending review

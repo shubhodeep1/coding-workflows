@@ -448,6 +448,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status_hand_back.py tests/test_claude_pr_sweep.py tests/test_check_in_session_targeting.py
 
+      - name: Skip-AI marker rule and review gate skip notice tests (CLAUDE.md §26.H, issue 4985)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_skip_ai_marker_rule.py
+
       - name: /implement-plan-claude command contract tests
         run: |
           set -euo pipefail

@@ -55,7 +55,13 @@ run and issue-list modes → `wait` / `next_stage`; --hand-back mode →
     (`review-round` / `conflict`, as for a Claude-fixer PR above), or a
     failed check run with no workflow run queued, in progress or pending on
     the branch (`ci-failed`; no age threshold, except that a
-    `claude/implement-plan-*` head keeps the --stuck-hours window). A live
+    `claude/implement-plan-*` head keeps the --stuck-hours window), or a
+    head that was never reviewed (`review-stalled`, issue #4985: no
+    hand-off, no gate skip notice, no auto-merge, no skip-AI marker, not a
+    draft or `ai:merge-queued`, no active run, and older than
+    CLAUDE_REVIEW_STALL_HOURS, default 2; `stall_redispatched` says a fixer
+    already re-dispatched its review; off when
+    CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN is unset). A live
     `ai:claude-fix-claim` on the current head reports `claimed` and a hold
     reports `held`; both are not done, so nobody starts a second fixer.
     A claim counts only when an owner / member / collaborator posted it as
@@ -82,7 +88,10 @@ most one hand-off run read (plus 1 compare read when the run was triggered
 by an older push than the head it reviewed), and 3 active-run reads when
 needed. Hand-back mode on a `claude/*` head issues 1 call plus one per 100
 PR comments, the check-run pages, at most 1 head-commit read, 1 hand-off run
-read, 1 compare read (same condition) and 3 active-run reads. Run mode
+read, 1 compare read (same condition) and 3 active-run reads (plus the
+dispatched-review list); the review-stall check reuses the PR object and the
+comments and only then adds that head-commit read and those active-run
+reads. Run mode
 issues 1 call. Issues mode issues one call per issue; the checker lists at
 most the few follow-ups one security cycle opens.
 Every call goes through `gh api`, which in Claude Code on the web is
@@ -147,7 +156,27 @@ FIX_CLAIM_TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 FIX_CLAIM_COUNTED_KINDS = ("conflict", "ci", "blocked")
 DEFAULT_FIX_CLAIM_LEASE_HOURS = 3.0
 DEFAULT_FIX_HAND_BACK_CAP = 3
-HAND_BACK_KIND_BY_STATE = {"conflict": "conflict", "review-round": "review", "ci-failed": "ci", "blocked": "blocked"}
+HAND_BACK_KIND_BY_STATE = {"conflict": "conflict", "review-round": "review", "ci-failed": "ci", "blocked": "blocked",
+	"review-stalled": "review"}
+# The skip-AI opt-out marker (issue #4985). Only an intentional marker counts:
+# anywhere in the PR title, or on a body line that holds nothing but the
+# marker (up to 3 leading spaces) outside a ``` / ~~~ fenced block. A quoted,
+# backticked, indented or mid-sentence mention never counts. The review gate
+# in .github/workflows/review_autofix.yml and review_autofix_sweep.yml apply
+# the same rule in awk; scripts/claude_pr_sweep.py calls has_skip_ai_marker.
+# tests/test_skip_ai_marker_rule.py holds all three to one case table.
+SKIP_AI_MARKER = "[skip ai]"
+SKIP_AI_BODY_LINE_RE = re.compile(r"^ {0,3}\[skip ai\][ \t]*$")
+SKIP_AI_FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
+# review_autofix.yml posts this once per head when it skips a PR-backed
+# claude/* head for skip_ai_marker / draft_or_skip_ai (issue #4985).
+REVIEW_SKIPPED_MARKER_RE = re.compile(
+	r"^<!-- ai:claude-fixer-review-skipped:v1 reason=([a-z_]+) head=([0-9a-f]{40}) -->$"
+)
+# --hand-back: a claude/* head with no review trace this long is review-stalled.
+DEFAULT_REVIEW_STALL_HOURS = 2.0
+# Labels that defer a review on purpose (scripts/review_merge_train.sh).
+REVIEW_DEFERRED_LABELS = ("ai:merge-queued",)
 
 
 class ReadError(Exception):
@@ -225,6 +254,31 @@ def _gh_api_paginated_object(path: str, list_key: str) -> dict:
 
 def _label_names(obj: dict) -> list[str]:
 	return [label.get("name", "") for label in obj.get("labels") or [] if isinstance(label, dict)]
+
+
+def has_skip_ai_marker(title: object, body: object) -> bool:
+	"""True when a PR's title or body carries an intentional skip-AI marker.
+
+	The title counts wherever it holds the marker. A body line counts only
+	when it holds nothing but the marker (up to 3 leading spaces, trailing
+	blanks and a trailing CR allowed) and lies outside a ``` / ~~~ fenced
+	block; an opening or closing fence line toggles the block. Non-string
+	input counts as empty. No API calls.
+	"""
+	if isinstance(title, str) and SKIP_AI_MARKER in title:
+		return True
+	if not isinstance(body, str):
+		return False
+	in_fence = False
+	for line in body.split("\n"):
+		if line.endswith("\r"):
+			line = line[:-1]
+		if SKIP_AI_FENCE_RE.match(line):
+			in_fence = not in_fence
+			continue
+		if not in_fence and SKIP_AI_BODY_LINE_RE.match(line):
+			return True
+	return False
 
 
 def _parse_time(value: str) -> dt.datetime:
@@ -511,6 +565,31 @@ def _fix_claim_trusted_logins(pr: dict) -> tuple[str, ...]:
 	return tuple(logins)
 
 
+def _trusted_fix_claims(comments: list, trusted_logins: tuple[str, ...]):
+	"""Yield `(head, kind, by, created_at)` for each trusted claim, oldest first.
+
+	A claim is trusted when its comment's author association is owner /
+	member / collaborator, its author's casefolded login is in
+	`trusted_logins`, and its body carries exactly one claim marker line
+	(see `read_fix_claims`). No API calls.
+	"""
+	for comment in sorted(comments, key=lambda entry: entry.get("id") if type(entry.get("id")) is int else 0):
+		if comment.get("author_association") not in FIX_CLAIM_TRUSTED_ASSOCIATIONS:
+			continue
+		claim_author = comment.get("user")
+		if (not isinstance(claim_author, dict) or not isinstance(claim_author.get("login"), str)
+			or claim_author["login"].casefold() not in trusted_logins):
+			continue
+		body = comment.get("body")
+		if not isinstance(body, str):
+			continue
+		markers = [match for line in body.splitlines() if (match := FIX_CLAIM_RE.fullmatch(line))]
+		if len(markers) != 1:
+			continue
+		claim_head, claim_kind, claim_by = markers[0].groups()
+		yield claim_head, claim_kind, claim_by, comment.get("created_at")
+
+
 def read_fix_claims(comments: list, head_sha: str, now: dt.datetime, ignore_by: tuple[str, ...] = (),
 	trusted_logins: tuple[str, ...] = ()) -> dict:
 	"""Summarise the trusted `ai:claude-fix-claim` markers on one PR.
@@ -536,24 +615,11 @@ def read_fix_claims(comments: list, head_sha: str, now: dt.datetime, ignore_by: 
 	cap = int(_env_positive_float("CLAUDE_FIX_HAND_BACK_CAP", DEFAULT_FIX_HAND_BACK_CAP))
 	counted: set[tuple[str, str]] = set()
 	latest = None
-	for comment in sorted(comments, key=lambda entry: entry.get("id") if type(entry.get("id")) is int else 0):
-		if comment.get("author_association") not in FIX_CLAIM_TRUSTED_ASSOCIATIONS:
-			continue
-		claim_author = comment.get("user")
-		if (not isinstance(claim_author, dict) or not isinstance(claim_author.get("login"), str)
-			or claim_author["login"].casefold() not in trusted_logins):
-			continue
-		body = comment.get("body")
-		if not isinstance(body, str):
-			continue
-		markers = [match for line in body.splitlines() if (match := FIX_CLAIM_RE.fullmatch(line))]
-		if len(markers) != 1:
-			continue
-		claim_head, claim_kind, claim_by = markers[0].groups()
+	for claim_head, claim_kind, claim_by, claim_created_at in _trusted_fix_claims(comments, trusted_logins):
 		if claim_kind in FIX_CLAIM_COUNTED_KINDS:
 			counted.add((claim_head, claim_kind))
 		if claim_head == head_sha and claim_by not in ignore_by:
-			latest = (claim_kind, claim_by, comment.get("created_at"))
+			latest = (claim_kind, claim_by, claim_created_at)
 	claim = {"state": "none"}
 	if latest is not None:
 		claim_kind, claim_by, claim_at = latest
@@ -574,6 +640,91 @@ def _hours_since(value: str | None, now: dt.datetime) -> float | None:
 		return (now - _parse_time(value)).total_seconds() / 3600
 	except ValueError:
 		return None
+
+
+def _head_has_review_trace(comments: list, head_sha: str, workflow_login: str) -> str | None:
+	"""Name the workflow comment that shows `head_sha` was reviewed or skipped on purpose.
+
+	Only comments by the workflow account (`workflow_login`, the
+	CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN value) count: a hand-off for the head,
+	answered or not (`ai:claude-fixer-handoff:v1`), or the gate's skip notice
+	for the head (`ai:claude-fixer-review-skipped:v1`). Returns a short
+	description, or None. No API calls: the caller passes its comments.
+	"""
+	for comment in comments:
+		user = comment.get("user")
+		body = comment.get("body")
+		if not isinstance(user, dict) or user.get("login") != workflow_login or not isinstance(body, str):
+			continue
+		for line in body.splitlines():
+			handoff = FIXER_HANDOFF_RE.fullmatch(line)
+			if handoff and handoff.group(2) == head_sha:
+				return f"a {handoff.group(1)} hand-off for this head"
+			skipped = REVIEW_SKIPPED_MARKER_RE.fullmatch(line)
+			if skipped and skipped.group(2) == head_sha:
+				return f"the gate skipped this head on purpose ({skipped.group(1)})"
+	return None
+
+
+def _review_stall_verdict(repo: str, number: int, pr: dict, head_sha: str, head_ref: str, comments: list,
+	now: dt.datetime, ignore_claim_by: tuple[str, ...] = ()) -> dict:
+	"""Decide whether a clean `claude/*` head was never reviewed (issue #4985).
+
+	Input: the `pulls/N` object and its comments, which `check_pr_hand_back`
+	already fetched, for a head with no block label, conflict, pending
+	hand-off, or failed check. Output: `{"done": False, "state": "open",
+	"reason": …}`, or a due `{"state": "review-stalled", "since": <head commit
+	time>, "stall_redispatched": bool, "reason": …}`.
+
+	Not stalled, with no API call: CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN is unset
+	(workflow comments cannot be trusted, so the check is off); the PR is a
+	draft; auto-merge is enabled (a clean review or the deterministic skip);
+	it carries a REVIEW_DEFERRED_LABELS label; its title or body holds an
+	intentional skip-AI marker; or `_head_has_review_trace` finds a hand-off
+	or gate skip notice for the head. Otherwise 1 head-commit read: younger
+	than CLAUDE_REVIEW_STALL_HOURS (default 2) is not stalled. Then the
+	active-run reads (`_active_run_count`, pending included, up to 4 calls):
+	any active run is not stalled. `stall_redispatched` is true when a trusted
+	`review` claim on this head was posted by a claimant not in
+	`ignore_claim_by`: a fixer already re-dispatched the review once, so the
+	next one holds instead of looping.
+	"""
+	workflow_login = os.environ.get("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "").strip()
+	if not workflow_login:
+		return {"done": False, "state": "open",
+			"reason": f"PR #{number} open; review-stall detection is off because CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN is unset"}
+	quiet = None
+	deferred = [name for name in _label_names(pr) if name in REVIEW_DEFERRED_LABELS]
+	if pr.get("draft"):
+		quiet = "it is a draft"
+	elif pr.get("auto_merge"):
+		quiet = "auto-merge is enabled"
+	elif deferred:
+		quiet = f"its review is deferred ({', '.join(deferred)})"
+	elif has_skip_ai_marker(pr.get("title"), pr.get("body")):
+		quiet = "it carries the skip-AI marker"
+	else:
+		quiet = _head_has_review_trace(comments, head_sha, workflow_login)
+	if quiet:
+		return {"done": False, "state": "open", "reason": f"PR #{number} open, no fix due: {quiet}"}
+
+	stall_hours = _env_positive_float("CLAUDE_REVIEW_STALL_HOURS", DEFAULT_REVIEW_STALL_HOURS)
+	commit = gh_api(f"repos/{repo}/commits/{head_sha}")
+	committed = commit["commit"]["committer"]["date"]
+	age = _hours_since(committed, now)
+	if age is None or age < stall_hours:
+		return {"done": False, "state": "open",
+			"reason": f"PR #{number} head {head_sha[:12]} has no review yet, {0.0 if age is None else age:.1f}h old (< {stall_hours:g}h)"}
+	active = _active_run_count(repo, head_ref, include_pending=True, pr_number=number)
+	if active:
+		return {"done": False, "state": "open",
+			"reason": f"PR #{number} head {head_sha[:12]} has no review yet, but {active} workflow run(s) on {head_ref} are still queued, running or pending"}
+	redispatched = any(
+		claim_head == head_sha and claim_kind == "review" and claim_by not in ignore_claim_by
+		for claim_head, claim_kind, claim_by, _ in _trusted_fix_claims(comments, _fix_claim_trusted_logins(pr))
+	)
+	return {"state": "review-stalled", "since": committed, "stall_redispatched": redispatched,
+		"reason": f"PR #{number} head {head_sha[:12]} has no review, hand-off, gate skip notice or active run after {age:.1f}h (>= {stall_hours:g}h)"}
 
 
 def check_pr_hand_back(repo: str, number: int, stuck_hours: float, min_age_hours: float, now: dt.datetime,
@@ -631,7 +782,11 @@ def check_pr_hand_back(repo: str, number: int, stuck_hours: float, min_age_hours
 			if run.get("status") == "completed" and run.get("conclusion") in FAILED_CHECK_CONCLUSIONS
 		]
 		if not failed:
-			return {"done": False, "state": "open", **base, "reason": f"PR #{number} open, no conflict, hand-off, block or failed check"}
+			# A clean head: the review may never have happened (issue #4985).
+			due = _review_stall_verdict(repo, number, pr, head_sha, head_ref, comments, now, ignore_claim_by)
+			if due.get("state") != "review-stalled":
+				return {**due, **base}
+	if due is None and not conflicted:
 		names = ", ".join(sorted(run.get("name", "?") for run in failed))
 		completed = sorted(run.get("completed_at") for run in failed if isinstance(run.get("completed_at"), str))
 		if head_ref.startswith(CLAUDE_FIXER_HEAD_PREFIX):
@@ -713,6 +868,7 @@ CHECKER_ROUTE_TABLE = {
 		"review-round": ("hand_back_fixer", None),
 		"ci-failed": ("hand_back_fixer", None),
 		"blocked": ("hand_back_fixer", None),
+		"review-stalled": ("hand_back_fixer", None),
 		"merged": ("hand_back_all", None),
 		"closed": ("hand_back_all", None),
 	},
@@ -742,7 +898,8 @@ def route_verdict(verdict: dict, mode: str) -> dict:
 	| `issues`    | resolved                      | next_stage      | success    |
 	| `issues`    | blocked                       | next_stage      | block      |
 	| `hand_back` | conflict, review-round,       | hand_back_fixer | —          |
-	|             | ci-failed, blocked            |                 |            |
+	|             | ci-failed, blocked,           |                 |            |
+	|             | review-stalled                |                 |            |
 	| `hand_back` | merged, closed                | hand_back_all   | —          |
 
 	A review round or a conflict is never `hand_back`: it starts a fresh

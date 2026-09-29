@@ -181,6 +181,7 @@ DISPATCHABLE_WORKFLOWS = frozenset(
 		"ai-validate.yml",
 		"review_autofix.yml",
 		"ai-review.yml",
+		"internal-review.yml",
 	}
 )
 _ROUTINE_ENDPOINTS += (

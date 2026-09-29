@@ -1352,7 +1352,7 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
 
   | Helper | Does | API calls |
   |---|---|---|
-  | `.claude/scripts/dispatch_workflow.py` | dispatches one of the six workflows allowed as `gh workflow run <file> *` and prints the id of the run it started (never the previous run) | 1 read, 1 POST, 1 read per 5 s poll (90 s max) |
+  | `.claude/scripts/dispatch_workflow.py` | dispatches one of the seven workflows allowed as `gh workflow run <file> *` and prints the id of the run it started (never the previous run) | 1 read, 1 POST, 1 read per 5 s poll (90 s max) |
   | `.claude/scripts/edit_comment.py` | edits one issue or PR comment in place from a JSON list of exact-once `old`/`new` pairs, or replaces its body | 1 read, 1 PATCH |
   | `.claude/scripts/permission_prompts.py` | reports and files the prompts below | 1 read per 100 labelled issues, 1 POST per new pattern |
 
@@ -1656,9 +1656,10 @@ two things back to the pushing session, which holds the context:
 - **A due Claude fix.** Every PR-backed `claude/*` head runs in
   Claude-fixer mode (§26.H), so the GPT editor and conflict resolver never
   fix it. When such a PR has a merge conflict, a failed check with nothing
-  running, a review hand-off from the reviewer panel, or a block label, the
-  checker wakes the pushing session, which fixes it with
-  `/fix-claude-pr` and pushes.
+  running, a review hand-off from the reviewer panel, a block label, or a
+  head whose review never happened (`review-stalled`), the checker wakes the
+  pushing session, which fixes it with `/fix-claude-pr` and pushes (or, for
+  a stalled review, re-dispatches it).
 - **A terminal verdict.** The pushing session writes the action-needed
   report: the next steps, or that it can be closed because there are none.
 
@@ -1858,12 +1859,12 @@ hand-back trigger id, a session id, and a role. There is at most one
    further reads. **Route on `action` only, never on `state`** (the
    script maps it, `route_verdict`):
 
-   | `state`                                            | `action`          | step |
-   |----------------------------------------------------|-------------------|------|
-   | `open`, `claimed`, `held`, or waiting on a run     | `wait`            | 2    |
-   | read failed (exit 2)                               | `retry`           | 3    |
-   | `conflict`, `review-round`, `ci-failed`, `blocked` | `hand_back_fixer` | 4    |
-   | `merged`, `closed`                                 | `hand_back_all`   | 4    |
+   | `state`                                                              | `action`          | step |
+   |----------------------------------------------------------------------|-------------------|------|
+   | `open`, `claimed`, `held`, or waiting on a run                       | `wait`            | 2    |
+   | read failed (exit 2)                                                 | `retry`           | 3    |
+   | `conflict`, `review-round`, `ci-failed`, `blocked`, `review-stalled` | `hand_back_fixer` | 4    |
+   | `merged`, `closed`                                                   | `hand_back_all`   | 4    |
 
 2. **`action` is `wait`** (`open`, `claimed`, `held`, or waiting on a
    run) → renew the dead-man's switch on every subscriber's Routine
@@ -1877,7 +1878,7 @@ hand-back trigger id, a session id, and a role. There is at most one
    therefore lets the dead-man's switch fire within 7 days, and the
    pushing session looks into it (§26.D).
 4. **`action` is `hand_back_fixer`** (a due fix: `state` is `conflict`,
-   `review-round`, `ci-failed`, or `blocked`) → if this same `head_sha`
+   `review-round`, `ci-failed`, `blocked`, or `review-stalled`) → if this same `head_sha`
    and `state` were already handed back, treat it as step 2 (the §26.H
    sweep covers a fixer that did not act). Otherwise **hand back to the
    fixer only**: `update_trigger` on the fixer's Routine with only
@@ -1954,7 +1955,7 @@ verdict; a woken `notify` subscriber does the same). Then, by `action`
 (§26.C step 1):
 
 - **Due fix** (`hand_back_fixer`: `conflict`, `review-round`, `ci-failed`,
-  `blocked`; or `wait` with `state` `claimed` by a claim of its own) and
+  `blocked`, `review-stalled`; or `wait` with `state` `claimed` by a claim of its own) and
   this session is the fixer → follow
   `.claude/commands/fix-claude-pr.md` **in this session** with the PR URL:
   it checks the §26.H cap, claims the head, fixes, verifies, pushes, then
@@ -2120,7 +2121,14 @@ sweep runs in the sessions that create them, never in Actions:
   the current head, a merge conflict with no workflow run queued, running,
   or pending on the branch, or a failed check with none either. No age
   window applies, except that a `claude/implement-plan-*` head keeps its
-  chain's 6-hour stuck window for failed checks.
+  chain's 6-hour stuck window for failed checks. A head whose review never
+  happened is due too (`review-stalled`, issue #4985): no hand-off, no
+  review-gate skip notice, no auto-merge, no skip-AI marker, not a draft
+  or `ai:merge-queued`, and no workflow run active for
+  `CLAUDE_REVIEW_STALL_HOURS` (default 2) after the head commit. Its fixer
+  claims it as `review` and re-dispatches the review once
+  (`internal-review.yml`, or `ai-review.yml` in consumer repos, with
+  `pr_number`); a head already re-dispatched is held and asked about.
 - **Catch-all sweep.** The `claude-pr-catch-all` job of
   `.github/workflows/review_autofix_sweep.yml` runs hourly (cron
   `17 * * * *`) in coding-workflows over this repo and every repo in

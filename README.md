@@ -89,6 +89,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `CLAUDE_PR_SWEEP_MIN_AGE_HOURS` | No | `2` | `claude-pr-catch-all` | How long a Claude fix on a `claude/*` PR (conflict, failed check, review hand-off, block label) must have been due, with no live claim, before the hourly catch-all sweep in `review_autofix_sweep.yml` starts a fresh `/fix-claude-pr` session for it. See [Claude fixes every claude/* PR](#claude-fixes-every-claude-pr). |
 | `CLAUDE_FIX_CLAIM_LEASE_HOURS` | No | `3` | `claude-pr-catch-all` / sessions | How long an `ai:claude-fix-claim` comment on a PR's current head keeps other fixers (the §26 checker's hand-back and the sweep) away. A push moves the head and ends the claim early. Sessions read the same variable from their environment and default to `3`. |
 | `CLAUDE_FIX_HAND_BACK_CAP` | No | `3` | `claude-pr-catch-all` / sessions | Conflict, CI, and block fixes allowed per PR (counted per distinct head and kind) before the fixer posts a `hold` claim, notifies, and asks instead of fixing again. Review rounds are bounded by `MAX_AUTOFIX_ITERATIONS` instead. |
+| `CLAUDE_REVIEW_STALL_HOURS` | No | `2` | `claude-pr-catch-all` / sessions | How long a `claude/*` head may go without any review trace (no hand-off, no review-gate skip notice, no auto-merge, no skip-AI marker, not a draft or `ai:merge-queued`, no active workflow run) before `check_in_status.py --hand-back` reports `review-stalled` and a fixer re-dispatches its review (issue #4985). |
 | `ORCH_PR_AUTOFIX_FLOW_ENABLED` | No | `true` | review_autofix, orchestrate_poll | Master switch for the orchestrator-aware PR autofix flow. When `true`, `review_autofix.yml`'s retrigger guard classifies the PR (`orch_intermediate` / `orch_final` / `other`) by base/head branch (used for observability and the orchestrator-side cap bypass on `orch_final`); `orchestrate_poll_process.sh` bypasses the `MAX_JUDGE_CYCLES` cap while the integration→default-branch final PR is open and pending merge so the final PR can run unlimited 5-autofix→judge cycles until mergeable. The per-PR autofix loop itself uses `MAX_AUTOFIX_ITERATIONS` uniformly across every mode. Set to `false` to force `orch_pr_mode` to stay at `other` for every PR (head/base never inspected) and disable the orchestrator-side cap bypass (`MAX_JUDGE_CYCLES=25` then applies to the final-PR loop too). See [Orchestrator PR autofix flow](#orchestrator-pr-autofix-flow). |
 | `ORCH_INTEGRATION_BRANCH_PATTERN` | No | `^orchestrator/project-` | review_autofix | POSIX-extended regex used by the retrigger guard to identify orchestrator integration branches (head ref) and orchestrator-targeted bases. Defaults match the orchestrator's conventional branch naming (`orchestrator/project-<TRACKING_ISSUE_NUMBER>` set by `.github/workflows/orchestrate.yml`). Override only if you have customised the orchestrator branch naming. |
 | `CHECK_RUNS_AUTOFIX_ENABLED` | No | `true` | review_autofix | When `true` (default), the workflow snapshots failed and incomplete GitHub check-runs on the PR head SHA into `${PR_CHECK_RUNS_CONTEXT_FILE}` and feeds it to reviewers + editor so CI / lint failures are detected and fixed on every run. The "Collect PR check-run failures" step in `.github/workflows/review_autofix.yml` calls `gh_retry gh api --paginate --slurp "repos/{repo}/commits/{sha}/check-runs?per_page=100"` once per poll iteration; this is one *logical* snapshot attempt, but it may consume multiple underlying GitHub API requests (one per pagination page, plus up to `GH_RETRY_MAX_ATTEMPTS` retries on transient failures), so operators sizing rate-limit budgets should treat the per-iteration cost as ≥1 requests rather than exactly one. Reviewers see the file as a numbered context section, and the editor prompt elevates failed entries to the top of the WILL_FIX priority order (see `scripts/review_apply_fixes.sh` "CI / LINT CHECK-RUN FAILURES" block). Fail-open: an unrecoverable API failure writes a sentinel file (`collection_status: api_error`) and the autofix pipeline continues — reviewers/editor are explicitly told to treat the absence-of-failures signal as unknown rather than confirmed-passing. Set to `false` to disable check-run collection entirely (the file still gets written with `collection_status: disabled` and zero counts so preflight always passes). |
@@ -1423,8 +1424,9 @@ next push is evaluated for the skip. Who fixes a PR that does get a hand-off:
 1. **The pushing session.** Its §26 Sonnet checker runs
    `.claude/scripts/check_in_status.py --hand-back` every hour. When a fix is
    due (a block label, a review hand-off for the current head, a merge
-   conflict, or a failed check with no workflow run queued, running, or
-   pending) the script reports `action: hand_back_fixer`, and the checker
+   conflict, a failed check with no workflow run queued, running, or
+   pending, or a head whose review never happened, `review-stalled`) the
+   script reports `action: hand_back_fixer`, and the checker
    pulls the pushing session's hand-back Routine forward. That session
    follows `/fix-claude-pr` in place: it claims the head, fixes, verifies,
    pushes, and registers a new hand-back with the same checker.
@@ -1457,6 +1459,24 @@ can forge a claim or a hold), live for
 `CLAUDE_FIX_HAND_BACK_CAP` (default 3) conflict, CI, and block fixes on one
 PR, the fixer posts a `hold` claim, sends one push notification, and asks;
 nothing touches a held head until someone pushes or the fixer resumes.
+
+**Reviews that never happened** (issue #4985). The review gate
+(`review_autofix.yml`) and both sweeps honour the skip-AI marker `[skip ai]`
+only when it is intentional: in the PR title, or on a description line
+holding nothing but the marker, outside a code fence. A mention in
+backticks, in a code block, or mid-sentence is reviewed. Every gate skip
+logs `AUTOFIX_GATE_SKIP reason=<skip_reason> pr=<n> head_sha=<sha>`. An open
+`claude/*` PR skipped for the marker (or for `pr_skip_ai=true` on a
+non-draft) gets one comment per head that says how to undo it and ends in
+`<!-- ai:claude-fixer-review-skipped:v1 reason=<reason> head=<sha> -->`.
+A `claude/*` head with no review trace for `CLAUDE_REVIEW_STALL_HOURS`
+(default 2) is `review-stalled`:
+- a trace is a hand-off, a skip notice, auto-merge, the marker, a draft,
+  `ai:merge-queued`, or a queued, running or pending workflow run;
+- the checker hands it back, or the catch-all queues it, as a `review` fix;
+- `/fix-claude-pr` re-dispatches the review once (`internal-review.yml`
+  here, `ai-review.yml` in consumer repos, with `pr_number`);
+- a head that stalls again after a re-dispatch is held and asked about.
 
 Setup: the catch-all needs the Claude issue pickup session to be running
 (`/claude-issue-pickup start`, see [Claude issue implementer](#claude-issue-implementer)),

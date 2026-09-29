@@ -1016,6 +1016,42 @@ reviews, comments, and conflicts stay a direct §12 request.
   keep their 6-hour stuck window, and their stage sessions claim the PRs
   they fix. Tests: `tests/test_check_in_status_hand_back.py`,
   `tests/test_claude_pr_sweep.py`.
+- Skip-AI marker and review stalls (issue #4985). The marker `[skip ai]`
+  counts only when intentional: anywhere in the PR title, or on a body line
+  holding only the marker (up to 3 leading spaces) outside a ``` / ~~~
+  fence. One rule, three copies: `has_skip_ai_marker` in
+  `.claude/scripts/check_in_status.py` (also used by
+  `scripts/claude_pr_sweep.py`) and the identical `SKIP_AI_BODY_AWK`
+  program in the review gate (`.github/workflows/review_autofix.yml`) and
+  `.github/workflows/review_autofix_sweep.yml`;
+  `tests/test_skip_ai_marker_rule.py` holds them to one case table. The gate
+  logs `AUTOFIX_GATE_SKIP reason=<skip_reason> pr=<n> head_sha=<sha>` on
+  every `should_run=false`. For an open `claude/*` PR skipped for
+  `skip_ai_marker`, or for `draft_or_skip_ai` on a non-draft, it posts one
+  comment per head ending in
+  `<!-- ai:claude-fixer-review-skipped:v1 reason=<reason> head=<sha> -->`
+  (`AUTOFIX_GATE_SKIP_NOTICE … posted=true|false detail=…`; deduped through
+  `gate_fetch_marker_comments`; never fails the gate; no label, because
+  `ai:review-skipped` means the deterministic skip).
+  `check_in_status.py --hand-back` reports `state: review-stalled`
+  (`hand_back_fixer`, `kind: review`, `since` = the head commit time) for a
+  `claude/*` head that:
+  - has no workflow hand-off (answered or not), gate skip notice,
+    auto-merge, or skip-AI marker;
+  - is not a draft or `ai:merge-queued`;
+  - has no workflow run queued, running or pending;
+  - is older than `CLAUDE_REVIEW_STALL_HOURS` (default 2; the catch-all job
+    sets it from the repository variable).
+  The check is off when `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` is unset. It
+  adds at most the head-commit read and the active-run reads the hand-back
+  mode already budgets. `stall_redispatched` is true when a trusted
+  `review` claim on the head came from a claimant the caller does not
+  ignore. `/fix-claude-pr` answers `review-stalled` by claiming the head
+  (`review`) and dispatching `internal-review.yml` (`ai-review.yml` in
+  consumer repos) with `pr_number` through `dispatch_workflow.py`, which
+  now allows `internal-review.yml`. A head already re-dispatched is held
+  and asked about. The project checker's plain `--pr` mode is unchanged;
+  the catch-all covers `/implement-plan-claude` PRs.
 
 - Hook: `.claude/hooks/pr_check_in_reminder.py`, a `PostToolUse` hook wired
   in `.claude/settings.json` under the anchored matcher
@@ -1037,7 +1073,7 @@ reviews, comments, and conflicts stay a direct §12 request.
   never `hand_back`); run and issue-list modes → `wait` / `next_stage`
   with `success` (completed, resolved) or `block` (failed, blocked);
   `--hand-back` → `wait` (open, claimed, held) / `hand_back_fixer`
-  (conflict, review-round, ci-failed, blocked) / `hand_back_all` (merged,
+  (conflict, review-round, ci-failed, blocked, review-stalled) / `hand_back_all` (merged,
   closed); exit 2 → `retry`. `done`, `state`, `reason`, the hand-back
   fields, and the exit codes are unchanged, and `scripts/claude_pr_sweep.py`
   (which calls `check_pr_hand_back` directly) sees no new field. An
@@ -1067,7 +1103,7 @@ reviews, comments, and conflicts stay a direct §12 request.
   are no `gh api` ask rules any more: `.claude/hooks/gh_api_write_guard.py`
   (CLAUDE.md §23.H, a `PreToolUse` hook on `Bash`) forces the prompt for
   every `gh api` write that is not a §23.B routine write to the local
-  repository (routine includes dispatching the six workflows allowed as
+  repository (routine includes dispatching the seven workflows allowed as
   `gh workflow run <file> *`, kept equal by a test), allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
@@ -1589,6 +1625,7 @@ and shipped:
 - `AUTOFIX_DISPATCH_SKIPPED`
 - `AUTOFIX_DISPATCH_ISSUED`
 - `AUTOFIX_GATE_SKIP`
+- `AUTOFIX_GATE_SKIP_NOTICE`
 - `AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD`
 - `AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED`
 - `AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE`
@@ -1782,6 +1819,7 @@ LOG_PREFIX.name=AUTOFIX_PEER_CHECK
 LOG_PREFIX.name=AUTOFIX_DISPATCH_SKIPPED
 LOG_PREFIX.name=AUTOFIX_DISPATCH_ISSUED
 LOG_PREFIX.name=AUTOFIX_GATE_SKIP
+LOG_PREFIX.name=AUTOFIX_GATE_SKIP_NOTICE
 LOG_PREFIX.name=AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD
 LOG_PREFIX.name=AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED
 LOG_PREFIX.name=AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE
