@@ -35,10 +35,13 @@ files only records not filed yet. A record key is `<log file name>:<line
 index>` (0-based over every line, so a skipped line never shifts a later key);
 the logger only appends, so a key never moves. A legacy file (a flat
 `{<signature>: <count>}` map, written before version 2) is migrated on read:
-its count covered the first `<count>` records of that signature in load order,
-classifier-outage records included, because earlier versions grouped them
-into the pattern. Only the real records in that prefix count as filed, so an
-outage counted earlier never hides a later real denial (issue #5012). A
+its count covered the first `<count>` records of that signature in logging
+order (each record's `ts`, ties in load order), classifier-outage records
+included, because earlier versions grouped them into the pattern. Logging
+order, not file-name order: a session log created after the last filing can
+sort before an older one, and its records were never counted. Only the real
+records in that prefix count as filed, so an outage counted earlier never
+hides a later real denial (issue #5012). A
 state file that is unreadable or of an unknown shape is treated as empty.
 
 A **classifier outage** is not a pattern. A `PermissionDenied` whose reason
@@ -515,7 +518,8 @@ def _migrate_legacy_counts(legacy_counts: dict[str, int], keyed_records: list[tu
 	"""Filed record keys for a pre-version-2 `{signature: count}` state (see the module docstring)."""
 	filed: dict[str, set[str]] = {}
 	counted: dict[str, int] = {}
-	for key, record in keyed_records:
+	# Stable sort: records with the same `ts` (or none) keep their load order.
+	for key, record in sorted(keyed_records, key=lambda keyed_record: str(keyed_record[1].get("ts") or "")):
 		sig = record_signature(record)
 		if sig not in legacy_counts or counted.get(sig, 0) >= legacy_counts[sig]:
 			continue

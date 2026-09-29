@@ -171,9 +171,11 @@ with the new #5012 regression test shown failing on the base branch first.
 - A legacy entry written by the unreleased #4750 project code (which already
   excluded outages) is migrated as outage-inclusive (AD-2): at most one
   duplicate "Seen again" comment, never a hidden denial.
-- A new session log whose name sorts before an older one breaks the
-  append-only prefix assumption for legacy counts only; the effect is again
-  over-reporting, bounded to one run.
+- A new session log whose name sorts before an older one would break a
+  file-order prefix for legacy counts, and could mark its never-filed real
+  denials as filed. The migration therefore takes the prefix in logging order
+  (each record's `ts`, ties in load order), which the file names do not
+  affect (PR #5028 review round 1).
 - State size grows with filed records; it lives next to the logs, which
   already hold every record.
 

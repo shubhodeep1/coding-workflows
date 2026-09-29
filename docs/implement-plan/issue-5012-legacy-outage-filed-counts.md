@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5012-legacy-outage-filed-counts-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5012
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4750-classifier-outage-get-session
-- Project branch: claude/implement-plan-issue-5012-legacy-outage-filed-counts   Final PR: #5028 draft
-- Status: COMPLETE
-- Stage: final-merge
+- Project branch: claude/implement-plan-issue-5012-legacy-outage-filed-counts   Final PR: #5028 ready
+- Status: BLOCKED
+- Stage: final-merge — review round
 - Activation: n/a (base claude/implement-plan-issue-4750-classifier-outage-get-session)
-- Waiting on: completion PR (into the project branch), then final PR #5028 (into the base branch)
+- Waiting on: PR #5028: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01Uy5MeMKSyq4MRk1wGxY62h (project checker, reused)   safety net and hand-back: in the validation 1/3 stage report
+- Check-in: checker session_01Uy5MeMKSyq4MRk1wGxY62h (project checker, reused)   safety net: none   hand-back: none (twin-sync hold; the `/reclarify` stage arms the wait)
 - Last updated: 2026-09-29
-- Last note: validation cycle 1/3 skipped per the operator's answer Q1: A on #5012 (standing decision Q17, confirmed as Q18: A): the final PR targets another project's branch, so validate.yml cannot authorize the target until #4734; #4750's project validates a branch that contains this fix before it reaches main. No validation-fix PR, so no conformance re-run; completion PR opened to move the plan to docs/completed/.
+- Last note: final PR #5028 review round 1: finding 1 (legacy migration prefix in file-name order could mark a newer, earlier-sorting session log's real denials as filed) is valid and fixed twin-first in `workflow-templates/.claude/scripts/permission_prompts.py` (prefix now in logging order, record `ts`); finding 2 and the task gap rejected. Blocked on the `.claude/` twin sync (Q40); asked on #5012.
 
 ## Phases
 1. [x] Phase 1 — record-level filed state with legacy migration — protected paths: .claude/scripts/permission_prompts.py (edited only in its workflow-templates/.claude/ twin, Q40; synced into `.claude/` by the master session in 8390e72) — PR #5039 merged 2026-09-29 (041e962, by the master session under Q46, evidence https://github.com/shubhodeep1/coding-workflows/pull/5039#issuecomment-5886043611); review rounds: 1 (all 17 findings rejected); interventions: 0
@@ -29,7 +29,7 @@
 ## Completion
 - Merged into the project branch: phase 1 PR #5039 (041e962); no conformance-fix or validation-fix PRs
 - Completion PR (this log commit) — doc moved to docs/completed/issue-5012-legacy-outage-filed-counts-plan.md
-- Final PR #5028 draft into `claude/implement-plan-issue-4750-classifier-outage-get-session` (marked ready in the final-merge stage; that stage closes #5012 and labels it `ai:merged` once #5028 merges, because the base is not the default branch)
+- Final PR #5028 ready into `claude/implement-plan-issue-4750-classifier-outage-get-session` — review rounds: 1 (2026-09-29: 1 of 2 findings fixed twin-first, task gap duplicate; waiting on the twin sync) (marked ready in the final-merge stage; that stage closes #5012 and labels it `ai:merged` once #5028 merges, because the base is not the default branch)
 
 ## Activation
 - n/a — the base is `claude/implement-plan-issue-4750-classifier-outage-get-session`, so this change goes live with project #4750 (PR #4770); the project ends after the final merge.
@@ -40,9 +40,11 @@
 - AD-3 [plan, 2026-09-29] Does the state file keep its name? — Picked: A — keep `filed-state.json`, add `"version": 2`. Alternatives: B — a new file name. Why: §6; the version key tells the formats apart. Applied in: phase 1 PR. Status: pending review
 - AD-4 [phase 1/1 — review round 1, 2026-09-29] Fix or reject the valid double-read NIT on filed-state.json, given the fix needs a protected-path twin-first cycle? — Picked: A — reject with reasons (no correctness impact; at worst over-reporting). Alternatives: B — fix twin-first under Q40. Why: §5 minimal change; B costs a master sync and a new review round for a NIT. Applied in: no code change. Status: pending review
 - AD-5 [validation 1/3, 2026-09-29] How is the BLOCKED state persisted when no PR is in flight? — Picked: A — one docs-only log commit pushed straight to the project branch, like the step 3a log commit. Alternatives: B — leave the log at the phase 1 blocker and carry the state only in the issue comment. Why: with B, a resumed session would read a stale phase 1 blocker and an unticked phase, so a `/reclarify` could not resume from the log. Applied in: no code change (log commit). Status: pending review
+- AD-6 [final-merge — review round 1, 2026-09-29] How should the legacy migration pick the records its count covered, now that file-name order is shown to be unsafe? — Picked: A — the first `<count>` records of the signature in logging order (record `ts`, ties in load order). Alternatives: B — skip records in log files created after the state file was last written, keep file order; C — reject the finding as an edge case. Why: the legacy count was the signature's total at filing time, which is exactly its earliest records by `ts`, so A needs no file metadata and also covers a log created between two filings; C leaves the #5012 defect reachable. Applied in: PR #5028 (review round 1 commit). Status: pending review
 
 ## Lessons
 - [source:security] A filer state that stores cumulative per-pattern counts breaks silently when the grouping later drops records; key filed state by stable record identity (file + line for append-only logs) and migrate old counts by their load-order prefix. (files: .claude/scripts/permission_prompts.py)
+- [source:intervention] A migration that replays a legacy cumulative count as a prefix must order records by when they were logged, not by log file name: a newer session log can sort ahead of an older one and its never-counted records would be taken as already handled. (files: .claude/scripts/permission_prompts.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29) (operator comment 5883926767 on #5012).
@@ -50,3 +52,5 @@
 - Blocked 2026-09-29 at validation cycle 1/3 (before dispatch): `validate.yml` cannot authorize a `target_ref` whose final PR targets another project's branch. Asked on #5012 (`ai:claude-blocked`); the standing decision for this case is Q17 in `docs/operations/master-session.md` on `main`. Answer on the issue and comment `/reclarify`. Resolved 2026-09-29: answered Q1: A (comment 5888990079, reconfirmed in 5893342856) and `/reclarify`; the resumed session (session_01JHDALYzBRDphJGgUyLumYu, started by the dispatcher routine) removed `ai:claude-blocked`, recorded `Validation: skipped`, and opened the completion PR.
 - This log update was pushed directly to the project branch as part of step 3a (no phase PR is in flight to carry it), so a resumed stage sees `Final PR: #5028` and does not open a second final PR.
 - Started by the Claude issue dispatcher routine (trigger trig_01FzNj7jt3iTsxF8CUydykuf) in session session_01FxPzZDsebojWQPAqJirYk1; `gh` was installed by running `.claude/hooks/session-start.sh` because the repository was attached mid-session; the GitHub MCP tools were not available, so issue and PR writes used `gh api` REST calls the §23.H guard classifies as routine.
+- Final PR #5028 review round 1 (2026-09-29, session_01KkXgd9AjBQXicmt3tCNHBm): 2 consensus findings + 1 task gap on head 60b8204. Finding 1 (`_migrate_legacy_counts` prefix in sorted file-name order) valid and fixed; the task gap is the same defect; finding 2 (malformed state treated as empty) rejected: by design (plan Approach, module docstring), it can only over-report, and existing issues are matched by marker, so it adds comments, never duplicate issues. The `.claude/` change runs under phase 1's recorded twin-first approval (Q40): only the `workflow-templates/.claude/` twin was edited; `test_template_parity` stays red until the sync.
+- Blocked 2026-09-29 at final-merge review round 1: twin sync of `workflow-templates/.claude/scripts/permission_prompts.py` → `.claude/scripts/permission_prompts.py` (twin sha256 `efc68e17382121a309d59a7853d4c2f3bbbae8bc155a7a924f68298fa677bcae`). `hold` claim posted on PR #5028; asked on #5012 (`ai:claude-blocked`). After the `[claude-twin-sync]` commit, comment `/reclarify`; that stage arms the wait on PR #5028 and does not redo this round.

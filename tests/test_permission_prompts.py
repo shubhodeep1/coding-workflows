@@ -15,7 +15,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -487,6 +487,25 @@ def test_legacy_count_already_covering_every_real_record_files_nothing(tmp_path,
 	assert fake.reads == 0 and fake.posts == []
 	# Nothing was posted, so the legacy file is left as it was.
 	assert json.loads((directory / pp.STATE_FILE).read_text()) == {sig: 2}
+
+
+def test_legacy_migration_takes_its_prefix_in_logging_order_not_file_name_order(tmp_path):
+	# PR #5028 review round 1: a session log created after the last legacy filing
+	# can sort before the older log. Its records were never counted, so the legacy
+	# prefix follows the record `ts`, not the file name. Reads the
+	# workflow-templates/ twin, which carries the fix before the `.claude/` sync.
+	twin = _load("permission_prompts_twin", TEMPLATE_SCRIPT_PATH)
+	sig = _git_status_signature()
+	directory = tmp_path / "log"
+	for _ in range(2):
+		logger.append_record(logger.build_record(dict(_git_status_denial(OUTAGE_REASON), session_id="sess-b"), NOW), directory)
+	for _ in range(2):
+		logger.append_record(logger.build_record(dict(_git_status_denial(REAL_DENIAL_REASON), session_id="sess-a"), NOW + timedelta(hours=1)), directory)
+	keyed_records = twin.load_keyed_records(directory)
+	assert [key for key, _ in keyed_records] == ["sess-a.jsonl:0", "sess-a.jsonl:1", "sess-b.jsonl:0", "sess-b.jsonl:1"]
+	# The legacy count 2 covered sess-b's two outages; sess-a's real denials stay unfiled.
+	assert twin._migrate_legacy_counts({sig: 2}, keyed_records) == {}
+	assert twin._migrate_legacy_counts({sig: 3}, keyed_records) == {sig: {"sess-a.jsonl:0"}}
 
 
 def test_v2_state_files_each_record_once(tmp_path, issues):

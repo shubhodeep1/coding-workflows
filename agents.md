@@ -1110,7 +1110,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   `{"version": 2, "filed": {<signature>: [<log file>:<line>, ...]}}`, real
   (non-outage) records only. A legacy `{<signature>: <count>}` file is
   migrated on read: its count covered the first `<count>` records of the
-  signature in load order, outage denials included, and only the real ones
+  signature in logging order (record `ts`, not log file name, since a newer
+  session log can sort first), outage denials included, and only the real ones
   among them count as filed, so an outage counted by an older filer never
   hides a later real denial (worst case: one extra "Seen again" comment).
   An unreadable or unknown state is treated as empty. No cap on open issues. Issue text
