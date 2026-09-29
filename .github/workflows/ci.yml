@@ -19,7 +19,8 @@ jobs:
     #
     # Static checks: shell-block guards, YAML lint, drift check, actionlint,
     # Python syntax and ruff, schema/prompt checks, and ShellCheck. About
-    # 3 minutes measured; 15 leaves room for a cold runner.
+    # 2 minutes measured (1.4-1.9 in #4707's CI runs); 15 leaves room for a
+    # cold runner.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -380,7 +381,7 @@ jobs:
 
   tests-hooks-and-orchestrator:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
-    # step order. Each test job measured 3-8 minutes (#4707); 20 leaves
+    # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -569,7 +570,7 @@ jobs:
 
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
-    # step order. Each test job measured 3-8 minutes (#4707); 20 leaves
+    # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -706,7 +707,7 @@ jobs:
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
-    # step order. Each test job measured 3-8 minutes (#4707); 20 leaves
+    # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -961,7 +962,7 @@ jobs:
 
   tests-release-and-log-analysis:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
-    # step order. Each test job measured 3-8 minutes (#4707); 20 leaves
+    # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     runs-on: ubuntu-latest
     timeout-minutes: 20
