@@ -324,7 +324,9 @@ None. No MongoDB collection is touched.
     instruction comment once per head.
   - A read error returns 3.
 - **Static test:** every `gh pr merge` call in `scripts/*.sh` outside
-  comments is wrapped. Each touched script sources the gate. Both files are
+  comments is wrapped and puts the PR number right after `pr merge`, the
+  only shape the gate parses (review round 2, AD-12). Each touched script
+  sources the gate. Both files are
   in `REQUIRED_BOOTSTRAP_SCRIPTS`. Both release workflows run the release
   step in `validate` before `release`. `ci.yml` runs the test file.
 - **Release mode on a scratch git repository:** a temp repo with a

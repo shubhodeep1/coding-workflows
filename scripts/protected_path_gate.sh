@@ -24,6 +24,12 @@
 #     posted, a warning is logged, and the wrapper returns 3. A failed read,
 #     a missing checker, or an unparseable call also returns 3 (fail closed).
 #
+# Callers put the PR number right after `pr merge`. A flag first
+# (`gh pr merge --repo o/r 42`) is refused rather than guessed at: skipping
+# flags would need every value-taking `gh pr merge` flag, and a wrong guess
+# would check a different PR than the one merged.
+# tests/test_protected_path_authorization.py fails CI on such a call.
+#
 # Every caller already treats a non-zero merge as "not merged", so a block
 # takes the caller's existing failure branch.
 #

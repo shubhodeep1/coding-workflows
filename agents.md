@@ -1166,6 +1166,11 @@ reviews, comments, and conflicts stay a direct §12 request.
     - No label is added, so Claude checkers keep waiting instead of starting
       a fixer.
     - Read errors retry three times, then block for that attempt.
+    - The gate reads the PR number from the token right after `pr merge`
+      and refuses any other shape (`reason=unparseable_merge_call`).
+      `tests/test_protected_path_authorization.py` fails CI on a
+      `gh pr merge` call in `scripts/*.sh` that is unwrapped or puts a flag
+      before the PR number.
     - Both files are in `REQUIRED_BOOTSTRAP_SCRIPTS`
       (`scripts/stage_workflow_support.sh`) and in the orchestrator's
       staging list (`orchestrate_poll.yml`).

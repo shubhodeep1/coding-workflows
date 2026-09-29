@@ -517,7 +517,15 @@ def test_gate_fails_closed_when_the_checker_is_missing(tmp_path):
 # Wiring
 # ──────────────────────────────────────────────────────────────────
 
-MERGE_CALL_RE = re.compile(r'gh pr merge "\$\{')
+# A `gh pr merge` call is either shaped like one (the PR expansion follows
+# `pr merge`) or sits where a command starts, whatever follows it; the second
+# form catches a call that puts a flag before the PR number. Mentions inside
+# messages (`echo "… 'gh pr merge --auto' failed"`) match neither.
+MERGE_CALL_RE = re.compile(
+	r'gh pr merge "\$\{'
+	r'|(?:^|[;&|({!]|\$\(|\b(?:if|elif|then|else|do|while|until|gh_retry|protected_path_guarded_merge))\s*gh pr merge\b'
+)
+PR_FIRST_RE = re.compile(r'gh pr merge "\$\{')
 
 
 def _code_lines(path):
@@ -527,18 +535,54 @@ def _code_lines(path):
 		yield number, line
 
 
+def _merge_call_problems(path):
+	"""Return (calls found, problems) for every `gh pr merge` call in `path`.
+
+	A call must be wrapped in `protected_path_guarded_merge`, and must put the
+	PR number right after `pr merge`: the gate reads it from there and refuses
+	(fails closed) any other shape, so a reordered call would never merge.
+	"""
+	found = 0
+	problems = []
+	for number, line in _code_lines(path):
+		for match in MERGE_CALL_RE.finditer(line):
+			found += 1
+			start = line.index("gh pr merge", match.start())
+			where = f"{path.name}:{number}: {line.strip()}"
+			if not re.search(r"protected_path_guarded_merge (gh_retry )?$", line[:start]):
+				problems.append(f"unwrapped: {where}")
+			if not PR_FIRST_RE.match(line, start):
+				problems.append(f"PR number not first after `pr merge`: {where}")
+	return found, problems
+
+
 def test_every_scripted_gh_pr_merge_is_wrapped():
 	found = 0
-	unwrapped = []
+	problems = []
 	for path in sorted(SCRIPTS_DIR.glob("*.sh")):
-		for number, line in _code_lines(path):
-			for match in MERGE_CALL_RE.finditer(line):
-				found += 1
-				prefix = line[:match.start()]
-				if not re.search(r"protected_path_guarded_merge (gh_retry )?$", prefix):
-					unwrapped.append(f"{path.name}:{number}: {line.strip()}")
+		path_found, path_problems = _merge_call_problems(path)
+		found += path_found
+		problems += path_problems
 	assert found >= 20, found
-	assert not unwrapped, "unwrapped gh pr merge call(s):\n" + "\n".join(unwrapped)
+	assert not problems, "gh pr merge call(s) the gate cannot guard:\n" + "\n".join(problems)
+
+
+@pytest.mark.parametrize("line, calls, expected", [
+	('protected_path_guarded_merge gh_retry gh pr merge "${PR}" --repo "${R}" --squash', 1, []),
+	('  if protected_path_guarded_merge gh pr merge "${PR}" --squash; then', 1, []),
+	('gh pr merge "${PR}" --squash', 1, ["unwrapped"]),
+	('x="$(gh pr merge "${PR}" --squash)"', 1, ["unwrapped"]),
+	('protected_path_guarded_merge gh_retry gh pr merge --repo "${R}" "${PR}" --squash', 1, ["PR number not first after `pr merge`"]),
+	('if gh_retry gh pr merge --squash "${PR}"; then', 1, ["unwrapped", "PR number not first after `pr merge`"]),
+	('echo "  enabling auto-merge via \'gh pr merge --auto\'..."', 0, []),
+	('echo "::warning::PR #${PR}: gh pr merge --auto failed; will retry."', 0, []),
+])
+def test_merge_call_scan_flags_unwrapped_and_reordered_calls(tmp_path, line, calls, expected):
+	script = tmp_path / "sample.sh"
+	script.write_text(f"# gh pr merge --repo o/r 1 (a comment)\n{line}\n", encoding="utf-8")
+	found, problems = _merge_call_problems(script)
+	assert found == calls
+	assert [problem.split(": sample.sh")[0] for problem in problems] == expected
 
 
 @pytest.mark.parametrize("script, needle", [
