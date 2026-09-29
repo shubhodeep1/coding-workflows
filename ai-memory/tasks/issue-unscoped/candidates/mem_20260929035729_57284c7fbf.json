@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12637 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The diagnostic log uses `${_di_rc}` instead of `${_di_pr_named_rc}`, so it reports the branch listing's return code rather than the PR-named listing's return code.\n  WHY: The log can report `rc=0` when the PR-named listing failed, misleading operator triage; reviewers agree the runtime decision is correct and the diagnostic is wrong.\n- scripts/orchestrate_poll_process.sh:16609-16611 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The new `elif` body uses spaces instead of the repository's established tab indentation style.\n  WHY: This is a style inconsistency with no runtime impact; minimax notes the body matches its sibling's existing spaces, while the surrounding `if`/`elif` keywords use tabs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:12637 | severity=high | confidence=[5]\n  PROBLEM: The diagnostic log uses the return code variable `${_di_rc}` instead of the intended PR-named lookup return code variable `${_di_pr_named_rc}`.\n  WHY: The diagnostic log reports `rc=0` when the PR-named listing actually failed (rc=1), which misleads operator triage regarding the cause of the failure. This bug also exists in other logging sites added to this file (e.g., lines 13809, 13951, 16609).\n- scripts/orchestrate_poll_process.sh:16610 | severity=low | confidence=[5]\n  PROBLEM: Inconsistent indentation (uses spaces instead of the repository's established tab indentation style).\n  WHY: Not a runtime failure, but a style inconsistency that violates the repository's established code style, potentially confusing tools or developers expecting tab-indented code.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:12637 | severity=high | confidence=[5]\n  PROBLEM: The diagnostic log prints `rc=${_di_rc}` (the branch listing's return code, captured at line 12601 and forced to `0` because the branch listing succeeded before this path) instead of `${_di_pr_named_rc}` (the PR-named listing's actual non-zero return code captured at line 12635).\n  WHY: When `PR_NAMED_REVIEW_RUNS` reports `outcome=incomplete reason=\u2026 wrapper=\u2026`, an operator who greps `STALL_INFLIGHT_DIRECT_CHECK \u2026 rc=\u2026` for the cause sees `rc=0` and concludes the API call succeeded; the real failure is masked.\n- scripts/orchestrate_poll_process.sh:16609-16611 | severity=low | confidence=[5]\n  PROBLEM: The new elif body uses spaces for indentation while the file's global convention is tabs.\n  WHY: Shell executes correctly; no behavioural impact. The immediately preceding existing elif body at lines 16613-16614 already uses the same 14-space pattern, so the new addition matches its sibling rather than introducing a new style \u2014 but the surrounding `if`/`elif` keywords at 16606/16609/16612 use tabs.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:12637 | severity=high | confidence=[5]\n  PROBLEM: The diagnostic log uses `rc=${_di_rc}` instead of `rc=${_di_pr_named_rc}`\n  WHY: The variable `_di_rc` holds the branch listing's return code (always 0 at this point since the branch listing succeeded before reaching the PR-named path), while `_di_pr_named_rc` holds the actual non-zero return code from the PR-named listing that triggered the incomplete path. The log shows `rc=0` alongside `outcome=pr_named_listing_incomplete`, misleading operators during triage. The runtime decision is correct, but the diagnostic is wrong.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh:12637 | severity=high | confidence=[5]\n  PROBLEM: The `STALL_INFLIGHT_DIRECT_CHECK` log for the `pr_named_listing_incomplete` outcome uses `rc=${_di_rc}` instead of `rc=${_di_pr_named_rc}`.\n  WHY: The log always reports `rc=0` alongside `outcome=pr_named_listing_incomplete`, misleading operator triage. The runtime decision is correct (the sentinel `listing-incomplete` is printed and the push is skipped), but a triage operator seeing `rc=0` would not realize the PR-named listing actually failed.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0648072c2d3d09fd5e85e2273a2359ba9782973422058b796cc74bd5c6b1ce40",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4987,
+    "run_id": "36516148246",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36516148246",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929035729_57284c7fbf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4987,
+    "run_id": "36516148246"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T03:57:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
