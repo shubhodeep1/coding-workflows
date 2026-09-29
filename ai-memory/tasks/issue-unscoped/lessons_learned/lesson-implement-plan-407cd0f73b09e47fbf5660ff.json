@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-29T15:46:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A marker that authorizes a delayed merge must bind everything the review depended on (head and base); the REST PR `base.sha` changes on a retarget or PR sync but not on every base push, so binding it costs no call and no extra reviews.",
+  "phase": "implement_plan",
+  "pr_number": 5186,
+  "record_id": "lesson-implement-plan-407cd0f73b09e47fbf5660ff",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-5147-bind-pending-merge-to-base",
+    "file:scripts/claude_fixer_pending_checks.py",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}
