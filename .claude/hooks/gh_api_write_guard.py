@@ -874,7 +874,10 @@ def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bo
 	more items joined by `;` or `&&`, each one of:
 	  - a `gh api` call that `classify` marks `read` (every entry of `results`
 	    must be a read; a routine write keeps today's result), with `$VAR` /
-	    `${VAR}` only in the endpoint path;
+	    `${VAR}` only in the endpoint path. Every `gh api` body item must be
+	    one of the calls `evaluate` classified, so a quoted or split-word call
+	    (`gh 'api' ...`, `"gh" api ...`, `gh ap''i ...`) keeps today's
+	    no-decision result;
 	  - `gh run view`, `gh run list`, or `gh pr view` with allowlisted flags
 	    and `$VAR` only as a positional argument;
 	each optionally piped into the safe filters (`head`/`tail -n N`, `wc -l`,
