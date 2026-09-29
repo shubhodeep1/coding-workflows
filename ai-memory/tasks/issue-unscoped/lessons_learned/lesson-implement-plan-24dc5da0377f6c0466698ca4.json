@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:36:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A new pass added inside an existing per-item sweep loop must catch every exception per item (`except Exception`, logged), not a list of expected classes: widening the list one class per review round left the older, more important work of the loop exposed to any failure the list missed.",
+  "phase": "implement_plan",
+  "pr_number": 4942,
+  "record_id": "lesson-implement-plan-24dc5da0377f6c0466698ca4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4900-claude-fixer-pending-checks-auto-merge",
+    "file:scripts/claude_pr_sweep.py"
+  ]
+}

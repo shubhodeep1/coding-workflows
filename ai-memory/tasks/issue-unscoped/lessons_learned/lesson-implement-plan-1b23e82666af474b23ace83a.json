@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T11:36:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a clean Claude-fixer outcome needs a later action, record it as its own workflow-owned marker rather than a `kind=findings` hand-off: `check_in_status.py` treats every findings hand-off as a review round, so a 0-entry hand-off wakes a fixer with nothing to fix.",
+  "phase": "implement_plan",
+  "pr_number": 4942,
+  "record_id": "lesson-implement-plan-1b23e82666af474b23ace83a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4900-claude-fixer-pending-checks-auto-merge",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}

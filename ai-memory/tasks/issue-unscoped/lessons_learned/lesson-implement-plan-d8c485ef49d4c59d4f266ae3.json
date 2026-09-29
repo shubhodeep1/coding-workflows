@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T11:36:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a workflow jq gate and a Python parser both match the same marker comment, give them the same round and header regexes (rounds start at 1) and cover the edge value in both test files, or a marker one side accepts can stall the other.",
+  "phase": "implement_plan",
+  "pr_number": 4942,
+  "record_id": "lesson-implement-plan-d8c485ef49d4c59d4f266ae3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4900-claude-fixer-pending-checks-auto-merge",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}

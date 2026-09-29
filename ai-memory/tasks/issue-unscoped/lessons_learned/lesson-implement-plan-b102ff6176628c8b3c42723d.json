@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T11:36:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A per-item fail-open loop must catch every exception class the item's code can raise, including `OSError` from temp files and subprocess setup, not only the API read errors; one uncaught item ends the run for every later item.",
+  "phase": "implement_plan",
+  "pr_number": 4942,
+  "record_id": "lesson-implement-plan-b102ff6176628c8b3c42723d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4900-claude-fixer-pending-checks-auto-merge",
+    "file:scripts/claude_pr_sweep.py",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}

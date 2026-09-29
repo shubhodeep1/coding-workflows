@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T11:36:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When the project branch syncs with the default branch, re-run the phase's tests against the merged code: a shared reader (`check_in_status.py`) can gain a new API read or a new trusted run shape (a review dispatched from the default branch) that the phase's own verifier and test stubs must mirror.",
+  "phase": "implement_plan",
+  "pr_number": 4942,
+  "record_id": "lesson-implement-plan-acb2d985406be3aaeffa0b8a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4900-claude-fixer-pending-checks-auto-merge",
+    "file:scripts/claude_fixer_pending_checks.py",
+    "file:.claude/scripts/check_in_status.py"
+  ]
+}
