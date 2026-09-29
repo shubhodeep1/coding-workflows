@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5119-deflake-stall-guard-observe-test-plan.md
 - Source issue: shubhodeep1/coding-workflows#5119 (https://github.com/shubhodeep1/coding-workflows/issues/5119)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5119-deflake-stall-guard-observe-test   Final PR: pending (opened right after this commit)
+- Project branch: claude/implement-plan-issue-5119-deflake-stall-guard-observe-test   Final PR: #5151 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5156
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01FRuvgsU7nunhaDLkzJ5G16
 - Last updated: 2026-09-29
-- Last note: project branch opened from main at f736cad; phase 1 implementing
+- Last note: review round 1 on PR #5156: fixed the one consensus finding (status-file poll now retries only `FileNotFoundError`); rejected the task-gap entry (it reports no gap)
 
 ## Phases
-1. [ ] Phase 1 — deterministic observe-only stall tests (`tests/test_codex_stall_guard_scripts.py`)
+1. [ ] Phase 1 — deterministic observe-only stall tests (`tests/test_codex_stall_guard_scripts.py`)   — PR #5156 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -33,8 +33,11 @@
 - AD-4 [plan, 2026-09-29] Update the #5119 rows in `docs/operations/master-session.md`? — Picked: A — no; the master session owns that doc and marks rows fixed after merge. Alternatives: B — mark the rows fixed in the phase PR. Why: B would claim a fix before it merges and conflict with the master's frequent edits (§5). Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A test that asserts a watchdog observed something must not race it with a fixed child sleep: the watchdog's idle clock starts when it reads the last output, so a stalled runner shrinks the window from both ends. Have the child wait for the watchdog's own written verdict, bounded under the subprocess timeout. (files: tests/test_codex_stall_guard_scripts.py, scripts/codex_stall_guard.sh)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#5119: deliver`); invoking session session_013Yp7ahUmRsRttvAvzppXjB.
 - The invoking session started with no `gh` CLI and no GitHub MCP tools (the repository was attached after start, so the SessionStart hook had not run). It ran `.claude/hooks/session-start.sh` to install `gh`; PR and comment writes use `gh api` REST (§23.H routine writes) in place of the `mcp__github__*` tools.
 - `security_pass_skip.py`: `{"skip": false, "label": null, "reason": "no skip label"}` → `Security pass: run`.
+- Draft final PR #5151 opened 2026-09-29.
+- Phase 1 verification (2026-09-29): `python3 tests/test_codex_stall_guard_scripts.py` passes in 32.1 s (34.6 s before the fix); 57 assert lines before and after, none changed; ruff E,F clean. Stress harness (local, not committed): 4 `yes` burners plus a helper that SIGSTOPs the guard at random moments. Pre-fix 1.3 s sleep with 0.7 s stalls: 10/10 runs failed with the CI assertion. Issue's 2.5 s sleep with 1.2 s stalls: 2/8 failed. Fix with 1.2 s stalls: 20/20 passed; fix with CPU burners only: 20/20 passed. Negative control (a guard that never writes `state=observed`): the unchanged assertion fails after 15.2 s, no `TimeoutExpired`.
