@@ -2676,12 +2676,48 @@ if args[0] == 'api':
 		sys.stdout.write(output)
 		sys.exit(0)
 
-	m = re.search(r'/actions/workflows/([^/]+)/runs', path)
+	m = re.search(r'/actions/workflows/([^/?]+)/runs', path)
 	if m:
 		runs = store.get('validation_workflow_runs', [])
 		by_file = store.get('workflow_runs_by_file') or {}
 		if m.group(1) in by_file:
 			runs = by_file[m.group(1)]
+		elif m.group(1) in ('internal-review.yml', 'ai-review.yml') and 'event=workflow_dispatch' in path:
+			# The poller's PR-named review dispatch lookup (issue #4927) lists
+			# each wrapper's workflow_dispatch runs over REST. Serve the
+			# active_autofix_runs entries of that wrapper (or with no
+			# workflow) that are workflow_dispatch runs or carry no event, in
+			# REST shape, one page at a time.
+			if store.get('pr_named_listing_fail'):
+				print('gh: Server Error (HTTP 502)', file=sys.stderr)
+				sys.exit(1)
+			page_m = re.search(r'[?&]page=(\d+)', path)
+			per_m = re.search(r'[?&]per_page=(\d+)', path)
+			page = int(page_m.group(1)) if page_m else 1
+			per_page = int(per_m.group(1)) if per_m else 30
+			runs = []
+			for idx, run in enumerate(store.get('active_autofix_runs', [])):
+				if run.get('workflow') not in (None, m.group(1)):
+					continue
+				if run.get('event', 'workflow_dispatch') != 'workflow_dispatch':
+					continue
+				runs.append({
+					'id': run.get('databaseId', 900000 + idx),
+					'event': run.get('event', 'workflow_dispatch'),
+					'status': run.get('status', 'queued'),
+					'conclusion': run.get('conclusion', ''),
+					'display_title': run.get('displayTitle', ''),
+					'created_at': run.get('createdAt', ''),
+					'run_started_at': run.get('startedAt', run.get('createdAt', '')),
+				})
+			result = {'workflow_runs': runs[(page - 1) * per_page:page * per_page], 'total_count': len(runs)}
+			if jq:
+				import subprocess as _sp
+				p = _sp.run(['jq', '-c', jq], input=json.dumps(result), capture_output=True, text=True)
+				print(p.stdout.rstrip())
+			else:
+				print(json.dumps(result))
+			sys.exit(0)
 		result = {'workflow_runs': runs, 'total_count': len(runs)}
 		if jq:
 			import subprocess as _sp
@@ -16811,6 +16847,30 @@ def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_bran
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "93"]
 	assert dispatches_for_pr == [], dispatches_for_pr
 	assert result.get("git_push_calls", []), "expected the empty-commit push path"
+
+
+def test_retrigger_review_skips_push_and_redispatch_when_pr_named_listing_is_incomplete():
+	# Issue #4927: the wrapper dispatch-run listing failed, so the poller
+	# cannot rule out a live default-branch review run for the PR. It must
+	# neither push the empty commit nor redispatch, and must not spend a
+	# recovery attempt; the next poll cycle retries.
+	state, prs = _retrigger_review_pr_state(94, "claude/retrigger-review-pr-named-incomplete")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 94},
+		prs=prs,
+		mock_store_extra={"pr_named_listing_fail": True},
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, issue_entry
+	assert result.get("git_push_calls", []) == [], result.get("git_push_calls", [])
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "94"]
+	assert dispatches_for_pr == [], dispatches_for_pr
+	assert "review dispatch run listing incomplete (PR-named lookup)" in result["stdout"], result["stdout"][-4000:]
 
 
 def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
