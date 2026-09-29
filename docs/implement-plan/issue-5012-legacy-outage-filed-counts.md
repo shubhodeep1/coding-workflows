@@ -1,17 +1,17 @@
 # Implement-Plan Log — Stop legacy filed counts from hiding real permission-prompt denials
 
-- Plan: docs/plans/issue-5012-legacy-outage-filed-counts-plan.md
+- Plan: docs/completed/issue-5012-legacy-outage-filed-counts-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5012
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4750-classifier-outage-get-session
 - Project branch: claude/implement-plan-issue-5012-legacy-outage-filed-counts   Final PR: #5028 draft
-- Status: BLOCKED
-- Stage: validation cycle 1/3 (blocked before dispatch)
-- Activation: not started
-- Waiting on: none (answer on #5012, then `/reclarify`)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4750-classifier-outage-get-session)
+- Waiting on: completion PR (into the project branch), then final PR #5028 (into the base branch)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01Uy5MeMKSyq4MRk1wGxY62h (idle, kept for the resumed project)   safety net none   hand-back none
+- Check-in: checker session_01Uy5MeMKSyq4MRk1wGxY62h (project checker, reused)   safety net and hand-back: in the validation 1/3 stage report
 - Last updated: 2026-09-29
-- Last note: conformance run 1 CONFORMANT with no fix PR; security pass skipped per the plan header; runtime validation cannot run: validate.yml authorizes an explicit target_ref only through an open PR into the default branch, and final PR #5028 targets the #4750 project branch. Asked on #5012 (Q17 case).
+- Last note: validation cycle 1/3 skipped per the operator's answer Q1: A on #5012 (standing decision Q17, confirmed as Q18: A): the final PR targets another project's branch, so validate.yml cannot authorize the target until #4734; #4750's project validates a branch that contains this fix before it reaches main. No validation-fix PR, so no conformance re-run; completion PR opened to move the plan to docs/completed/.
 
 ## Phases
 1. [x] Phase 1 — record-level filed state with legacy migration — protected paths: .claude/scripts/permission_prompts.py (edited only in its workflow-templates/.claude/ twin, Q40; synced into `.claude/` by the master session in 8390e72) — PR #5039 merged 2026-09-29 (041e962, by the master session under Q46, evidence https://github.com/shubhodeep1/coding-workflows/pull/5039#issuecomment-5886043611); review rounds: 1 (all 17 findings rejected); interventions: 0
@@ -24,10 +24,15 @@
 
 ## Validation
 - Cycle 1 — 2026-09-29: not dispatched. `validate.yml@main` ("Authorize explicit validation target") accepts `target_ref` only when exactly one open PR has that head and `base=<default branch>`; the same listing for this project branch returns 0 PRs, because final PR #5028 targets `claude/implement-plan-issue-4750-classifier-outage-get-session` (project PR #4770, into `main`). Validating the default branch or the base branch in its place is not allowed, so this is a stop (CLAUDE.md §28.C), asked on #5012. Long-term fix: #4734.
+- Validation: skipped (covered by #4750's project validation) — 2026-09-29, operator answer Q1: A on #5012 (comment 5888990079, standing decision Q17; reconfirmed as Q18: A in comment 5893342856). This change reaches `main` only through project PR #4770, whose chain runs its own security audit and runtime validation on a branch that contains this fix.
 
 ## Completion
+- Merged into the project branch: phase 1 PR #5039 (041e962); no conformance-fix or validation-fix PRs
+- Completion PR (this log commit) — doc moved to docs/completed/issue-5012-legacy-outage-filed-counts-plan.md
+- Final PR #5028 draft into `claude/implement-plan-issue-4750-classifier-outage-get-session` (marked ready in the final-merge stage; that stage closes #5012 and labels it `ai:merged` once #5028 merges, because the base is not the default branch)
 
 ## Activation
+- n/a — the base is `claude/implement-plan-issue-4750-classifier-outage-get-session`, so this change goes live with project #4750 (PR #4770); the project ends after the final merge.
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-29] How should the filer stop legacy counts from hiding real denials? — Picked: A — track filed records by key (`<log file>:<line>`) per signature in a versioned `filed-state.json`, migrating legacy counts by the load-order prefix. Alternatives: B — keep counts and subtract each signature's outage records once; C — discard legacy state. Why: A is exact for both old and new state and is the issue's second recommendation; B is wrong when outages arrived after the last filing; C re-comments every pattern. Applied in: phase 1 PR. Status: pending review
@@ -42,6 +47,6 @@
 ## Notes
 - Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29) (operator comment 5883926767 on #5012).
 - Blocked 2026-09-29 before phase 1: protected-path approval asked on #5012 (`ai:claude-blocked`). Resolved 2026-09-29: answered Q1: A (twin-first per Q40, operator comment 5883926767); the master session synced the twin (8390e72) and merged PR #5039 under Q46.
-- Blocked 2026-09-29 at validation cycle 1/3 (before dispatch): `validate.yml` cannot authorize a `target_ref` whose final PR targets another project's branch. Asked on #5012 (`ai:claude-blocked`); the standing decision for this case is Q17 in `docs/operations/master-session.md` on `main`. Answer on the issue and comment `/reclarify`.
+- Blocked 2026-09-29 at validation cycle 1/3 (before dispatch): `validate.yml` cannot authorize a `target_ref` whose final PR targets another project's branch. Asked on #5012 (`ai:claude-blocked`); the standing decision for this case is Q17 in `docs/operations/master-session.md` on `main`. Answer on the issue and comment `/reclarify`. Resolved 2026-09-29: answered Q1: A (comment 5888990079, reconfirmed in 5893342856) and `/reclarify`; the resumed session (session_01JHDALYzBRDphJGgUyLumYu, started by the dispatcher routine) removed `ai:claude-blocked`, recorded `Validation: skipped`, and opened the completion PR.
 - This log update was pushed directly to the project branch as part of step 3a (no phase PR is in flight to carry it), so a resumed stage sees `Final PR: #5028` and does not open a second final PR.
 - Started by the Claude issue dispatcher routine (trigger trig_01FzNj7jt3iTsxF8CUydykuf) in session session_01FxPzZDsebojWQPAqJirYk1; `gh` was installed by running `.claude/hooks/session-start.sh` because the repository was attached mid-session; the GitHub MCP tools were not available, so issue and PR writes used `gh api` REST calls the §23.H guard classifies as routine.
