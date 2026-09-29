@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T22:40:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A single global filed-count per signature can only approximate per-session coverage; any partial-coverage rule on it must err toward re-reporting, never toward marking another session's occurrences filed.",
+  "phase": "implement_plan",
+  "pr_number": 5288,
+  "record_id": "lesson-implement-plan-54c020f9965e34d8598a0791",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5125-key-reported-state-by-repo-and-session",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}
