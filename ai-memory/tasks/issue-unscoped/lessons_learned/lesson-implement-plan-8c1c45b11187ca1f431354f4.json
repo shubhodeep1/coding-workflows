@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T07:05:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An issue-mode project whose base is not the default branch cannot pass runtime validation with `target_ref`: `validate.yml` authorizes an explicit target only through an open PR from that branch into the default branch, so check the final PR's base before dispatching step 10.",
+  "phase": "implement_plan",
+  "pr_number": 5079,
+  "record_id": "lesson-implement-plan-8c1c45b11187ca1f431354f4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4885-failed-slot-runner-line-check",
+    "file:.github/workflows/validate.yml",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
