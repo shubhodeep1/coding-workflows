@@ -30,6 +30,7 @@ These are in force until the operator changes them. Cite them by Q-number when a
 | **Q63: A** (dead-checker restart) | The poller restarts a project checker when all five conditions hold (below). #4910 moves the rule into the hourly pickup; after that lands, remove it from the poller. |
 | **Q66: A** | #4695 composes the #4687 and #4688 rejection gates, with the `RF-` id as the only vote token. |
 | **Q67: A** | Batch hook and `settings.json` syncs into one approval window (#4817, #4858, and #4891 when ready). |
+| **Q17: A** (stacked-project validation skip, 2026-09-29) | When a project's runtime validation cannot be dispatched only because its final PR targets **another project's branch** (`validate.yml` answers `Explicit validation target is not authorized`), the master answers the §28.C blocker with A: record `Validation: skipped (covered by #<parent>'s project validation)` and comment `/reclarify`. The parent project re-runs its security audit and runtime validation on a branch that contains the fix before anything reaches `main`. It never applies to a project whose final PR targets `main` or `stable`, or to a validation run that was dispatched and failed. Lasts until #4734 (validate stacked and `stable` targets) is on `main`. |
 
 ## Routines
 
@@ -107,6 +108,13 @@ Restart a project checker only when ALL of these hold. A project checker is a no
 | Command behind a blocking prompt goes unreported | #4755 |
 | Close sweep closes issues on non-default-branch merges | #4813 |
 | Merge resolver ran on draft `claude/*` PRs | fixed by #4869 (merged) |
+| Session starts without `gh`, GitHub MCP tools, or a repository checkout (often after a container restart) | #4938 |
+| Protected-path phases stop to ask a question Q40 already answers | #4948 |
+| Long-running branches run outdated hooks (guard fixes on `main` not merged in) | #4952 |
+| Review gate silently skips a PR whose body quotes the skip-AI marker; checker waits forever | #4985 |
+| Pickup starts only 10 sessions per hourly wake, so resumes wait hours | #4990 |
+| Auto-mode classifier refuses a resume the master answered ("Auto-Mode Bypass") | #5018 |
+| Stacked projects cannot run runtime validation | #4734 (Q17 covers it until then) |
 
 ## Gotchas
 
