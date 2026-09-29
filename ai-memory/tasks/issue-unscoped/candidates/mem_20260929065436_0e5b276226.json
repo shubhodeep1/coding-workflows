@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `agents.md` to name the approved read-loop shape beside the safe helpers.\n  expected_change_site: agents.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not contain any modifications to agents.md, which is required by Phase 1 of the implementation plan.\n- requirement: Mirror CLAUDE.md \u00a723.H table and paragraph, and \u00a723.D.4 wording, byte-for-byte to the root CLAUDE.md.\n  expected_change_site: CLAUDE.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not contain any modifications to CLAUDE.md, which is required by Phase 1 of the implementation plan.\n- requirement: Mirror CLAUDE.md \u00a723.H table and paragraph, and \u00a723.D.4 wording, byte-for-byte to workflow-templates/CLAUDE.md.\n  expected_change_site: workflow-templates/CLAUDE.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not contain any modifications to workflow-templates/CLAUDE.md, which is required by Phase 1 of the implementation plan.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nRequirement: Update `agents.md` to name the approved read-loop shape beside the safe helpers.\nExpected change site: agents.md\nEvidence of absence: The PR diff does not contain any modifications to agents.md, which is required by Phase 1 of the implementation plan.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n\nRequirement: Mirror CLAUDE.md \u00a723.H table and paragraph, and \u00a723.D.4 wording, byte-for-byte to the root CLAUDE.md.\nExpected change site: CLAUDE.md\nEvidence of absence: The PR diff does not contain any modifications to CLAUDE.md, which is required by Phase 1 of the implementation plan.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n\nRequirement: Mirror CLAUDE.md \u00a723.H table and paragraph, and \u00a723.D.4 wording, byte-for-byte to workflow-templates/CLAUDE.md.\nExpected change site: workflow-templates/CLAUDE.md\nEvidence of absence: The PR diff does not contain any modifications to workflow-templates/CLAUDE.md, which is required by Phase 1 of the implementation plan.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5ea7964f85ab8f023a50a521791997a16199d3d4ecfc65aa1fe7dc2145553f58",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5049,
+    "run_id": "36531666583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36531666583",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929065436_0e5b276226",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5049,
+    "run_id": "36531666583"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T06:54:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
