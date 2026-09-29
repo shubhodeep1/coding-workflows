@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:06:14Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Claude Code Web's agent proxy refuses `search/issues` and other non-repository-scoped REST paths (HTTP 403, \"sessions are bound to their configured repositories\"); a helper meant for a cloud session (the master poller, a checker) must read through `repos/<owner>/<repo>/\u2026` endpoints or fall back to one.",
+  "phase": "implement_plan",
+  "pr_number": 5081,
+  "record_id": "lesson-implement-plan-f360a463707c1bb18e7c0402",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4755-report-blocking-permission-prompts",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}
