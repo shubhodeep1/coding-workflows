@@ -2210,8 +2210,10 @@ This is an explicit carve-out from §0 and §2 (including §2's
   describes. In issue mode nobody watches the session, so the ask is
   delivered on the source issue: one comment naming the blocker, the
   options, and the recommended one, the `ai:claude-blocked` label, and one
-  `PushNotification`. A human answers there and comments `/reclarify` to
-  resume.
+  `PushNotification`. The comment's second line names the stopping session,
+  `<!-- ai:claude-blocked-session:v1 id=<session id> -->`. A human answers
+  there and comments `/reclarify` to resume; once the Claude issue pickup has
+  started the next session, it archives the named session (issue #4817).
 - **Ask-first operations** — §22.B (DigitalOcean mutations), §23.C
   (destructive and administrative GitHub writes, merges included), and
   §24.D (Cloudflare destructive and account-level writes). The chain never

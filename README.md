@@ -1323,7 +1323,13 @@ claude-code-remote tools never implements an issue itself:
 exhausted cap, a failed security or validation run, an ask-first operation,
 a missing base branch) comments once on the issue, labels it
 `ai:claude-blocked`, and sends a push notification; answer there and comment
-`/reclarify` to resume. If `claude_issue_route.py`
+`/reclarify` to resume. The comment names the stopping session
+(`<!-- ai:claude-blocked-session:v1 id=… -->`). After the pickup starts the
+replacement session for a `reclarify` item, it archives that session, plus
+any other idle blocked session of the issue, at most 5.
+`claude_issue_route.py replaced-sessions` picks them. It never picks a
+checker, `/deploy-activate`, pickup, or poller session, and never a running
+one or one waiting on a permission prompt (#4817). If `claude_issue_route.py`
 itself errors, clarify falls back to the Codex pipeline with a warning, so no
 issue is dropped.
 

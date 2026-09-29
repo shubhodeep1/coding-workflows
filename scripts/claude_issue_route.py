@@ -31,6 +31,11 @@ Shell drivers:
     §26 checker asks the pickup for one with a one-shot trigger; the pickup
     parses that request with ``arm-check-in-request`` (CLAUDE.md §26.B step
     1c).
+  * When the pickup starts the session for a ``reclarify`` queue item, it runs
+    ``replaced-sessions`` to pick the old blocked sessions of that issue to
+    archive (issue #4817): the one the latest trusted ``ai:claude-blocked:v1``
+    comment names, plus blocked sessions whose title belongs to the issue,
+    never a checker, ``/deploy-activate``, pickup, or poller session.
 
 Queue binding (issue #4621): the creator of a queue issue says nothing about
 its current title and body, which anyone who can edit the issue can change.
@@ -59,6 +64,7 @@ Routing order (first match wins):
      empty or ``claude`` -> claude; anything else -> claude with a warning
 
 All functions are pure except ``fetch_open_queue`` (one ``gh api`` read),
+``fetch_issue_comments`` (one paginated ``gh api`` read),
 ``fetch_queue_bindings`` (the batched binding reads it documents),
 ``append_queue_binding`` (writes the binding file it is given), and the CLI
 entrypoints, which read only the files they are given (or those reads) and
@@ -178,6 +184,26 @@ QUEUE_BINDING_DEFERRED = "deferred"
 # every wake and defer the bound items behind them forever.
 QUEUE_BINDING_SCAN_FACTOR = 3
 RUN_URL_PARTS_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/([0-9]{1,20})$")
+
+# Replaced blocked sessions (issue #4817): an issue-mode session that stops
+# BLOCKED posts one `ai:claude-blocked:v1` comment whose second line names the
+# stopping session. When `/reclarify` makes the pickup start the replacement,
+# `replaced-sessions` picks the old sessions the pickup archives.
+BLOCKED_MARKER = "<!-- ai:claude-blocked:v1 -->"
+# The marker counts only on a line of its own: a blocked comment that quotes
+# it in prose or a diff (as #4817's did) still names exactly one session.
+BLOCKED_SESSION_MARKER_RE = re.compile(r"(?m)^[ \t]*<!-- ai:claude-blocked-session:v1 id=(\S+) -->[ \t]*\r?$")
+SESSION_ID_RE = re.compile(r"^session_[A-Za-z0-9]{10,64}$")
+SESSIONS_JSON_START_RE = re.compile(r"[\[{]")
+REPLACED_SESSIONS_LIMIT = 5
+SESSION_STATUS_IDLE = "SESSION_STATUS_IDLE"
+SESSION_BUCKET_BLOCKED = "SESSION_STATUS_BUCKET_BLOCKED"
+# Titles of sessions that are never archived by this rule, even when a blocked
+# comment names them: checkers (project and CLAUDE.md §26), old per-wait
+# checkers, `/deploy-activate`, the pickup, and pollers.
+PROTECTED_SESSION_TITLE_RE = re.compile(
+	r"(?i)(?:— checker\b|— waiting:|— deploy-activate\b|\bstatus check-in\b|\bclaude issue pickup\b|\bpoller\b)"
+)
 
 
 def _label_names(issue: dict[str, Any]) -> list[str]:
@@ -1011,6 +1037,199 @@ def parse_arm_check_in_request(text: str, allowed_repos: list[str]) -> dict[str,
 	}
 
 
+def _normalize_session_id(value: Any) -> str:
+	"""``session_<x>`` for ``session_<x>`` or ``cse_<x>``; ``""`` when malformed."""
+	if not isinstance(value, str):
+		return ""
+	text = value.strip()
+	if text.startswith("cse_"):
+		text = "session_" + text[len("cse_"):]
+	return text if SESSION_ID_RE.match(text) else ""
+
+
+def blocked_comment_session(comments: list[Any]) -> dict[str, Any]:
+	"""The session named by the issue's latest trusted blocked comment.
+
+	Input: the issue's comment array (REST). Only comments by a trusted author
+	(``is_trusted_issue_author``) whose body starts with ``BLOCKED_MARKER``
+	count, so an outsider's comment can neither name a session nor hide one.
+	The latest of them names a session only when it carries exactly one
+	``<!-- ai:claude-blocked-session:v1 id=session_… -->`` line with a valid id.
+
+	Output: ``{"session_id": str, "comment_id": int | None, "reason": str}``
+	with ``reason`` ``named``, ``no_blocked_comment``, ``no_marker``,
+	``several_markers``, or ``bad_session_id``. Pure: no API calls.
+	"""
+	blocked = [
+		comment for comment in comments or []
+		if isinstance(comment, dict)
+		and is_trusted_issue_author(comment)
+		and isinstance(comment.get("body"), str)
+		and comment["body"].lstrip().startswith(BLOCKED_MARKER)
+	]
+	if not blocked:
+		return {"session_id": "", "comment_id": None, "reason": "no_blocked_comment"}
+	blocked.sort(key=lambda comment: (str(comment.get("created_at") or ""), comment.get("id") if isinstance(comment.get("id"), int) else 0))
+	latest = blocked[-1]
+	comment_id = latest.get("id") if isinstance(latest.get("id"), int) else None
+	ids = BLOCKED_SESSION_MARKER_RE.findall(latest["body"])
+	if not ids:
+		return {"session_id": "", "comment_id": comment_id, "reason": "no_marker"}
+	if len(ids) > 1:
+		return {"session_id": "", "comment_id": comment_id, "reason": "several_markers"}
+	session_id = ids[0] if SESSION_ID_RE.match(ids[0]) else ""
+	return {"session_id": session_id, "comment_id": comment_id, "reason": "named" if session_id else "bad_session_id"}
+
+
+def _session_list(value: Any) -> list[Any] | None:
+	"""The session objects of one ``list_sessions`` result shape, or ``None``."""
+	if isinstance(value, list):
+		return value
+	if isinstance(value, dict):
+		if isinstance(value.get("ccr"), dict):
+			return _session_list(value["ccr"])
+		for key in ("data", "sessions"):
+			if isinstance(value.get(key), list):
+				return value[key]
+	return None
+
+
+def parse_sessions_listing(text: str) -> list[dict[str, Any]]:
+	"""Session objects from a ``list_sessions`` result; raise ValueError when absent.
+
+	Accepts the raw JSON (``{"ccr": {"data": [...]}}``, ``{"data": [...]}``,
+	or an array) or the file the harness saves for a large result, which wraps
+	that JSON in an untrusted-data preamble and closing tag. Titles and every
+	other field are data: this function only locates the JSON.
+
+	Every ``[`` / ``{`` is a candidate start, however many brackets the
+	preamble holds, and candidates are found lazily: a well-formed result
+	decodes at its first bracket, so only text without a result is scanned
+	to the end.
+	"""
+	text = text or ""
+	decoder = json.JSONDecoder()
+	for match in SESSIONS_JSON_START_RE.finditer(text):
+		start = match.start()
+		try:
+			value, _ = decoder.raw_decode(text, start)
+		except ValueError:
+			continue
+		sessions = _session_list(value)
+		# A list holding anything but session objects (a `[1, 2]` in the
+		# preamble) is not the result; keep scanning past it.
+		if sessions is not None and all(isinstance(item, dict) for item in sessions):
+			return sessions
+	raise ValueError("no list_sessions result found")
+
+
+def _session_repo_matches(session: dict[str, Any], repo: str) -> bool:
+	context = session.get("session_context")
+	sources = context.get("sources") if isinstance(context, dict) else None
+	want = f"https://github.com/{repo}".lower()
+	for source in sources if isinstance(sources, list) else []:
+		git = source.get("git_repository") if isinstance(source, dict) else None
+		url = git.get("url") if isinstance(git, dict) else None
+		if isinstance(url, str) and url.strip().lower().removesuffix(".git").rstrip("/") == want:
+			return True
+	return False
+
+
+def issue_session_title(title: str, repo: str, issue_number: int) -> bool:
+	"""True when ``title`` is one of the titles an issue-mode session for this issue carries.
+
+	``issue <repo>#<N> — implement`` (the pickup), ``implement-issue-claude —
+	#<N>…`` (the session's own title), or ``implement-plan issue-<N>-<topic> —
+	<stage>…`` (a stage of the issue's project). A number is never matched as
+	the prefix of a longer one.
+	"""
+	if not isinstance(title, str):
+		return False
+	number = re.escape(str(issue_number))
+	patterns = (
+		rf"(?i)^issue {re.escape(repo)}#{number} — implement(?:\s|$)",
+		rf"^implement-issue-claude — #{number}(?:\s|$)",
+		rf"^implement-plan issue-{number}-[a-z0-9-]+ — ",
+	)
+	return any(re.match(pattern, title.strip()) for pattern in patterns)
+
+
+def select_replaced_sessions(
+	sessions: list[Any],
+	repo: str,
+	issue_number: int,
+	named: str = "",
+	exclude: list[str] | None = None,
+	limit: int = REPLACED_SESSIONS_LIMIT,
+) -> dict[str, Any]:
+	"""Pick the sessions the pickup archives after starting an issue's replacement.
+
+	Input: the session objects of one ``list_sessions`` page, the issue, the
+	session ``named`` by its latest trusted blocked comment (or ``""``), and
+	session ids never to archive (the new session and the pickup itself).
+
+	A session is archived only when all of these hold (issue #4817):
+	its source repository is ``repo``; its title belongs to this issue
+	(``issue_session_title``) and is not protected
+	(``PROTECTED_SESSION_TITLE_RE``: checkers, ``/deploy-activate``, the
+	pickup, pollers); it is not excluded; its ``session_status`` is
+	``SESSION_STATUS_IDLE`` (never ``RUNNING``, ``REQUIRES_ACTION``, or
+	``ARCHIVED``); and it is either the ``named`` session (``match: named``)
+	or visibly blocked, with ``status_bucket`` BLOCKED or ``BLOCKED`` in its
+	title (``match: title``). At most ``limit`` are returned, the named one
+	first.
+
+	Output: ``{"archive": [{"id", "title", "match"}], "kept": [{"id", "title",
+	"reason"}]}``. ``kept`` lists only sessions of this issue (and the named
+	one, as ``named_not_listed`` when the page does not carry it). Pure.
+	"""
+	named = _normalize_session_id(named)
+	excluded = {_normalize_session_id(value) for value in exclude or []}
+	excluded.discard("")
+	archive: list[dict[str, str]] = []
+	kept: list[dict[str, str]] = []
+	named_seen = False
+	candidates: list[tuple[int, dict[str, str]]] = []
+	for session in sessions or []:
+		if not isinstance(session, dict):
+			continue
+		session_id = _normalize_session_id(session.get("id"))
+		if not session_id:
+			continue
+		title = session.get("title") if isinstance(session.get("title"), str) else ""
+		is_named = bool(named) and session_id == named
+		named_seen = named_seen or is_named
+		if not is_named and not issue_session_title(title, repo, issue_number):
+			continue
+		entry = {"id": session_id, "title": title}
+		if session_id in excluded:
+			reason = "excluded"
+		elif PROTECTED_SESSION_TITLE_RE.search(title):
+			reason = "protected_title"
+		elif not issue_session_title(title, repo, issue_number):
+			reason = "title_not_this_issue"
+		elif not _session_repo_matches(session, repo):
+			reason = "other_repository"
+		elif session.get("session_status") != SESSION_STATUS_IDLE:
+			reason = f"status {session.get('session_status') or 'unknown'}"
+		elif not is_named and session.get("status_bucket") != SESSION_BUCKET_BLOCKED and not re.search(r"\bBLOCKED\b", title):
+			reason = "not_blocked"
+		else:
+			candidates.append((0 if is_named else 1, {**entry, "match": "named" if is_named else "title"}))
+			continue
+		kept.append({**entry, "reason": reason})
+	candidates.sort(key=lambda item: item[0])
+	limit = max(int(limit), 0)
+	for position, (_, entry) in enumerate(candidates):
+		if position < limit:
+			archive.append(entry)
+		else:
+			kept.append({"id": entry["id"], "title": entry["title"], "reason": "over_limit"})
+	if named and not named_seen:
+		kept.append({"id": named, "title": "", "reason": "named_not_listed"})
+	return {"archive": archive, "kept": kept}
+
+
 def _read_json(path: str) -> Any:
 	return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -1151,6 +1370,78 @@ def _gh_api_read(path: str, binary: bool = False, jq: str = "") -> Any:
 		return json.loads(text)
 	except ValueError as exc:
 		raise RuntimeError(f"gh api {path.split('?')[0]} returned invalid JSON: {exc}") from exc
+
+
+def fetch_issue_comments(repo: str, issue_number: int) -> list[Any]:
+	"""All comments of one issue: one paginated REST read (``per_page=100``, §15).
+
+	Raises RuntimeError when gh fails (for example the web agent proxy's 403 for
+	a repository not attached to the pickup session) or returns non-arrays; the
+	``replaced-sessions`` caller fails open to the title route.
+	"""
+	if not REPO_SLUG_RE.match(repo or ""):
+		raise RuntimeError(f"invalid repo: {repo!r}")
+	cmd = ["gh", "api", "--paginate", f"repos/{repo}/issues/{int(issue_number)}/comments?per_page=100"]
+	try:
+		proc = subprocess.run(cmd, capture_output=True, timeout=120)
+	except (OSError, subprocess.TimeoutExpired) as exc:
+		raise RuntimeError(f"gh api failed: {exc}") from exc
+	if proc.returncode != 0:
+		detail = proc.stderr.decode("utf-8", "replace").strip()[:300]
+		raise RuntimeError(f"gh api issues/{int(issue_number)}/comments exited {proc.returncode}: {detail}")
+	# --paginate prints one JSON array per page back to back.
+	text = proc.stdout.decode("utf-8", "replace")
+	decoder = json.JSONDecoder()
+	comments: list[Any] = []
+	index = 0
+	while True:
+		while index < len(text) and text[index].isspace():
+			index += 1
+		if index >= len(text):
+			break
+		try:
+			page, index = decoder.raw_decode(text, index)
+		except ValueError as exc:
+			raise RuntimeError(f"gh api issues/{int(issue_number)}/comments returned invalid JSON: {exc}") from exc
+		if not isinstance(page, list):
+			raise RuntimeError(f"gh api issues/{int(issue_number)}/comments returned a non-array")
+		comments.extend(page)
+	return comments
+
+
+def _cmd_replaced_sessions(args: argparse.Namespace) -> int:
+	repo = args.repo or ""
+	if not REPO_SLUG_RE.match(repo) or args.issue <= 0:
+		print(f"invalid --repo or --issue: {repo!r} #{args.issue}", file=sys.stderr)
+		return 2
+	try:
+		sessions = parse_sessions_listing(Path(args.sessions_file).read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, ValueError) as exc:
+		print(f"cannot read --sessions-file: {exc}", file=sys.stderr)
+		return 2
+	comments_read = "ok"
+	try:
+		if args.comments_json:
+			comments = _read_json(args.comments_json)
+			if not isinstance(comments, list):
+				raise ValueError("comments JSON is not an array")
+		else:
+			comments = fetch_issue_comments(repo, args.issue)
+	except (OSError, ValueError, RuntimeError) as exc:
+		comments = []
+		comments_read = f"failed: {exc}"[:300]
+	named = blocked_comment_session(comments)
+	result = select_replaced_sessions(sessions, repo, args.issue, named["session_id"], args.exclude, args.limit)
+	print(json.dumps({
+		"repo": repo,
+		"issue": args.issue,
+		"comments_read": comments_read,
+		"named": named["session_id"],
+		"named_reason": named["reason"] if comments_read == "ok" else "comments_unread",
+		"named_comment_id": named["comment_id"],
+		**result,
+	}))
+	return 0
 
 
 def _read_binding_zip(data: bytes, repo: str, run_id: str) -> dict[str, dict[str, str]]:
@@ -1444,6 +1735,15 @@ def main(argv: list[str] | None = None) -> int:
 	p_arm.add_argument("--registry", required=True)
 	p_arm.add_argument("--self-repo", default=DEFAULT_UPSTREAM_REPO)
 	p_arm.set_defaults(func=_cmd_arm_check_in_request)
+
+	p_replaced = sub.add_parser("replaced-sessions", help="pick the blocked sessions the pickup archives after a /reclarify start (issue #4817)")
+	p_replaced.add_argument("--repo", required=True)
+	p_replaced.add_argument("--issue", type=int, required=True)
+	p_replaced.add_argument("--sessions-file", required=True, help="the list_sessions result, raw or as the harness saved it")
+	p_replaced.add_argument("--exclude", action="append", default=[], help="a session id never to archive (the new session, the pickup); repeatable")
+	p_replaced.add_argument("--comments-json", default="", help="the issue's comments; read with gh (one paginated call) when omitted")
+	p_replaced.add_argument("--limit", type=int, default=REPLACED_SESSIONS_LIMIT)
+	p_replaced.set_defaults(func=_cmd_replaced_sessions)
 
 	args = parser.parse_args(argv)
 	return args.func(args)

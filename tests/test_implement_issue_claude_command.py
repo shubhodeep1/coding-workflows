@@ -293,3 +293,47 @@ def test_pickup_starts_fixer_sessions_for_pr_fix_items(pickup_cmd):
 	assert "`item_type` `pr_fix`" in pickup_cmd
 	assert "title `PR <repo>#<N> — fix <kind>`" in pickup_cmd
 	assert "`/fix-claude-pr` re-reads the PR and stops when the fix is no longer due" in pickup_cmd
+
+
+BLOCKED_SESSION_LINE = "`<!-- ai:claude-blocked-session:v1 id=<your session id> -->`"
+
+
+def test_blocked_stops_name_their_session(issue_cmd, plan_cmd, claude_md):
+	"""Issue #4817: every issue-mode blocked stop names its own session for the pickup."""
+	own_id = 'with the id from `echo "session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}"`'
+	assert f"The comment's second line names this session: {BLOCKED_SESSION_LINE}, {own_id}" in plan_cmd
+	assert "the Claude issue pickup archives the session the comment names once that next session exists (`scripts/claude_issue_route.py replaced-sessions`, issue #4817)" in plan_cmd
+	assert f"When `CLAUDE_CODE_REMOTE_SESSION_ID` is set, the comment's second line names this session: {BLOCKED_SESSION_LINE}, {own_id}" in issue_cmd
+	assert "The comment's second line names the stopping session, `<!-- ai:claude-blocked-session:v1 id=<session id> -->`." in claude_md
+	assert "once the Claude issue pickup has started the next session, it archives the named session (issue #4817)" in claude_md
+	# The marker the commands write is the one the script parses.
+	assert route.BLOCKED_SESSION_MARKER_RE.search("<!-- ai:claude-blocked-session:v1 id=session_01AbcdefghijKLMNOP -->")
+	assert route.BLOCKED_MARKER == "<!-- ai:claude-blocked:v1 -->"
+
+
+def test_pickup_archives_the_session_a_reclarify_replaces(pickup_cmd):
+	"""Issue #4817: after starting the replacement, the pickup archives only what the script picked."""
+	text = (COMMANDS / "claude-issue-pickup.md").read_text(encoding="utf-8")
+	assert "4. **Archive the session a `/reclarify` replaces** (issue #4817)." in pickup_cmd
+	assert "only to an `item_type` `issue` entry whose `trigger` is `reclarify`, and only after both calls of sub-step 1 succeeded" in pickup_cmd
+	assert "call `list_sessions` with `mine: true` and `limit: 100`" in pickup_cmd
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py replaced-sessions --repo <repo> --issue <N> --sessions-file <that file> --exclude <new session id> --exclude <your session id>" in pickup_cmd
+	assert "Call `archive_session` only when `session_status` is `SESSION_STATUS_IDLE` and `title` equals the entry's `title`." in pickup_cmd
+	assert "Never archive a session that is `RUNNING` or `REQUIRES_ACTION`" in pickup_cmd
+	assert "It never prints a checker, `/deploy-activate`, pickup, or poller session." in pickup_cmd
+	assert "It never fails the entry and never reopens the entry's queue issues." in pickup_cmd
+	assert "); archived <a>; ignored <k>; remaining <r>; failed <f>`" in pickup_cmd
+	assert "`archive_session`, `set_session_title`, `list_sessions` (load them with ToolSearch when deferred)" in pickup_cmd
+	assert "The one exception is step 3.4" in pickup_cmd
+	# The archive step sits between starting the sessions (step 3) and the report (step 4).
+	assert text.index("3. **Start one session per pending entry.**") < text.index("4. **Archive the session a `/reclarify` replaces**") < text.index("4. **Report.**")
+
+
+def test_replaced_sessions_is_allowlisted():
+	import json as _json
+
+	allow = _json.loads((ROOT / ".claude" / "settings.json").read_text())["permissions"]["allow"]
+	assert "Bash(python3 scripts/claude_issue_route.py replaced-sessions *)" in allow
+	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py replaced-sessions *)" in allow
+	assert "mcp__Claude_Code_Remote__list_sessions" in allow
+	assert "mcp__Claude_Code_Remote__archive_session" in allow
