@@ -107,8 +107,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `Why it fails at runtime:`, `Requirement:`, `Expected change site:`,
    `Evidence of absence:`, `SEVERITY:`, `ISSUE_CONFIDENCE:`, markdown markers
    ignored), and, when any lens heading of
-   `prompts/review-reviewer-checklist.txt` appears, all nine lenses each
-   followed by `NONE`; prose around the verdicts is allowed. It
+   `prompts/review-reviewer-checklist.txt` appears (markdown markers and list
+   numbering ignored), all nine lenses each followed by `NONE`; prose around
+   the verdicts is allowed. It
    then takes the same clean path and logs
    `CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS pr=… head=… round=… failed_slots=… clean_reviewers=… min=…`.
    Fewer clean reviewers, any other text, or a status or output file that
