@@ -35,7 +35,9 @@ Fail closed. Auto-merge is enabled only when ALL of these hold:
     run, `failed_count: 0` and `incomplete_count: 0`;
   * the review run the comment links completed with `success`, in this
     repository, from a review workflow, on the PR's head branch, triggered
-    by the reviewed head or an earlier push to it;
+    by the reviewed head or an earlier push to it (or dispatched for this PR
+    by the review sweep from the default branch, bound by its run title,
+    issue #4618);
   * the repository's ENABLE_AUTO_MERGE variable reads `true` (unset = `true`;
     an unreadable variable does not merge).
 `review_enable_auto_merge.sh` keeps its own guards on top: `--match-head-commit`
@@ -236,25 +238,31 @@ def read_check_snapshot(repo: str, head_sha: str) -> dict:
 	return parse_check_snapshot(text, head_sha)
 
 
-def verify_review_run(repo: str, marker: dict, head_sha: str, head_ref: str) -> str:
+def verify_review_run(repo: str, marker: dict, head_sha: str, head_ref: str,
+	number: int | None = None, default_branch: str | None = None) -> str:
 	"""Return "" when the marker's review run is verified, else the reason it is not.
 
 	The run must be the linked one, in `repo`, from a review workflow
-	(`check_in_status.FIXER_WORKFLOW_PATHS`), on `head_ref`, completed with
-	`success`, and triggered by the reviewed head or an earlier push to it.
-	One run read, plus one compare read when the trigger commit differs.
+	(`check_in_status.FIXER_WORKFLOW_PATHS`), completed with `success`, and
+	either on `head_ref` and triggered by the reviewed head or an earlier push
+	to it, or an internal-review.yml run the review sweep dispatched for PR
+	`number` from `default_branch` (issue #4618), bound by its exact title
+	the same way `check_in_status.py` verifies a hand-off's run. One run
+	read, plus one compare read when a head-branch run's trigger commit
+	differs.
 	"""
 	run = check_in_status.gh_api(f"repos/{repo}/actions/runs/{marker['run_id']}")
 	run_repo = run.get("repository")
 	run_path = run.get("path")
+	dispatched = number is not None and check_in_status._is_pr_dispatched_review_run(run, number, default_branch)
 	if (run.get("id") != marker["run_id"] or run.get("html_url") != marker["run_url"]
 		or not isinstance(run_repo, dict) or run_repo.get("full_name") != repo
 		or not isinstance(run_path, str) or run_path.split("@", 1)[0] not in check_in_status.FIXER_WORKFLOW_PATHS
-		or run.get("head_branch") != head_ref):
+		or (not dispatched and run.get("head_branch") != head_ref)):
 		return f"review run {marker['run_id']} does not match this PR's review workflow"
 	if run.get("status") != "completed" or run.get("conclusion") != "success":
 		return f"review run {marker['run_id']} is {run.get('status')}/{run.get('conclusion')}"
-	if not check_in_status._review_run_head_on_branch_history(repo, run.get("head_sha"), head_sha):
+	if not dispatched and not check_in_status._review_run_head_on_branch_history(repo, run.get("head_sha"), head_sha):
 		return f"review run {marker['run_id']} was not triggered from this head's history"
 	return ""
 
@@ -343,7 +351,8 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 		return {"state": "checks_failed", "head_sha": head_sha, "reason": f"failed check runs (left to the ci-failed hand-back): {snapshot['detail']}"}
 	if snapshot["state"] != "ready":
 		return {"state": "snapshot_invalid", "head_sha": head_sha, "reason": snapshot["detail"]}
-	run_problem = verify_review_run(repo, marker, head_sha, head_ref)
+	run_problem = verify_review_run(repo, marker, head_sha, head_ref,
+		number=number, default_branch=check_in_status._pr_default_branch(pr))
 	if run_problem:
 		return {"state": "run_unverified", "head_sha": head_sha, "reason": run_problem}
 	enable_flag = read_enable_auto_merge(repo)

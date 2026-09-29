@@ -157,6 +157,8 @@ elif base == f"repos/o/r/actions/runs/{state['review_run']['id']}":
 	emit(state["review_run"])
 elif base == "repos/o/r/actions/runs":
 	emit({"total_count": 0, "workflow_runs": []})
+elif base == "repos/o/r/actions/workflows/internal-review.yml/runs":
+	emit({"total_count": 0, "workflow_runs": []})
 elif base == "repos/o/r/actions/variables/ENABLE_AUTO_MERGE":
 	value = state.get("enable_auto_merge")
 	if value == "forbidden":
@@ -326,6 +328,38 @@ def test_every_other_state_fails_closed(fake_gh, label, setup, expected):
 	assert result["state"] == expected, (label, result)
 	if expected != "merge_failed":
 		assert fake_gh.merges() == [], label
+
+
+def _dispatched_review_run(**overrides) -> dict:
+	# A review the sweep dispatched from the default branch (issue #4618):
+	# its branch and sha are main's, and the run title binds it to the PR.
+	run = {"event": "workflow_dispatch", "head_branch": "main", "head_sha": OTHER_HEAD,
+		"display_title": f"Internal: AI Review & Autofix [pr:{PR}]"}
+	run.update(overrides)
+	return _review_run(**run)
+
+
+def test_sweep_dispatched_review_run_verifies_by_title(fake_gh):
+	pr = _pr(base={"ref": "main", "repo": {"full_name": REPO, "default_branch": "main"}})
+	fake_gh.set(pr=pr, comments=[_comment(5, _pending_body())], check_runs=GREEN, review_run=_dispatched_review_run())
+	result = _evaluate()
+	assert result["state"] == "merge_enabled", result
+	assert fake_gh.merges() == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
+
+
+@pytest.mark.parametrize("label, run_overrides, pr_base", [
+	("title names another PR", dict(display_title="Internal: AI Review & Autofix [pr:7]"), "main"),
+	("not a dispatch", dict(event="push"), "main"),
+	("default branch unknown", {}, None),
+	("dispatched from another branch", dict(head_branch="stable"), "main"),
+])
+def test_default_branch_review_run_needs_the_full_dispatch_binding(fake_gh, label, run_overrides, pr_base):
+	base = {"ref": "main", "repo": {"full_name": REPO, "default_branch": pr_base}} if pr_base else {"ref": "main"}
+	fake_gh.set(pr=_pr(base=base), comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		review_run=_dispatched_review_run(**run_overrides))
+	result = _evaluate()
+	assert result["state"] == "run_unverified", (label, result)
+	assert fake_gh.merges() == [], label
 
 
 def test_unset_workflow_author_trusts_no_marker(fake_gh):
