@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4886-numbered-session-titles-plan.md
 - Source issue: shubhodeep1/coding-workflows#4886 (https://github.com/shubhodeep1/coding-workflows/issues/4886)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4886-numbered-session-titles   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-4886-numbered-session-titles   Final PR: #4943 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: twin sync of `workflow-templates/.claude/commands/{implement-plan-claude,implement-issue-claude,claude-issue-dispatch,fix-claude-pr}.md` into `.claude/commands/`, plus the listed `.claude/commands/claude-issue-pickup.md` edit, on PR #5009 (hold claim on its head), then `/reclarify`
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened; phase 1 starting under the twin-first protected-path approval.
+- Last note: phase 1 implemented and verified; phase PR #5009 opened against the project branch with a hold claim; stopped BLOCKED for the twin sync (interim twin-first rule, Q40: A).
 
 ## Phases
-1. [ ] Phase 1 — numbered session titles and dual-form matchers   — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/claude-issue-dispatch.md`, `.claude/commands/fix-claude-pr.md` (edited through their `workflow-templates/.claude/commands/` twins), `.claude/commands/claude-issue-pickup.md` (no twin; the edit is listed for the supervising session)
+1. [ ] Phase 1 — numbered session titles and dual-form matchers   — PR #5009 open (held for the twin sync); review rounds: 0; interventions: 0 — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/claude-issue-dispatch.md`, `.claude/commands/fix-claude-pr.md` (edited through their `workflow-templates/.claude/commands/` twins), `.claude/commands/claude-issue-pickup.md` (no twin; the edit is listed for the supervising session)
    - `/implement-plan-claude` twin: `### Session titles`, stage, checker, deploy-activate, and hand-back titles, rename on PR open (steps 3a, 6), dual-form reuse check and zombie cleanup, three titles in the checker prompt
    - `/claude-issue-dispatch` twin and the pickup: `#<N> · issue <repo>#<N> — implement`
    - `/fix-claude-pr` twin: issue from the head ref, fresh-fixer rename after the claim, step 8 prefix
@@ -51,3 +51,5 @@
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher (trigger `trig_01MF2bMLpiNc2DoCKNLpmpWo`, `dispatch shubhodeep1/coding-workflows#4886: start`) in session `session_01BGZEXrd6FYZpCoQvq27kaY`; permission mode auto. An earlier session (`session_01PKMcfjuzNCPE2CckfGEkBg`) had stopped before start, wrongly concluding that the `mcp__github__*` tools and `gh` were missing (they are deferred / installed by the SessionStart hook); the operator restarted the issue here.
 - Security pass: run (`security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}`).
 - Protected-path approval: phase 1 — twin-first per Q40 (operator decision restated in the #4886 body: "follow the interim twin-first rule (operator Q40: A): edit the `workflow-templates/.claude/**` twins, post a hold, and stop BLOCKED") (2026-09-29). The phase edits only the `workflow-templates/.claude/` twins, lists the twinless pickup edit, pushes, posts a `hold` claim, and stops BLOCKED listing the files to copy.
+- Phase 1 (2026-09-29): edits only the twins and CLAUDE.md, agents.md, tests, ci.yml, and the changelog fragment. Expected red until the twin sync (7): `test_implement_plan_claude_command.py::test_template_parity` and `::test_one_checker_per_project_keeps_the_chain_shallow`, `test_implement_issue_claude_command.py::test_template_parity[implement-issue-claude.md | claude-issue-dispatch.md | implement-plan-claude.md]`, `test_check_in_status_hand_back.py::test_fix_claude_pr_routes_on_action` (fix-claude-pr twin parity), and `test_session_titles.py::test_pickup_starts_issue_sessions_with_the_issue_number` (the pickup edit). With the four twins copied and the pickup edit applied in a scratch tree: 560 passed across the session-titles, plan-command, issue-command, issue-route, section-numbers, check-in hand-back, stale-Routine, check-in-reminder, update-workflows guardrails, and security-skip suites. A before/after run of the 86 test files that read a changed file shows the same 65 failures on `main` and with the change (Python 3.11 environment failures, e.g. `tests/test_workflow_retro.py` does not import); no regressions.
+- The session container had no `pytest`; it was installed with pip so the suites run.
