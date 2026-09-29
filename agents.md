@@ -268,7 +268,18 @@ Phases of the unattended pipeline (each is a separate workflow file under
     queue with
     `claude_issue_route.py queue-pending --fetch-repo` (one queue read plus
     the batched binding reads `fetch_queue_bindings` documents; only bound
-    items by `github-actions[bot]` for registered repos; ≤ 10 per wake),
+    items by `github-actions[bot]` for registered repos; ≤ 20 per wake,
+    `QUEUE_PICKUP_LIMIT`, overridable with the pickup session's
+    `CLAUDE_ISSUE_PICKUP_LIMIT` clamped to 1..30; `reclarify` resumes
+    first, then queue order; binding reads cover the first 3 × limit
+    targets; the output adds `limit`, `oldest_waiting_minutes`, and, with
+    `--wake hourly | catch-up`, `catch_up_due`; #4990). A wake whose
+    `catch_up_due` is true schedules one self-bound `send_later` catch-up
+    wake 30 minutes out (`Claude issue pickup: catch-up`, arguments
+    `— wake. — catch-up`), unless one is already pending; a catch-up wake
+    never schedules another, and the one-line report adds
+    `oldest_waiting=<minutes | none>` and `catch_up=<scheduled | pending |
+    none | failed>`. The pickup
     starts one Opus session per target issue via `claude-issue-dispatch.md`
     step 2, and closes the queue issues with a `Dispatched:` line (no
     comment). A claude.ai routine run cannot do this: it gets no
