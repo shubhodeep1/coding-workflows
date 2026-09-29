@@ -3,24 +3,24 @@
 - Plan: docs/plans/issue-4948-protected-path-twin-first-default-plan.md
 - Source issue: shubhodeep1/coding-workflows#4948
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4948-protected-path-twin-first-default   Final PR: #F draft
+- Project branch: claude/implement-plan-issue-4948-protected-path-twin-first-default   Final PR: #4989 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5008 (phase 1): review round 3
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01Ame2D1ptdLmTxyN2aYG1jw (project checker, reused)   safety net and hand-back: in the review-round stage report
 - Last updated: 2026-09-29
-- Last note: project branch opened; implementing phase 1 twin-first (operator Q40).
+- Last note: Review round 2 on f859888 (ledger `18e9df36…`): both task gaps valid and fixed in one `[claude-autofix]` commit. The sunset test now also asserts the agents.md closing sentence is gone, plus (proactive, same defect) the command twin's separate `**Sunset:**` paragraph and the CLAUDE.md bullet's Sunset sentence; the log's test count is corrected to 6. No `.claude/**` file changed, so no twin sync is needed.
 
 ## Phases
-1. [ ] Phase 1 — interim twin-first default for protected-path phases   — protected paths: `.claude/commands/implement-plan-claude.md` (edited only in its `workflow-templates/.claude/` twin, Q40)
-   - [ ] Twin `implement-plan-claude.md` step 4: interim paragraph (automatic approval line, twin-only edits, no-twin diff + sha256, hold claim + twin-sync blocker, resume, later stages, the three question cases, sunset)
-   - [ ] CLAUDE.md §28.C: new bullet naming the interim automatic twin-first default and its sunset (#4785)
-   - [ ] `agents.md` and `docs/operations/master-session.md` (Q40 row) updated
-   - [ ] `tests/test_implement_plan_claude_command.py`: command-twin, CLAUDE.md, and sunset-guard tests
-   - [ ] `changelog.d/4948-protected-path-twin-first-default.md`
-   - Done: the new tests pass; the rest of `tests/` passes except `test_template_parity` until the `[claude-twin-sync]` copy
+1. [ ] Phase 1 — interim twin-first default for protected-path phases   — protected paths: `.claude/commands/implement-plan-claude.md` (edited only in its `workflow-templates/.claude/` twin, Q40) — PR #5008 open (twin synced in f60a3b1); review rounds: 2; interventions: 0
+   - [x] Twin `implement-plan-claude.md` step 4: interim paragraph (automatic approval line, twin-only edits, no-twin diff + sha256, hold claim + twin-sync blocker, resume, later stages, the three uncovered cases, sunset) — `workflow-templates/.claude/commands/implement-plan-claude.md:35-45` (root copy: pending twin sync)
+   - [x] CLAUDE.md §28.C: new bullet naming the interim automatic twin-first default and its sunset (#4785) — `CLAUDE.md:2236-2253`
+   - [x] `agents.md` (`:1116-1123`) and `docs/operations/master-session.md` (Q40 row) updated
+   - [x] `tests/test_implement_plan_claude_command.py`: 6 new tests (command twin ×3, CLAUDE.md, operator-doc presence, sunset guard)
+   - [x] `changelog.d/4948-protected-path-twin-first-default.md`
+   - Done: in the twin overlay the command and changelog tests pass (55 passed, 1 skipped); the real tree fails only `test_template_parity` until the twin sync. Full overlay run: 4720 passed, 122 failed — the same 122 fail on a clean `origin/main` copy (missing `jsonschema` / `gawk` in the container)
 
 ## Conformance
 
@@ -42,9 +42,14 @@
 - AD-7 [plan, 2026-09-29] How is "a phase whose plan explicitly needs a watched session" recognised? — Picked: A — the plan's phase text says the phase must run in a watched session (for example `watched session: required`). Alternatives: B — infer it from the files (for example hooks or `settings.json`). Why: hook and `settings.json` twins can be edited unattended; only their sync needs the operator (Q62/Q64), which stop 2 already covers. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:intervention] A sunset (removal-trigger) test must assert the absence of every interim text the plan's Rollout names, in every file that carries it (docs included), and a paired presence test must pin the same markers while the interim is live so the sunset guard cannot pass vacuously. (files: tests/test_implement_plan_claude_command.py, agents.md, docs/operations/master-session.md)
+- [source:intervention] When interim text spans more than one sentence or paragraph, give the sunset test one marker per separately removable piece (the opener and every closing or Sunset sentence), not just the opener, or a partial removal passes with an orphaned sentence. (files: tests/test_implement_plan_claude_command.py)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #4948 (session session_01KWvixVyQiLvzZBHTrbRFpw, started by the master's dispatch trigger trig_017hVhQvGvbgboSSGrnNqVBF); start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
 - Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29). Operator context of the dispatch trigger (standing decision Q40: A, `docs/operations/master-session.md`): edit only the `workflow-templates/.claude/**` twins, open the phase PR, post a `hold` claim on its head, and stop BLOCKED for the `[claude-twin-sync]` copy.
 - `security_pass_skip.py`: `{"skip": false, "label": null, "reason": "no skip label"}` → `Security pass: run`.
 - Stale Routine sweep: deleted 1 (`trig_015sJatxZ2Cy2xBDGCaZRLP6`, an ended one-shot of issue-4927).
+- Twin to sync: `workflow-templates/.claude/commands/implement-plan-claude.md` → `.claude/commands/implement-plan-claude.md`, twin sha256 `83884435a9a1db1dd5f102ac455dd60dd6628a29cac2cd4c6386e704f9bb90a7`. No `.claude/` path without a twin is changed.
+- `tests/test_workflow_retro.py` was excluded locally: `scripts/workflow_retro.py` needs Python 3.12 f-string syntax and the container runs 3.11 (unrelated to this change).
+- While building the test overlay, a failed `rsync` let one `cp` run in the real checkout and overwrite `.claude/commands/implement-plan-claude.md` with the twin; it was restored with `git checkout` before any commit, and `.claude/` matched HEAD afterwards.
