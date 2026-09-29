@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Plan step 3 states \"README.md, agents.md, docs/INVENTORY.md: one sentence each on the new deferral\" (docs/plans/issue-5148-pending-checks-newer-review-race-plan.md:63-79)\n  expected_change_site: docs/INVENTORY.md\n  confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The PR diff includes updates to README.md and agents.md but no diff hunk in docs/INVENTORY.md. The PR description lists \"README.md, agents.md, and the changelog.d/5148-\u2026 fragment\" but omits docs/INVENTORY.md. The plan explicitly required one sentence in each of the three files.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nRequirement: Plan step 3 states \"README.md, agents.md, docs/INVENTORY.md: one sentence each on the new deferral\" (docs/plans/issue-5148-pending-checks-newer-review-race-plan.md:63-79)\nExpected change site: docs/INVENTORY.md\nEvidence of absence: The PR diff includes updates to README.md and agents.md but no diff hunk in docs/INVENTORY.md. The PR description lists \"README.md, agents.md, and the changelog.d/5148-\u2026 fragment\" but omits docs/INVENTORY.md. The plan explicitly required one sentence in each of the three files.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6f9b0b5dfa2bb52e80fb909a985c82433f22a82b39571223e51e9231fa5d26a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5209,
+    "run_id": "36599060744",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36599060744",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929165631_933f98fbbf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5209,
+    "run_id": "36599060744"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T16:56:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
