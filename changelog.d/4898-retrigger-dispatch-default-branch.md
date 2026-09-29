@@ -1,0 +1,18 @@
+<!-- changelog: security -->
+- **`review_autofix.yml` now starts its follow-up review runs from the default branch, never from the pull request's head branch.** This closes the last two sites of security finding `review-dispatches-unmerged-workflow` (#4618, #4701).
+
+Two steps in `review_autofix.yml` re-dispatch the review workflow: "Re-trigger review via workflow_dispatch", right after the editor pushes its own `[ai-autofix]` commit, and "Re-dispatch review on editor-changes-lost". Both passed `--ref <PR head branch>`, so the next run executed the branch's own copy of the workflow file with `secrets: inherit` and write permissions. With `allow_workflow_edits` on, that copy could carry workflow edits the editor had just made. Both now dispatch without `--ref`, pass only a PR number they have checked is a positive integer, and try the PR-named wrappers (`internal-review.yml`, `ai-review.yml`) before `review_autofix.yml`. The review still checks out the PR head from the PR's metadata.
+
+A run started from the default branch shows the default branch as its head, so the two run probes these steps use now also find runs by name. The duplicate-run check (`autofix_retrigger_has_inflight_peer`) counts queued or running dispatch runs named for the PR. The per-head retry budget of the changes-lost re-dispatch (`autofix_changes_lost_head_retry_consumed`) counts completed runs named for the PR since the head was pushed, so the retry stays bounded now that it runs from the default branch.
+
+| The numbers that matter | Value |
+| --- | --- |
+| `review_autofix.yml` dispatches that run an unmerged branch's workflow file | 0 (was 2 steps, 6 `gh workflow run --ref` calls) |
+| New GitHub API calls per probe | at most 1 `GET actions/runs?event=workflow_dispatch&per_page=100`, only when the branch lookup found nothing |
+| `review_autofix.yml` size | 437,126 bytes (was 451,394; both step bodies moved to `scripts/`) |
+
+What this means for operators: after an autofix push or an editor-changes-lost run, the next review run shows the default branch in the Actions list, with the PR in its run name (`Internal: AI Review & Autofix [pr:<N>]` here, `AI Review [pr:<N>]` in consumer repos). A consumer repo whose `ai-review.yml` predates the PR run name (#4701) still gets the default-branch dispatch, but its probes cannot see those runs until the next workflow sync.
+
+### For contributors
+
+The step bodies live in `scripts/review_autofix_step_post_commit_retrigger.sh` and `scripts/review_autofix_step_changes_lost_redispatch.sh`, registered in `REQUIRED_BOOTSTRAP_SCRIPTS` and `tests/review_autofix_step_scripts.py`. The shared lookup is `_autofix_pr_named_review_runs <pr> [status]` in `scripts/gh_helpers.sh`. `autofix_changes_lost_head_retry_consumed` takes an optional fifth argument, the head commit's epoch time, and fails closed without a push-time bound. Its `AUTOFIX_CHANGES_LOST_BUDGET` line gains `pr_named_completed=`; `AUTOFIX_PEER_CHECK` is unchanged. The E2E review dispatches in `test-and-mark-stable.yml` keep `--ref` because Phase 4 pins runs to the bait commit's SHA; comments there state the exposure.
