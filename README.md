@@ -1512,7 +1512,9 @@ partial-finalize artifacts for a resume that skips the whole reviewer phase.
 The binding to the finding is by `consensus_id`, never by file and line
 proximity (issue #4687): a finding stays blocking when another consensus
 entry of either pass lies within 3 lines of it, the flagger reported another
-finding in that file within 3 lines (or without a readable line), or its
+finding in that file within 3 lines (or without a readable line; a quoted,
+bolded, or workspace-prefixed spelling of the path is that file, and
+`1250 to 1262` or `1250, 1262` covers every line it names), or its
 `consensus_id` is duplicated, so a rejection of one finding can never demote
 a distinct one next to it. A round left with only non-blocking
 entries still posts the ledger and then takes the zero-findings auto-merge

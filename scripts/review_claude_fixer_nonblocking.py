@@ -27,7 +27,8 @@ consensus ids by issue #4687):
     the same file within LINE_TOLERANCE lines of P, no other CONSENSUS
     FINDINGS entry of this ledger lies in the same file within LINE_TOLERANCE
     lines of the entry, and F reported no other finding record in the same
-    file within LINE_TOLERANCE lines of either range, in that file without a
+    file (a path that ends with ``/`` plus the other counts, see _same_file())
+    within LINE_TOLERANCE lines of either range, in that file without a
     readable line, or with an unreadable file;
   * at least MIN_REJECTERS successful reviewers other than F each cast a
     rejection vote (below) for a manifest entry whose consensus_id is P's,
@@ -198,16 +199,30 @@ RECORD_FILE_RE = re.compile(rf"^\s*(?:#{{1,6}}\s+)?{RECORD_ITEM}{RECORD_MARKUP}F
 RECORD_LINE_RE = re.compile(
 	rf"^\s*(?:[-*]\s+)?{RECORD_MARKUP}(?:Line or code reference|Line reference|Lines?){RECORD_MARKUP}\s*:{RECORD_MARKUP}"
 	r"\s*(?P<value>.*?)\s*$", re.IGNORECASE)
-RECORD_PATH_RE = re.compile(r"^`?(?P<path>[^\s`|:,()]+)`?(?::L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?)?")
-RECORD_LINE_NUMBER_RE = re.compile(r"(?<![\w/.-])L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
+# A line range may be written ``N-M``, ``N–M``, ``N to M``, or ``N through M``.
+RECORD_RANGE = r"(?:\s*(?:[-–]|to\b|through\b)\s*L?(?P<end>\d+))?"
+# A line number ends at anything but a word character, ``/``, or a ``.`` that
+# continues it (``3.14`` is a version); a sentence's closing ``.`` is allowed.
+RECORD_LINE_END = r"(?![\w/]|\.\w)"
+# The File: value's leading path, with any wrapping bold / italic markup,
+# quotes, angle brackets, or Markdown link brackets around it dropped
+# (``**README.md**``, ``"README.md"``, ``[README.md](…)``); a trailing ``.``
+# or ``;`` is dropped by _record_path().
+RECORD_PATH_RE = re.compile(
+	r"^[*\"'<\[]*`?(?P<path>[^\s`|:,()*\"'<>\[\]]+)`?[*\"'>\]]*(?::L?(?P<start>\d+)" + RECORD_RANGE + r")?")
+RECORD_LINE_NUMBER_RE = re.compile(r"(?<![\w/.-])L?(?P<start>\d+)" + RECORD_RANGE + RECORD_LINE_END)
 # Explicit line references inside a longer value: ``path:N[-M]`` (the path has a
 # ``/`` or a file extension that starts with a letter) and ``line N`` /
 # ``lines N-M`` / ``LN``. A bare number elsewhere in the value is code text, not
 # a line reference, and so are a version (``3.14:40``, ``1.2.3:40``) and a URL's
 # ``//host:port``.
 RECORD_LINE_PATH_RE = re.compile(
-	r"(?<![\w/.:-])`?[\w./-]*(?:/[\w.-]*|\.[A-Za-z][\w-]*)`?:L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
-RECORD_LINE_WORD_RE = re.compile(r"(?<![\w-])(?:[Ll]ines?\s*|L)(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
+	r"(?<![\w/.:-])`?[\w./-]*(?:/[\w.-]*|\.[A-Za-z][\w-]*)`?:L?(?P<start>\d+)" + RECORD_RANGE + RECORD_LINE_END)
+RECORD_LINE_WORD_RE = re.compile(r"(?<![\w-])(?:[Ll]ines?\s*|L)(?P<start>\d+)" + RECORD_RANGE + RECORD_LINE_END)
+# More lines listed right after the first reference (``1250, 1262``,
+# ``lines 1250 and 1262``): the record spans all of them.
+RECORD_LINE_MORE_RE = re.compile(
+	r"\s*(?:,|and\b|&)\s*(?:[Ll]ines?\s*)?L?(?P<start>\d+)" + RECORD_RANGE + RECORD_LINE_END)
 RECORD_LEADING_STRIP = " \t`(,;:—–-"
 RECORD_CONSENSUS_ID_RE = re.compile(
 	rf"^\s*(?:[-*]\s+)?{RECORD_MARKUP}consensus_id{RECORD_MARKUP}:{RECORD_MARKUP}\s*`?(?P<consensus_id>{CONSENSUS_ID_PATTERN})`?\s*$")
@@ -702,13 +717,43 @@ def _votes_in(text: str, manifest: dict[str, tuple[str, tuple[int, int], str]], 
 
 def _record_lines(value: str) -> tuple[int, int] | None:
 	"""The line range of an explicit reference: a leading number or range, else
-	the first ``path:N[-M]`` or ``line N`` / ``LN`` in the value. Code text such
-	as ``retries = 3`` reads no line, so the record has no readable line."""
-	match = RECORD_LINE_NUMBER_RE.match(value.lstrip(RECORD_LEADING_STRIP))
+	the first ``path:N[-M]`` or ``line N`` / ``LN`` in the value, widened over
+	any lines listed right after it (see _widen_lines()). Code text such as
+	``retries = 3`` reads no line, so the record has no readable line."""
+	stripped = value.lstrip(RECORD_LEADING_STRIP)
+	match = RECORD_LINE_NUMBER_RE.match(stripped)
 	if match is None:
+		stripped = value
 		found = [candidate for candidate in (RECORD_LINE_PATH_RE.search(value), RECORD_LINE_WORD_RE.search(value)) if candidate]
 		match = min(found, key=lambda candidate: candidate.start()) if found else None
-	return _range(match.group("start"), match.group("end")) if match else None
+	if match is None:
+		return None
+	return _widen_lines(_range(match.group("start"), match.group("end")), stripped, match.end())
+
+
+def _widen_lines(lines: tuple[int, int], value: str, position: int) -> tuple[int, int]:
+	"""Widen ``lines`` over the lines listed at ``position`` of ``value``
+	(``, 1262``, `` and lines 1270-1272``), so a record never reads narrower
+	than the lines it names (conformance run 2)."""
+	low, high = lines
+	while (more := RECORD_LINE_MORE_RE.match(value, position)) is not None:
+		extra = _range(more.group("start"), more.group("end"))
+		low, high = min(low, extra[0]), max(high, extra[1])
+		position = more.end()
+	return low, high
+
+
+def _record_path(path: str) -> str | None:
+	"""A record's normalized path: a trailing ``.`` or ``;`` (sentence
+	punctuation) is dropped, and nothing left is no path."""
+	return _norm_path(path).rstrip(".;") or None
+
+
+def _same_file(first: str, second: str) -> bool:
+	"""Whether two record paths may name the same file: equal, or one ends
+	with ``/`` plus the other (an absolute or workspace-prefixed path). Used
+	only to keep an entry blocking, so an over-match fails toward blocking."""
+	return first == second or first.endswith("/" + second) or second.endswith("/" + first)
 
 
 def flagger_finding_records(text: str) -> list[dict]:
@@ -719,10 +764,12 @@ def flagger_finding_records(text: str) -> list[dict]:
 	the next ``File:`` or ``Requirement:`` line, a REJECTED_FINDING line, a
 	heading, or a fence. Each record is a dict with ``path`` (None when the
 	``File:`` value does not start with a path: a word with no ``.`` or ``/``
-	followed by more text is prose), ``lines`` (None when no explicit line
-	reference (see _record_lines()) is read from the ``File:`` value, its
-	first ``Line or code reference:`` / ``Line:`` / ``Lines:`` field, or the
-	rest of the ``File:`` value), and ``consensus_ids``, the ids of the whole
+	followed by more text is prose; wrapping markup, quotes, or link brackets
+	and a trailing ``.`` / ``;`` are dropped), ``lines`` (None when no
+	explicit line reference (see _record_lines()) is read from the ``File:``
+	value, its first ``Line or code reference:`` / ``Line:`` / ``Lines:``
+	field, or the rest of the ``File:`` value; ``N to M`` is a range and a
+	list such as ``N, M`` spans all its lines), and ``consensus_ids``, the ids of the whole
 	``consensus_id:`` lines inside it. A consensus_id anywhere else in the
 	output (prose, a quote, a code block, a REJECTED_FINDING line, a line
 	after the record's blank line) belongs to no record and binds nothing.
@@ -749,11 +796,11 @@ def flagger_finding_records(text: str) -> list[dict]:
 			if path_match and not ("." in path_match.group("path") or "/" in path_match.group("path")
 					or not value[path_match.end():].strip()):
 				path_match = None
-			path = _norm_path(path_match.group("path")) if path_match else None
+			path = _record_path(path_match.group("path")) if path_match else None
 			lines = None
 			if path_match and path_match.group("start"):
-				lines = _range(path_match.group("start"), path_match.group("end"))
-			current = {"path": path or None, "lines": lines, "consensus_ids": [], "line_field_seen": False,
+				lines = _widen_lines(_range(path_match.group("start"), path_match.group("end")), value, path_match.end())
+			current = {"path": path, "lines": lines, "consensus_ids": [], "line_field_seen": False,
 				"file_rest": value[path_match.end():] if path_match else value}
 			records.append(current)
 			continue
@@ -892,7 +939,7 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 				for other_index, other in enumerate(ledger_locations)):
 			keep("ambiguous_nearby")
 			continue
-		if any(record is not cited and (record["path"] is None or (record["path"] == path and (record["lines"] is None
+		if any(record is not cited and (record["path"] is None or (_same_file(record["path"], path) and (record["lines"] is None
 				or _near(record["lines"], source_lines) or _near(record["lines"], lines)))) for record in flagger_records):
 			keep("ambiguous_flagger_nearby")
 			continue
