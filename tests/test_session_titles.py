@@ -177,6 +177,7 @@ def test_claude_md_keeps_the_check_in_title_exact_and_prefixes_fixer_and_report(
 	assert "this title never takes the `#<issue> · ` prefix other sessions carry, so the exact match holds" in claude_md
 	assert "the PR's source issue number when it has one (it goes first in a fresh fixer's title, §26.C step 5)" in claude_md
 	assert "`title` = `PR #<n> — fix <kind>` (with `#<issue> · ` in front when the instructions name a source issue)" in claude_md
-	assert "`PR #<n> closed — decision needed` (with `#<issue> · ` in front when the PR has a source issue)" in claude_md
+	# Both §26.D report titles (merged and closed) take the issue prefix.
+	assert "`PR #<n> merged — <no action needed | action needed>` or `PR #<n> closed — decision needed`, either title with `#<issue> · ` in front when the PR has a source issue" in claude_md
 	# The checker's terminal renames are unchanged.
 	assert "`PR #<n> <merged | closed> — handed to <fixer session id>`" in claude_md

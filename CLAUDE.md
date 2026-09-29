@@ -1971,8 +1971,8 @@ Then it runs the stale Routine sweep (§26.G), renames itself
 `session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}` in Bash rather than a
 `get_session` call) to
 `PR #<n> merged — <no action needed | action needed>` or
-`PR #<n> closed — decision needed` (with `#<issue> · ` in front when the
-PR has a source issue), and sends one `PushNotification` (one
+`PR #<n> closed — decision needed`, either title with `#<issue> · ` in
+front when the PR has a source issue, and sends one `PushNotification` (one
 line, under 200 characters) with the terminal state and whether action is
 needed, since the user is unlikely to be watching hours after the push.
 It sends it only for a terminal verdict, never on a non-terminal
