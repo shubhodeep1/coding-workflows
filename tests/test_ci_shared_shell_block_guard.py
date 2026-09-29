@@ -16,6 +16,9 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 GUARD_STEP_NAME = "Shared shell-block anti-regression checks"
+# Since #4707 CI runs as parallel jobs; the guard runs first in the fast
+# `static-checks` job, so it fails before the test jobs finish.
+GUARD_JOB_ID = "static-checks"
 
 INLINE_CODEX_SCANNED = ",".join(
 	(
@@ -62,7 +65,7 @@ WATCHDOG_SCANNED = ",".join(
 
 def _lint_steps() -> list[dict]:
 	workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
-	return workflow["jobs"]["lint"]["steps"]
+	return workflow["jobs"][GUARD_JOB_ID]["steps"]
 
 
 def _guard_body() -> str:
@@ -136,9 +139,24 @@ class GuardOrderingContractTest(unittest.TestCase):
 			"Setup Python",
 			"Install Python CI dependencies",
 			"YAML lint",
-			"Orchestrate poll implementation-failed regression fast-fail",
 		):
 			self.assertLess(guard_index, step_names.index(later_step))
+		self.assertEqual(
+			guard_index,
+			checkout_index + 1,
+			"every other step of the static-checks job must run after the guard",
+		)
+		self.assertEqual(checkout_index, 0)
+
+	def test_guard_runs_once_across_all_ci_jobs(self) -> None:
+		workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+		guard_jobs = [
+			job_id
+			for job_id, job in workflow["jobs"].items()
+			for step in job.get("steps", [])
+			if step.get("name") == GUARD_STEP_NAME
+		]
+		self.assertEqual(guard_jobs, [GUARD_JOB_ID])
 
 	def test_guard_contract_test_is_wired_into_ci(self) -> None:
 		workflow_text = CI_WORKFLOW.read_text(encoding="utf-8")

@@ -12,11 +12,14 @@ Run sequentially the module took
 `timeout-minutes` and left every CI run — on `main` as well as on PRs —
 cancelled mid-suite, so the repo had no completing full-test gate.
 
-The step now shards the module across `CI_POLL_TEST_SHARDS` workers.
-Two things have to hold for that to be safe:
+The step now shards the module across `CI_POLL_TEST_SHARDS` workers, and
+since #4707 the `orchestrate-poll` job runs as a matrix: each group first
+takes its `NR % total == n` slice of the module, then shards that slice
+locally with the same split. Two things have to hold for that to be safe:
 
-  1. the shard split must be a true partition — every test runs exactly
-     once, no duplicates and no silent drops;
+  1. the group split and the shard split must each be a true partition,
+     and so must their composition — every test runs exactly once, no
+     duplicates and no silent drops;
   2. a failing shard must fail the step.
 
 The partition property is what these tests pin hardest: a sharding bug
@@ -53,17 +56,37 @@ RELEASE_WORKFLOWS = {
 SHARD_AWK_RE = re.compile(
 	r"""awk -v n="\$\{shard\}" -v total="\$\{shards\}" '(?P<expr>[^']+)'"""
 )
+GROUP_AWK_RE = re.compile(
+	r"""awk -v n="\$\{poll_group\}" -v total="\$\{poll_groups\}" '(?P<expr>[^']+)'"""
+)
+POLL_JOB_ID = "orchestrate-poll"
 
 
 def load_lint_job() -> dict:
+	"""The aggregate `lint` job (it needs every other CI job since #4707)."""
 	return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]["lint"]
 
 
+def load_poll_job() -> dict:
+	return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"][POLL_JOB_ID]
+
+
+def poll_job_step(step_name: str) -> dict:
+	for step in load_poll_job()["steps"]:
+		if step.get("name") == step_name:
+			return step
+	raise AssertionError(f"{step_name!r} step not found in the ci.yml {POLL_JOB_ID} job")
+
+
 def poll_step() -> dict:
-	for step in load_lint_job()["steps"]:
+	for step in load_poll_job()["steps"]:
 		if step.get("name") == "Orchestrate poll process unit tests":
 			return step
 	raise AssertionError("orchestrate-poll step not found in ci.yml")
+
+
+def poll_group_count() -> int:
+	return len(load_poll_job()["strategy"]["matrix"]["poll-group"])
 
 
 def shard_awk_expression() -> str:
@@ -73,12 +96,19 @@ def shard_awk_expression() -> str:
 	return match.group("expr").strip()
 
 
+def group_awk_expression() -> str:
+	match = GROUP_AWK_RE.search(poll_step()["run"])
+	if match is None:
+		raise AssertionError("could not locate the group-split awk expression in ci.yml")
+	return match.group("expr").strip()
+
+
 class ShardPartitionTest(unittest.TestCase):
 	"""The awk split must lose nothing and duplicate nothing."""
 
-	def shard(self, lines: list[str], total: int, n: int) -> list[str]:
+	def shard(self, lines: list[str], total: int, n: int, expression: str | None = None) -> list[str]:
 		result = subprocess.run(
-			["awk", "-v", f"n={n}", "-v", f"total={total}", shard_awk_expression()],
+			["awk", "-v", f"n={n}", "-v", f"total={total}", expression or shard_awk_expression()],
 			input="\n".join(lines) + "\n",
 			capture_output=True,
 			text=True,
@@ -94,10 +124,27 @@ class ShardPartitionTest(unittest.TestCase):
 		self.assertCountEqual(collected, lines, f"count={count} shards={total}")
 		self.assertEqual(len(collected), len(set(collected)), "a test ran in more than one shard")
 
+	def assert_two_level_partition(self, count: int, groups: int, shards: int) -> None:
+		"""Group split, then the shard split inside each group, as ci.yml runs them."""
+		lines = [f"test_case_{i:04d}" for i in range(count)]
+		collected: list[str] = []
+		for group in range(groups):
+			group_lines = self.shard(lines, groups, group, group_awk_expression())
+			for n in range(shards):
+				collected.extend(self.shard(group_lines, shards, n))
+		self.assertCountEqual(collected, lines, f"count={count} groups={groups} shards={shards}")
+		self.assertEqual(len(collected), len(set(collected)), "a test ran in more than one group or shard")
+
 	def test_partition_holds_across_shard_counts(self) -> None:
 		for total in (1, 2, 3, 4, 5, 8):
 			with self.subTest(shards=total):
 				self.assert_partition(307, total)
+
+	def test_two_level_partition_holds_across_group_and_shard_counts(self) -> None:
+		for groups in (1, 4, 5):
+			for shards in (1, 4):
+				with self.subTest(groups=groups, shards=shards):
+					self.assert_two_level_partition(307, groups, shards)
 
 	def test_partition_holds_when_tests_are_fewer_than_shards(self) -> None:
 		for count in (0, 1, 2, 3):
@@ -131,6 +178,7 @@ class ShardPartitionTest(unittest.TestCase):
 			len(remaining_names), 100, "poll subset unexpectedly small; re-check the sharding math"
 		)
 		self.assert_partition(len(remaining_names), 4)
+		self.assert_two_level_partition(len(remaining_names), poll_group_count(), 4)
 
 
 class PollStepContractTest(unittest.TestCase):
@@ -147,6 +195,30 @@ class PollStepContractTest(unittest.TestCase):
 	def test_step_uses_a_locatable_partition_expression(self) -> None:
 		"""The partition tests above are only meaningful if this resolves."""
 		self.assertEqual(shard_awk_expression(), "NR % total == n")
+		self.assertEqual(group_awk_expression(), "NR % total == n")
+
+	def test_group_index_and_count_come_from_the_matrix(self) -> None:
+		self.assertEqual(self.step["env"]["CI_POLL_TEST_GROUP_INDEX"], "${{ strategy.job-index }}")
+		self.assertEqual(self.step["env"]["CI_POLL_TEST_GROUP_COUNT"], "${{ strategy.job-total }}")
+		self.assertEqual(load_poll_job()["strategy"]["matrix"]["poll-group"], [0, 1, 2, 3])
+		self.assertIs(load_poll_job()["strategy"]["fail-fast"], False)
+
+	def test_shards_read_the_group_slice_not_the_whole_subset(self) -> None:
+		group_split = self.run.index("/tmp/orchestrate_poll_group_tests.txt")
+		shard_split = self.run.index('awk -v n="${shard}"')
+		self.assertLess(group_split, shard_split)
+		shard_loop = self.run[shard_split:]
+		self.assertIn("/tmp/orchestrate_poll_group_tests.txt", shard_loop)
+		self.assertNotIn("/tmp/orchestrate_poll_remaining_tests.txt", shard_loop)
+
+	def test_invalid_group_fails_instead_of_dropping_tests(self) -> None:
+		self.assertIn("Invalid orchestrate-poll group", self.run)
+		guard = self.run.index("Invalid orchestrate-poll group")
+		self.assertLess(guard, self.run.index("/tmp/orchestrate_poll_group_tests.txt"))
+
+	def test_fast_fail_subset_runs_in_group_zero_only(self) -> None:
+		fast_fail = poll_job_step("Orchestrate poll implementation-failed regression fast-fail")
+		self.assertEqual(fast_fail["if"], "strategy.job-index == 0")
 
 	def test_missing_partition_expression_has_clear_failure(self) -> None:
 		with mock.patch(f"{__name__}.SHARD_AWK_RE") as missing_expression_pattern:
@@ -173,17 +245,24 @@ class PollStepContractTest(unittest.TestCase):
 		self.assertIn("is not a positive integer", self.run)
 
 	def test_the_three_single_file_modules_still_run(self) -> None:
+		group_zero_gate = self.run.index('if [ "${poll_group}" -eq 0 ]; then')
 		for module in (
 			"tests/test_orchestrate_poll_noop_suspicious_recovery.py",
 			"tests/test_state_snapshot.py",
 			"tests/test_run_substate_ledger.py",
 		):
 			self.assertIn(module, self.run)
+			self.assertEqual(self.run.count(module), 1)
+			self.assertLess(group_zero_gate, self.run.index(module), "single-file modules run once, in group 0")
 
 
 class JobBudgetTest(unittest.TestCase):
-	def test_lint_job_has_headroom_over_the_sharded_runtime(self) -> None:
-		self.assertEqual(load_lint_job()["timeout-minutes"], 45)
+	def test_poll_job_has_headroom_over_the_sharded_runtime(self) -> None:
+		# About 5 minutes per group measured (#4707); 20 covers a cold runner.
+		self.assertEqual(load_poll_job()["timeout-minutes"], 20)
+
+	def test_lint_aggregate_job_only_reads_results(self) -> None:
+		self.assertEqual(load_lint_job()["timeout-minutes"], 5)
 
 	def test_e2e_smoke_job_has_headroom_for_all_phase_budgets(self) -> None:
 		e2e_smoke_job = yaml.safe_load(
@@ -312,7 +391,7 @@ class ReleaseValidateScriptsShardContractTest(unittest.TestCase):
 		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
 			with self.subTest(workflow=workflow_name):
 				self.assertEqual(
-					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 45
+					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 60
 				)
 
 
