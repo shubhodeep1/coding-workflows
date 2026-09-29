@@ -13,8 +13,9 @@ env:
 jobs:
   static-checks:
     # The old single `lint` job ran every check in one runner and took
-    # 40-45 minutes (#4707). The checks are now split across parallel jobs
-    # and the final `lint` job below aggregates them into one status.
+    # 40-45 minutes, with a 60-minute stopgap budget (#4706). The checks are
+    # now split across parallel jobs (#4707), and the final `lint` job below
+    # aggregates them into one status.
     #
     # Static checks: shell-block guards, YAML lint, drift check, actionlint,
     # Python syntax and ruff, schema/prompt checks, and ShellCheck. About

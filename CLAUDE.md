@@ -1316,7 +1316,7 @@ and classifies it:
 |---|---|---|
 | read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion | not prompted by the hook |
 | routine | a §23.B write to the local checkout's repository (or `{owner}/{repo}`): create a PR; edit a PR's or issue's `title`/`body`; add or edit an issue or PR comment; reply to a review thread; add or remove one label; request reviewers; dispatch (`ref`, `inputs` only) one of the workflows `.claude/settings.json` already allows as `gh workflow run <file> *` (§23.C command-invoked carve-out) | not prompted by the hook |
-| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input`, a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a `$(...)` or backtick word, handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode |
+| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input`, a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a backtick or double-quoted `$(...)` substitution Bash would run — single-quoted text is data — handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode |
 
 The hook decides once for the whole Bash call: **ask** when any call is a
 write; **allow** when every call is a read or routine and the command
@@ -1840,33 +1840,44 @@ hand-back trigger id, a session id, and a role. There is at most one
 1. Run `PYTHONDONTWRITEBYTECODE=1 CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=<login>
    CLAUDE_FIXER_VERDICT_BOT_LOGIN=<bot login or empty> python3
    .claude/scripts/check_in_status.py --repo <owner>/<repo> --pr <n>
-   --hand-back`. It prints one JSON line: `done`, `state`, `reason`, and on
-   a `claude/*` head `kind`, `head_sha`, `claim`, and the hand-back counts
-   (§26.H). The script decides; the model does not interpret the PR. It
-   uses REST only (§15): one PR read, plus on a `claude/*` head the
-   comment and check-run pages and at most six further reads.
-2. **Not done** (`open`, `claimed`, `held`, or waiting on a run) → renew
-   the dead-man's switch on every subscriber's Routine (`update_trigger`
-   with only `run_once_at` = now + 7 days), call `send_later` with
-   `delay_minutes: 60`, `initiation: own_followup`, and `name` = `PR #<n>
-   status check-in` into the checker session, and end the turn. No
-   message to the user, no PR comment, no CI, review, comment, conflict,
-   or branch work: the checker never fixes anything.
-3. **Read failed** (exit 2) → call `send_later` the same way but do not
-   renew any Routine. A read that keeps failing therefore lets the
-   dead-man's switch fire within 7 days, and the pushing session looks
-   into it (§26.D).
-4. **Due fix** (`state` is `conflict`, `review-round`, `ci-failed`, or
-   `blocked`) → if this same `head_sha` and `state` were already handed
-   back, treat it as step 2 (the §26.H sweep covers a fixer that did not
-   act). Otherwise **hand back to the fixer only**: `update_trigger` on the
-   fixer's Routine with only `run_once_at` = now + 1 minute (never the
-   prompt), note the time, `head_sha`, and `state`, call `send_later` with
-   `delay_minutes: 10` and `name` = `PR #<n> status check-in: hand-back
-   check`, and end the turn.
-   **Terminal** (`merged` / `closed`) → stop re-arming and pull **every**
-   subscriber's Routine forward the same way, then arm the same 10-minute
-   check. The checker writes no report and sends no notification.
+   --hand-back`. It prints one JSON line: `done`, `state`, `reason`,
+   `action`, and on a `claude/*` head `kind`, `head_sha`, `claim`, and the
+   hand-back counts (§26.H). The script decides; the model does not
+   interpret the PR. It uses REST only (§15): one PR read, plus on a
+   `claude/*` head the comment and check-run pages and at most six
+   further reads. **Route on `action` only, never on `state`** (the
+   script maps it, `route_verdict`):
+
+   | `state`                                            | `action`          | step |
+   |----------------------------------------------------|-------------------|------|
+   | `open`, `claimed`, `held`, or waiting on a run     | `wait`            | 2    |
+   | read failed (exit 2)                               | `retry`           | 3    |
+   | `conflict`, `review-round`, `ci-failed`, `blocked` | `hand_back_fixer` | 4    |
+   | `merged`, `closed`                                 | `hand_back_all`   | 4    |
+
+2. **`action` is `wait`** (`open`, `claimed`, `held`, or waiting on a
+   run) → renew the dead-man's switch on every subscriber's Routine
+   (`update_trigger` with only `run_once_at` = now + 7 days), call
+   `send_later` with `delay_minutes: 60`, `initiation: own_followup`, and
+   `name` = `PR #<n> status check-in` into the checker session, and end
+   the turn. No message to the user, no PR comment, no CI, review,
+   comment, conflict, or branch work: the checker never fixes anything.
+3. **`action` is `retry`** (the read failed, exit 2) → call `send_later`
+   the same way but do not renew any Routine. A read that keeps failing
+   therefore lets the dead-man's switch fire within 7 days, and the
+   pushing session looks into it (§26.D).
+4. **`action` is `hand_back_fixer`** (a due fix: `state` is `conflict`,
+   `review-round`, `ci-failed`, or `blocked`) → if this same `head_sha`
+   and `state` were already handed back, treat it as step 2 (the §26.H
+   sweep covers a fixer that did not act). Otherwise **hand back to the
+   fixer only**: `update_trigger` on the fixer's Routine with only
+   `run_once_at` = now + 1 minute (never the prompt), note the time,
+   `head_sha`, and `state`, call `send_later` with `delay_minutes: 10` and
+   `name` = `PR #<n> status check-in: hand-back check`, and end the turn.
+   **`action` is `hand_back_all`** (terminal: `merged` / `closed`) → stop
+   re-arming and pull **every** subscriber's Routine forward the same way,
+   then arm the same 10-minute check. The checker writes no report and
+   sends no notification.
 5. **Hand-back check** (the 10-minute wake) → `get_trigger` on each
    Routine you pulled forward:
    - `last_run.status` is `ROUTINE_RUN_STATUS_SUCCEEDED`, `last_run.fired_at`
@@ -1909,20 +1920,22 @@ hand-back trigger id, a session id, and a role. There is at most one
 When the hand-back wakes the pushing session, it first runs
 `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py
 --repo <owner>/<repo> --pr <n> --hand-back` itself (the Routine carries no
-verdict; a woken `notify` subscriber does the same). Then, by `state`:
+verdict; a woken `notify` subscriber does the same). Then, by `action`
+(§26.C step 1):
 
-- **Due fix** (`conflict`, `review-round`, `ci-failed`, `blocked`, or a
-  claim of its own) and this session is the fixer → follow
+- **Due fix** (`hand_back_fixer`: `conflict`, `review-round`, `ci-failed`,
+  `blocked`; or `wait` with `state` `claimed` by a claim of its own) and
+  this session is the fixer → follow
   `.claude/commands/fix-claude-pr.md` **in this session** with the PR URL:
   it checks the §26.H cap, claims the head, fixes, verifies, pushes, then
   creates a new hand-back Routine (step 1) and registers it with the same
   checker as `fixer` (step 1b). The checker stays; never create a second
   one. A `notify` subscriber woken for a due fix (it should not be) only
   re-registers.
-- **Terminal** → write the report below. A `notify` subscriber writes it
-  for its own purpose and stops; the fixer finishes as described after
-  it. First, in this order, the fixer renames the checker (its id is in
-  this session's arming report) to
+- **Terminal** (`hand_back_all`) → write the report below. A `notify`
+  subscriber writes it for its own purpose and stops; the fixer finishes
+  as described after it. First, in this order, the fixer renames the
+  checker (its id is in this session's arming report) to
   `PR #<n> <state> — handed to <this session's id>` and archives it
   (`archive_session`), and only then deletes the fired Routine
   (`delete_trigger`, ignoring not-found). The order matters: the checker's
@@ -1930,12 +1943,12 @@ verdict; a woken `notify` subscriber does the same). Then, by `state`:
   hand-back, so the checker must be gone before the Routine is. The wake
   itself proves the hand-back arrived, so that check is no longer needed;
   its leftover reminder is removed by the sweep.
-- **Still open, claimed, or held** → the checker stopped renewing the
-  Routine for 7 days, or the fix is already owned: re-arm from §26.B step
-  1 (a new hand-back Routine, registered with the checker, or a fresh
-  checker when the old one is gone).
-- **Read failed** → say so in one line and re-arm the same way, so the
-  next wake retries.
+- **Still open, claimed, or held** (any other `wait`) → the checker
+  stopped renewing the Routine for 7 days, or the fix is already owned:
+  re-arm from §26.B step 1 (a new hand-back Routine, registered with the
+  checker, or a fresh checker when the old one is gone).
+- **Read failed** (`retry`) → say so in one line and re-arm the same
+  way, so the next wake retries.
 
 The pushing session writes the report (the checker writes it only in the
 §26.C step 5 fallback) for a terminal PR, in that session, where the user
@@ -2031,8 +2044,12 @@ sweep runs in the sessions that create them, never in Actions:
   panel still reviews, but the GPT editor, conflict resolver, and
   review-blocked judge never run. The workflow posts a hand-off comment
   for findings, failing checks, or a pre-review conflict, and auto-merges
-  only after a clean review with fresh, ready checks. So a Claude session
-  must fix these PRs: the pushing session through its §26 hand-back, a
+  only after a clean review with fresh, ready checks. A `claude/*` PR that
+  qualifies for the deterministic doc-only or small-diff skip takes it like
+  any other PR (`ai:review-skipped`, head-bound auto-merge, no review), except
+  on a `claude_fixer_converged_head` verification run or while a hand-off
+  for the current head is pending. Every `claude/*` PR that gets a hand-off
+  or a block must be fixed by a Claude session: the pushing session through its §26 hand-back, a
   fresh `/fix-claude-pr` session when that session is gone, the
   `/implement-plan-claude` chain for its own PRs, or the sweep below.
 - **Claims stop duplicate fixers.** Before any fix, the fixer claims the
