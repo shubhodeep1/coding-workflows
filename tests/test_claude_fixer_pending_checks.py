@@ -495,6 +495,39 @@ def test_a_failed_run_listing_read_raises_for_the_sweep_to_log(fake_gh):
 	assert fake_gh.merges() == []
 
 
+_DROP = object()
+
+
+def _malformed(run: dict, **fields) -> dict:
+	run = dict(run)
+	for key, value in fields.items():
+		if value is _DROP:
+			run.pop(key)
+		else:
+			run[key] = value
+	return run
+
+
+@pytest.mark.parametrize("label, branch_runs, listings", [
+	# PR #5183 review round 1: a run that cannot be ordered against the
+	# marker's run, or classified as active, fails the read instead of being
+	# skipped (a newer failed review with a string id used to be ignored).
+	("newer failed head-branch review with a string id", [_malformed(_run(RUN_ID + 1, conclusion="failure"), id=str(RUN_ID + 1))], {}),
+	("head-branch run with no id", [_malformed(_run(RUN_ID + 1), id=_DROP)], {}),
+	("sweep dispatch for this PR with a boolean id", [], {"internal-review.yml": [_malformed(_dispatch(RUN_ID + 2), id=True)]}),
+	("head-branch run with no status", [_malformed(_run(RUN_ID + 1), status=_DROP)], {}),
+	("unbound dispatch with a null status", [],
+		{"review_autofix.yml": [_malformed(_run(RUN_ID + 3, workflow="review_autofix.yml", event="workflow_dispatch",
+			head_branch="main"), status=None)]}),
+])
+def test_a_malformed_run_in_a_listing_raises_for_the_sweep_to_log(fake_gh, label, branch_runs, listings):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
+		dispatch_runs=_dispatch_runs(**listings))
+	with pytest.raises(pending_checks.check_in_status.ReadError, match="malformed runs listing"):
+		_evaluate()
+	assert fake_gh.merges() == [], label
+
+
 def test_a_missing_head_branch_runs_listing_is_not_read_as_no_runs(fake_gh, monkeypatch):
 	# Only a review workflow's dispatch listing may 404 (the workflow does not
 	# exist in that repo); the head-branch listing always exists.

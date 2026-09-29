@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
 - Project branch: claude/implement-plan-issue-5148-pending-checks-newer-review-race   Final PR: #5178 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR from `claude/implement-plan-issue-5148-pending-checks-newer-review-race-phase-1` (its number is in the checker's resume block and the stage report)
+- Waiting on: PR #5183
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: project checker armed after the phase 1 PR opened (ids in the stage report and the resume block)
+- Check-in: checker session_01HRuW9tokc4gWgq1vPau85k   safety net and hand-back: ids in the review-round stage report
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified: `check_review_runs()` defers the pending-checks merge (`review_active` / `review_superseded`); 94 tests in `tests/test_claude_fixer_pending_checks.py` pass, 14 new cases fail on the unfixed evaluator.
+- Last note: review round 1 (session session_01To6wvsi1wxqK6uYp8uVUKG): 2 of 3 minimax findings fixed in one `[claude-autofix]` commit (a runs listing with a run lacking an integer `id` or string `status` now raises `ReadError`), 1 rejected (the comments re-read is already validated by `gh_api_list`); 99 tests pass.
 
 ## Phases
-1. [ ] Phase 1 — defer the pending-checks merge while a newer review is active or unsettled   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — defer the pending-checks merge while a newer review is active or unsettled   — PR #5183 open (waiting); review rounds: 1; interventions: 0
    - `check_review_runs()` in `scripts/claude_fixer_pending_checks.py`: head-branch runs, `[pr:<N>]` internal-review dispatches, unbound `review_autofix.yml` / `ai-review.yml` dispatches
    - `evaluate()` returns `review_active` / `review_superseded` and re-reads the marker before merging
    - Tests: the audit's exploit scenario and every defer / supersede path; existing #4900 suites green
@@ -43,6 +43,7 @@
 - [source:security] Before an automated job enables auto-merge from an earlier review's result, it must check for newer reviews of the same PR that are still running (including dispatches from the default branch, whose check runs never attach to the PR head) and re-read the result after that check; nothing disables auto-merge once a later review finds a problem. (files: scripts/claude_fixer_pending_checks.py)
 
 ## Notes
+- Review round 1 (2026-09-29, head a697863): F1 (run with no `status`) fixed; the old code already failed closed but reported it as an active run. F2 (run with a non-integer `id`) fixed; the superseded check skipped such a run (fail open), while its `TypeError` claim about `marker_run_id` was wrong (always an `int`). F3 (comments re-read unvalidated) rejected: `check_in_status.gh_api_list` raises `ReadError` on a non-array page or a non-object item.
 - Issue-mode project started by the Claude issue dispatcher routine (trigger trig_01REnV4f26hDKipeNXXCHKgR) in session session_01AnxtvQ843pzNkV2iTQRcJc (Auto mode). Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5148#issuecomment-5891537425
 - Security pass: skip (`security_pass_skip.py`: `ai:security` created and labelled by the issue automation).
 - Base branch is the #4900 project branch (final PR #4922, open at start). The final PR targets it, so the final-merge stage closes #5148 explicitly and activation is n/a.

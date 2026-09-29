@@ -287,7 +287,13 @@ def verify_review_run(repo: str, marker: dict, head_sha: str, head_ref: str,
 
 
 def _read_review_run_listing(path: str, missing_ok: bool = False) -> list[dict] | None:
-	"""The `workflow_runs` of one Actions runs listing; with `missing_ok`, None when the workflow does not exist (404)."""
+	"""The `workflow_runs` of one Actions runs listing; with `missing_ok`, None when the workflow does not exist (404).
+
+	Every run must carry an integer `id` and a string `status`; a run without
+	them cannot be ordered against the marker's run or classified as active,
+	so the listing raises `check_in_status.ReadError` instead of being read
+	around (fail closed).
+	"""
 	try:
 		listing = check_in_status.gh_api(path)
 	except check_in_status.ReadError as exc:
@@ -295,7 +301,9 @@ def _read_review_run_listing(path: str, missing_ok: bool = False) -> list[dict] 
 			return None
 		raise
 	runs = listing.get("workflow_runs")
-	if not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs):
+	if not isinstance(runs, list) or any(
+		not isinstance(run, dict) or type(run.get("id")) is not int or not isinstance(run.get("status"), str) for run in runs
+	):
 		raise check_in_status.ReadError(f"gh api {path} returned a malformed runs listing")
 	return runs
 
@@ -318,7 +326,8 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	(`check_in_status.DISPATCHED_REVIEW_RUNS_PATH`) and of each
 	UNBOUND_DISPATCH_REVIEW_WORKFLOWS entry (1 call each, newest 100 runs; a
 	404 there, the workflow not existing in that repo, is no runs). Any other
-	failed read, a 404 on the head-branch listing included, raises
+	failed read, a 404 on the head-branch listing included, and a listing
+	with a run that has no integer `id` or string `status` raise
 	`check_in_status.ReadError`.
 
 	Output: None, or {"state": "review_active" | "review_superseded",
@@ -351,7 +360,7 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 		names = ", ".join(sorted({f"{_run_path(run) or 'unknown workflow'} run {run.get('id')} ({run.get('status')})" for run in active}))
 		return {"state": "review_active", "reason": f"a newer review of this PR may still be running: {names}"}
 	bound_reviews = [run for run in branch_runs if _run_path(run) in check_in_status.FIXER_WORKFLOW_PATHS] + bound_dispatches
-	newer = [run for run in bound_reviews if type(run.get("id")) is int and run["id"] > marker_run_id]
+	newer = [run for run in bound_reviews if run["id"] > marker_run_id]
 	if newer:
 		latest = max(newer, key=lambda run: run["id"])
 		if latest.get("conclusion") != "success":
