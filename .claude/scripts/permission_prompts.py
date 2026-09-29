@@ -348,7 +348,11 @@ def _is_redirect(token: str) -> bool:
 
 
 def _is_heredoc_operator(token: str) -> bool:
-	"""A `<<` or `<<-` heredoc operator; a `<<<` herestring has no heredoc body."""
+	"""A `<<` heredoc operator token; a `<<<` herestring has no heredoc body.
+
+	No `<<-` token reaches this: the lexer splits `<<-WORD` into `<<` and
+	`-WORD`, so a `<<-` heredoc is counted through its `<<` token.
+	"""
 	return _is_redirect(token) and token.startswith("<<") and not token.startswith("<<<")
 
 
