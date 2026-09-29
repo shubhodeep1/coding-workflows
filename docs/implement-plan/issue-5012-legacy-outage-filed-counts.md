@@ -3,15 +3,15 @@
 - Plan: docs/plans/issue-5012-legacy-outage-filed-counts-plan.md
 - Source issue: shubhodeep1/coding-workflows#5012
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4750-classifier-outage-get-session
-- Project branch: claude/implement-plan-issue-5012-legacy-outage-filed-counts   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5012-legacy-outage-filed-counts   Final PR: #5028 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
 - Waiting on: none
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened; phase 1 touches a protected path and needs a Protected-path approval before it starts
+- Last note: project branch and draft final PR #5028 opened; phase 1 not started — it edits `.claude/scripts/permission_prompts.py` (protected path) and no `Protected-path approval: phase 1` line is recorded (CLAUDE.md §28.C); asked on #5012
 
 ## Phases
 1. [ ] Phase 1 — record-level filed state with legacy migration — protected paths: .claude/scripts/permission_prompts.py
@@ -35,4 +35,6 @@
 ## Lessons
 
 ## Notes
+- Blocked 2026-09-29 before phase 1: protected-path approval asked on #5012 (`ai:claude-blocked`). Answer with a `Protected-path approval: phase 1 — <letter> (<date>)` line and `/reclarify`.
+- This log update was pushed directly to the project branch as part of step 3a (no phase PR is in flight to carry it), so a resumed stage sees `Final PR: #5028` and does not open a second final PR.
 - Started by the Claude issue dispatcher routine (trigger trig_01FzNj7jt3iTsxF8CUydykuf) in session session_01FxPzZDsebojWQPAqJirYk1; `gh` was installed by running `.claude/hooks/session-start.sh` because the repository was attached mid-session; the GitHub MCP tools were not available, so issue and PR writes used `gh api` REST calls the §23.H guard classifies as routine.
