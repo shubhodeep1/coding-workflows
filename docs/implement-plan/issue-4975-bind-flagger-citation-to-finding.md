@@ -6,19 +6,20 @@
 - Base branch: claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason
 - Project branch: claude/implement-plan-issue-4975-bind-flagger-citation-to-finding   Final PR: #5026 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3 — review round
+- Stage: conformance 2/3
 - Activation: not started
-- Waiting on: PR #5060 (conformance fix 1, review round 2)
+- Waiting on: PR #5116 (conformance fix 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_014rdmhD1aoaX4meJcY3BWPS (project checker, reused)
 - Last updated: 2026-09-29
-- Last note: PR #5060 review round 1: fixed the `path:N` reader so a version (`3.14:40`) or a URL's `host:port` reads no line; rejected the `:40` leading-colon finding (editor line shorthand, intended). Earlier: conformance run 1 INCOMPLETE (Step 4 FAIL: the record parser read code-text digits as lines, missed numbered/heading File: lines, and read prose File: values as paths, so a second same-line flagger finding escaped ambiguous_flagger_nearby); conformance fix PR opened (AD-6..AD-8).
+- Last note: Conformance run 2 INCOMPLETE (Step 4 FAIL: a second flagger finding escaped `ambiguous_flagger_nearby` when its `File:` path was decorated or absolute, or its lines were written `N to M` / `N, M`); conformance fix PR #5116 opened (AD-9, AD-10). Before the run the project branch took the issue base (which had merged the issue-4976 project) as `[claude-merge-resolve]` a22f301. Earlier: PR #5060 merged 2026-09-29 as 453b439.
 
 ## Phases
 1. [x] Phase 1 — bind the flagger citation to a structured finding record (scripts/review_claude_fixer_nonblocking.py, scripts/review_run_reviewers.sh header sentence, tests, README.md, agents.md, changelog fragment)   — PR #5032 merged 2026-09-29; review rounds: 0; interventions: 0
 
 ## Conformance
-- Run 1 — 2026-09-29: INCOMPLETE (Step 4 FAIL, 3 EVIDENCE-BASED findings in `flagger_finding_records()`) — fix PR #5060 (waiting; review rounds: 1) (pre-security)
+- Run 1 — 2026-09-29: INCOMPLETE (Step 4 FAIL, 3 EVIDENCE-BASED findings in `flagger_finding_records()`) — fix PR #5060 merged 2026-09-29 as 453b439; review rounds: 2 (round 2: both findings rejected, does not reproduce / no defect; head held with no verdict bot, merged by the master session under its Q46) (pre-security)
+- Run 2 — 2026-09-29: INCOMPLETE (Step 4 FAIL, 2 EVIDENCE-BASED BLOCKERs in `flagger_finding_records()`: decorated / absolute `File:` paths read as another file, `N to M` / `N, M` / `N-M.` read only line N; both let a second same-line flagger finding escape `ambiguous_flagger_nearby`) — fix PR #5116 (waiting) (pre-security)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue; `.claude/scripts/security_pass_skip.py` printed `"skip": true`).
@@ -38,12 +39,16 @@
 - AD-6 [conformance 1/3, 2026-09-29] Which values of a finding record's line field count as a line reference? — Picked: A — only an explicit reference: a leading number or range, `path:N[-M]` (path with `.` or `/`), `line N` / `lines N-M`, or `LN`; code text reads no line, which keeps the entry blocking. Alternatives: B — strip inline code spans, then take any number; C — keep taking the first number anywhere. Why: `Line or code reference:` carries code text by design (the runner prompt's own example is code), B still misreads unquoted code, and A fails toward blocking (§1). Applied in: conformance fix PR. Status: pending review
 - AD-7 [conformance 1/3, 2026-09-29] Which `File:` line shapes start a finding record? — Picked: A — plain, `-` / `*` bulleted, numbered (`1.` / `1)`), and Markdown-heading (`### File:`) lines. Alternatives: B — add numbered items only; C — keep plain and bulleted only. Why: a second finding in a numbered or heading item was invisible to the ambiguity check; more records only keep more entries blocking. Applied in: conformance fix PR. Status: pending review
 - AD-8 [conformance 1/3, 2026-09-29] When does a `File:` value name a readable path? — Picked: A — when its leading token contains `.` or `/`, or is the whole value (optionally `:N`); prose such as `the install example, line 1261` names no file, which keeps a nearby entry blocking. Alternatives: B — any leading token (as before); C — require `.` or `/` always. Why: B let a prose-described second finding escape the check; C would also drop `File: Makefile:12`. Extensionless files followed by prose lose demotion, the fail-toward-blocking direction. Applied in: conformance fix PR. Status: pending review
+- AD-9 [conformance 2/3, 2026-09-29] Which spellings of a record's `File:` path name the entry's file? — Picked: A — drop wrapping markup, quotes, angle and link brackets and a trailing `.` / `;`; for the second-finding check only, also count a path that ends with `/` plus the entry's path (or the reverse). Alternatives: B — treat any decorated path as unreadable, leaving absolute paths escaping; C — no change. Why: fails toward blocking (§1) in the ambiguity check while the citation stays bound to an exact file. Applied in: PR #5116. Status: pending review
+- AD-10 [conformance 2/3, 2026-09-29] How are multi-line references read? — Picked: A — `N to M` / `N through M` is a range, a list right after the first reference (`, N` / `and N` / `& N`) widens the span, and a closing sentence period no longer drops a range. Alternatives: B — treat any multi-number value as unreadable; C — no change. Why: a record never reads narrower than the lines it names; B would also stop well-formed citations from demoting. Applied in: PR #5116. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] Tightening how a reviewer's raw output is parsed breaks test fixtures that model that output loosely; search every test that writes review_<slug>.txt (tests/test_review_autofix_claude_fixer_mode.py as well as the script's own suite) before changing the parser. (files: tests/test_review_autofix_claude_fixer_mode.py, scripts/review_claude_fixer_nonblocking.py)
 - [source:conformance] A parser that reads locations from free-form reviewer output must fail toward "unreadable": take a line only from an explicit reference (`path:N`, `line N`, a leading number), never the first digit in the value, and treat prose where a path belongs as no path, because a wrong readable location silently defeats proximity-based safety checks. (files: scripts/review_claude_fixer_nonblocking.py)
+- [source:conformance] When a safety check compares locations parsed from free-form output, normalize every spelling of the same location (decorated or absolute paths, `N to M` ranges, line lists) before comparing, and let the comparison over-match where a match keeps the safe outcome; an exact-string compare silently turns a variant spelling into "somewhere else". (files: scripts/review_claude_fixer_nonblocking.py)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude from #4975; security pass skipped per plan header.
 - The session had neither `gh` nor the `mcp__github__*` tools at start (repo cloned after SessionStart); the repo's SessionStart hook was run by hand to install `gh`, and GitHub writes go through `gh api` REST.
 - Conformance run 1: `tests/test_review_issue_ledger.py`, `tests/test_review_parse_consolidator.py`, `tests/test_review_pipeline_integration.py`, and `tests/test_review_reject_verify.py` fail in the stage container because `gawk` is not installed; they fail identically without the fix and do not touch the filter.
+- Conformance run 2: the issue base had merged the issue-4976 project (source-grounded rejection votes, #5027); the stage sync conflicted in the parser constants and the `REJECTING_REVIEWS` fixture, resolved keeping both sides (a22f301). The four gawk-dependent review suites pass once `gawk` is installed (975 passed).
