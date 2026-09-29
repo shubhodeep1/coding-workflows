@@ -110,6 +110,9 @@ def test_checker_matchers_accept_both_title_forms(plan_cmd):
 		"PR #4943 — implement-plan issue-4886-numbered-session-titles — checker",
 		"implement-plan issue-4886-numbered-session-titles — waiting: PR #4950",
 		"#4886 · PR #4950 — implement-plan issue-4886-numbered-session-titles — waiting: PR #4950",
+		# Renamed by hand: free text before the phrase, the phrase mid-string.
+		"old checker (renamed) implement-plan issue-4886-numbered-session-titles — checker, keep",
+		"issue shubhodeep1/coding-workflows#4886 — implement-plan issue-4886-numbered-session-titles — waiting: run 123 (manual)",
 	],
 )
 def test_checker_titles_old_new_and_hand_prefixed_all_match(title):
