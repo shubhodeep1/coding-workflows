@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMAND = ROOT / ".claude" / "commands" / "audit-plans.md"
@@ -16,7 +17,7 @@ TEMPLATE_COMMAND = ROOT / "workflow-templates" / ".claude" / "commands" / "audit
 
 @pytest.fixture(scope="module")
 def text() -> str:
-	return " ".join(COMMAND.read_text(encoding="utf-8").split())
+	return " ".join(TEMPLATE_COMMAND.read_text(encoding="utf-8").split())
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +28,8 @@ def step6(text) -> str:
 
 
 def test_template_parity():
-	assert TEMPLATE_COMMAND.read_text(encoding="utf-8") == COMMAND.read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("commands/audit-plans.md")
 
 
 def test_gate_enumerates_orchestrator_projects(step6):

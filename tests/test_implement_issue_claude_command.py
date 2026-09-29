@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import claude_issue_route as route  # noqa: E402
+from claude_twin_state import assert_claude_not_ahead
 
 COMMANDS = ROOT / ".claude" / "commands"
 TEMPLATE_COMMANDS = ROOT / "workflow-templates" / ".claude" / "commands"
@@ -24,17 +25,17 @@ def _flat(path: Path) -> str:
 
 @pytest.fixture(scope="module")
 def issue_cmd() -> str:
-	return _flat(COMMANDS / "implement-issue-claude.md")
+	return _flat(TEMPLATE_COMMANDS / "implement-issue-claude.md")
 
 
 @pytest.fixture(scope="module")
 def dispatch_cmd() -> str:
-	return _flat(COMMANDS / "claude-issue-dispatch.md")
+	return _flat(TEMPLATE_COMMANDS / "claude-issue-dispatch.md")
 
 
 @pytest.fixture(scope="module")
 def plan_cmd() -> str:
-	return _flat(COMMANDS / "implement-plan-claude.md")
+	return _flat(TEMPLATE_COMMANDS / "implement-plan-claude.md")
 
 
 @pytest.fixture(scope="module")
@@ -44,7 +45,8 @@ def claude_md() -> str:
 
 @pytest.mark.parametrize("name", NAMES)
 def test_template_parity(name):
-	assert (TEMPLATE_COMMANDS / name).read_text(encoding="utf-8") == (COMMANDS / name).read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead(f"commands/{name}")
 
 
 def test_section_28_scope_covers_issue_mode(claude_md):
@@ -58,7 +60,7 @@ def test_section_28_scope_covers_issue_mode(claude_md):
 
 
 def test_plan_command_issue_mode_contract(plan_cmd):
-	text = (COMMANDS / "implement-plan-claude.md").read_text()
+	text = (TEMPLATE_COMMANDS / "implement-plan-claude.md").read_text()
 	assert "## Issue Mode" in text
 	assert "Base branch: <issue base>" in plan_cmd
 	assert "the final PR's `base` is `<issue base>`" in plan_cmd
@@ -165,7 +167,7 @@ def test_dispatcher_payload_keys_match_router(dispatch_cmd):
 
 
 def test_issue_label_and_comment_tools_are_allowlisted():
-	settings = (ROOT / ".claude" / "settings.json").read_text()
+	settings = (ROOT / "workflow-templates" / ".claude" / "settings.json").read_text()
 	for tool in ("mcp__github__issue_write", "mcp__github__add_issue_comment", "mcp__github__update_issue_comment"):
 		assert f'"{tool}"' in settings
 
@@ -280,7 +282,7 @@ def test_pickup_fails_closed_and_never_comments(pickup_cmd):
 def test_pickup_tools_are_allowlisted():
 	import json as _json
 
-	allow = _json.loads((ROOT / ".claude" / "settings.json").read_text())["permissions"]["allow"]
+	allow = _json.loads((ROOT / "workflow-templates" / ".claude" / "settings.json").read_text())["permissions"]["allow"]
 	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py queue-pending *)" in allow
 	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py arm-check-in-request *)" in allow
 	for tool in ("create_session", "create_trigger", "list_triggers", "delete_trigger", "archive_session", "get_session", "set_session_title"):

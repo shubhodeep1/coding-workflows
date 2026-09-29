@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / ".claude" / "scripts"
@@ -17,7 +18,7 @@ TEMPLATE_SCRIPTS = ROOT / "workflow-templates" / ".claude" / "scripts"
 
 
 def _load():
-	spec = importlib.util.spec_from_file_location("security_pass_skip", SCRIPTS / "security_pass_skip.py")
+	spec = importlib.util.spec_from_file_location("security_pass_skip", TEMPLATE_SCRIPTS / "security_pass_skip.py")
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return module
@@ -317,11 +318,12 @@ def test_skip_labels_match_the_router():
 
 
 def test_template_copy_matches():
-	assert (SCRIPTS / "security_pass_skip.py").read_bytes() == (TEMPLATE_SCRIPTS / "security_pass_skip.py").read_bytes()
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("scripts/security_pass_skip.py")
 
 
 def test_settings_allow_the_script():
-	for settings in (ROOT / ".claude" / "settings.json", ROOT / "workflow-templates" / ".claude" / "settings.json"):
+	for settings in (ROOT / "workflow-templates" / ".claude" / "settings.json",):
 		allow = json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"]
 		assert "Bash(python3 .claude/scripts/security_pass_skip.py *)" in allow, settings
 		assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/security_pass_skip.py *)" in allow, settings

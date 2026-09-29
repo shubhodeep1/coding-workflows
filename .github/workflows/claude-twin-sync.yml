@@ -1,0 +1,121 @@
+---
+name: Claude Twin Sync
+
+# Copies workflow-templates/.claude/** into .claude/** through one sync PR
+# (CLAUDE.md §28.C, issue #4785).
+#
+# Claude Code never auto-approves an edit under .claude/**, so unattended
+# sessions edit only the unprotected twin, workflow-templates/.claude/**. Once
+# a twin change is on the default branch, scripts/claude_twin_sync.py copies
+# each changed twin file into .claude/** on claude/claude-twin-sync-<sha> and
+# opens (or updates, never duplicates) one PR:
+#   - Commands and scripts only: the script merges the PR once every check
+#     run on its head has passed (CI's lint included) and every changed file
+#     equals the default branch's twin.
+#   - Hooks or settings (.claude/hooks/**, .claude/settings.json,
+#     .claude/settings.local.json), or a conflict (a .claude/ file changed
+#     directly): labelled ai:claude-sync-approval, one Telegram alert per new
+#     head. The workflow never approves, merges, or enables auto-merge on it;
+#     the repository owner reviews and merges it. The status
+#     claude-twin-sync/owner-approval reports whether the owner's latest review
+#     approves the current head.
+# Sync PRs carry [skip ai]; review_autofix.yml and the CLAUDE.md §26.H sweep
+# also skip their head ref, so AI review can never merge a guard change.
+#
+# Triggers: a push that changed a twin, an hourly catch-up, a manual run, CI
+# finishing on a sync branch (the merge attempt), and a review on a sync PR
+# (the approval status). Every trigger runs the same idempotent pass.
+#
+# Credentials: GITHUB_TOKEN reads; GH_PAT is passed only to the sync step, for
+# the push, the PR writes, the label, the status, and the merge. The checkout
+# does not persist credentials, and no session environment variable is read
+# (CLAUDE.md §23.E / §24.G). Consumers are not affected: they receive the twin
+# at @stable through update_workflows.yml and never read this repo's .claude/.
+
+"on":
+  push:
+    branches:
+      - main
+    paths:
+      - "workflow-templates/.claude/**"
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch: {}
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - "claude/claude-twin-sync-*"
+  pull_request_review:
+    types:
+      - submitted
+      - dismissed
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  statuses: read
+
+concurrency:
+  group: claude-twin-sync-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+
+jobs:
+  sync:
+    if: github.repository == 'shubhodeep1/coding-workflows' && (github.event_name != 'pull_request_review' || startsWith(github.event.pull_request.head.ref, 'claude/claude-twin-sync-'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout the default branch with full history
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Sync .claude/ from workflow-templates/.claude/
+        id: sync
+        env:
+          CLAUDE_TWIN_SYNC_READ_TOKEN: ${{ github.token }}
+          CLAUDE_TWIN_SYNC_WRITE_TOKEN: ${{ secrets.GH_PAT }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          summary_file="${RUNNER_TEMP}/claude-twin-sync-summary.json"
+          python3 scripts/claude_twin_sync.py run \
+            --repo "${GITHUB_REPOSITORY}" \
+            --owner "${GITHUB_REPOSITORY_OWNER}" \
+            --ref "origin/${DEFAULT_BRANCH}" \
+            --default-branch "${DEFAULT_BRANCH}" \
+            --summary-file "${summary_file}"
+          {
+            echo "## Claude twin sync"
+            echo ""
+            echo '```json'
+            cat "${summary_file}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          alert="$(jq -r '.alert // ""' "${summary_file}" | tr '\n' ' ')"
+          echo "alert=${alert}" >> "${GITHUB_OUTPUT}"
+
+      - name: Alert the operator (owner review needed)
+        if: steps.sync.outputs.alert != ''
+        env:
+          ALERT_TEXT: ${{ steps.sync.outputs.alert }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source scripts/tg_helpers.sh
+          tg_send_msg "${ALERT_TEXT}"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true

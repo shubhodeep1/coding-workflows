@@ -1000,7 +1000,7 @@ def test_arm_check_in_request_returns_fixed_fields():
 		),
 	}
 	# The stale Routine sweep must recognise both triggers this flow creates.
-	sys.path.insert(0, str(ROOT / ".claude" / "scripts"))
+	sys.path.insert(0, str(ROOT / "workflow-templates" / ".claude" / "scripts"))  # the twin (CLAUDE.md §28.C)
 	import stale_routines  # noqa: E402
 
 	assert stale_routines.CHECK_IN_NAME_PATTERN.match(parsed["ready_trigger_name"])

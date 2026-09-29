@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMAND = ROOT / ".claude" / "commands" / "implement-plan-claude.md"
@@ -24,11 +25,12 @@ def _flat(path: Path) -> str:
 
 @pytest.fixture(scope="module")
 def text() -> str:
-	return " ".join(COMMAND.read_text(encoding="utf-8").split())
+	return " ".join(TEMPLATE_COMMAND.read_text(encoding="utf-8").split())
 
 
 def test_template_parity():
-	assert TEMPLATE_COMMAND.read_text(encoding="utf-8") == COMMAND.read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("commands/implement-plan-claude.md")
 
 
 def test_validation_verdict_reads_status_json_first(text):
@@ -233,7 +235,7 @@ def test_every_started_session_runs_opus_at_high_effort(text):
 
 def test_stage_sessions_claim_before_fixing(text):
 	"""Q22: a stage session claims the PR head so the §26.H sweep never duplicates it."""
-	assert "### Claims" in COMMAND.read_text(encoding="utf-8")
+	assert "### Claims" in TEMPLATE_COMMAND.read_text(encoding="utf-8")
 	assert ".claude/scripts/claude_fix_claim.py post" in text
 	assert "[Claim the head](#claims) (`--kind review` for findings, `--kind conflict` for a conflict)" in text
 	assert "[claim the head](#claims) (`--kind blocked`, or `--kind ci` for a stuck PR)" in text

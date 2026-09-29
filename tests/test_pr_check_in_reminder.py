@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -77,7 +78,7 @@ SILENT_COMMANDS = [
 
 
 def _load_hook():
-	spec = importlib.util.spec_from_file_location("pr_check_in_reminder", HOOK_PATH)
+	spec = importlib.util.spec_from_file_location("pr_check_in_reminder", TEMPLATE_HOOK_PATH)
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
@@ -91,7 +92,7 @@ def _run_hook(stdin_text: str) -> subprocess.CompletedProcess:
 	env = dict(os.environ)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	return subprocess.run(
-		[sys.executable, str(HOOK_PATH)],
+		[sys.executable, str(TEMPLATE_HOOK_PATH)],
 		input=stdin_text,
 		capture_output=True,
 		text=True,
@@ -253,7 +254,7 @@ def test_hook_has_no_environment_escape_hatch_and_no_api_calls():
 	env["CLAUDE_PR_MERGE_GUARD"] = "off"
 	env["CLAUDE_PR_CHECK_IN_REMINDER"] = "off"
 	result = subprocess.run(
-		[sys.executable, str(HOOK_PATH)],
+		[sys.executable, str(TEMPLATE_HOOK_PATH)],
 		input=json.dumps({"tool_name": "mcp__github__create_pull_request", "tool_input": {}}),
 		capture_output=True,
 		text=True,
@@ -262,7 +263,7 @@ def test_hook_has_no_environment_escape_hatch_and_no_api_calls():
 	)
 	assert result.returncode == 0
 	assert json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"] == hook.REMINDER
-	source = HOOK_PATH.read_text(encoding="utf-8")
+	source = TEMPLATE_HOOK_PATH.read_text(encoding="utf-8")
 	assert "os.environ" not in source
 	assert "getenv" not in source
 	assert "subprocess" not in source
@@ -317,7 +318,7 @@ def _reminder_entries(path: Path) -> list[dict]:
 	]
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_settings_wire_the_reminder_once_under_the_documented_matcher(path):
 	entries = _reminder_entries(path)
 	assert len(entries) == 1
@@ -330,7 +331,7 @@ def test_settings_wire_the_reminder_once_under_the_documented_matcher(path):
 	assert isinstance(wired.get("timeout"), int) and wired["timeout"] > 0
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_reminder_is_not_wired_as_a_pre_tool_use_hook(path):
 	"""The reminder must run after the push, never gate it."""
 	settings = json.loads(path.read_text(encoding="utf-8"))
@@ -353,7 +354,7 @@ def test_settings_matcher_skips_unrelated_mcp_tools(tool_name):
 
 
 def test_existing_guard_wiring_is_untouched():
-	for path in (SETTINGS_PATH, TEMPLATE_SETTINGS_PATH):
+	for path in (TEMPLATE_SETTINGS_PATH,):
 		settings = json.loads(path.read_text(encoding="utf-8"))
 		matchers = [entry.get("matcher") for entry in settings["hooks"]["PreToolUse"]]
 		assert "Bash" in matchers
@@ -362,8 +363,10 @@ def test_existing_guard_wiring_is_untouched():
 
 
 def test_template_parity():
-	assert TEMPLATE_HOOK_PATH.read_text(encoding="utf-8") == HOOK_PATH.read_text(encoding="utf-8")
-	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("hooks/pr_check_in_reminder.py")
+	assert_claude_not_ahead("settings.json")
+	assert_claude_not_ahead("commands/seed-repo.md")
 
 
 def test_claude_md_documents_the_rule():
@@ -407,7 +410,7 @@ def test_claude_md_documents_the_rule():
 	assert text.index("## §25.") < text.index("## §26.") < text.index("## FINAL REMINDER")
 
 
-@pytest.mark.parametrize("path", [SEED_REPO_COMMAND, TEMPLATE_SEED_REPO_COMMAND])
+@pytest.mark.parametrize("path", [TEMPLATE_SEED_REPO_COMMAND])
 def test_seed_repo_command_ships_the_hook(path):
 	assert "hooks/pr_check_in_reminder.py" in path.read_text(encoding="utf-8")
 

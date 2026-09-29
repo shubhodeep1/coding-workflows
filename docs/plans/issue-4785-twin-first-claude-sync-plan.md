@@ -44,7 +44,7 @@ Unattended sessions cannot edit `.claude/**`: Claude Code never auto-approves th
     - CI's `lint` run is among them;
     - every changed path is a non-guard, non-excluded `.claude/` file whose head content equals the twin on `main`.
   - A sync PR that touches `.claude/hooks/**`, `.claude/settings.json`, or `.claude/settings.local.json`, or that lists a conflict, is labelled `ai:claude-sync-approval` and triggers one Telegram alert. The workflow never approves, merges, or enables auto-merge on it.
-  - For guard or conflict sync PRs, the workflow posts a commit status `claude-twin-sync/owner-approval`. It reads `success` only when the owner's latest review on the current head is `APPROVED`, and `pending` otherwise.
+  - The workflow posts a commit status `claude-twin-sync/owner-approval` on every sync head. For a guard or conflict sync PR it reads `success` only when the owner's latest review on the current head is `APPROVED`, and `pending` otherwise. A non-guard sync PR gets `success`, so the status can be made a required check without blocking it.
 - G6: Automation cannot merge a sync PR by AI review alone. Sync PRs carry `[skip ai]`, and in addition `review_autofix.yml`'s gate and `scripts/claude_pr_sweep.py` skip any head starting `claude/claude-twin-sync-`, with no auto-merge.
 - G7: A new CI step runs `claude_twin_sync.py check`, so `.claude/` is never ahead of its twin. It fails when a PR, or a push to `main`/`stable`, changes a non-excluded `.claude/<file>` to anything other than the twin's content at the same commit. The twin may be ahead of `.claude/`.
 - G8: Tests follow the twin.
@@ -111,7 +111,7 @@ The workflow checks out `main` with `fetch-depth: 0` and runs `plan`. It then fi
 3. **Commit it.**
    - No open PR: create a commit on `claude/claude-twin-sync-<short sha>` from `main`. When there are no copies, this is an empty marker commit.
    - Open PR: create a two-parent commit with `git commit-tree <tree> -p <sync head> -p <main>`. The branch only moves forward, as the ruleset requires, and the PR diff is exactly the copies. Skip this when the tree and parents are already current.
-4. **Push and PR.** Push with `GH_PAT`. Open or edit the PR, with `[skip ai]` and `Refs #4785` in the body and the copy and conflict lists in the body.
+4. **Push and PR.** Push with `GH_PAT`. Open or edit the PR, with `[skip ai]` and the copy and conflict lists in the body. Sync PRs name no issue, so they never cross-link #4785 or trip §19.
 5. **Guard or conflict PR** → set the label, the status, and one Telegram alert per new head.
 6. **Non-guard PR with no conflict** → try the merge rule (G5). The `workflow_run` and hourly triggers retry it.
 

@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -22,7 +23,7 @@ SETTINGS_PATHS = [REPO_ROOT / ".claude" / "settings.json", REPO_ROOT / "workflow
 
 
 def _load():
-	spec = importlib.util.spec_from_file_location("dispatch_workflow", SCRIPT_PATH)
+	spec = importlib.util.spec_from_file_location("dispatch_workflow", TEMPLATE_SCRIPT_PATH)
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return module
@@ -202,7 +203,7 @@ def test_payload_file_is_removed_when_serialisation_fails(monkeypatch):
 
 
 def test_payload_file_is_written_as_utf8():
-	assert 'NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")' in SCRIPT_PATH.read_text(encoding="utf-8")
+	assert 'NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")' in TEMPLATE_SCRIPT_PATH.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("workflow", ["release.yml", "../security-audit.yml", "security-audit.yml/../x", ""])
@@ -251,7 +252,7 @@ def test_main_reports_invalid_workflow_with_exit_1(capsys):
 	assert json.loads(capsys.readouterr().out)["dispatched"] is False
 
 
-@pytest.mark.parametrize("path", SETTINGS_PATHS)
+@pytest.mark.parametrize("path", SETTINGS_PATHS[1:])  # the twin; .claude/ follows via the sync PR
 def test_allowlist_matches_the_gh_workflow_run_allow_rules(path):
 	allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]
 	allowlisted = {
@@ -264,4 +265,5 @@ def test_allowlist_matches_the_gh_workflow_run_allow_rules(path):
 
 
 def test_template_parity():
-	assert TEMPLATE_SCRIPT_PATH.read_text(encoding="utf-8") == SCRIPT_PATH.read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("scripts/dispatch_workflow.py")

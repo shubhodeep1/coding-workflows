@@ -1380,7 +1380,8 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   never widens a permission for a destructive or administrative action; an
   `ai:permission-prompt` issue for a protected-path edit (`.claude/**`) or an
   ask-first operation is closed as not planned, because that prompt is by
-  design.
+  design: the session should have edited the twin under
+  `workflow-templates/.claude/` (§28.C).
 
 `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`, and
 `tests/test_permission_prompts.py` cover the helpers, the hook, the filing
@@ -2052,6 +2053,9 @@ sweep runs in the sessions that create them, never in Actions:
   or a block must be fixed by a Claude session: the pushing session through its §26 hand-back, a
   fresh `/fix-claude-pr` session when that session is gone, the
   `/implement-plan-claude` chain for its own PRs, or the sweep below.
+  The one exception is a Claude twin sync PR (`claude/claude-twin-sync-*`,
+  §28.C): the gate and the sweep skip it, and it is merged by
+  `claude-twin-sync.yml` or the repository owner, never by AI review.
 - **Claims stop duplicate fixers.** Before any fix, the fixer claims the
   PR's current head with `.claude/scripts/claude_fix_claim.py post` (one
   comment ending in `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict
@@ -2218,14 +2222,35 @@ This is an explicit carve-out from §0 and §2 (including §2's
   performs them; a project that needs one lists it as an operator step,
   and `/deploy-activate` walks the human through it.
 - A question with no option that satisfies §28.B's hard rules.
-- **Protected-path edits.** A phase that must edit `.claude/**` (hooks,
-  `settings.json`, commands, scripts) is never started unattended: Claude
-  Code never auto-approves those edits, and in a session nobody watches a
-  classifier block silently drops them. `/implement-plan-claude` marks such
-  phases when it builds the checklist and stops at `Status: BLOCKED` before
-  the phase starts, asking whether to run it in a watched session, drop the
-  `.claude/` part, or try unattended anyway; the answer is recorded as a
-  `Protected-path approval:` line in the progress log.
+- **Protected-path edits.** Claude Code never auto-approves an edit under
+  `.claude/**` (hooks, `settings.json`, commands, scripts), and in a session
+  nobody watches a classifier block silently drops it. So unattended
+  sessions **edit the twin, never `.claude/**`** (twin-first, issue #4785):
+  in coding-workflows every change to a twinned `.claude/<file>` is made in
+  `workflow-templates/.claude/<file>` only, and such a phase runs unattended
+  like any other. After the change reaches the default branch,
+  `.github/workflows/claude-twin-sync.yml` (`scripts/claude_twin_sync.py`)
+  copies each changed twin into `.claude/**` through one sync PR on
+  `claude/claude-twin-sync-<sha>`, so no session ever runs hooks changed on
+  its own branch. A sync PR that changes only commands or scripts is merged
+  by the workflow once every check on its head passed. One that touches
+  `.claude/hooks/**`, `.claude/settings.json`, or
+  `.claude/settings.local.json`, or that lists a conflict (a `.claude/`
+  file changed directly), is labelled `ai:claude-sync-approval` and merged
+  only by the repository owner: the workflow never approves or merges it,
+  because hooks and settings are the guards that limit what sessions can
+  do. `review_autofix.yml` and the §26.H sweep skip sync PRs. CI fails a PR
+  that moves `.claude/` ahead of its twin; the twin may be ahead while its
+  sync PR is pending. The protected-path stop remains for the `.claude/`
+  files that have no twin (`UPSTREAM_ONLY_PATHS` in
+  `scripts/claude_twin_sync.py`: the consumer-variant commands and
+  `claude-issue-pickup.md`) and in repos without `workflow-templates/.claude/`
+  (consumers, whose `.claude/**` comes from the upstream sync):
+  `/implement-plan-claude` marks such phases when it builds the checklist and
+  stops at `Status: BLOCKED` before the phase starts, asking whether to run
+  it in a watched session, drop the `.claude/` part, or try unattended
+  anyway; the answer is recorded as a `Protected-path approval:` line in the
+  progress log.
 - **Whether to run the chain at all.** The stages, the conformance audit, the
   security pass, and validation are the project, not options. A session that
   cannot run them (no claude-code-remote tools to start stage sessions and

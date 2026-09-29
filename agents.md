@@ -1110,14 +1110,114 @@ reviews, comments, and conflicts stay a direct §12 request.
   masks token-like strings, removes heredoc bodies, and truncates commands to
   2,000 characters. In consumer repos it only reports.
 - `/implement-plan-claude` step 0 now refuses to run outside Auto mode
-  (except issue mode, which records the mode), and a phase touching
-  `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
-  §28.C) until a `Protected-path approval: phase <n>` line is recorded.
+  (except issue mode, which records the mode). A phase that changes a
+  twinned `.claude/` file edits only its `workflow-templates/.claude/` twin
+  and runs unattended (see [Claude twin sync](#claude-twin-sync-claudemd-28c));
+  only a phase that must edit a `.claude/` file with no twin stops at
+  `Status: BLOCKED` before it starts (CLAUDE.md §28.C) until a
+  `Protected-path approval: phase <n>` line is recorded.
 - The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
-  and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
-  three scripts live under `workflow-templates/.claude/`. Tests:
+  and `scripts/label_helpers.sh`. The hook and the three scripts are
+  twinned under `workflow-templates/.claude/`, which is the copy the tests
+  load. Tests:
   `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`,
   `tests/test_permission_prompts.py` (one `ci.yml` step).
+
+---
+
+## Claude twin sync (CLAUDE.md §28.C)
+
+**Coding-workflows only** (issue #4785). Claude Code never auto-approves an
+edit under `.claude/**`, so unattended sessions edit only the unprotected
+twin, `workflow-templates/.claude/**`, and never `.claude/**`. After a twin
+change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
+`scripts/claude_twin_sync.py run`, which copies each changed twin into
+`.claude/**` through one sync PR.
+
+- **Triggers:** a push to `main` that changed `workflow-templates/.claude/**`;
+  hourly at minute 41 (catch-up); `workflow_dispatch`; `CI` completing on a
+  `claude/claude-twin-sync-*` branch (the merge attempt); a PR review
+  submitted or dismissed on a sync PR (the approval status). Every trigger
+  runs the same idempotent pass, in one concurrency group.
+- **Twin set:** every regular file under `workflow-templates/.claude/`
+  except `UPSTREAM_ONLY_PATHS` (the consumer-variant commands
+  `analyze-log.md`, `deploy-activate.md`, `investigate-issue.md`,
+  `validate-consumer-issue.md`, `verify-activation.md`, and the
+  upstream-only `claude-issue-pickup.md`). Those are never synced, are exempt
+  from the sync-state check, and still need a watched session to edit their
+  `.claude/` copy.
+- **Classification** (`plan`, full history required): a `.claude/` copy that
+  is missing, has another mode, or equals any version the twin had (up to
+  500 revisions, `git log --raw`) is copied. One that matches no twin
+  version (an operator changed it directly) or is a symlink is a
+  **conflict**: listed in the PR, never overwritten. Paths with `..`, `.`,
+  empty segments, a backslash, or a leading `/` are rejected.
+- **The sync PR:** branch `claude/claude-twin-sync-<main sha[:12]>` (a
+  `-2`…`-9` suffix when a closed PR left that name), built on a temporary
+  git index so no path touches the working tree. The body carries
+  `[skip ai]`, the copied files, and the conflicts. An open sync PR is
+  updated with a forward-only commit (the ruleset forbids non-fast-forward
+  pushes), never duplicated; extra open sync PRs are closed as superseded,
+  and an open one is closed when the twins already match. With only
+  conflicts, the PR carries an empty marker commit.
+- **Merge rule by path:**
+  - Only commands or scripts: the workflow merges it
+    (`gh pr merge --squash --match-head-commit`) once every check run on the
+    head has completed `success`/`neutral`/`skipped`, CI's `lint` run is
+    among them, commit statuses (if any) combine to `success`, and every
+    changed file is an `added`/`modified` non-guard `.claude/` file equal to
+    `main`'s twin (`merge-check`). A push to the branch waits for the next
+    CI run.
+  - `.claude/hooks/**`, `.claude/settings.json`, `.claude/settings.local.json`,
+    or any conflict: labelled `ai:claude-sync-approval`, one Telegram ERROR
+    alert per new head (`scripts/tg_helpers.sh`). The workflow never
+    approves, merges, or enables auto-merge on it; the repository owner
+    reviews and merges it. Status `claude-twin-sync/owner-approval` is
+    `success` only when the owner's latest deciding review (`author_association`
+    `OWNER`) approves the current head, else `pending`; non-guard PRs get
+    `success` ("No hook or settings change").
+- **Other automation stays out:** the `review_autofix.yml` gate skips a
+  `claude/claude-twin-sync-*` head (`AUTOFIX_GATE_SKIP reason=claude_twin_sync`,
+  no deterministic-skip auto-merge), and `scripts/claude_pr_sweep.py` never
+  queues a fixer for one.
+- **Sync-state check:** the CI step "Claude twin sync state (CLAUDE.md
+  §28.C)" runs `claude_twin_sync.py check --base <base> --head HEAD` on PRs
+  into `main` (base: the merge commit's first parent) and pushes to `main`
+  (base: `github.event.before`); `stable` promotions span many PRs and are
+  skipped. It fails
+  when the range moves a non-excluded `.claude/` file to content other than
+  its twin at HEAD. The twin may be ahead while a sync PR is pending; on
+  `main` the two match again once it merges. Tests load the twin and call
+  `tests/claude_twin_state.py::assert_claude_not_ahead`, which skips a
+  differing pair in a shallow clone.
+- **Credentials:** `GITHUB_TOKEN` (`contents`, `pull-requests`, `checks`,
+  `statuses`: read) for reads; `GH_PAT` only in the sync step, for the push
+  (passed in `GIT_CONFIG_*` environment variables to that one git command),
+  the PR writes, the label, the status, and the merge. The checkout is
+  SHA-pinned with `persist-credentials: false`; no session environment
+  variable is read.
+- **API budget (§15):** one open-PR list per 100 PRs; for an owner-gated PR
+  one review list per 100 reviews; for a merge attempt one file list, one
+  check-run list per 100 runs, and one combined-status read; writes only on
+  change. No GraphQL except `gh pr merge`.
+- **Consumers:** unaffected. `update_workflows.yml` already copies
+  `workflow-templates/.claude/**` into consumer repos at `@stable`, so they
+  never depend on a sync PR, and the workflow runs only in
+  `shubhodeep1/coding-workflows`. The twinned commands tell consumer
+  sessions to keep the protected-path stop, since a consumer has no
+  `workflow-templates/.claude/`.
+- **Residual risks:** every AI actor here authenticates to GitHub as the
+  owner account (sessions through the App proxy, workflows through
+  `GH_PAT`), so the workflow cannot tell a human owner's approval from an
+  AI's; the boundary is that sessions never approve or merge (§23.C). And
+  because `GH_PAT` is the owner, GitHub does not let the owner approve a
+  sync PR, so `claude-twin-sync/owner-approval` stays `pending` and the
+  owner merges it by hand. Optional operator steps: make that status a
+  required check in the `main` ruleset, and give the workflow its own bot
+  identity.
+- Tests: `tests/test_claude_twin_sync.py` (own `ci.yml` step), plus cases in
+  `tests/test_review_autofix_claude_fixer_mode.py` and
+  `tests/test_claude_pr_sweep.py`.
 
 ---
 
@@ -2137,6 +2237,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/clarify.yml
 .github/workflows/claude-issue-intake.yml
 .github/workflows/claude-issue-queue-watchdog.yml
+.github/workflows/claude-twin-sync.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml

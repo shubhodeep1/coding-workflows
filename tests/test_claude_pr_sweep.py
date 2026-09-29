@@ -42,6 +42,21 @@ def test_candidates_are_open_same_repo_claude_prs(monkeypatch):
 	assert sweeper.list_candidates("o/r") == [{"number": 1, "head_ref": "claude/x"}, {"number": 6, "head_ref": "claude/y"}]
 
 
+def test_candidates_never_include_claude_twin_sync_prs(monkeypatch):
+	"""CLAUDE.md §28.C: sync PRs are merged by claude-twin-sync.yml or the owner; no fixer is queued."""
+	prs = [_pr(1), _pr(2, ref="claude/claude-twin-sync-0123456789ab"), _pr(3, ref="claude/claude-twin-sync-0123456789ab-2")]
+	monkeypatch.setattr(sweeper.check_in_status, "gh_api_list", lambda path: prs)
+	assert sweeper.list_candidates("o/r") == [{"number": 1, "head_ref": "claude/x"}]
+	assert sweeper.CLAUDE_TWIN_SYNC_BRANCH_PREFIX == sweeper_twin_sync_prefix()
+
+
+def sweeper_twin_sync_prefix():
+	spec = importlib.util.spec_from_file_location("claude_twin_sync", ROOT / "scripts" / "claude_twin_sync.py")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module.SYNC_BRANCH_PREFIX
+
+
 def _setup(monkeypatch, verdicts, candidates=None):
 	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: candidates if candidates is not None else [{"number": n, "head_ref": "claude/x"} for n in verdicts])
 

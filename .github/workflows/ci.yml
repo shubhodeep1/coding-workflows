@@ -191,6 +191,39 @@ jobs:
             fi
           done
 
+      - name: Claude twin sync state (CLAUDE.md §28.C)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          REF_NAME: ${{ github.ref_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          # .claude/ may lag its twin (workflow-templates/.claude/) while a
+          # claude-twin-sync.yml PR is pending, but it may never move anywhere
+          # but the twin: the check fails when this PR or push changes a
+          # .claude/ file to content that differs from its twin at HEAD.
+          if [ "${EVENT_NAME}" = "pull_request" ] && [ "${BASE_REF}" = "main" ]; then
+            # The checkout is the PR's merge commit; its first parent is the
+            # base-branch tip the merge was built on.
+            base="$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')"
+          elif [ "${EVENT_NAME}" = "push" ] && [ "${REF_NAME}" = "main" ]; then
+            # One merged PR per push, so the range is that PR's net change.
+            base="${PUSH_BEFORE:-}"
+          else
+            # A stable promotion spans many PRs, each already checked into
+            # main; a sync followed by a newer twin change in one range is
+            # not a violation.
+            echo "${EVENT_NAME} on ${BASE_REF:-${REF_NAME}}: the twin sync state is enforced on PRs into main and pushes to main; skipping."
+            exit 0
+          fi
+          if [ -z "${base}" ] || [ "${base}" = "0000000000000000000000000000000000000000" ]; then
+            echo "No base commit for this event; skipping the twin sync-state check."
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "${base}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD
+
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -447,6 +480,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status_hand_back.py tests/test_claude_pr_sweep.py
+
+      - name: Claude twin sync tests (CLAUDE.md §28.C)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_twin_sync.py
 
       - name: /implement-plan-claude command contract tests
         run: |

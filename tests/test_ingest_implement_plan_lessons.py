@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import ingest_implement_plan_lessons as ingest  # noqa: E402
+from claude_twin_state import assert_claude_not_ahead
 
 
 SAMPLE_LOG = """# Implement-Plan Log — Sample
@@ -276,12 +277,12 @@ COMMAND_COPIES = (
 
 
 def test_implement_plan_claude_copies_are_identical() -> None:
-	source, template = (d / "implement-plan-claude.md" for d in COMMAND_COPIES)
-	assert source.read_text(encoding="utf-8") == template.read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("commands/implement-plan-claude.md")
 
 
 def test_implement_plan_claude_runs_conformance_before_security_and_records_lessons() -> None:
-	text = (COMMAND_COPIES[0] / "implement-plan-claude.md").read_text(encoding="utf-8")
+	text = (COMMAND_COPIES[1] / "implement-plan-claude.md").read_text(encoding="utf-8")  # the twin (CLAUDE.md §28.C)
 	conformance = text.index("8. **Conformance audit")
 	security = text.index("9. **Security pass")
 	validation = text.index("10. **Runtime validation.**")

@@ -271,7 +271,7 @@ def test_every_wrapper_template_renders_to_an_immutable_ref() -> None:
 
 
 def test_seed_commands_require_immutable_wrapper_rendering() -> None:
-	for command_path in SEED_COMMANDS:
+	for command_path in SEED_COMMANDS[1:]:  # the twin; .claude/ follows via the sync PR (CLAUDE.md §28.C)
 		command_text = command_path.read_text(encoding="utf-8")
 		assert "scripts/workflow_wrapper_refs.py" in command_text
 		assert "40-character" in command_text

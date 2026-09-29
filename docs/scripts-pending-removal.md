@@ -235,3 +235,15 @@ Copy this block when adding a new entry:
   - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=all&per_page=1"` shows no queue item created after the removal of the queue path.
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_claude_issue_route.py` returns exit code 0 after the watchdog tests are removed with it.
 - **Owner:** @shubhodeep1
+
+### `.github/workflows/claude-twin-sync.yml` + `scripts/claude_twin_sync.py`
+
+- **Introduced in:** #4804 (2026-09-28)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. Remove only if Claude Code gains a way to auto-approve `.claude/**` edits in unattended sessions, or if `.claude/**` stops being a hand-maintained twin of `workflow-templates/.claude/**` (for example, a symlink or generated copy).
+- **Removal preflight checks:**
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py plan --ref origin/main` (full clone) prints `"copies": []` and `"conflicts": []`: nothing is waiting to be synced.
+  - `gh api "repos/shubhodeep1/coding-workflows/pulls?state=open&per_page=100" --jq '[.[] | select(.head.ref | startswith("claude/claude-twin-sync-"))] | length'` returns `0`.
+  - CLAUDE.md §28.C, `workflow-templates/.claude/commands/implement-plan-claude.md`, `implement-issue-claude.md`, and `fix-claude-pr.md` no longer tell sessions to edit the twin instead of `.claude/**` (`rg -n 'Edit the twin, never' CLAUDE.md workflow-templates/.claude/commands` returns nothing).
+  - The CI step "Claude twin sync state (CLAUDE.md §28.C)", the `claude_twin_sync` skip in `review_autofix.yml`, and `CLAUDE_TWIN_SYNC_BRANCH_PREFIX` in `scripts/claude_pr_sweep.py` are removed in the same PR.
+- **Owner:** @shubhodeep1

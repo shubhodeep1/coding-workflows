@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -36,7 +37,7 @@ LOCAL_SLUG = "shubhodeep1/coding-workflows"
 
 
 def _load_guard():
-	spec = importlib.util.spec_from_file_location("gh_api_write_guard", GUARD_PATH)
+	spec = importlib.util.spec_from_file_location("gh_api_write_guard", TEMPLATE_GUARD_PATH)
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
@@ -60,7 +61,7 @@ def _run_hook(stdin_text: str) -> subprocess.CompletedProcess:
 	env = dict(os.environ)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	return subprocess.run(
-		[sys.executable, str(GUARD_PATH)],
+		[sys.executable, str(TEMPLATE_GUARD_PATH)],
 		input=stdin_text,
 		capture_output=True,
 		text=True,
@@ -377,7 +378,7 @@ def test_other_dispatches_ask(command):
 	assert _decide(command) == guard.DECISION_ASK
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_dispatchable_workflows_match_the_gh_workflow_run_allow_rules(path):
 	allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]
 	allowlisted = {
@@ -502,13 +503,13 @@ def test_internal_exception_asks(monkeypatch, capsys):
 
 
 def test_hook_has_no_environment_escape_hatch():
-	source = GUARD_PATH.read_text(encoding="utf-8")
+	source = TEMPLATE_GUARD_PATH.read_text(encoding="utf-8")
 	assert "os.environ" not in source
 	assert "getenv" not in source
 
 
 def test_hook_issues_no_github_api_calls():
-	source = GUARD_PATH.read_text(encoding="utf-8")
+	source = TEMPLATE_GUARD_PATH.read_text(encoding="utf-8")
 	assert '["gh"' not in source
 	assert "api.github.com" not in source
 
@@ -526,7 +527,7 @@ def _guard_entries(settings: dict) -> list[dict]:
 	]
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_settings_wire_the_guard_once_under_bash(path):
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	entries = _guard_entries(settings)
@@ -540,7 +541,7 @@ def test_settings_wire_the_guard_once_under_bash(path):
 	assert hook["command"].endswith('/.claude/hooks/gh_api_write_guard.py')
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_settings_no_longer_carry_gh_api_ask_rules(path):
 	# A permissions.ask rule prompts even when a hook allows (and in Auto mode),
 	# so any `gh api` ask rule would bring the prompts back.
@@ -548,7 +549,7 @@ def test_settings_no_longer_carry_gh_api_ask_rules(path):
 	assert not any(rule.startswith("Bash(gh api") for rule in permissions.get("ask", []))
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+@pytest.mark.parametrize("path", [TEMPLATE_SETTINGS_PATH])
 def test_other_bash_guards_stay_wired(path):
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	commands = [
@@ -561,8 +562,9 @@ def test_other_bash_guards_stay_wired(path):
 
 
 def test_template_parity():
-	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
-	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead("hooks/gh_api_write_guard.py")
+	assert_claude_not_ahead("settings.json")
 
 
 def test_claude_md_documents_the_guard():
@@ -573,7 +575,7 @@ def test_claude_md_documents_the_guard():
 
 
 def test_seed_repo_command_ships_the_hook():
-	assert "hooks/gh_api_write_guard.py" in SEED_REPO_COMMAND.read_text(encoding="utf-8")
+	assert "hooks/gh_api_write_guard.py" in (REPO_ROOT / "workflow-templates" / ".claude" / "commands" / "seed-repo.md").read_text(encoding="utf-8")
 
 
 def test_ci_runs_this_file():
