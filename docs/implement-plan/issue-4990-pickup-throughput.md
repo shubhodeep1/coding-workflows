@@ -1,20 +1,20 @@
 # Implement-Plan Log — Claude issue pickup throughput: catch-up wake, higher limit, resumes first
 
-- Plan: docs/plans/issue-4990-pickup-throughput-plan.md
+- Plan: docs/completed/issue-4990-pickup-throughput-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4990 (https://github.com/shubhodeep1/coding-workflows/issues/4990)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4990-pickup-throughput   Final PR: #5030 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1
-- Activation: not started
-- Waiting on: PR #5061 (phase 1/1)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (branch claude/implement-plan-issue-4990-pickup-throughput-complete → project branch)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_011kZ19gKQj5B1eX3AXqP8r7   safety net trig_01CUMjjWy42P6qFBkeTrN4ob   hand-back trig_013pUeZMUyaEURf2Cg5xsUbm
+- Check-in: checker session_011kZ19gKQj5B1eX3AXqP8r7   safety net: armed by the completion stage (see its report)   hand-back: armed by the completion stage
 - Last updated: 2026-09-29
-- Last note: Q1: A — the master applied the twin sync as 3c69d52 (sha256 560d5ddb…, 278 tests passed); `ai:claude-blocked` removed; phase 1 wait armed on PR #5061
+- Last note: validation cycle 1 passed (run 36558347168, 10/10 tests on 87e733f); project branch synced with main f736cad as 58d834c (docs-only, 282 pickup/command tests pass); completion PR moves the plan to docs/completed/
 
 ## Phases
-1. [ ] Phase 1 — pickup throughput: catch-up wake, limit 20 (`CLAUDE_ISSUE_PICKUP_LIMIT`), resumes first, `oldest_waiting`   — PR #5061 open (waiting); review rounds: 0; interventions: 0 — protected paths: `.claude/commands/claude-issue-pickup.md` (no twin; diff in the sync blocker per Q40)
+1. [x] Phase 1 — pickup throughput: catch-up wake, limit 20 (`CLAUDE_ISSUE_PICKUP_LIMIT`), resumes first, `oldest_waiting`   — PR #5061 merged 2026-09-29 by the master session (merge 2120e61, Q46: A; #4990 Q1: A) after review round 1 (1 finding, rejected); review rounds: 1; interventions: 0 — protected paths: `.claude/commands/claude-issue-pickup.md` (no twin; diff in the sync blocker per Q40)
    - [x] `scripts/claude_issue_route.py`: `QUEUE_PICKUP_LIMIT = 20`, `resolve_pickup_limit`, two-tier ordering, `oldest_waiting_minutes`, `catch_up_due`, `--wake` / `--now`
    - [x] `tests/test_claude_issue_route.py`: limit, ordering, oldest-waiting, catch-up tests
    - [x] `tests/test_implement_issue_claude_command.py`: pickup catch-up assertions (pass after the twin sync)
@@ -23,12 +23,16 @@
    - [x] `changelog.d/4990-pickup-throughput.md`
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT — no fixes (pre-security; audited project branch at 6a73383 after merging main aebaa17; 266 pickup tests pass; full-suite failures identical to main, 114 in 18 unrelated files)
 
 ## Security pass
+- Cycle 1 — run 36551077188 2026-09-29 (ref: claude/implement-plan-issue-4990-pickup-throughput, incremental aebaa17..6a73383, 10 files): clean — tracker=#3576 findings=0 followups_created=0
 
 ## Validation
+- Cycle 1 — run 36558347168 2026-09-29 (target_ref: claude/implement-plan-issue-4990-pickup-throughput, validated 87e733f): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 289s); no fix PR
 
 ## Completion
+- Completion PR (this PR, claude/implement-plan-issue-4990-pickup-throughput-complete) open — doc moved to docs/completed/issue-4990-pickup-throughput-plan.md
 - Final PR #5030 draft
 
 ## Activation
@@ -51,3 +55,5 @@
 - Protected-path approval: phase 1 — twin-first per Q40, as the issue body (OWNER) prescribes (2026-09-29). No `workflow-templates/.claude/**` twin needs a change; the `claude-issue-pickup.md` diff goes in the sync blocker.
 - security_pass_skip.py: `{"skip": false, "label": null, "reason": "no skip label"}` → Security pass: run.
 - The invoking session installed `gh` by running `.claude/hooks/session-start.sh` by hand: the repository was attached after session start, so the SessionStart hook had not run.
+- Project branch synced with main ce1db50 as 87e733f before validation (clean merge; 282 pickup/command tests pass), and with main f736cad as 58d834c at the completion stage (docs-only merge; 282 passed, 1 skipped).
+- Issue progress comment id 5883795392. CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1 (#5057).
