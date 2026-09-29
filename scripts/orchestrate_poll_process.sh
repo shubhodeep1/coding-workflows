@@ -12568,6 +12568,15 @@ prime_phase_concurrency_snapshot() {
 # the workflow_dispatch runs named for that PR, with the same status and
 # freshness filters, and echoes the freshest match's databaseId.  One-argument
 # callers keep the branch-only behaviour and make no extra call.
+#
+# When that PR-named listing is incomplete (issue #4927: a page failed, or
+# more runs than it could read), the helper echoes the sentinel
+# `listing-incomplete` instead of a run id and logs
+# outcome=pr_named_listing_incomplete.  Both push sites treat any non-empty
+# result as "skip the empty-commit push", so a listing that cannot prove the
+# absence of a live review run never authorises the push; the next poll
+# cycle retries.  The branch listing above keeps its fail-open contract: it
+# is scoped to the PR's own branch, so unrelated dispatches cannot crowd it.
 _direct_inflight_review_run_on_branch()
 {
 	local _di_branch="$1"
@@ -12622,7 +12631,14 @@ _direct_inflight_review_run_on_branch()
 		  ] | (.[0].databaseId // empty)
 	' 2>/dev/null || echo "")"
 	if [ -z "${_di_match}" ] && [[ "${_di_pr}" =~ ^[1-9][0-9]*$ ]]; then
-		_di_match="$(_pr_named_review_dispatch_runs "${_di_pr}" 2>/dev/null | jq -r \
+		local _di_pr_named_json="" _di_pr_named_rc=0
+		_di_pr_named_json="$(_pr_named_review_dispatch_runs "${_di_pr}")" || _di_pr_named_rc=$?
+		if [ "${_di_pr_named_rc}" -ne 0 ]; then
+			echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} pr=${_di_pr} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=pr_named_listing_incomplete" >&2
+			printf '%s\n' "listing-incomplete"
+			return 0
+		fi
+		_di_match="$(printf '%s' "${_di_pr_named_json}" | jq -r \
 			--argjson now "${_di_now_epoch}" \
 			--argjson threshold "${_di_stall_secs}" '
 			(if type == "array" then . else [] end)
@@ -13784,9 +13800,19 @@ STALL_EOF
           # every completed head-branch run seen. A missing createdAt counts
           # as older, so this path only adds a redispatch when the failure
           # is definitely the newest run.
+          # An incomplete listing (issue #4927) can neither show the newest
+          # PR-named run nor rule out a live one, so this cycle neither
+          # redispatches nor pushes; the next poll cycle retries.
           if [ -z "${_rtr_failed_conclusion}" ]; then
             local _rtr_pr_named_row _rtr_pr_named_conclusion _rtr_pr_named_created_at
-            _rtr_pr_named_row="$(_pr_named_review_dispatch_runs "${pr_num}" \
+            local _rtr_pr_named_json="" _rtr_pr_named_rc=0
+            _rtr_pr_named_json="$(_pr_named_review_dispatch_runs "${pr_num}")" || _rtr_pr_named_rc=$?
+            if [ "${_rtr_pr_named_rc}" -ne 0 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} review dispatch run listing incomplete (PR-named lookup); skipping redispatch and empty-commit push this cycle, the next poll cycle retries."
+              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+              return 1
+            fi
+            _rtr_pr_named_row="$(printf '%s' "${_rtr_pr_named_json}" \
               | jq -r '.[0] // empty | select(.status == "completed") | "\(.conclusion // "")\t\(.createdAt // "")"' \
               2>/dev/null || echo "")"
             if [[ "${_rtr_pr_named_row}" == *$'\t'* ]]; then
@@ -13921,6 +13947,11 @@ STALL_EOF
           # authoritative branch-scoped run listing; a false negative here
           # discards a full in-flight review pass (RC1 of the #11/#12 incident).
           _rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
+          if [ "${_rtr_direct_inflight_id}" = "listing-incomplete" ]; then
+            echo "  Issue #${issue_num} PR #${pr_num} review dispatch run listing incomplete (direct check); cannot rule out an in-flight review run on ${head_ref}, skipping empty-commit push. The next poll cycle retries."
+            STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            return 1
+          fi
           if [ -n "${_rtr_direct_inflight_id}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
@@ -16575,6 +16606,9 @@ STALL_EOF
 			if [ -n "${_std_rtr_inflight_id}" ]; then
 			  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${REVIEW_RUN_MAX_RUNTIME_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
 			  STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+			elif [ "${_std_rtr_direct_inflight_id}" = "listing-incomplete" ]; then
+              echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} review dispatch run listing incomplete (direct check); cannot rule out an in-flight review run on ${head_ref}, skipping empty-commit push. The next poll cycle retries."
+              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
 			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
@@ -17355,10 +17389,18 @@ _has_active_autofix_run()
 	# --branch and cannot return a default-branch run. The review wrappers
 	# name each dispatched run for its PR; _pr_named_review_dispatch_runs
 	# matches those names in this repo and in consumer repos. One extra
-	# call, issued only when the head-branch lookups found nothing (§15).
+	# lookup, issued only when the head-branch lookups found nothing (§15).
+	# An incomplete listing (issue #4927) cannot prove that no review run is
+	# active, so it counts as one: the dispatch is skipped and the next poll
+	# cycle retries.
 	if [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
-		local pr_named_active
-		pr_named_active="$(_pr_named_review_dispatch_runs "${pr_number}" \
+		local pr_named_active pr_named_json="" pr_named_rc=0
+		pr_named_json="$(_pr_named_review_dispatch_runs "${pr_number}")" || pr_named_rc=$?
+		if [ "${pr_named_rc}" -ne 0 ]; then
+			echo "  ${log_prefix} Review dispatch run listing incomplete (PR-named lookup); treating a review run as possibly active. Skipping; the next poll cycle retries."
+			return 0
+		fi
+		pr_named_active="$(printf '%s' "${pr_named_json}" \
 			| jq -r '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
 			2>/dev/null || echo "0")"
 		if [ "${pr_named_active:-0}" -gt 0 ] 2>/dev/null; then
@@ -17383,49 +17425,153 @@ _has_active_autofix_run()
 # #4701), never from PR text, so an exact match on the name identifies
 # the PR.
 #
+# Listing (security, issue #4927): only the two wrappers' own
+# workflow_dispatch runs are read, page by page, back to the review-run
+# window. The previous single page of the newest 100 workflow_dispatch runs
+# of every workflow covered under 3.5 hours in coding-workflows (153
+# internal-review.yml dispatches in 5 hours, 2026-09-29), so a burst of
+# unrelated dispatches could push a live review run off it; the stall
+# recovery then pushed an empty commit under that run and discarded it.
+#
 # Input:     $1 = PR number. Anything but ^[1-9][0-9]*$ prints [] with no call.
 # Output:    one JSON array on stdout, newest first, of the matching runs:
 #            [{databaseId, event, status, conclusion, displayTitle, createdAt, startedAt}]
-# API calls: exactly one `gh run list --event workflow_dispatch --limit 100`.
-#            It has no --workflow filter, so one call covers both wrapper
-#            names in either kind of repo (§15). Callers issue it only after
-#            their head-branch lookups found nothing. The page holds the
-#            newest 100 workflow_dispatch runs of every workflow (about
-#            2-3 hours in coding-workflows, 2026-09-28); review runs finish
-#            well inside that, and an older run that fell off the page is
-#            treated as absent, the behaviour before PR-named runs existed.
-# Fail-open: a gh or jq failure prints [], so the caller behaves as it did
-#            before PR-named runs existed.
+# Returns:   0 = the listing is complete: an empty array means no run named
+#            for the PR was created inside the window.
+#            1 = the listing is incomplete. Stdout still carries the matches
+#            read so far, but a missing run proves nothing: callers skip
+#            their dispatch or empty-commit push, and the next poll cycle
+#            retries.
+# API calls: for each wrapper (internal-review.yml, ai-review.yml), one
+#            `GET actions/workflows/<wrapper>/runs?event=workflow_dispatch&created=>=<cutoff>&per_page=100&page=<p>`
+#            per page, where <cutoff> is now minus REVIEW_RUN_MAX_RUNTIME_MINUTES
+#            (default 250; older review runs are zombies to the poller).
+#            Pages continue until the distinct runs read reach the listing's
+#            total_count, at most 10 pages (GitHub serves at most 1,000
+#            results for a filtered run listing). A wrapper this repo does
+#            not have answers 404 on its first page and counts as complete
+#            and empty. In coding-workflows that is 3 calls (two
+#            internal-review.yml pages, one ai-review.yml 404). REST only;
+#            callers issue it only after their head-branch lookups found
+#            nothing (§15).
+# Incomplete: a page that failed after gh_retry (other than that first-page
+#            404), a malformed page, a cutoff that cannot be computed, a
+#            short page before total_count was reached (the listing shifted
+#            while it was read), or more runs than 10 pages hold. Each is
+#            logged once on stderr (CLAUDE.md §8):
+#            PR_NAMED_REVIEW_RUNS pr=<N> outcome=incomplete reason=<cutoff_unavailable|page_failed|malformed_page|listing_shifted|truncated|filter_failed> wrapper=<file> page=<p> read=<n> total=<n>
 #
 # Usage: _pr_named_review_dispatch_runs <pr_number>
 _pr_named_review_dispatch_runs()
 {
 	local pr_number="$1"
-	local runs_json=""
+	local _pnr_window_min="${REVIEW_RUN_MAX_RUNTIME_MINUTES:-250}"
+	local _pnr_max_pages=10
+	local _pnr_now="" _pnr_cutoff="" _pnr_err_file="" _pnr_reason=""
+	local _pnr_wrapper="" _pnr_page=0 _pnr_page_json="" _pnr_page_rc=0 _pnr_page_len=0
+	local _pnr_total=0 _pnr_read=0 _pnr_wrapper_runs='[]' _pnr_runs='[]' _pnr_matches=""
 	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
 		printf '[]\n'
 		return 0
 	fi
-	runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
-		--event workflow_dispatch \
-		--limit 100 \
-		--json databaseId,event,status,conclusion,displayTitle,createdAt,startedAt \
-		2>/dev/null)" || runs_json=""
-	if [ -z "${runs_json}" ]; then
-		printf '[]\n'
-		return 0
+	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min=250
+	_pnr_now="$(date +%s 2>/dev/null || echo "")"
+	if [[ "${_pnr_now}" =~ ^[0-9]+$ ]]; then
+		_pnr_cutoff="$(jq -nr --argjson t "$(( _pnr_now - _pnr_window_min * 60 ))" '$t | todate' 2>/dev/null || echo "")"
 	fi
-	printf '%s' "${runs_json}" | jq -c --arg pr "${pr_number}" '
+	if ! [[ "${_pnr_cutoff}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		echo "PR_NAMED_REVIEW_RUNS pr=${pr_number} outcome=incomplete reason=cutoff_unavailable wrapper=none page=0 read=0 total=0" >&2
+		printf '[]\n'
+		return 1
+	fi
+	_pnr_err_file="$(mktemp "${TMPDIR:-/tmp}/pr_named_review_runs.XXXXXX" 2>/dev/null || echo "")"
+	for _pnr_wrapper in internal-review.yml ai-review.yml; do
+		_pnr_page=1
+		_pnr_total=0
+		_pnr_read=0
+		_pnr_wrapper_runs='[]'
+		while :; do
+			if [ "${_pnr_page}" -gt "${_pnr_max_pages}" ]; then
+				_pnr_reason="truncated"
+				break 2
+			fi
+			_pnr_page_rc=0
+			_pnr_page_json="$(gh_retry gh api -X GET \
+				"repos/${GITHUB_REPOSITORY}/actions/workflows/${_pnr_wrapper}/runs?event=workflow_dispatch&created=>=${_pnr_cutoff}&per_page=100&page=${_pnr_page}" \
+				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {databaseId: .id, event: .event, status: .status, conclusion: .conclusion, displayTitle: .display_title, createdAt: .created_at, startedAt: .run_started_at}]}' \
+				2>"${_pnr_err_file:-/dev/null}")" || _pnr_page_rc=$?
+			if [ "${_pnr_page_rc}" -ne 0 ]; then
+				# A wrapper this repo does not have: complete and empty.
+				if [ "${_pnr_page}" -eq 1 ] && [ -n "${_pnr_err_file}" ] \
+					&& grep -q 'HTTP 404' "${_pnr_err_file}" 2>/dev/null; then
+					break
+				fi
+				if [ -n "${_pnr_err_file}" ]; then
+					cat "${_pnr_err_file}" >&2 2>/dev/null || true
+				fi
+				_pnr_reason="page_failed"
+				break 2
+			fi
+			if ! printf '%s' "${_pnr_page_json}" \
+				| jq -e '(.total_count | type == "number" and . >= 0) and (.workflow_runs | type == "array")' >/dev/null 2>&1; then
+				_pnr_reason="malformed_page"
+				break 2
+			fi
+			# Accumulate through stdin, never --argjson: 1,000 runs exceed
+			# the kernel's single-argument limit (MAX_ARG_STRLEN, 128 KiB).
+			if ! _pnr_total="$(printf '%s' "${_pnr_page_json}" | jq -r '.total_count | floor' 2>/dev/null)" \
+				|| ! _pnr_page_len="$(printf '%s' "${_pnr_page_json}" | jq -r '.workflow_runs | length' 2>/dev/null)" \
+				|| ! _pnr_wrapper_runs="$(printf '%s\n%s\n' "${_pnr_wrapper_runs}" "${_pnr_page_json}" \
+					| jq -cs '(.[0] + .[1].workflow_runs) | unique_by(.databaseId)' 2>/dev/null)" \
+				|| ! _pnr_read="$(printf '%s' "${_pnr_wrapper_runs}" | jq -r 'length' 2>/dev/null)" \
+				|| ! [[ "${_pnr_total}" =~ ^[0-9]+$ && "${_pnr_page_len}" =~ ^[0-9]+$ && "${_pnr_read}" =~ ^[0-9]+$ ]]; then
+				_pnr_wrapper_runs='[]'
+				_pnr_reason="malformed_page"
+				break 2
+			fi
+			if [ "${_pnr_read}" -ge "${_pnr_total}" ]; then
+				break
+			fi
+			if [ "${_pnr_page_len}" -lt 100 ]; then
+				_pnr_reason="listing_shifted"
+				break 2
+			fi
+			_pnr_page=$(( _pnr_page + 1 ))
+		done
+		if ! _pnr_runs="$(printf '%s\n%s\n' "${_pnr_runs}" "${_pnr_wrapper_runs}" | jq -cs '.[0] + .[1]' 2>/dev/null)"; then
+			_pnr_runs='[]'
+			_pnr_wrapper_runs='[]'
+			_pnr_reason="filter_failed"
+			break
+		fi
+	done
+	if [ -n "${_pnr_err_file}" ]; then
+		rm -f "${_pnr_err_file}" 2>/dev/null || true
+	fi
+	# An incomplete listing still prints the matches it read (the wrapper
+	# it stopped in included); callers do not act on them.
+	if [ -n "${_pnr_reason}" ]; then
+		_pnr_runs="$(printf '%s\n%s\n' "${_pnr_runs}" "${_pnr_wrapper_runs}" | jq -cs '.[0] + .[1]' 2>/dev/null)" \
+			|| _pnr_runs='[]'
+	fi
+	_pnr_matches="$(printf '%s' "${_pnr_runs}" | jq -c --arg pr "${pr_number}" '
 		(if type == "array" then . else [] end)
-		| [ .[]?
-			| select(type == "object")
+		| [ .[]? | select(type == "object") ]
+		| unique_by(.databaseId)
+		| [ .[]
 			| select((.event // "workflow_dispatch") == "workflow_dispatch")
 			| select((.displayTitle // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
 				or (.displayTitle // "") == ("AI Review [pr:" + $pr + "]"))
 		  ]
 		| sort_by(.createdAt // "")
 		| reverse
-	' 2>/dev/null || printf '[]\n'
+	' 2>/dev/null)" || { _pnr_matches="[]"; [ -n "${_pnr_reason}" ] || _pnr_reason="filter_failed"; }
+	printf '%s\n' "${_pnr_matches:-[]}"
+	if [ -n "${_pnr_reason}" ]; then
+		echo "PR_NAMED_REVIEW_RUNS pr=${pr_number} outcome=incomplete reason=${_pnr_reason} wrapper=${_pnr_wrapper} page=${_pnr_page} read=${_pnr_read} total=${_pnr_total}" >&2
+		return 1
+	fi
+	return 0
 }
 
 # Helper: Dispatch review workflow for merge conflict resolution

@@ -136,12 +136,20 @@ class PollerPrNamedRunContract(unittest.TestCase):
 		self.helper = text[helper_start:text.index("\n}\n", helper_start)]
 
 	def test_guard_looks_up_pr_named_dispatch_runs(self) -> None:
-		# Issue #4701: the lookup moved into the shared helper, which covers
-		# both wrapper names with one call (no --workflow filter).
-		self.assertIn('_pr_named_review_dispatch_runs "${pr_number}"', self.body)
-		self.assertIn("--event workflow_dispatch", self.helper)
-		self.assertIn("--limit 100", self.helper)
-		self.assertNotIn("--workflow", self.helper)
+		# Issue #4701: the lookup lives in the shared helper, which matches
+		# both wrapper names. Issue #4927: it lists each wrapper's own
+		# workflow_dispatch runs page by page instead of one global page of
+		# the newest 100 dispatches, and an incomplete listing counts as an
+		# active run.
+		self.assertIn('_pr_named_review_dispatch_runs "${pr_number}")" || pr_named_rc=$?', self.body)
+		self.assertIn('if [ "${pr_named_rc}" -ne 0 ]; then', self.body)
+		self.assertIn("for _pnr_wrapper in internal-review.yml ai-review.yml; do", self.helper)
+		self.assertIn(
+			'actions/workflows/${_pnr_wrapper}/runs?event=workflow_dispatch&created=>=${_pnr_cutoff}&per_page=100&page=${_pnr_page}',
+			self.helper,
+		)
+		self.assertNotIn("gh run list", self.helper)
+		self.assertNotIn("--limit 100", self.helper)
 		self.assertIn('("Internal: AI Review & Autofix [pr:" + $pr + "]")', self.helper)
 		self.assertIn('("AI Review [pr:" + $pr + "]")', self.helper)
 
