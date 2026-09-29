@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:432-464 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: `_segment_credentials()` does not capture a hyphen-prefixed value supplied as a separate argument to a long credential flag, so the credential can remain unmasked.\n  WHY: The long-flag branch filters out next words starting with `-`, unlike the short-flag branch; reviewers rate this MAJOR.\n- workflow-templates/.claude/scripts/permission_prompts.py:486 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_segment_credentials()` may consume a following flag as the value of a long credential flag, causing a false-positive command withhold.\n  WHY: The reviewer says the fail-closed fallback withholds the command when the consumed token is another flag; this finding conflicts with reports that the long-flag branch skips hyphen-prefixed values.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/scripts/permission_prompts.py:454-464 | severity=high | confidence=[4]\n  PROBLEM: The long-flag branch does not capture a hyphen-prefixed credential value, leaving it unmasked.\n  WHY: `_segment_credentials` filters such values from `following`, unlike the short-flag branch, so the value may be posted verbatim.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/permission_prompts.py:486 | severity=high | confidence=[4]\n  PROBLEM: In `_segment_credentials`, a token beginning with `-` may be consumed as a long-flag value even when it is another flag.\n  WHY: This can cause a false-positive fail-closed command withhold, impacting usability.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/permission_prompts.py:455 | severity=high\n  PROBLEM: `_segment_credentials` skips a hyphen-prefixed value after a long credential flag, so it is not added to the credential set.\n  WHY: The value can then be posted verbatim; the short-flag branch explicitly consumes the next word even when it starts with `-`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/permission_prompts.py:432-445 | severity=high | confidence=[5]\n  PROBLEM: Long credential flags do not consume the next word when it starts with `-`, leaving the credential value out of the credential set.\n  WHY: The equivalent short-flag branch consumes such values, but a hyphen-prefixed password or token supplied to a long flag can be posted verbatim.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- workflow-templates/.claude/scripts/permission_prompts.py:462 | severity=high\n  PROBLEM: Long credential flags skip values starting with `-`.\n  WHY: This requires a fix in `_segment_credentials` and a test.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py:_segment_credentials(), long-flag branch | severity=high | confidence=[4]\n  PROBLEM: Long credential flags do not consume the next shell word as their value when it starts with `-`, leaving the credential unmasked.\n  WHY: `_sanitize_bash_command()` can return the display unchanged, allowing the credential to be posted verbatim.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6fb0aeb21a3c899ff8b351a8fd591689e4bcf85601478abf11c474ad81484891",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5217,
+    "run_id": "36606591931",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36606591931",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929184440_8fb0e01bd6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5217,
+    "run_id": "36606591931"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T18:44:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
