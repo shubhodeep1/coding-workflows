@@ -3142,7 +3142,8 @@ def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None
 	# Both merge calls run through the protected-path gate (issue #4919) and
 	# still expose ready labels only after a successful bound merge request.
 	assert re.search(
-		r'if protected_path_guarded_merge gh_retry gh pr merge .*? --merge --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}"; then\n\s+record_auto_merge_ready_labels_allowed "true"',
+		r'protected_path_guarded_merge gh_retry gh pr merge .*? --merge --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}" \|\| _forward_merge_rc=\$\?\n'
+		r'\s+if \[ "\$\{_forward_merge_rc\}" -eq 0 \]; then\n\s+record_auto_merge_ready_labels_allowed "true"',
 		helper_text,
 	)
 	assert re.search(

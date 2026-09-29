@@ -1159,8 +1159,10 @@ reviews, comments, and conflicts stay a direct §12 request.
       (marker `<!-- ai:protected-path-authorization:v1 head=<sha> -->`) and
       logs `PROTECTED_PATH_GATE pr=… decision=block`.
     - `review_enable_auto_merge.sh` then logs
-      `AUTOFIX_AUTO_MERGE_PROTECTED_PATH … action=refuse` and withholds
+      `AUTOFIX_AUTO_MERGE_PROTECTED_PATH … action=refuse` (squash) or
+      `action=refuse_merge_commit` (forward-merge fallback PR) and withholds
       `ai:ready-to-merge`.
+    - The instruction comment lists at most 20 paths, then `… and N more`.
     - No label is added, so Claude checkers keep waiting instead of starting
       a fixer.
     - Read errors retry three times, then block for that attempt.
@@ -1168,8 +1170,12 @@ reviews, comments, and conflicts stay a direct §12 request.
       (`scripts/stage_workflow_support.sh`) and in the orchestrator's
       staging list (`orchestrate_poll.yml`).
     - `review_autofix.yml`'s deterministic-skip merge is not wrapped: its
-      `PROTECTED_SKIP_SUPPRESSED` guard already refuses the skip for
-      `.claude/*`, `workflow-templates/*`, and `scripts/*`.
+      `PROTECTED_SKIP_SUPPRESSED` guard refuses the skip for `.claude/*`,
+      `workflow-templates/*`, `scripts/*`, and
+      `tests/test_claude_template_parity.py`.
+      `tests/test_protected_path_authorization.py` runs the real guard over
+      every path in the gate's protected set, so a path added to the gate
+      must be added to the guard too.
   - **Release.** `test-and-mark-stable.yml` and `mark-stable.yml` run
     "Verify protected-path changes are authorized (issue #4919)" in
     `validate`, before `release` moves the `stable` tag.
@@ -1797,6 +1803,8 @@ and shipped:
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
+- `PROTECTED_PATH_GATE`
+- `AUTOFIX_AUTO_MERGE_PROTECTED_PATH`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1989,6 +1997,8 @@ LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
 LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=PROTECTED_PATH_GATE
+LOG_PREFIX.name=AUTOFIX_AUTO_MERGE_PROTECTED_PATH
 
 ---
 

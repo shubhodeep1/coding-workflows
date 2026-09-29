@@ -261,7 +261,10 @@ def evaluate_pr(
 
 def instruction_body(head: str, paths: list[str]) -> str:
 	"""The comment asking the owner for authorization; never a bare command."""
-	listed = "\n".join(f"- `{path}`" for path in paths) or "- (file list truncated; treated as protected)"
+	# Capped like the JSON output: GitHub rejects a comment over 65,536 characters.
+	listed = "\n".join(f"- `{path}`" for path in paths[:PATHS_IN_OUTPUT]) or "- (file list truncated; treated as protected)"
+	if len(paths) > PATHS_IN_OUTPUT:
+		listed += f"\n- … and {len(paths) - PATHS_IN_OUTPUT} more"
 	return (
 		f"{INSTRUCTION_MARKER.format(head=head)}\n"
 		"🔒 **Protected-path authorization required** (issue #4919)\n\n"

@@ -236,9 +236,14 @@ if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq '^auto/forward-merge-stable-'
 	if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
 		echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}')..."
 		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=merge_commit"
-		if protected_path_guarded_merge gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
+		_forward_merge_rc=0
+		protected_path_guarded_merge gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}" || _forward_merge_rc=$?
+		if [ "${_forward_merge_rc}" -eq 0 ]; then
 			record_auto_merge_ready_labels_allowed "true"
 			echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
+		elif [ "${_forward_merge_rc}" -eq 3 ]; then
+			echo "AUTOFIX_AUTO_MERGE_PROTECTED_PATH pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse_merge_commit"
+			echo "::warning::Auto-merge (merge commit) refused on forward-merge fallback PR #${PR_NUMBER}: it changes protected-equivalent paths and the repository owner has not authorized head ${INITIAL_HEAD_SHA} (issue #4919). The PR stays open; the owner posts '/authorize-protected-paths ${INITIAL_HEAD_SHA}' and merges it with 'Create a merge commit'."
 		else
 			echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Check that 'Allow merge commits' and 'Allow auto-merge' are enabled in repo settings and branch protection is configured. The PR remains open for manual 'Create a merge commit'."
 		fi

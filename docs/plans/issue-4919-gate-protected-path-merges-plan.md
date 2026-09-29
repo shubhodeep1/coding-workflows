@@ -65,7 +65,8 @@ rejected.
   - `review_autofix.yml` job `deterministic-skip-merge` (`:1900`, `:1918`).
     Its gate already turns the skip off (`PROTECTED_SKIP_SUPPRESSED`,
     `:1205-1210`) for any PR touching `.claude/*`, `workflow-templates/*`,
-    `scripts/*`, or `.github/*`.
+    `scripts/*`, or `.github/*`. Review round 1 added
+    `tests/test_claude_template_parity.py` to that list (AD-11).
 - **Release path.** Consumers sync from `refs/tags/stable`
   (`update_workflows.yml`, "Sync .claude/ assets from upstream"). The tag
   moves in `test-and-mark-stable.yml` job `release` ("Tag version and update

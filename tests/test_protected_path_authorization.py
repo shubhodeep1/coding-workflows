@@ -17,6 +17,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -144,6 +145,16 @@ def test_instruction_comment_never_authorizes():
 	assert f"<!-- ai:protected-path-authorization:v1 head={HEAD} -->" in body
 	assert f"/authorize-protected-paths {HEAD}" in body
 	assert ppa.comment_authorizes(_comment(body=body), HEAD) != ""
+
+
+def test_instruction_comment_caps_the_path_list():
+	paths = [f".claude/commands/cmd-{n:04d}.md" for n in range(3000)]
+	body = ppa.instruction_body(HEAD, paths)
+	listed = [line for line in body.splitlines() if line.startswith("- `")]
+	assert listed == [f"- `{path}`" for path in paths[:ppa.PATHS_IN_OUTPUT]]
+	assert f"- … and {3000 - ppa.PATHS_IN_OUTPUT} more" in body
+	assert len(body) < 5000
+	assert "- … and" not in ppa.instruction_body(HEAD, paths[:ppa.PATHS_IN_OUTPUT])
 
 
 def test_authorizing_comment_requires_full_sha():
@@ -559,6 +570,106 @@ def test_review_enable_auto_merge_refuses_without_ready_labels():
 	assert 'record_auto_merge_ready_labels_allowed "true"' not in refuse
 
 
+def _run_auto_merge_script_on_protected_pr(tmp_path, head_ref):
+	"""Run the real review_enable_auto_merge.sh and gate with a fake `gh`.
+
+	The PR changes `.claude/settings.json` and has no owner comment, so the
+	real checker blocks it; the fake records every `gh` call.
+	"""
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	calls_path = tmp_path / "gh_calls.jsonl"
+	env_path = tmp_path / "github_env.txt"
+	fake_gh = bin_dir / "gh"
+	fake_gh.write_text(textwrap.dedent(f"""\
+		#!/usr/bin/env python3
+		import json, sys
+		args = sys.argv[1:]
+		with open({str(calls_path)!r}, "a", encoding="utf-8") as fh:
+		    fh.write(json.dumps(args) + "\\n")
+		if args[:1] == ["api"]:
+		    path = next(a for a in args[1:] if not a.startswith("-"))
+		    if "/labels" in path:
+		        sys.exit(0)
+		    if "/pulls/42/files" in path:
+		        print(json.dumps([{{"filename": ".claude/settings.json", "status": "modified"}}]))
+		        sys.exit(0)
+		    if "/issues/42/comments" in path:
+		        print("{{}}" if "POST" in args else "[]")
+		        sys.exit(0)
+		    if path.endswith("/pulls/42"):
+		        print(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {HEAD!r}}}, "body": ""}}))
+		        sys.exit(0)
+		    sys.exit(1)
+		if args[:2] == ["pr", "merge"]:
+		    sys.exit(0)
+		sys.exit(1)
+		"""), encoding="utf-8")
+	fake_gh.chmod(0o755)
+	env = {
+		**os.environ,
+		"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+		"GITHUB_REPOSITORY": "o/r",
+		"PR_NUMBER": "42",
+		"ENABLE_AUTO_MERGE": "true",
+		"FORWARD_MERGE_FALLBACK_AUTO_MERGE": "true",
+		"ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-",
+		"INITIAL_HEAD_SHA": HEAD,
+		"GH_TOKEN": "fake-token",
+		"GITHUB_ENV": str(env_path),
+		"GH_RETRY_MAX_ATTEMPTS": "1",
+	}
+	proc = subprocess.run(
+		["bash", str(SCRIPTS_DIR / "review_enable_auto_merge.sh")],
+		cwd=str(tmp_path), env=env, capture_output=True, text=True, check=False,
+	)
+	calls = [json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()] if calls_path.exists() else []
+	labels_allowed = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+	return proc, calls, labels_allowed
+
+
+@pytest.mark.parametrize("head_ref, action", [
+	("ai/issue-42", "refuse"),
+	("auto/forward-merge-stable-20260929", "refuse_merge_commit"),
+])
+def test_review_enable_auto_merge_refuses_an_unauthorized_protected_pr_end_to_end(tmp_path, head_ref, action):
+	proc, calls, labels_allowed = _run_auto_merge_script_on_protected_pr(tmp_path, head_ref)
+	assert proc.returncode == 0, proc.stderr
+	assert not [call for call in calls if call[:2] == ["pr", "merge"]], calls
+	assert f"AUTOFIX_AUTO_MERGE_PROTECTED_PATH pr=42 head_sha={HEAD} action={action}" in proc.stdout, proc.stdout
+	assert "decision=block" in proc.stderr
+	assert labels_allowed == ["AUTO_MERGE_READY_LABELS_ALLOWED=false"]
+	posts = [call for call in calls if call[:1] == ["api"] and "POST" in call]
+	assert len(posts) == 1 and f"head={HEAD}" in " ".join(posts[0])
+
+
+def test_every_protected_path_is_refused_the_deterministic_skip():
+	# review_autofix.yml's deterministic-skip merge is not wrapped by the gate
+	# (AD-3): its PROTECTED_SKIP_SUPPRESSED guard must cover the gate's whole
+	# protected set, including paths added to it later.
+	from test_workflow_failure_heal import SHA_A, _run_gate as _run_review_gate
+
+	paths = sorted(ppa.PROTECTED_FILES) + [f"{prefix}settings.json" for prefix in ppa.PROTECTED_PREFIXES]
+	paths.append("Tests/Test_Claude_Template_Parity.py")
+	for path in paths:
+		for previous in (None, path):
+			entry = {"filename": path, "status": "modified"}
+			if previous:
+				entry = {"filename": "docs/renamed.md", "previous_filename": previous, "status": "renamed"}
+			with tempfile.TemporaryDirectory(prefix="gate-protected-path-") as tmp_name:
+				result, outputs, _state = _run_review_gate(Path(tmp_name), comments=[], state_overrides={
+					"pr": {
+						"state": "open", "merged": False, "head": {"ref": "ai/issue-4919", "sha": SHA_A},
+						"labels": [], "additions": 1, "deletions": 1, "changed_files": 1,
+						"mergeable": True, "mergeable_state": "clean", "title": "test", "body": "",
+					},
+					"file_pages": [[entry]],
+				}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+			assert result.returncode == 0, (path, result.stderr)
+			assert outputs["deterministic_skip"] == "false", (path, previous, result.stdout)
+			assert "protected_suppressed=true" in result.stdout, (path, previous, result.stdout)
+
+
 @pytest.mark.parametrize("workflow, before", [
 	("test-and-mark-stable.yml", "- name: Verify CI passed on source branch"),
 	("mark-stable.yml", "- name: Verify CI passed on stable"),
@@ -577,6 +688,13 @@ def test_release_workflows_gate_protected_changes_before_the_tag_moves(workflow,
 	assert "exit 1" in block
 	release_job = text[release:release + 400]
 	assert "validate" in release_job.split("needs:", 1)[1].splitlines()[0]
+
+
+@pytest.mark.parametrize("prefix", ["PROTECTED_PATH_GATE", "AUTOFIX_AUTO_MERGE_PROTECTED_PATH"])
+def test_log_prefixes_are_registered(prefix):
+	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	assert f"- `{prefix}`" in agents_text
+	assert f"LOG_PREFIX.name={prefix}\n" in agents_text
 
 
 def test_ci_runs_this_file():

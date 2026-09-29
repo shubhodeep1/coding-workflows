@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4678-edit-files-without-python-heredocs
 - Project branch: claude/implement-plan-issue-4919-gate-protected-path-merges   Final PR: #4973 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR from `claude/implement-plan-issue-4919-gate-protected-path-merges-phase-1` (the PR that carries this line)
+- Waiting on: PR #4992
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: see the stage report and the next `— resume.` block (checker, safety net, and hand-back ids are armed after this PR opens)
+- Check-in: checker session_01GBDF73SehLSZua8ZpT29UT (reused); safety net and hand-back ids are in the review-round stage report and the next `— resume.` block
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified (73 new tests; every existing suite touching the changed files passes; the 114 other failures of the full suite fail identically on the unchanged base); phase PR opened.
+- Last note: review round 1 on PR #4992: all 4 consensus findings and both task gaps fixed in one `[claude-autofix]` commit (parity pins added to the deterministic-skip guard, forward-merge refusal logged, instruction list capped, log prefixes registered, end-to-end refusal tests); 0 rejected.
 
 ## Phases
-1. [ ] Phase 1 — protected-path merge and release authorization gate (scripts/protected_path_authorization.py, scripts/protected_path_gate.sh, merge-site wiring in review_enable_auto_merge.sh / review_rb_judge.sh / orchestrate_poll_process.sh, stage_workflow_support.sh + orchestrate_poll.yml staging, release gate in test-and-mark-stable.yml / mark-stable.yml, tests, ci.yml, CLAUDE.md §23.I, agents.md, changelog)   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — protected-path merge and release authorization gate (scripts/protected_path_authorization.py, scripts/protected_path_gate.sh, merge-site wiring in review_enable_auto_merge.sh / review_rb_judge.sh / orchestrate_poll_process.sh, stage_workflow_support.sh + orchestrate_poll.yml staging, release gate in test-and-mark-stable.yml / mark-stable.yml, tests, ci.yml, CLAUDE.md §23.I, agents.md, changelog)   — PR #4992 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -38,11 +38,13 @@
 - AD-8 [plan, 2026-09-29] Gate consumer repos too? — Picked: A — yes, only for PRs touching the protected set. Alternatives: B — coding-workflows only. Why: a consumer's `.claude/**` also steers its unattended sessions. Applied in: phase 1 PR. Status: pending review
 - AD-9 [plan, 2026-09-29] What happens on a read error? — Picked: A — retry three times, then refuse the merge for this attempt. Alternatives: B — fail open. Why: §1. Applied in: phase 1 PR. Status: pending review
 - AD-10 [plan, 2026-09-29] How is an authorized PR bound to its head on an unbound merge call? — Picked: A — the wrapper adds `--match-head-commit <authorized head>`. Alternatives: B — leave it. Why: otherwise a push between check and merge merges an unapproved head. Applied in: phase 1 PR. Status: pending review
+- AD-11 [phase 1/1 — review round, 2026-09-29] How is the deterministic-skip gap for `tests/test_claude_template_parity.py` (review round 1, PR #4992) closed? — Picked: A — add the path to `review_autofix.yml`'s `PROTECTED_SKIP_SUPPRESSED` guard, with a test that runs the real guard over the gate's whole protected set. Alternatives: B — source the gate in the `deterministic-skip-merge` job and wrap its two merge calls; C — only extend the static wrap test to workflow YAML. Why: A is a one-line guard change that keeps AD-3's no-wrap design and fails CI when the two sets drift; B edits a near-limit workflow job (§27), and C alone would only fail, not fix. Applied in: PR #4992. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] `orchestrate_poll_process.sh` runs from the copy `orchestrate_poll.yml` stages from a fixed script list, not from `stage_workflow_support.sh`; a new helper it sources must be added to that list too, or every orchestrator run fails at staging. (files: .github/workflows/orchestrate_poll.yml, scripts/stage_workflow_support.sh)
 - [source:plan-deviation] A GitHub Actions step `name:` containing ` #` must be quoted: YAML reads the rest as a comment and silently truncates the name (yamllint reports it only as a comment-spacing warning). (files: .github/workflows/test-and-mark-stable.yml, .github/workflows/mark-stable.yml, .github/workflows/ci.yml)
 - [source:plan-deviation] A gate wrapped around a shared merge path must leave the unaffected case byte-for-byte unchanged: requiring a well-formed head SHA for every PR broke 40 orchestrator tests whose fakes use placeholder SHAs, so the SHA is required only where it is used (a protected PR). (files: scripts/protected_path_authorization.py, tests/test_orchestrate_poll_process.py)
+- [source:intervention] A merge gate that leaves `review_autofix.yml`'s deterministic-skip merge unwrapped depends on its `PROTECTED_SKIP_SUPPRESSED` guard covering the gate's whole protected set; pin that with a test that runs the real guard over every protected path, so adding a path to one list without the other fails CI. (files: .github/workflows/review_autofix.yml, scripts/protected_path_authorization.py, tests/test_protected_path_authorization.py)
 
 ## Notes
 - Issue mode: permission mode `auto` (recorded, not asked).
