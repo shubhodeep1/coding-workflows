@@ -1119,6 +1119,38 @@ reviews, comments, and conflicts stay a direct §12 request.
   `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`,
   `tests/test_permission_prompts.py` (one `ci.yml` step).
 
+## Unattended question guard (CLAUDE.md §28.G)
+
+- `.claude/hooks/unattended_question_guard.py` runs on `Stop` and on
+  `PreToolUse` for `AskUserQuestion`. It acts only in sessions marked
+  unattended by `unattended_question_guard.py mark --repo <owner>/<repo>
+  --issue <N>`, which writes
+  `~/.claude/unattended-issue-mode/<CLAUDE_CODE_REMOTE_SESSION_ID>.json`.
+- **Who marks:** `/implement-issue-claude` step 0, and every
+  `/implement-plan-claude` session whose plan has a `Source issue:` line
+  (step 1). Both forms of the `mark` command are allowlisted.
+- **Without a mark:** without `CLAUDE_CODE_REMOTE_SESSION_ID`, `mark` writes
+  nothing and exits 0. A session without a marker for its own id prints
+  nothing and is never blocked.
+- **`Stop`:** blocks (`{"decision": "block"}`) when both of these hold:
+  - the final message has a §2 question (`Q<n>:` plus two or more lettered
+    choice lines, or `Q<n>: A/B`) or a fixed-phrase permission ask;
+  - no tool call in the current turn carried
+    `<!-- ai:claude-blocked:v1 -->` with a non-error result. The hook reads
+    this from `transcript_path`. `last_assistant_message` is preferred for
+    the final text.
+
+  The per-session count lives in `<id>.state.json`, with a cap of 2 blocks.
+  After the cap the stop is allowed with a
+  `unattended-question-guard: cap reached …` `systemMessage` and a
+  `cap_reached` line in `stop-guard.jsonl`.
+- **`AskUserQuestion`:** denied (`permissionDecision: "deny"`) in a marked
+  session, with no cap.
+- **Failure and cost:** fails open with a `systemMessage` (bad payload,
+  unreadable marker or state, internal error). No API calls, no escape hatch.
+- **Tests and twin:** byte-identical twin under `workflow-templates/.claude/`;
+  tests in `tests/test_unattended_question_guard.py` (own `ci.yml` step).
+
 ---
 
 ## Repo-specific batching helpers

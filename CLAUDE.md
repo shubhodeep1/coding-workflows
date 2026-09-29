@@ -2297,6 +2297,44 @@ never see this file. §28 changes nothing about the orchestrator's own
 clarify auto-answer (`[auto-answered-by-orchestrator]`), which keeps its
 own policy.
 
+### G) Enforcement: No Turn Ends on an Unread Question
+
+Prose alone did not stop unattended issue-mode sessions from ending their
+turn on an in-session Q/A question, or from stalling on an `AskUserQuestion`
+permission prompt (issue #4911). `.claude/hooks/unattended_question_guard.py`
+enforces §28.B and §28.C in those sessions. It is wired in
+`.claude/settings.json` on `Stop` and on `PreToolUse` with the matcher
+`AskUserQuestion`.
+
+- **Which sessions.** Only sessions marked unattended. The §28.A issue-mode
+  preflight marks them: `/implement-issue-claude` step 0 and every
+  `/implement-plan-claude` session whose plan carries a `Source issue:` line
+  run `unattended_question_guard.py mark --repo <owner>/<repo> --issue <N>`.
+  That writes `~/.claude/unattended-issue-mode/<CLAUDE_CODE_REMOTE_SESSION_ID>.json`.
+  A session without `CLAUDE_CODE_REMOTE_SESSION_ID`, or without a marker for
+  that id, is never blocked or denied. That covers every interactive and
+  local session.
+- **`Stop`.** The hook blocks the stop when both of these hold:
+  - the final assistant message asks a §2 question (a `Q<n>:` line with
+    lettered choices, or `Q<n>: A/B`) or asks for permissions;
+  - no tool call in the current turn posted a `<!-- ai:claude-blocked:v1 -->`
+    comment. The hook checks this in the local transcript, with no API calls.
+
+  The reason restates §28.B and §28.C and names the self-serve writes: §23.B
+  comments and labels, and the command-approved dispatches through
+  `dispatch_workflow.py`. At most 2 blocks per session. The third such stop is
+  allowed, with a `systemMessage` starting
+  `unattended-question-guard: cap reached` and one JSON line in
+  `~/.claude/unattended-issue-mode/stop-guard.jsonl`.
+- **`AskUserQuestion`.** Always denied in a marked session, with the same
+  §28 reason.
+- **Fail open.** The hook allows with a `systemMessage` on an unreadable,
+  invalid, or non-object payload, an unreadable marker or state file, or an
+  internal error, and allows empty input silently. It makes no GitHub API
+  calls (§15) and has no environment-variable escape hatch.
+  `tests/test_unattended_question_guard.py` covers the rules and the wiring
+  and runs in its own `ci.yml` step.
+
 ---
 
 ## FINAL REMINDER

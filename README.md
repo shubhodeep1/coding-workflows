@@ -1080,6 +1080,18 @@ not delete wrappers that are already present in `.github/workflows/`.
 > requires Auto mode, and stops before any phase that must edit `.claude/**`
 > to ask how to run it.
 
+> **Unattended question guard (CLAUDE.md §28.G):** the same sync ships
+> `.claude/hooks/unattended_question_guard.py`, wired on `Stop` and on
+> `AskUserQuestion`. It enforces §28 in unattended issue-mode sessions, which
+> mark themselves at the start of `/implement-issue-claude` and of every
+> issue-mode `/implement-plan-claude` stage.
+> - A marked session cannot end its turn on an in-session Q/A question or a
+>   request for permissions unless it posted the `ai:claude-blocked` comment
+>   on the issue. At most 2 blocks per session, then the stop is allowed with
+>   a `cap reached` system message.
+> - `AskUserQuestion` is denied in a marked session.
+> - Interactive sessions are never marked, so the hook never affects them.
+
 > **Audit identity and regeneration:**
 > `scripts/security/check-npm-audit.js` matches findings on
 > `severity|package|advisoryId` (`advisoryId` prefers GHSA, then CVE).

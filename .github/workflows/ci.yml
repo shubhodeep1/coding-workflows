@@ -425,6 +425,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_check_in_reminder.py
 
+      - name: Unattended question guard hook tests (CLAUDE.md §28.G)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unattended_question_guard.py
+
       - name: Check-in status helper tests (/implement-plan-claude, CLAUDE.md §26)
         run: |
           set -euo pipefail
