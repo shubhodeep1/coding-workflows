@@ -1,30 +1,36 @@
 # Implement-Plan Log — validate.yml authorizes a stable target only for a verified workflow-heal issue bound to the PR
 
-- Plan: docs/plans/issue-4791-validate-stable-heal-provenance-plan.md
+- Plan: docs/completed/issue-4791-validate-stable-heal-provenance-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4791
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4734-validate-stacked-stable-targets
 - Project branch: claude/implement-plan-issue-4791-validate-stable-heal-provenance   Final PR: #4793 draft (into claude/implement-plan-issue-4734-validate-stacked-stable-targets)
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
-- Activation: not started
-- Waiting on: PR #4803 (review round 4)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4734-validate-stacked-stable-targets)
+- Waiting on: the completion PR from claude/implement-plan-issue-4791-validate-stable-heal-provenance-complete
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01XWRiu3ZyGe3ooZRkGRuffy   safety net and hand-back: see the stage report
+- Check-in: checker session_01XWRiu3ZyGe3ooZRkGRuffy   safety net and hand-back: see the completion stage report
 - Last updated: 2026-09-29
-- Last note: review round 3 on PR #4803 (head c9cad16): both findings rejected as stated, and the stale text behind them fixed (AD-8). The `all(.[]; type == "array")` claim repeats round 2's misread; a live `gh api --paginate --slurp` read of issue #4791's events returned `[[4 events]]`. The PR description already had the paginated wording; the one-page wording the reviewer quoted survived in this plan's Goal 1.5, Goal 5, Approach, Constraints, and Tests, which now match AD-5 to AD-7. validate.yml documents the `[[event, ...], ...]` shape at the check, and a test pins a bare event list as refused. tests/test_validate_target_ref_input.py + checkout-audit + size-limit 17 passed, the 26 suites that read validate.yml 346 passed, actionlint clean, validate.yml 72,816 bytes.
+- Last note: completion stage: plan moved to docs/completed/; conformance run 1 CONFORMANT; security skipped (plan header); validation skipped under Q2: A (a deadlock with project #4734, which covers this code in its own validation). Next: final-merge 1/1 marks #4793 ready and closes #4791 with `ai:merged` once it merges.
 
 ## Phases
-1. [ ] Phase 1 — verify heal provenance and PR binding for stable targets in validate.yml   — PR #4803 open (waiting); review rounds: 3; interventions: 0
+1. [x] Phase 1 — verify heal provenance and PR binding for stable targets in validate.yml   — PR #4803 merged 2026-09-29 (1407d6c, merged by the operator under Q1: A); review rounds: 4; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT (Implemented COMPLETE, Correctness PASS, no findings) — no fixes (pre-security). Checks: tests/test_validate_target_ref_input.py + checkout audit + size limit 17 passed; the 35 suites that read validate.yml apart from the poller suite 633 passed (69 need `jsonschema` and `jinja2`, which the container lacked; they fail identically on the pre-merge base f6426be); tests/test_orchestrate_poll_process.py could not run (over 13 minutes, does not exercise this step); actionlint 1.7.12 clean; validate.yml 72,816 bytes.
 
 ## Security pass
+- Skipped (ai:security: automation-produced issue, per the plan header).
 
 ## Validation
+- Skipped (covered by #4734's project validation) — Q2: A, 2026-09-29 (issue comment 5884718839, standing decision Q17: A in docs/operations/master-session.md). `validate.yml@main` lists only target PRs into `main`, and final PR #4793 goes into the #4734 project branch, which is what #4734 adds support for; #4734 waits on this issue, so neither could proceed. #4734 re-runs its security audit and runtime validation on a branch that contains this fix before anything reaches `main`.
 
 ## Completion
+- Completion PR from claude/implement-plan-issue-4791-validate-stable-heal-provenance-complete (open) — doc moved to docs/completed/issue-4791-validate-stable-heal-provenance-plan.md
+- Final PR #4793 draft
 
 ## Activation
+- n/a: the base is the #4734 project branch, so this change goes live with project #4734.
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-28] Which provenance rules decide a genuine heal issue? — Picked: A — the `security_pass_skip.py` rules (automation author, label applied at creation by the author, fp marker) plus the issue naming `stable` as its branch. Alternatives: B — author and marker only, no events read; C — a new provenance record written by the heal intake. Why: reuses the rules already reviewed for #4623 at one extra read; C needs a new producer and still would not bind the PR. Applied in: phase 1 PR. Status: pending review
@@ -39,8 +45,11 @@
 ## Lessons
 - [source:plan-deviation] A fail-closed "one 100-item page" read borrowed from a budget-bound check (security_pass_skip.py) is an availability gap in a workflow gate; paginate with `--paginate --slurp` and verify every page when the call runs rarely. (files: .github/workflows/validate.yml)
 - [source:intervention] When an auto-decision changes the approach mid-project, amend the plan doc's goals, approach, and tests in the same PR; reviewers and the conformance audit read the plan as the spec and keep flagging the superseded wording. (files: docs/plans/issue-4791-validate-stable-heal-provenance-plan.md)
+- [source:validation] A security follow-up of a project that changes `validate.yml` target authorization is built on that project's branch, but validation runs `validate.yml@main`, so the follow-up cannot be validated until the parent merges while the parent waits on the follow-up; decide the validation route when the follow-up is planned (the parent's validation covers it). (files: .github/workflows/validate.yml, .github/workflows/internal-validate.yml)
 
 ## Notes
+- 2026-09-29: phase 1 review round 4 repeated round 3's findings and no verdict bot is configured; blocked as Q1 on the issue. Q1: A (operator, comment 5883581758): PR #4803 merged into the project branch as 1407d6c under standing merge approval Q46.
+- 2026-09-29: validation blocked as Q2 (comment 5884489061); Q2: A (comment 5884718839).
 - Issue mode; base branch `claude/implement-plan-issue-4734-validate-stacked-stable-targets` (project #4734, final PR #4746 into main, open); security pass: skip (`security_pass_skip.py`: `ai:security` created and labelled by the issue automation).
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4791#issuecomment-5868284059
 - Protected paths: none (phase 1 touches no `.claude/**` path).
