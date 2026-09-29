@@ -466,13 +466,20 @@ def test_sweep_runs_the_pending_pass_only_for_open_verdicts(monkeypatch):
 	assert summary["pending_checks_merged"] == 1 and summary["queued"] == 1
 
 
-def test_sweep_pending_pass_fails_open_per_pr(monkeypatch, capsys):
+@pytest.mark.parametrize("error", [
+	sweeper.check_in_status.ReadError("HTTP 502"),
+	AttributeError("'NoneType' object has no attribute 'get'"),
+	KeyError("run_id"),
+	TypeError("malformed payload"),
+	ValueError("malformed payload"),
+])
+def test_sweep_pending_pass_fails_open_per_pr(monkeypatch, capsys, error):
 	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: [{"number": 1, "head_ref": REF}, {"number": 2, "head_ref": REF}])
 	monkeypatch.setattr(sweeper.check_in_status, "check_pr_hand_back", lambda *a, **k: {"done": False, "state": "open"})
 
 	def flaky(repo, number, dry_run):
 		if number == 1:
-			raise sweeper.check_in_status.ReadError("HTTP 502")
+			raise error
 		return {"state": "merge_enabled", "head_sha": HEAD}
 
 	summary = _sweep(pending=flaky)

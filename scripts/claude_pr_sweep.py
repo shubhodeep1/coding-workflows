@@ -253,10 +253,12 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 				if pending_checks is not None and state == "open":
 					# OSError too: the snapshot's temp directory can fail (disk
 					# full, unwritable TMPDIR), and that must not end the sweep
-					# for every later PR and repo.
+					# for every later PR and repo. AttributeError too: this pass
+					# parses more API payloads than the hand-back read above, and
+					# one malformed payload must not end the sweep either.
 					try:
 						pending = pending_checks(repo, number, dry_run)
-					except (check_in_status.ReadError, KeyError, OSError, TypeError, ValueError) as exc:
+					except (check_in_status.ReadError, AttributeError, KeyError, OSError, TypeError, ValueError) as exc:
 						summary["errors"] += 1
 						print(f"::warning::CLAUDE_PR_SWEEP pending_checks_failed repo={repo} pr=#{number} error={exc}")
 						continue
