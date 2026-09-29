@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T16:25:46Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A deliberate over-match in a safety check must say so in its docstring and be pinned by a test that exercises the over-matching case (not a fixture that sidesteps it, like `docs/README.md.bak`), or every review round re-flags it as a defect.",
+  "phase": "implement_plan",
+  "pr_number": 5116,
+  "record_id": "lesson-implement-plan-0f8732de02fede123a52c4ed",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4975-bind-flagger-citation-to-finding",
+    "file:scripts/review_claude_fixer_nonblocking.py",
+    "file:tests/test_review_claude_fixer_nonblocking.py"
+  ]
+}

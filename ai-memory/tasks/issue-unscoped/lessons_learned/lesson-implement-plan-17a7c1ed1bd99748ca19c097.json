@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T16:25:46Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a safety check compares locations parsed from free-form output, normalize every spelling of the same location (decorated or absolute paths, `N to M` ranges, line lists) before comparing, and let the comparison over-match where a match keeps the safe outcome; an exact-string compare silently turns a variant spelling into \"somewhere else\".",
+  "phase": "implement_plan",
+  "pr_number": 5116,
+  "record_id": "lesson-implement-plan-17a7c1ed1bd99748ca19c097",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4975-bind-flagger-citation-to-finding",
+    "file:scripts/review_claude_fixer_nonblocking.py"
+  ]
+}
