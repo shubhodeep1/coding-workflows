@@ -5,25 +5,26 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4786-guard-allow-read-loops   Final PR: #4796 draft
 - Status: BLOCKED
-- Stage: phase 1/1
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: [claude-twin-sync] of `.claude/hooks/gh_api_write_guard.py` on the phase 1 PR (operator's supervising session)
+- Waiting on: [claude-twin-sync] of `workflow-templates/.claude/hooks/gh_api_write_guard.py` (sha256 `061ef67e258d2e78f0ba7887991f3351136c3423616849b4d10c2a39c76e47bf`) into `.claude/hooks/` on conformance fix PR #5049 (operator's supervising session, Q40), then `/reclarify` on #4786. On resume: arm the wait on PR #5049 (next stages `conformance 2/3` on merge, `conformance 1/3 — review round` on a hand-off, `conformance 1/3 — blocked PR` on a block).
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (blocked before the first wait; no checker armed)
+- Check-in: checker session_01Cpvhi1Fix9rbzmu8UsiabB (idle, reused on resume)   safety net none   hand-back none
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented twin-first (Protected-path approval A): the guard change is in `workflow-templates/.claude/hooks/gh_api_write_guard.py` only, tests pass against the twin (227 passed), and the root `.claude/` copy waits for the operator's `[claude-twin-sync]`. The phase PR carries a hold claim; twin-parity and the new root-guard tests fail until the sync, as expected.
+- Last note: conformance 1/3 (session_01C7Dk6HHRbQQtdC65wjnFPQ) found one EVIDENCE-BASED BLOCKER: the raw-text fast path allowed a loop holding a quoted `gh api` write (`gh 'api' -X DELETE …`). Fixed twin-first per Q40 in PR #5049 (hold claim posted); the stage stops BLOCKED for the operator's `[claude-twin-sync]`.
 
 ## Phases
-1. [ ] Phase 1 — read-only loop approval in the `gh api` guard — protected paths: `.claude/hooks/gh_api_write_guard.py`
-   - [ ] `_is_approvable_read_loop` and the widened fast path / allow condition in `.claude/hooks/gh_api_write_guard.py` (plus docstring)
-   - [ ] byte-identical twin `workflow-templates/.claude/hooks/gh_api_write_guard.py`
-   - [ ] `tests/test_gh_api_write_guard.py`: `READ_LOOP_ALLOWED`, `READ_LOOP_NO_DECISION`, `READ_LOOP_ASK`, hook-process case
-   - [ ] CLAUDE.md §23.H table and paragraph, and §23.D.4 wording, mirrored byte-for-byte to `workflow-templates/CLAUDE.md`
-   - [ ] `agents.md` guard paragraph
-   - [ ] `changelog.d/4786-guard-read-only-for-loops.md`
+1. [x] Phase 1 — read-only loop approval in the `gh api` guard — protected paths: `.claude/hooks/gh_api_write_guard.py` — PR #4967 merged 2026-09-29 (after the operator's `[claude-twin-sync]` 1d62018)
+   - [x] `_is_approvable_read_loop` and the widened fast path / allow condition in `.claude/hooks/gh_api_write_guard.py` (plus docstring)
+   - [x] byte-identical twin `workflow-templates/.claude/hooks/gh_api_write_guard.py`
+   - [x] `tests/test_gh_api_write_guard.py`: `READ_LOOP_ALLOWED`, `READ_LOOP_NO_DECISION`, `READ_LOOP_ASK`, hook-process case
+   - [x] CLAUDE.md §23.H table and paragraph, and §23.D.4 wording, mirrored byte-for-byte to `workflow-templates/CLAUDE.md`
+   - [x] `agents.md` guard paragraph
+   - [x] `changelog.d/4786-guard-read-only-for-loops.md`
    - Done when the pytest run in the plan passes, both twins `cmp` identical, the incident command → `allow`, and a `-X DELETE` loop → `ask`
 
 ## Conformance
+- Run 1 — 2026-09-29: INCOMPLETE (Correctness FAIL: 1 EVIDENCE-BASED BLOCKER, the fast path at `.claude/hooks/gh_api_write_guard.py:1006` allowed a loop holding a quoted `gh api` write) — fix PR #5049 (pre-security, twin-first per Q40)
 
 ## Security pass
 
@@ -46,9 +47,11 @@
 - AD-10 [phase 1/1, 2026-09-28] How to "build on #4704" (operator note on #4786) while #4704 is still open? — Picked: A — merge #4704's head into the phase branch, then merge `main` once #4704 merges. Alternatives: B — build on the project branch alone and reconcile at #4704's merge. Why: the operator asked to build on it; #4704 merged 2026-09-28 and the phase branch now carries it through `main` (operator relay Q7: A). Applied in: phase 1 PR. Status: pending review
 - AD-11 [phase 1/1, 2026-09-28] May `$VAR` form the first path segment of a `gh api` endpoint (`gh api $r`)? — Picked: A — no, the first segment must be literal. Alternatives: B — yes, anywhere before `?`. Why: §1; a first-segment variable could pick `graphql` or any other top-level endpoint. Applied in: phase 1 PR. Status: pending review
 - AD-12 [phase 1/1, 2026-09-28] May the lowercase loop variable name a proxy (`https_proxy`, `no_proxy`, …)? — Picked: A — no, any name containing `proxy` is rejected. Alternatives: B — any lowercase name, as the plan's AD-3 alone allows. Why: §1; assigning to an already exported lowercase proxy variable re-routes `gh`'s traffic. Applied in: phase 1 PR. Status: pending review
+- AD-13 [phase 1/1 — resume, 2026-09-29] Push the progress-log update (Status IN_PROGRESS, Waiting on PR #4967, phase 1 sub-items verified: 230 passed, twins cmp-identical, incident loop → allow, DELETE loop → ask) to the phase branch while a review run is in progress on 1d62018? — Picked: A — defer it to the next stage's commit. Alternatives: B — push now and restart the review. Why: a docs-only push would cancel the in-flight reviewer panel; the resume block carried the state meanwhile. Applied in: no code change. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] A lowercase-only rule for a shell variable the guard lets a loop assign is not enough: exported lowercase variables such as `https_proxy` / `no_proxy` still change how `gh` connects, so reject proxy names too. (files: workflow-templates/.claude/hooks/gh_api_write_guard.py)
+- [source:conformance] A guard fast path that skips commands without raw `gh api` text must not approve anything it later finds as a dequoted `gh api` call (`gh 'api'`, `"gh" api`): the raw-text check never classified it, so require every `gh api` item to match a classified call. (files: .claude/hooks/gh_api_write_guard.py, workflow-templates/.claude/hooks/gh_api_write_guard.py)
 
 ## Notes
 - Started by the Claude issue dispatcher (trigger `trig_01UiUhRwpsg5tCsavLazmm7R`) in session `session_01TnvYqW1gqscFF4mBgRJHdk`, Auto mode.
@@ -59,3 +62,5 @@
 - Resumed 2026-09-28 by `/reclarify` in session `session_01MgikEs3YDowQVZL9F3ubPr` (dispatch trigger `trig_01KoML4yQeqmeRtdepeE24go`).
 - 2026-09-29: merged `origin/main` (with #4704) into the project and phase branches on the operator relay Q7: A (trigger `trig_01XVS43dbsJrNCdJnuf9fGrC`); no conflicts. The root `.claude/hooks/gh_api_write_guard.py` now equals `main`'s, and the twin is `main`'s plus this phase's additions only.
 - `tests/test_family_node_runtime.py` fails locally on `origin/main` too (2 tests); unrelated to this phase.
+- 2026-09-29: resumed after the operator's `[claude-twin-sync]` (1d62018) lifted the hold; phase 1 PR #4967 merged 04:32Z. Check-in for that wait: checker session_01Cpvhi1Fix9rbzmu8UsiabB, safety net trig_01AF7E6kfVHozS31Zye6WLSW, hand-back trig_014gAejXbcZyWmzg5ZqUPQaj (both deleted by conformance 1/3). Issue progress comment id 5868290840.
+- Protected-path approval: conformance fix 1 — twin-first per Q40 (standing operator decision, 2026-09-29): PR #5049 edits only `workflow-templates/.claude/hooks/gh_api_write_guard.py`; the root copy waits for `[claude-twin-sync]`.
