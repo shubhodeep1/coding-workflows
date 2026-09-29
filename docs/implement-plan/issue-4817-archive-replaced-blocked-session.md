@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#4817 (https://github.com/shubhodeep1/coding-workflows/issues/4817)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4817-archive-replaced-blocked-session   Final PR: #4827 draft
-- Status: BLOCKED
-- Stage: phase 1/1
+- Status: IN_PROGRESS
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #4846 twin sync by the supervising session (interim twin-first rule), then `/reclarify` on #4817
+- Waiting on: PR #4846
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
-- Last updated: 2026-09-28
-- Last note: phase 1 implemented twin-first and pushed as PR #4846 with a `hold` claim on its head; stopped BLOCKED on #4817 listing the files to copy and the exact `claude-issue-pickup.md` diff.
+- Check-in: project checker armed right after the review-round push (ids in the stage report and the issue progress comment)
+- Last updated: 2026-09-29
+- Last note: resumed after the twin sync (`f523f30`, #4817 Q1: A); synced the project branch with main (`e4d6391`); review round 1 on `f523f30`: fixed the `parse_sessions_listing` candidate cap and the preamble-array acceptance and the quoted-marker match, rejected 2 findings with reasons.
 
 ## Phases
-1. [ ] Phase 1 — blocked-session marker, `replaced-sessions` selection, pickup archive step   — PR #4846 open (hold: awaiting twin sync); review rounds: 0; interventions: 0 — protected paths: `.claude/settings.json`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/implement-issue-claude.md` (edited through their `workflow-templates/.claude/` twins), `.claude/commands/claude-issue-pickup.md` (no twin; exact diff listed for the supervising session)
+1. [ ] Phase 1 — blocked-session marker, `replaced-sessions` selection, pickup archive step   — PR #4846 open (twin sync `f523f30` 2026-09-29); review rounds: 1; interventions: 0 — protected paths: `.claude/settings.json`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/implement-issue-claude.md` (edited through their `workflow-templates/.claude/` twins), `.claude/commands/claude-issue-pickup.md` (no twin; exact diff listed for the supervising session)
    - [x] `scripts/claude_issue_route.py`: `blocked_comment_session`, `parse_sessions_listing`, `select_replaced_sessions`, `fetch_issue_comments`, CLI `replaced-sessions`
    - [x] `workflow-templates/.claude/settings.json`: two `replaced-sessions` allow rules
    - [x] `workflow-templates/.claude/commands/implement-plan-claude.md` + `implement-issue-claude.md`: blocked-session marker line
@@ -46,6 +46,8 @@
 - AD-11 [plan, 2026-09-28] How is the new subcommand allowlisted? — Picked: A — two new `permissions.allow` rules for `replaced-sessions` in the settings twin. Alternatives: B — a flag on the allowlisted `queue-pending`. Why: a narrow rule for each subcommand, reviewed at the twin sync. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] When a script locates a JSON result inside a harness-saved tool-result file, scan every `[` / `{` lazily and accept only a candidate whose shape is the expected result; a fixed candidate cap, or accepting any JSON array, misses the result behind a bracket-heavy preamble. (files: scripts/claude_issue_route.py)
+- [source:intervention] A hidden HTML-comment marker that a script parses from an issue comment must be matched on a line of its own: the same comment often quotes the marker in prose or a diff, and an unanchored match counts the quote. (files: scripts/claude_issue_route.py)
 - [source:plan-deviation] A new test helper in a large test module must be checked against the module's existing private helpers too (`_comment` already existed in tests/test_claude_issue_route.py); a shadowing helper silently breaks earlier tests. (files: tests/test_claude_issue_route.py)
 
 ## Notes
@@ -53,3 +55,5 @@
 - Security pass: run (`security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}`).
 - Protected-path approval: phase 1 — interim twin-first rule (operator #4750 Q40: A, restated in the #4817 body: "Edits to `.claude/commands/**` follow the interim twin-first rule until #4785 lands") (2026-09-28). The phase edits only the `workflow-templates/.claude/` twins, pushes, posts a `hold` claim, and stops BLOCKED listing the files to copy and the exact `claude-issue-pickup.md` diff.
 - Phase 1 verification (2026-09-28): real tree `tests/test_claude_issue_route.py` 228 passed; scratch copy with twins synced and the pickup diff applied: CI step files 309 passed, the 60 test files referencing the changed files 2766 passed, 8 environmental failures (7 need a `.git` directory and pass in the real checkout, 1 needs `gawk`, not installed here). Pickup diff sha256 of the result: 5df0a2100a8146e8911d196e65996bab0676ac0eef7d2485429cbb21ea6d0bb2.
+- Resumed 2026-09-29 in session `session_0176578RCQhTAxSESw6Zjbjq` (started by the master session, operator Q14: A, after `/reclarify`). The blocked session `session_012VrDSaYG3hUdX8hAvmRAUf` was already archived. Project branch synced with `origin/main` (clean merge, `e4d6391`).
+- Review round 1 (head `f523f30`, ledger `4ced9e51…`): fixed — `parse_sessions_listing` 50-candidate cap (consensus, plus the task gap) and its latency note (lazy scan); fixed proactively — a JSON array of non-sessions in the preamble was taken as an empty listing, and `BLOCKED_SESSION_MARKER_RE` counted a marker quoted inside a line, so #4817's own blocked comment (which quotes it) read as `several_markers` and named nothing; the marker now counts only on a line of its own. Rejected — `str.removesuffix` (runtime is Python 3.11 in sessions and 3.12 in CI); exit 2 not retried (deliberate fail-closed: a missed archive leaves the session as it was before this change).

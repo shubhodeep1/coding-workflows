@@ -1657,6 +1657,19 @@ def test_blocked_comment_session_names_nothing_without_a_trusted_marker(comments
 	assert result["session_id"] == "" and result["reason"] == reason
 
 
+def test_blocked_comment_session_ignores_markers_quoted_inside_a_line():
+	# #4817's own blocked comment quoted the marker in its file list and diff;
+	# counted, those made the named route fail with `several_markers`.
+	body = (
+		_blocked_comment_body()
+		+ "\n2. Issue Mode blocked stops gain the `<!-- ai:claude-blocked-session:v1 id=… -->` line."
+		+ "\n```diff\n+   - line `<!-- ai:claude-blocked-session:v1 id=session_01AnotherSessionId000 -->`\n```"
+	)
+	assert route.blocked_comment_session([_blocked_issue_comment(body)])["session_id"] == BLOCKED_NAMED_SESSION
+	crlf = _blocked_comment_body().replace("\n", "\r\n")
+	assert route.blocked_comment_session([_blocked_issue_comment(crlf)])["session_id"] == BLOCKED_NAMED_SESSION
+
+
 def test_blocked_comment_session_does_not_let_an_untrusted_comment_hide_the_trusted_one():
 	comments = [
 		_blocked_issue_comment(_blocked_comment_body(), created="2026-09-28T10:00:00Z", cid=1),
@@ -1687,6 +1700,23 @@ def test_parse_sessions_listing_accepts_raw_and_harness_saved_results(wrap):
 def test_parse_sessions_listing_rejects_text_without_a_result():
 	with pytest.raises(ValueError):
 		route.parse_sessions_listing("no json here")
+
+
+def test_parse_sessions_listing_finds_the_result_after_a_bracket_heavy_preamble():
+	# Review round 1 of PR #4846: a 50-candidate cap missed a result that
+	# followed more than 50 `[` / `{` characters, and the CLI exited 2. A JSON
+	# array of non-sessions in the preamble (`[1, 2]`) was also taken as an
+	# empty listing.
+	sessions = [_listed_session(BLOCKED_NAMED_SESSION, "implement-issue-claude — #4817")]
+	preamble = "[x] {y} " * 200 + "[1, 2] {\"a\": 1} " * 20
+	text = preamble + json.dumps({"ccr": {"data": sessions}}) + "\n</other-session>"
+	assert route.parse_sessions_listing(text) == sessions
+	assert route.parse_sessions_listing("[1, 2] " + json.dumps(sessions)) == sessions
+
+
+def test_parse_sessions_listing_scans_every_candidate_before_giving_up():
+	with pytest.raises(ValueError):
+		route.parse_sessions_listing("[x] {y} " * 500 + '{"a": 1} [1, 2]')
 
 
 def _select_replaced(sessions, named="", exclude=("session_01NewReplacementSession0", "session_01PickupSessionId000000")):

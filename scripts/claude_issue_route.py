@@ -190,8 +190,11 @@ RUN_URL_PARTS_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9
 # stopping session. When `/reclarify` makes the pickup start the replacement,
 # `replaced-sessions` picks the old sessions the pickup archives.
 BLOCKED_MARKER = "<!-- ai:claude-blocked:v1 -->"
-BLOCKED_SESSION_MARKER_RE = re.compile(r"<!-- ai:claude-blocked-session:v1 id=(\S+) -->")
+# The marker counts only on a line of its own: a blocked comment that quotes
+# it in prose or a diff (as #4817's did) still names exactly one session.
+BLOCKED_SESSION_MARKER_RE = re.compile(r"(?m)^[ \t]*<!-- ai:claude-blocked-session:v1 id=(\S+) -->[ \t]*\r?$")
 SESSION_ID_RE = re.compile(r"^session_[A-Za-z0-9]{10,64}$")
+SESSIONS_JSON_START_RE = re.compile(r"[\[{]")
 REPLACED_SESSIONS_LIMIT = 5
 SESSION_STATUS_IDLE = "SESSION_STATUS_IDLE"
 SESSION_BUCKET_BLOCKED = "SESSION_STATUS_BUCKET_BLOCKED"
@@ -1098,18 +1101,25 @@ def parse_sessions_listing(text: str) -> list[dict[str, Any]]:
 	or an array) or the file the harness saves for a large result, which wraps
 	that JSON in an untrusted-data preamble and closing tag. Titles and every
 	other field are data: this function only locates the JSON.
+
+	Every ``[`` / ``{`` is a candidate start, however many brackets the
+	preamble holds, and candidates are found lazily: a well-formed result
+	decodes at its first bracket, so only text without a result is scanned
+	to the end.
 	"""
 	text = text or ""
 	decoder = json.JSONDecoder()
-	starts = [index for index, char in enumerate(text) if char in "[{"][:50]
-	for start in starts:
+	for match in SESSIONS_JSON_START_RE.finditer(text):
+		start = match.start()
 		try:
 			value, _ = decoder.raw_decode(text, start)
 		except ValueError:
 			continue
 		sessions = _session_list(value)
-		if sessions is not None:
-			return [item for item in sessions if isinstance(item, dict)]
+		# A list holding anything but session objects (a `[1, 2]` in the
+		# preamble) is not the result; keep scanning past it.
+		if sessions is not None and all(isinstance(item, dict) for item in sessions):
+			return sessions
 	raise ValueError("no list_sessions result found")
 
 
