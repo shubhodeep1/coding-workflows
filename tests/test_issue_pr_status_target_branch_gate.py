@@ -144,6 +144,7 @@ def _run_step(
 	pr_merged: bool = True,
 	default_branch: str = "main",
 	pr_head_ref: str = "claude/some-feature",
+	pr_head_repo: str = REPOSITORY,
 	orch_graphql_fail: bool = False,
 ) -> dict:
 	tmp = Path(tempfile.mkdtemp(prefix="issue-pr-status-gate-"))
@@ -183,6 +184,7 @@ def _run_step(
 			"REPOSITORY": REPOSITORY,
 			"PR_NUMBER": "4748",
 			"PR_HEAD_REF": pr_head_ref,
+			"PR_HEAD_REPO_FULL_NAME": pr_head_repo,
 			"PR_BASE_REF": pr_base_ref,
 			"PR_BASE_DEFAULT_BRANCH": default_branch,
 			"PR_MERGED": "true" if pr_merged else "false",
@@ -271,6 +273,7 @@ def test_target_branch_alias_counts() -> None:
 		issues={10: {"body": "**Target branch:** `stable` (heal)\n", "labels": ["ai:workflow-heal"]}},
 		pr_base_ref="stable",
 		pr_body="Fixes #10\n",
+		pr_head_ref="ai/issue-10",
 	)
 	assert result["labels"] == [("10", "ai:merged")], result
 
@@ -425,6 +428,78 @@ def test_empty_default_branch_falls_back_to_main() -> None:
 	assert result["closed"] == [10], result
 
 
+def test_non_automation_head_on_integration_branch_is_left_untouched() -> None:
+	"""Issue #5226: an unrelated PR saying `Fixes #10` merged into the branch
+	#10's editable `Integration branch:` line names is not #10's assigned
+	fix. Off the default branch only an automation head counts, so the issue
+	gets no label. Exercises both body sources."""
+	for closing_refs in ([10], []):
+		result = _run_step(
+			issues={10: {"body": "- Integration branch: `claude/implement-plan-parent`\n", "labels": ["ai:security"]}},
+			pr_base_ref="claude/implement-plan-parent",
+			pr_body="Fixes #10\n",
+			closing_refs=closing_refs,
+			pr_head_ref="feature/unrelated",
+		)
+		assert result["labels"] == [], (closing_refs, result)
+		assert result["closed"] == [], (closing_refs, result)
+		assert (
+			"PR #4748 merged into claude/implement-plan-parent is not an automation PR for issue #10 "
+			f"(head feature/unrelated, head repo {REPOSITORY}); leaving its labels and state unchanged."
+		) in result["stdout"], result["stdout"]
+
+
+def test_fork_head_on_managed_child_project_branch_is_left_untouched() -> None:
+	"""Issue #5226: a fork PR whose head is named `ai/issue-10` must not close
+	a labelled child on its project branch; only a same-repository head
+	proves the automation created it. An empty head repo fails closed too."""
+	for head_repo in ("attacker/widgets", ""):
+		result = _run_step(
+			issues={10: {"body": MANAGED_CHILD_BODY, "labels": ["ai:orchestrator-managed"]}},
+			pr_base_ref="orchestrator/project-5",
+			pr_body="Fixes #10\n",
+			closing_refs=[10],
+			pr_head_ref="ai/issue-10",
+			pr_head_repo=head_repo,
+		)
+		assert result["labels"] == [], (head_repo, result)
+		assert result["closed"] == [], (head_repo, result)
+		assert (
+			"PR #4748 merged into orchestrator/project-5 is not an automation PR for issue #10 "
+			f"(head ai/issue-10, head repo {head_repo or 'none'}); leaving its labels and state unchanged."
+		) in result["stdout"], result["stdout"]
+
+
+def test_judge_followup_head_on_integration_branch_labels() -> None:
+	"""Issue #5226: the orchestrator judge's `fix/<n>-followup-<epoch>` PR is
+	an automation head and keeps labelling its issue on the integration
+	branch."""
+	result = _run_step(
+		issues={10: {"body": "- Integration branch: `claude/implement-plan-parent`\n", "labels": ["ai:security"]}},
+		pr_base_ref="claude/implement-plan-parent",
+		pr_body="Closes #10\n",
+		closing_refs=[10],
+		pr_head_ref="fix/10-followup-1790000000",
+	)
+	assert result["labels"] == [("10", "ai:merged")], result
+	assert result["closed"] == [], result
+
+
+def test_default_branch_merge_from_fork_still_labels_and_closes() -> None:
+	"""Issue #5226 only narrows non-default merges: GitHub closes the issue on
+	a default-branch merge whatever the head."""
+	result = _run_step(
+		issues={10: {"body": "Standalone issue.", "labels": []}},
+		pr_base_ref="main",
+		pr_body="Fixes #10\n",
+		closing_refs=[10],
+		pr_head_ref="patch-1",
+		pr_head_repo="contributor/widgets",
+	)
+	assert result["labels"] == [("10", "ai:merged")], result
+	assert result["closed"] == [10], result
+
+
 def test_unmerged_close_behaviour_is_unchanged() -> None:
 	"""Out of scope for #4813: a PR closed without merging keeps labelling the
 	linked issue `ai:closed` and closing it, whatever its base."""
@@ -450,5 +525,9 @@ if __name__ == "__main__":
 	test_rest_fallback_applies_the_same_managed_rule()
 	test_non_main_default_branch_is_resolved_from_payload()
 	test_empty_default_branch_falls_back_to_main()
+	test_non_automation_head_on_integration_branch_is_left_untouched()
+	test_fork_head_on_managed_child_project_branch_is_left_untouched()
+	test_judge_followup_head_on_integration_branch_labels()
+	test_default_branch_merge_from_fork_still_labels_and_closes()
 	test_unmerged_close_behaviour_is_unchanged()
 	print("PASS")
