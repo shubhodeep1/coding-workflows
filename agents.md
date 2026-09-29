@@ -824,16 +824,7 @@ defective), a security or validation read, the completion PR, the
 final merge, a `/verify-activation — scope activation` cycle, the
 `/deploy-activate` hand-off) runs in its own fresh session titled
 `#<issue> · PR #<pr> — implement-plan <slug> — <stage>`, which archives the previous stage session
-unless it is waiting on the user. Titles lead with the numbers (issue #4886):
-`#<issue> · ` when the project has a source issue, then the PR the session works
-on, else the project's final PR (the checker is
-`#<issue> · PR #<final> — implement-plan <slug> — checker`). A stage renames
-itself when it opens a PR. The checker reuse check and the zombie-checker cleanup
-match any title that contains `implement-plan <slug> — checker`, so older and
-hand-renamed checkers still match. Issue sessions start as
-`#<N> · issue <repo>#<N> — implement`, a fresh `/fix-claude-pr` session adds
-`#<I> · ` when its head is `claude/implement-plan-issue-<I>-…`, and
-`PR #<n> status check-in` titles and Routine names are unchanged. A finished stage session is not woken to
+unless it is waiting on the user; a finished stage session is not woken to
 continue, because the gap between check-ins outlives the prompt cache and a
 wake would re-send the whole history at full price. The one exception is the
 **hand-back**: when a PR the chain waits on is blocked, closed, or stuck,
@@ -846,7 +837,16 @@ itself. A scheduled Routine fire creates no session, so the hand-back adds
 no parent link, and it leaves the project checker running for the next
 wait. Merged PRs, review rounds, finished runs, and resolved issue lists
 still start a fresh stage session, and a failed hand-back falls back to a
-fresh `… — blocked PR` stage session. New projects work on a
+fresh `… — blocked PR` stage session. Titles lead with the numbers (issue #4886):
+`#<issue> · ` when the project has a source issue, then the PR the session works
+on, else the project's final PR (the checker is
+`#<issue> · PR #<final> — implement-plan <slug> — checker`). A stage renames
+itself when it opens a PR. The checker reuse check and the zombie-checker cleanup
+match any title that contains `implement-plan <slug> — checker`, so older and
+hand-renamed checkers still match. Issue sessions start as
+`#<N> · issue <repo>#<N> — implement`, a fresh `/fix-claude-pr` session adds
+`#<I> · ` when its head is `claude/implement-plan-issue-<I>-…`, and
+`PR #<n> status check-in` titles and Routine names are unchanged. New projects work on a
 project branch `claude/implement-plan-<slug>` with a draft final PR into the
 default branch (the orchestrator's `orchestrator/project-<N>` equivalent):
 phase and fix PRs target it, security (`security-audit.yml` `ref` input) and
