@@ -3,24 +3,24 @@
 - Plan: docs/plans/issue-4911-unattended-question-guard-plan.md
 - Source issue: shubhodeep1/coding-workflows#4911 (https://github.com/shubhodeep1/coding-workflows/issues/4911)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4911-unattended-question-guard   Final PR: draft (opened right after this commit; number in the issue progress comment)
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-4911-unattended-question-guard   Final PR: #4964 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5003 twin sync by the supervising session (interim twin-first rule, operator hook approval window Q62/Q64), then `/reclarify` on #4911
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened; implementing phase 1 under the interim twin-first rule.
+- Last note: phase 1 implemented twin-first and pushed as PR #5003 with a `hold` claim on its head; stopped BLOCKED on #4911 listing the 5 files to copy (new hook, settings.json, 3 commands).
 
 ## Phases
-1. [ ] Phase 1 — unattended question guard (`Stop` + `AskUserQuestion` hook, issue-mode marker)   — protected paths: `.claude/hooks/unattended_question_guard.py` [new], `.claude/settings.json`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/seed-repo.md` (all edited through their `workflow-templates/.claude/` twins)
-   - [ ] `workflow-templates/.claude/hooks/unattended_question_guard.py`: `mark` CLI, `Stop` block with cap 2, `AskUserQuestion` deny, fail open
-   - [ ] `workflow-templates/.claude/settings.json`: `Stop` + `PreToolUse` `AskUserQuestion` wiring, two `mark` allow rules
-   - [ ] `workflow-templates/.claude/commands/implement-issue-claude.md` step 0 + `implement-plan-claude.md` step 1 / Issue Mode: run `mark`
-   - [ ] `workflow-templates/.claude/commands/seed-repo.md`: list the hook
-   - [ ] CLAUDE.md §28.G, README.md, agents.md, `.github/workflows/ci.yml` step, `changelog.d/4911-unattended-question-guard.md`
-   - [ ] `tests/test_unattended_question_guard.py`
+1. [ ] Phase 1 — unattended question guard (`Stop` + `AskUserQuestion` hook, issue-mode marker)   — PR #5003 open (hold: awaiting twin sync); review rounds: 0; interventions: 0 — protected paths: `.claude/hooks/unattended_question_guard.py` [new], `.claude/settings.json`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/seed-repo.md` (all edited through their `workflow-templates/.claude/` twins)
+   - [x] `workflow-templates/.claude/hooks/unattended_question_guard.py`: `mark` CLI, `Stop` block with cap 2, `AskUserQuestion` deny, fail open
+   - [x] `workflow-templates/.claude/settings.json`: `Stop` + `PreToolUse` `AskUserQuestion` wiring, two `mark` allow rules
+   - [x] `workflow-templates/.claude/commands/implement-issue-claude.md` step 0 + `implement-plan-claude.md` step 1 / Issue Mode: run `mark`
+   - [x] `workflow-templates/.claude/commands/seed-repo.md`: list the hook
+   - [x] CLAUDE.md §28.G, README.md, agents.md, `.github/workflows/ci.yml` step, `changelog.d/4911-unattended-question-guard.md`
+   - [x] `tests/test_unattended_question_guard.py`
    - Done: new tests pass with the twins synced; existing settings/command/hook suites still pass
 
 ## Conformance
@@ -46,6 +46,7 @@
 ## Lessons
 
 ## Notes
+- Verification (2026-09-29, scratch copy with the 5 twins synced into `.claude/`): `tests/test_unattended_question_guard.py` 68 passed; 16 related suites 986 passed; 94 test files referencing touched paths run one by one: 83 pass, 2 collect nothing, 9 fail identically on unmodified `origin/main` (container environment: `test_family_*`, `test_render_validation_templates*`, one `test_implement_post_codex_recovery` case, `test_orchestrate_poll_process` timeout).
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher (trigger `trig_012hHLRNELGddsYm76muyywq`) in session `session_01MD1KoBnW8eNXCRP4Jn1Ysg`; permission mode auto.
 - Security pass: run (`security_pass_skip.py` → `{"skip": false, "label": null, "reason": "no skip label"}`).
 - Protected-path approval: phase 1 — interim twin-first rule (operator #4750 Q40: A, restated in the #4911 body: "use the interim twin-first rule (Q40: A). The operator approves the hook sync once") (2026-09-29). The phase edits only the `workflow-templates/.claude/` twins, pushes, posts a `hold` claim, and stops BLOCKED listing the files to copy.
