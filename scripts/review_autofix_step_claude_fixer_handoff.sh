@@ -27,9 +27,12 @@
 # which moves every consensus finding raised by exactly one reviewer and
 # rejected (REJECTED_FINDING lines in the raw pass-2 outputs under
 # PREVIOUS_REVIEWS_DIR) by a strict majority of the other successful
-# reviewers, at least two, into a NON-BLOCKING FINDINGS block. Rejections
-# are bound to the finding by its pass-1 consensus_id, never by file and
-# line proximity, and an ambiguous match stays blocking (issue #4687). The filtered
+# reviewers, at least two, into a NON-BLOCKING FINDINGS block. A rejection
+# counts only when it names a finding ID from this run's
+# PREVIOUS_REVIEWS_DIR/rejection_ids_pass1.json (issue #4688), so a line
+# quoted from the PR never counts and no manifest means no demotion. The ID
+# binds to the finding by its pass-1 consensus_id, never by file and line
+# proximity, and an ambiguous match stays blocking (issue #4687). The filtered
 # copy is what this step counts, digests, and posts; a round whose only
 # entries are non-blocking still posts the ledger, then takes the
 # zero-findings path. A missing or failing filter keeps the original ledger,

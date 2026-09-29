@@ -195,12 +195,12 @@ How to bucket reviewer entries:
 - Entries that follow the standard reviewer issue shape (File:/Line or code reference:/Problem:/Why it fails at runtime:/ISSUE_CONFIDENCE:) belong in CONSENSUS FINDINGS.
 - Entries emitted under a reviewer's "TASK COMPLETENESS / INTENT GAPS" checklist heading, or that follow the TASK_GAP shape (Requirement:/Expected change site:/Evidence of absence:/ISSUE_CONFIDENCE:), belong in CONSENSUS TASK GAPS. Do NOT shoehorn a TASK_GAP into CONSENSUS FINDINGS just because it lacks a file:line.
 - Always emit BOTH blocks even when one is empty; the empty body is the single line "(No findings reported.)" or "(No task gaps reported.)".
-- Lines of the form "REJECTED_FINDING: <consensus_id> | <file>:<line> | flagged_by: <slug> | reason: ..." are a
-  reviewer's verdict that another reviewer's earlier finding is not a defect. They are NOT findings: never emit them
+- Lines of the form "REJECTED_FINDING: <ID> | <file>:<line> | flagged_by: <slug> | reason: ..." (the ID looks
+  like RF-<16 hex>; older lines have no ID or cite a consensus_id instead) are a reviewer's
+  verdict that another reviewer's earlier finding is not a defect. They are NOT findings: never emit them
   as bullets in any block. Instead, add that reviewer's slug to the "rejected_by: [...]" line of the matching
-  CONSENSUS FINDINGS entry (the entry carrying the consensus_id the line cites; when no entry carries it, the
-  same file, nearby line, and same flagged_by slug); omit the line when no one rejected the entry. The line is
-  informational; keep the entry itself unchanged.
+  CONSENSUS FINDINGS entry (same file, nearby line, same flagged_by slug); omit the line when no one rejected
+  the entry. The line is informational; keep the entry itself unchanged.
 - A reviewer finding may carry a line "consensus_id: p1-<12 hex digits>" (the id of an earlier ledger entry the
   reviewer re-reports as the same defect). Copy that line verbatim into the CONSENSUS FINDINGS entry and the
   per-reviewer bullet built from that finding. Never invent a consensus_id, never take one from a
