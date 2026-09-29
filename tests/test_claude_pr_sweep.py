@@ -42,6 +42,32 @@ def test_candidates_are_open_same_repo_claude_prs(monkeypatch):
 	assert sweeper.list_candidates("o/r") == [{"number": 1, "head_ref": "claude/x"}, {"number": 6, "head_ref": "claude/y"}]
 
 
+def test_only_an_intentional_marker_drops_a_candidate(monkeypatch):
+	# Issue #4985: PR #4807's body only quoted the marker; the catch-all skipped it too.
+	prs = [
+		_pr(1, body="AD-3: `[skip ai]` plus a head-ref skip"),
+		_pr(2, body="```\n[skip ai]\n```"),
+		_pr(3, body="Notes\n\n[skip ai]\n"),
+		_pr(4, title="Docs [skip ai]"),
+	]
+	monkeypatch.setattr(sweeper.check_in_status, "gh_api_list", lambda path: prs)
+	assert sweeper.list_candidates("o/r") == [{"number": 1, "head_ref": "claude/x"}, {"number": 2, "head_ref": "claude/x"}]
+
+
+def test_a_stalled_review_is_queued_as_a_review_fix(monkeypatch):
+	posted = _setup(monkeypatch, {7: _due(state="review-stalled", kind="review")})
+	queued_items = []
+
+	def fake_queue(self_repo, token, repo, number, head, kind, claim, run_url):
+		queued_items.append((repo, number, kind))
+		return 902
+
+	summary = _run(queue=fake_queue)
+	assert summary["queued"] == 1 and queued_items == [("o/r", 7, "review")]
+	assert posted == [("o/r", 7, HEAD, "review", "sweep-run-123")]
+	assert "review" in route.PR_FIX_KINDS
+
+
 def _setup(monkeypatch, verdicts, candidates=None):
 	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: candidates if candidates is not None else [{"number": n, "head_ref": "claude/x"} for n in verdicts])
 
@@ -228,6 +254,7 @@ def test_workflow_runs_the_catch_all_hourly_with_the_queue_token():
 	assert env["CLAUDE_PR_SWEEP_MIN_AGE_HOURS"] == "${{ vars.CLAUDE_PR_SWEEP_MIN_AGE_HOURS || '2' }}"
 	assert env["CLAUDE_FIX_CLAIM_LEASE_HOURS"] == "${{ vars.CLAUDE_FIX_CLAIM_LEASE_HOURS || '3' }}"
 	assert env["CLAUDE_FIX_HAND_BACK_CAP"] == "${{ vars.CLAUDE_FIX_HAND_BACK_CAP || '3' }}"
+	assert env["CLAUDE_REVIEW_STALL_HOURS"] == "${{ vars.CLAUDE_REVIEW_STALL_HOURS || '2' }}"
 	assert "${{" not in step["run"]
 
 
