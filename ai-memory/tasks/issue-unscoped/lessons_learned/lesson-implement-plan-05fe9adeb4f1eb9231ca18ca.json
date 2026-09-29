@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T05:04:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a script locates a JSON result inside a harness-saved tool-result file, scan every `[` / `{` lazily and accept only a candidate whose shape is the expected result; a fixed candidate cap, or accepting any JSON array, misses the result behind a bracket-heavy preamble.",
+  "phase": "implement_plan",
+  "pr_number": 4846,
+  "record_id": "lesson-implement-plan-05fe9adeb4f1eb9231ca18ca",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4817-archive-replaced-blocked-session",
+    "file:scripts/claude_issue_route.py"
+  ]
+}

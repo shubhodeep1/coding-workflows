@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T05:04:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A hidden HTML-comment marker that a script parses from an issue comment must be matched on a line of its own: the same comment often quotes the marker in prose or a diff, and an unanchored match counts the quote.",
+  "phase": "implement_plan",
+  "pr_number": 4846,
+  "record_id": "lesson-implement-plan-34e4ab8fb5bdf0b7fae98045",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4817-archive-replaced-blocked-session",
+    "file:scripts/claude_issue_route.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T05:04:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A new test helper in a large test module must be checked against the module's existing private helpers too (`_comment` already existed in tests/test_claude_issue_route.py); a shadowing helper silently breaks earlier tests.",
+  "phase": "implement_plan",
+  "pr_number": 4846,
+  "record_id": "lesson-implement-plan-b514bdfd40bf9cd4cbc01275",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4817-archive-replaced-blocked-session",
+    "file:tests/test_claude_issue_route.py"
+  ]
+}
