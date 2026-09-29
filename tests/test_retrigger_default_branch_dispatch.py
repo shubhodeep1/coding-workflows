@@ -24,7 +24,10 @@ for the PR (``_autofix_pr_named_review_runs``):
   non-cancelled PR-named runs created since the head was pushed, with one
   extra call only when the branch lookup counted nothing, and fails closed,
   so the changes-lost retry stays bounded once it runs from the default
-  branch.
+  branch. A dispatch run that is not named for the PR (a renamed caller,
+  ``review_autofix.yml``, or an ``ai-review.yml`` that predates the run
+  name) consumes the budget itself, because its own retry could never
+  count it.
 """
 
 from __future__ import annotations
@@ -131,7 +134,7 @@ def test_both_steps_share_one_dispatch_chain() -> None:
 def test_changes_lost_step_passes_the_head_commit_time() -> None:
 	body = CHANGES_LOST_SCRIPT.read_text(encoding="utf-8")
 	assert 'REVIEWED_HEAD_COMMIT_EPOCH="$(git log -1 --format=%ct HEAD 2>/dev/null || echo "")"' in body
-	assert '"${REVIEWED_HEAD_SHA}" "${REVIEWED_HEAD_COMMIT_EPOCH}"; then' in body
+	assert '"${REVIEWED_HEAD_SHA}" "${REVIEWED_HEAD_COMMIT_EPOCH}" "${GITHUB_EVENT_NAME:-}"; then' in body
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +288,7 @@ def test_changes_lost_redispatch_uses_the_same_chain() -> None:
 		extra_env={
 			"HARNESS_PRELUDE": 'autofix_retrigger_has_inflight_peer() { return 1; }\n'
 			'autofix_changes_lost_head_retry_consumed() { printf "%s\\n" "BUDGET_ARGS $*"; return 1; }\n',
+			"GITHUB_EVENT_NAME": "workflow_dispatch",
 		},
 	)
 	assert proc.returncode == 0, proc.stderr
@@ -295,6 +299,7 @@ def test_changes_lost_redispatch_uses_the_same_chain() -> None:
 	fields = budget_line.split()
 	assert fields[1:4] == [PR, BRANCH, CURRENT_RUN]
 	assert len(fields[4]) == 40 and fields[5].isdigit(), budget_line
+	assert fields[6] == "workflow_dispatch", budget_line
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +473,10 @@ def test_budget_counts_a_pr_named_retry_since_the_push() -> None:
 	assert proc.returncode == 0, (proc.stdout, proc.stderr)
 	assert "prior_completed=1 pr_named_completed=1" in proc.stdout
 	assert len(calls) == 2
-	assert "status=completed" in calls[1] and "event=workflow_dispatch" in calls[1] and "-X GET" in calls[1]
+	assert "event=workflow_dispatch" in calls[1] and "-X GET" in calls[1]
+	# No status filter: the in-progress current run must be in the page so
+	# an unnamed dispatch run can be recognised (completed is filtered locally).
+	assert "status=" not in calls[1], calls[1]
 
 
 def test_budget_ignores_pr_named_runs_before_the_push_cancelled_and_itself() -> None:
@@ -572,3 +580,104 @@ def test_budget_available_when_no_retry_ran_yet() -> None:
 	)
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 	assert "prior_completed=0 pr_named_completed=0" in proc.stdout
+	# No sixth argument: the unnamed-dispatch check is skipped, and the budget
+	# line says so rather than hiding it.
+	assert "pr_named_completed=0 event=-" in proc.stdout
+
+
+def _unnamed_dispatch(run_id: int, status: str, conclusion: str | None, created_epoch: int) -> dict:
+	# A consumer ai-review.yml that predates the "[pr:<N>]" run name titles
+	# its dispatch runs with the workflow name only.
+	return {
+		"id": run_id,
+		"event": "workflow_dispatch",
+		"status": status,
+		"conclusion": conclusion,
+		"created_at": _iso(created_epoch),
+		"path": ".github/workflows/ai-review.yml",
+		"display_title": "AI Review",
+		"head_sha": "d" * 40,
+	}
+
+
+def test_budget_fails_closed_on_a_dispatch_run_not_named_for_the_pr() -> None:
+	# The loop the audit found: the head's pull_request twin was cancelled and
+	# the earlier retry ran unnamed, so neither lookup counts it. This run is
+	# unnamed too, so it must not dispatch another invisible retry.
+	proc, calls = _run_probe(
+		BUDGET,
+		[_branch_run(300, HEAD, "completed", "cancelled", PUSH_EPOCH, path=".github/workflows/ai-review.yml")],
+		[
+			_unnamed_dispatch(777, "completed", "failure", PUSH_EPOCH + 600),
+			_unnamed_dispatch(int(CURRENT_RUN), "in_progress", None, PUSH_EPOCH + 1200),
+		],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		HEAD,
+		str(PUSH_EPOCH - 60),
+		"workflow_dispatch",
+	)
+	assert proc.returncode == 0, (proc.stdout, proc.stderr)
+	assert "reason=unnamed_dispatch_run" in proc.stderr
+	assert len(calls) == 2, calls
+
+
+def test_budget_available_for_a_pr_named_dispatch_run_with_no_prior_retry() -> None:
+	# The current run is itself PR-named and in progress: it is recognised,
+	# not counted, and the budget stays available.
+	proc, calls = _run_probe(
+		BUDGET,
+		[_branch_run(300, HEAD, "completed", "cancelled", PUSH_EPOCH)],
+		[
+			_pr_named(int(CURRENT_RUN), "in_progress", None, PUSH_EPOCH + 600),
+			_pr_named(308, "queued", None, PUSH_EPOCH + 700),
+		],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		HEAD,
+		str(PUSH_EPOCH - 60),
+		"workflow_dispatch",
+	)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	assert "prior_completed=0 pr_named_completed=0 event=workflow_dispatch" in proc.stdout
+	assert len(calls) == 2, calls
+
+
+def test_budget_counts_the_prior_retry_for_a_pr_named_dispatch_run() -> None:
+	proc, _ = _run_probe(
+		BUDGET,
+		[_branch_run(300, HEAD, "completed", "cancelled", PUSH_EPOCH)],
+		[
+			_pr_named(int(CURRENT_RUN), "in_progress", None, PUSH_EPOCH + 1200),
+			_pr_named(301, "completed", "failure", PUSH_EPOCH + 600),
+		],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		HEAD,
+		str(PUSH_EPOCH - 60),
+		"workflow_dispatch",
+	)
+	assert proc.returncode == 0, (proc.stdout, proc.stderr)
+	assert "prior_completed=1 pr_named_completed=1" in proc.stdout
+
+
+def test_budget_unnamed_check_skips_pull_request_runs() -> None:
+	# A pull_request run is on the head branch, so its retry can count it;
+	# only workflow_dispatch runs are checked for a PR name.
+	proc, _ = _run_probe(
+		BUDGET,
+		[_branch_run(300, HEAD, "completed", "cancelled", PUSH_EPOCH)],
+		[],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		HEAD,
+		str(PUSH_EPOCH),
+		"pull_request",
+	)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	assert "reason=unnamed_dispatch_run" not in proc.stderr
+	assert "event=pull_request" in proc.stdout

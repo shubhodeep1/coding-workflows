@@ -1256,8 +1256,9 @@ _autofix_pr_named_review_runs()
 #
 # Motivation:
 #   review_autofix.yml finishes a commit-and-push cycle and then
-#   issues `gh workflow run review_autofix.yml` as a fallback in
-#   case the merge-ref for the synchronize event is unbuildable.
+#   dispatches the next review run from the default branch (the
+#   PR-named wrapper first, issue #4898) as a fallback in case the
+#   merge-ref for the synchronize event is unbuildable.
 #   In the common case the push already fires pull_request.synchronize
 #   → internal-review.yml → review_autofix.yml, so both runs land in
 #   the same `pr-autofix-${PR}` concurrency group with
@@ -1268,7 +1269,8 @@ _autofix_pr_named_review_runs()
 #   in flight.
 #
 # Input:
-#   $1 pr_number      — PR number (informational, used in log lines)
+#   $1 pr_number      — PR number: used in log lines, and must match
+#                       ^[1-9][0-9]*$ for the PR-named lookup below
 #   $2 head_branch    — PR head branch name (required for filtering)
 #   $3 current_run_id — github.run_id of the CURRENT run, so we can
 #                       exclude ourselves from the peer check.
@@ -1427,13 +1429,17 @@ autofix_retrigger_has_inflight_peer()
 #   further dispatch is allowed.
 #
 # Input:
-#   $1 pr_number      — PR number (informational, used in log lines)
+#   $1 pr_number      — PR number: used in log lines, and must match
+#                       ^[1-9][0-9]*$ when the PR-named lookup below runs
 #   $2 head_branch    — PR head branch name (required for filtering)
 #   $3 current_run_id — github.run_id of the CURRENT run (excluded)
 #   $4 head_sha       — the PR head commit this run reviewed (required)
 #   $5 head_commit_epoch — optional: the head commit's committer time in
 #                       epoch seconds (`git log -1 --format=%ct`); one
 #                       input to the push-time bound below
+#   $6 event_name     — optional: the current run's event
+#                       (GITHUB_EVENT_NAME, the caller's event inside a
+#                       reusable workflow); see "Unnamed dispatch runs"
 #
 # PR-named runs (issue #4898):
 #   The retry is dispatched from the default branch, so its head_sha is
@@ -1449,9 +1455,25 @@ autofix_retrigger_has_inflight_peer()
 #   budget sooner (fail closed), never loops. No bound, an invalid PR
 #   number, or a failed call fails closed.
 #
+# Unnamed dispatch runs (issue #4898, conformance audit):
+#   A retry dispatched from the default branch under a name the PR-named
+#   match cannot see (a differently named caller wrapper, review_autofix.yml
+#   itself, or an ai-review.yml that predates the "[pr:<N>]" run name) is
+#   invisible to both lookups, so the next retry would count nothing and
+#   dispatch again without bound once the head's pull_request twin was
+#   concurrency-cancelled. When $6 is workflow_dispatch and the current
+#   run is not among the PR-named runs, the budget is consumed
+#   (reason=unnamed_dispatch_run, fail closed): such a run never
+#   dispatches an automated retry. The PR-named page is therefore fetched
+#   without a status filter (still one call) and filtered to completed
+#   runs locally, so the in-progress current run is in it. An empty $6
+#   (a caller that predates it) skips this check; the budget line then
+#   shows event=-, so a caller that drops the event is visible in the log.
+#
 # Output (stdout):
 #   AUTOFIX_CHANGES_LOST_BUDGET pr=<n> branch=<b> head_sha=<sha> \
-#     current_run=<r> prior_completed=<n> pr_named_completed=<n|->
+#     current_run=<r> prior_completed=<n> pr_named_completed=<n|-> \
+#     event=<$6|->
 #   An AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED line is emitted on
 #   probe failure (stderr).
 #
@@ -1467,8 +1489,8 @@ autofix_retrigger_has_inflight_peer()
 #   1 `gh api GET /repos/{repo}/actions/runs` call per invocation,
 #   wrapped in gh_retry (§15: same single branch-scoped list the peer
 #   helper issues; the two probes run back-to-back in one step at most
-#   once per review run), plus 1 PR-named `?event=workflow_dispatch
-#   &status=completed` call only when the branch lookup counted nothing.
+#   once per review run), plus 1 PR-named `?event=workflow_dispatch`
+#   call only when the branch lookup counted nothing.
 #   The branch-filtered call cannot return default-branch runs, so no
 #   existing call could carry the PR-named match.
 # ---------------------------------------------------------------
@@ -1479,6 +1501,7 @@ autofix_changes_lost_head_retry_consumed()
 	local current_run_id="${3:-}"
 	local head_sha="${4:-}"
 	local head_commit_epoch="${5:-}"
+	local run_event_name="${6:-}"
 
 	if [ -z "${head_branch}" ] || [ -z "${current_run_id}" ] || [ -z "${head_sha}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
 		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch:-?} reason=missing_inputs" >&2
@@ -1557,8 +1580,16 @@ autofix_changes_lost_head_retry_consumed()
 			return 0
 		fi
 		local pr_named_runs
-		if ! pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}" "completed"); then
+		if ! pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}"); then
 			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=pr_named_api_error" >&2
+			return 0
+		fi
+		if [ "${run_event_name}" = "workflow_dispatch" ] \
+			&& ! printf '%s' "${pr_named_runs}" | jq -e --arg current "${current_run_id}" \
+				'any(.[]; (.id | tostring) == $current)' >/dev/null 2>&1; then
+			# This dispatch run is not named for the PR, so a retry it
+			# dispatched could never count it (see "Unnamed dispatch runs").
+			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=unnamed_dispatch_run" >&2
 			return 0
 		fi
 		if ! pr_named_completed=$(printf '%s' "${pr_named_runs}" | jq -r \
@@ -1579,7 +1610,7 @@ autofix_changes_lost_head_retry_consumed()
 		prior_completed=$(( ${prior_completed:-0} + pr_named_completed ))
 	fi
 
-	echo "AUTOFIX_CHANGES_LOST_BUDGET pr=${pr_number:-?} branch=${head_branch} head_sha=${head_sha} current_run=${current_run_id} prior_completed=${prior_completed:-0} pr_named_completed=${pr_named_completed}"
+	echo "AUTOFIX_CHANGES_LOST_BUDGET pr=${pr_number:-?} branch=${head_branch} head_sha=${head_sha} current_run=${current_run_id} prior_completed=${prior_completed:-0} pr_named_completed=${pr_named_completed} event=${run_event_name:--}"
 
 	if [ "${prior_completed:-0}" -gt 0 ] 2>/dev/null; then
 		return 0

@@ -41,12 +41,14 @@ fi
 # The retry is dispatched from the default branch (issue #4898), so its
 # head_sha is the default branch's, not this head. The probe also counts
 # completed review runs named for the PR since this head was pushed; the
-# head's commit time is one input to that push-time bound.
+# head's commit time is one input to that push-time bound. The run's event
+# lets it fail closed on a dispatch run that is not named for the PR, whose
+# own retry could never count it.
 REVIEWED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
 REVIEWED_HEAD_COMMIT_EPOCH="$(git log -1 --format=%ct HEAD 2>/dev/null || echo "")"
 if [ -z "${REVIEWED_HEAD_SHA}" ] \
   || ! type autofix_changes_lost_head_retry_consumed >/dev/null 2>&1 \
-  || autofix_changes_lost_head_retry_consumed "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}" "${REVIEWED_HEAD_SHA}" "${REVIEWED_HEAD_COMMIT_EPOCH}"; then
+  || autofix_changes_lost_head_retry_consumed "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}" "${REVIEWED_HEAD_SHA}" "${REVIEWED_HEAD_COMMIT_EPOCH}" "${GITHUB_EVENT_NAME:-}"; then
   echo "AUTOFIX_DISPATCH_SKIPPED reason=changes_lost_budget_unavailable_or_exhausted pr=${PR_NUMBER} head_sha=${REVIEWED_HEAD_SHA:-unknown} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
   emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=changes_lost_budget_unavailable_or_exhausted" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=editor_changes_lost_retrigger"
   echo "CHANGES_LOST_REDISPATCHED=skipped_budget_unavailable_or_exhausted" >> "$GITHUB_ENV"
