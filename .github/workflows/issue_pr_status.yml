@@ -187,6 +187,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO_FULL_NAME: ${{ github.event.pull_request.head.repo.full_name }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_BASE_DEFAULT_BRANCH: ${{ github.event.pull_request.base.repo.default_branch }}
           PR_MERGED: ${{ github.event.pull_request.merged }}
@@ -230,6 +231,18 @@ jobs:
             # merge into a non-default branch counts only on its declared
             # integration branch (fail closed).
             issue_body_orchestrator_project_branch() { :; }
+          fi
+          # Issue #5226: off the default branch GitHub closes nothing, and
+          # a PR's closing keyword and the issue's `Integration branch:`
+          # line are author-controlled text. A merge into a non-default
+          # target branch therefore counts only when the PR's head is an
+          # automation branch for the issue (`ai/issue-<n>`,
+          # `ai/issue-<n>-…`, `fix/<n>-followup-<epoch>`) pushed to this
+          # repository.
+          if ! type pr_head_ref_is_issue_automation_branch >/dev/null 2>&1; then
+            # Older gh_helpers.sh: no identity helper, so only
+            # default-branch merges count (fail closed).
+            pr_head_ref_is_issue_automation_branch() { return 1; }
           fi
 
           record_issue_integration_branches() {
@@ -420,7 +433,9 @@ jobs:
           #      ai:orchestrator-managed label (issue #4957), and then
           #      applies FINAL_LABEL and closes on a merge into the
           #      default branch, its declared integration branch, or its
-          #      orchestrator/project-<T> branch — never any other base.
+          #      orchestrator/project-<T> branch — never any other base,
+          #      and off the default branch only from a same-repository
+          #      automation head for the issue (issue #5226).
           #      The orchestrator poller's reconcile_managed_issue_labels
           #      and close_merged_issues_sweep paths remain authoritative
           #      backstops; this path is idempotent with them.
@@ -428,8 +443,10 @@ jobs:
           #   3. Standalone issues — neither tracking nor managed. A
           #      merge into the default branch labels and closes them; a
           #      merge into their declared integration branch (issue
-          #      #4813) applies FINAL_LABEL but leaves them open; any
-          #      other base leaves them unchanged.
+          #      #4813) applies FINAL_LABEL but leaves them open, and
+          #      only from a same-repository automation head for the
+          #      issue (issue #5226); any other base or head leaves them
+          #      unchanged.
           #
           # Single batched GraphQL call (one API request regardless of
           # N) per CLAUDE.md §15. Fail-open with a per-issue REST
@@ -542,6 +559,11 @@ jobs:
                 else
                   echo "PR merged into ${PR_BASE_REF}, which is not issue #${issue_number}'s target branch (default ${DEFAULT_BRANCH_NAME}, integration ${issue_target_branch:-none}); leaving its labels and state unchanged."
                 fi
+                continue
+              fi
+              if [ -z "${PR_HEAD_REPO_FULL_NAME:-}" ] || [ "${PR_HEAD_REPO_FULL_NAME}" != "${REPOSITORY}" ] \
+                || ! pr_head_ref_is_issue_automation_branch "${issue_number}" "${PR_HEAD_REF:-}"; then
+                echo "PR #${PR_NUMBER} merged into ${PR_BASE_REF} is not an automation PR for issue #${issue_number} (head ${PR_HEAD_REF:-none}, head repo ${PR_HEAD_REPO_FULL_NAME:-none}); leaving its labels and state unchanged."
                 continue
               fi
             fi

@@ -912,6 +912,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_issue_pr_status_payload_fallback_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_issue_pr_status_target_branch_gate.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_gh_helpers_issue_body_integration_branch.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_gh_helpers_issue_automation_branch.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_phase_transition_contract.py
 
       - name: Test-and-mark-stable plan polling guard regression tests
