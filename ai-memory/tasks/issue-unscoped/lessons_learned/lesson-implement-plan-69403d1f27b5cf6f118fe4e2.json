@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T12:46:54Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A git-history lookup that asks \"was this blob ever a version of the file\" must include merge commits (`git log -m --raw`): a merge that combines two edits produces a version no single-parent commit holds, and project-branch syncs make such merges routine.",
+  "phase": "implement_plan",
+  "pr_number": 5122,
+  "record_id": "lesson-implement-plan-69403d1f27b5cf6f118fe4e2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4785-twin-first-claude-sync",
+    "file:scripts/claude_twin_sync.py",
+    "file:tests/claude_twin_state.py"
+  ]
+}
