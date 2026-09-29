@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/implement-issue-claude.md:49-52 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The relative link `[Session titles](.claude/commands/implement-plan-claude.md#session-titles)` does not resolve from the twin file's directory.\n  WHY: Readers following the link from the twin encounter a broken documentation link; it has no runtime effect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/commands/implement-issue-claude.md:49 (step 8) | severity=NIT | confidence=4\n  PROBLEM: The relative link target [Session titles](.claude/commands/implement-plan-claude.md#session-titles) is incorrect.\n  WHY: The file is located in workflow-templates/.claude/commands/, and the link to .claude/commands/... does not exist from that relative path, resulting in a broken documentation link.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/implement-issue-claude.md:52 | severity=NIT | confidence=4\n  PROBLEM: The relative link `[Session titles](.claude/commands/implement-plan-claude.md#session-titles)` resolves incorrectly from the twin's path.\n  WHY: From `workflow-templates/.claude/commands/implement-issue-claude.md`, this resolves to `workflow-templates/.claude/commands/.claude/commands/implement-plan-claude.md` which does not exist; the twin as-shipped has a broken link during the twin-first window, while the copied `.claude/` version resolves correctly.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- workflow-templates/.claude/commands/implement-issue-claude.md:step 8 (the link target in the sentence \"Follow `/implement-plan-claude` ...\") | severity=NIT | confidence=5\n  PROBLEM: Relative link target `.claude/commands/implement-plan-claude.md` resolves incorrectly from the twin's path (workflow-templates/.claude/commands/) and does not exist there.\n  WHY: During the interim twin-first window the link is broken in the twin as-shipped; an operator or reader following the twin file gets a 404 or lands on the wrong file.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/commands/implement-issue-claude.md:line 52, the link `[Session titles](.claude/commands/implement-plan-claude.md#session-titles)` | severity=NIT | confidence=4\n  PROBLEM: The relative link target `.claude/commands/implement-plan-claude.md` does not resolve from the twin's directory (`workflow-templates/.claude/commands/`).\n  WHY: No runtime effect \u2014 Claude reads command files as text instructions, not by following markdown links. The link is for human readability only, and is broken when resolved from the file's directory.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b8a62ae58c44d7a9f0e5f42e5201d12d64fa3d61fc37407ef5886e5a8ef98de3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5009,
+    "run_id": "36533549995",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36533549995",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929072145_6ad77b75e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5009,
+    "run_id": "36533549995"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T07:21:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
