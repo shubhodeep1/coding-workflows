@@ -305,6 +305,11 @@ def tree_of(repo: str, commit: str) -> str:
 	return run_git(repo, ["rev-parse", f"{commit}^{{tree}}"]).strip()
 
 
+def claude_tree_of(repo: str, treeish: str) -> str:
+	"""The tree id of `.claude/` in `treeish` (a commit or a tree), or "" without one."""
+	return run_git(repo, ["rev-parse", "--verify", "--quiet", f"{treeish}:{CLAUDE_ROOT}"], check=False).strip()
+
+
 def is_ancestor(repo: str, ancestor: str, descendant: str) -> bool:
 	proc = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", ancestor, descendant], capture_output=True)
 	return proc.returncode == 0
@@ -656,7 +661,12 @@ def run_sync(repo_root: str, gh: GitHub, ref: str, default_branch: str, owner: s
 		run_git(repo_root, ["fetch", "--no-tags", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"], env=git_auth_env(gh.read_token))
 		if resolve_commit(repo_root, f"refs/remotes/origin/{branch}") != head:
 			raise SyncError(f"{branch} moved while this run read it; the next run retries")
-		if tree_of(repo_root, head) != tree or not is_ancestor(repo_root, ref_sha, head):
+		# Rebuild only when the head's `.claude/` no longer equals the default
+		# branch's plus the copies. A default-branch commit anywhere else
+		# changes neither the PR's diff nor what it merges, and a new head
+		# restarts CI (about 45 minutes) and voids an owner approval, so on a
+		# busy default branch the PR would never merge.
+		if claude_tree_of(repo_root, head) != claude_tree_of(repo_root, tree):
 			parents = [head] if is_ancestor(repo_root, ref_sha, head) else [head, ref_sha]
 			head = commit_tree(repo_root, tree, parents, f"[claude-twin-sync] sync .claude/ with {TWIN_ROOT}/ at {short}")
 			push_commit(repo_root, head, branch, gh.write_token, gh.dry_run)

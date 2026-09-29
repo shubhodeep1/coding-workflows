@@ -1187,7 +1187,11 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   git index so no path touches the working tree. The body carries
   `[skip ai]`, the copied files, and the conflicts. An open sync PR is
   updated with a forward-only commit (the ruleset forbids non-fast-forward
-  pushes), never duplicated; extra open sync PRs are closed as superseded,
+  pushes), never duplicated, and only when its `.claude/` tree no longer
+  equals `main`'s plus the copies: a `main` commit elsewhere leaves the head
+  alone, so its CI run and any owner approval stay valid (CI takes about 45
+  minutes, and a rebuild on every `main` commit would keep a sync PR from
+  ever merging on a busy day); extra open sync PRs are closed as superseded,
   and an open one is closed when the twins already match. With only
   conflicts, the PR carries an empty marker commit.
 - **Merge rule by path:**
