@@ -580,6 +580,9 @@ def test_budget_available_when_no_retry_ran_yet() -> None:
 	)
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 	assert "prior_completed=0 pr_named_completed=0" in proc.stdout
+	# No sixth argument: the unnamed-dispatch check is skipped, and the budget
+	# line says so rather than hiding it.
+	assert "pr_named_completed=0 event=-" in proc.stdout
 
 
 def _unnamed_dispatch(run_id: int, status: str, conclusion: str | None, created_epoch: int) -> dict:
@@ -638,7 +641,7 @@ def test_budget_available_for_a_pr_named_dispatch_run_with_no_prior_retry() -> N
 		"workflow_dispatch",
 	)
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
-	assert "prior_completed=0 pr_named_completed=0" in proc.stdout
+	assert "prior_completed=0 pr_named_completed=0 event=workflow_dispatch" in proc.stdout
 	assert len(calls) == 2, calls
 
 
@@ -677,3 +680,4 @@ def test_budget_unnamed_check_skips_pull_request_runs() -> None:
 	)
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 	assert "reason=unnamed_dispatch_run" not in proc.stderr
+	assert "event=pull_request" in proc.stdout

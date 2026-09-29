@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4701-review-dispatch-default-branch
 - Project branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch   Final PR: #4923 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 1/3 — review round
 - Activation: not started
-- Waiting on: conformance fix PR (branch claude/implement-plan-issue-4898-retrigger-dispatch-default-branch-conformance-fix-1)
+- Waiting on: PR #5036 (conformance fix 1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01GWp9PnRZTCBZkQhCbRnyNw (project checker, reused)
 - Last updated: 2026-09-29
-- Last note: conformance run 1 INCOMPLETE (1 EVIDENCE-BASED BLOCKER, 2 CONCERNs); fix PR opened against the project branch
+- Last note: PR #5036 review round 1: 1 finding fixed (the run's event on the budget line), 1 finding and 1 task gap rejected with reasons
 
 ## Phases
 1. [x] Phase 1 — default-branch retrigger dispatch plus PR-named probes   — PR #4982 merged 2026-09-29
@@ -24,6 +24,7 @@
 
 ## Conformance
 - Run 1 — 2026-09-29: INCOMPLETE (Step 4 FAIL) — fix PR from `claude/implement-plan-issue-4898-retrigger-dispatch-default-branch-conformance-fix-1` (pre-security). BLOCKER: the changes-lost budget could not see a retry dispatched under a name the PR-named match misses (renamed caller, `review_autofix.yml`, or a pre-#4701 `ai-review.yml`), so with the head's pull_request twin cancelled the retry looped without bound (fixed per AD-9). CONCERNs: stale `$1 pr_number` / dispatch comments in `scripts/gh_helpers.sh`; changelog size row no longer true after the base grew `review_autofix.yml` (fixed).
+  - Fix PR #5036 review rounds: 1 (2026-09-29: `AUTOFIX_CHANGES_LOST_BUDGET` gains `event=`, so a skipped unnamed-dispatch check shows as `event=-`; rejected: `return 0` read as success (it is the documented fail-closed skip), and the empty-`$6` task gap (the one caller passes `GITHUB_EVENT_NAME`, pinned by tests)).
 
 ## Security pass
 
@@ -48,6 +49,7 @@
 - [source:plan-deviation] Moving a dispatch off the head ref also blinds any head-SHA loop bound keyed on that dispatch's runs; extend the bound (here, PR-named runs since the push) in the same change, or the retry loop loses its limit. (files: scripts/gh_helpers.sh, scripts/review_autofix_step_changes_lost_redispatch.sh)
 - [source:plan-deviation] `tests/test_log_prefix_regressions.sh` pins the exact `AUTOFIX_PEER_CHECK` line, so a new field on a pinned log line is a breaking change; keep the line and surface new detail elsewhere. (files: scripts/gh_helpers.sh, tests/test_log_prefix_regressions.sh)
 - [source:conformance] A loop bound that recognises its own retry by run name must fail closed when the current run carries no such name: a retry dispatched under a fallback name is invisible to the next run, and the bound silently disappears. (files: scripts/gh_helpers.sh, scripts/review_autofix_step_changes_lost_redispatch.sh)
+- [source:intervention] When a safety check is skipped because an optional argument is empty, put the argument's value on the helper's summary log line, so a caller that drops it shows up in the log instead of silently losing the check. (files: scripts/gh_helpers.sh)
 
 ## Notes
 - Conformance 1/3 (2026-09-29): project branch synced with the issue base (`claude/implement-plan-issue-4701-review-dispatch-default-branch`, not merged; final PR #4709 open into `main`) as merge `eb1fb86`; zombie checkers archived: 0.

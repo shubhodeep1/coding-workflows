@@ -1467,11 +1467,13 @@ autofix_retrigger_has_inflight_peer()
 #   dispatches an automated retry. The PR-named page is therefore fetched
 #   without a status filter (still one call) and filtered to completed
 #   runs locally, so the in-progress current run is in it. An empty $6
-#   (a caller that predates it) skips this check.
+#   (a caller that predates it) skips this check; the budget line then
+#   shows event=-, so a caller that drops the event is visible in the log.
 #
 # Output (stdout):
 #   AUTOFIX_CHANGES_LOST_BUDGET pr=<n> branch=<b> head_sha=<sha> \
-#     current_run=<r> prior_completed=<n> pr_named_completed=<n|->
+#     current_run=<r> prior_completed=<n> pr_named_completed=<n|-> \
+#     event=<$6|->
 #   An AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED line is emitted on
 #   probe failure (stderr).
 #
@@ -1608,7 +1610,7 @@ autofix_changes_lost_head_retry_consumed()
 		prior_completed=$(( ${prior_completed:-0} + pr_named_completed ))
 	fi
 
-	echo "AUTOFIX_CHANGES_LOST_BUDGET pr=${pr_number:-?} branch=${head_branch} head_sha=${head_sha} current_run=${current_run_id} prior_completed=${prior_completed:-0} pr_named_completed=${pr_named_completed}"
+	echo "AUTOFIX_CHANGES_LOST_BUDGET pr=${pr_number:-?} branch=${head_branch} head_sha=${head_sha} current_run=${current_run_id} prior_completed=${prior_completed:-0} pr_named_completed=${pr_named_completed} event=${run_event_name:--}"
 
 	if [ "${prior_completed:-0}" -gt 0 ] 2>/dev/null; then
 		return 0
