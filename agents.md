@@ -127,7 +127,20 @@ Phases of the unattended pipeline (each is a separate workflow file under
    with a clean check snapshot auto-merge in the run; at the cap the PR itself
    is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
-   (`claude_fixer_awaiting_session`). A clean round whose check runs are
+   (`claude_fixer_awaiting_session`). A pre-review conflict whose unmerged
+   paths include a protected `.claude/**` path is the one conflict the GPT
+   resolver still takes on a `claude/*` head
+   (`CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED`, default on; plan
+   D14): the merge-topology gate exports `CLAUDE_FIXER_PROTECTED_CONFLICT`
+   (log `AUTOFIX_GATE_CLAUDE_FIXER_PROTECTED_CONFLICT pr=<n> head=<sha>
+   paths=<k> resolver=<ran|skipped_switch_off|skipped_cannot_push>`), the
+   hand-off step posts nothing, and "Detect merge conflicts", the resolver
+   steps, the push and the re-trigger run; the push starts a normal
+   Claude-fixer review round. When the resolver fails or escalates, "Hand
+   unresolved protected conflict to Claude session"
+   (`scripts/review_autofix_step_claude_fixer_protected_conflict.sh`) posts
+   the `kind=conflict` hand-off with a `Protected paths:` line, and the
+   fixer holds for a human. A clean round whose check runs are
    still running after the refresh wait is not a hand-off
    (`CLAUDE_FIXER_CHECKS_PENDING_ENABLED`, default on): the step posts one
    `## Review round <n>: clean, waiting for checks` comment per head ending
@@ -949,7 +962,11 @@ non-`claude/*` head; on a `claude/*` head also the comment and check-run
 pages and at most six further reads) and routes on its `action` field
 (`wait`, `retry`, `hand_back_fixer`, `hand_back_all`), renews every
 subscriber's hand-back 7 days ahead, and re-arms itself with `send_later`
-every 60 minutes while nothing is due. A PR has one checker: a second interested
+after the JSON's `retry_after_minutes` while nothing is due: 60, or for a
+held head `CLAUDE_CHECK_IN_HELD_RETRY_MINUTES` (default 180, clamped to
+60–1440). The checker never asks the human anything and never waits on an
+answer: on an unexpected state it re-arms and records the state in its
+session title only. A PR has one checker: a second interested
 session registers with it (`PR #<n> status check-in: subscriber` one-shot
 trigger) as `fixer` (it pushed to the PR) or `notify`, instead of creating
 another. When a Claude fix is due on a `claude/*` head (block label,
@@ -1760,6 +1777,7 @@ and shipped:
 - `AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED`
 - `AUTOFIX_GATE_CLAUDE_FIXER_MERGE_CHECK`
 - `AUTOFIX_GATE_CLAUDE_FIXER_JUDGE`
+- `AUTOFIX_GATE_CLAUDE_FIXER_PROTECTED_CONFLICT`
 - `CLAUDE_FIXER_HANDOFF`
 - `CLAUDE_FIXER_CHECKS_PENDING`
 - `CLAUDE_FIXER_JUDGE`
@@ -1956,6 +1974,7 @@ LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_MERGE_CHECK
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_JUDGE
+LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_PROTECTED_CONFLICT
 LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
 LOG_PREFIX.name=CLAUDE_FIXER_CHECKS_PENDING
 LOG_PREFIX.name=CLAUDE_FIXER_JUDGE
