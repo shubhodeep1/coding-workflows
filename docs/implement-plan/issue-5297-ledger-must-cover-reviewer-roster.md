@@ -2,19 +2,19 @@
 
 - Plan: docs/plans/issue-5297-ledger-must-cover-reviewer-roster-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5297-ledger-must-cover-reviewer-roster   Final PR: pending
+- Project branch: claude/implement-plan-issue-5297-ledger-must-cover-reviewer-roster   Final PR: #5303 draft
 - Source issue: shubhodeep1/coding-workflows#5297   Base branch: claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote   Security pass: skip (ai:security: automation-produced issue)
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (head claude/implement-plan-issue-5297-ledger-must-cover-reviewer-roster-phase-1; number in the stage report and the checker instructions)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from the issue base; implementing phase 1
+- Last note: phase 1 implemented and verified (89 Claude-fixer tests incl. mawk and gawk, 232 with the size and review_autofix contract tests, changelog tests, shellcheck); phase PR opened against the project branch; waiting on its review round or merge
 
 ## Phases
-1. [ ] Phase 1 — Ledger must cover the runner's reviewer roster (failed-slot path of the Claude-fixer clean-ledger check, tests, docs, changelog)
+1. [ ] Phase 1 — Ledger must cover the runner's reviewer roster (failed-slot path of the Claude-fixer clean-ledger check, tests, docs, changelog)   — PR open (waiting); review rounds: 0; interventions: 0
    - scripts/review_autofix_step_claude_fixer_handoff.sh: roster from status_review_<slug>.txt and review_<slug>.txt; every roster slot needs a ledger block; empty roster or bad slug fails closed
    - tests/test_review_autofix_claude_fixer_mode.py: exploit (6 reviewers, min 4, 1 failed, 1 omitted finding) hands off; omitted clean slot, output-only slot, bad slug hand off; existing tests pass
    - README.md, agents.md, changelog.d/5297-ledger-must-cover-reviewer-roster.md

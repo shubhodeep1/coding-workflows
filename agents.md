@@ -109,7 +109,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    ignored), and, when any lens heading of
    `prompts/review-reviewer-checklist.txt` appears (markdown markers and list
    numbering ignored), all nine lenses each followed by `NONE`; prose around
-   the verdicts is allowed. It
+   the verdicts is allowed. The ledger must also carry a block for every
+   slot the runner wrote a `status_review_<slug>.txt` or
+   `review_<slug>.txt` for (issue #5297: the ledger can leave a reviewer
+   out entirely, and a missing block is never a missing vote); an
+   omitted slot, an empty roster, or an unexpected slot name hands off
+   with a `::warning::`. It
    then takes the same clean path and logs
    `CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS pr=… head=… round=… failed_slots=… clean_reviewers=… min=…`.
    Fewer clean reviewers, any other text, or a status or output file that
