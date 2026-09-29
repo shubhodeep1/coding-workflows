@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#4910 (https://github.com/shubhodeep1/coding-workflows/issues/4910)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4910-restart-dead-checkers   Final PR: #4965 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: the supervising session `[claude-twin-sync]` on PR #4984 + `/reclarify` (interim twin-first rule, Q40: A)
+- Waiting on: PR #4984
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01PUk3sYkLpwZZR6nKcaXnx9   safety net trig_01Nruu38N1qoh67yZLbaKs2R   hand-back trig_01DkuXJs1Q2h8PsefG5njtug
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and pushed as PR #4984 (hold claim on its head); stopped BLOCKED for the twin sync: `workflow-templates/.claude/settings.json` → `.claude/settings.json`, and the pickup diff in the `ai:claude-blocked` comment on #4910.
+- Last note: Q1: A — the supervising session synced the twins (`[claude-twin-sync]` 0e436d7, 2026-09-29); `ai:claude-blocked` removed; waiting on PR #4984 review rounds with project checker session_01PUk3sYkLpwZZR6nKcaXnx9.
 
 ## Phases
-1. [ ] Phase 1 — restart script, pickup step 3b, settings twin, docs   — PR #4984 open (hold: twin sync); review rounds: 0; interventions: 0   — protected paths: `.claude/settings.json` (edited through its `workflow-templates/.claude/` twin), `.claude/commands/claude-issue-pickup.md` (no twin; exact edit in the blocked comment)
+1. [ ] Phase 1 — restart script, pickup step 3b, settings twin, docs   — PR #4984 open (twin sync 0e436d7 pushed, hold lifted); review rounds: 0; interventions: 0   — protected paths: `.claude/settings.json` (edited through its `workflow-templates/.claude/` twin), `.claude/commands/claude-issue-pickup.md` (no twin; exact edit in the blocked comment)
    - `scripts/claude_checker_restart.py` [new] (`scan`, `decide`) + `tests/test_claude_checker_restart.py` [new] + `ci.yml` step
    - `settings.json` twin: allow the two subcommands and `set_session_tags`
    - pickup step 3b (restart + re-queue), step 0 tools, step 1 `limit: 100`, step 2 exits, step 4 report, Rules, Tool Access
@@ -52,3 +52,4 @@
 ## Notes
 - Protected-path approval: phase 1 — twin-first per Q40 (issue #4910 body: "Protected paths: `.claude/**`, so use the interim twin-first rule (Q40: A)", 2026-09-29). `.claude/settings.json` changes through its twin; the `claude-issue-pickup.md` diff goes in the blocked comment; the phase PR carries a `hold` claim and the stage stops BLOCKED for the supervising session's `[claude-twin-sync]`.
 - #4887's pickup step 3a reads its own `list_sessions` cursor page; this step needs the newest page (plan Notes).
+- Q1: A (2026-09-29, master session `session_0199TGCqNCt5BJNmyeqrYpSp`, OWNER comment on #4910): the `.claude/` part landed under the interim rule as `[claude-twin-sync]` 0e436d7 (settings sha256 `930f7292…`, pickup sha256 `2ccbd45f…`); its wake message stood in for `/reclarify`. `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` is passed to every `check_in_status.py` call and checker prompt (#5057).
