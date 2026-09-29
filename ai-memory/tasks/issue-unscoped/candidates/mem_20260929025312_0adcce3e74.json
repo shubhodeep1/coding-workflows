@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py (and workflow-templates/.claude/scripts/check_in_status.py twin): lines 134-136 (DISPATCHED_REVIEW_WORKFLOW / DISPATCHED_REVIEW_TITLE / DISPATCHED_REVIEW_RUNS_PATH), line 301, line 333, line 335 | severity=high | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: `check_in_status.py` only recognizes PR-named dispatch runs for `internal-review.yml` and its internal-review title, so it misses consumer `ai-review.yml` runs dispatched from the default branch.\n  WHY: In consumer repos the active-run fallback queries the wrong workflow and the hand-off run validation rejects `ai-review.yml` runs; this can make the checker report a review as stuck while it is running or wait indefinitely for a verified completed run.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/check_in_status.py (and workflow-templates/.claude/scripts/check_in_status.py twin): lines 134-136 (DISPATCHED_REVIEW_WORKFLOW / DISPATCHED_REVIEW_TITLE / DISPATCHED_REVIEW_RUNS_PATH), line 301, line 333, line 335\n  PROBLEM: The PR-named dispatch-run lookup in `_active_run_count` and the validation in `_is_pr_dispatched_review_run` are hardcoded for `internal-review.yml` and its title `\"Internal: AI Review & Autofix [pr:{number}]\"`. Consumer repos use `ai-review.yml` with run name `\"AI Review [pr:<N>]\"`. The twin file is byte-identical, so consumer repos receive these same constants. In consumer repos, `_active_run_count`'s PR-named fallback queries `internal-review.yml/runs` which 404s (handled, returns 0), so the checker never sees active `ai-review.yml` dispatch runs; `_is_pr_dispatched_review_run` rejects `ai-review.yml` runs because both the workflow path and title checks fail. After #4701 moved consumer-repo dispatches to the default branch, the head-branch lookup and `head_branch == head_ref` check no longer find or accept them.\n  WHY: In a consumer repo with a `claude/*` PR, the poller dispatches `ai-review.yml` from the default branch (issue #4701). The \u00a726 checker runs `check_in_status.py --hand-back`; `_active_run_count` finds nothing on the head branch, falls through to the PR-named lookup, gets a 404 on `internal-review.yml`, returns 0, and the checker reports `stuck` or `conflict` while a review is still running. For a review hand-off, `_check_claude_fixer_pr` reads the referenced run, `_is_pr_dispatched_review_run` rejects it, and the fallback `head_branch != head_ref` also fails, so the checker waits indefinitely for a verified completed review run.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6385cfd554d73dd51008bb5b91bc320e56c9acf0391b03314bbefaca2b873ee1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36513834955",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36513834955",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929025312_0adcce3e74",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36513834955"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T02:53:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
