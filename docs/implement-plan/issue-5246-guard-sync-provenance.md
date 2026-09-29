@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5246-guard-sync-provenance-plan.md
 - Source issue: shubhodeep1/coding-workflows#5246
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4785-twin-first-claude-sync
-- Project branch: claude/implement-plan-issue-5246-guard-sync-provenance   Final PR: pending
+- Project branch: claude/implement-plan-issue-5246-guard-sync-provenance   Final PR: #5267 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5273
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01V6cH71S7p1H6ovhesNZWfA   safety net trig_014gA4xY3L2q8cWZTSo8r9df   hand-back trig_01JPhGbbeDDdkLmDbhQeSuCa
 - Last updated: 2026-09-29
-- Last note: project branch opened from the #4785 project branch; phase 1 starting.
+- Last note: phase 1 PR #5273 opened against the project branch; waiting on its review round or merge.
 
 ## Phases
-1. [ ] Phase 1 — guard-path rule in `claude_twin_sync.py check`, CI wiring, tests, docs
+1. [ ] Phase 1 — guard-path rule in `claude_twin_sync.py check`, CI wiring, tests, docs   — PR #5273 open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -36,6 +36,7 @@
 ## Lessons
 
 ## Notes
+- Phase 1 adds `guard_violation_reason` next to the planned `is_sync_pr_head` in `scripts/claude_twin_sync.py`, to keep `check_not_ahead` readable; the behaviour is the plan's.
 - Invoked by the Claude issue dispatcher (`/implement-issue-claude`), session session_01CkwU2FZQfHVM3gi2PP6RdZ, in Auto mode.
 - Base branch `claude/implement-plan-issue-4785-twin-first-claude-sync` is unmerged (its final PR #4804 into `main` is a draft), so this project ends after its final merge: `Activation: n/a` and the final-merge stage closes #5246 with `ai:merged`.
 - No phase touches `.claude/**`.
