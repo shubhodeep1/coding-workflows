@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T23:53:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Check the harness's documented reload behaviour before designing around \"read only at session start\": Claude Code's file watcher hot-reloads `settings.json` (hooks and permissions) and runs `ConfigChange` per detected change, so a load check must follow `ConfigChange`, not just SessionStart.",
+  "phase": "implement_plan",
+  "pr_number": 5301,
+  "record_id": "lesson-implement-plan-3b6805d12a0c5b4feb53ac1e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5259-restart-after-settings-sync",
+    "file:.claude/hooks/settings_load_recorder.py",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
