@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4934-chain-same-file-security-followups-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Source issue: shubhodeep1/coding-workflows#4934   Base branch: main   Progress comment: 5883200031
-- Project branch: claude/implement-plan-issue-4934-chain-same-file-security-followups   Final PR: pending
+- Project branch: claude/implement-plan-issue-4934-chain-same-file-security-followups   Final PR: #4996 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened; phase 1 in progress
+- Last note: phase 1 implemented and verified (340 tests across the route, security-audit, skip, and issue-command suites; ruff and shellcheck clean); phase PR opened
 
 ## Phases
-1. [ ] Phase 1 — chain same-file security follow-ups and hold dependent queue items
+1. [ ] Phase 1 — chain same-file security follow-ups and hold dependent queue items   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -37,6 +37,7 @@
 - AD-8 [plan, 2026-09-29] Which `Depends on:` lines count? — Picked: A — every same-repository `Depends on: #N` line, self-references dropped, deduplicated, at most 10. Alternatives: B — only the first line; C — also `owner/repo#N`. Why: never silently ignore a stated dependency; cross-repo reads are out of budget. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] The security audit reorders findings before filing, so tests of per-finding follow-up output must read the filing order from the created issues, not assume the input order. (files: scripts/security_audit.sh, tests/test_security_audit_workflow_contract.py)
 
 ## Notes
 - Issue mode: this session was started by the Claude issue dispatcher routine in Auto mode.

@@ -58,8 +58,14 @@ Routing order (first match wins):
   6. repository variable ``AI_ISSUE_IMPLEMENTER``: ``codex`` -> codex;
      empty or ``claude`` -> claude; anything else -> claude with a warning
 
+Chained issues (issue #4934): an issue whose body names ``Depends on: #N``
+is queued with a ``depends_on`` payload key, and the pickup holds it (listed
+under ``ignored`` as ``held: …``) until #N is closed with ``ai:merged``
+(``parse_depends_on``, ``fetch_dependency_states``, ``queue_pending``).
+
 All functions are pure except ``fetch_open_queue`` (one ``gh api`` read),
 ``fetch_queue_bindings`` (the batched binding reads it documents),
+``fetch_dependency_states`` (one ``gh api`` read per dependency),
 ``append_queue_binding`` (writes the binding file it is given), and the CLI
 entrypoints, which read only the files they are given (or those reads) and
 write JSON or text to stdout.
@@ -143,6 +149,23 @@ REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 QUEUE_PAYLOAD_BLOCK_RE = re.compile(r"```text\n(.*?)\n```", re.DOTALL)
 RUN_URL_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+$")
 FIRE_TEXT_KEYS: tuple[str, ...] = ("repo", "issue", "url", "trigger", "skip_security_pass")
+
+# Chained issues (issue #4934): a standalone issue whose body carries a
+# `Depends on: #N` line (the security audit writes one when two follow-ups of
+# one run change the same file) waits in the queue until #N is closed with
+# `ai:merged`. The intake records the dependencies as the optional last
+# payload key, written only when there are some, so every other item renders
+# exactly as before (the binding check compares renderings).
+FIRE_TEXT_OPTIONAL_KEYS: tuple[str, ...] = ("depends_on",)
+MERGED_LABEL = "ai:merged"
+DEPENDS_ON_MAX = 10
+DEPENDS_ON_LINE_RE = re.compile(r"(?mi)^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Depends on:?(?:\*\*)?[ \t]*#([1-9][0-9]{0,9})\b")
+DEPENDS_ON_VALUE_RE = re.compile(r"^[1-9][0-9]{0,9}(?:,[1-9][0-9]{0,9}){0,%d}$" % (DEPENDS_ON_MAX - 1))
+# A 403 / 404 means this session can never read the dependency (a repository
+# not attached to a web session, or no such issue), so waiting would strand
+# the item; any other read failure is retried on the next wake.
+DEPENDENCY_INACCESSIBLE_RE = re.compile(r"HTTP 40[34]\b")
+QUEUE_DEPENDENCY_READ_LIMIT = 30
 
 # Pull-request fix items (CLAUDE.md §26.H): the catch-all sweep
 # (scripts/claude_pr_sweep.py) queues one per claude/* PR whose Claude fix
@@ -384,7 +407,11 @@ def authorize_target(
 
 
 def build_fire_text(validated: dict[str, Any]) -> str:
-	"""Render the routine fire text: fixed keys, no user-controlled prose."""
+	"""Render the routine fire text: fixed keys, no user-controlled prose.
+
+	A non-empty ``depends_on`` list (issue #4934) adds a final
+	``depends_on: <n>,<n>`` line; without one the text is unchanged.
+	"""
 	lines = [
 		SCHEMA_VERSION,
 		f"repo: {validated['repo']}",
@@ -393,7 +420,24 @@ def build_fire_text(validated: dict[str, Any]) -> str:
 		f"trigger: {validated['trigger']}",
 		f"skip_security_pass: {'true' if validated['skip_security_pass'] else 'false'}",
 	]
+	depends_on = validated.get("depends_on") or []
+	if depends_on:
+		lines.append(f"depends_on: {','.join(str(number) for number in depends_on)}")
 	return "\n".join(lines) + "\n"
+
+
+def parse_depends_on(body: str, issue_number: Any = None) -> list[int]:
+	"""The issue numbers an issue body names on ``Depends on: #N`` lines (issue #4934).
+
+	Accepts ``Depends on: #N`` on its own line, optionally as a list item or in
+	bold, with the colon optional. Only same-repository ``#N`` references
+	count; a reference to the issue itself is dropped. Returns them sorted and
+	deduplicated, at most ``DEPENDS_ON_MAX``. Pure.
+	"""
+	numbers = {int(match) for match in DEPENDS_ON_LINE_RE.findall(body or "")}
+	if isinstance(issue_number, int):
+		numbers.discard(issue_number)
+	return sorted(numbers)[:DEPENDS_ON_MAX]
 
 
 def load_allowed_repos(registry_path: Path, self_repo: str) -> list[str]:
@@ -416,6 +460,9 @@ def parse_fire_text(text: str) -> dict[str, Any]:
 	The inverse of ``build_fire_text`` with the same rules as
 	``claude-issue-dispatch.md`` step 1: first line ``claude_issue.v1``, each
 	key exactly once, nothing else. The registry check is the caller's.
+	The optional ``depends_on`` key (issue #4934) must be the canonical
+	rendering: ascending, distinct issue numbers other than the issue itself;
+	it appears in the result only when present.
 	"""
 	lines = [line.rstrip() for line in (text or "").strip().splitlines()]
 	if not lines or lines[0] != SCHEMA_VERSION:
@@ -423,7 +470,7 @@ def parse_fire_text(text: str) -> dict[str, Any]:
 	fields: dict[str, str] = {}
 	for line in lines[1:]:
 		key, sep, value = line.partition(": ")
-		if not sep or key not in FIRE_TEXT_KEYS:
+		if not sep or key not in FIRE_TEXT_KEYS + FIRE_TEXT_OPTIONAL_KEYS:
 			raise ValueError(f"unexpected line: {line[:80]!r}")
 		if key in fields:
 			raise ValueError(f"duplicate key: {key}")
@@ -444,13 +491,21 @@ def parse_fire_text(text: str) -> dict[str, Any]:
 		raise ValueError(f"invalid trigger: {fields['trigger']!r}")
 	if fields["skip_security_pass"] not in ("true", "false"):
 		raise ValueError("skip_security_pass is not true or false")
-	return {
+	parsed: dict[str, Any] = {
 		"repo": repo,
 		"issue_number": number,
 		"issue_url": url,
 		"trigger": fields["trigger"],
 		"skip_security_pass": fields["skip_security_pass"] == "true",
 	}
+	if "depends_on" in fields:
+		if not DEPENDS_ON_VALUE_RE.match(fields["depends_on"]):
+			raise ValueError(f"invalid depends_on: {fields['depends_on'][:80]!r}")
+		depends_on = [int(value) for value in fields["depends_on"].split(",")]
+		if depends_on != sorted(set(depends_on)) or number in depends_on:
+			raise ValueError("depends_on is not ascending, distinct, and free of the issue itself")
+		parsed["depends_on"] = depends_on
+	return parsed
 
 
 def queue_title(repo: str, issue_number: int) -> str:
@@ -696,6 +751,7 @@ def queue_pending(
 	trusted_author: str = QUEUE_TRUSTED_AUTHOR,
 	limit: int = QUEUE_PICKUP_LIMIT,
 	bindings: dict[str, Any] | None = None,
+	dependencies: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
 	"""Turn the open queue issues into the pickup's work list.
 
@@ -717,6 +773,16 @@ def queue_pending(
 	``remaining``) for the next wake. ``None`` skips the check: only the
 	sweep's "already queued" dedupe uses that, because it must count every
 	open trusted item. The pickup CLI always passes bindings.
+
+	``dependencies`` (issue #4934) is the ``fetch_dependency_states`` result.
+	When given, an issue entry whose payload names ``depends_on`` is kept only
+	when every dependency is ``merged`` (closed with ``ai:merged``) or
+	``inaccessible`` (noted in the entry's ``dependency_notes``); otherwise
+	each of its queue issues is ``ignored`` with a ``held: …`` reason and
+	stays open for the next wake. An entry with a dependency missing from the
+	map counts in ``deferred``. Holds are applied before ``limit``, so held
+	entries never take a start slot. ``None`` skips the check (the sweep's
+	dedupe); the pickup CLI always passes a map.
 	"""
 	allowed = {slug.lower() for slug in allowed_repos if isinstance(slug, str)}
 	candidates = [issue for issue in issues if _is_queue_issue(issue)]
@@ -790,10 +856,23 @@ def queue_pending(
 		key = (validated["repo"].lower(), validated["issue_number"])
 		entry = groups.get(key)
 		if entry is None:
-			entry = {"item_type": "issue", **validated, "fire_text": build_fire_text(validated), "queue_issues": []}
+			# The fire text keeps the six documented keys: the pickup only
+			# starts an item once its dependencies are resolved (issue #4934).
+			fire_fields = {name: value for name, value in validated.items() if name != "depends_on"}
+			entry = {"item_type": "issue", **validated, "fire_text": build_fire_text(fire_fields), "queue_issues": []}
 			groups[key] = entry
+		# Duplicates are sorted oldest first, so the newest intake read of the
+		# issue decides its dependencies.
+		if validated.get("depends_on"):
+			entry["depends_on"] = validated["depends_on"]
+		else:
+			entry.pop("depends_on", None)
 		entry["queue_issues"].append({"number": number, "body": body})
 	ordered = list(groups.values())
+	if dependencies is not None:
+		ordered, held, unread = _apply_dependency_holds(ordered, dependencies)
+		ignored.extend(held)
+		deferred += unread
 	limit = max(int(limit), 0)
 	return {
 		"pending": ordered[:limit],
@@ -801,6 +880,144 @@ def queue_pending(
 		"remaining": max(len(ordered) - limit, 0) + deferred,
 		"deferred": deferred,
 	}
+
+
+def dependency_key(repo: str, number: int) -> str:
+	"""The ``dependencies`` map key for issue ``number`` of ``repo``."""
+	return f"{(repo or '').lower()}#{number}"
+
+
+def _apply_dependency_holds(entries: list[dict[str, Any]], dependencies: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+	"""Split pickup entries by their dependency states (see ``queue_pending``).
+
+	Returns ``(kept, held, unread)``: the entries to consider for a start, one
+	``ignored`` record per queue issue of each held entry, and the number of
+	entries left for the next wake because a dependency was not read.
+	"""
+	kept: list[dict[str, Any]] = []
+	held: list[dict[str, Any]] = []
+	unread = 0
+	for entry in entries:
+		depends_on = entry.get("depends_on") if entry.get("item_type") == "issue" else None
+		if not depends_on:
+			kept.append(entry)
+			continue
+		records = [(number, dependencies.get(dependency_key(entry["repo"], number))) for number in depends_on]
+		if any(not isinstance(record, dict) for _, record in records):
+			unread += 1
+			continue
+		reasons: list[str] = []
+		notes: list[str] = []
+		for number, record in records:
+			state = record.get("state")
+			detail = str(record.get("reason") or "")[:200]
+			if state == "merged":
+				continue
+			if state == "inaccessible":
+				notes.append(f"#{number} is not readable here ({detail}); started without waiting for it")
+			elif state == "open":
+				reasons.append(f"waiting on #{number} (open)")
+			elif state == "closed_unmerged":
+				reasons.append(f"dependency #{number} closed without {MERGED_LABEL}")
+			else:
+				reasons.append(f"dependency #{number} unreadable this wake ({detail or state})")
+		if reasons:
+			for queued in entry["queue_issues"]:
+				held.append({"queue_issue": queued["number"], "reason": "held: " + "; ".join(reasons)})
+			continue
+		if notes:
+			entry["dependency_notes"] = notes
+		kept.append(entry)
+	return kept, held, unread
+
+
+def dependency_state(issue: Any) -> dict[str, Any]:
+	"""Classify one ``GET repos/<repo>/issues/<N>`` answer for the dependency hold.
+
+	``merged`` (closed with ``ai:merged``), ``closed_unmerged``, ``open``, or
+	``unavailable`` for an answer that is not an issue object. ``closed_at`` is
+	carried for the watchdog. Pure.
+	"""
+	if not isinstance(issue, dict):
+		return {"state": "unavailable", "reason": "answer is not an issue object"}
+	state = issue.get("state")
+	if state == "open":
+		return {"state": "open"}
+	if state == "closed":
+		closed_at = issue.get("closed_at") if isinstance(issue.get("closed_at"), str) else ""
+		if MERGED_LABEL in _label_names(issue):
+			return {"state": "merged", "closed_at": closed_at}
+		return {"state": "closed_unmerged", "closed_at": closed_at}
+	return {"state": "unavailable", "reason": f"unknown issue state {state!r}"}
+
+
+def fetch_dependency_states(keys: list[str], gh_read: Any = None) -> dict[str, Any]:
+	"""Read each dependency issue once (issue #4934).
+
+	Input: ``dependency_key`` strings, deduplicated here, of which the first
+	``QUEUE_DEPENDENCY_READ_LIMIT`` (30) are read; the rest are left out of
+	the result, so their items are deferred. Output: ``{key: record}`` with
+	the ``dependency_state`` record, or ``{"state": "inaccessible" |
+	"unavailable", "reason"}`` for a failed read (HTTP 403 / 404 is
+	``inaccessible``). Calls (CLAUDE.md §15): one REST ``GET
+	repos/<repo>/issues/<N>`` per key read through ``gh``; none when ``keys``
+	is empty. A failed read affects only its own key and is never retried here.
+	"""
+	read = gh_read or _gh_api_read
+	unique: list[str] = []
+	for key in keys:
+		if isinstance(key, str) and key not in unique:
+			unique.append(key)
+	states: dict[str, Any] = {}
+	for key in unique[:QUEUE_DEPENDENCY_READ_LIMIT]:
+		repo, _, number = key.rpartition("#")
+		if not REPO_SLUG_RE.match(repo) or not re.fullmatch(r"[1-9][0-9]{0,9}", number):
+			states[key] = {"state": "unavailable", "reason": "invalid dependency reference"}
+			continue
+		try:
+			issue = read(f"repos/{repo}/issues/{number}")
+		except RuntimeError as exc:
+			kind = "inaccessible" if DEPENDENCY_INACCESSIBLE_RE.search(str(exc)) else "unavailable"
+			states[key] = {"state": kind, "reason": str(exc)[:200]}
+			continue
+		states[key] = dependency_state(issue)
+	return states
+
+
+def pending_dependency_keys(entries: list[Any]) -> list[str]:
+	"""The dependency keys of the issue entries of a ``queue_pending`` result, in order."""
+	keys: list[str] = []
+	for entry in entries:
+		if not isinstance(entry, dict) or entry.get("item_type") != "issue":
+			continue
+		for number in entry.get("depends_on") or []:
+			key = dependency_key(entry["repo"], number)
+			if key not in keys:
+				keys.append(key)
+	return keys
+
+
+def _queue_item_dependencies(issue: dict[str, Any]) -> tuple[str, list[int]]:
+	"""``(repo, depends_on)`` from a queue issue's payload; ``("", [])`` when it has none or is malformed."""
+	try:
+		validated = parse_fire_text(queue_payload_text((issue.get("body") or "").replace("\r\n", "\n")))
+	except ValueError:
+		return "", []
+	return validated["repo"], validated.get("depends_on") or []
+
+
+def stale_dependency_keys(issues: list[Any], trusted_author: str = QUEUE_TRUSTED_AUTHOR) -> list[str]:
+	"""The dependency keys ``queue_stale`` needs: those of trusted, open, not yet flagged items."""
+	keys: list[str] = []
+	for issue in issues:
+		if not _is_queue_issue(issue) or _queue_author(issue) != trusted_author or QUEUE_STALE_LABEL in _label_names(issue):
+			continue
+		repo, depends_on = _queue_item_dependencies(issue)
+		for number in depends_on:
+			key = dependency_key(repo, number)
+			if key not in keys:
+				keys.append(key)
+	return keys
 
 
 def queue_binding_run_ids(
@@ -942,13 +1159,23 @@ def queue_stale(
 	now: datetime,
 	stale_hours: float = QUEUE_STALE_HOURS_DEFAULT,
 	trusted_author: str = QUEUE_TRUSTED_AUTHOR,
+	dependencies: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
 	"""Trusted open queue issues older than ``stale_hours`` and not yet flagged.
 
 	Input: the same issue array as ``queue_pending``. Output: one
-	``{"number", "title", "age_hours"}`` per issue to flag, oldest first.
-	Issues already carrying ``ai:claude-issue-queue-stale`` are skipped, so
-	each stranded item alerts once.
+	``{"number", "title", "age_hours", "reason"}`` per issue to flag, oldest
+	first. Issues already carrying ``ai:claude-issue-queue-stale`` are
+	skipped, so each stranded item alerts once.
+
+	``dependencies`` (issue #4934, the ``fetch_dependency_states`` result)
+	judges an item whose payload names ``depends_on`` only when every
+	dependency was read: any dependency closed without ``ai:merged`` flags
+	it at once (``reason`` names it), an open one means it waits by design
+	(not flagged), and when all are merged its age counts from the latest
+	dependency close. An unread or unreadable dependency skips the item this
+	run. ``None`` keeps the plain age rule for every item. Other items get
+	``reason`` ``not picked up``.
 	"""
 	stale: list[dict[str, Any]] = []
 	for issue in issues:
@@ -959,9 +1186,32 @@ def queue_stale(
 		created = _parse_timestamp(issue.get("created_at"))
 		if created is None:
 			continue
-		age = (now - created).total_seconds() / 3600.0
+		since = created
+		reason = "not picked up"
+		repo, depends_on = _queue_item_dependencies(issue) if dependencies is not None else ("", [])
+		if depends_on:
+			records = [(number, dependencies.get(dependency_key(repo, number))) for number in depends_on]
+			if any(not isinstance(record, dict) or record.get("state") not in ("merged", "open", "closed_unmerged") for _, record in records):
+				continue
+			closed_unmerged = [number for number, record in records if record["state"] == "closed_unmerged"]
+			if closed_unmerged:
+				age = (now - created).total_seconds() / 3600.0
+				stale.append({
+					"number": issue.get("number"),
+					"title": issue.get("title") or "",
+					"age_hours": round(age, 1),
+					"reason": "dependency " + ", ".join(f"#{number}" for number in closed_unmerged) + f" closed without {MERGED_LABEL}",
+				})
+				continue
+			if any(record["state"] == "open" for _, record in records):
+				continue
+			for _, record in records:
+				closed = _parse_timestamp(record.get("closed_at"))
+				if closed is not None and closed > since:
+					since = closed
+		age = (now - since).total_seconds() / 3600.0
 		if age >= stale_hours:
-			stale.append({"number": issue.get("number"), "title": issue.get("title") or "", "age_hours": round(age, 1)})
+			stale.append({"number": issue.get("number"), "title": issue.get("title") or "", "age_hours": round(age, 1), "reason": reason})
 	stale.sort(key=lambda item: -item["age_hours"])
 	return stale
 
@@ -1072,6 +1322,15 @@ def _cmd_fire_body(args: argparse.Namespace) -> int:
 
 def _cmd_queue_issue(args: argparse.Namespace) -> int:
 	validated = _read_json(args.validated_json)
+	if args.target_issue_json:
+		# The live target issue the intake read for authorization (issue #4934).
+		target = _read_json(args.target_issue_json)
+		body = target.get("body") if isinstance(target, dict) and isinstance(target.get("body"), str) else ""
+		depends_on = parse_depends_on(body, validated.get("issue_number"))
+		if depends_on:
+			validated["depends_on"] = depends_on
+		else:
+			validated.pop("depends_on", None)
 	print(json.dumps(build_queue_issue(validated, args.run_url)))
 	return 0
 
@@ -1329,7 +1588,20 @@ def _cmd_queue_pending(args: argparse.Namespace) -> int:
 			return 2
 	else:
 		bindings = {"repo": queue_repo, "runs": {}}
-	print(json.dumps(queue_pending(issues, allowed, args.trusted_author, args.limit, bindings=bindings)))
+	# Dependency holds (issue #4934): read each dependency of the bound items
+	# in the same scan window once. Without a map, a dependent item is
+	# deferred, never started unchecked.
+	if args.fetch_repo:
+		scan = queue_pending(issues, allowed, args.trusted_author, max(args.limit, 0) * QUEUE_BINDING_SCAN_FACTOR, bindings=bindings)
+		dependencies = fetch_dependency_states(pending_dependency_keys(scan["pending"]))
+	elif args.dependencies_json:
+		dependencies = _read_json(args.dependencies_json)
+		if not isinstance(dependencies, dict):
+			print("dependencies JSON is not an object", file=sys.stderr)
+			return 2
+	else:
+		dependencies = {}
+	print(json.dumps(queue_pending(issues, allowed, args.trusted_author, args.limit, bindings=bindings, dependencies=dependencies)))
 	return 0
 
 
@@ -1361,7 +1633,15 @@ def _cmd_queue_stale(args: argparse.Namespace) -> int:
 	if now is None:
 		print(f"invalid --now: {args.now!r}", file=sys.stderr)
 		return 2
-	print(json.dumps(queue_stale(issues, now, args.stale_hours, args.trusted_author)))
+	dependencies = None
+	if args.fetch_dependencies:
+		dependencies = fetch_dependency_states(stale_dependency_keys(issues, args.trusted_author))
+	elif args.dependencies_json:
+		dependencies = _read_json(args.dependencies_json)
+		if not isinstance(dependencies, dict):
+			print("dependencies JSON is not an object", file=sys.stderr)
+			return 2
+	print(json.dumps(queue_stale(issues, now, args.stale_hours, args.trusted_author, dependencies=dependencies)))
 	return 0
 
 
@@ -1402,6 +1682,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_queue = sub.add_parser("queue-issue", help="build the coding-workflows queue issue for a validated payload")
 	p_queue.add_argument("--validated-json", required=True)
 	p_queue.add_argument("--run-url", default="")
+	p_queue.add_argument("--target-issue-json", default="", help="the target issue as read by the intake; its Depends on: lines become depends_on (issue #4934)")
 	p_queue.set_defaults(func=_cmd_queue_issue)
 
 	p_pr_fix = sub.add_parser("pr-fix-queue-issue", help="build the queue issue for one claude/* PR fix (CLAUDE.md §26.H)")
@@ -1422,6 +1703,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_pending.add_argument("--limit", type=int, default=QUEUE_PICKUP_LIMIT)
 	p_pending.add_argument("--bindings-json", default="", help="binding records (fetch_queue_bindings output) for --issues-json mode")
 	p_pending.add_argument("--default-branch", default="", help="skip the default-branch read of --fetch-repo")
+	p_pending.add_argument("--dependencies-json", default="", help="dependency states (fetch_dependency_states output) for --issues-json mode (issue #4934)")
 	p_pending.set_defaults(func=_cmd_queue_pending)
 
 	p_bind = sub.add_parser("add-queue-binding", help="record a queue issue in this run's binding file (issue #4621)")
@@ -1437,6 +1719,8 @@ def main(argv: list[str] | None = None) -> int:
 	p_stale.add_argument("--stale-hours", type=float, default=QUEUE_STALE_HOURS_DEFAULT)
 	p_stale.add_argument("--now", default="")
 	p_stale.add_argument("--trusted-author", default=QUEUE_TRUSTED_AUTHOR)
+	p_stale.add_argument("--fetch-dependencies", action="store_true", help="read the dependency issues of dependent items with gh, one REST call each (issue #4934)")
+	p_stale.add_argument("--dependencies-json", default="", help="dependency states (fetch_dependency_states output) instead of --fetch-dependencies")
 	p_stale.set_defaults(func=_cmd_queue_stale)
 
 	p_arm = sub.add_parser("arm-check-in-request", help="parse a pickup — arm-check-in request (CLAUDE.md §26.B step 1c)")

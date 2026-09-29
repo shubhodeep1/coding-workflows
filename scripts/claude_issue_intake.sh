@@ -244,7 +244,9 @@ if [ -z "${QUEUE_TOKEN}" ]; then
 fi
 
 QUEUE_FILE="${RUNTIME_DIR}/queue_issue.json"
-python3 "${ROUTE_PY}" queue-issue --validated-json "${VALIDATED_FILE}" --run-url "${RUN_URL}" > "${QUEUE_FILE}"
+# The target issue read in step 1b supplies its `Depends on: #N` lines, which
+# the pickup waits on (issue #4934); no extra read.
+python3 "${ROUTE_PY}" queue-issue --validated-json "${VALIDATED_FILE}" --run-url "${RUN_URL}" --target-issue-json "${TARGET_ISSUE_FILE}" > "${QUEUE_FILE}"
 QUEUE_TITLE="$(jq -r '.title' "${QUEUE_FILE}")"
 QUEUE_LABEL="$(jq -r '.label' "${QUEUE_FILE}")"
 # The body is read once and checked here: a `$(jq ...)` inside a gh argument
@@ -255,6 +257,10 @@ if ! QUEUE_BODY="$(jq -er '.body | select(type == "string" and length > 0 and (c
 	# Name the check that failed, so the operator can tell the cases apart.
 	QUEUE_BODY_STATE="$(jq -r '.body | if type != "string" then "missing (\(type))" elif length == 0 then "empty" elif contains("\u0000") then "text with a NUL byte" else "unreadable" end' "${QUEUE_FILE}" 2>/dev/null || true)"
 	fail "queue_failed" "the rendered queue issue body is ${QUEUE_BODY_STATE:-unreadable (queue-issue output is not JSON)}"
+fi
+QUEUE_DEPENDS_ON="$(printf '%s\n' "${QUEUE_BODY}" | sed -n 's/^depends_on: \([0-9,]*\)$/\1/p' || true)"
+if [ -n "${QUEUE_DEPENDS_ON}" ]; then
+	log "depends_on repo=${REPO} issue=${ISSUE_NUMBER} depends_on=${QUEUE_DEPENDS_ON}"
 fi
 
 # One read of the open queue (≤ 100 items; the pickup drains it hourly) to
@@ -311,6 +317,9 @@ BODY="<!-- ai:claude-issue-dispatched:v1 -->
 🤖 Queued for the Claude issue pickup (trigger \`${TRIGGER}\`). Within about an hour it starts the Claude session that implements this issue in \`${REPO}\`, and that session posts its progress here.
 
 Queue item: ${QUEUE_URL}"
+if [ -n "${QUEUE_DEPENDS_ON}" ]; then
+	BODY+=$'\n'"Waits for: #${QUEUE_DEPENDS_ON//,/, #} (this issue's \`Depends on:\` line). The pickup starts it only after each of them is closed with \`ai:merged\`."
+fi
 [ -z "${RUN_URL}" ] || BODY+=$'\n'"Intake run: ${RUN_URL}"
 gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || \
 	log "warn dispatched_comment_failed repo=${REPO} issue=${ISSUE_NUMBER}"
