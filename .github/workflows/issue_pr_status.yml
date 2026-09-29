@@ -412,23 +412,24 @@ jobs:
           #   2. MANAGED_ISSUES — orchestrator-managed child issues
           #      (label `ai:orchestrator-managed` OR the
           #      "Managed by: AI Orchestrator" body marker; the marker
-          #      only suppresses the merged Telegram alert). These merge
-          #      into orchestrator/project-N, never main, so the default
-          #      `PR_BASE_REF == main` close gate would strand them. The
-          #      label/close loop treats an issue as a managed child only
-          #      when it carries the ai:orchestrator-managed label (issue
-          #      #4957), and then applies FINAL_LABEL and closes on a
-          #      merge into the default branch, its declared integration
-          #      branch, or its orchestrator/project-<T> branch — never
-          #      any other base. The orchestrator poller's
-          #      reconcile_managed_issue_labels and
-          #      close_merged_issues_sweep paths remain authoritative
+          #      only suppresses the merged Telegram alert). Their PRs
+          #      usually merge into a project branch rather than the
+          #      default branch, so a default-branch-only close gate would
+          #      strand them. The label/close loop treats an issue as a
+          #      managed child only when it carries the
+          #      ai:orchestrator-managed label (issue #4957), and then
+          #      applies FINAL_LABEL and closes on a merge into the
+          #      default branch, its declared integration branch, or its
+          #      orchestrator/project-<T> branch — never any other base.
+          #      The orchestrator poller's reconcile_managed_issue_labels
+          #      and close_merged_issues_sweep paths remain authoritative
           #      backstops; this path is idempotent with them.
           #
-          #   3. Standalone issues — neither tracking nor managed. Keep
-          #      the original `PR_BASE_REF == main` gate to preserve
-          #      the workflow's long-standing safety for non-orchestrator
-          #      flows.
+          #   3. Standalone issues — neither tracking nor managed. A
+          #      merge into the default branch labels and closes them; a
+          #      merge into their declared integration branch (issue
+          #      #4813) applies FINAL_LABEL but leaves them open; any
+          #      other base leaves them unchanged.
           #
           # Single batched GraphQL call (one API request regardless of
           # N) per CLAUDE.md §15. Fail-open with a per-issue REST
