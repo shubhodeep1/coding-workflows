@@ -5,18 +5,19 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4785-twin-first-claude-sync
 - Project branch: claude/implement-plan-issue-5246-guard-sync-provenance   Final PR: #5267 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #5273
+- Waiting on: conformance fix PR on branch `claude/implement-plan-issue-5246-guard-sync-provenance-conformance-fix-1`
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01V6cH71S7p1H6ovhesNZWfA   safety net trig_014gA4xY3L2q8cWZTSo8r9df   hand-back trig_01JPhGbbeDDdkLmDbhQeSuCa
+- Check-in: checker session_01V6cH71S7p1H6ovhesNZWfA   safety net + hand-back: armed by the conformance 1/3 stage (ids in its report and the next `— resume.` block)
 - Last updated: 2026-09-29
-- Last note: phase 1 PR #5273 opened against the project branch; waiting on its review round or merge.
+- Last note: conformance 1/3 CONFORMANT (Correctness: CONCERNS); fix PR on branch `claude/implement-plan-issue-5246-guard-sync-provenance-conformance-fix-1` corrects the agents.md / changelog claim that a required `lint` check enforces the guard rule for every PR.
 
 ## Phases
-1. [ ] Phase 1 — guard-path rule in `claude_twin_sync.py check`, CI wiring, tests, docs   — PR #5273 open (waiting); review rounds: 0; interventions: 0
+1. [x] Phase 1 — guard-path rule in `claude_twin_sync.py check`, CI wiring, tests, docs   — PR #5273 merged 2026-09-29; review rounds: 0; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — fix PR on branch `claude/implement-plan-issue-5246-guard-sync-provenance-conformance-fix-1` (pre-security): agents.md and the changelog fragment claimed a required `lint` check lets GitHub enforce the guard rule for every PR, but a `pull_request` run uses the PR's own `ci.yml` and `scripts/claude_twin_sync.py`.
 
 ## Security pass
 - Skipped: `Security pass: skip (ai:security: automation-produced issue)` in the plan header (`.claude/scripts/security_pass_skip.py` verified it).
@@ -34,6 +35,7 @@
 - AD-4 [plan, 2026-09-29] Is deleting a guard file together with its twin still allowed as a "synced delete"? — Picked: A — no: a guard deletion is always a violation, so removing a hook or setting needs the owner's hand-merge. Alternatives: B — keep allowing a two-sided guard delete. Why: the sync never copies a deletion, and removing a guard weakens what sessions are limited by (§1); non-guard deletes are unchanged (§5). Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:conformance] A check that runs on `pull_request` executes the PR's own workflow file and scripts, so docs must not claim that requiring it enforces a rule against a PR that can also edit that check. (files: .github/workflows/ci.yml, scripts/claude_twin_sync.py, agents.md)
 
 ## Notes
 - Phase 1 adds `guard_violation_reason` next to the planned `is_sync_pr_head` in `scripts/claude_twin_sync.py`, to keep `check_not_ahead` readable; the behaviour is the plan's.
