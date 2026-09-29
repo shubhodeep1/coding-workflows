@@ -268,7 +268,18 @@ Phases of the unattended pipeline (each is a separate workflow file under
     queue with
     `claude_issue_route.py queue-pending --fetch-repo` (one queue read plus
     the batched binding reads `fetch_queue_bindings` documents; only bound
-    items by `github-actions[bot]` for registered repos; ≤ 10 per wake),
+    items by `github-actions[bot]` for registered repos; ≤ 20 per wake,
+    `QUEUE_PICKUP_LIMIT`, overridable with the pickup session's
+    `CLAUDE_ISSUE_PICKUP_LIMIT` clamped to 1..30; `reclarify` resumes
+    first, then queue order; binding reads cover the first 3 × limit
+    targets; the output adds `limit`, `oldest_waiting_minutes`, and, with
+    `--wake hourly | catch-up`, `catch_up_due`; #4990). A wake whose
+    `catch_up_due` is true schedules one self-bound `send_later` catch-up
+    wake 30 minutes out (`Claude issue pickup: catch-up`, arguments
+    `— wake. — catch-up`), unless one is already pending; a catch-up wake
+    never schedules another, and the one-line report adds
+    `oldest_waiting=<minutes | none>` and `catch_up=<scheduled | pending |
+    none | failed>`. The pickup
     starts one Opus session per target issue via `claude-issue-dispatch.md`
     step 2, and closes the queue issues with a `Dispatched:` line (no
     comment). A claude.ai routine run cannot do this: it gets no
@@ -1140,6 +1151,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   (except issue mode, which records the mode), and a phase touching
   `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
   §28.C) until a `Protected-path approval: phase <n>` line is recorded.
+  Interim until #4785 (issue #4948): in a repo that has
+  `workflow-templates/.claude/`, the stage records
+  `Protected-path approval: phase <n> — twin-first (automatic, interim until
+  #4785) (<date>)` itself, edits only the twins, and stops only for the
+  `[claude-twin-sync]` copy (a `hold` claim plus the twin-sync blocker). The
+  question remains for an edit denied in the twin tree and for a phase whose
+  plan needs a watched session, and a recorded answer is never overwritten.
+  The PR that makes #4785's sync live removes this default.
 - The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
   and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
   three scripts live under `workflow-templates/.claude/`. Tests:
