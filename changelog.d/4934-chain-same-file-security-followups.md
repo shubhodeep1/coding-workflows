@@ -13,4 +13,4 @@ What this means for operators: a follow-up can now sit in the queue for hours wh
 
 ### For contributors
 
-A dependency read that returns HTTP 403 or 404 cannot succeed from that session (for example a consumer repository not attached to the pickup's web session), so the pickup skips that dependency and notes it in the entry's `dependency_notes` rather than holding the item forever; any other read failure holds the item for one wake. Queue items without a dependency render byte-identically, so existing bindings stay valid. The Codex route ignores the line.
+A dependency read that returns HTTP 403 or 404 cannot succeed from that session (for example a consumer repository not attached to the pickup's web session), so the pickup skips that dependency and notes it in the entry's `dependency_notes` rather than holding the item forever; any other read failure, including a rate-limit 403, holds the item for one wake. Queue items without a dependency render byte-identically, so existing bindings stay valid. The Codex route ignores the line.

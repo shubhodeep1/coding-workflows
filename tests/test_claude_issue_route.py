@@ -1751,6 +1751,27 @@ def test_dependency_state_and_fetch():
 	assert len(route.fetch_dependency_states(many, gh_read=lambda path, **_: {"state": "open"})) == route.QUEUE_DEPENDENCY_READ_LIMIT
 
 
+def test_a_rate_limited_dependency_read_holds_the_item():
+	"""GitHub answers a rate limit with HTTP 403 too; that read is transient, so it must hold the item, not start it."""
+	answers = {
+		"1": "gh api repos/o/r/issues/1 exited 1: gh: API rate limit exceeded for user ID 1. (HTTP 403)",
+		"2": "gh api repos/o/r/issues/2 exited 1: gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)",
+		"3": "gh api repos/o/r/issues/3 exited 1: gh: Resource not accessible by integration (HTTP 403)",
+	}
+
+	def fake_read(path, binary=False, jq=""):
+		raise RuntimeError(answers[path.rsplit("/", 1)[1]])
+
+	states = route.fetch_dependency_states(["o/r#1", "o/r#2", "o/r#3"], gh_read=fake_read)
+	assert {key: record["state"] for key, record in states.items()} == {"o/r#1": "unavailable", "o/r#2": "unavailable", "o/r#3": "inaccessible"}
+	item = _queue_item(12, _dependent(depends_on=(4687,)))
+	key = route.dependency_key("shubhodeep1/digital_pa", 4687)
+	out = route.queue_pending([item], REGISTRY_ALLOWED, dependencies={key: states["o/r#1"]})
+	assert out["pending"] == []
+	assert out["ignored"][0]["queue_issue"] == 12
+	assert out["ignored"][0]["reason"].startswith("held: dependency #4687 unreadable this wake (")
+
+
 def test_queue_stale_judges_dependent_items_by_their_dependencies():
 	from datetime import datetime, timezone
 
