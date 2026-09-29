@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T22:11:51Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A PR-named `workflow_dispatch` run counts as trusted evidence only when its `head_branch` is the dispatch (default) branch: `run-name` is evaluated from the workflow file at the dispatched ref, so a null or empty `head_branch` proves nothing and must fail closed; tolerate null only where the run is used to suppress work, never to accept it.",
+  "phase": "implement_plan",
+  "pr_number": 5268,
+  "record_id": "lesson-implement-plan-d077df84c0e5d668db5e2dae",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5093-smoke-review-dispatch-default-branch",
+    "file:scripts/smoke_review_dispatch.sh"
+  ]
+}
