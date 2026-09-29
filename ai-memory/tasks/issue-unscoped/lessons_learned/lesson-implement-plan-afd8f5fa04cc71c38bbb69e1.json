@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-29T11:07:47Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A GitHub Actions step `name:` containing ` #` must be quoted: YAML reads the rest as a comment and silently truncates the name (yamllint reports it only as a comment-spacing warning).",
+  "phase": "implement_plan",
+  "pr_number": 4992,
+  "record_id": "lesson-implement-plan-afd8f5fa04cc71c38bbb69e1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:.github/workflows/test-and-mark-stable.yml",
+    "file:.github/workflows/mark-stable.yml",
+    "file:.github/workflows/ci.yml"
+  ]
+}

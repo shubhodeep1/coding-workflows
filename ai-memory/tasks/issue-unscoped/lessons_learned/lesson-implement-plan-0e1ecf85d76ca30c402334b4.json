@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-29T11:07:47Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A merge gate that leaves `review_autofix.yml`'s deterministic-skip merge unwrapped depends on its `PROTECTED_SKIP_SUPPRESSED` guard covering the gate's whole protected set; pin that with a test that runs the real guard over every protected path, so adding a path to one list without the other fails CI.",
+  "phase": "implement_plan",
+  "pr_number": 4992,
+  "record_id": "lesson-implement-plan-0e1ecf85d76ca30c402334b4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/protected_path_authorization.py",
+    "file:tests/test_protected_path_authorization.py"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T11:07:47Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A static \"every call is wrapped\" test must find calls by command position, not by the one argument shape the current callers happen to use: a regex anchored on `gh pr merge \"${` never sees `gh pr merge --repo \u2026 \"${PR}\"`, so an unwrapped call in that shape passes the test.",
+  "phase": "implement_plan",
+  "pr_number": 4992,
+  "record_id": "lesson-implement-plan-f9207745df5e3933a1b405db",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:tests/test_protected_path_authorization.py",
+    "file:scripts/protected_path_gate.sh"
+  ]
+}

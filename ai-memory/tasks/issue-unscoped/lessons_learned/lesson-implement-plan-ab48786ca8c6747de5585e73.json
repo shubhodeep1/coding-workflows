@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T11:07:47Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`orchestrate_poll_process.sh` runs from the copy `orchestrate_poll.yml` stages from a fixed script list, not from `stage_workflow_support.sh`; a new helper it sources must be added to that list too, or every orchestrator run fails at staging.",
+  "phase": "implement_plan",
+  "pr_number": 4992,
+  "record_id": "lesson-implement-plan-ab48786ca8c6747de5585e73",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:.github/workflows/orchestrate_poll.yml",
+    "file:scripts/stage_workflow_support.sh"
+  ]
+}

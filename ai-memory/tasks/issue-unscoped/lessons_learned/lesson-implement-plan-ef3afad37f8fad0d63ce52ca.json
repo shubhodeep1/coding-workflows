@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T11:07:47Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A gate wrapped around a shared merge path must leave the unaffected case byte-for-byte unchanged: requiring a well-formed head SHA for every PR broke 40 orchestrator tests whose fakes use placeholder SHAs, so the SHA is required only where it is used (a protected PR).",
+  "phase": "implement_plan",
+  "pr_number": 4992,
+  "record_id": "lesson-implement-plan-ef3afad37f8fad0d63ce52ca",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_authorization.py",
+    "file:tests/test_orchestrate_poll_process.py"
+  ]
+}
