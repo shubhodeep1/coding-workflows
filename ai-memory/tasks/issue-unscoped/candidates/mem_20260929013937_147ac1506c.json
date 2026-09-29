@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_shared_shell_block_guard.py:65-66 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: `_lint_steps` is misleadingly named because it reads steps from the `static-checks` job, not the `lint` job.\n  WHY: It does not fail at runtime, but can confuse maintainers about which job's steps it returns.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_shared_shell_block_guard.py:65 | severity=low | confidence=5\n  PROBLEM: The function name `_lint_steps` is misleading as it now returns steps from the static-checks job, not the lint job.\n  WHY: It does not fail at runtime, but creates confusion for maintainers who expect lint-related steps.\n- HARDENING_SUGGESTION: In `.github/workflows/ci.yml`, the aggregate lint job may omit a newly added job from its `needs` list, causing the lint status not to reflect overall CI status or to pass prematurely. Suggested minimal fix: add a unit test in `tests/test_ci_job_split_contract.py` verifying the aggregate job explicitly lists all required workflow jobs. Estimated lines changed: 10-15.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_shared_shell_block_guard.py:~66 (_lint_steps) | severity not stated | confidence not stated\n  PROBLEM: `_lint_steps` no longer matches the job it reads from; it returns the `static-checks` job's steps via `GUARD_JOB_ID`.\n  WHY: The misleading name may lead readers to look for the steps in `ci.yml[\"jobs\"][\"lint\"][\"steps\"]`, which would raise `KeyError`.\n  SUGGESTED_FIX: Rename `_lint_steps` to `_guard_job_steps` (or similar) and update the two internal callers (`_guard_body` and `test_guard_immediately_follows_checkout_and_precedes_setup_install_lint_and_tests`).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_ci_shared_shell_block_guard.py:`def _lint_steps() -> list[dict]:` at line ~65 | severity=NIT | confidence=5\n  PROBLEM: `_lint_steps()` reads steps from the `static-checks` job via `GUARD_JOB_ID = \"static-checks\"`, not from `lint`.\n  WHY: It does not fail at runtime, but the old name implies it reads from `lint` when it actually reads from `static-checks`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_ci_shared_shell_block_guard.py:66 | severity not stated | confidence not stated\n  PROBLEM: `_lint_steps` is misleading (now static-checks).\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "aa0510fa1a36a7b1677f6b881331d6e474d832eb9b79a6a71872897d1b2fd27d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4884,
+    "run_id": "36504835390",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36504835390",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929013937_147ac1506c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4884,
+    "run_id": "36504835390"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T01:39:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
