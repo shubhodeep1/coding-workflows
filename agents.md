@@ -1130,7 +1130,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   blocker (a `hold` claim in `/fix-claude-pr`). A merged `settings.json`
   change applies from the next session. Local git only, no GitHub API
   calls. The SessionStart hook logs the drift as
-  `[session-start] claude_assets=stale …` (stable log prefixes). Tests:
+  `[session-start] claude_assets=stale …`, or `claude_assets=diverged …`
+  when shallow history has no merge base (stable log prefixes). Tests:
   `tests/test_claude_asset_sync_command.py`,
   `tests/test_session_start_claude_assets_drift.py` (one `ci.yml` step).
 - The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
@@ -1737,8 +1738,15 @@ and shipped:
 - `[session-start] claude_assets=stale behind=<n> files=<comma list>`
   (`.claude/hooks/session-start.sh`, Claude Code Web sessions only; issue
   #4952): the checkout lacks default-branch changes to `.claude/hooks/**` or
-  `.claude/settings.json`. `behind` is `unknown` when shallow history has no
-  merge base.
+  `.claude/settings.json`. `behind` counts every commit the default branch
+  holds and the checkout lacks (what the sync merge brings in), not only the
+  commits touching the listed files. The default branch comes from
+  `origin/HEAD`, else `git ls-remote --symref origin HEAD`, else `main`; the
+  network calls run only under GNU `timeout` (15 s each).
+- `[session-start] claude_assets=diverged behind=unknown files=<comma list>`
+  (same hook): shallow history has no merge base, so the listed files differ
+  from the default branch but the hook cannot tell whose change each
+  difference is (it may be the branch's own edit).
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to

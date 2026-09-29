@@ -9,6 +9,9 @@ checked; the twins must stay byte-identical.
 
 from __future__ import annotations
 
+import os
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -45,6 +48,8 @@ def test_sync_procedure_is_defined_once_in_helpers(commands):
 	assert "only changes the default branch holds and the working branch lacks" in section
 	assert "Never rebase or force-push" in section
 	assert "[claude-asset-sync] merge <source> for .claude/ guard updates" in section
+	assert "git merge --no-edit" not in section
+	assert "HEAD@{1}" not in section
 	assert "no GitHub API calls" in section
 	assert plan.count("### Claude-asset sync") == 1
 
@@ -92,3 +97,66 @@ def test_resume_and_fixer_run_the_sync(commands):
 	assert "--kind hold" in fixer
 	assert "<!-- ai:claude-blocked:v1 -->" in fixer
 	assert "PushNotification" in fixer
+
+
+def _git_env(home: Path) -> dict[str, str]:
+	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+	env.update({
+		"HOME": str(home),
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_AUTHOR_NAME": "test",
+		"GIT_AUTHOR_EMAIL": "test@example.invalid",
+		"GIT_COMMITTER_NAME": "test",
+		"GIT_COMMITTER_EMAIL": "test@example.invalid",
+		"GIT_TERMINAL_PROMPT": "0",
+	})
+	return env
+
+
+def _git(cwd: Path, env: dict[str, str], *args: str) -> str:
+	return subprocess.run(
+		["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True
+	).stdout.strip()
+
+
+def _commit(repo: Path, env: dict[str, str], rel: str, content: str, message: str) -> None:
+	path = repo / rel
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(content, encoding="utf-8")
+	_git(repo, env, "add", rel)
+	_git(repo, env, "commit", "-q", "-m", message)
+
+
+def _documented_command(section: str, pattern: str) -> str:
+	match = re.search(pattern, section)
+	assert match, pattern
+	return match.group(1).replace("<source>", "main")
+
+
+@pytest.mark.parametrize("own_commit", (True, False), ids=("diverged-branch", "fast-forwardable-branch"))
+@pytest.mark.parametrize("directory", DIRS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_documented_merge_and_settings_commands_behave_as_described(directory: Path, own_commit: bool, tmp_path: Path):
+	"""Run steps 4 and 6 exactly as written, in a scratch repository with the reflog off."""
+	section = _section(_flat(directory / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	merge = _documented_command(section, r"`(git merge [^`]*origin/<source>)`")
+	settings = _documented_command(section, r"`(git diff --name-only [^`]*-- \.claude/settings\.json)`")
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/settings.json", "{}\n", "settings")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "config", "core.logAllRefUpdates", "false")
+	_git(clone, env, "checkout", "-q", "-b", "work")
+	if own_commit:
+		_commit(clone, env, "work.md", "x\n", "branch work")
+	_commit(origin, env, ".claude/settings.json", '{"hooks": {}}\n', "wiring")
+	_git(clone, env, "fetch", "-q", "origin", "main")
+	subprocess.run(["bash", "-c", merge], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert _git(clone, env, "log", "-1", "--format=%s") == "[claude-asset-sync] merge main for .claude/ guard updates"
+	assert len(_git(clone, env, "log", "-1", "--format=%P").split()) == 2
+	changed = subprocess.run(["bash", "-c", settings], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert changed.stdout.strip() == ".claude/settings.json"
