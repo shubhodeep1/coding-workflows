@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T16:25:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A lookup of default-branch `workflow_dispatch` runs by PR run name must not pass the API's `branch=` filter or require `head_branch == <ref>`: GitHub can report `head_branch` as null on such runs, so keep null or empty head branches and drop only runs on another branch.",
+  "phase": "implement_plan",
+  "pr_number": 5111,
+  "record_id": "lesson-implement-plan-69421a2b41d70f93d07f632b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5093-smoke-review-dispatch-default-branch",
+    "file:scripts/smoke_review_dispatch.sh"
+  ]
+}
