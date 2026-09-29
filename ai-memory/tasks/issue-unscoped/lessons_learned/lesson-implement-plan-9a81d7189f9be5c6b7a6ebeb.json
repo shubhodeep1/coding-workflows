@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T07:06:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A change that adds a hook, script, or workflow must also update every prose list that counts or names its siblings (`README.md`'s \"ships N hooks\" sentence, `/seed-repo`'s file list), and a doc test should pin the new name in that list.",
+  "phase": "implement_plan",
+  "pr_number": 5069,
+  "record_id": "lesson-implement-plan-9a81d7189f9be5c6b7a6ebeb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4858-inline-edit-guard",
+    "file:README.md",
+    "file:tests/test_inline_edit_guard.py"
+  ]
+}
