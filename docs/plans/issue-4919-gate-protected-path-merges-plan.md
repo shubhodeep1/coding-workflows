@@ -180,9 +180,11 @@ rejected.
      - Each commit is authorized when one of its merged PRs
        (`commits/{sha}/pulls`) has an authorizing comment at that PR's
        `head.sha`.
-     - Commits whose PRs all merged at or before the grandfather cutoff pass
-       (AD-5). The cutoff is the committer date of the first first-parent
-       commit on `<head>` that added this script.
+     - Commits reachable from the gate's arrival commit pass (AD-5). The
+       arrival commit is the oldest first-parent commit on `<head>` that
+       changed this script. Reachability is pure git history, so no date an
+       agent can set decides it (the committer-date cutoff first planned
+       here was replaced in phase 1; conformance run 1).
      - A commit with no merged PR is blocked.
      - A missing `<base>` ref (first release) means the whole history, still
        subject to the cutoff.
@@ -453,9 +455,11 @@ the next `@stable` release.
 - **AD-5** [plan, 2026-09-29]
   - Question: How does the release gate treat changes merged before the
     gate existed?
-  - Picked: A. They are grandfathered. A PR merged at or before the
-    committer date of the first first-parent commit on the candidate that
-    added `scripts/protected_path_authorization.py` passes.
+  - Picked: A. They are grandfathered. A protected commit reachable from
+    the oldest first-parent commit on the candidate that changed
+    `scripts/protected_path_authorization.py` passes. (First planned as a
+    committer-date cutoff; phase 1 used reachability instead, because an
+    agent can set a commit date.)
   - Alternatives: B: no grandfathering; the owner authorizes every earlier
     PR retroactively.
   - Why: B blocks the first release on dozens of already-reviewed PRs,
