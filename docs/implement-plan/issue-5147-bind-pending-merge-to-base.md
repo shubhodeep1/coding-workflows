@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5147-bind-pending-merge-to-base-plan.md
 - Source issue: shubhodeep1/coding-workflows#5147
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
-- Project branch: claude/implement-plan-issue-5147-bind-pending-merge-to-base   Final PR: pending
+- Project branch: claude/implement-plan-issue-5147-bind-pending-merge-to-base   Final PR: #5179 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (head claude/implement-plan-issue-5147-bind-pending-merge-to-base-phase-1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project started by /implement-issue-claude (session_01C1BNRjR2aajP3S6bUTQGn2); plan and log committed.
+- Last note: phase 1 implemented and verified locally (138 targeted tests, ruff, yamllint, actionlint, shellcheck, workflow size guard); phase PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — bind the pending-checks marker to the reviewed base
+1. [ ] Phase 1 — bind the pending-checks marker to the reviewed base   — PR open (waiting); review rounds: 0; interventions: 0
    - Hand-off step posts an `ai:claude-fixer-pending-checks:v2` line bound to `PR_PAYLOAD_FILE`'s `base.ref` (sha256) and `base.sha`; no pending comment without a valid base
    - `scripts/claude_fixer_pending_checks.py` returns `base_changed` / `base_unbound` and never merges on a missing or mismatched binding
    - Gate skips dispatched re-runs only for a marker bound to the current base (fresh review on retarget)
@@ -42,6 +42,7 @@
 - AD-7 [plan, 2026-09-29] Should the in-run zero-findings auto-merge also be base-bound? — Picked: A — no, out of scope. Alternatives: B — add a base re-read to the workflow's auto-merge step. Why: §5; the finding is about the sweep's delayed authorization. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:security] A marker that authorizes a delayed merge must bind everything the review depended on (head and base); the REST PR `base.sha` changes on a retarget or PR sync but not on every base push, so binding it costs no call and no extra reviews. (files: scripts/claude_fixer_pending_checks.py, scripts/review_autofix_step_claude_fixer_handoff.sh, .github/workflows/review_autofix.yml)
 
 ## Notes
 - Started 2026-09-29 by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#5147: deliver`) in session_01C1BNRjR2aajP3S6bUTQGn2 (Auto mode). The session had no GitHub MCP tools and no `gh` until the repo's SessionStart hook was run by hand after attaching the repo; GitHub writes use `gh api` routine calls.

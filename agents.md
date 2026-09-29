@@ -96,8 +96,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    one incomplete check run post
    `<!-- ai:claude-fixer-pending-checks:v1 head=<sha> round=<n> ledger=<sha256> -->`
    under `## Review round <n>: clean review, waiting for check runs`
-   instead of a hand-off (issue #4900); dispatch re-runs on that head are
-   skipped too (`claude_fixer_pending_checks`), and the `claude-pr-catch-all`
+   instead of a hand-off (issue #4900), plus
+   `<!-- ai:claude-fixer-pending-checks:v2 head=<sha> round=<n> ledger=<sha256> base_sha=<sha> base_ref_sha256=<sha256> -->`
+   binding the review to `PR_PAYLOAD_FILE`'s base (issue #5147; no valid
+   payload base, no pending-checks comment); dispatch re-runs on that head
+   are skipped too (`claude_fixer_pending_checks`) while the PR's current
+   `base.sha` and `base.ref` match the v2 line, and the `claude-pr-catch-all`
    sweep enables head-bound auto-merge once those checks finish green. Doc-only and small-diff `claude/*`
    PRs take the gate's deterministic skip (`deterministic-skip-merge`, no
    reviewer panel, no hand-off) like any other PR, with two exceptions.
@@ -1025,7 +1029,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   `scripts/claude_fixer_pending_checks.py` (issue #4900): with a live
   `ai:claude-fixer-pending-checks:v1` marker by
   `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` on the current head (no later
-  hand-off), it snapshots the head's check runs once through
+  hand-off) whose `ai:claude-fixer-pending-checks:v2` line matches the PR's
+  current `base.sha` and sha256 of its `base.ref` (issue #5147; otherwise
+  `base_changed` / `base_unbound`, decided from the PR read with no further
+  call, and the gate lets the next review-sweep dispatch review the head
+  again), it snapshots the head's check runs once through
   `scripts/collect_pr_check_runs_context.py` (`CHECK_RUNS_WAIT_TIMEOUT_SECS=0`),
   and when they are `ready` with none failed or incomplete, the linked review
   run succeeded, the PR is not blocked, conflicted, a draft, or already
