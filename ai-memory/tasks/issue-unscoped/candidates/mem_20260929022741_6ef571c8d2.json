@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_session_janitor.py:129-139 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: _title_candidates unconditionally strips a `PR #<N> \u2014 ` prefix, which can classify a title as a stage and cause an active issue-start session to be archived.\n  WHY: The stripped title can match STAGE_TITLE_PATTERN and enter later_stages, allowing it to supersede an issue-start session; reviewers disagree on whether this behavior is intentional, and severity ranges from NIT to MAJOR.\n- scripts/claude_session_janitor.py:106 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: _page_shape calls .get() on payload without confirming it is a dictionary.\n  WHY: If the input is a list, payload.get(\"ccr\") raises AttributeError and the janitor exits 2, stopping the sweep.\n- scripts/claude_session_janitor.py:51 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: subprocess.run([\"gh\", \"api\", path]...) inherits the environment.\n  WHY: Environment secrets could leak or environment variables such as GIT_* or PATH could interfere with subprocess execution.\n- scripts/claude_session_janitor.py:214 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: load_page surfaces only a generic \u201ccannot read --sessions\u201d error after JSON parse failures, without logging the specific parse error or partial data.\n  WHY: The pickup cannot distinguish a malformed harness wrapper or truncated page from a real JSON error, delaying diagnosis of session-list problems.\n- changelog.d/4887-archive-finished-sessions.md:2 | severity=low | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The sentence \u201cThe Claude issue pickup's hourly wake archives the fixer, issue-start, and report sessions nothing else archived\u201d is missing a relative pronoun or auxiliary verb.\n  WHY: The sentence reads incorrectly.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The claude-issue-pickup.md edit is coding-workflows-only\" (plan:198, PR summary, CLAUDE.md \u00a726.I step 3a + tools + report + Rules + Tool Access).\n  expected_change_site: .claude/commands/claude-issue-pickup.md\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: Changed-files list and diff contain no edit to the root pickup (only workflow-templates twins for other files); tests fail until sync (PR summary acknowledges \"instruction-text tests pass with ... the pickup edit applied\").\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_session_janitor.py:129-139 (_title_candidates) | severity=high | confidence=[5]\n  PROBLEM: The pr_prefix match at line 136 and the candidate append at lines 137-138 execute unconditionally, outside the if issue_prefix: guard.\n  WHY: Same as above \u2014 the test at line 109 proves the spurious stage classification. The fix is to indent lines 136-138 into the if issue_prefix: block and add an else pass to keep the return symmetry.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_session_janitor.py:51 | severity=low | confidence=[3]\n  PROBLEM: subprocess.run([\"gh\", \"api\", path]...) inherits the environment.\n  WHY: Could leak environment secrets or interfere with subprocess execution if dangerous environment variables (e.g., GIT_*, PATH) are present in the runner environment.\n- scripts/claude_session_janitor.py:106 | severity=high | confidence=[4]\n  PROBLEM: _page_shape calls .get() on payload without confirming it is a dictionary.\n  WHY: If the input is a list (e.g., [1, 2]), payload.get(\"ccr\") raises AttributeError, causing load_page to fail and the janitor to exit 2, stopping the sweep.\n- scripts/claude_session_janitor.py:136 | severity=low | confidence=[3]\n  PROBLEM: The strip pr_prefix = PR_PREFIX_PATTERN.match(rest) is applied to rest (which may be the original title if issue_prefix did not match) without checking if an issue prefix should have been there.\n  WHY: A spurious match might occur if a non-fixer title happens to match FIXER_TITLE_PATTERN after an accidental strip, potentially leading to incorrect archival of an active session.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/4887-archive-finished-sessions.md: line 2 | severity=low | confidence=[5]\n  PROBLEM: The sentence \"The Claude issue pickup's hourly wake archives the fixer, issue-start, and report sessions nothing else archived\" is missing a relative pronoun or auxiliary verb.\n  WHY: N/A \u2014 documentation only, but the sentence reads incorrectly. Suggested fix: \"sessions that nothing else archived\" or \"sessions nothing else has archived\".\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/claude_session_janitor.py:129 | severity=high | confidence=[4]\n  PROBLEM: PR_PREFIX_PATTERN.strip on titles like \"PR #4729 \u2014 implement-plan issue-4723-x \u2014 phase 1/1 \u2014 review round\" (no preceding issue prefix) produces a candidate that matches STAGE_TITLE_PATTERN, classifying it as \"stage\".\n  WHY: Such a stage is added to later_stages:281 (does not match NON_SUPERSEDING_STAGE_PATTERN), superseding an earlier issue-start for the same issue. Test in tests/test_claude_session_janitor.py:268 (parametrized with stage_hours=12 > issue-start 10h) asserts no supersede, but code does\u2014test/code mismatch on intent.\n- scripts/claude_session_janitor.py:214 | severity=low | confidence=[3]\n  PROBLEM: JSON parse failures (malformed harness wrapper, truncated page) raise ValueError after 50 attempts but only surface generic \"cannot read --sessions\" in main:359; no specific parse error or partial data is logged.\n  WHY: Pickup sees opaque error on bad page; cannot distinguish harness wrapper truncation from real JSON error, delaying diagnosis of session-list problems.\n- TASK_GAP\n  Requirement: \"The claude-issue-pickup.md edit is coding-workflows-only\" (plan:198, PR summary, CLAUDE.md \u00a726.I step 3a + tools + report + Rules + Tool Access).\n  Expected change site: .claude/commands/claude-issue-pickup.md\n  Evidence of absence: Changed-files list and diff contain no edit to the root pickup (only workflow-templates twins for other files); tests fail until sync (PR summary acknowledges \"instruction-text tests pass with ... the pickup edit applied\").\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "476d35082542f820fe12730fddfc08c5ecab1c3846d172422780a3c0cc1dfcc1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4937,
+    "run_id": "36511071849",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36511071849",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929022741_6ef571c8d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4937,
+    "run_id": "36511071849"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T02:27:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
