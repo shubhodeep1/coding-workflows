@@ -995,12 +995,27 @@ def test_runner_output_without_a_none_verdict_is_not_a_clean_vote():
 		_assert_clean_vote_rejected(proc, calls, github_env, "has no NONE verdict")
 
 
+def _list_heading_outputs(*, prose_lens: bool) -> tuple[str, ...]:
+	"""Checklist outputs whose lens headings are a numbered or bulleted markdown
+	list; with prose_lens the ninth lens is answered with prose, not NONE."""
+	last_verdict = "The three pass-1 claims are false positives." if prose_lens else "NONE"
+	outputs = []
+	for heading in ("{n}. {lens}", "{n}) **{lens}**", "- {lens}:", "* `{lens}`"):
+		outputs.append(
+			"\n\n".join(
+				heading.format(n=n, lens=lens) + "\n" + (last_verdict if lens == CHECKLIST_LENSES[-1] else "NONE")
+				for n, lens in enumerate(CHECKLIST_LENSES, start=1)
+			)
+		)
+	return tuple(outputs)
+
+
 def test_checklist_lens_without_a_none_verdict_is_not_a_clean_vote():
 	prose_lens = _checklist_output({"TASK COMPLETENESS / INTENT GAPS": "The three pass-1 claims are false positives."})
 	missing_lens = "\n\n".join(f"{lens}\nNONE" for lens in CHECKLIST_LENSES[:-1])
 	trailing_heading = "\n\n".join(f"{lens}\nNONE" for lens in CHECKLIST_LENSES[:-1]) + f"\n\n{CHECKLIST_LENSES[-1]}\n"
 	two_headings = CLEAN_RUNNER_OUTPUT.replace("SECURITY & INPUT VALIDATION\nNONE", "SECURITY & INPUT VALIDATION\nCORRECTNESS & LOGIC\nNONE", 1)
-	for content in (prose_lens, missing_lens, trailing_heading, two_headings):
+	for content in (prose_lens, missing_lens, trailing_heading, two_headings, *_list_heading_outputs(prose_lens=True)):
 		with tempfile.TemporaryDirectory() as td:
 			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
 		_assert_clean_vote_rejected(proc, calls, github_env, "leaves a checklist lens without a NONE verdict")
@@ -1022,6 +1037,8 @@ def test_clean_votes_accept_the_reviewer_contract_shapes():
 		"\r\n".join(f"## {lens}\r\n  NONE  " for lens in CHECKLIST_LENSES),
 		# Checklist off: the reviewer contract's bare NONE (prompts/_nag_reminders.txt).
 		"NONE",
+		# Numbered or bulleted lens headings, each followed by NONE.
+		*_list_heading_outputs(prose_lens=False),
 	):
 		with tempfile.TemporaryDirectory() as td:
 			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
@@ -1033,6 +1050,8 @@ def test_clean_runner_output_check_behaves_the_same_under_mawk_and_gawk():
 		CLEAN_RUNNER_OUTPUT: None,
 		_checklist_output({"CORRECTNESS & LOGIC": "- **File:** scripts/a.sh"}): "reports a finding or task gap",
 		_checklist_output({"TASK COMPLETENESS / INTENT GAPS": "prose"}): "leaves a checklist lens without a NONE verdict",
+		_list_heading_outputs(prose_lens=True)[1]: "leaves a checklist lens without a NONE verdict",
+		_list_heading_outputs(prose_lens=False)[1]: None,
 		"No changes are needed.": "has no NONE verdict",
 	}
 	for awk_name in ("mawk", "gawk"):
