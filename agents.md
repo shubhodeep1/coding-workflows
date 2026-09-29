@@ -92,15 +92,19 @@ Phases of the unattended pipeline (each is a separate workflow file under
    failed (retry limit reached, killed, timed out) is a missing vote, not a
    finding (issue #4835): its block counts as failed only when its single line
    is `scripts/review_run_reviewers.sh`'s retry-exhaustion line for that
-   block's own model and the runner's `status_review_<slug>.txt` reads
-   `failed`. Such a ledger is clean when the consensus blocks are empty, no
+   block's own model, the runner's `status_review_<slug>.txt` reads
+   `failed`, and the runner's `review_<slug>.txt` is exactly that line
+   (issue #4885: the status file also reads `failed` after a non-retryable
+   error, whose output line differs, so a ledger line alone never proves the
+   failure class). Such a ledger is clean when the consensus blocks are empty, no
    completed reviewer reported anything, and at least
    `CLAUDE_FIXER_MIN_CLEAN_REVIEWERS` (repo var, default 5) blocks read
    `(No findings reported.)` from slots whose status file reads `success`; it
    then takes the same clean path and logs
    `CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS pr=… head=… round=… failed_slots=… clean_reviewers=… min=…`.
-   Fewer clean reviewers, any other text, or a status that does not match
-   hands the round off, and the hand-off names the failed slots. A ledger with
+   Fewer clean reviewers, any other text, or a status or output file that
+   does not match hands the round off, and the hand-off names the verified
+   failed slots. A ledger with
    no failed slot keeps the every-block-clean rule, with no minimum. At the
    cap the PR itself
    is labelled `ai:review-blocked`; dispatch
