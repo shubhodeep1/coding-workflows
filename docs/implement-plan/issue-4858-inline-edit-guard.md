@@ -4,14 +4,14 @@
 - Source issue: shubhodeep1/coding-workflows#4858
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4858-inline-edit-guard   Final PR: #4877 draft
-- Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Status: BLOCKED
+- Stage: conformance 2/3
 - Activation: not started
-- Waiting on: conformance fix PR (run 1) into the project branch
+- Waiting on: `[claude-twin-sync]` of `workflow-templates/.claude/hooks/inline_edit_guard.py` into `.claude/hooks/` on the conformance fix PR (run 2) into the project branch (Q40 twin-first; `hold` claim on its head)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_012fdy3doXASWrZZ9W5itkZu (reused), re-armed by session_01AUzXxnBGzFYg6HrxRXU4TH for the conformance fix PR (trigger ids in its report and on the #4858 progress comment)
+- Check-in: checker session_012fdy3doXASWrZZ9W5itkZu (kept idle while BLOCKED; no pending check-in, safety net, or hand-back)
 - Last updated: 2026-09-29
-- Last note: Conformance run 1 on the project branch: CONFORMANT (Correctness: CONCERNS). One EVIDENCE-BASED CONCERN: `README.md`'s list of hooks the `.claude/` sync ships still said "four" and left out `inline_edit_guard.py` (§7). Fixed in the conformance fix PR, with a README test.
+- Last note: Conformance run 2 on the project branch: CONFORMANT (Correctness: CONCERNS). One EVIDENCE-BASED CONCERN: the guard did not look past `env`'s own options (`env -i`, `env -u NAME`, `env --`, `/usr/bin/env`), so `env -i python3 -c "open('x','w')…"` got no decision. Fixed twin-first in the conformance fix PR (run 2); stopped BLOCKED for the root copy's twin sync.
 
 ## Phases
 1. [x] Phase 1 — inline-edit guard hook, wiring, logging, docs, tests   — protected paths: `.claude/hooks/inline_edit_guard.py`, `.claude/settings.json`, `.claude/scripts/permission_prompts.py`, `.claude/commands/seed-repo.md` (edited only in their `workflow-templates/.claude/` twins, Q40) — PR #4925 merged 2026-09-29 (merge commit `964c7b0`, twin sync `2917932`); review rounds: 2; interventions: 0
@@ -25,6 +25,7 @@
 
 ## Conformance
 - Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — conformance fix PR for the stale `README.md` hook list (pre-security). Checks: 387 guard / prompt / `gh api` guard / PR-watch tests pass; 37 extra edge-case probes of the hook match the plan; twin copies byte-identical.
+- Run 2 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — conformance fix PR (run 2) for `env` options hiding the interpreter from the guard (pre-security). Checks: 406 guard / prompt / `gh api` guard / PR-watch / session-targeting tests pass; 2488 of 2489 tests in the 71 files that read the project's or the `main` merge's files pass (the one failure is `gawk: command not found` in this container); `ruff` clean; 66 extra edge-case probes, of which only the 3 `env`-with-options shapes miss. The fix passes 397 guard / prompt tests in a twin overlay.
 
 ## Security pass
 
@@ -49,6 +50,7 @@
 - [source:intervention] When one file matches another file's constant by prefix or exact text (a deny reason and the filter that recognises it), add a test that loads both real files and asserts the match, so rewording either side fails CI instead of silently changing behaviour. (files: .claude/hooks/inline_edit_guard.py, .claude/scripts/permission_prompts.py, tests/test_inline_edit_guard.py)
 
 - [source:conformance] A change that adds a hook, script, or workflow must also update every prose list that counts or names its siblings (`README.md`'s "ships N hooks" sentence, `/seed-repo`'s file list), and a doc test should pin the new name in that list. (files: README.md, tests/test_inline_edit_guard.py)
+- [source:conformance] A guard that finds a segment's real command must skip each wrapper's own options, `env` included: a shared tokenizer that skips a bare `env` stops at `env -i` or `env -u NAME`, which hides the command after it. Test every wrapper with an option. (files: .claude/hooks/inline_edit_guard.py, tests/test_inline_edit_guard.py)
 
 ## Notes
 - Permission mode at start: auto.
@@ -65,3 +67,6 @@
 - This session's own read-only `python3` heredoc probe was denied by the guard, because its test strings contained `open('x','w')`. That is the accepted false positive the plan's Risks names; the probe ran from a scratch file instead.
 - Review round 3 was clean: PR #4925 auto-merged into the project branch at 2026-09-29T05:21:58Z (merge commit `964c7b0`). Check-in for that wait: checker session_012fdy3doXASWrZZ9W5itkZu, safety net trig_012gpBf3gmNvqeKNqKhupc3n, hand-back trig_01HRqFfMzDauoLBb9kLgNHqq (both deleted by the next stage). Issue #4858 progress comment id 5881426354.
 - Conformance 1/3 by session session_01AUzXxnBGzFYg6HrxRXU4TH (started by the checker). Archived session_012emrSDbkxsTBUpzQkXo7ua, deleted its safety net and hand-back, zombie checkers archived: 0, and synced the project branch with `main` (clean merge `97502bb`). `tests/test_workflow_retro.py` does not collect under this container's Python 3.11 (`scripts/workflow_retro.py:794` uses a 3.12 f-string); that file is outside this project, and CI runs 3.12.
+- PR #5069 (conformance fix 1) auto-merged into the project branch at 2026-09-29T07:05:09Z (merge commit `16db0ec`). Check-in for that wait: checker session_012fdy3doXASWrZZ9W5itkZu, safety net trig_012thQiUEFebFos5ba624Z2R, hand-back trig_017dGPeSFSv844P5Du9qho3V (both deleted by the next stage).
+- Conformance 2/3 by session session_01NFKkDViPiSdrxcr5q8r8PY (started by the checker). Archived session_01AUzXxnBGzFYg6HrxRXU4TH, deleted its safety net and hand-back, zombie checkers archived: 0, and synced the project branch with `main` (clean merge `3b60f00`, which brings #4797). The session hit the weekly usage limit mid-stage and was resumed by the master session's resume trigger. `tests/test_orchestrate_poll_process.py` and the other `test_orchestrate_*` sandbox suites run past 25 minutes in this container; they cover scripts neither this project nor the merge touches, so they were left out of the local run.
+- Protected-path approval: conformance fix 2 — twin-first per Q40 (2026-09-29). The fix edits `.claude/hooks/inline_edit_guard.py`. Twin-first delivery (#4785) is still not on `main`, so the operator's standing interim rule applies (comment 5881614126: "This applies until #4785 lands"). Only the `workflow-templates/.claude/hooks/` twin changes, a `hold` claim is on the fix PR's head, and the stage stops BLOCKED until a watched session lands the root copy as `[claude-twin-sync]` and comments `/reclarify`. Until then the real tree fails `test_template_parity` and the 6 new `env` cases, which load the root copy.
