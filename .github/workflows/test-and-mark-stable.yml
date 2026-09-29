@@ -778,6 +778,11 @@ jobs:
             while [ "$lookup_page" -le "$lookup_max_pages" ]; do
               runs_json=$(fetch_plan_runs_page_json "$lookup_page" || echo "")
               [ -n "$runs_json" ] || return 1
+              # gh_api_safe_print echoes its "::error::gh api call failed"
+              # line to stdout, so a failed read arrives here as text, not as
+              # an empty string; without this check it ended the walk as a
+              # short page (PR #4730 conformance audit).
+              printf '%s' "$runs_json" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 || return 1
               page_value=$(printf '%s' "$runs_json" \
                 | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" --arg field "$field" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .[$field] // empty' 2>/dev/null || echo "")
               if [ -n "$page_value" ] && [ "$page_value" != "null" ]; then

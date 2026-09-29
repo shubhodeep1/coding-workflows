@@ -50,6 +50,10 @@ elif "/actions/runs?" in path:
 	pages = json.loads(open(os.environ["STUB_RUN_PAGES"], encoding="utf-8").read())
 	match = re.search(r"[?&]page=(\d+)", path)
 	page = int(match.group(1)) if match else 1
+	if os.environ.get("STUB_RUN_PAGE_FAILS") == str(page):
+		# A failed read the way gh reports one: a message on stderr, exit 1.
+		sys.stderr.write("HTTP 502: Bad Gateway\n")
+		sys.exit(1)
 	payload = {"workflow_runs": pages[page - 1] if page <= len(pages) else []}
 else:
 	sys.stderr.write("stub gh: unexpected path " + path + "\n")
@@ -130,6 +134,39 @@ def _run_wait_plan(pages: list[list[dict]], labels: str, labels_later: str | Non
 		return proc.returncode, outputs, calls, proc.stdout + proc.stderr
 
 
+def _run_latest_scoped_run_field(pages: list, fail_page: int | None = None) -> tuple[int, str, str]:
+	# Runs latest_scoped_run_field on its own, with the step's gh helpers and
+	# the same stub gh, and returns its exit code, stdout, and stderr.
+	script = _wait_plan_script()
+	functions = script[script.index("PLAN_RUN_LOOKUP_MAX_PAGES=10"):script.index("# Both success exits")]
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir()
+		gh = bin_dir / "gh"
+		gh.write_text(STUB_GH, encoding="utf-8")
+		gh.chmod(0o755)
+		pages_file = tmp_path / "pages.json"
+		pages_file.write_text(json.dumps(pages), encoding="utf-8")
+		log_file = tmp_path / "gh.log"
+		log_file.touch()
+		env = dict(os.environ)
+		env.update({
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			"TEST_REPO": "owner/repo",
+			"ISSUE_NUMBER": ISSUE_NUMBER,
+			"ISSUE_TITLE": ISSUE_TITLE,
+			"STUB_GH_LOG": str(log_file),
+			"STUB_RUN_PAGES": str(pages_file),
+			"STUB_LABELS": "",
+		})
+		if fail_page is not None:
+			env["STUB_RUN_PAGE_FAILS"] = str(fail_page)
+		body = "set -euo pipefail\n. ./scripts/comprehensive_test_and_release_gh_api.sh\n" + functions + "\nlatest_scoped_run_field Plan id\n"
+		proc = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60)
+		return proc.returncode, proc.stdout, proc.stderr
+
+
 def _run_pages_requested(calls: list[list[str]]) -> list[str]:
 	return [call[1] for call in calls if "/actions/runs?" in call[1]]
 
@@ -195,6 +232,28 @@ def test_paging_is_bounded() -> None:
 	# the per-poll cost stays one call (CLAUDE.md §15).
 	assert len(requested) == 1 + 10, len(requested)
 	assert "&page=1&" in requested[0] and "&page=1&" in requested[1] and "&page=2&" in requested[2], requested[:3]
+
+
+def test_lookup_returns_1_when_a_later_page_cannot_be_read() -> None:
+	# Conformance audit of PR #4730: gh_api_safe_print echoes its
+	# "::error::gh api call failed" line to stdout, so a failed read reached
+	# the page walk as non-JSON text and ended it as a short page (exit 0)
+	# instead of the documented exit 1.
+	rc, out, err = _run_latest_scoped_run_field([_noise_page(1000)], fail_page=2)
+	assert rc == 1, (rc, out, err)
+	assert out == "", out
+
+
+def test_lookup_returns_1_when_a_page_is_malformed() -> None:
+	rc, out, err = _run_latest_scoped_run_field([_noise_page(1000), None])
+	assert rc == 1, (rc, out, err)
+	assert out == "", out
+
+
+def test_lookup_exit_codes_for_a_match_a_short_window_and_the_page_cap() -> None:
+	assert _run_latest_scoped_run_field([_noise_page(1000), [_run(777)]])[:2] == (0, "777")
+	assert _run_latest_scoped_run_field([_noise_page(1000), _noise_page(2000, count=40)])[:2] == (0, "")
+	assert _run_latest_scoped_run_field([_noise_page(1000 + 100 * i) for i in range(10)])[:2] == (2, "")
 
 
 def _completed_plan_page(noise_first_id: int = 3000, extra: list[dict] | None = None) -> list[dict]:
