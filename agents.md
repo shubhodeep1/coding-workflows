@@ -1199,7 +1199,10 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `[skip ai]`, the copied files, and the conflicts. An open sync PR is
   updated with a forward-only commit (the ruleset forbids non-fast-forward
   pushes), never duplicated, and only when its `.claude/` tree no longer
-  equals `main`'s plus the copies: a `main` commit elsewhere leaves the head
+  equals `main`'s plus the copies or the head changes a path outside
+  `.claude/` since its merge-base with `main` (a foreign push onto the sync
+  branch, rebuilt away so the diff is only the copies again, log key
+  `rebuild … reason=head_changes_outside_claude`): a `main` commit elsewhere leaves the head
   alone, so its CI run and any owner approval stay valid (CI takes about 45
   minutes, and a rebuild on every `main` commit would keep a sync PR from
   ever merging on a busy day); extra open sync PRs are closed as superseded,

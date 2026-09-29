@@ -310,6 +310,22 @@ def claude_tree_of(repo: str, treeish: str) -> str:
 	return run_git(repo, ["rev-parse", "--verify", "--quiet", f"{treeish}:{CLAUDE_ROOT}"], check=False).strip()
 
 
+def changes_outside_claude(repo: str, ref: str, head: str) -> list[str]:
+	"""Paths outside `.claude/` that `head` changed since its merge-base with `ref`.
+
+	A sync head built by this script carries only `.claude/` copies, so any
+	other path means a foreign commit on the sync branch. Without a merge-base
+	(unrelated histories) nothing can be compared, and the head counts as
+	foreign.
+	"""
+	base = run_git(repo, ["merge-base", ref, head], check=False).strip()
+	if not base:
+		return ["(no merge-base with the default branch)"]
+	out = run_git(repo, ["diff", "--name-only", "--no-renames", "-z", base, head])
+	prefix = CLAUDE_ROOT + "/"
+	return sorted(p for p in out.split("\x00") if p and not p.startswith(prefix))
+
+
 def is_ancestor(repo: str, ancestor: str, descendant: str) -> bool:
 	proc = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", ancestor, descendant], capture_output=True)
 	return proc.returncode == 0
@@ -661,12 +677,17 @@ def run_sync(repo_root: str, gh: GitHub, ref: str, default_branch: str, owner: s
 		run_git(repo_root, ["fetch", "--no-tags", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"], env=git_auth_env(gh.read_token))
 		if resolve_commit(repo_root, f"refs/remotes/origin/{branch}") != head:
 			raise SyncError(f"{branch} moved while this run read it; the next run retries")
-		# Rebuild only when the head's `.claude/` no longer equals the default
-		# branch's plus the copies. A default-branch commit anywhere else
+		# Rebuild when the head's `.claude/` no longer equals the default
+		# branch's plus the copies, or when the head carries a change outside
+		# `.claude/` (a foreign push onto the sync branch, which `merge-check`
+		# would refuse on every run). A default-branch commit anywhere else
 		# changes neither the PR's diff nor what it merges, and a new head
 		# restarts CI (about 45 minutes) and voids an owner approval, so on a
 		# busy default branch the PR would never merge.
-		if claude_tree_of(repo_root, head) != claude_tree_of(repo_root, tree):
+		foreign = changes_outside_claude(repo_root, ref_sha, head)
+		if foreign:
+			log(f"rebuild pr=#{primary['number']} reason=head_changes_outside_claude count={len(foreign)}")
+		if foreign or claude_tree_of(repo_root, head) != claude_tree_of(repo_root, tree):
 			parents = [head] if is_ancestor(repo_root, ref_sha, head) else [head, ref_sha]
 			head = commit_tree(repo_root, tree, parents, f"[claude-twin-sync] sync .claude/ with {TWIN_ROOT}/ at {short}")
 			push_commit(repo_root, head, branch, gh.write_token, gh.dry_run)
