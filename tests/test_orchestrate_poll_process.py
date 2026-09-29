@@ -14640,6 +14640,16 @@ def test_backward_scan_promotes_ready_to_merge_with_merged_pr_to_merged():
 	)
 
 
+_SWEEP_MANAGED_CHILD_TRACKING_ONLY_BODY = (
+	"Implement the thing.\n\n"
+	"---\n"
+	"**Orchestrator metadata** (do not edit)\n"
+	"- Tracking issue: #192\n"
+	"- Local ID: `issue-1`\n"
+	"- Managed by: AI Orchestrator\n"
+)
+
+
 def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr():
 	"""close_merged_issues_sweep defensive backstop (added 2026-04-27):
 	open issues carrying ai:ready-to-merge whose linked PR is verified
@@ -14647,6 +14657,9 @@ def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
 	backfilled before close, so concurrent readers (wave-status resolver,
 	validation fix-up loop) see the same terminal label as the
 	merged_label-origin path always produced.
+
+	This is the orchestrator-managed child case; the standalone case is
+	test_close_merged_issues_sweep_closes_standalone_ready_to_merge_on_default_branch_merge.
 	"""
 	# Project is already complete so the wave loop is benign and the only
 	# late side-effect on the orchestrator-managed child issue (#10) is the
@@ -14692,10 +14705,14 @@ def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		# Real orchestrator children carry ai:orchestrator-managed; the
-		# sweep's target-branch rule (issue #4813) accepts their merge into
-		# orchestrator/project-192 because of it.
+		# Real orchestrator children carry ai:orchestrator-managed and the
+		# orchestrator metadata block; the sweep's target-branch rule
+		# (issues #4813, #4957) accepts their merge into
+		# orchestrator/project-192 because of the label plus the
+		# `Tracking issue: #192` lineage line (no Integration branch value
+		# here, so the lineage path is what accepts it).
 		issue_labels={10: ["ai:ready-to-merge", "ai:orchestrator-managed"]},
+		issue_bodies={10: _SWEEP_MANAGED_CHILD_TRACKING_ONLY_BODY},
 		issue_linked_prs={10: 901},
 		prs=[merged_pr],
 		mock_gh_issue_list_label_filter=True,
@@ -14890,6 +14907,32 @@ def test_close_merged_issues_sweep_closes_on_default_branch_merge():
 	assert "CLOSE_MERGED_SWEEP issue=10 pr=961 origin=merged_label status=closed" in result["stdout"]
 
 
+def test_close_merged_issues_sweep_closes_standalone_ready_to_merge_on_default_branch_merge():
+	"""Issue #4957 review: since #4813,
+	test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
+	covers the ready_label origin for an orchestrator-managed child only. A
+	standalone issue (no ai:orchestrator-managed label, no metadata) carrying
+	ai:ready-to-merge whose closing PR merged into the default branch must
+	still get ai:merged backfilled, lose ai:ready-to-merge, and close."""
+	default_pr = _sweep_standalone_closing_pr(966, "main", "claude/standalone-final")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 966},
+		prs=[default_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	final_labels = result["issues"]["10"]["labels"]
+	assert "ai:merged" in final_labels, f"Expected ai:merged backfilled on #10; got {final_labels}"
+	assert "ai:ready-to-merge" not in final_labels, f"Expected ai:ready-to-merge stripped from #10; got {final_labels}"
+	assert 10 in result.get("closed_issues", []), (
+		f"A default-branch merge must close the standalone issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=966 origin=ready_label status=closed" in result["stdout"]
+
+
 def test_close_merged_issues_sweep_closes_on_declared_integration_branch_merge():
 	"""Issue #4813: a merge into the branch the issue names on its
 	`Integration branch:` line (a security follow-up built on its parent
@@ -14909,6 +14952,87 @@ def test_close_merged_issues_sweep_closes_on_declared_integration_branch_merge()
 		f"A merge into the declared integration branch must close the issue; closed_issues={result.get('closed_issues')}"
 	)
 	assert "CLOSE_MERGED_SWEEP issue=10 pr=962 origin=merged_label status=closed" in result["stdout"]
+
+
+def test_close_merged_issues_sweep_ignores_body_marker_without_managed_label():
+	"""Issue #4957: a standalone issue whose body quotes "Managed by: AI
+	Orchestrator" (in prose or on its own line) is not orchestrator-managed.
+	A closing-keyword PR merged into an unrelated branch must not close it:
+	the sweep logs rejected=non_target_base and falls through to the
+	merged_label no_merged_pr_found policy."""
+	unrelated_pr = _sweep_standalone_closing_pr(963, "feature/unrelated", "feature/unrelated-fix")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_bodies={10: (
+			"A standalone issue body containing \u201cManaged by: AI Orchestrator,\u201d even in prose.\n\n"
+			"- Managed by: AI Orchestrator\n"
+		)},
+		issue_linked_prs={10: 963},
+		prs=[unrelated_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), (
+		f"Body text must not make the issue managed; closed_issues={result.get('closed_issues')}"
+	)
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=963 rejected=non_target_base "
+		"base=feature/unrelated default_branch=main issue_base=none project_base=none"
+	) in result["stdout"], "Missing non_target_base rejection log line in poller stdout"
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label no_merged_pr_found" in (result["stdout"] + result["stderr"])
+
+
+def test_close_merged_issues_sweep_leaves_labelled_child_open_on_unrelated_base():
+	"""Issue #4957: a labelled orchestrator-managed child finishes only on its
+	own project branch, not on any base. A merge into another project's
+	branch is rejected with its project_base in the log line."""
+	other_project_pr = _sweep_standalone_closing_pr(964, "orchestrator/project-193", "ai/issue-10")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged", "ai:orchestrator-managed"]},
+		issue_bodies={10: _SWEEP_MANAGED_CHILD_TRACKING_ONLY_BODY},
+		issue_linked_prs={10: 964},
+		prs=[other_project_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), (
+		f"A labelled child must not close on another project's branch; closed_issues={result.get('closed_issues')}"
+	)
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=964 rejected=non_target_base "
+		"base=orchestrator/project-193 default_branch=main issue_base=none project_base=orchestrator/project-192"
+	) in result["stdout"], "Missing non_target_base rejection log line in poller stdout"
+
+
+def test_close_merged_issues_sweep_closes_labelled_child_on_declared_integration_branch():
+	"""Issue #4957: a labelled child whose metadata names its integration
+	branch still closes on a merge into it (the #4813 declared-branch rule)."""
+	child_pr = _sweep_standalone_closing_pr(965, "orchestrator/project-192", "ai/issue-10")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged", "ai:orchestrator-managed"]},
+		issue_bodies={10: (
+			"Implement the thing.\n\n"
+			"---\n"
+			"**Orchestrator metadata** (do not edit)\n"
+			"- Tracking issue: #192\n"
+			"- Integration branch: orchestrator/project-192\n"
+			"- Managed by: AI Orchestrator\n"
+		)},
+		issue_linked_prs={10: 965},
+		prs=[child_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", []), (
+		f"A labelled child must close on its integration branch; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=965 origin=merged_label status=closed" in result["stdout"]
 
 
 def test_close_merged_issues_sweep_closes_issues_with_large_bodies():
