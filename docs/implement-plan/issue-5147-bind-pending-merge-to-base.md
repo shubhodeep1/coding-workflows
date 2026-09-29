@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
 - Project branch: claude/implement-plan-issue-5147-bind-pending-merge-to-base   Final PR: #5179 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (head claude/implement-plan-issue-5147-bind-pending-merge-to-base-phase-1)
+- Waiting on: PR #5186
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01Pv1NrebS3urzs5D9gF6Dy4
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified locally (138 targeted tests, ruff, yamllint, actionlint, shellcheck, workflow size guard); phase PR opened against the project branch.
+- Last note: review round 1 on PR #5186: 1 consensus finding (lone-surrogate base ref crashed `base_ref_digest`) accepted and fixed with an injective `surrogatepass` encoding plus tests.
 
 ## Phases
-1. [ ] Phase 1 — bind the pending-checks marker to the reviewed base   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — bind the pending-checks marker to the reviewed base   — PR #5186 open (waiting); review rounds: 1; interventions: 0
    - Hand-off step posts an `ai:claude-fixer-pending-checks:v2` line bound to `PR_PAYLOAD_FILE`'s `base.ref` (sha256) and `base.sha`; no pending comment without a valid base
    - `scripts/claude_fixer_pending_checks.py` returns `base_changed` / `base_unbound` and never merges on a missing or mismatched binding
    - Gate skips dispatched re-runs only for a marker bound to the current base (fresh review on retarget)

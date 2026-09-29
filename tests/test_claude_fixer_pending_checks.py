@@ -248,6 +248,8 @@ def test_marker_is_found_for_the_current_head_from_the_workflow_account():
 def test_base_binding_needs_one_v2_line_matching_the_v1_line():
 	"""Issue #5147: without exactly one v2 line for the same head, round, and ledger the marker is unbound."""
 	assert pending_checks.base_ref_digest(BASE_REF) == _ref_digest(BASE_REF)
+	# A lone surrogate hashes instead of raising, and never collides with a replacement character.
+	assert pending_checks.base_ref_digest(BASE_REF + "\ud800") != pending_checks.base_ref_digest(BASE_REF + "\ufffd")
 	cases = {
 		"v1 only": _pending_body(binding=None),
 		"two v2 lines": _pending_body() + "\n" + _binding_line(base_sha=OTHER_BASE_SHA),
@@ -427,6 +429,8 @@ def _reads_after_the_marker(fake_gh) -> list[list[str]]:
 	("same ref, base sha changed", {"ref": BASE_REF, "sha": OTHER_BASE_SHA}, _pending_body(), "base_changed"),
 	("PR base has no sha", {"ref": BASE_REF}, _pending_body(), "base_changed"),
 	("PR base has no ref", {"sha": BASE_SHA}, _pending_body(), "base_changed"),
+	# Review round 1 of PR #5186: a base ref JSON decodes to a lone surrogate must not crash the digest.
+	("PR base ref with a lone surrogate", {"ref": BASE_REF + "\ud800", "sha": BASE_SHA}, _pending_body(), "base_changed"),
 	("marker without a base binding", {"ref": BASE_REF, "sha": BASE_SHA}, _pending_body(binding=None), "base_unbound"),
 ], ids=lambda value: value if isinstance(value, str) and "\n" not in value and not value.startswith("base_") else "")
 def test_a_base_other_than_the_reviewed_one_never_merges(fake_gh, label, pr_base, body, expected):

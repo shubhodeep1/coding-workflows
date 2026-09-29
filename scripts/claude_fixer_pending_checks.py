@@ -126,8 +126,15 @@ def _comment_id(comment: dict) -> int:
 
 
 def base_ref_digest(ref: str) -> str:
-	"""sha256 (hex) of a base ref name, as the hand-off step writes it into the v2 marker."""
-	return hashlib.sha256(ref.encode("utf-8")).hexdigest()
+	"""sha256 (hex) of a base ref name, as the hand-off step writes it into the v2 marker.
+
+	`surrogatepass` keeps a ref that JSON decoding left with a lone surrogate
+	from raising `UnicodeEncodeError` mid-evaluation: its digest is simply
+	one no hand-off step can have written, so `evaluate` reports
+	`base_changed`. The encoding stays injective, so two different refs
+	never share a digest.
+	"""
+	return hashlib.sha256(ref.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def find_pending_marker(comments: list, repo: str, head_sha: str, author_login: str) -> dict | None:
