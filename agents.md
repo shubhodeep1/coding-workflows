@@ -298,7 +298,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     line names the stopping session, which the pickup archives with
     `claude_issue_route.py replaced-sessions` once `/reclarify` has started
     its replacement: same repo, a title of that issue, `SESSION_STATUS_IDLE`,
-    never a checker, `/deploy-activate`, pickup, or poller session; #4817). Issue-mode sessions auto-decide every question, start-up
+    blocked evidence (bucket `SESSION_STATUS_BUCKET_BLOCKED` or `BLOCKED` in
+    the title) even when named, never a checker, `/deploy-activate`, pickup,
+    or poller session; #4817. Only a trusted author's comment posted through
+    the Claude GitHub App, `performed_via_github_app.slug` `claude`, names a
+    session; #5063). Issue-mode sessions auto-decide every question, start-up
     checks included (CLAUDE.md §28.A), but never whether to run the chain: a
     session without claude-code-remote tools stops with `ai:claude-blocked`
     (§28.C).

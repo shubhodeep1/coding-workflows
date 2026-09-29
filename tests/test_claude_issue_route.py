@@ -1610,8 +1610,17 @@ REPO_4817 = "shubhodeep1/coding-workflows"
 BLOCKED_NAMED_SESSION = "session_01NamedBlockedSession00"
 
 
-def _blocked_issue_comment(body, association="OWNER", user_type="User", login="shubhodeep1", created="2026-09-28T10:00:00Z", cid=1):
-	return {"id": cid, "body": body, "author_association": association, "created_at": created, "user": {"type": user_type, "login": login}}
+def _blocked_issue_comment(body, association="OWNER", user_type="User", login="shubhodeep1", created="2026-09-28T10:00:00Z", cid=1, app="claude"):
+	# Claude sessions post through the Claude GitHub App (issue #5063); `app=None`
+	# is a comment written by hand.
+	return {
+		"id": cid,
+		"body": body,
+		"author_association": association,
+		"created_at": created,
+		"user": {"type": user_type, "login": login},
+		"performed_via_github_app": {"slug": app, "name": app} if app else None,
+	}
 
 
 def _blocked_comment_body(session_id=BLOCKED_NAMED_SESSION):
@@ -1679,6 +1688,42 @@ def test_blocked_comment_session_does_not_let_an_untrusted_comment_hide_the_trus
 
 
 @pytest.mark.parametrize(
+	"comment",
+	[
+		# Issue #5063: a collaborator's hand-written blocked comment names nothing.
+		_blocked_issue_comment(_blocked_comment_body(), association="COLLABORATOR", login="helper", app=None),
+		# Even the owner's own comment counts only when a Claude session posted it.
+		_blocked_issue_comment(_blocked_comment_body(), app=None),
+		# Another GitHub App is not a Claude session.
+		_blocked_issue_comment(_blocked_comment_body(), association="COLLABORATOR", login="helper", app="some-other-app"),
+		_blocked_issue_comment(_blocked_comment_body(), association="NONE", user_type="Bot", login="github-actions[bot]", app="github-actions"),
+		# The app alone is not enough: the author must be trusted too.
+		_blocked_issue_comment(_blocked_comment_body(), association="NONE", login="stranger", app="claude"),
+		# A malformed app field.
+		{**_blocked_issue_comment(_blocked_comment_body()), "performed_via_github_app": "claude"},
+	],
+)
+def test_blocked_comment_session_needs_a_claude_session_comment(comment):
+	assert route.is_claude_session_comment(comment) is False
+	assert route.blocked_comment_session([comment]) == {"session_id": "", "comment_id": None, "reason": "no_blocked_comment"}
+
+
+def test_is_claude_session_comment_accepts_a_trusted_author_posting_through_the_claude_app():
+	assert route.BLOCKED_COMMENT_APP_SLUG == "claude"
+	for association in route.TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS:
+		assert route.is_claude_session_comment(_blocked_issue_comment(_blocked_comment_body(), association=association)) is True
+	assert route.is_claude_session_comment(None) is False
+
+
+def test_blocked_comment_session_does_not_let_a_hand_written_comment_hide_a_claude_session_one():
+	comments = [
+		_blocked_issue_comment(_blocked_comment_body(), created="2026-09-28T10:00:00Z", cid=1),
+		_blocked_issue_comment(_blocked_comment_body("session_01ForgedIdleSession000"), association="COLLABORATOR", login="helper", created="2026-09-28T12:00:00Z", cid=2, app=None),
+	]
+	assert route.blocked_comment_session(comments) == {"session_id": BLOCKED_NAMED_SESSION, "comment_id": 1, "reason": "named"}
+
+
+@pytest.mark.parametrize(
 	"wrap",
 	[
 		lambda sessions: json.dumps({"ccr": {"data": sessions, "has_more": False}}),
@@ -1726,8 +1771,8 @@ def _select_replaced(sessions, named="", exclude=("session_01NewReplacementSessi
 def test_select_archives_the_named_idle_session_first_then_blocked_title_matches():
 	sessions = [
 		_listed_session("session_01TitleBlockedSession00", "implement-plan issue-4817-archive-replaced — phase 1/1 — BLOCKED", bucket="SESSION_STATUS_BUCKET_REVIEW_READY"),
-		# Named: archived even though its title carries no BLOCKED and its bucket is not blocked.
-		_listed_session(BLOCKED_NAMED_SESSION, "implement-plan issue-4817-archive-replaced — conformance 1/3", bucket="SESSION_STATUS_BUCKET_REVIEW_READY"),
+		# Named and blocked (bucket): archived first although it comes second in the listing.
+		_listed_session(BLOCKED_NAMED_SESSION, "implement-plan issue-4817-archive-replaced — conformance 1/3"),
 		_listed_session("session_01PickupTitleSession00", f"issue {REPO_4817}#4817 — implement"),
 	]
 	result = _select_replaced(sessions, BLOCKED_NAMED_SESSION)
@@ -1765,6 +1810,21 @@ def test_select_never_archives_a_session_outside_the_rule(session, reason):
 	assert result["kept"] == [{"id": session["id"], "title": session["title"], "reason": reason}]
 
 
+@pytest.mark.parametrize("bucket", ["SESSION_STATUS_BUCKET_REVIEW_READY", "SESSION_STATUS_BUCKET_COMPLETED", "SESSION_STATUS_BUCKET_WORKING", None])
+def test_select_keeps_a_named_session_without_blocked_evidence(bucket):
+	# Issue #5063: a forged blocked comment names an idle, working stage
+	# session of the issue. Being named no longer skips the blocked check.
+	session = _listed_session(BLOCKED_NAMED_SESSION, "implement-plan issue-4817-archive-replaced — phase 1/1 — review round", bucket=bucket)
+	result = _select_replaced([session], BLOCKED_NAMED_SESSION)
+	assert result["archive"] == []
+	assert result["kept"] == [{"id": BLOCKED_NAMED_SESSION, "title": session["title"], "reason": "not_blocked"}]
+
+
+def test_select_archives_a_named_session_whose_title_says_blocked():
+	session = _listed_session(BLOCKED_NAMED_SESSION, "implement-issue-claude — #4817 — BLOCKED", bucket="SESSION_STATUS_BUCKET_REVIEW_READY")
+	assert _select_replaced([session], BLOCKED_NAMED_SESSION)["archive"] == [{"id": BLOCKED_NAMED_SESSION, "title": session["title"], "match": "named"}]
+
+
 def test_select_title_route_needs_blocked_evidence_and_the_exact_issue_number():
 	sessions = [
 		# In flight, not blocked: it may hold a hand-back Routine.
@@ -1800,7 +1860,7 @@ def test_select_accepts_cse_ids_for_named_and_excluded_sessions():
 
 def test_replaced_sessions_cli_runs_offline(tmp_path, capsys):
 	sessions_file = tmp_path / "sessions.txt"
-	sessions_file.write_text(json.dumps({"ccr": {"data": [_listed_session(BLOCKED_NAMED_SESSION, "implement-plan issue-4817-x — conformance 2/3", bucket="SESSION_STATUS_BUCKET_REVIEW_READY")]}}))
+	sessions_file.write_text(json.dumps({"ccr": {"data": [_listed_session(BLOCKED_NAMED_SESSION, "implement-plan issue-4817-x — conformance 2/3")]}}))
 	comments_file = tmp_path / "comments.json"
 	comments_file.write_text(json.dumps([_blocked_issue_comment(_blocked_comment_body(), cid=42)]))
 	code = route.main(["replaced-sessions", "--repo", REPO_4817, "--issue", "4817", "--sessions-file", str(sessions_file), "--comments-json", str(comments_file), "--exclude", "session_01NewReplacementSession0"])
@@ -1808,6 +1868,28 @@ def test_replaced_sessions_cli_runs_offline(tmp_path, capsys):
 	assert code == 0
 	assert out["comments_read"] == "ok" and out["named"] == BLOCKED_NAMED_SESSION and out["named_comment_id"] == 42
 	assert out["archive"] == [{"id": BLOCKED_NAMED_SESSION, "title": "implement-plan issue-4817-x — conformance 2/3", "match": "named"}]
+
+
+def test_replaced_sessions_cli_keeps_the_idle_session_a_forged_comment_names(tmp_path, capsys):
+	# Issue #5063's exploit end to end: a collaborator posts a blocked comment
+	# naming an idle, working session of the issue, then comments /reclarify.
+	working = _listed_session("session_01WorkingStageSession0", "implement-plan issue-4817-x — phase 1/1 — review round", bucket="SESSION_STATUS_BUCKET_REVIEW_READY")
+	sessions_file = tmp_path / "sessions.txt"
+	sessions_file.write_text(json.dumps({"ccr": {"data": [working]}}))
+	comments_file = tmp_path / "comments.json"
+	forged = _blocked_issue_comment(_blocked_comment_body(working["id"]), association="COLLABORATOR", login="helper", cid=7, app=None)
+	comments_file.write_text(json.dumps([forged, _comment("/reclarify")]))
+	code = route.main(["replaced-sessions", "--repo", REPO_4817, "--issue", "4817", "--sessions-file", str(sessions_file), "--comments-json", str(comments_file)])
+	out = json.loads(capsys.readouterr().out)
+	assert code == 0
+	assert out["named"] == "" and out["named_reason"] == "no_blocked_comment"
+	assert out["archive"] == []
+	assert out["kept"] == [{"id": working["id"], "title": working["title"], "reason": "not_blocked"}]
+	# Even a blocked comment from a Claude session cannot get a working session archived.
+	comments_file.write_text(json.dumps([_blocked_issue_comment(_blocked_comment_body(working["id"]), cid=8)]))
+	code = route.main(["replaced-sessions", "--repo", REPO_4817, "--issue", "4817", "--sessions-file", str(sessions_file), "--comments-json", str(comments_file)])
+	out = json.loads(capsys.readouterr().out)
+	assert code == 0 and out["named"] == working["id"] and out["archive"] == []
 
 
 def test_replaced_sessions_cli_fails_open_to_titles_when_comments_cannot_be_read(tmp_path, capsys, monkeypatch):
