@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T07:16:20Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a helper's return codes or API-call budget change, update the header comments of every caller that restates them, not only the helper's own docstring; grep the callers for phrases like \"one extra call\" and \"Returns 0 if\".",
+  "phase": "implement_plan",
+  "pr_number": 5054,
+  "record_id": "lesson-implement-plan-3a1525bb517d32121001df02",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4927-paginate-review-dispatch-runs",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}

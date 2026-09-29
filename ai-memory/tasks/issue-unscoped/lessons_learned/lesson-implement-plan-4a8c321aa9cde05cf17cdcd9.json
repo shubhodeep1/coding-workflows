@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T07:16:20Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change narrows a helper's fail-open contract, grep the helper's own body and the README section that documents it for \"fail open\" / \"fails open\" as well, not only the callers' headers: the in-function diagnostics comment and the README paragraph kept the old blanket claim.",
+  "phase": "implement_plan",
+  "pr_number": 5054,
+  "record_id": "lesson-implement-plan-4a8c321aa9cde05cf17cdcd9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4927-paginate-review-dispatch-runs",
+    "file:scripts/orchestrate_poll_process.sh",
+    "file:README.md"
+  ]
+}
