@@ -1261,7 +1261,10 @@ mode).
    routine run gets no claude-code-remote tools (`create_session`,
    `send_later`), so it can start neither the implementation session nor any
    later stage (issue #4525). The pickup starts only items whose binding
-   checks out (below). That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
+   checks out (below). An issue with a `Depends on: #N` line (the security
+   audit writes one when two follow-ups of a run change the same file) is
+   held, and listed with the reason, until #N is closed with `ai:merged`
+   (issue #4934). That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
    as `/implement-plan-claude` in issue mode. The project is built on the
    branch the issue names in an `Integration branch:` / `Target branch:` line:
    a security follow-up on its project's branch, a heal issue on `stable` or
