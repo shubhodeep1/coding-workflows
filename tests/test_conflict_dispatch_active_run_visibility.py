@@ -137,13 +137,20 @@ class PollerPrNamedRunContract(unittest.TestCase):
 
 	def test_guard_looks_up_pr_named_dispatch_runs(self) -> None:
 		# Issue #4701: the lookup moved into the shared helper, which covers
-		# both wrapper names with one call (no --workflow filter).
+		# both wrapper names with one call (no workflow filter). Issue #5094:
+		# that call is REST so each run's path and head_branch can be checked.
 		self.assertIn('_pr_named_review_dispatch_runs "${pr_number}"', self.body)
-		self.assertIn("--event workflow_dispatch", self.helper)
-		self.assertIn("--limit 100", self.helper)
+		self.assertIn(
+			'"repos/${GITHUB_REPOSITORY}/actions/runs?event=workflow_dispatch&branch=${default_branch_uri}&per_page=100"',
+			self.helper,
+		)
 		self.assertNotIn("--workflow", self.helper)
+		self.assertNotIn("/workflows/", self.helper.split("jq -c", 1)[0])
 		self.assertIn('("Internal: AI Review & Autofix [pr:" + $pr + "]")', self.helper)
 		self.assertIn('("AI Review [pr:" + $pr + "]")', self.helper)
+		self.assertIn('select((.head_branch // "") == $default_branch)', self.helper)
+		self.assertIn('(.path // "") == ".github/workflows/internal-review.yml"', self.helper)
+		self.assertIn('(.path // "") == ".github/workflows/ai-review.yml"', self.helper)
 
 	def test_pr_named_lookup_follows_the_head_branch_lookups(self) -> None:
 		self.assertLess(self.body.index('--branch "${head_ref}"'), self.body.index("_pr_named_review_dispatch_runs"))

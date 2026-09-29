@@ -61,29 +61,45 @@ def _extract_fn(script: Path, name: str) -> str:
 # $GH_LOG, then answer:
 #   gh workflow run ...        -> exit $GH_WORKFLOW_RUN_RC (default 0)
 #   gh run list ... --branch   -> $GH_BRANCH_LIST (applied through --jq when given)
-#   gh run list ... --event    -> $GH_EVENT_LIST, or exit 1 when GH_EVENT_FAIL=1
+#   gh api repos/<repo> --jq . -> $GH_DEFAULT_BRANCH (default main), or exit 1
+#                                 when GH_DEFAULT_BRANCH_FAIL=1
+#   gh api .../actions/runs?event=workflow_dispatch...
+#                              -> {"workflow_runs": $GH_EVENT_LIST}, the raw
+#                                 $GH_EVENT_PAYLOAD when set, or exit 1 when
+#                                 GH_EVENT_FAIL=1
 _STUBS = r"""
 gh_retry() { "$@"; }
+_safe_gh_jq() { gh api "$@"; }
 gh() {
 	local IFS=$'\t'
 	printf '%s\n' "$*" >> "${GH_LOG}"
 	if [ "${1:-}" = "workflow" ] && [ "${2:-}" = "run" ]; then
 		return "${GH_WORKFLOW_RUN_RC:-0}"
 	fi
+	if [ "${1:-}" = "api" ] && [ "${2:-}" = "repos/${GITHUB_REPOSITORY}" ]; then
+		[ "${GH_DEFAULT_BRANCH_FAIL:-0}" = "1" ] && return 1
+		printf '%s\n' "${GH_DEFAULT_BRANCH-main}"
+		return 0
+	fi
+	if [ "${1:-}" = "api" ] && [[ "${2:-}" == "repos/${GITHUB_REPOSITORY}/actions/runs?event=workflow_dispatch"* ]]; then
+		[ "${GH_EVENT_FAIL:-0}" = "1" ] && return 1
+		if [ -n "${GH_EVENT_PAYLOAD:-}" ]; then
+			printf '%s\n' "${GH_EVENT_PAYLOAD}"
+		else
+			printf '{"workflow_runs": %s}\n' "${GH_EVENT_LIST:-[]}"
+		fi
+		return 0
+	fi
 	if [ "${1:-}" = "run" ] && [ "${2:-}" = "list" ]; then
 		local arg jq_filter="" prev="" kind=""
 		for arg in "$@"; do
 			[ "${prev}" = "--jq" ] && jq_filter="${arg}"
 			[ "${arg}" = "--branch" ] && kind="branch"
-			[ "${arg}" = "--event" ] && [ -z "${kind}" ] && kind="event"
 			prev="${arg}"
 		done
 		local payload="[]"
 		if [ "${kind}" = "branch" ]; then
 			payload="${GH_BRANCH_LIST:-[]}"
-		elif [ "${kind}" = "event" ]; then
-			[ "${GH_EVENT_FAIL:-0}" = "1" ] && return 1
-			payload="${GH_EVENT_LIST:-[]}"
 		fi
 		if [ -n "${jq_filter}" ]; then
 			printf '%s' "${payload}" | jq -r "${jq_filter}"
@@ -174,21 +190,94 @@ class ConflictDispatchDefaultBranch(_ShellHarness):
 				self.assertEqual(self.gh_calls(), [])
 
 
-def _named_run(pr: int, *, title: str | None = None, status: str = "in_progress", conclusion: str = "",
-		created: str | None = None, run_id: int = 1, event: str = "workflow_dispatch") -> dict:
+_INTERNAL_REVIEW_PATH = ".github/workflows/internal-review.yml"
+_AI_REVIEW_PATH = ".github/workflows/ai-review.yml"
+_RUNS_CALL_PREFIX = "repos/owner/repo/actions/runs?event=workflow_dispatch"
+
+
+def _named_run(pr: int, *, title: str | None = None, status: str = "in_progress", conclusion: str | None = None,
+		created: str | None = None, run_id: int = 1, event: str = "workflow_dispatch",
+		head_branch: str = "main", path: str | None = None) -> dict:
+	"""One REST ``actions/runs`` entry, as the default-branch dispatch of a review wrapper reports it.
+
+	``path`` defaults to the wrapper that sets ``title``: ``ai-review.yml``
+	for an ``AI Review [pr:<N>]`` title, ``internal-review.yml`` otherwise.
+	"""
+	display_title = title if title is not None else f"Internal: AI Review & Autofix [pr:{pr}]"
+	if path is None:
+		path = _AI_REVIEW_PATH if display_title.startswith("AI Review") else _INTERNAL_REVIEW_PATH
 	return {
-		"databaseId": run_id,
+		"id": run_id,
+		"name": display_title,
 		"event": event,
 		"status": status,
 		"conclusion": conclusion,
-		"displayTitle": title if title is not None else f"Internal: AI Review & Autofix [pr:{pr}]",
-		"createdAt": created or _iso_minutes_ago(5),
-		"startedAt": created or _iso_minutes_ago(5),
+		"display_title": display_title,
+		"head_branch": head_branch,
+		"path": path,
+		"created_at": created or _iso_minutes_ago(5),
+		"run_started_at": created or _iso_minutes_ago(5),
 	}
 
 
+def _runs_calls(calls: list[list[str]]) -> list[list[str]]:
+	return [call for call in calls if len(call) > 1 and call[0] == "api" and call[1].startswith(_RUNS_CALL_PREFIX)]
+
+
+def _default_branch_calls(calls: list[list[str]]) -> list[list[str]]:
+	return [call for call in calls if call[:2] == ["api", "repos/owner/repo"]]
+
+
+class PrNamedReviewDefaultBranch(_ShellHarness):
+	"""Issue #5094: the provenance branch is resolved once per shell and never guessed."""
+
+	functions = ((POLLER_SCRIPT, "_pr_named_review_default_branch"),)
+
+	def test_resolves_once_and_caches_in_the_calling_shell(self) -> None:
+		result = self.run_bash(
+			"""
+			_pr_named_review_default_branch >/dev/null
+			_pr_named_review_default_branch
+			_pr_named_review_default_branch
+			""",
+			GH_DEFAULT_BRANCH="trunk",
+		)
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertEqual(result.stdout.split(), ["trunk", "trunk"])
+		self.assertEqual(len(_default_branch_calls(self.gh_calls())), 1, self.gh_calls())
+
+	def test_never_reuses_the_guessed_default_branch_variable(self) -> None:
+		result = self.run_bash("_pr_named_review_default_branch", DEFAULT_BRANCH="main", GH_DEFAULT_BRANCH="trunk")
+		self.assertEqual(result.stdout.strip(), "trunk")
+
+	def test_unresolved_branch_prints_empty_and_logs(self) -> None:
+		result = self.run_bash(
+			"""
+			_pr_named_review_default_branch
+			_pr_named_review_default_branch
+			""",
+			GH_DEFAULT_BRANCH_FAIL="1",
+		)
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertEqual(result.stdout.strip(), "")
+		self.assertEqual(result.stderr.count("PR_NAMED_REVIEW_PROVENANCE"), 1, result.stderr)
+		self.assertIn("outcome=default_branch_unresolved", result.stderr)
+		self.assertEqual(len(_default_branch_calls(self.gh_calls())), 1, self.gh_calls())
+
+	def test_main_flow_primes_the_cache_before_processing_projects(self) -> None:
+		poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+		prime = "\n_pr_named_review_default_branch >/dev/null || true\n"
+		self.assertEqual(poller.count(prime), 1)
+		self.assertLess(poller.index("\n_pr_named_review_default_branch()\n{"), poller.index(prime))
+		self.assertLess(poller.index(prime), poller.index('TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"'))
+		self.assertLess(poller.index(prime), poller.index("\nrun_standalone_stall_recovery\n"))
+
+
 class PrNamedReviewDispatchRuns(_ShellHarness):
-	functions = ((POLLER_SCRIPT, "_pr_named_review_dispatch_runs"),)
+	functions = (
+		(POLLER_SCRIPT, "_pr_named_review_default_branch"),
+		(POLLER_SCRIPT, "_pr_named_review_dispatch_runs"),
+	)
 
 	def _runs(self, pr: str, runs: list[dict] | None = None, **env: str) -> list[dict]:
 		result = self.run_bash(f'_pr_named_review_dispatch_runs "{pr}"', GH_EVENT_LIST=json.dumps(runs or []), **env)
@@ -207,17 +296,70 @@ class PrNamedReviewDispatchRuns(_ShellHarness):
 		]
 		self.assertEqual([r["databaseId"] for r in self._runs("12", runs)], [2, 1])
 
-	def test_one_call_without_a_workflow_filter(self) -> None:
-		self._runs("12", [_named_run(12)])
+	def test_output_keeps_the_camel_case_shape(self) -> None:
+		run = _named_run(12, run_id=41, status="completed", conclusion="failure", created="2026-09-28T01:00:00Z")
+		self.assertEqual(self._runs("12", [run]), [{
+			"databaseId": 41, "event": "workflow_dispatch", "status": "completed", "conclusion": "failure",
+			"displayTitle": "Internal: AI Review & Autofix [pr:12]",
+			"createdAt": "2026-09-28T01:00:00Z", "startedAt": "2026-09-28T01:00:00Z",
+		}])
+
+	def test_rejects_runs_that_only_borrow_the_name(self) -> None:
+		# Issue #5094: the name is evaluated from the workflow file at the
+		# dispatched ref, so it proves nothing without identity (path) and
+		# provenance (a default-branch head).
+		spoofs = {
+			"branch-dispatched wrapper": _named_run(12, run_id=11, head_branch="attacker/branch"),
+			"branch-dispatched consumer wrapper": _named_run(12, title="AI Review [pr:12]", run_id=12, head_branch="attacker/branch"),
+			"other workflow file": _named_run(12, run_id=13, path=".github/workflows/evil.yml"),
+			"path suffix only": _named_run(12, run_id=14, path=".github/workflows/not-internal-review.yml"),
+			"title of the other wrapper": _named_run(12, run_id=15, path=_AI_REVIEW_PATH),
+			"consumer title from the internal wrapper": _named_run(12, title="AI Review [pr:12]", run_id=16, path=_INTERNAL_REVIEW_PATH),
+			"push event": _named_run(12, run_id=17, event="push"),
+			"missing head branch": _named_run(12, run_id=18, head_branch=""),
+		}
+		for label, run in spoofs.items():
+			with self.subTest(spoof=label):
+				self.assertEqual(self._runs("12", [run]), [])
+		genuine = _named_run(12, run_id=19)
+		self.assertEqual([r["databaseId"] for r in self._runs("12", list(spoofs.values()) + [genuine])], [19])
+
+	def test_provenance_uses_the_resolved_default_branch(self) -> None:
+		runs = [_named_run(12, run_id=1, head_branch="main"), _named_run(12, run_id=2, head_branch="trunk")]
+		self.assertEqual([r["databaseId"] for r in self._runs("12", runs, GH_DEFAULT_BRANCH="trunk")], [2])
+
+	def test_one_runs_call_scoped_to_the_default_branch(self) -> None:
+		self._runs("12", [_named_run(12)], GH_DEFAULT_BRANCH="release/v2")
 		calls = self.gh_calls()
-		self.assertEqual(len(calls), 1, calls)
-		call = calls[0]
-		self.assertEqual(call[:2], ["run", "list"])
-		self.assertIn("--event", call)
-		self.assertEqual(call[call.index("--event") + 1], "workflow_dispatch")
-		self.assertEqual(call[call.index("--limit") + 1], "100")
-		self.assertNotIn("--workflow", call)
-		self.assertNotIn("--branch", call)
+		runs_calls = _runs_calls(calls)
+		self.assertEqual(len(runs_calls), 1, calls)
+		self.assertEqual(len(_default_branch_calls(calls)), 1, calls)
+		self.assertEqual(len(calls), 2, calls)
+		url = runs_calls[0][1]
+		self.assertIn("&branch=release%2Fv2&", url)
+		self.assertTrue(url.endswith("&per_page=100"), url)
+		self.assertNotIn("workflows/", url)
+
+	def test_primed_cache_costs_only_the_runs_call(self) -> None:
+		result = self.run_bash(
+			"""
+			_pr_named_review_default_branch >/dev/null
+			: > "${GH_LOG}"
+			_pr_named_review_dispatch_runs 12 >/dev/null
+			_pr_named_review_dispatch_runs 12 >/dev/null
+			""",
+			GH_EVENT_LIST=json.dumps([_named_run(12)]),
+		)
+		self.assertEqual(result.returncode, 0, result.stderr)
+		calls = self.gh_calls()
+		self.assertEqual(len(_runs_calls(calls)), 2, calls)
+		self.assertEqual(_default_branch_calls(calls), [])
+
+	def test_unresolved_default_branch_matches_nothing_without_a_runs_call(self) -> None:
+		self.assertEqual(self._runs("12", [_named_run(12)], GH_DEFAULT_BRANCH_FAIL="1"), [])
+		self.assertEqual(_runs_calls(self.gh_calls()), [])
+		self.assertEqual(self._runs("12", [_named_run(12)], GH_DEFAULT_BRANCH=""), [])
+		self.assertEqual(_runs_calls(self.gh_calls()), [])
 
 	def test_invalid_pr_number_prints_empty_list_without_a_call(self) -> None:
 		for bad in ("", "0", "07", "1]", "x"):
@@ -227,16 +369,17 @@ class PrNamedReviewDispatchRuns(_ShellHarness):
 
 	def test_fails_open_on_gh_failure_or_bad_payload(self) -> None:
 		self.assertEqual(self._runs("12", GH_EVENT_FAIL="1"), [])
-		result = self.run_bash('_pr_named_review_dispatch_runs 12', GH_EVENT_LIST="not json")
-		self.assertEqual(result.returncode, 0, result.stderr)
-		self.assertEqual(json.loads(result.stdout), [])
-		result = self.run_bash('_pr_named_review_dispatch_runs 12', GH_EVENT_LIST='{"a":1}')
-		self.assertEqual(json.loads(result.stdout), [])
+		for payload in ("not json", '{"a":1}', "[1, 2]", '{"workflow_runs": "x"}', '{"workflow_runs": [1, null]}'):
+			with self.subTest(payload=payload):
+				result = self.run_bash('_pr_named_review_dispatch_runs 12', GH_EVENT_PAYLOAD=payload)
+				self.assertEqual(result.returncode, 0, result.stderr)
+				self.assertEqual(json.loads(result.stdout), [])
 
 
 class HasActiveAutofixRunPrNamed(_ShellHarness):
 	functions = (
 		(POLLER_SCRIPT, "_has_active_autofix_run"),
+		(POLLER_SCRIPT, "_pr_named_review_default_branch"),
 		(POLLER_SCRIPT, "_pr_named_review_dispatch_runs"),
 	)
 
@@ -266,19 +409,29 @@ class HasActiveAutofixRunPrNamed(_ShellHarness):
 		])
 		self.assertIn("rc=1", out)
 
+	def test_spoofed_pr_named_run_does_not_suppress_the_dispatch(self) -> None:
+		# Issue #5094: a run that only borrows the PR's review name must not
+		# make the guard skip the conflict dispatch.
+		_result, out = self._check("33", [
+			_named_run(33, run_id=1, head_branch="attacker/branch"),
+			_named_run(33, run_id=2, path=".github/workflows/evil.yml"),
+		])
+		self.assertIn("rc=1", out)
+		self.assertNotIn("Skipping dispatch", out)
+
 	def test_pr_named_call_only_after_head_branch_lookups_miss(self) -> None:
 		_result, out = self._check("33", [_named_run(33)], branch_count="1")
 		self.assertIn("rc=0", out)
-		self.assertFalse(any("--event" in call for call in self.gh_calls()), self.gh_calls())
+		self.assertEqual(_runs_calls(self.gh_calls()), [])
 		self.gh_log.write_text("", encoding="utf-8")
 		self._check("33", [], branch_count="0")
-		event_calls = [call for call in self.gh_calls() if "--event" in call]
-		self.assertEqual(len(event_calls), 1, self.gh_calls())
+		self.assertEqual(len(_runs_calls(self.gh_calls())), 1, self.gh_calls())
 
 
 class DirectInflightFallbackPrNamed(_ShellHarness):
 	functions = (
 		(POLLER_SCRIPT, "_direct_inflight_review_run_on_branch"),
+		(POLLER_SCRIPT, "_pr_named_review_default_branch"),
 		(POLLER_SCRIPT, "_pr_named_review_dispatch_runs"),
 	)
 
@@ -303,10 +456,19 @@ class DirectInflightFallbackPrNamed(_ShellHarness):
 		self.assertEqual(result.stdout.strip(), "")
 		self.assertIn("outcome=no_fresh_review_run", result.stderr)
 
+	def test_spoofed_pr_named_run_does_not_block_the_push(self) -> None:
+		result = self._run('"ai/issue-7" "55"', [
+			_named_run(55, run_id=1, head_branch="attacker/branch"),
+			_named_run(55, title="AI Review [pr:55]", run_id=2, path=_INTERNAL_REVIEW_PATH),
+		])
+		self.assertEqual(result.stdout.strip(), "")
+		self.assertIn("outcome=no_fresh_review_run", result.stderr)
+
 	def test_without_a_pr_number_makes_no_extra_call(self) -> None:
 		result = self._run('"ai/issue-7"', [_named_run(55)])
 		self.assertEqual(result.stdout.strip(), "")
-		self.assertEqual([c for c in self.gh_calls() if "--event" in c], [])
+		self.assertEqual(_runs_calls(self.gh_calls()), [])
+		self.assertEqual(_default_branch_calls(self.gh_calls()), [])
 		self.assertEqual(len(self.gh_calls()), 1, self.gh_calls())
 
 
@@ -320,9 +482,10 @@ class StallJudgeWorkflowOutcomesPrNamed(unittest.TestCase):
 		program_end = text.index("' 2>/dev/null || echo '[]')\"", program_start)
 		self.program = text[program_start:program_end]
 
-	def _outcomes(self, runs: list[dict], pr: str) -> list[dict]:
+	def _outcomes(self, runs: list[dict], pr: str, default_branch: str = "main") -> list[dict]:
 		result = subprocess.run(
-			["jq", "-c", "--arg", "head_ref", "ai/issue-7", "--arg", "head_sha", "a" * 40, "--arg", "pr", pr, self.program],
+			["jq", "-c", "--arg", "head_ref", "ai/issue-7", "--arg", "head_sha", "a" * 40, "--arg", "pr", pr,
+			 "--arg", "default_branch", default_branch, self.program],
 			input=json.dumps({"workflow_runs": runs}), capture_output=True, text=True,
 		)
 		self.assertEqual(result.returncode, 0, result.stderr)
@@ -344,6 +507,27 @@ class StallJudgeWorkflowOutcomesPrNamed(unittest.TestCase):
 				conclusion="success", created_at="2026-09-28T00:30:00Z"),
 		]
 		self.assertEqual([r["id"] for r in self._outcomes(runs, "77")], [2, 1, 5])
+
+	def test_rejects_pr_named_runs_without_identity_or_provenance(self) -> None:
+		base = {"name": "Internal: AI Review & Autofix", "path": _INTERNAL_REVIEW_PATH, "event": "workflow_dispatch",
+			"display_title": "Internal: AI Review & Autofix [pr:77]", "head_branch": "main", "head_sha": "f" * 40,
+			"status": "completed", "conclusion": "failure", "created_at": "2026-09-28T01:00:00Z"}
+		runs = [
+			dict(base, id=1, head_branch="attacker/branch"),
+			dict(base, id=2, path=".github/workflows/evil-internal-review.yml"),
+			dict(base, id=3, display_title="AI Review [pr:77]"),
+			dict(base, id=4),
+		]
+		self.assertEqual([r["id"] for r in self._outcomes(runs, "77")], [4])
+		self.assertEqual(self._outcomes([dict(base, id=4)], "77", default_branch=""), [])
+		self.assertEqual([r["id"] for r in self._outcomes([dict(base, id=5, head_branch="trunk")], "77", "trunk")], [5])
+
+	def test_resolves_the_default_branch_before_the_scan(self) -> None:
+		text = POLLER_SCRIPT.read_text(encoding="utf-8")
+		start = text.index('workflow_outcomes="$(printf \'%s\' "${workflows_json}" | jq -c')
+		preamble = text[text.rindex("_load_actions_runs_cached", 0, start):start]
+		self.assertIn('_wo_default_branch="$(_pr_named_review_default_branch 2>/dev/null)"', preamble)
+		self.assertIn('--arg default_branch "${_wo_default_branch}"', text[start:start + 300])
 
 	def test_no_linked_pr_keeps_head_branch_matching_only(self) -> None:
 		runs = [
@@ -416,9 +600,13 @@ class ReviewWrapperRunNames(unittest.TestCase):
 				start = poller.index(scan_start)
 				scan = poller[start:poller.index("(.[0].id // empty)", start)]
 				self.assertIn('--arg pr "${pr_num}"', scan)
-				self.assertIn('or ($pr != "" and (.event // "") == "workflow_dispatch"', scan)
+				self.assertIn('--arg default_branch "$(_pr_named_review_default_branch 2>/dev/null)"', scan)
+				self.assertIn('or ($pr != "" and $default_branch != "" and (.event // "") == "workflow_dispatch"', scan)
+				self.assertIn('and (.head_branch // "") == $default_branch', scan)
 				self.assertIn('(.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")', scan)
+				self.assertIn('and (.path // "") == ".github/workflows/internal-review.yml")', scan)
 				self.assertIn('(.display_title // "") == ("AI Review [pr:" + $pr + "]")', scan)
+				self.assertIn('and (.path // "") == ".github/workflows/ai-review.yml")', scan)
 		self.assertEqual(poller.count('_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"'), 2)
 
 	def test_no_review_dispatch_passes_a_head_ref(self) -> None:
