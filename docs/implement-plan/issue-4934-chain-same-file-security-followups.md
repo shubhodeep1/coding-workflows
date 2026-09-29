@@ -5,18 +5,19 @@
 - Source issue: shubhodeep1/coding-workflows#4934   Base branch: main   Progress comment: 5883200031
 - Project branch: claude/implement-plan-issue-4934-chain-same-file-security-followups   Final PR: #4996 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: phase 1 PR (the PR carrying this log update)
+- Waiting on: conformance fix 1 PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01WHRV2iQsVtX3tMPC7D9ENh (reused)   safety net and hand-back: see the stage report and the issue progress comment
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified (340 tests across the route, security-audit, skip, and issue-command suites; ruff and shellcheck clean); phase PR opened
+- Last note: conformance run 1 CONFORMANT with one EVIDENCE-BASED concern (a rate-limit HTTP 403 on a dependency read started the dependent item); fixed in the conformance fix 1 PR (341 tests, ruff, shellcheck clean)
 
 ## Phases
-1. [ ] Phase 1 — chain same-file security follow-ups and hold dependent queue items   — PR open (waiting); review rounds: 0; interventions: 0
+1. [x] Phase 1 — chain same-file security follow-ups and hold dependent queue items   — PR #5002 merged 2026-09-29 (merged by the operator after the review-round-1 block, answer C on #4934); review rounds: 1; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT (Correctness: CONCERNS) — fix PR: conformance fix 1 (pre-security)
 
 ## Security pass
 
@@ -35,10 +36,14 @@
 - AD-6 [plan, 2026-09-29] How are held items reported without editing `.claude/**`? — Picked: A — as `ignored` entries with `held: …` reasons. Alternatives: B — a new `held` key plus a pickup command edit (protected path, §28.C). Why: fits the existing contract. Applied in: phase 1 PR. Status: pending review
 - AD-7 [plan, 2026-09-29] Should the Codex route honour `Depends on:` too? — Picked: A — no, Claude route only. Alternatives: B — add the hold to clarify / the poller. Why: the issue scopes the hold to the Claude intake and pickup (§5). Applied in: no code change. Status: pending review
 - AD-8 [plan, 2026-09-29] Which `Depends on:` lines count? — Picked: A — every same-repository `Depends on: #N` line, self-references dropped, deduplicated, at most 10. Alternatives: B — only the first line; C — also `owner/repo#N`. Why: never silently ignore a stated dependency; cross-repo reads are out of budget. Applied in: phase 1 PR. Status: pending review
+- AD-9 [conformance 1/3, 2026-09-29] Should a dependency read that fails with a rate-limit HTTP 403 count as inaccessible (start the item without waiting)? — Picked: A — no: a rate-limit or abuse-detection 403 is transient, so it is `unavailable` and holds the item for that wake; permission 403s and 404s stay `inaccessible`. Alternatives: B — keep every 403 inaccessible, as documented in phase 1. Why: AD-2's own rule is that a transient error must not skip the gate, and a skipped gate is the parallel-conflict failure #4934 exists to prevent. Applied in: conformance fix 1 PR. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] The security audit reorders findings before filing, so tests of per-finding follow-up output must read the filing order from the created issues, not assume the input order. (files: scripts/security_audit.sh, tests/test_security_audit_workflow_contract.py)
+- [source:conformance] GitHub answers primary and secondary rate limits with HTTP 403, so code that reads a 403 as "can never succeed" must first exclude rate-limit messages, or a transient limit silently skips a gate. (files: scripts/claude_issue_route.py)
 
 ## Notes
 - Issue mode: this session was started by the Claude issue dispatcher routine in Auto mode.
 - The session had no `mcp__github__*` tools and no preinstalled `gh`; `gh` was installed by running `.claude/hooks/session-start.sh`, and GitHub writes use `gh api` routine writes (CLAUDE.md §23.H).
+- 2026-09-29: resumed by session_01HQBMeq6bqy9XUqQs639dJM after `/reclarify` (answer C: the operator merged #5002 into the project branch). The project branch was synced with `main` (clean merge) and conformance 1/3 ran in this session.
+- Conformance 1/3 not fixed (HYPOTHESIS, AD-3 by design): the queue watchdog reads dependencies with the workflow's `github.token`, which cannot read private consumer repositories, so a dependent consumer-repo item is never judged by the watchdog.
