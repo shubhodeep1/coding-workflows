@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T22:28:38Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Splitting one CI job into parallel jobs turns every \"step A runs before step B\" test that compares line numbers into a false guarantee; pin that both steps share a job as well.",
+  "phase": "implement_plan",
+  "pr_number": 4874,
+  "record_id": "lesson-implement-plan-f7aaede95aa2b9feac52bbce",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4707-split-ci-lint-job",
+    "file:tests/test_ci_inventory_parity_order_contract.py",
+    "file:.github/workflows/ci.yml"
+  ]
+}
