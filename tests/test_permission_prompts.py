@@ -425,13 +425,14 @@ FILING = "shubhodeep1/coding-workflows"
 class FakeGitHub:
 	"""Fake `gh api` reads and POSTs for report-now and lookup."""
 
-	def __init__(self, issues=None, pulls=None, search=None, comments=None, fail_read=False, fail_post=False):
+	def __init__(self, issues=None, pulls=None, search=None, comments=None, fail_read=False, fail_post=False, fail_search=False):
 		self.issues = issues or []
 		self.pulls = pulls or []
 		self.search = search or {"items": []}
 		self.comments = comments or {}
 		self.fail_read = fail_read
 		self.fail_post = fail_post
+		self.fail_search = fail_search
 		self.reads: list[str] = []
 		self.posts: list[tuple[str, dict]] = []
 
@@ -449,6 +450,8 @@ class FakeGitHub:
 		self.reads.append(path)
 		if self.fail_read:
 			raise pp.check_in_status.ReadError("proxy 403")
+		if self.fail_search and path.startswith("search/"):
+			raise pp.check_in_status.ReadError("gh: This GitHub API path is not available (HTTP 403)")
 		return self.search
 
 	def post(self, path, body):
@@ -881,6 +884,35 @@ def test_lookup_finds_the_newest_trusted_comment(tmp_path, github):
 	result = pp.lookup(SESSION, FILING)
 	assert result["found"] is True and result["comment_url"] == "c1" and "--forged" not in result["command"]
 	assert len(fake.reads) == 2
+
+
+def test_lookup_falls_back_to_the_pattern_issues_when_search_is_refused(tmp_path, github):
+	# Claude Code Web's agent proxy answers search/issues with HTTP 403, and the poller runs there.
+	body = _reported_body(tmp_path, github)
+	issues = [
+		{"number": 7, "html_url": "i7", "author_association": "OWNER", "body": "another pattern"},
+		{"number": 901, "html_url": "i901", "author_association": "OWNER", "body": body},
+	]
+	fake = github(fail_search=True, issues=issues)
+	result = pp.lookup(SESSION, FILING)
+	assert result["found"] is True and result["issue_url"] == "i901" and result["comment_url"] == ""
+	assert result["command"] == "gh api repos/o/r/issues --jq '.[]'"
+	assert fake.reads[0].startswith("search/issues?")
+	assert fake.reads[1] == f"repos/{FILING}/issues?labels=ai%3Apermission-prompt&state=all&sort=updated&direction=desc"
+	# Issue 7's comments are read before 901's body matches; nothing past the match.
+	assert fake.reads[2:] == [f"repos/{FILING}/issues/7/comments"]
+
+
+def test_lookup_fallback_checks_comments_and_caps_the_hits(tmp_path, github):
+	body = _reported_body(tmp_path, github)
+	issues = [{"number": n, "html_url": f"i{n}", "author_association": "OWNER", "body": "other"} for n in (1, 2, 3, 4)]
+	fake = github(fail_search=True, issues=issues, comments={4: [{"html_url": "c4", "author_association": "OWNER", "body": body}]})
+	# Issue 4 is past LOOKUP_MAX_HITS, so its report is not read.
+	assert pp.lookup(SESSION, FILING) == {"found": False, "session": SESSION}
+	assert len(fake.reads) == 2 + pp.LOOKUP_MAX_HITS
+	fake = github(fail_search=True, issues=issues[:1], comments={1: [{"html_url": "c1", "author_association": "OWNER", "body": body}]})
+	result = pp.lookup(SESSION, FILING)
+	assert result["found"] is True and result["issue_url"] == "i1" and result["comment_url"] == "c1"
 
 
 def test_lookup_not_found_and_read_failure(tmp_path, github, capsys):

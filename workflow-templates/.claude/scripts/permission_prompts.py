@@ -71,7 +71,10 @@ its target, and `filed-state.json` as `file` would record it.
 
 `lookup` is read-only and serves the operator's poller: it finds the newest
 session marker for a session and prints the sanitized command and the issue
-or PR link. `session-meta` records the session title for `report-now`,
+or PR link. When the search read fails (Claude Code Web's agent proxy refuses
+`search/issues`, and the poller runs there), it checks the most recently
+updated `ai:permission-prompt` issues instead, which is where `report-now`
+reports in FILING_REPO. `session-meta` records the session title for `report-now`,
 keyed by session id in `session-meta.json` under `filing.lock`.
 
 Issue text is untrusted data: the tool name, the prompt reason, and the
@@ -86,8 +89,9 @@ API calls (CLAUDE.md §15), REST only, none when nothing is new:
     read as `file` plus one POST. Elsewhere, one read of the branch's open
     PRs plus at most one POST. At most MAX_IMMEDIATE_REPORTS reports per
     session.
-  - `lookup`: one search read, then one comments read per 100 comments for
-    each hit it checks (at most LOOKUP_MAX_HITS hits).
+  - `lookup`: one search read (when it fails, one read of the
+    `ai:permission-prompt` issues per 100 issues instead), then one comments
+    read per 100 comments for each hit it checks (at most LOOKUP_MAX_HITS).
   - `report`, `session-meta`: none.
 
 `report` and `file` print one JSON line. Exit 0 (including a partial run,
@@ -890,12 +894,27 @@ def parse_immediate_block(text: str, session_label: str) -> dict | None:
 	}
 
 
+def _lookup_candidates(session_label: str, slug: str) -> list:
+	"""The issues `lookup` checks: its search hits, or the newest-updated `ai:permission-prompt` issues when the search read fails.
+
+	Claude Code Web's agent proxy refuses `search/issues` (HTTP 403, "sessions
+	are bound to their configured repositories"), and the operator's poller runs
+	there. The repository-scoped list of pattern issues, which `report-now`
+	comments on or opens in FILING_REPO, still answers: 1 read per 100 labelled
+	issues, the same read as `existing_issues`. Raises ReadError when both reads fail.
+	"""
+	query = urllib.parse.quote(f'repo:{slug} "{session_label}"', safe="")
+	try:
+		result = check_in_status.gh_api(f"search/issues?q={query}&sort=updated&order=desc&per_page={LOOKUP_MAX_HITS}")
+	except check_in_status.ReadError:
+		return check_in_status.gh_api_list(f"repos/{slug}/issues?labels={LABEL.replace(':', '%3A')}&state=all&sort=updated&direction=desc")[:LOOKUP_MAX_HITS]
+	items = result.get("items")
+	return items if isinstance(items, list) else []
+
+
 def lookup(session_label: str, slug: str) -> dict:
 	"""Find the newest immediate report for a session; see the module docstring. Raises ReadError on a failed read."""
-	query = urllib.parse.quote(f'repo:{slug} "{session_label}"', safe="")
-	result = check_in_status.gh_api(f"search/issues?q={query}&sort=updated&order=desc&per_page={LOOKUP_MAX_HITS}")
-	items = result.get("items") if isinstance(result.get("items"), list) else []
-	for item in items[:LOOKUP_MAX_HITS]:
+	for item in _lookup_candidates(session_label, slug)[:LOOKUP_MAX_HITS]:
 		if not isinstance(item, dict) or not isinstance(item.get("number"), int):
 			continue
 		issue_url = str(item.get("html_url") or "")

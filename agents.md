@@ -1176,7 +1176,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   `/implement-issue-claude`.
 - `permission_prompts.py lookup --session <id> [--repo <slug>]` is
   read-only, for the operator's poller: one search read plus one comments
-  read per hit (at most 3). Only bodies and comments by an OWNER, MEMBER, or
+  read per hit (at most 3). Claude Code Web's agent proxy refuses the
+  search (HTTP 403), and the poller runs there, so when the search read
+  fails it checks the 3 most recently updated `ai:permission-prompt` issues
+  instead (1 read per 100 labelled issues), where `report-now` reports in
+  coding-workflows. Only bodies and comments by an OWNER, MEMBER, or
   COLLABORATOR count. It prints `found`, `issue_url`, `comment_url`,
   `signature`, `event`, `tool_name`, `command`, and `title`, and exits 2 on
   a failed read. Operator step: the master poller runs it for a session

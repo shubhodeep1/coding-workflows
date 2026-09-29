@@ -8,7 +8,7 @@ Until now, `.claude/hooks/permission_prompt_logger.py` only logged prompts. `per
 | Reports per signature per session | 1 (a later `file` lists it under `already_reported`) |
 | Reports per session | at most 5 |
 | API calls per report | 1 POST, plus the issue read `file` already makes (elsewhere, 1 open-PR read) |
-| API calls per `lookup` | 1 search read plus 1 comments read per hit, at most 3 hits |
+| API calls per `lookup` | 1 search read plus 1 comments read per hit, at most 3 hits (where search is refused, as in Claude Code Web, 1 read per 100 `ai:permission-prompt` issues replaces it) |
 | Delay added to the prompt | none (the hook does not wait for the helper) |
 | Kill switch | `CLAUDE_PERMISSION_PROMPT_REPORT=off` (default: unset, on) |
 
