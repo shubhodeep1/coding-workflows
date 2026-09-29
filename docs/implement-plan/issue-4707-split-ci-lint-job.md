@@ -1,17 +1,17 @@
 # Implement-Plan Log — Split the CI lint job into parallel jobs so CI finishes well under 20 minutes
 
-- Plan: docs/plans/issue-4707-split-ci-lint-job-plan.md
+- Plan: docs/completed/issue-4707-split-ci-lint-job-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4707
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4707-split-ci-lint-job   Final PR: #4874 draft
-- Status: IN_PROGRESS
-- Stage: conformance 3/3 — review round
-- Activation: not started
-- Waiting on: PR #5092 (conformance fix 3/3; next stage `conformance 3/3 — fix check`)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (into the project branch), then final PR #4874
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: project checker session_01BWX5wabwbkpvBkn9CqZcd6 (reused; trigger ids in the stage report)
+- Check-in: checker session_01BWX5wabwbkpvBkn9CqZcd6 (project checker, reused)   safety net and hand-back: in the validation 1/3 — read result stage report
 - Last updated: 2026-09-29
-- Last note: conformance 3/3 — review round 1 on PR #5092 (head 800d07a): one NIT task gap from one reviewer (grok, confidence 5), rejected because the PR already carries the change it asks for (its own evidence line reads "none — both files contain the exact updates"); no failing check. No verdict bot is configured, so the round's commit is a real change instead: `main` was merged into the project branch (f30f8df) and the project branch into the PR, and the new head is reviewed again.
+- Last note: conformance fix check FIX-VERIFIED (#5092); security cycle 1 clean (run 36569012905); validation cycle 1 (run 36577216412, target_ref project branch at 6bfe900) passed: status=pass raw_status=pass, 10/10 tests. No validation-fix PR, so no conformance re-run; completion PR opened to move the plan to docs/completed/.
 
 ## Phases
 1. [x] Phase 1 — split `ci.yml` into parallel jobs behind an aggregate `lint`, raise release `validate-scripts` budget, update tests and docs   — PR #4884 merged 2026-09-29 (5f6dd77); review rounds: 2; interventions: 0
@@ -20,13 +20,18 @@
 - Run 1 — 2026-09-29: CONFORMANT (Step 3 COMPLETE; Step 4 CONCERNS: 2 EVIDENCE-BASED doc findings, 0 BLOCKER) — fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-1` (pre-security). Checks: 16 CI-reading test modules, yamllint, actionlint (pinned CI version), §27 size (max 351,391 bytes), step parity vs `origin/main` (125 steps, all present once; only the poll steps changed). End to end: CI run 36523765261 on 5f6dd77 via final PR #4874, success, 9.0 minutes wall-clock, critical path `orchestrate-poll (0)` 8.7 minutes.
 - Run 2 — 2026-09-29: CONFORMANT (Step 3 COMPLETE; Step 4 CONCERNS: 2 EVIDENCE-BASED doc findings, 0 BLOCKER) — fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-2` (pre-security). Re-audited after #5052 on the project branch synced with `main` (e8110b9): PR #5052's figures match run 36523765261's job records (run 8m58s, `orchestrate-poll (0)` 8m43s, `tests-promote-stall-and-review` 8m09s); `main` has not touched the three workflows since 5f6dd77. Checks: 16 CI-reading test modules, yamllint, actionlint 1.7.12, step parity vs current `origin/main` (125 steps, each once; only the two poll steps changed), `assemble_changelog.py assemble --dry-run` (9 fragments, #4706 and #4707 in the same release).
 - Run 3 — 2026-09-29: CONFORMANT (Step 3 COMPLETE; Step 4 CONCERNS: 1 EVIDENCE-BASED doc finding, 0 BLOCKER) — fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-3` (pre-security; last run the cap allows, so its merge is followed by `conformance 3/3 — fix check`); PR #5092, review rounds: 2. Re-audited after #5078 on the project branch synced with `main` (aa8f74b; `main`'s #4797 added `tests/test_check_in_session_targeting.py` to the §26 hand-back step, which merged cleanly into `tests-promote-stall-and-review`). Finding: `ci.yml` job comments claimed measured runtimes (static-checks "About 3 minutes", test jobs "3-8 minutes") that CI runs 36523765261, 36527182237, 36530680439, 36533369764, and 36535570251 contradict (static-checks 1.4-1.9 minutes, test jobs 2.4-8.2); the orchestrate-poll "about 5 minutes" claim holds (groups 1-3: 3.5-6.3 minutes). Checks: 17 CI-reading test modules (incl. the new `test_check_in_session_targeting.py`), yamllint, actionlint 1.7.12 over every workflow and template, step parity vs current `origin/main` (125 steps, each once; only the two poll steps changed), cross-job side-effect scan (no step reads a `/tmp` file, `GITHUB_ENV`, or tool written by another job), §27 size (max 351,422 bytes).
+- Fix check — 2026-09-29: FIX-VERIFIED (#5092) — none outside scope (the one listed finding resolved: `ci.yml` job comments now match the job records of runs 36523765261, 36527182237, 36530680439, 36533369764, 36535570251; parsed `ci.yml` identical before and after; yamllint and 6 CI contract test modules, 61 passed)
 
 ## Security pass
+- Cycle 1 — run 36569012905 2026-09-29 (ref: claude/implement-plan-issue-4707-split-ci-lint-job): clean — conclusion success, scope incremental (11 files, f736cad..6bfe900), tracker #3576 findings=0 followups_created=0
 
 ## Validation
+- Cycle 1 — run 36577216412 2026-09-29 (target_ref: claude/implement-plan-issue-4707-split-ci-lint-job, authorized head 6bfe900 level with `main` f736cad): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 253s)
 
 ## Completion
-- Final PR #4874 draft
+- Merged into the project branch: phase 1 PR #4884; conformance fix PRs #5052, #5078, #5092
+- Completion PR (this log commit) — doc moved to docs/completed/issue-4707-split-ci-lint-job-plan.md
+- Final PR #4874 draft (marked ready in the final-merge stage, with the measured critical path from CI run 36523765261: 9.0 minutes wall-clock, critical path `orchestrate-poll (0)` 8.7 minutes)
 
 ## Activation
 
