@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T23:18:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Automation posts issue comments as the same trusted User a human uses, and many embed model text without an `<!-- ai:` marker; any widened comment-command trigger must be scoped (for example by label) and not rely on markers alone.",
+  "phase": "implement_plan",
+  "pr_number": 5287,
+  "record_id": "lesson-implement-plan-449582ed23ed11b0039f7ad7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5243-reclarify-any-line",
+    "file:.github/workflows/clarify.yml",
+    "file:.github/workflows/plan.yml"
+  ]
+}
