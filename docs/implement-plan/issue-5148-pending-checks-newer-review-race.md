@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
 - Project branch: claude/implement-plan-issue-5148-pending-checks-newer-review-race   Final PR: #5178 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3 — review round
+- Stage: conformance 2/3
 - Activation: not started
-- Waiting on: PR #5209
+- Waiting on: conformance fix PR 2 (branch claude/implement-plan-issue-5148-pending-checks-newer-review-race-conformance-fix-2; number in the conformance 2/3 stage report)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01HRuW9tokc4gWgq1vPau85k   safety net and hand-back: ids in the conformance 1/3 — review round stage report
+- Check-in: checker session_01HRuW9tokc4gWgq1vPau85k   safety net and hand-back: ids in the conformance 2/3 stage report
 - Last updated: 2026-09-29
-- Last note: conformance 1/3 review round 3 (session session_01EywLdg9bPoF6Y1KGzM74Qq) on PR #5209: the one finding (a test case label still paired `force_rb_judge` with `review_autofix.yml` after this PR's comment moved that path to `review_rb_judge_dispatch.yml`) was valid and fixed in the label; test-only change.
+- Last note: conformance 2/3 (session session_01NzSMeavZGfEbpnoB4y5HUu): PR #5209 merged 2026-09-29; re-audit CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS); one EVIDENCE-BASED stale-doc finding (the sweep's §15 batching contract omitted the #5148 run reads) fixed in conformance fix PR 2, docstring only.
 
 ## Phases
 1. [x] Phase 1 — defer the pending-checks merge while a newer review is active or unsettled   — PR #5183 merged 2026-09-29; review rounds: 1; interventions: 0
@@ -22,7 +22,8 @@
    - Done: the plan's phase 1 "done" condition. Protected paths: none.
 
 ## Conformance
-- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — fix PR #5209: `review_rb_judge_dispatch.yml` added to the unbound dispatch listings (pre-security); review rounds: 3
+- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — fix PR #5209: `review_rb_judge_dispatch.yml` added to the unbound dispatch listings (pre-security); review rounds: 3; merged 2026-09-29
+- Run 2 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — conformance fix PR 2: `scripts/claude_pr_sweep.py`'s §15 batching contract now lists the pending-checks pass's head-branch runs read, 4 workflow_dispatch runs reads, comments re-read, and compare read (pre-security)
 
 ## Security pass
 
@@ -45,8 +46,10 @@
 ## Lessons
 - [source:security] Before an automated job enables auto-merge from an earlier review's result, it must check for newer reviews of the same PR that are still running (including dispatches from the default branch, whose check runs never attach to the PR head) and re-read the result after that check; nothing disables auto-merge once a later review finds a problem. (files: scripts/claude_fixer_pending_checks.py)
 - [source:conformance] When a guard lists workflow runs by workflow file, list the wrapper workflows too: a `workflow_dispatch` wrapper that calls a reusable workflow (such as `review_rb_judge_dispatch.yml` calling `review_autofix.yml`) records its runs under the wrapper's own path, not the reusable workflow's. (files: scripts/claude_fixer_pending_checks.py, .github/workflows/review_rb_judge_dispatch.yml)
+- [source:conformance] When a module's API budget grows, update every caller that restates it too: a batching contract (CLAUDE.md §15) in the calling script's docstring goes stale silently, because no test reads it. (files: scripts/claude_pr_sweep.py, scripts/claude_fixer_pending_checks.py)
 
 ## Notes
+- Conformance run 2 (2026-09-29, project head 660568d): checks run: `pytest tests/test_claude_fixer_pending_checks.py tests/test_claude_pr_sweep.py tests/test_check_in_status_hand_back.py tests/test_review_autofix_claude_fixer_mode.py tests/test_check_in_session_targeting.py` (282 passed, Python 3.11), `ruff check --select E,F --ignore E501` on the footprint (pass). Audited against `internal-review.yml`'s triggers and concurrency groups: no normal event produces a newer head-branch or dispatched review run that concludes other than `success` on an unchanged head, so `review_superseded` cannot block a clean PR in steady state.
 - Conformance review round 3 (2026-09-29, head c05da49, PR #5209): the only finding (minimax, confidence 2) was valid: the `tests/test_claude_fixer_pending_checks.py` case for an unbound `review_autofix.yml` dispatch was labelled `force_rb_judge / convergence dispatch`, while `scripts/claude_fixer_pending_checks.py:120-127` now says `review_autofix.yml` covers convergence and direct dispatches and the stall poller's `force_rb_judge` path runs as `review_rb_judge_dispatch.yml` (its own case). Relabelled `convergence or direct review_autofix.yml dispatch`; no behaviour change.
 - Conformance review round 2 (2026-09-29, head 08ae2d0, PR #5209): the only finding (task gap, glm, NIT) was valid: `changelog.d/5148-pending-checks-newer-review-race.md`'s reads row still said 3 `workflow_dispatch` runs listings while the module docstring says 4 after `review_rb_judge_dispatch.yml` joined them; fixed to 4. No other doc carries the count.
 - Conformance review round 1 (2026-09-29, head c2ae591, PR #5209): the only finding was a task gap (no `docs/INVENTORY.md` hunk); invalid on the project (line 125 carries phase 1's sentence), settled by AD-8. The push-triggered `review-claude-branch-push / codex-agent (claude-branch-review)` check failed in its LLM summariser (`all 10 attempts failed`, run 36598991686), an infrastructure failure; the PR-event review run on the same head succeeded.
