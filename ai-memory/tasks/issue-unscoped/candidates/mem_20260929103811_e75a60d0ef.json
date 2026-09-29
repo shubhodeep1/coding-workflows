@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1729-1785 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: `integration_value` can return `\"\"` for an empty or whitespace-only backtick-delimited value, which the main loop accepts as a match and uses to stop searching before a later valid Target branch.\n  WHY: The reviewers report that this differs from the line-bounded regex behavior; z-ai_glm-5_2 disputes the finding, stating that the regex also matches whitespace and the parser and reference agree.\n- scripts/gh_helpers.sh:1690-1705 | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The header comment says the new grammar is identical to the line-by-line regex behavior, but the implementation reportedly diverges for empty backtick-delimited values.\n  WHY: The comment could mislead maintainers about the parser contract; z-ai_glm-5_2 disputes the reported divergence.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Grammar is applied one line at a time ... Results equal the regexes applied to each line on its own\" (scripts/gh_helpers.sh:1690-1692)\n  expected_change_site: scripts/gh_helpers.sh, integration_value and main loop logic.\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The current `integration_value` logic accepts empty/whitespace-only backtick-delimited values (returning `\"\"`) that the line-by-line regex does not match, causing premature termination.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:1729, 1731, 1773 | confidence=5\n  PROBLEM: `integration_value` returns `\"\"` for some invalid inputs (e.g., `Integration branch: \\` \\``), which the main loop incorrectly treats as a valid match.\n  WHY: The main loop uses `if value is not None:` to check for matches. `\"\"` is not None, so the parser accepts an empty result as a valid integration branch and exits, instead of continuing to check for a valid branch on subsequent lines or with the Target branch label. This diverges from the behavior of the original regexes and the Python reference implementation `extract_integration_branch`.\n- scripts/gh_helpers.sh:1690-1705 | confidence=5\n  PROBLEM: The header comment claims the new grammar is identical to the regexes applied line-by-line, but the implementation diverges for empty backtick-delimited values.\n  WHY: The comment incorrectly states the contract, which could mislead future maintainers and contradicts the finding that the parser is more permissive than the regexes for empty inputs.\n- scripts/gh_helpers.sh:1690-1705 | confidence=5\n  PROBLEM: The implementation of `integration_value` is more permissive than the original `INTEGRATION_BRANCH_LINE_RE` regex, breaking the contract that \"Results equal the regexes applied to each line on its own\".\n  WHY: The original regexes applied line-by-line would not match `Integration branch: \\` \\``, so they would have continued searching, potentially finding a valid branch on a later line. The new parser incorrectly stops on the first line, leading to incorrect branch resolution in those cases.\n- Requirement: \"Grammar is applied one line at a time ... Results equal the regexes applied to each line on its own\" (scripts/gh_helpers.sh:1690-1692)\n  Expected change site: scripts/gh_helpers.sh, integration_value and main loop logic.\n  Evidence of absence: The current `integration_value` logic accepts empty/whitespace-only backtick-delimited values (returning `\"\"`) that the line-by-line regex does not match, causing premature termination.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/gh_helpers.sh: `integration_value` function (lines 1729-1745) and main loop (lines 1766-1785) | severity=MAJOR | confidence=4\n  PROBLEM: The parser returns `\"\"` for label lines with empty or whitespace-only backtick-delimited values (e.g., `Integration branch: \\``), which the main loop accepts as a match and exits before checking subsequent lines. However, the reference regex `INTEGRATION_BRANCH_LINE_RE` does NOT match these inputs, so `_line_bounded_reference` would skip the first line and match a later valid Target branch line.\n  WHY: For the body `\"Integration branch: \\`\\nTarget branch: real\\n\"`, the shell parser returns `\"\"` (no branch), while `_line_bounded_reference` returns `\"real\"`. The test `test_shell_parser_matches_line_bounded_grammar` includes this body in `LINE_BOUNDED_BODIES` (line 136) and should fail, but the PR description claims it passes. This suggests either the test is not actually run, the test is failing but not reported, or there is a bug in `_line_bounded_reference` that makes it return `\"\"` instead of `\"real\"`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f7fe6b41092a2dfecc272b40e76f259c05181baec313985b45b7092463ec2001",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5005,
+    "run_id": "36545265162",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36545265162",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929103811_e75a60d0ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5005,
+    "run_id": "36545265162"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T10:38:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
