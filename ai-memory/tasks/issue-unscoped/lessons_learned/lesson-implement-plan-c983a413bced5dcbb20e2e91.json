@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T05:41:43Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "After dispatching a workflow, confirm the returned run's inputs (ref / target_ref) name this project before trusting its verdict, because a concurrent dispatch of the same workflow can be returned as this project's run.",
+  "phase": "implement_plan",
+  "pr_number": 5050,
+  "record_id": "lesson-implement-plan-c983a413bced5dcbb20e2e91",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-4787-checker-renames-only-itself",
+    "file:.claude/scripts/dispatch_workflow.py"
+  ]
+}
