@@ -63,7 +63,7 @@ $ARGUMENTS
 
 ## Rules
 
-- **Edit the twin, never `.claude/**`.** A fix to a hook, setting, command, or session script goes into `workflow-templates/.claude/**` only; `claude-twin-sync.yml` copies it into `.claude/**` after merge (CLAUDE.md §28.C). A `claude/claude-twin-sync-*` PR is never yours to fix: the sync workflow or the repository owner merges it.
+- **Edit the twin, never `.claude/**`.** In a repo with `workflow-templates/.claude/` (coding-workflows), a fix to a hook, setting, command, or session script goes into `workflow-templates/.claude/**` only; `claude-twin-sync.yml` copies it into `.claude/**` after merge (CLAUDE.md §28.C). In a repo without it (a consumer), `.claude/**` comes from the upstream sync and an edit there keeps the §28.C protected-path stop. A `claude/claude-twin-sync-*` PR is never yours to fix: the sync workflow or the repository owner merges it.
 - **Claim first, fix second.** No edit, push, comment, or label change before step 4 succeeded on the current head. A live claim by someone else means stop.
 - **One fix round per wake.** Fix what is due on the claimed head, push once, and hand the waiting back to the §26 checker. Never loop, poll, `sleep`, or subscribe to PR activity (§25; a hook blocks it).
 - **The PR stays the PR.** Never open a second PR for the fix, never retarget, never merge, never close without the §23.C ask.

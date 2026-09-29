@@ -53,7 +53,7 @@ $ARGUMENTS
 
 ## Rules
 
-- **Edit the twin, never `.claude/**`.** An issue that changes hooks, settings, commands, or session scripts is planned as edits to `workflow-templates/.claude/**` only; `claude-twin-sync.yml` copies them into `.claude/**` after the project merges (CLAUDE.md §28.C). Such a phase is not a protected-path stop; only a `.claude/` file with no twin is.
+- **Edit the twin, never `.claude/**`.** In a repo with `workflow-templates/.claude/` (coding-workflows), an issue that changes hooks, settings, commands, or session scripts is planned as edits to `workflow-templates/.claude/**` only; `claude-twin-sync.yml` copies them into `.claude/**` after the project merges (CLAUDE.md §28.C). Such a phase is not a protected-path stop; only a `.claude/` file with no twin is. In a repo without it (a consumer), `.claude/**` comes from the upstream sync and a phase that must edit it keeps the protected-path stop.
 - **One issue, one phase, one chain.** Never fold a second issue in or split one into several phases. Everything after the plan is `/implement-plan-claude` issue mode; this file never ships PRs itself.
 - **The issue closes only when the whole project merged.** The final PR carries `Fixes #<N>` into the default branch, or the final-merge stage closes the issue and labels it `ai:merged` for any other base. Every other PR uses `Refs #<N>`. An `ai:orchestrator-tracking` issue is never routed here (§19).
 - **Build on the branch the issue names.** A security follow-up is built on its project's branch and a heal issue on `stable` or the named PR branch; nothing else defaults to the default branch.

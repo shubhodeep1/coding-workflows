@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from claude_twin_state import assert_claude_not_ahead
 
 ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_MD = ROOT / "CLAUDE.md"
@@ -104,7 +105,7 @@ def test_fixer_reports_archive_truthfully(section_d):
 	assert "`archive failed: <error>`" in section_d
 
 
-@pytest.mark.parametrize("prefix", ["", "workflow-templates"])
+@pytest.mark.parametrize("prefix", ["workflow-templates"])  # the twin; .claude/ follows via the sync PR (CLAUDE.md §28.C)
 def test_implement_plan_claude_checks_before_archiving_the_checker(prefix):
 	text = _flat(_command(prefix, "implement-plan-claude.md"))
 	check = _section(text, "### Archiving the project checker", "## Helpers")
@@ -119,7 +120,7 @@ def test_implement_plan_claude_checks_before_archiving_the_checker(prefix):
 	assert f"is not archived yet, and passes the {link}, archive it right after the new one is created" in text
 
 
-@pytest.mark.parametrize("prefix", ["", "workflow-templates"])
+@pytest.mark.parametrize("prefix", ["workflow-templates"])  # the twin; .claude/ follows via the sync PR (CLAUDE.md §28.C)
 def test_implement_plan_checker_prompt_targets_no_session(prefix):
 	text = _flat(_command(prefix, "implement-plan-claude.md"))
 	prompt = _section(text, "### Checker prompt", "### Hand-back")
@@ -134,7 +135,7 @@ def test_implement_plan_checker_prompt_targets_no_session(prefix):
 	assert "call get_session on <stage session id>; not archived → treat it as handed back (above)" in step_4b
 
 
-@pytest.mark.parametrize("prefix", ["", "workflow-templates"])
+@pytest.mark.parametrize("prefix", ["workflow-templates"])  # the twin; .claude/ follows via the sync PR (CLAUDE.md §28.C)
 def test_fix_claude_pr_renames_only_its_own_session(prefix):
 	text = _flat(_command(prefix, "fix-claude-pr.md"))
 	assert "continue with CLAUDE.md §26.D instead, including its `get_session` title check" in text
@@ -151,4 +152,5 @@ def test_claude_issue_pickup_archives_only_the_checker_it_created():
 
 @pytest.mark.parametrize("name", ["implement-plan-claude.md", "fix-claude-pr.md"])
 def test_twins_are_identical(name):
-	assert _command("workflow-templates", name).read_text(encoding="utf-8") == _command("", name).read_text(encoding="utf-8")
+	"""`.claude/` is never ahead of its twin (CLAUDE.md §28.C; the twin may await its sync PR)."""
+	assert_claude_not_ahead(f"commands/{name}")

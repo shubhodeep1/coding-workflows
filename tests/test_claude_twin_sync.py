@@ -386,6 +386,7 @@ class FakeGitHub(sync.GitHub):
 		self.files = files or []
 		self.runs = runs or []
 		self.status = status or {"state": "", "statuses": []}
+		self.status_reads = 0
 		self.writes: list[list[str]] = []
 
 	def get(self, path):
@@ -398,6 +399,7 @@ class FakeGitHub(sync.GitHub):
 		if "/check-runs" in path:
 			return {"check_runs": self.runs if "page=1" in path else []}
 		if path.endswith("/status"):
+			self.status_reads += 1
 			return self.status
 		raise AssertionError(path)
 
@@ -522,6 +524,42 @@ def test_run_guard_pr_is_labelled_alerted_and_never_merged(repo):
 	assert any("state=success" in w for w in approved.wrote("/statuses/"))
 	assert approved.merges() == [] and approved.wrote("labels[]") == []
 	assert not any(w for w in approved.writes if "APPROVE" in " ".join(w) or "/reviews" in " ".join(w))
+
+
+def _approval_status(state, description):
+	return {"state": state, "statuses": [{"context": sync.APPROVAL_STATUS_CONTEXT, "state": state, "description": description}]}
+
+
+def test_run_posts_the_approval_status_only_when_it_changes(repo):
+	"""§15 / GitHub's 1000-statuses-per-sha-and-context limit: an unchanged status is never re-posted."""
+	_twin_ahead(repo, "hooks/h.py", "h v2\n")
+	branch = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")["branch"]
+	git(repo, "fetch", "-q", "origin")
+	pr = _pr_from_origin(repo, branch, labels=[sync.APPROVAL_LABEL], body=sync.render_body(sync.plan_sync(str(repo), "HEAD")))
+	waiting = FakeGitHub(prs=[pr], status=_approval_status("pending", "Owner review and merge required"))
+	summary = sync.run_sync(str(repo), waiting, "HEAD", "main", "owner", "77")
+	assert summary["action"] == "unchanged" and summary["merge"] == "owner only"
+	assert waiting.writes == [] and waiting.status_reads == 1
+	approved = FakeGitHub(prs=[pr], reviews=[_review("APPROVED", commit=pr["head"]["sha"])],
+		status=_approval_status("pending", "Owner review and merge required"))
+	sync.run_sync(str(repo), approved, "HEAD", "main", "owner", "77")
+	assert [w for w in approved.writes if any("state=success" in part for part in w)] == approved.wrote("/statuses/")
+	assert len(approved.wrote("/statuses/")) == 1
+
+
+def test_run_merge_reuses_the_status_read_when_nothing_changed(repo):
+	_twin_ahead(repo)
+	branch = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")["branch"]
+	git(repo, "fetch", "-q", "origin")
+	pr = _pr_from_origin(repo, branch, body=sync.render_body(sync.plan_sync(str(repo), "HEAD")))
+	files = [{"filename": claude("commands/a.md"), "status": "modified"}]
+	green = FakeGitHub(prs=[pr], files=files, runs=[_run("lint")], status=_approval_status("success", "No hook or settings change"))
+	summary = sync.run_sync(str(repo), green, "HEAD", "main", "owner", "77")
+	assert summary["merge"] == "merged" and green.wrote("/statuses/") == [] and green.status_reads == 1
+	# A status that had to be (re)posted is read again before the merge decision.
+	stale = FakeGitHub(prs=[pr], files=files, runs=[_run("lint")], status=_approval_status("pending", "Owner review and merge required"))
+	sync.run_sync(str(repo), stale, "HEAD", "main", "owner", "77")
+	assert len(stale.wrote("/statuses/")) == 1 and stale.status_reads == 2 and stale.merges() == []
 
 
 def test_run_conflict_only_opens_an_empty_marker_pr(repo):
@@ -684,6 +722,9 @@ def test_command_twins_say_edit_the_twin(name):
 	text = _flat_doc(ROOT / sync.TWIN_ROOT / "commands" / name)
 	assert "**Edit the twin, never `.claude/**`.**" in text
 	assert "claude-twin-sync.yml" in text
+	# The twins ship to consumers, which have no workflow-templates/.claude/ and keep the protected-path stop (G1).
+	assert "`workflow-templates/.claude/` (coding-workflows)" in text
+	assert "(a consumer" in text
 
 
 def test_approval_label_is_in_the_label_contract():
