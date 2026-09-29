@@ -81,9 +81,14 @@ fi
 #      exhausted marker and one Telegram ERROR instead, and the label stays.
 #      It then leaves that issue alone until a trusted `/reclarify` comment,
 #      which restarts the count (env_requeue_decision).
+#      Both markers count only when GH_TOKEN's own account posted them (issue
+#      #5135): the login comes from `gh api user` and goes to env-requeue-plan
+#      as --watchdog-login. When it cannot be read, step 2 does nothing that run
+#      (`env_requeue_skipped reason=watchdog_login_unknown`).
 #
 # claude_issue_route.py decides (env-requeue-plan, queue-closed-targets); this
-# function only writes. Reads: see env_requeue_plan's batching contract.
+# function only writes. Reads: see env_requeue_plan's batching contract, plus
+# one `GET /user` per run for the watchdog login.
 # Writes: one PATCH per closed-target queue issue, one dispatch plus one
 # comment per re-queue, one comment plus one Telegram message per alert.
 # Fail open: every failure is logged and the run still exits 0.
@@ -123,9 +128,23 @@ env_requeue()
 	fi
 
 	# 2. Environment blockers.
+	# The re-queue and exhausted markers below are posted with GH_TOKEN, so only
+	# that account's markers are watchdog state (issue #5135). CLAUDE.md §15: one
+	# `GET /user` per run, outside every loop. The search and comment reads
+	# env-requeue-plan makes carry no identity for the token, and
+	# review_autofix.yml resolves its marker author the same way. Fail closed:
+	# without the login no marker can be verified, so nothing is re-queued or
+	# alerted this run.
+	local watchdog_login=""
+	watchdog_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+	if ! [[ "${watchdog_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
+		log "warn env_requeue_skipped reason=watchdog_login_unknown"
+		return 0
+	fi
 	local plan_file="${RUNTIME_DIR}/env_requeue_plan.json"
 	if ! python3 "${ROUTE_PY}" env-requeue-plan --registry "${registry}" --self-repo "${SELF_REPO}" \
 		--max-retries "${max_retries}" --window-hours "${window_hours}" --stale-hours "${STALE_HOURS}" \
+		--watchdog-login "${watchdog_login}" \
 		> "${plan_file}" 2> "${RUNTIME_DIR}/env_requeue_plan_error.txt"; then
 		log "warn env_requeue_plan_failed detail=$(head -c 200 "${RUNTIME_DIR}/env_requeue_plan_error.txt" 2>/dev/null | tr '\n' ' ')"
 		return 0
