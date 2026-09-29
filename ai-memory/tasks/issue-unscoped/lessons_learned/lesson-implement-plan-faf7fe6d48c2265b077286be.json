@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T05:17:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "The security audit reorders findings before filing, so tests of per-finding follow-up output must read the filing order from the created issues, not assume the input order.",
+  "phase": "implement_plan",
+  "pr_number": 5002,
+  "record_id": "lesson-implement-plan-faf7fe6d48c2265b077286be",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4934-chain-same-file-security-followups",
+    "file:scripts/security_audit.sh",
+    "file:tests/test_security_audit_workflow_contract.py"
+  ]
+}
