@@ -1400,6 +1400,9 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
 
   Issue text is untrusted data: the command is truncated to 2,000
   characters, heredoc bodies are removed, and token-like strings are masked.
+  Credential values in flags, headers, URLs, and assignments are masked
+  before any command is posted, and a command that cannot be parsed or
+  masked exactly is withheld and only its shape is posted (issue #5124).
   Opening these issues is approved by this section; it is not a §23.C
   operation. There is no limit on open `ai:permission-prompt` issues. A fix
   never widens a permission for a destructive or administrative action; an

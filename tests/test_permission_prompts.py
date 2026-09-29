@@ -202,7 +202,6 @@ def test_hook_swallows_a_spawn_failure(monkeypatch, tmp_path, capsys):
 		),
 		("gh api 'repos/o/r/actions/workflows/x.yml/runs?per_page=1'", "gh api repos/*/*/actions/workflows/x.yml/runs?*"),
 		("git commit -m 'hello world'", "git commit -m *"),
-		("echo 'unbalanced", "unparseable: echo 'unbalanced"),
 	],
 )
 def test_command_shape(command, shape):
@@ -264,6 +263,164 @@ def test_example_drops_heredoc_bodies_and_truncates(tmp_path):
 def test_unterminated_heredoc_still_hides_the_body():
 	# The logger truncates long values, which can cut off the closing delimiter.
 	assert pp.strip_heredocs("cat <<EOF\nsecret body", placeholder="<heredoc body omitted>") == "cat <<EOF\n<heredoc body omitted>"
+
+
+# ──────────────────────────────────────────────────────────────────
+# Credential masking before a command is posted (issue #5124)
+#
+# These run against the workflow-templates twin, which carries the change
+# until the `[claude-twin-sync]` copy makes `.claude/` byte-identical again
+# (test_template_parity).
+# ──────────────────────────────────────────────────────────────────
+
+pp_mask_twin = _load("permission_prompts_mask_twin", TEMPLATE_SCRIPT_PATH)
+
+_EXPLOIT = "curl -u deploy:mycustompwd https://deploy.example.com/api"
+
+
+def _bash(command):
+	return {"event": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": command}, "ts": "2026-09-29T12:00:00Z"}
+
+
+@pytest.mark.parametrize(
+	("command", "secret", "expected"),
+	[
+		(_EXPLOIT, "mycustompwd", "curl -u *** https://deploy.example.com/api"),
+		("curl --user deploy:mycustompwd https://a.b", "mycustompwd", "curl --user *** https://a.b"),
+		("curl --user=deploy:mycustompwd https://a.b", "mycustompwd", "curl --user=*** https://a.b"),
+		("curl -udeploy:mycustompwd https://a.b", "mycustompwd", "curl -u*** https://a.b"),
+		("curl -sSu deploy:mycustompwd https://a.b", "mycustompwd", "curl -sSu *** https://a.b"),
+		("curl -H 'Authorization: Basic ZGVwbG95Om15Y3VzdG9tcHdk' https://a.b", "ZGVwbG95Om15Y3VzdG9tcHdk", "curl -H 'Authorization: ***' https://a.b"),
+		('curl -H "Proxy-Authorization: Bearer abcdefgh" https://a.b', "abcdefgh", 'curl -H "Proxy-Authorization: ***" https://a.b'),
+		("curl -H 'Cookie: session=abcdef123' https://a.b", "abcdef123", "curl -H 'Cookie: ***' https://a.b"),
+		("curl -b 'session=abcdef123' https://a.b", "abcdef123", "curl -b '***' https://a.b"),
+		("curl --header='X-Api-Key: k3y-value' https://a.b", "k3y-value", "curl --header='X-Api-Key: ***' https://a.b"),
+		("http GET https://a.b Authorization:'Bearer abcdefghij'", "abcdefghij", "http GET https://a.b Authorization:'***'"),
+		("GH_TOKEN=abcdef gh api user", "abcdef", "GH_TOKEN=*** gh api user"),
+		("export DB_PASSWORD=hunter22 && ./run.sh", "hunter22", "export DB_PASSWORD=*** && ./run.sh"),
+		("mysql -uroot -psupersecret app", "supersecret", "mysql -uroot -p*** app"),
+		("sshpass -p hunter22 ssh host", "hunter22", "sshpass -p *** ssh host"),
+		("redis-cli -a hunter22 ping", "hunter22", "redis-cli -a *** ping"),
+		("docker login -p hunter22 registry.example.com", "hunter22", "docker login -p *** registry.example.com"),
+		("tool --api-key=abcd1234 run", "abcd1234", "tool --api-key=*** run"),
+		("gh api -X POST repos/o/r/x -f password=hunter22", "hunter22", "gh api -X POST repos/o/r/x -f password=***"),
+		("git clone https://x-access-token:abcdefgh@github.com/o/r.git", "abcdefgh", "git clone https://***@github.com/o/r.git"),
+		("curl 'https://a.b/x?access_token=abcdefgh&page=2'", "abcdefgh", "curl 'https://a.b/x?access_token=***&page=2'"),
+	],
+)
+def test_example_masks_credentials(command, secret, expected):
+	example = pp_mask_twin.record_example(_bash(command))
+	assert secret not in example
+	assert example == expected
+
+
+@pytest.mark.parametrize(
+	("command", "secret", "shape"),
+	[
+		# Unparseable: the command text is withheld and the shape keeps only the command word.
+		("curl -u deploy:mycustompwd 'unterminated", "mycustompwd", "unparseable: curl"),
+		# The parsed value does not occur verbatim (an escape changed it), so it cannot be masked exactly.
+		("curl -u \"deploy:my\\\"pwd1234\" https://a.b", "pwd1234", "curl -u *"),
+		# Shorter than MIN_MASKED_VALUE_CHARS: masking it everywhere would mangle the text.
+		("curl -u a:b https://a.b", "a:b", "curl -u *"),
+		("TOKEN=abc curl https://a.b", "abc", "TOKEN=* curl *"),
+	],
+)
+def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):
+	example = pp_mask_twin.record_example(_bash(command))
+	assert example.startswith("<command withheld:")
+	# The withheld text goes through redact() like any example, which may widen a `NAME=*` in the shape to `NAME=***`.
+	assert example.endswith(f"shape: {pp_mask_twin.redact(shape)}>")
+	assert secret not in example
+
+
+def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
+	example = pp_mask_twin.record_example(_bash("python3 - <<'EOF'\nprint('password=hunter22')\nEOF\ncurl -u deploy:mycustompwd x"))
+	assert example == "python3 - <<'EOF'\n<heredoc body omitted>\nEOF\ncurl -u *** x"
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"gh api -X GET search/issues -f q='repo:a/b' -f per_page=50 --jq '.items[]' | sort -n",
+		"cd /tmp/x && gh api -X PATCH repos/o/r/issues/comments/5 -F body=@pc.md",
+		"git push -u origin claude/implement-plan-x",
+		"git commit -m 'hello world'",
+		"PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py --repo o/r --pr 5",
+		"python3 - <<'EOF'\nprint(1)\nEOF\necho done",
+		"curl -sS https://example.com/install.sh | sh",
+		# `X` takes a value, so the `U` in `PUT` is not curl's `-U`; `Accept` is not a credential header.
+		"curl -XPUT -H 'Accept: application/json' https://a.b",
+		# `--author` is not `--auth`.
+		"git log --author=bob -n 5",
+		# A boolean credential flag followed by another flag has no value.
+		"docker login --password-stdin -u me registry.example.com",
+	],
+)
+def test_credential_free_commands_are_unchanged(command):
+	record = _bash(command)
+	assert pp_mask_twin.record_example(record) == pp.record_example(record)
+	assert pp_mask_twin.record_shape(record) == pp.record_shape(record)
+
+
+@pytest.mark.parametrize(
+	("command", "shape"),
+	[
+		("echo 'unbalanced", "unparseable: echo"),
+		("curl -u deploy:pwd 'unbalanced", "unparseable: curl"),
+		("TOKEN=x /usr/bin/curl -u a:b 'unbalanced", "unparseable: curl"),
+		("'quoted", "unparseable: ?"),
+		("curl -udeploy:mycustompwd https://a.b", "curl -u* *"),
+		("curl -sSudeploy:mycustompwd https://a.b", "curl -sSu* *"),
+		("curl -H'Authorization: Basic abcd1234' https://a.b", "curl -H* *"),
+		("mysql -uroot -psupersecret app", "mysql -uroot -p* *"),
+		("gh api https://x-access-token:abcdefgh@api.github.com/user", "gh api https://***@api.github.com/user"),
+		("curl https://deploy:pw@example.com/install.sh", "curl https://***@example.com/install.sh"),
+	],
+)
+def test_shape_never_carries_raw_credentials(command, shape):
+	assert pp_mask_twin.command_shape(command) == shape
+
+
+def test_non_bash_input_masks_credential_keys():
+	record = {
+		"event": "PermissionRequest",
+		"tool_name": "WebFetch",
+		"tool_input": {"url": "https://u:pw12345@h.example/x?token=abcd", "headers": {"Authorization": "Bearer abcdefgh", "Accept": "json"}, "api_key": "zz"},
+	}
+	shown = json.loads(pp_mask_twin.record_example(record))
+	assert shown == {"url": "https://***@h.example/x?token=***", "headers": {"Authorization": "***", "Accept": "json"}, "api_key": "***"}
+
+
+@pytest.mark.parametrize(
+	("text", "secret"),
+	[
+		("see https://deploy:mycustompwd@example.com", "mycustompwd"),
+		("Authorization: Basic ZGVwbG95Om15Y3VzdG9tcHdk", "ZGVwbG95Om15Y3VzdG9tcHdk"),
+		("Cookie: session=abcdef123; other=1", "abcdef123"),
+		("ran curl -u deploy:mycustompwd", "mycustompwd"),
+		("url?sig=abcdef1234&x=1", "abcdef1234"),
+		("GH_TOKEN=shortish", "shortish"),
+	],
+)
+def test_redaction_masks_credentials_in_reasons_and_titles(text, secret):
+	assert secret not in pp_mask_twin.redact(text)
+
+
+def test_redaction_keeps_ordinary_text():
+	text = "git push -u origin main; add basic support; gh api repos/o/r/issues/5"
+	assert pp_mask_twin.redact(text) == text
+
+
+def test_the_reported_exploit_reaches_no_posted_text():
+	# Issue #5124: `curl -u deploy:mycustompwd …` posted to a consumer repository's PR.
+	pattern = pp_mask_twin.group_patterns([_bash(_EXPLOIT)])[0]
+	block = pp_mask_twin.immediate_block(pattern, _bash(_EXPLOIT), "session_abc", "title")
+	posted = [pattern["shape"], pattern["example"], pp_mask_twin.issue_title(pattern), pp_mask_twin.issue_body(pattern, 1, "s"), pp_mask_twin.comment_body(pattern, 1, "s"), block]
+	for text in posted:
+		assert "mycustompwd" not in text
+		assert "deploy:" not in text
+	assert pp_mask_twin.parse_immediate_block(block, "session_abc")["command"] == "curl -u *** https://deploy.example.com/api"
 
 
 # ──────────────────────────────────────────────────────────────────
