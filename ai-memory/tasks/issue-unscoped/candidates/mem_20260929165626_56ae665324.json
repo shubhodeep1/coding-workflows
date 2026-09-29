@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/claude-twin-sync.yml:47-73 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `workflow_run` trigger's `branches` filter is ignored, and the job-level `if:` does not filter by `github.event.workflow_run.head_branch`, so the job runs on every CI completion in the repo.\n  WHY: This causes redundant git work and API calls, consuming unnecessary Actions minutes.\n- .github/workflows/claude-twin-sync.yml:58-62 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `pull_request_review` trigger has no `branches:` filter, so reviews on non-sync branches create workflow runs.\n  WHY: The job skips non-sync reviews, but those workflow runs still consume Actions minutes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/claude-twin-sync.yml:47-54, 73 | severity=low | confidence=4\n  PROBLEM: The `workflow_run` trigger's `branches` filter is ignored, and the job-level `if:` does not filter by `github.event.workflow_run.head_branch`, so the job runs on every CI completion in the repo.\n  WHY: This causes redundant git work and API calls, consuming unnecessary Actions minutes.\n- .github/workflows/claude-twin-sync.yml:58-62 | severity=low | confidence=4\n  PROBLEM: The `pull_request_review` trigger has no `branches:` filter, so reviews on non-sync branches create workflow runs.\n  WHY: The job skips non-sync reviews, but those workflow runs still consume Actions minutes.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "988e58e0cacdc282175aa299e01793281391f60dd47226b36350b1163432039e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36598858010",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36598858010",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929165626_56ae665324",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36598858010"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T16:56:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
