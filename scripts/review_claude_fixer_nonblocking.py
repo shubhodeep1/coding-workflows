@@ -174,16 +174,27 @@ FENCE_RE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})")
 # Finding records in a reviewer's raw output (issue #4975). The flagger's
 # consensus_id citation binds only as a whole line inside one of them.
 RECORD_MARKUP = r"(?:\*\*|__)?"
-RECORD_FILE_RE = re.compile(rf"^\s*(?:[-*]\s+)?{RECORD_MARKUP}File{RECORD_MARKUP}\s*:{RECORD_MARKUP}\s*(?P<value>.*?)\s*$",
+# A record's File: or Requirement: line may sit in a bulleted or numbered list item.
+RECORD_ITEM = r"(?:(?:[-*]|\d+[.)])\s+)?"
+RECORD_FILE_RE = re.compile(rf"^\s*(?:#{{1,6}}\s+)?{RECORD_ITEM}{RECORD_MARKUP}File{RECORD_MARKUP}\s*:{RECORD_MARKUP}\s*(?P<value>.*?)\s*$",
 	re.IGNORECASE)
 RECORD_LINE_RE = re.compile(
 	rf"^\s*(?:[-*]\s+)?{RECORD_MARKUP}(?:Line or code reference|Line reference|Lines?){RECORD_MARKUP}\s*:{RECORD_MARKUP}"
 	r"\s*(?P<value>.*?)\s*$", re.IGNORECASE)
 RECORD_PATH_RE = re.compile(r"^`?(?P<path>[^\s`|:,()]+)`?(?::L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?)?")
 RECORD_LINE_NUMBER_RE = re.compile(r"(?<![\w/.-])L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
+# Explicit line references inside a longer value: ``path:N[-M]`` (the path has a
+# ``/`` or a file extension that starts with a letter) and ``line N`` /
+# ``lines N-M`` / ``LN``. A bare number elsewhere in the value is code text, not
+# a line reference, and so are a version (``3.14:40``, ``1.2.3:40``) and a URL's
+# ``//host:port``.
+RECORD_LINE_PATH_RE = re.compile(
+	r"(?<![\w/.:-])`?[\w./-]*(?:/[\w.-]*|\.[A-Za-z][\w-]*)`?:L?(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
+RECORD_LINE_WORD_RE = re.compile(r"(?<![\w-])(?:[Ll]ines?\s*|L)(?P<start>\d+)(?:\s*[-–]\s*L?(?P<end>\d+))?(?![\w/.])")
+RECORD_LEADING_STRIP = " \t`(,;:—–-"
 RECORD_CONSENSUS_ID_RE = re.compile(
 	rf"^\s*(?:[-*]\s+)?{RECORD_MARKUP}consensus_id{RECORD_MARKUP}:{RECORD_MARKUP}\s*`?(?P<consensus_id>{CONSENSUS_ID_PATTERN})`?\s*$")
-RECORD_BREAK_RE = re.compile(rf"^\s*(?:[-*]\s+)?(?:{RECORD_MARKUP}Requirement{RECORD_MARKUP}\s*:|REJECTED_FINDING\s*:|#)",
+RECORD_BREAK_RE = re.compile(rf"^\s*{RECORD_ITEM}(?:{RECORD_MARKUP}Requirement{RECORD_MARKUP}\s*:|REJECTED_FINDING\s*:|#)",
 	re.IGNORECASE)
 RECORD_HEADING_RE = re.compile(r"^[A-Z][A-Z0-9 /&()-]*[A-Z)]$")
 
@@ -550,20 +561,28 @@ def _votes_in(text: str, manifest: dict[str, tuple[str, tuple[int, int], str]]) 
 
 
 def _record_lines(value: str) -> tuple[int, int] | None:
-	match = RECORD_LINE_NUMBER_RE.search(value)
+	"""The line range of an explicit reference: a leading number or range, else
+	the first ``path:N[-M]`` or ``line N`` / ``LN`` in the value. Code text such
+	as ``retries = 3`` reads no line, so the record has no readable line."""
+	match = RECORD_LINE_NUMBER_RE.match(value.lstrip(RECORD_LEADING_STRIP))
+	if match is None:
+		found = [candidate for candidate in (RECORD_LINE_PATH_RE.search(value), RECORD_LINE_WORD_RE.search(value)) if candidate]
+		match = min(found, key=lambda candidate: candidate.start()) if found else None
 	return _range(match.group("start"), match.group("end")) if match else None
 
 
 def flagger_finding_records(text: str) -> list[dict]:
 	"""Return the ``File:`` finding records of a reviewer's raw output (issue #4975).
 
-	A record starts at a ``File:`` line outside any fenced code block and runs
-	to the first blank line, the next ``File:`` or ``Requirement:`` line, a
-	REJECTED_FINDING line, a heading, or a fence. Each record is a dict with
-	``path`` (None when the ``File:`` value is not a path), ``lines`` (None
-	when no line number is read from the ``File:`` value, its first
-	``Line or code reference:`` / ``Line:`` / ``Lines:`` field, or the rest of
-	the ``File:`` value), and ``consensus_ids``, the ids of the whole
+	A record starts at a ``File:`` line (plain, bulleted, numbered, or a
+	heading) outside any fenced code block and runs to the first blank line,
+	the next ``File:`` or ``Requirement:`` line, a REJECTED_FINDING line, a
+	heading, or a fence. Each record is a dict with ``path`` (None when the
+	``File:`` value does not start with a path: a word with no ``.`` or ``/``
+	followed by more text is prose), ``lines`` (None when no explicit line
+	reference (see _record_lines()) is read from the ``File:`` value, its
+	first ``Line or code reference:`` / ``Line:`` / ``Lines:`` field, or the
+	rest of the ``File:`` value), and ``consensus_ids``, the ids of the whole
 	``consensus_id:`` lines inside it. A consensus_id anywhere else in the
 	output (prose, a quote, a code block, a REJECTED_FINDING line, a line
 	after the record's blank line) belongs to no record and binds nothing.
@@ -585,6 +604,11 @@ def flagger_finding_records(text: str) -> list[dict]:
 		if file_match:
 			value = file_match.group("value")
 			path_match = RECORD_PATH_RE.match(value)
+			# A leading word is a path only when it looks like one (a "." or "/")
+			# or is the whole value: "File: the install example" names no file.
+			if path_match and not ("." in path_match.group("path") or "/" in path_match.group("path")
+					or not value[path_match.end():].strip()):
+				path_match = None
 			path = _norm_path(path_match.group("path")) if path_match else None
 			lines = None
 			if path_match and path_match.group("start"):

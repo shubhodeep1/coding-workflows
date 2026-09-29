@@ -401,6 +401,8 @@ def test_issue_4975_an_id_line_before_any_finding_record_binds_nothing(tmp_path)
 	f"File: README.md\nLine or code reference: the rewrapped backtick\nconsensus_id: {RID}\n",
 	f"File: README.md\nconsensus_id: {RID}\n",
 	f"File: (see above)\nLine or code reference: 1261\nconsensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: `fetch(url, 1261)`\nconsensus_id: {RID}\n",
+	f"File: the README example, line 1261\nconsensus_id: {RID}\n",
 	f"File: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\nconsensus_id: {FLAW_ID}\n",
 	CITING_RECORD + "\n" + CITING_RECORD,
 ])
@@ -418,6 +420,13 @@ def test_issue_4975_a_citation_that_does_not_bind_one_record_at_the_entry_stays_
 	"File: README.md:1258\nProblem: injection\n",
 	"File: README.md\nProblem: injection\n",
 	"File: (unknown)\nLine or code reference: 1261\nProblem: injection\n",
+	# Conformance run 1: a number in code text is not a line, a numbered or
+	# heading item is a record, and a prose File: value names no file.
+	"File: README.md\nLine or code reference: `retries = 3` (line 1261)\nProblem: injection\n",
+	"File: README.md\nLine or code reference: run(\"$title\", 2)\nProblem: injection\n",
+	"2. File: README.md:1262\nProblem: injection\n",
+	"### File: README.md:1262\nProblem: injection\n",
+	"File: the README install example, line 1261\nProblem: injection\n",
 ])
 def test_issue_4975_another_flagger_finding_at_the_entry_keeps_it_blocking(tmp_path, other_record):
 	"""The summariser folded a same-line defect into the rejected entry: the flagger's output shows two findings there."""
@@ -447,6 +456,9 @@ def test_issue_4975_a_distant_flagger_finding_does_not_block_demotion(tmp_path, 
 	f"File: README.md, line 1261\nconsensus_id: {RID}\n",
 	f"File: README.md\nconsensus_id: {RID}\nLine or code reference: 1261\nProblem: lost its backtick\n",
 	f"CORRECTNESS\nFile: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\n\nREJECTED_FINDING: none\n",
+	f"1. **File:** `README.md:1261`\n   consensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: `retries = 3` (line 1261)\nconsensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: 1261 `retries = 3`\nconsensus_id: {RID}\n",
 ])
 def test_issue_4975_a_citation_inside_the_flaggers_record_demotes(tmp_path, flagger_output):
 	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=flagger_output)
@@ -468,6 +480,29 @@ def test_issue_4975_finding_records_parse_the_reviewer_shape():
 		{"path": "scripts/a.py", "lines": (40, 44), "consensus_ids": [RID]},
 		{"path": "scripts/b.py", "lines": (7, 7), "consensus_ids": []},
 	]
+
+
+@pytest.mark.parametrize(("output", "expected"), [
+	("File: a.py\nLine or code reference: `retries = 3`\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: lock.acquire(1) without release\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: `a.py:40-44`\n", ("a.py", (40, 44))),
+	("File: a.py\nLine or code reference: `x = 3` around line 40\n", ("a.py", (40, 40))),
+	("File: a.py\nLine or code reference: #L40\n", ("a.py", (40, 40))),
+	("File: a.py (40)\n", ("a.py", (40, 40))),
+	("File: Makefile:12\n", ("Makefile", (12, 12))),
+	("File: Makefile (line 3)\n", (None, (3, 3))),
+	("1) File: a.py:4-6\n", ("a.py", (4, 6))),
+	# PR #5060 review round 1: a version or a URL's host:port is not path:N.
+	("File: a.py\nLine or code reference: see version 3.14:40 for context\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: `1.2.3:40`\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: `http://localhost:8080`\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: see scripts/Makefile:12\n", ("a.py", (12, 12))),
+	("File: a.py\nLine or code reference: `.github/workflows/ci.yml:7-9`\n", ("a.py", (7, 9))),
+])
+def test_issue_4975_finding_records_read_only_explicit_paths_and_lines(output, expected):
+	"""Conformance run 1: code text reads no line, and a prose File: value reads no path."""
+	records = nonblocking.flagger_finding_records(output)
+	assert [(record["path"], record["lines"]) for record in records] == [expected]
 
 
 def test_a_duplicated_id_in_the_ledger_stays_blocking(tmp_path):
