@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:168-171 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The comment says `DEPENDENCY_RATE_LIMIT_RE` uses the same pattern as `_is_gh_rate_limit` in `scripts/gh_helpers.sh:50`, but the Python regex omits `HTTP 429`.\n  WHY: There is no runtime failure today because `DEPENDENCY_INACCESSIBLE_RE` matches only HTTP 403/404, so HTTP 429 falls through to `unavailable`; the inaccurate parity claim is a maintenance hazard.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_issue_route.py:168-169, 171 | severity=low | confidence=3\n  PROBLEM: The comment claims `DEPENDENCY_RATE_LIMIT_RE` is the \"same pattern as `_is_gh_rate_limit` in scripts/gh_helpers.sh\", but the shell function also matches HTTP 429.\n  WHY: HTTP 429 does not reach the rate-limit check because `DEPENDENCY_INACCESSIBLE_RE` only matches HTTP 403 and HTTP 404; the inaccurate comment could mislead a future maintainer.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_route.py:168-171 | severity=low | confidence=4\n  PROBLEM: The comment states `DEPENDENCY_RATE_LIMIT_RE` matches the same pattern as `_is_gh_rate_limit` in `scripts/gh_helpers.sh`, but the shell function explicitly matches `HTTP 429` as well.\n  WHY: The current code path masks this because `DEPENDENCY_INACCESSIBLE_RE` handles 429 before reaching this check, but the comment could mislead a future maintainer.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_route.py:168-171 | severity=low | confidence=4\n  PROBLEM: The comment explicitly says the Python regex uses the \"same pattern as `_is_gh_rate_limit` in scripts/gh_helpers.sh\", but `_is_gh_rate_limit` at `scripts/gh_helpers.sh:50` matches `HTTP 429`, which the Python regex omits.\n  WHY: The runtime is correct today because `DEPENDENCY_INACCESSIBLE_RE` does not match 429, but the comment documents a false parity that could mislead future changes.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_issue_route.py:168-169, 171\n  PROBLEM: The comment claims the Python regex is the \"same pattern as `_is_gh_rate_limit` in scripts/gh_helpers.sh\", but the shell function at `scripts/gh_helpers.sh:50` also matches `HTTP 429`, which `DEPENDENCY_RATE_LIMIT_RE` omits.\n  WHY: The comment inaccurately implies parity; HTTP 429 is already handled because `DEPENDENCY_INACCESSIBLE_RE` does not match it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(Reviewer failed after non-retryable error on attempt 1; no findings available.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_issue_route.py:168-171 | severity=low | confidence=4\n  PROBLEM: The comment at line 168 claims `DEPENDENCY_RATE_LIMIT_RE` is \"the same pattern as `_is_gh_rate_limit` in scripts/gh_helpers.sh\", but the shell function at `scripts/gh_helpers.sh:50` includes `HTTP 429`, which the Python regex omits.\n  WHY: There is no runtime failure today because `DEPENDENCY_INACCESSIBLE_RE` matches only 403/404, but the inaccurate cross-reference could mislead a future maintainer.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d0a0ef3968b28aab37f34a0b67cf1e16a7d45f957a6ca436efc81a36a8a407a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5055,
+    "run_id": "36527736336",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36527736336",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929062512_5dfa9b11e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5055,
+    "run_id": "36527736336"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T06:25:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
