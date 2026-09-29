@@ -1255,7 +1255,12 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   auto-merges with a failing check, but `main` has no required status
   checks and the GPT review path only feeds failing checks to its reviewers,
   so making `lint` a required check in the `main` ruleset is the operator
-  step (CLAUDE.md §23.C) that lets GitHub enforce the rule for every PR.
+  step (CLAUDE.md §23.C) that lets GitHub block a PR the check fails. It
+  does not cover a PR that also edits `.github/workflows/ci.yml` or
+  `scripts/claude_twin_sync.py`: a `pull_request` run uses the PR's own
+  copies of both, so such a PR can skip or weaken the check and still turn
+  `lint` green. A PR that changes a guard path together with either file
+  needs the owner's review of those files as well.
 - **Credentials:** `GITHUB_TOKEN` (`contents`, `pull-requests`, `checks`,
   `statuses`: read) for reads; `GH_PAT` only in the sync step, for the push
   (passed in `GIT_CONFIG_*` environment variables to that one git command),
