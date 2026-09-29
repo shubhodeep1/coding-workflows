@@ -207,7 +207,10 @@ rejected.
      `ai:ready-to-merge` label is added.
    - `review_rb_judge.sh` `:1770-1771`, `:1818-1819`, and the
      `merge_with_followup` sync merge.
-   - `orchestrate_poll_process.sh`, all eleven call sites listed in Context.
+   - `orchestrate_poll_process.sh`: all nine sites listed in Context (15
+     calls).
+   - `orchestrate_poll.yml`: both files are added to its required staging
+     list, because the orchestrator runs from that staged copy.
    - Each script sources `protected_path_gate.sh` next to its existing
      helper sources. With `set -e`, a missing gate file fails closed.
    - `stage_workflow_support.sh` adds both files to
@@ -244,7 +247,10 @@ merge path open.
        `scripts/stage_workflow_support.sh`,
        `.github/workflows/test-and-mark-stable.yml`,
        `.github/workflows/mark-stable.yml`, `.github/workflows/ci.yml`,
-       `CLAUDE.md`, `agents.md`
+       `.github/workflows/orchestrate_poll.yml`, `CLAUDE.md`, `agents.md`,
+       and the existing tests whose fakes model the merge scripts
+       (`tests/test_review_autofix_review_pipeline_contract.py`,
+       `tests/test_review_rb_judge_label_propagation.py`)
    - Done when:
      - every unit and wiring test in Tests passes
      - the static test finds no unwrapped `gh pr merge` in `scripts/*.sh`
@@ -272,7 +278,8 @@ merge path open.
 - `scripts/review_enable_auto_merge.sh`, `scripts/review_rb_judge.sh`,
   `scripts/orchestrate_poll_process.sh`, `scripts/stage_workflow_support.sh`
 - `.github/workflows/test-and-mark-stable.yml`,
-  `.github/workflows/mark-stable.yml`, `.github/workflows/ci.yml`
+  `.github/workflows/mark-stable.yml`, `.github/workflows/ci.yml`,
+  `.github/workflows/orchestrate_poll.yml`
 - `tests/test_protected_path_authorization.py` [new]
 - `CLAUDE.md` (and `workflow-templates/CLAUDE.md`, a symlink to it), `agents.md`
 - `changelog.d/4919-protected-path-merge-authorization.md` [new]

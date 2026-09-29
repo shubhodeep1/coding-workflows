@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4919-gate-protected-path-merges-plan.md
 - Source issue: shubhodeep1/coding-workflows#4919
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4678-edit-files-without-python-heredocs
-- Project branch: claude/implement-plan-issue-4919-gate-protected-path-merges   Final PR: pending
+- Project branch: claude/implement-plan-issue-4919-gate-protected-path-merges   Final PR: #4973 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR from `claude/implement-plan-issue-4919-gate-protected-path-merges-phase-1` (the PR that carries this line)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: see the stage report and the next `— resume.` block (checker, safety net, and hand-back ids are armed after this PR opens)
 - Last updated: 2026-09-29
-- Last note: project branch opened from the issue base; phase 1 in progress.
+- Last note: phase 1 implemented and verified (73 new tests; every existing suite touching the changed files passes; the 114 other failures of the full suite fail identically on the unchanged base); phase PR opened.
 
 ## Phases
-1. [ ] Phase 1 — protected-path merge and release authorization gate (scripts/protected_path_authorization.py, scripts/protected_path_gate.sh, merge-site wiring in review_enable_auto_merge.sh / review_rb_judge.sh / orchestrate_poll_process.sh, stage_workflow_support.sh, release gate in test-and-mark-stable.yml / mark-stable.yml, tests, ci.yml, CLAUDE.md §23.I, agents.md, changelog)
+1. [ ] Phase 1 — protected-path merge and release authorization gate (scripts/protected_path_authorization.py, scripts/protected_path_gate.sh, merge-site wiring in review_enable_auto_merge.sh / review_rb_judge.sh / orchestrate_poll_process.sh, stage_workflow_support.sh + orchestrate_poll.yml staging, release gate in test-and-mark-stable.yml / mark-stable.yml, tests, ci.yml, CLAUDE.md §23.I, agents.md, changelog)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -40,10 +40,15 @@
 - AD-10 [plan, 2026-09-29] How is an authorized PR bound to its head on an unbound merge call? — Picked: A — the wrapper adds `--match-head-commit <authorized head>`. Alternatives: B — leave it. Why: otherwise a push between check and merge merges an unapproved head. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] `orchestrate_poll_process.sh` runs from the copy `orchestrate_poll.yml` stages from a fixed script list, not from `stage_workflow_support.sh`; a new helper it sources must be added to that list too, or every orchestrator run fails at staging. (files: .github/workflows/orchestrate_poll.yml, scripts/stage_workflow_support.sh)
+- [source:plan-deviation] A GitHub Actions step `name:` containing ` #` must be quoted: YAML reads the rest as a comment and silently truncates the name (yamllint reports it only as a comment-spacing warning). (files: .github/workflows/test-and-mark-stable.yml, .github/workflows/mark-stable.yml, .github/workflows/ci.yml)
+- [source:plan-deviation] A gate wrapped around a shared merge path must leave the unaffected case byte-for-byte unchanged: requiring a well-formed head SHA for every PR broke 40 orchestrator tests whose fakes use placeholder SHAs, so the SHA is required only where it is used (a protected PR). (files: scripts/protected_path_authorization.py, tests/test_orchestrate_poll_process.py)
 
 ## Notes
 - Issue mode: permission mode `auto` (recorded, not asked).
 - Security pass skipped per `security_pass_skip.py`: `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`.
 - Base branch final PR #4684 is open (draft); the base has not moved (checked 2026-09-29).
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/4919#issuecomment-5882706456
+- Phase 1 plan deviations (recorded in the plan and as lessons): both gate files were also added to `orchestrate_poll.yml`'s staging list; two existing tests whose fakes model the merge scripts were updated (`tests/test_review_autofix_review_pipeline_contract.py` serves the gate's files read and pins the gated call shape; `tests/test_review_rb_judge_label_propagation.py` sources the gate and serves an empty files list).
+- Verification (2026-09-29): `tests/test_protected_path_authorization.py` 73 passed; the judge, review-pipeline, workflow-size, section-number, template-parity, and permission-prompt suites pass; full suite `-n 4`: 4740 passed, 156 failed, of which 40 were caused by this phase (fixed by requiring a head SHA only for protected PRs; all 40 then passed) and the other 114 failed identically on the unchanged base (environment: validation template renderers, node/mongo family runtimes, consolidator/reject-verify, `test_workflow_retro.py` import error). Mutation: unwrapping one orchestrator merge call fails `test_every_scripted_gh_pr_merge_is_wrapped`. `yamllint -s` and `actionlint` clean on the four touched workflows. Read-only smoke against the live API: `pr` mode allows #4973 (unprotected) and blocks #4783 (pin change, no owner comment); the wrapper passes #4973's merge call through unchanged.
 - This session had no `mcp__github__*` tools; `gh` was installed by the repo's SessionStart hook, and GitHub writes go through `gh api` routine calls and the allowlisted helpers.
