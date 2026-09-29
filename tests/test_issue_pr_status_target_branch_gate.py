@@ -9,8 +9,11 @@ the issue on that label before the chain's final merge.
 
 The step now labels a linked issue on a merged PR only when the PR's base is the
 issue's target branch: the default branch, the branch the issue body names on
-its `Integration branch:` / `Target branch:` line, or any base for an
-orchestrator-managed child. These tests run the step's real `run:` script under
+its `Integration branch:` / `Target branch:` line, or, for an
+orchestrator-managed child, its `orchestrator/project-<T>` branch. Issue #4957:
+an issue is a managed child only when it carries the `ai:orchestrator-managed`
+label; the "Managed by: AI Orchestrator" body text alone never counts. These
+tests run the step's real `run:` script under
 bash with a stub `gh` on PATH and record the label and close calls it makes.
 """
 
@@ -80,6 +83,9 @@ if args[:2] == ["api", "graphql"]:
 		]
 		print(json.dumps({"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": nodes}}}}}))
 		sys.exit(0)
+	if state.get("orch_graphql_fail"):
+		print("graphql unavailable", file=sys.stderr)
+		sys.exit(1)
 	repo = {}
 	import re
 	for alias, num in re.findall(r"(i\d+): issue\(number: (\d+)\)", query):
@@ -90,6 +96,26 @@ if args[:2] == ["api", "graphql"]:
 			"body": issue["body"],
 		}
 	print(json.dumps({"data": {"repository": repo}}))
+	sys.exit(0)
+
+if len(args) >= 2 and args[0] == "api" and args[1].startswith("repos/") and "/issues/" in args[1] and "--jq" in args:
+	# Serve the real REST shape (labels are objects, not names) and apply the
+	# caller's own --jq filter with jq, as gh does, so the test exercises the
+	# workflow's label transform instead of a pre-flattened payload.
+	import subprocess
+	num = args[1].rsplit("/", 1)[1]
+	issue = state["issues"][num]
+	rest_issue = {
+		"number": int(num),
+		"labels": [{"id": 1000 + idx, "name": name, "color": "ededed"} for idx, name in enumerate(issue["labels"])],
+		"body": issue["body"],
+	}
+	jq_filter = args[args.index("--jq") + 1]
+	proc = subprocess.run(["jq", "-c", jq_filter], input=json.dumps(rest_issue), capture_output=True, text=True)
+	if proc.returncode != 0:
+		sys.stderr.write(proc.stderr)
+		sys.exit(proc.returncode)
+	sys.stdout.write(proc.stdout)
 	sys.exit(0)
 
 if args[:2] == ["issue", "close"]:
@@ -118,6 +144,7 @@ def _run_step(
 	pr_merged: bool = True,
 	default_branch: str = "main",
 	pr_head_ref: str = "claude/some-feature",
+	orch_graphql_fail: bool = False,
 ) -> dict:
 	tmp = Path(tempfile.mkdtemp(prefix="issue-pr-status-gate-"))
 	try:
@@ -137,6 +164,7 @@ def _run_step(
 			},
 			"closing_refs": list(closing_refs or []),
 			"closed": [],
+			"orch_graphql_fail": orch_graphql_fail,
 		}), encoding="utf-8")
 		label_calls = tmp / "label_calls.txt"
 		label_calls.write_text("", encoding="utf-8")
@@ -247,16 +275,130 @@ def test_target_branch_alias_counts() -> None:
 	assert result["labels"] == [("10", "ai:merged")], result
 
 
+MANAGED_CHILD_BODY = (
+	"Implement the thing.\n\n"
+	"---\n"
+	"**Orchestrator metadata** (do not edit)\n"
+	"- Tracking issue: #5\n"
+	"- Integration branch: orchestrator/project-5\n"
+	"- Local ID: `issue-1`\n"
+	"- Priority: 1\n"
+	"- Managed by: AI Orchestrator\n"
+)
+# Legacy child metadata with no integration-branch value: only the tracking
+# line ties the child to its project branch.
+MANAGED_CHILD_TRACKING_ONLY_BODY = (
+	"Implement the thing.\n\n"
+	"---\n"
+	"**Orchestrator metadata** (do not edit)\n"
+	"- Tracking issue: #5\n"
+	"- Local ID: `issue-1`\n"
+	"- Managed by: AI Orchestrator\n"
+)
+# Issue #4957: a standalone issue that quotes the marker, in prose and even
+# on a line of its own, without the automation-applied label.
+SPOOFED_MARKER_BODY = (
+	"A standalone issue body containing \u201cManaged by: AI Orchestrator,\u201d even in prose.\n\n"
+	"- Managed by: AI Orchestrator\n"
+)
+
+
 def test_orchestrator_managed_child_closes_on_integration_branch_merge() -> None:
+	"""Exercises both payload sources (closingIssuesReferences and the batched
+	alias lookup) and both lineage lines (declared integration branch, and
+	the tracking-issue line alone)."""
+	for closing_refs in ([10], []):
+		for body in (MANAGED_CHILD_BODY, MANAGED_CHILD_TRACKING_ONLY_BODY):
+			result = _run_step(
+				issues={10: {"body": body, "labels": ["ai:orchestrator-managed"]}},
+				pr_base_ref="orchestrator/project-5",
+				pr_body="Fixes #10\n",
+				closing_refs=closing_refs,
+				pr_head_ref="ai/issue-10",
+			)
+			assert result["labels"] == [("10", "ai:merged")], (closing_refs, body, result)
+			assert result["closed"] == [10], (closing_refs, body, result)
+			assert "Closing orchestrator-managed child issue #10" in result["stdout"], result["stdout"]
+
+
+def test_body_marker_without_label_is_not_managed() -> None:
+	"""Issue #4957: the marker text alone does not make an issue managed, so a
+	PR merged into an unrelated branch neither labels nor closes it. Exercises
+	both payload sources."""
+	for closing_refs in ([10], []):
+		result = _run_step(
+			issues={10: {"body": SPOOFED_MARKER_BODY, "labels": ["ai:claude"]}},
+			pr_base_ref="feature/unrelated",
+			pr_body="Fixes #10\n",
+			closing_refs=closing_refs,
+			pr_head_ref="ai/issue-10",
+		)
+		assert result["labels"] == [], (closing_refs, result)
+		assert result["closed"] == [], (closing_refs, result)
+		assert (
+			'Issue #10 has the "Managed by: AI Orchestrator" text but not the ai:orchestrator-managed label; '
+			"treating it as a standalone issue."
+		) in result["stdout"], result["stdout"]
+		assert (
+			"PR merged into feature/unrelated, which is not issue #10's target branch "
+			"(default main, integration none); leaving its labels and state unchanged."
+		) in result["stdout"], result["stdout"]
+
+
+def test_body_marker_without_label_still_closes_on_default_branch() -> None:
+	"""The spoof fix only narrows non-default merges: a default-branch merge
+	closes the issue exactly as it closes any standalone issue."""
 	result = _run_step(
-		issues={10: {"body": "- Managed by: AI Orchestrator\n", "labels": ["ai:orchestrator-managed"]}},
-		pr_base_ref="orchestrator/project-5",
+		issues={10: {"body": SPOOFED_MARKER_BODY, "labels": []}},
+		pr_base_ref="main",
 		pr_body="Fixes #10\n",
-		pr_head_ref="ai/issue-10",
+		closing_refs=[10],
 	)
 	assert result["labels"] == [("10", "ai:merged")], result
 	assert result["closed"] == [10], result
-	assert "Closing orchestrator-managed child issue #10" in result["stdout"], result["stdout"]
+
+
+def test_labelled_child_on_unrelated_base_is_left_untouched() -> None:
+	"""Issue #4957: a labelled child finishes only on its own project branch,
+	not on any base (here another project's branch)."""
+	result = _run_step(
+		issues={10: {"body": MANAGED_CHILD_BODY, "labels": ["ai:orchestrator-managed"]}},
+		pr_base_ref="orchestrator/project-6",
+		pr_body="Fixes #10\n",
+		pr_head_ref="ai/issue-10",
+	)
+	assert result["labels"] == [], result
+	assert result["closed"] == [], result
+	assert (
+		"PR merged into orchestrator/project-6, which is not orchestrator-managed issue #10's project branch "
+		"(default main, integration orchestrator/project-5, project orchestrator/project-5); "
+		"leaving its labels and state unchanged."
+	) in result["stdout"], result["stdout"]
+
+
+def test_rest_fallback_applies_the_same_managed_rule() -> None:
+	"""When the batched GraphQL lookup fails, the per-issue REST fallback also
+	requires the label and the project branch."""
+	child = _run_step(
+		issues={10: {"body": MANAGED_CHILD_TRACKING_ONLY_BODY, "labels": ["ai:orchestrator-managed"]}},
+		pr_base_ref="orchestrator/project-5",
+		pr_body="Fixes #10\n",
+		pr_head_ref="ai/issue-10",
+		orch_graphql_fail=True,
+	)
+	assert "falling back to per-issue REST" in child["stdout"], child["stdout"]
+	assert child["labels"] == [("10", "ai:merged")], child
+	assert child["closed"] == [10], child
+
+	spoof = _run_step(
+		issues={10: {"body": SPOOFED_MARKER_BODY, "labels": []}},
+		pr_base_ref="orchestrator/project-5",
+		pr_body="Fixes #10\n",
+		pr_head_ref="ai/issue-10",
+		orch_graphql_fail=True,
+	)
+	assert spoof["labels"] == [], spoof
+	assert spoof["closed"] == [], spoof
 
 
 def test_non_main_default_branch_is_resolved_from_payload() -> None:
@@ -302,6 +444,10 @@ if __name__ == "__main__":
 	test_declared_integration_branch_merge_labels_without_closing()
 	test_target_branch_alias_counts()
 	test_orchestrator_managed_child_closes_on_integration_branch_merge()
+	test_body_marker_without_label_is_not_managed()
+	test_body_marker_without_label_still_closes_on_default_branch()
+	test_labelled_child_on_unrelated_base_is_left_untouched()
+	test_rest_fallback_applies_the_same_managed_rule()
 	test_non_main_default_branch_is_resolved_from_payload()
 	test_empty_default_branch_falls_back_to_main()
 	test_unmerged_close_behaviour_is_unchanged()
