@@ -625,6 +625,16 @@ jobs:
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
+
+          # The run-ID capture below matches runs by display_title, so an
+          # empty title is a missing input: fail before polling, as wait-plan
+          # does (PR #5035 review).
+          if [ -z "${ISSUE_TITLE}" ]; then
+            echo "::error::Missing issue title for Clarify run scoping"
+            echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           # Robust workflow run-ID capture — retries on empty results to ride out
@@ -1117,6 +1127,16 @@ jobs:
           MIN_GRACE_SECONDS=60
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
+
+          # The run-ID capture below matches runs by display_title, so an
+          # empty title is a missing input: fail before polling, as wait-plan
+          # does (PR #5035 review).
+          if [ -z "${ISSUE_TITLE}" ]; then
+            echo "::error::Missing issue title for Implement run scoping"
+            echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           # Robust workflow run-ID capture — retries on empty results to ride out

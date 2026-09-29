@@ -394,7 +394,7 @@ def _phase_step_script(step_id: str) -> str:
 	raise AssertionError(f"{step_id} step not found")
 
 
-def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None) -> tuple[int, dict[str, str], list[list[str]], str]:
+def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE) -> tuple[int, dict[str, str], list[list[str]], str]:
 	# Runs the real wait-clarify / wait-implement script against the stub gh
 	# and returns its exit code, GITHUB_OUTPUT, gh calls, and combined output.
 	with tempfile.TemporaryDirectory() as tmp:
@@ -418,7 +418,7 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
 			"TEST_REPO": "owner/repo",
 			"ISSUE_NUMBER": ISSUE_NUMBER,
-			"ISSUE_TITLE": ISSUE_TITLE,
+			"ISSUE_TITLE": issue_title,
 			"PHASE_TIMEOUT": "60",
 			"POLL_INTERVAL": "0",
 			"GITHUB_OUTPUT": str(output_file),
@@ -507,6 +507,20 @@ def test_implement_capture_retries_an_unreadable_page() -> None:
 	assert rc == 1, log
 	assert outputs.get("status") == "run_id_missing", outputs
 	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 5, _run_pages_requested(calls)
+
+
+def test_clarify_and_implement_fail_before_polling_without_an_issue_title() -> None:
+	# PR #5035 review: the captures match runs by display_title, so an empty
+	# title fails the step up front, as wait-plan does, instead of polling the
+	# phase and then failing at capture (or matching a run with an empty title).
+	for step_id, phase, kwargs in (("wait-clarify", "Clarify", {"labels": "ai:planning"}), ("wait-implement", "Implement", {"pr_number": 42})):
+		pages = [[_run(444, name=f"Internal: AI {phase}", title="")]]
+		rc, outputs, calls, log = _run_phase_step(step_id, pages, issue_title="", **kwargs)
+		assert rc == 1, log
+		assert outputs.get("status") == "run_id_missing", outputs
+		assert "run_id" not in outputs, outputs
+		assert f"::error::Missing issue title for {phase} run scoping" in log, log
+		assert calls == [], calls
 
 
 def main() -> int:
