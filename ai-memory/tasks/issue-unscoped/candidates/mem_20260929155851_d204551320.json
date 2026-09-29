@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py:lines 487-502 (`_blocked_label_targets` MCP branch) and lines 491-497 in particular | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The MCP branch now requires `tool_input.get(\"method\") == MCP_LABEL_WRITE_METHOD` (i.e., literal lowercase `\"update\"`), so an otherwise legitimate label write using an alias or different casing would be rejected.\n  WHY: An unattended session that calls the MCP tool with a method the server documents as an addition operation but with different casing or naming would fail the strict equality check, the hook returns `True` to block the stop, and the session is forced into a second turn to retry.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py:lines 487-502 (`_blocked_label_targets` MCP branch) and lines 491-497 in particular | severity=NIT | confidence=2\n  PROBLEM: The MCP branch now requires `tool_input.get(\"method\") == MCP_LABEL_WRITE_METHOD` (i.e., literal lowercase `\"update\"`). If the `mcp__github__issue_write` tool ever exposes an alias or normalization that produces `\"Update\"` / `\"UPDATE\"` / `\"set_labels\"` / `\"add_labels\"` \u2014 none of which the parser knows about \u2014 the hook would silently reject an otherwise legitimate label write and the session would be blocked when it should not be.\n  WHY: An unattended session that calls the MCP tool with a method the server documents as an addition operation but with different casing or naming would fail the strict equality check, the hook returns `True` to block the stop, and the session is forced into a second turn to retry. Not a security regression (the bypass direction is now closed) but a usability/forward-compat concern.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fe8cd625561edc6b46efa3b3288f3b3984bf336c75a09772e8c19414adf26d23",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5099,
+    "run_id": "36592331844",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36592331844",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929155851_d204551320",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5099,
+    "run_id": "36592331844"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T15:58:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
