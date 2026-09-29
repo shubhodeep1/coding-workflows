@@ -131,6 +131,9 @@ Restart a project checker only when ALL of these hold. A project checker is a no
 | Pickup starts only 10 sessions per hourly wake, so resumes wait hours | #4990 |
 | Auto-mode classifier refuses a resume the master answered ("Auto-Mode Bypass") | #5018 |
 | Stacked projects cannot run runtime validation | #4734 (Q17 covers it until then) |
+| Checker given an empty `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` never sees review hand-offs and waits forever | #5057 |
+| Hold claims always say "reached the cap of 3", even for twin-sync and held-merge holds | #5058 |
+| Classifier refuses optional cleanup (`delete_trigger` "Interfere With Workloads") three times, forcing a human prompt | #5068 |
 
 ## Gotchas
 
@@ -153,4 +156,8 @@ Learned 2026-09-29:
 - **A session's `post_turn_summary` is frozen at its last turn.** Before acting on a "blocked" item, read the issue's newest comment and the PR head. The poller was told the same on 2026-09-29 (rule update "verify on GitHub").
 - **Q46 excludes hook changes.** A held PR whose diff touches `.claude/hooks/**` or `settings.json` needs the operator's explicit yes, even when every finding was rejected (#4870, Q16: A).
 - **The classifier may refuse a resume you answered** as `[Auto-Mode Bypass]` (#4891). The operator unblocks it by typing a confirmation into that session; #5018 is the lasting fix.
+- **Every wake or resume prompt you send names `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1`** (never empty) for the checker instructions it will write. A checker armed with an empty value reports `open, wait` on every review round (PR #4807 stalled 2 h that way; #5057). The same prompt should tell the session to skip, not retry, a refused `delete_trigger` or `archive_session` (#5068), and to edit files with Edit/Write, not `python3` heredocs (#4858).
+- **A hold comment's text does not tell you why it holds** (#5058). Read the linked issue's newest `ai:claude-blocked` comment: most holds are Q40 twin syncs or Q46 held merges the master clears itself, not caps.
+- **Verification agents for Q46 merges and twin-sync prep.** A Sonnet background agent per PR (or per 3–4 branches) gathers the six Q46 conditions or prepares twin-sync worktrees under the scratchpad (`win/<issue>`), copying command and script twins only. Review every hook and `settings.json` diff yourself. Hook twins on different branches each fork from `main`'s copy, so each copy lands on its own branch.
+- **Usage limit stops (2026-09-29 ~08:00Z).** When the account hits its weekly limit, every Sonnet session (poller, pickup, checkers) and many stage sessions fail with `You've hit your weekly limit`, and their `send_later` chains die. Once the operator enables extra usage (or the limit resets), list all non-archived sessions (page with `after_id` back 8 days), select `post_turn_summary.status_detail` containing `limit`, and send each a one-shot "resume after usage limit" trigger: checkers repeat their latest checker-instructions from step 1; other sessions continue from their latest instructions. `create_trigger` is rate-limited to about 10 per minute, so send them in batches of 10, a minute apart.
 - **Approval windows.** Stage every command and script copy in Auto mode first. Then ask the operator to switch the master out of Auto, run **one** command that copies only the hooks and `settings.json`, ask them to switch back, and only then test, commit and push. Checking the status script for a `claude/*` PR needs `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1`; without it, hand-offs are hidden.
