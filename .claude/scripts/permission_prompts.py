@@ -82,13 +82,14 @@ command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
 token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
 Before any of that, a Bash command is parsed fail-closed (issue #5124): the
 values of credential-named assignments, credential headers, credential long
-flags (`--user`, `--password`, `--token`, …), and per-command credential
-short flags (`curl -u`, `mysql -p`, …) become `***`. A command that cannot
-be parsed, or whose credential does not occur verbatim or is shorter than
-MIN_MASKED_VALUE_CHARS, is withheld and only its shape is shown; the shape
-itself keeps no raw text (an unparseable command keeps only its command
-word, an attached credential short flag becomes `-u*`). Non-Bash tool input
-shows `***` for every key that names a credential.
+flags (`--user`, `--password`, `--token`, …, even when the value starts with
+`-`), and per-command credential short flags (`curl -u`, `mysql -p`, …)
+become `***`. A command that cannot be parsed, or whose credential does not
+occur verbatim or is shorter than MIN_MASKED_VALUE_CHARS, is withheld and
+only its shape is shown; the shape itself keeps no raw text (an unparseable
+command keeps only its command word, an attached credential short flag
+becomes `-u*`). Non-Bash tool input shows `***` for every key that names a
+credential.
 
 API calls (CLAUDE.md §15), REST only, none when nothing is new:
   - `file`: one read of the `ai:permission-prompt` issues per 100 issues,
@@ -202,6 +203,8 @@ WITHHELD_COMMAND_TEMPLATE = "<command withheld: it could not be parsed, or a cre
 _CREDENTIAL_NAME_RE = re.compile(r"(?i)(token|secret|passw|pwd|api[_-]?key|apikey|auth(?!or(?!iz))|credential|cookie|private[_-]?key|access[_-]?key|signature)")
 # Long flags whose value is a credential (`--user`, `--password`, `--token`, `--cookie`, `--auth`, `--api-key`, …).
 _CREDENTIAL_LONG_FLAG_RE = re.compile(r"(?i)^--[a-z0-9-]*(user|pass|pwd|token|secret|auth(?!or(?!iz))|cookie|credential|bearer|api-?key|private-?key|access-?key)[a-z0-9-]*$")
+# Credential long flags known to take no value (`--password-stdin`, `--with-token`, `--no-auth`); any other one may take a value that starts with `-`.
+_BOOLEAN_CREDENTIAL_LONG_FLAG_RE = re.compile(r"(?i)^--(no-[a-z0-9-]+|[a-z0-9-]+-stdin|with-token)$")
 # curl's boolean short flags, which may precede a credential flag in one cluster (`-sSu name:pw`).
 _CLUSTER_BOOLEAN_LETTERS = frozenset("sSvkLfiIgGNjJOqnB")
 # Short flags (letters) whose value is a credential, by command or `command subcommand`.
@@ -297,6 +300,14 @@ def _credential_flag_position(token: str, letters: str) -> int | None:
 	return None
 
 
+def _credential_flag_awaits_value(token: str, command: str, subcommand: str) -> bool:
+	"""True for a credential flag whose value, if any, is the next word: a credential long flag without `=` (not a boolean one), or the command's credential short flag with nothing attached."""
+	if token.startswith("--"):
+		return "=" not in token and bool(_CREDENTIAL_LONG_FLAG_RE.match(token)) and not _BOOLEAN_CREDENTIAL_LONG_FLAG_RE.match(token)
+	letters = _CREDENTIAL_SHORT_FLAGS.get(command, "") + _CREDENTIAL_SHORT_FLAGS.get(f"{command} {subcommand}", "")
+	return _credential_flag_position(token, letters) == len(token) - 1
+
+
 def _cut_attached_value(token: str, letters: str) -> str | None:
 	"""`-u*` for a short-flag cluster whose flag in `letters` has an attached value (`-udeploy:pwd`, `-sSuname:pw`); else None."""
 	position = _credential_flag_position(token, letters)
@@ -352,6 +363,11 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			if flag not in seen_flags:
 				seen_flags.add(flag)
 				shape.append(flag)
+			if index < len(tokens) and tokens[index].startswith("-") and _credential_flag_awaits_value(token, command, subcommand):
+				# A next word that starts with `-` may be this flag's value (`--password -s3cret`): it never reaches the shape.
+				index += 1
+				if shape[-1] != "*":
+					shape.append("*")
 			continue
 		positionals += 1
 		if command == "gh" and positionals == 2 and len(shape) >= 2 and shape[1] == "api":
@@ -462,6 +478,10 @@ def _segment_credentials(words: list[str]) -> set[str]:
 				elif following is not None:
 					values.add(following)
 					index += 1
+				elif index < len(words) and not _BOOLEAN_CREDENTIAL_LONG_FLAG_RE.match(name):
+					# A next word that starts with `-` may be the value (`--password -s3cret`) or
+					# another flag: mask it either way, and still read it as a word of its own.
+					values.add(words[index])
 		else:
 			position = _credential_flag_position(word, letters)
 			if position is None:

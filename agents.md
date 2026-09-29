@@ -1142,15 +1142,16 @@ reviews, comments, and conflicts stay a direct §12 request.
   2,000 characters. Before that, every posted Bash command (here and in
   `report-now`) is parsed fail-closed (issue #5124): the values of
   credential-named `NAME=value` words, credential headers (`Authorization`,
-  `Cookie`, …), credential long flags (`--user`, `--password`, `--token`, …),
-  per-command credential short flags (`curl -u/-U/-b/-E`, `mysql -p`,
-  `sshpass -p`, `redis-cli -a`, `docker login -p`), URL userinfo, and
-  credential query parameters become `***`. A command that cannot be parsed,
-  or whose credential is shorter than 4 characters or does not occur
-  verbatim, is withheld and only its shape is posted; the shape keeps no raw
-  text (`unparseable: <command word>`, `-u*` for an attached value). Other
-  tools' input shows `***` for credential-named keys. In consumer repos it
-  only reports. Signatures that
+  `Cookie`, …), credential long flags (`--user`, `--password`, `--token`, …,
+  also a separate value that starts with `-`), per-command credential short
+  flags (`curl -u/-U/-b/-E`, `mysql -p`, `sshpass -p`, `redis-cli -a`,
+  `docker login -p`), URL userinfo, and credential query parameters become
+  `***`. A command that cannot be parsed, or whose credential is shorter
+  than 4 characters or does not occur verbatim, is withheld and only its
+  shape is posted; the shape keeps no raw text
+  (`unparseable: <command word>`, `-u*` for an attached value). Other
+  tools' input shows `***` for
+  credential-named keys. In consumer repos it only reports. Signatures that
   `report-now` already reported are skipped and listed under
   `already_reported`.
 - `permission_prompts.py report-now --log-file F --cwd D [--record-sha256 H]`

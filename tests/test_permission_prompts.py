@@ -306,6 +306,12 @@ def _bash(command):
 		("gh api -X POST repos/o/r/x -f password=hunter22", "hunter22", "gh api -X POST repos/o/r/x -f password=***"),
 		("git clone https://x-access-token:abcdefgh@github.com/o/r.git", "abcdefgh", "git clone https://***@github.com/o/r.git"),
 		("curl 'https://a.b/x?access_token=abcdefgh&page=2'", "abcdefgh", "curl 'https://a.b/x?access_token=***&page=2'"),
+		# A long credential flag's separate value may start with `-`; a following flag is masked too, and still read as a flag.
+		("tool --password -s3cretvalue run", "-s3cretvalue", "tool --password *** run"),
+		("curl --user -deploy:mycustompwd https://a.b", "mycustompwd", "curl --user *** https://a.b"),
+		("tool --password --token s3cretvalue", "s3cretvalue", "tool --password *** ***"),
+		# A boolean credential flag has no value, so the next flag stays; the flag after it still masks its value.
+		("tool --password-stdin --token s3cretvalue", "s3cretvalue", "tool --password-stdin --token ***"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -324,6 +330,8 @@ def test_example_masks_credentials(command, secret, expected):
 		# Shorter than MIN_MASKED_VALUE_CHARS: masking it everywhere would mangle the text.
 		("curl -u a:b https://a.b", "a:b", "curl -u *"),
 		("TOKEN=abc curl https://a.b", "abc", "TOKEN=* curl *"),
+		# A long credential flag's `-`-prefixed value shorter than MIN_MASKED_VALUE_CHARS.
+		("tool --password -ab run", "-ab", "tool --password *"),
 	],
 )
 def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):
@@ -376,6 +384,12 @@ def test_credential_free_commands_are_unchanged(command):
 		("mysql -uroot -psupersecret app", "mysql -uroot -p* *"),
 		("gh api https://x-access-token:abcdefgh@api.github.com/user", "gh api https://***@api.github.com/user"),
 		("curl https://deploy:pw@example.com/install.sh", "curl https://***@example.com/install.sh"),
+		# A separate credential value that starts with `-` is a value, not a flag, in the shape.
+		("tool --password -s3cretvalue run", "tool --password *"),
+		("curl --user -deploy:mycustompwd https://a.b", "curl --user *"),
+		("curl -u -deploy:mycustompwd https://a.b", "curl -u *"),
+		("docker login --password-stdin -u me registry.example.com", "docker login --password-stdin -u *"),
+		("gh auth login --with-token -h github.com", "gh auth * --with-token -h *"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):
