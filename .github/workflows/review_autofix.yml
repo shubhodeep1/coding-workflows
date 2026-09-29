@@ -755,25 +755,40 @@ jobs:
             fi
             gate_base_ref_digest="$(printf '%s' "${pr_base_ref_gate}" | sha256sum | cut -d ' ' -f 1)"
             # Only the latest trusted pending-checks comment for the head
-            # counts, selected as find_pending_marker selects it (header plus
-            # one v1 line for the head, same round), and its single v2 line
-            # must carry that v1 line's round and ledger. An older comment
-            # bound to the current base must not skip the review while the
-            # sweep evaluates a newer one bound elsewhere: after a retarget
-            # back to an earlier reviewed base, neither would act.
+            # counts, selected as find_pending_marker selects it: lines split
+            # as Python's str.splitlines() splits them (CRLF and the other
+            # Unicode line boundaries), the header on the first line, exactly
+            # one v1 line (any head) that names this head and the header's
+            # round, and exactly one run line linking this repository's run.
+            # Its single v2 line must carry that v1 line's round and ledger.
+            # An older comment bound to the current base must not skip the
+            # review while the sweep evaluates a newer one bound elsewhere:
+            # after a retarget back to an earlier reviewed base, neither
+            # would act.
             jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" \
+              --arg repo "${REPOSITORY}" \
               --arg base_sha "${pr_base_sha_gate}" --arg base_digest "${gate_base_ref_digest}" '
-                def lines: (.body // "") | split("\n");
-                def v1: "^<!-- ai:claude-fixer-pending-checks:v1 head=" + $head + " round=(?<round>[1-9][0-9]*) ledger=(?<ledger>[0-9a-f]{64}) -->$";
-                def header_round: (.body // "") | capture("^## Review round (?<round>[1-9][0-9]*): clean review, waiting for check runs\\n").round;
-                def v1_markers: [lines[] | select(test(v1)) | capture(v1)];
-                ([.[] | select((.id | type) == "number" and .author_login == $author and
-                  ((.body // "") | test("^## Review round [1-9][0-9]*: clean review, waiting for check runs\\n")) and
-                  (v1_markers | length) == 1 and v1_markers[0].round == header_round)] | max_by(.id)) as $latest |
-                if $latest == null then false else
-                  ($latest | v1_markers[0]) as $marker |
-                  [$latest | lines[] | select(startswith("<!-- ai:claude-fixer-pending-checks:v2 "))]
-                    == ["<!-- ai:claude-fixer-pending-checks:v2 head=" + $head + " round=" + $marker.round + " ledger=" + $marker.ledger + " base_sha=" + $base_sha + " base_ref_sha256=" + $base_digest + " -->"]
+                def lines: [(.body // "") | splits("\r\n|[\n\r\u000b\u000c\u001c\u001d\u001e\u0085\u2028\u2029]")];
+                def header: "^## Review round (?<round>[1-9][0-9]*): clean review, waiting for check runs$";
+                def v1: "^<!-- ai:claude-fixer-pending-checks:v1 head=(?<head>[0-9a-f]{40}) round=(?<round>[1-9][0-9]*) ledger=(?<ledger>[0-9a-f]{64}) -->$";
+                def run_prefix: "Reviewed head: `" + $head + "` (";
+                def run_link: "^Reviewed head: `" + $head + "` \\(\\[workflow run\\]\\(https://[^/\\s)]+/" + ($repo | gsub("\\."; "\\.")) + "/actions/runs/[1-9][0-9]*\\)\\)\\.$";
+                def pending_marker:
+                  lines as $lines | ($lines[0] // "") as $first |
+                  if ($first | test(header)) then
+                    [$lines[] | select(test(v1)) | capture(v1)] as $markers |
+                    [$lines[] | select(startswith(run_prefix))] as $runs |
+                    if ($markers | length) == 1 and $markers[0].head == $head and $markers[0].round == ($first | capture(header).round)
+                      and ($runs | length) == 1 and ($runs[0] | test(run_link))
+                    then {lines: $lines, marker: $markers[0]} else null end
+                  else null end;
+                if ($repo | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") | not) then false else
+                  ([.[] | select((.id | type) == "number" and .id > 0 and .author_login == $author)
+                    | .id as $id | pending_marker | select(. != null) | . + {id: $id}] | max_by(.id)) as $latest |
+                  if $latest == null then false else
+                    [$latest.lines[] | select(startswith("<!-- ai:claude-fixer-pending-checks:v2 "))]
+                      == ["<!-- ai:claude-fixer-pending-checks:v2 head=" + $head + " round=" + $latest.marker.round + " ledger=" + $latest.marker.ledger + " base_sha=" + $base_sha + " base_ref_sha256=" + $base_digest + " -->"]
+                  end
                 end
               ' "${gate_marker_comments_file}" >/dev/null 2>&1
           }
