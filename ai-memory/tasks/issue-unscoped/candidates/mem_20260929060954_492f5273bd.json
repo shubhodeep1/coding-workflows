@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1815-1819 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A retry after `gh issue create` succeeds but loses its response can capture the URL of a duplicate issue, leaving the original untracked and chaining later follow-ups to the duplicate.\n  WHY: A dependent follow-up can be held for operator intervention if the duplicate issue is closed without merge.\n- scripts/security_audit.sh:1820-1821 | severity=high | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: If the captured issue URL is unrecognized, the issue number is cleared and later follow-ups are filed without dependency lines.\n  WHY: This can silently reintroduce the parallel-conflict behavior the dependency chain is intended to prevent.\n- scripts/claude_issue_route.py:1601-1603 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: In `--fetch-repo` mode, `_cmd_queue_pending` calls `queue_pending` twice on the same `issues` list, repeating work whose first results are discarded.\n  WHY: Each pickup wake incurs unnecessary iteration, payload parsing, and binding checks.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The Codex route (AI_ISSUE_IMPLEMENTER=codex, ai:codex) ignores the line\" (plan Non-goals, AD-7)\n  expected_change_site: The clarify/implement paths or orchestrator poller\n  confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: No change to any clarify, implement, or poller script modifies behavior when `Depends on:` is present. AD-7 explicitly chose no change for Codex route. This is not a gap - the requirement is a non-goal.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/security_audit.sh:1815-1819 | severity=low | confidence=3\n  PROBLEM: The `gh issue create` output is captured via `FOLLOWUP_URL=\"$(gh_retry gh issue create ...)\". If `gh_retry` succeeds on the final retry but an earlier attempt already created an issue (POST succeeded, response lost), the URL captured belongs to a duplicate issue. Later follow-ups that depend on this row would be chained to the duplicate, not the original, while the orphaned original issue is never tracked.\n  WHY: A follow-up reads `FOLLOWUP_NUMBERS[depends_index]` and gets the duplicate's number. The duplicate may be closed without merge (since no session is building it), triggering a `dependency #N closed without ai:merged` hold on the dependent item that requires operator intervention. The plan documents this risk as \"ACCEPTED\" but the review should note it.\n- scripts/security_audit.sh:1820-1821 | severity=high | confidence=2\n  PROBLEM: `FOLLOWUP_NUMBER=\"${FOLLOWUP_URL##*/}\"` followed by `[[ \"${FOLLOWUP_NUMBER}\" =~ ^[1-9][0-9]*$ ]] || FOLLOWUP_NUMBER=\"\"` discards the number when the URL format is unrecognized. When this happens for a row that later follow-ups depend on, `FOLLOWUP_NUMBERS[depends_index]` is empty, the warning fires, and those later follow-ups are filed without dependency lines \u2014 exactly the parallel conflict #4934 exists to prevent. The guard catches corrupted output but the consequence is silent reintroduction of the original bug.\n  WHY: If `gh issue create` outputs a non-URL string (e.g. a gh version banner, a deprecation notice, or rate-limit text that `gh` prints to stdout before exiting 0), the number is cleared and the dependency chain breaks. The `::warning::` is visible in the log but no alert fires.\n- scripts/claude_issue_route.py:1601-1603 | severity=low | confidence=3\n  PROBLEM: `_cmd_queue_pending` in `--fetch-repo` mode calls `queue_pending` twice on the same `issues` list. The first call processes binding checks on `limit * SCAN_FACTOR` items. The second call re-processes the full list with the same binding checks plus dependency holds. While bindings are cached in-memory, both calls iterate the full issue list, re-parse payloads, and re-check bindings for every item.\n  WHY: Not a correctness failure, but wastes CPU budget on every pickup wake. The first call's `ignored` and `remaining` results are discarded; only the second call's output is used.\n- Requirement: \"The Codex route (AI_ISSUE_IMPLEMENTER=codex, ai:codex) ignores the line\" (plan Non-goals, AD-7)\n  Expected change site: The clarify/implement paths or orchestrator poller\n  Evidence of absence: No change to any clarify, implement, or poller script modifies behavior when `Depends on:` is present. AD-7 explicitly chose no change for Codex route. This is not a gap - the requirement is a non-goal.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f3b20ae7df1c5cc094fb97592267051f01cd128e7b98d6cdc569a8573f1bdffa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36527702441",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36527702441",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929060954_492f5273bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36527702441"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T06:09:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
