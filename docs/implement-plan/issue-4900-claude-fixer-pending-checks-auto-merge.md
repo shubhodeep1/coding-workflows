@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
 - Project branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge   Final PR: #4922 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (the PR carrying this log update)
+- Waiting on: PR #4942
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_011Tb3U5tZETVFkPYfdpNYmZ   safety net pending   hand-back pending (re-armed by the review-round stage)
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified locally (ruff, yamllint, actionlint, shellcheck, inventory parity, 345 related tests pass); phase 1 PR opened against the project branch.
+- Last note: review round 1 on PR #4942 (head 00faa29): 5 findings + 1 task gap fixed in one `[claude-autofix]` commit, 3 rejected; project branch synced with main (a4b0f83).
 
 ## Phases
-1. [ ] Phase 1 — pending-checks marker, gate skip, and sweep auto-merge   — phase 1 PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — pending-checks marker, gate skip, and sweep auto-merge   — PR #4942 open (waiting); review rounds: 1; interventions: 0
    - Hand-off step posts `ai:claude-fixer-pending-checks:v1` for a clean ledger with only incomplete checks
    - Gate skips dispatched re-runs on such a head (`claude_fixer_pending_checks`)
    - `scripts/claude_fixer_pending_checks.py` + `scripts/claude_pr_sweep.py` enable head-bound auto-merge once the head's checks are ready
@@ -44,6 +44,7 @@
 - AD-9 [plan, 2026-09-29] A `cancelled` / `stale` check? — Picked: A — never merge; log it. Alternatives: B — treat it as green. Why: fail closed (§1). Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] When a workflow jq gate and a Python parser both match the same marker comment, give them the same round and header regexes (rounds start at 1) and cover the edge value in both test files, or a marker one side accepts can stall the other. (files: .github/workflows/review_autofix.yml, scripts/claude_fixer_pending_checks.py)
 - [source:plan-deviation] When a clean Claude-fixer outcome needs a later action, record it as its own workflow-owned marker rather than a `kind=findings` hand-off: `check_in_status.py` treats every findings hand-off as a review round, so a 0-entry hand-off wakes a fixer with nothing to fix. (files: scripts/review_autofix_step_claude_fixer_handoff.sh, scripts/claude_fixer_pending_checks.py)
 
 ## Notes

@@ -876,6 +876,9 @@ def test_gate_pending_checks_skip_needs_the_workflow_marker_for_this_head():
 		"other head": [_pending_comment(PENDING.replace(HEAD, "d" * 40))],
 		"marker without the issued header": [{**_pending_comment(), "body": PENDING}],
 		"quoted marker": [_pending_comment("> " + PENDING)],
+		# Same round contract as scripts/claude_fixer_pending_checks.py: rounds start at 1.
+		"round zero": [{**_pending_comment(), "body": "## Review round 0: clean review, waiting for check runs\n"
+			+ PENDING.replace(" round=1 ", " round=0 ")}],
 	}
 	for label, comments in cases.items():
 		with tempfile.TemporaryDirectory() as td:

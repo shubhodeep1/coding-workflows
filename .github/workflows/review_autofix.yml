@@ -741,8 +741,8 @@ jobs:
           {
             jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
                 any(.[]; .author_login == $author and
-                  ((.body // "") | test("^## Review round [0-9]+: clean review, waiting for check runs\\n")) and
-                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-pending-checks:v1 head=" + $head + " round=[0-9]+ ledger=[0-9a-f]{64} -->$"))))
+                  ((.body // "") | test("^## Review round [1-9][0-9]*: clean review, waiting for check runs\\n")) and
+                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-pending-checks:v1 head=" + $head + " round=[1-9][0-9]* ledger=[0-9a-f]{64} -->$"))))
               ' "${gate_marker_comments_file}" >/dev/null 2>&1
           }
 

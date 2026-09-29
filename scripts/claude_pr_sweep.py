@@ -218,7 +218,7 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 	"""
 	claimant = f"sweep-run-{run_id}" if re.fullmatch(r"[0-9]{1,20}", run_id or "") else "sweep-run-local"
 	summary = {"repos": 0, "candidates": 0, "due": 0, "queued": 0, "already_queued": 0, "reported": 0, "skipped": 0, "errors": 0,
-		"pending_checks_merged": 0}
+		"pending_checks_merged": 0, "pending_checks_waiting": 0}
 	allowed = allowed if allowed is not None else repos
 	configured = bool(queue_token) and bool(REPO_RE.fullmatch(self_repo or ""))
 	already: set[tuple[str, int]] = set()
@@ -259,6 +259,8 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 						continue
 					if pending.get("state") == "merge_enabled":
 						summary["pending_checks_merged"] += 1
+					elif pending.get("state") == "waiting":
+						summary["pending_checks_waiting"] += 1
 					if pending.get("state") not in ("not_eligible", "no_marker"):
 						log(f"pending_checks repo={repo} pr=#{number} state={pending.get('state')} "
 							f"head={str(pending.get('head_sha') or '')[:12]} reason={json.dumps(pending.get('reason', ''))}")

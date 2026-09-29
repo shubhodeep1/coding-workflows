@@ -92,6 +92,15 @@ DEFAULT_ENABLE_AUTO_MERGE = "true"
 DEFAULT_FORWARD_MERGE_FALLBACK_AUTO_MERGE = "true"
 DEFAULT_ORCH_INTEGRATION_BRANCH_PATTERN = "^orchestrator/project-"
 SUBPROCESS_TIMEOUT_SECS = 180
+# review_enable_auto_merge.sh exits 0 on every path, including the ones that
+# suppress auto-merge, so the line it prints after `gh pr merge --auto`
+# succeeded is the only success signal. tests/test_claude_fixer_pending_checks.py
+# pins it against the helper, so a wording change fails CI instead of turning
+# every merge into `merge_failed`.
+AUTO_MERGE_ENABLED_LINE_PREFIX = "Auto-merge enabled."
+# The forms `gh api` (and the GitHub error body it prints to stdout) use for a
+# 404; scripts/gh_helpers.sh recognises the same set.
+NOT_FOUND_RE = re.compile(r"HTTP 404|gh: Not Found|404 Not Found|status code 404|\"status\":\s*\"404\"", re.IGNORECASE)
 
 
 def _comment_id(comment: dict) -> int:
@@ -258,7 +267,7 @@ def read_enable_auto_merge(repo: str) -> str | None:
 	except (OSError, subprocess.TimeoutExpired):
 		return None
 	if proc.returncode != 0:
-		return DEFAULT_ENABLE_AUTO_MERGE if "HTTP 404" in (proc.stderr or proc.stdout) else None
+		return DEFAULT_ENABLE_AUTO_MERGE if NOT_FOUND_RE.search(f"{proc.stderr}\n{proc.stdout}") else None
 	try:
 		payload = json.loads(proc.stdout)
 	except ValueError:
@@ -287,7 +296,8 @@ def enable_auto_merge(repo: str, number: int, head_sha: str, enable_flag: str) -
 	except (OSError, subprocess.TimeoutExpired) as exc:
 		return {"enabled": False, "output": f"review_enable_auto_merge.sh did not run: {exc}"}
 	output = "\n".join(part for part in (proc.stdout.strip(), proc.stderr.strip()) if part)
-	return {"enabled": proc.returncode == 0 and "Auto-merge enabled." in proc.stdout, "output": output}
+	enabled = proc.returncode == 0 and any(line.startswith(AUTO_MERGE_ENABLED_LINE_PREFIX) for line in proc.stdout.splitlines())
+	return {"enabled": enabled, "output": output}
 
 
 def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False) -> dict:
@@ -302,7 +312,7 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 	Raises `check_in_status.ReadError` when a read fails.
 	"""
 	pr = check_in_status.gh_api(f"repos/{repo}/pulls/{number}")
-	head = pr.get("head") or {}
+	head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
 	head_sha = head.get("sha") if isinstance(head.get("sha"), str) else ""
 	head_ref = head.get("ref") if isinstance(head.get("ref"), str) else ""
 	blocking = [name for name in check_in_status._label_names(pr) if name in check_in_status.BLOCKING_LABELS]

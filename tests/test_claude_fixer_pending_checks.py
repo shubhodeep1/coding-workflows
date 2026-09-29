@@ -226,6 +226,7 @@ def test_marker_trust_rules_fail_closed():
 		"quoted marker": [_comment(5, body.replace("<!-- ai:", "> <!-- ai:"))],
 		"two markers": [_comment(5, body + "\n" + body.splitlines()[-1])],
 		"round differs from header": [_comment(5, body.replace("round=1 ", "round=2 "))],
+		"round zero": [_comment(5, _pending_body(round_number=0))],
 		"run link to another repository": [_comment(5, _pending_body(run_url="https://github.com/x/y/actions/runs/99"))],
 		"superseded by a later hand-off": [_comment(5, body), _comment(6, _handoff_body())],
 	}
@@ -312,6 +313,7 @@ def test_dry_run_reports_ready_without_merging(fake_gh):
 	("auto-merge already on", dict(pr=_pr(auto_merge={"merge_method": "squash"})), "not_eligible"),
 	("closed", dict(pr=_pr(state="closed")), "not_eligible"),
 	("not a claude head", dict(pr=_pr(ref="ai/issue-7")), "not_eligible"),
+	("malformed head object", dict(pr=_pr(head="claude/fix-lint")), "not_eligible"),
 	("auto-merge disabled for the repo", dict(enable_auto_merge="false"), "auto_merge_disabled"),
 	("auto-merge variable unreadable", dict(enable_auto_merge="forbidden"), "auto_merge_setting_unreadable"),
 	("merge refused", dict(merge_fails=True), "merge_failed"),
@@ -336,6 +338,44 @@ def test_enable_auto_merge_variable_reads(fake_gh):
 	for stored, expected in ((None, "true"), ("true", "true"), ("false", "false"), ("forbidden", None)):
 		fake_gh.set(enable_auto_merge=stored)
 		assert pending_checks.read_enable_auto_merge(REPO) == expected, stored
+
+
+@pytest.mark.parametrize("stderr, stdout, expected", [
+	("gh: Not Found (HTTP 404)\n", "", "true"),
+	("gh: Not Found\n", "", "true"),
+	("", '{"message":"Not Found","documentation_url":"https://docs.github.com","status":"404"}', "true"),
+	("gh: warning\n", '{"message": "Not Found", "status": "404"}', "true"),
+	("gh: Resource not accessible by personal access token (HTTP 403)\n", '{"status":"403"}', None),
+	("gh: Bad credentials (HTTP 401)\n", "", None),
+	("", "", None),
+])
+def test_unset_variable_is_recognised_from_any_404_form(monkeypatch, stderr, stdout, expected):
+	"""An unset variable reads as the default however `gh` words the 404; anything else stays unreadable."""
+	monkeypatch.setattr(pending_checks.subprocess, "run",
+		lambda *a, **k: subprocess.CompletedProcess(a[0], 1, stdout=stdout, stderr=stderr))
+	assert pending_checks.read_enable_auto_merge(REPO) == expected
+
+
+def test_auto_merge_success_line_matches_the_helper():
+	"""The success signal the evaluator reads is the line the helper prints after `gh pr merge --auto` succeeded."""
+	lines = (ROOT / "scripts" / "review_enable_auto_merge.sh").read_text(encoding="utf-8").splitlines()
+	echoes = [index for index, line in enumerate(lines)
+		if line.strip().startswith(f'echo "{pending_checks.AUTO_MERGE_ENABLED_LINE_PREFIX}')]
+	assert len(echoes) == 1, echoes
+	merge = max(index for index, line in enumerate(lines[:echoes[0]]) if "gh pr merge" in line and "--auto" in line)
+	assert lines[merge].strip().startswith("if ") and echoes[0] - merge <= 3
+
+
+@pytest.mark.parametrize("returncode, stdout, expected", [
+	(0, "Enabling auto-merge (squash) on PR #42...\nAuto-merge enabled. PR will merge once all required checks pass.\n", True),
+	(0, "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable).\n", False),
+	(0, "::warning::Could not enable auto-merge on PR #42.\n", False),
+	(1, "Auto-merge enabled. PR will merge once all required checks pass.\n", False),
+])
+def test_enable_auto_merge_reads_the_helper_result(monkeypatch, returncode, stdout, expected):
+	monkeypatch.setattr(pending_checks.subprocess, "run",
+		lambda *a, **k: subprocess.CompletedProcess(a[0], returncode, stdout=stdout, stderr=""))
+	assert pending_checks.enable_auto_merge(REPO, PR, HEAD, "true")["enabled"] is expected
 
 
 # ---- check_in_status.py routes a pending-checks head unchanged ----
@@ -473,12 +513,13 @@ def test_pr_4869_sequence_auto_merges_without_a_findings_hand_off(fake_gh, tmp_p
 		fake_gh.set(comments=comments, check_runs=RUNNING)
 		summary = _sweep()
 		assert summary["pending_checks_merged"] == 0 and summary["due"] == 0 and fake_gh.merges() == []
+		assert summary["pending_checks_waiting"] == 1
 		# 00:55:09Z: `lint` finishes green — the next sweep enables auto-merge.
 		fake_gh.set(comments=comments, check_runs=GREEN)
 		summary = _sweep()
 	finally:
 		monkeypatch.undo()
-	assert summary["pending_checks_merged"] == 1 and summary["due"] == 0
+	assert summary["pending_checks_merged"] == 1 and summary["due"] == 0 and summary["pending_checks_waiting"] == 0
 	assert fake_gh.merges() == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
 
 
