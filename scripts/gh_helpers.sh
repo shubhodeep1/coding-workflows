@@ -1687,6 +1687,17 @@ extract_repo_scoped_issue_refs_from_text()
 # (tests/test_gh_helpers_issue_body_integration_branch.py checks
 # parity with the Python parser).
 #
+# The grammar is applied one line at a time, in linear time, with
+# string operations instead of those regexes (issue #4956). Under
+# re.MULTILINE their `\s*` also matches newlines, so a blank-line-heavy
+# body was rescanned from every line start (16,000 blank lines: 7 s),
+# and inside one line the lazy value followed by "\s*`?\s*$" backtracks
+# cubically (one label line with 2,000 spaces: 30 s). Whitespace is
+# str.isspace(), the set `\s` matches, minus the "\n" lines are split
+# on. The only results that differ from the regexes are bodies whose
+# label line had no value and the regex took one from a later line;
+# such a label line now yields nothing.
+#
 # Used by close_merged_issues_sweep and issue_pr_status.yml to decide
 # whether a merged PR landed on the issue's own target branch
 # (issue #4813). Reads the body from $1, issues no API call, prints
@@ -1697,16 +1708,68 @@ issue_body_integration_branch()
 	local _body="${1:-}"
 	[ -n "${_body}" ] || return 0
 	printf '%s' "${_body}" | python3 -c '
-import re
 import sys
 
-body = sys.stdin.read()
-match = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
-if match:
-	print(match.group(1).strip())
-	sys.exit(0)
-alias_match = re.search(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", body, re.MULTILINE)
-if alias_match:
-	print((alias_match.group(1) or alias_match.group(2) or "").strip())
+
+def value_after_label(line, labels):
+	rest = line.lstrip()
+	if rest.startswith("-"):
+		rest = rest[1:].lstrip()
+	for label in labels:
+		if rest.startswith(label):
+			return rest[len(label):]
+	return None
+
+
+def integration_value(rest):
+	# ws* [`] ws* VALUE ws* [`] ws*, VALUE non-empty and backtick-free.
+	core = rest.strip()
+	lead = rest[:len(rest) - len(rest.lstrip())]
+	trail = rest[len(rest.rstrip()):]
+	if core == "`":
+		return "" if (lead or trail) else None
+	opened = core.startswith("`")
+	if opened:
+		core = core[1:]
+	closed = core.endswith("`")
+	if closed:
+		core = core[:-1]
+	region = ("" if opened else lead) + core + ("" if closed else trail)
+	if not region or "`" in region:
+		return None
+	return region.strip()
+
+
+def target_value(rest):
+	# ws* `VALUE` [ws PROSE] ws*, or ws* TOKEN ws* with no ws or backtick.
+	core = rest.lstrip()
+	if core.startswith("`"):
+		end = core.find("`", 1)
+		if end < 1:
+			return None
+		region = core[1:end]
+		after = core[end + 1:]
+		if not region or (after and not after[0].isspace()):
+			return None
+		return region.strip()
+	token = core.rstrip()
+	if not token or "`" in token or any(ch.isspace() for ch in token):
+		return None
+	return token
+
+
+lines = sys.stdin.read().split("\n")
+for labels, value_of in (
+	(("**Integration branch:**", "Integration branch:"), integration_value),
+	(("**Target branch:**", "Target branch:"), target_value),
+):
+	for line in lines:
+		rest = value_after_label(line, labels)
+		if rest is None:
+			continue
+		value = value_of(rest)
+		if value is not None:
+			print(value)
+			sys.exit(0)
 ' 2>/dev/null || true
 }
