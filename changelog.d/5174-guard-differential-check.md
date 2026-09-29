@@ -8,7 +8,7 @@ The reviewer panel reads hook diffs but never executes them. #5144's rewrite of 
 | Corpora shipped | 4 (`pr_merge_status_guard`, `gh_api_write_guard`, `pr_watch_guard`, `inline_edit_guard`) |
 | Shapes flagged on PR #5173 at `b6dd693` | 22, covering all three review findings plus the `cd`-separator and `-`-source shapes |
 | Shapes flagged on PR #5173 at `03c2487` (the fix) | 0 |
-| Where it runs | `lint` job of `.github/workflows/ci.yml`, pull requests into `main` and `stable` |
+| Where it runs | `tests-hooks-and-orchestrator` job of `.github/workflows/ci.yml` (reported through `CI / lint`), pull requests into `main` and `stable` |
 
 What this means for operators: a guard change that reaches `main`, including a #4785 twin-sync PR, has been executed against the known bypass shapes first. When a review or incident finds a new bypass, add the shape to the hook's corpus file.
 

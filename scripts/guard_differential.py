@@ -58,9 +58,10 @@ a summary line. `--json` also prints every shape's result. Exit 0 when clean
 or when no hook changed, 1 on a regression or a missing corpus, 2 on a usage
 or setup error (bad ref, unreadable corpus).
 
-Wired as the `Guard differential check (issue #5174)` step of the `lint` job
-in `.github/workflows/ci.yml`, which runs on every pull request into `main`
-and `stable`, so a #4785 twin-sync PR is gated by it too.
+Wired as the `Guard differential check (issue #5174)` step of the
+`tests-hooks-and-orchestrator` job in `.github/workflows/ci.yml` (reported
+through the `CI / lint` aggregate), which runs on every pull request into
+`main` and `stable`, so a #4785 twin-sync PR is gated by it too.
 """
 
 from __future__ import annotations
