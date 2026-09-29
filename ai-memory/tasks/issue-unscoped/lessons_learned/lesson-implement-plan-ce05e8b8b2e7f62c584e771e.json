@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T13:30:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A tolerant line parser over model output must normalise every structural line the same way: when field labels accept markdown markers and list numbering, section headings must too, or a numbered layout silently skips the per-section rule.",
+  "phase": "implement_plan",
+  "pr_number": 5172,
+  "record_id": "lesson-implement-plan-ce05e8b8b2e7f62c584e771e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5114-verify-clean-votes-from-runner-output",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}
