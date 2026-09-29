@@ -2006,7 +2006,7 @@ def _clarify_route_step():
 	return next(step for step in steps if step.get("name") == "Decide clarify route")
 
 
-def _run_clarify_route(stubs, issue, comment_body="/reclarify", event_name="issue_comment", **extra):
+def _run_clarify_route(stubs, issue, comment_body="/reclarify", event_name="issue_comment", *, route_cwd=ROOT, **extra):
 	rt = stubs["tmp"] / "clarify_rt"
 	rt.mkdir(exist_ok=True)
 	meta = rt / "issue_meta.json"
@@ -2028,7 +2028,7 @@ def _run_clarify_route(stubs, issue, comment_body="/reclarify", event_name="issu
 		"GITHUB_REPOSITORY": "shubhodeep1/digital_pa",
 		**extra,
 	}
-	result = subprocess.run(["bash", "-c", _clarify_route_step()["run"]], cwd=ROOT, env=env, capture_output=True, text=True)
+	result = subprocess.run(["bash", "-c", _clarify_route_step()["run"]], cwd=route_cwd, env=env, capture_output=True, text=True)
 	outputs = dict(line.split("=", 1) for line in output.read_text().splitlines() if "=" in line)
 	return result, outputs
 
@@ -2088,6 +2088,45 @@ def test_clarify_keeps_the_skip_when_the_comment_read_fails(stubs):
 	assert "final_merge_resume check failed for closed issue #9" in result.stdout
 	assert "reason=issue_closed outcome=skip" in result.stdout
 	assert outputs["final_merge_resume"] == "false"
+
+
+def _clarify_cwd_without_gh_helpers(stubs):
+	"""A checkout whose scripts/ lacks gh_helpers.sh, so the step's fallback runs."""
+	workdir = stubs["tmp"] / "no_gh_helpers"
+	(workdir / "scripts").mkdir(parents=True, exist_ok=True)
+	link = workdir / "scripts" / "claude_issue_route.py"
+	if not link.exists():
+		link.symlink_to(ROOT / "scripts" / "claude_issue_route.py")
+	return workdir
+
+
+def test_clarify_fallback_retries_and_warns_without_gh_helpers(stubs):
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		route_cwd=_clarify_cwd_without_gh_helpers(stubs),
+		GH_STUB_FAIL_COMMENTS="1",
+		GH_RETRY_MAX_ATTEMPTS="2",
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "scripts/gh_helpers.sh did not load; gh_retry_to_file falls back to 2 plain attempts" in result.stdout
+	assert stubs["log"].read_text().count("api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100") == 2
+	assert "final_merge_resume check failed for closed issue #9" in result.stdout
+	assert outputs["final_merge_resume"] == "false"
+
+
+def test_clarify_fallback_still_routes_a_final_merge_resume(stubs):
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		route_cwd=_clarify_cwd_without_gh_helpers(stubs),
+		GH_STUB_COMMENTS_JSON=json.dumps(_resume_comments()),
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "gh_retry_to_file falls back to" in result.stdout
+	assert "reason=final_merge_resume outcome=handoff issue=9" in result.stdout
+	assert outputs["final_merge_resume"] == "true"
+	assert outputs["issue_implementer"] == "claude"
 
 
 def test_clarify_open_issue_route_is_unchanged(stubs):

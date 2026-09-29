@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5222 (https://github.com/shubhodeep1/coding-workflows/issues/5222)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5222-final-merge-resume-closed-issue   Final PR: #5225 draft
-- Status: BLOCKED
-- Stage: phase 1/1
+- Status: IN_PROGRESS
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5271: twin sync
+- Waiting on: PR #5271
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (twin-first hold: the wait is armed by the stage `/reclarify` resumes)
+- Check-in: checker session_01KfkvbMJgMjDKZBQ8DTiARb   safety net and hand-back: see the review-round-1 stage report
 - Last updated: 2026-09-29
-- Last note: phase 1 PR #5271 opened twin-first; held (hold claim) until the supervising session copies the two command twins into .claude/commands as a [claude-twin-sync] commit and comments /reclarify on #5222
+- Last note: review round 1 on head 63ee422: both consensus findings fixed in one [claude-autofix] commit (clarify.yml fallback retry + warning; telemetry contract assertion); waiting on review round 2
 
 ## Phases
-1. [ ] Phase 1 — final-merge resume on a closed issue   — PR #5271 open (held for twin sync); review rounds: 0; interventions: 0; protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md (twin-first)
+1. [ ] Phase 1 — final-merge resume on a closed issue   — PR #5271 open (waiting); review rounds: 1; interventions: 0; protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md (twin-first)
 
 ## Conformance
 
@@ -36,7 +36,10 @@
 
 ## Lessons
 - [source:plan-deviation] A full local `pytest tests` run does not finish within 40 minutes on a cloud session runner; verify a phase by running each test file that references the changed paths separately with a per-file timeout, and leave the full suite to CI. (files: tests/test_orchestrate_poll_process.py)
+- [source:intervention] A new stable `AI_PHASE_GATE_V1` telemetry line must also be pinned in tests/test_phase_skip_gate_telemetry_contract.py, and a workflow step's inline fallback for a gh_helpers.sh function should keep bounded retries and warn when it is used. (files: .github/workflows/clarify.yml, tests/test_phase_skip_gate_telemetry_contract.py)
 
 ## Notes
+- 2026-09-29 twin-sync resume stage (session_01QCEtm4U1UmHqXfWHjCRj5Q): owner answered Q1: A; [claude-twin-sync] 63ee422 verified (both .claude/commands sha256 match the twins); ai:claude-blocked removed from #5222; project branch synced with main (a06a40e, clean merge); wait armed on PR #5271.
+- 2026-09-29 review round 1 (session_019WoLVxBYnoYozUC6qZQHLn): finding clarify.yml:426-428 (no-retry gh_retry_to_file fallback) fixed with bounded retries and a degraded-mode warning; task gap in tests/test_phase_skip_gate_telemetry_contract.py fixed with a final_merge_resume assertion.
 - Issue progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5222#issuecomment-5898432937
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-29)

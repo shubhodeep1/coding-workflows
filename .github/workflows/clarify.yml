@@ -424,7 +424,13 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
-          type gh_retry_to_file >/dev/null 2>&1 || gh_retry_to_file() { local out="$1"; shift; "$@" > "${out}"; }
+          # Degraded fallback for the final-merge resume comments read: a few
+          # plain attempts with backoff (no rate-limit handling), announced so
+          # the run log tells a degraded read from an ineligible issue.
+          if ! type gh_retry_to_file >/dev/null 2>&1; then
+            echo "::warning::scripts/gh_helpers.sh did not load; gh_retry_to_file falls back to ${GH_RETRY_MAX_ATTEMPTS:-3} plain attempts without rate-limit handling"
+            gh_retry_to_file() { local out="$1"; shift; local attempt=1; while :; do "$@" > "${out}" && return 0; [ "${attempt}" -lt "${GH_RETRY_MAX_ATTEMPTS:-3}" ] || return 1; sleep "$((attempt * 2))"; attempt=$((attempt + 1)); done; }
+          fi
           LABELS_CSV="$(jq -r '[(.labels // [])[]?.name] | join(",")' "${ISSUE_META_FILE}")"
 
           IS_ORCHESTRATOR_MANAGED="false"
