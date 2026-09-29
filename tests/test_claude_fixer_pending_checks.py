@@ -427,7 +427,7 @@ def test_forced_review_running_from_the_default_branch_blocks_the_merge(fake_gh)
 	("the marker's own run re-run", [_run(RUN_ID, status="in_progress")], {}),
 	("an older review still running", [_run(RUN_ID - 5, status="in_progress")], {}),
 	("sweep dispatch for this PR queued", [], {"internal-review.yml": [_dispatch(RUN_ID + 2, status="queued")]}),
-	("force_rb_judge / convergence dispatch (no PR binding)", [],
+	("convergence or direct review_autofix.yml dispatch (no PR binding)", [],
 		{"review_autofix.yml": [_run(RUN_ID + 3, workflow="review_autofix.yml", status="in_progress", event="workflow_dispatch",
 			head_branch="main")]}),
 	("consumer ai-review.yml dispatch (no PR binding)", [],

@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01HRuW9tokc4gWgq1vPau85k   safety net and hand-back: ids in the conformance 1/3 — review round stage report
 - Last updated: 2026-09-29
-- Last note: conformance 1/3 review round 2 (session session_01BrXD1ZHudX99F66gmdoxHi) on PR #5209: the one task-gap finding (the changelog fragment's reads row still said 3 `workflow_dispatch` listings after the docstring moved to 4) was valid and fixed; 316 tests and the inventory parity check pass.
+- Last note: conformance 1/3 review round 3 (session session_01EywLdg9bPoF6Y1KGzM74Qq) on PR #5209: the one finding (a test case label still paired `force_rb_judge` with `review_autofix.yml` after this PR's comment moved that path to `review_rb_judge_dispatch.yml`) was valid and fixed in the label; test-only change.
 
 ## Phases
 1. [x] Phase 1 — defer the pending-checks merge while a newer review is active or unsettled   — PR #5183 merged 2026-09-29; review rounds: 1; interventions: 0
@@ -22,7 +22,7 @@
    - Done: the plan's phase 1 "done" condition. Protected paths: none.
 
 ## Conformance
-- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — fix PR #5209: `review_rb_judge_dispatch.yml` added to the unbound dispatch listings (pre-security); review rounds: 2
+- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — fix PR #5209: `review_rb_judge_dispatch.yml` added to the unbound dispatch listings (pre-security); review rounds: 3
 
 ## Security pass
 
@@ -47,6 +47,7 @@
 - [source:conformance] When a guard lists workflow runs by workflow file, list the wrapper workflows too: a `workflow_dispatch` wrapper that calls a reusable workflow (such as `review_rb_judge_dispatch.yml` calling `review_autofix.yml`) records its runs under the wrapper's own path, not the reusable workflow's. (files: scripts/claude_fixer_pending_checks.py, .github/workflows/review_rb_judge_dispatch.yml)
 
 ## Notes
+- Conformance review round 3 (2026-09-29, head c05da49, PR #5209): the only finding (minimax, confidence 2) was valid: the `tests/test_claude_fixer_pending_checks.py` case for an unbound `review_autofix.yml` dispatch was labelled `force_rb_judge / convergence dispatch`, while `scripts/claude_fixer_pending_checks.py:120-127` now says `review_autofix.yml` covers convergence and direct dispatches and the stall poller's `force_rb_judge` path runs as `review_rb_judge_dispatch.yml` (its own case). Relabelled `convergence or direct review_autofix.yml dispatch`; no behaviour change.
 - Conformance review round 2 (2026-09-29, head 08ae2d0, PR #5209): the only finding (task gap, glm, NIT) was valid: `changelog.d/5148-pending-checks-newer-review-race.md`'s reads row still said 3 `workflow_dispatch` runs listings while the module docstring says 4 after `review_rb_judge_dispatch.yml` joined them; fixed to 4. No other doc carries the count.
 - Conformance review round 1 (2026-09-29, head c2ae591, PR #5209): the only finding was a task gap (no `docs/INVENTORY.md` hunk); invalid on the project (line 125 carries phase 1's sentence), settled by AD-8. The push-triggered `review-claude-branch-push / codex-agent (claude-branch-review)` check failed in its LLM summariser (`all 10 attempts failed`, run 36598991686), an infrastructure failure; the PR-event review run on the same head succeeded.
 - Review round 1 (2026-09-29, head a697863): F1 (run with no `status`) fixed; the old code already failed closed but reported it as an active run. F2 (run with a non-integer `id`) fixed; the superseded check skipped such a run (fail open), while its `TypeError` claim about `marker_run_id` was wrong (always an `int`). F3 (comments re-read unvalidated) rejected: `check_in_status.gh_api_list` raises `ReadError` on a non-array page or a non-object item.
