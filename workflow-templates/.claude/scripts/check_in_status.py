@@ -134,6 +134,18 @@ FIXER_WORKFLOW_PATHS = (
 DISPATCHED_REVIEW_WORKFLOW = ".github/workflows/internal-review.yml"
 DISPATCHED_REVIEW_TITLE = "Internal: AI Review & Autofix [pr:{number}]"
 DISPATCHED_REVIEW_RUNS_PATH = "repos/{repo}/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=100"
+# The orchestrator poller and the merge train dispatch the consumer wrapper
+# ai-review.yml from the default branch too (issue #4701), and it names those
+# runs `AI Review [pr:<N>]` (issue #4926). Each (workflow path, title) pair is
+# accepted only together: a wrapper's run-name produces only its own title.
+# The DISPATCHED_REVIEW_* names above stay for compatibility (CLAUDE.md §6).
+PR_NAMED_REVIEW_DISPATCHES = (
+	(DISPATCHED_REVIEW_WORKFLOW, DISPATCHED_REVIEW_TITLE),
+	(".github/workflows/ai-review.yml", "AI Review [pr:{number}]"),
+)
+# One repo-wide listing covers both wrappers, the same listing and newest-100
+# window the poller's _pr_named_review_dispatch_runs reads (issue #4701).
+PR_NAMED_REVIEW_RUNS_PATH = "repos/{repo}/actions/runs?event=workflow_dispatch&per_page=100"
 # --hand-back mode: review_autofix.yml runs every PR-backed claude/* head in
 # Claude-fixer mode (its `claude/*)` gate case).
 CLAUDE_BRANCH_PREFIX = "claude/"
@@ -283,12 +295,13 @@ def _active_run_count(repo: str, head_ref: str, include_pending: bool = False, p
 	"""Count queued / running (and, with `include_pending`, pending) runs for a PR.
 
 	One read per status filtered by the head branch. When those find nothing
-	and `pr_number` is given, one more read lists internal-review.yml's
-	workflow_dispatch runs and counts the active ones titled
-	DISPATCHED_REVIEW_TITLE for this PR: the sweep dispatches them from the
-	default branch (issue #4618), so the head-branch filter never sees them.
-	A repository without internal-review.yml (HTTP 404) counts 0; any other
-	failed read raises `ReadError`.
+	and `pr_number` is given, one more read (PR_NAMED_REVIEW_RUNS_PATH, the
+	newest 100 workflow_dispatch runs of the repository) counts the active
+	runs whose (path, display_title) is one of PR_NAMED_REVIEW_DISPATCHES for
+	this PR: internal-review.yml runs the sweep dispatches (issue #4618) and
+	ai-review.yml runs the poller and merge train dispatch (issues #4701,
+	#4926). Both start from the default branch, so the head-branch filter
+	never sees them. Any failed read raises `ReadError`.
 	"""
 	statuses = ("queued", "in_progress", "pending") if include_pending else ("queued", "in_progress")
 	active = 0
@@ -297,17 +310,21 @@ def _active_run_count(repo: str, head_ref: str, include_pending: bool = False, p
 		active += int(listing.get("total_count") or 0)
 	if active or pr_number is None:
 		return active
-	try:
-		listing = gh_api(DISPATCHED_REVIEW_RUNS_PATH.format(repo=repo))
-	except ReadError as exc:
-		if "HTTP 404" in str(exc):
-			return 0
-		raise
-	title = DISPATCHED_REVIEW_TITLE.format(number=pr_number)
+	listing = gh_api(PR_NAMED_REVIEW_RUNS_PATH.format(repo=repo))
 	return sum(
 		1 for run in listing.get("workflow_runs") or []
-		if isinstance(run, dict) and run.get("status") in statuses and run.get("display_title") == title
+		if isinstance(run, dict) and run.get("status") in statuses and _is_pr_named_review_pair(run, pr_number)
 	)
+
+
+def _is_pr_named_review_pair(run: dict, number: int) -> bool:
+	"""True when the run's workflow path (without `@ref`) and display_title
+	form one PR_NAMED_REVIEW_DISPATCHES pair for PR `number`. Needs no API call."""
+	path = run.get("path")
+	if not isinstance(path, str):
+		return False
+	pair = (path.split("@", 1)[0], run.get("display_title"))
+	return any(pair == (workflow, title.format(number=number)) for workflow, title in PR_NAMED_REVIEW_DISPATCHES)
 
 
 def _pr_default_branch(pr: dict) -> str | None:
@@ -319,20 +336,21 @@ def _pr_default_branch(pr: dict) -> str | None:
 
 
 def _is_pr_dispatched_review_run(review_run: dict, number: int, default_branch: str | None) -> bool:
-	"""True for an internal-review.yml run the sweep dispatched for this PR.
+	"""True for a PR-named review run dispatched from the default branch for this PR.
 
-	Such a run starts from the default branch, so its head_branch and head_sha
-	describe the default branch, not the PR; the exact run title binds it to
-	PR `number`, and the hand-off's own `head=` marker binds the reviewed head.
-	Needs no API call. False when the default branch is unknown.
+	That is an internal-review.yml run the sweep dispatched (issue #4618) or an
+	ai-review.yml run the poller or merge train dispatched (issues #4701,
+	#4926). Such a run starts from the default branch, so its head_branch and
+	head_sha describe the default branch, not the PR; the exact (path, title)
+	pair from PR_NAMED_REVIEW_DISPATCHES binds it to PR `number`, and the
+	hand-off's own `head=` marker binds the reviewed head. Needs no API call.
+	False when the default branch is unknown.
 	"""
-	path = review_run.get("path")
 	return (
 		default_branch is not None
 		and review_run.get("event") == "workflow_dispatch"
-		and isinstance(path, str) and path.split("@", 1)[0] == DISPATCHED_REVIEW_WORKFLOW
 		and review_run.get("head_branch") == default_branch
-		and review_run.get("display_title") == DISPATCHED_REVIEW_TITLE.format(number=number)
+		and _is_pr_named_review_pair(review_run, number)
 	)
 
 
