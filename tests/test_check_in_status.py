@@ -37,7 +37,11 @@ def _pr(**overrides):
 	return pr
 
 
-DISPATCH_RUNS = "repos/o/r/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=100"
+# One repo-wide workflow_dispatch listing covers both PR-named review wrappers
+# (internal-review.yml, issue #4618; ai-review.yml, issues #4701 and #4926).
+DISPATCH_RUNS = "repos/o/r/actions/runs?event=workflow_dispatch&per_page=100"
+INTERNAL_REVIEW_PATH = ".github/workflows/internal-review.yml"
+AI_REVIEW_PATH = ".github/workflows/ai-review.yml"
 
 
 def _stub(monkeypatch, responses):
@@ -146,7 +150,7 @@ def test_old_head_with_active_sweep_dispatch_for_the_pr_waits(monkeypatch, capsy
 	# path must still count it by its `[pr:<N>]` title.
 	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
 	responses[DISPATCH_RUNS] = {"workflow_runs": [
-		{"status": status, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		{"status": status, "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:7]"},
 	]}
 	_stub(monkeypatch, responses)
 	_, out = _run(["--pr", "7"], capsys)
@@ -156,14 +160,30 @@ def test_old_head_with_active_sweep_dispatch_for_the_pr_waits(monkeypatch, capsy
 def test_old_head_with_sweep_dispatch_for_another_pr_or_finished_is_stuck(monkeypatch, capsys):
 	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
 	responses[DISPATCH_RUNS] = {"workflow_runs": [
-		{"status": "in_progress", "display_title": "Internal: AI Review & Autofix [pr:8]"},
-		{"status": "completed", "display_title": "Internal: AI Review & Autofix [pr:7]"},
-		{"status": "pending", "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		{"status": "in_progress", "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:8]"},
+		{"status": "completed", "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		{"status": "pending", "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		{"status": "in_progress", "path": AI_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		{"status": "in_progress", "path": INTERNAL_REVIEW_PATH, "display_title": "AI Review [pr:7]"},
+		{"status": "in_progress", "path": AI_REVIEW_PATH, "display_title": "AI Review [pr:8]"},
 	]}
 	_stub(monkeypatch, responses)
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is True and out["state"] == "stuck"
 
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress"])
+def test_old_head_with_active_consumer_ai_review_dispatch_for_the_pr_waits(monkeypatch, capsys, status):
+	# Issue #4926: in a consumer repo the poller and merge train dispatch
+	# ai-review.yml from the default branch and name the run `AI Review [pr:<N>]`.
+	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
+	responses[DISPATCH_RUNS] = {"workflow_runs": [
+		{"status": status, "path": AI_REVIEW_PATH + "@main", "display_title": "AI Review [pr:7]"},
+	]}
+	_stub(monkeypatch, responses)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
 
 def test_failed_check_on_old_head_without_active_run_is_stuck(monkeypatch, capsys):
 	runs = [
@@ -309,6 +329,36 @@ def test_fixer_conflict_handoff_is_a_conflict_round(monkeypatch, capsys):
 	_stub_fixer(monkeypatch, _fixer_responses(), [_comment(_handoff(kind="conflict"))])
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is True and out["state"] == "conflict"
+
+
+# Issue #4926: a consumer repo's poller and merge train dispatch ai-review.yml
+# from the default branch, titled `AI Review [pr:<N>]`; the project checker
+# (--pr mode) must accept that hand-off like an internal-review.yml sweep run.
+CONSUMER_DISPATCH = {"path": AI_REVIEW_PATH, "event": "workflow_dispatch", "head_branch": "main",
+	"head_sha": "d" * 40, "display_title": "AI Review [pr:7]"}
+
+
+@pytest.mark.parametrize("kind, state", [("findings", "review-round"), ("conflict", "conflict")])
+def test_fixer_handoff_from_consumer_ai_review_dispatch_is_due(monkeypatch, capsys, kind, state):
+	pr = _fixer_pr(base={"repo": {"default_branch": "main"}}, **({"mergeable_state": "dirty"} if kind == "conflict" else {}))
+	calls = _stub_fixer(monkeypatch, _fixer_responses(pr=pr, **CONSUMER_DISPATCH), [_comment(_handoff(kind=kind))])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == state
+	assert not any("/compare/" in call for call in calls)
+
+
+@pytest.mark.parametrize("run_change", [
+	{"display_title": "Internal: AI Review & Autofix [pr:7]"},
+	{"display_title": "AI Review [pr:8]"},
+	{"event": "pull_request"},
+])
+def test_fixer_handoff_from_unbound_consumer_dispatch_fails_closed(monkeypatch, capsys, run_change):
+	pr = _fixer_pr(base={"repo": {"default_branch": "main"}})
+	responses = _fixer_responses(pr=pr, **{**CONSUMER_DISPATCH, **run_change})
+	responses[f"repos/o/r/compare/{'d' * 40}...{FIXER_HEAD}?per_page=1"] = {"status": "diverged"}
+	_stub_fixer(monkeypatch, responses, [_comment(_handoff())])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and "waiting for verified completed review run" in out["reason"]
 
 
 @pytest.mark.parametrize("author", ["", "wrong-bot"])
