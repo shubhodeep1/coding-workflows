@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:463 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The active-run guard omits the `--` end-of-options separator, so a head branch beginning with `-` can be parsed by `grep` as an option instead of a pattern.\n  WHY: `grep` may exit non-zero on the option error, allowing release to proceed under a live review run; the reviewer notes concrete exploitability is negligible because callers do not use Git refs beginning with `-`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_merge_train.sh:463 | severity=low | confidence=3\n  PROBLEM: The active-run guard in `_mt_release` removed the `--` end-of-options separator when switching from `grep -Fxq -- \"${head}\"` to `grep -Fxq -e \"pr:${num}\" ${head:+-e \"${head}\"}`. A head branch that starts with `-` (e.g. `-n`) would be interpreted as a grep option, not a pattern.\n  WHY: A branch named `-something` would cause grep to misparse the argument as a flag (`ERROR: Unknown option`), treating it as a pattern matching error rather than a branch-key match. The guard would fail open (grep exits non-zero on error), allowing the merge-train release to proceed under a live review run. In practice git refs do not start with `-` on this repo's callers, so concrete exploitability is negligible, but the defense-in-depth barrier the `--` provided is gone.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "43005f4e1f0eea15d6920829fdfc563819be50e43ac7c1a04eb71a29ef12b7d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36509514437",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36509514437",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929015855_f9fa6f70bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36509514437"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T01:58:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
