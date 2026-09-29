@@ -8,7 +8,7 @@ usage()
 	cat <<'EOF'
 Usage: write_opencode_config.sh --role reviewer|writer --model <slug>
                                 --project-path <path> --config-path <path>
-                                --serena on|off [--max-steps <n>]
+                                --serena on|off
 EOF
 }
 
@@ -30,7 +30,6 @@ model_slug=""
 project_path=""
 config_path=""
 serena_mode=""
-max_steps=""
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -59,11 +58,6 @@ while [ "$#" -gt 0 ]; do
 			serena_mode="$2"
 			shift 2
 			;;
-		--max-steps)
-			require_value "$@"
-			max_steps="$2"
-			shift 2
-			;;
 		-h|--help)
 			usage
 			exit 0
@@ -90,10 +84,6 @@ case "${serena_mode}" in
 	*) fail "invalid --serena '${serena_mode}' (expected on|off)" ;;
 esac
 
-if [ -n "${max_steps}" ] && [[ ! "${max_steps}" =~ ^[1-9][0-9]{0,5}$ ]]; then
-	fail "invalid --max-steps '${max_steps}' (expected a positive integer)"
-fi
-
 if [[ ! "${model_slug}" =~ ^[A-Za-z0-9][A-Za-z0-9._:+-]*(/[A-Za-z0-9][A-Za-z0-9._:+-]*)+$ ]]; then
 	fail "invalid --model '${model_slug}'"
 fi
@@ -119,7 +109,7 @@ config_dir="$(dirname "${config_path}")"
 mkdir -p "${config_dir}"
 
 python3 - "${role}" "${model_slug}" "${project_path}" "${config_path}" \
-	"${catalog_path}" "${models_path}" "${serena_bin}" "${max_steps}" <<'PY'
+	"${catalog_path}" "${models_path}" "${serena_bin}" <<'PY'
 import json
 import os
 import sys
@@ -127,7 +117,7 @@ import tempfile
 from pathlib import Path
 
 
-role, model_slug, project_path, config_path, catalog_path, models_path, serena_bin, max_steps = sys.argv[1:]
+role, model_slug, project_path, config_path, catalog_path, models_path, serena_bin = sys.argv[1:]
 
 
 def load_json(path: str, label: str) -> object:
@@ -200,19 +190,6 @@ permission = reviewer_permission if role == "reviewer" else writer_permission
 tools = reviewer_tools if role == "reviewer" else writer_tools
 qualified_model = f"openrouter/{model_slug}"
 
-agent_config = {
-	"description": f"coding-workflows {role} role",
-	"mode": "primary",
-	"model": qualified_model,
-	"permission": permission,
-	"tools": tools,
-}
-# --max-steps sets OpenCode's agent `steps` cap: at the cap the model must
-# answer in text instead of calling another tool. Only the review panel
-# (scripts/review_run_reviewers.sh) passes it, from REVIEWER_MAX_STEPS.
-if max_steps:
-	agent_config["steps"] = int(max_steps)
-
 config = {
 	"$schema": "https://opencode.ai/config.json",
 	"autoupdate": False,
@@ -223,7 +200,13 @@ config = {
 	"permission": permission,
 	"tools": tools,
 	"agent": {
-		role: agent_config
+		role: {
+			"description": f"coding-workflows {role} role",
+			"mode": "primary",
+			"model": qualified_model,
+			"permission": permission,
+			"tools": tools,
+		}
 	},
 	"enabled_providers": ["openrouter"],
 	"provider": {

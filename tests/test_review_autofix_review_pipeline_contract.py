@@ -4568,13 +4568,37 @@ def test_reviewer_positive_int_or_default_falls_back_on_invalid_values() -> None
 	assert repeat_floor.stdout.strip() == "10"
 
 
-def test_reviewer_classify_retryable_failure_maps_tool_repeat() -> None:
+def test_reviewer_classify_retryable_failure_maps_loop_guards() -> None:
 	result = _run_reviewer_loop_guard_function(
 		["reviewer_classify_retryable_failure"],
 		"reviewer_classify_retryable_failure 143 tool_repeat /dev/null ''",
 	)
 	assert result.returncode == 0
 	assert result.stdout.strip() == "tool_repeat"
+	# The turn cap is final: not retryable even though the kill exit code
+	# (143/137) would otherwise classify as a timeout.
+	for exit_code in ("143", "137", "0"):
+		result = _run_reviewer_loop_guard_function(
+			["reviewer_classify_retryable_failure"],
+			f"reviewer_classify_retryable_failure {exit_code} max_steps /dev/null ''",
+		)
+		assert result.returncode == 1, exit_code
+		assert result.stdout == "", exit_code
+
+
+def test_reviewer_turn_count_counts_opencode_step_starts() -> None:
+	step_event = json.dumps({"type": "step_start", "part": {"type": "step-start"}}, separators=(",", ":"))
+	grep_event = _reviewer_tool_use_event("grep", {"pattern": "x"})
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		events = root / "events.jsonl"
+		events.write_text("\n".join([step_event, grep_event] * 121) + "\n", encoding="utf-8")
+		empty = root / "empty.jsonl"
+		empty.write_text("", encoding="utf-8")
+		for path, expected in ((events, "121"), (empty, "0"), (root / "absent.jsonl", "0")):
+			result = _run_reviewer_loop_guard_function(["reviewer_turn_count"], f'reviewer_turn_count "{path}"')
+			assert result.returncode == 0
+			assert result.stdout.strip() == expected, path.name
 
 
 def test_reviewer_loop_guards_are_wired_for_the_review_panel_only() -> None:
@@ -4582,12 +4606,18 @@ def test_reviewer_loop_guards_are_wired_for_the_review_panel_only() -> None:
 	assert "REVIEWER_MAX_STEPS: ${{ vars.REVIEWER_MAX_STEPS || '120' }}" in workflow
 	assert "REVIEWER_TOOL_REPEAT_LIMIT: ${{ vars.REVIEWER_TOOL_REPEAT_LIMIT || '10' }}" in workflow
 	reviewers_text = REVIEWERS.read_text(encoding="utf-8")
-	assert '--max-steps "${REVIEWER_MAX_STEPS_EFFECTIVE}"' in reviewers_text
-	assert reviewers_text.count('--max-steps "') == 1
+	assert 'turns_started="$(reviewer_turn_count "${tmp_structured_output}")"' in reviewers_text
+	assert '[ "${turns_started}" -gt "${REVIEWER_MAX_STEPS_EFFECTIVE}" ]' in reviewers_text
+	assert "printf 'max_steps' > \"${wd_reason_file}\"" in reviewers_text
 	assert 'reviewer_tool_repeat_detected "${tmp_structured_output}" "${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}"' in reviewers_text
 	assert "printf 'tool_repeat' > \"${wd_reason_file}\"" in reviewers_text
+	# The guards live in the panel watchdog only; OpenCode's soft `steps`
+	# setting is not used, and no other reviewer-role caller is capped.
+	assert "--max-steps" not in (REPO_ROOT / "scripts" / "write_opencode_config.sh").read_text(encoding="utf-8")
 	for other_caller in ("review_run_judge_interim.sh", "review_synthesise_smoke.sh", "summarize_reviewer_consensus.sh"):
-		assert "--max-steps" not in (REPO_ROOT / "scripts" / other_caller).read_text(encoding="utf-8")
+		other_text = (REPO_ROOT / "scripts" / other_caller).read_text(encoding="utf-8")
+		assert "REVIEWER_MAX_STEPS" not in other_text
+		assert "REVIEWER_TOOL_REPEAT_LIMIT" not in other_text
 
 
 def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models() -> None:

@@ -128,13 +128,27 @@ reviewer_positive_int_or_default() {
   printf '%s\n' "${default_value}"
 }
 
-# Reviewer loop guards. REVIEWER_MAX_STEPS caps OpenCode turns per reviewer
-# attempt (write_opencode_config.sh --max-steps). REVIEWER_TOOL_REPEAT_LIMIT
+# Reviewer loop guards, enforced by the per-attempt watchdog.
+# REVIEWER_MAX_STEPS hard-stops an attempt once it starts more than that many
+# OpenCode turns and fails the slot without a retry. REVIEWER_TOOL_REPEAT_LIMIT
 # ends an attempt once that many consecutive tool calls are identical (same
-# tool, same input). Real reviewer passes peaked at 101 turns; x-ai/grok-4.20
-# looped for 2,205 turns on one repeated grep (run 35949371968).
+# tool, same input) as a retryable failure. Real reviewer passes peaked at 101
+# turns; x-ai/grok-4.20 looped for 2,205 turns on one repeated grep (run
+# 35949371968). OpenCode's own agent `steps` setting only asks the model to
+# stop and keeps offering tools, so it is not used.
 REVIEWER_MAX_STEPS_EFFECTIVE="$(reviewer_positive_int_or_default "${REVIEWER_MAX_STEPS:-}" 120 1 REVIEWER_MAX_STEPS)"
 REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE="$(reviewer_positive_int_or_default "${REVIEWER_TOOL_REPEAT_LIMIT:-}" 10 2 REVIEWER_TOOL_REPEAT_LIMIT)"
+
+# Print how many turns (OpenCode `step_start` events) the JSON event stream $1
+# has started; 0 when the file is missing or empty.
+reviewer_turn_count() {
+  local structured_file="$1"
+  local turn_count=""
+
+  [ -s "${structured_file}" ] || { printf '0\n'; return 0; }
+  turn_count="$(grep -cF '"type":"step_start"' "${structured_file}" 2>/dev/null || true)"
+  printf '%s\n' "${turn_count:-0}"
+}
 
 # Succeeds (and prints the tool name) when the last $2 completed tool calls in
 # the OpenCode JSON event stream $1 are identical: same tool, same input. The
@@ -3646,6 +3660,11 @@ reviewer_classify_retryable_failure() {
   local stderr_file="$3"
   local stall_state="${4:-}"
 
+  # The reviewer turn cap is a final stop: never retried or failed back.
+  if [ "${wd_reason}" = "max_steps" ]; then
+    return 1
+  fi
+
   if [ "${stall_state}" = "killed" ]; then
     printf 'stall_guard\n'
     return 0
@@ -3858,8 +3877,7 @@ execute_reviewer_attempt() {
     --model "${effective_model}" \
     --project-path "${reviewer_opencode_workspace}" \
     --config-path "${reviewer_opencode_config_path}" \
-    --serena off \
-    --max-steps "${REVIEWER_MAX_STEPS_EFFECTIVE}"; then
+    --serena off; then
     echo "Reviewer slot ${slot_model} (${effective_model}) failed to generate its OpenCode config on ${attempt_label}." | tee -a "${log_file}" >&2
     REVIEWER_ATTEMPT_OUTCOME="failed"
     REVIEWER_ATTEMPT_CMD_RC=1
@@ -3966,6 +3984,15 @@ execute_reviewer_attempt() {
         _reviewer_kill_pid "${cpid}"
         rm -f "${hb_file}"
         exit 143
+      fi
+      turns_started="$(reviewer_turn_count "${tmp_structured_output}")"
+      if [ "${turns_started}" -gt "${REVIEWER_MAX_STEPS_EFFECTIVE}" ] 2>/dev/null; then
+        echo "Reviewer ${effective_model} killed — started turn ${turns_started}, over the turn limit of ${REVIEWER_MAX_STEPS_EFFECTIVE}." | tee -a "${log_file}" >&2
+        printf 'max_steps' > "${wd_reason_file}"
+        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        _reviewer_kill_pid "${cpid}"
+        rm -f "${hb_file}"
+        exit 146
       fi
       if repeat_tool="$(reviewer_tool_repeat_detected "${tmp_structured_output}" "${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}")"; then
         echo "Reviewer ${effective_model} killed — ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE} consecutive identical '${repeat_tool}' tool calls (repeat limit: ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE})." | tee -a "${log_file}" >&2
@@ -4085,6 +4112,13 @@ execute_reviewer_attempt() {
     wd_reason="$(cat "${wd_reason_file}" 2>/dev/null || true)"
   fi
   rm -f "${wd_reason_file}"
+  # A loop-guard kill must never be read as a clean exit, even if OpenCode
+  # handled SIGTERM and left partial text behind.
+  case "${wd_reason}" in
+    max_steps|tool_repeat)
+      [ "${cmd_rc}" -ne 0 ] || cmd_rc=143
+      ;;
+  esac
   if stall_state="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
     :
   elif [ -s "${stall_status_file}" ]; then
@@ -4178,6 +4212,9 @@ execute_reviewer_attempt() {
         tool_repeat)
           echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (tool repeat limit ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}, exit=${cmd_rc})." | tee -a "${log_file}"
           ;;
+        max_steps)
+          echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (turn limit ${REVIEWER_MAX_STEPS_EFFECTIVE}, exit=${cmd_rc}); not retried." | tee -a "${log_file}"
+          ;;
         *)
           echo "Reviewer slot ${slot_model} (${effective_model}) execution failed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
           ;;
@@ -4203,7 +4240,7 @@ execute_reviewer_attempt() {
     killed:*:*|*:idle_timeout:*|*:tool_repeat:*|*:*:137)
       emit_reviewer_substate "Stalled" "${attempt_number}" "${tmp_stderr}"
       ;;
-    *:max_wall:*|*:*:124|*:*:143)
+    *:max_wall:*|*:max_steps:*|*:*:124|*:*:143)
       emit_reviewer_substate "TimedOut" "${attempt_number}" "${tmp_stderr}"
       ;;
     *)

@@ -134,10 +134,11 @@ env:
   # slot) sit outside the gpt-6-sol editor `high` default. Override per-repo via vars.THINKING_LEVEL_REVIEWER; the smoke
   # path forces `low` separately in the "Detect smoke test" step.
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
-  # Reviewer loop guards (scripts/write_opencode_config.sh, scripts/review_run_reviewers.sh):
-  # OpenCode turn cap per reviewer attempt, and the run of identical
-  # consecutive tool calls (same tool + same input) that ends the attempt as
-  # a retryable `tool_repeat` failure. Reviewers only; writers are unaffected.
+  # Reviewer loop guards (scripts/review_run_reviewers.sh watchdog), review
+  # panel only: an attempt that starts more than REVIEWER_MAX_STEPS OpenCode
+  # turns is stopped and the slot fails without a retry; a run of
+  # REVIEWER_TOOL_REPEAT_LIMIT identical consecutive tool calls (same tool +
+  # same input) ends the attempt as a retryable `tool_repeat` failure.
   REVIEWER_MAX_STEPS: ${{ vars.REVIEWER_MAX_STEPS || '120' }}
   REVIEWER_TOOL_REPEAT_LIMIT: ${{ vars.REVIEWER_TOOL_REPEAT_LIMIT || '10' }}
   REVIEWER_VERBOSITY: ${{ vars.VERBOSITY_REVIEWER || 'low' }}

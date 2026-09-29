@@ -41,7 +41,6 @@ def _run(
 	serena: str = "off",
 	model: str = MODEL_SLUG,
 	extra_env: dict[str, str] | None = None,
-	extra_args: list[str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	catalog, models = _fixture_files(root)
 	config = root / "config.json"
@@ -68,7 +67,6 @@ def _run(
 			str(config),
 			"--serena",
 			serena,
-			*(extra_args or []),
 		],
 		env=env,
 		text=True,
@@ -246,34 +244,6 @@ def test_failed_render_preserves_an_existing_configuration() -> None:
 		)
 		assert result.returncode != 0
 		assert config.read_text(encoding="utf-8") == original
-
-
-def test_max_steps_sets_the_agent_steps_cap_only_when_requested() -> None:
-	with tempfile.TemporaryDirectory() as directory:
-		root = Path(directory)
-		result, config = _run(root, extra_args=["--max-steps", "120"])
-		assert result.returncode == 0, result.stderr
-		rendered = json.loads(config.read_text(encoding="utf-8"))
-		assert rendered["agent"]["reviewer"]["steps"] == 120
-
-		result, config = _run(root)
-		assert result.returncode == 0, result.stderr
-		rendered = json.loads(config.read_text(encoding="utf-8"))
-		assert "steps" not in rendered["agent"]["reviewer"]
-
-		result, config = _run(root, role="writer")
-		assert result.returncode == 0, result.stderr
-		rendered = json.loads(config.read_text(encoding="utf-8"))
-		assert "steps" not in rendered["agent"]["writer"]
-
-
-def test_max_steps_rejects_non_positive_values() -> None:
-	with tempfile.TemporaryDirectory() as directory:
-		root = Path(directory)
-		for bad_value in ("0", "-5", "abc", "12x", "1234567"):
-			result, _ = _run(root, extra_args=["--max-steps", bad_value])
-			assert result.returncode == 2, bad_value
-			assert "invalid --max-steps" in result.stderr
 
 
 def main() -> int:
