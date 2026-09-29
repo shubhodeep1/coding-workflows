@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-29T09:18:29Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "On a Claude-fixer head a merge conflict is found by the pre-review merge-topology gate, not \"Detect merge conflicts\" (which Claude-fixer mode skips), and the hand-off step runs before the resolver steps, so a change to Claude-fixer conflict routing belongs in the topology gate's Claude-fixer branch plus a step after the resolver.",
+  "phase": "implement_plan",
+  "pr_number": 4904,
+  "record_id": "lesson-implement-plan-e260b2556d02b75144971aa0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:claude-fixer-unattended-convergence",
+    "file:scripts/review_autofix_step_merge_topology_gate.sh",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}
