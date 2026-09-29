@@ -92,6 +92,10 @@ HEREDOC_OPEN_WRITE = "cd /repo && python3 - <<'PY' 2>&1\nwith open('CLAUDE.md', 
 		"python3 -c \"open(str(p), 'w').write('x')\"",
 		"python3 - <<'EOF'\nimport os\nwith open(os.path.join(str(d), 'f'), 'w') as f:\n    f.write('x')\nEOF",
 		"cat <<'A'\nnotes\nA\npython3 - <<'B'\nopen(p, 'w').write('x')\nB",
+		"python3 -c \"open(os.path.join(str(p.replace('/', '_')), 'x'), 'w').write('1')\"",
+		"python3 -c \"open('a(b', 'w').write('1')\"",
+		"python3 -c \"open(mode='w', file=p).write('1')\"",
+		"python3 -c \"open(p, encoding='utf-8', mode='a').write('1')\"",
 	],
 )
 def test_inline_interpreter_writes_are_classed(command):
@@ -121,6 +125,9 @@ def test_inline_interpreter_writes_are_classed(command):
 		"ls -la",
 		"python3 -c \"print(open(os.path.join(d, 'w')).read())\"",
 		"python3 - <<'A'\nprint(open('a').read())\nA\ncat <<'B'\nopen(p, 'w')\nB",
+		"python3 -c \"print(open(os.path.join(str(p.replace('/', '_')), 'w')).read())\"",
+		"python3 -c \"print(open('a, w').read())\"",
+		"python3 - <<'PY' && echo \"<<X\"\nprint(1)\nPY\ncat <<'B'\nopen(p, 'w')\nB",
 	],
 )
 def test_reads_scripts_and_data_are_not_classed(command):
