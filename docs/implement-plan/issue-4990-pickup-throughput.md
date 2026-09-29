@@ -4,21 +4,21 @@
 - Source issue: shubhodeep1/coding-workflows#4990 (https://github.com/shubhodeep1/coding-workflows/issues/4990)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4990-pickup-throughput   Final PR: #5030 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: PR #5061 (phase 1/1) — twin sync of `.claude/commands/claude-issue-pickup.md` (Q40), then /reclarify
+- Waiting on: PR #5061 (phase 1/1)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_011kZ19gKQj5B1eX3AXqP8r7   safety net trig_01CUMjjWy42P6qFBkeTrN4ob   hand-back trig_013pUeZMUyaEURf2Cg5xsUbm
 - Last updated: 2026-09-29
-- Last note: phase 1 PR #5061 opened; BLOCKED on the Q40 twin sync (pickup diff in the #4990 blocker comment, hold claim on the PR head); resume with /reclarify
+- Last note: Q1: A — the master applied the twin sync as 3c69d52 (sha256 560d5ddb…, 278 tests passed); `ai:claude-blocked` removed; phase 1 wait armed on PR #5061
 
 ## Phases
-1. [ ] Phase 1 — pickup throughput: catch-up wake, limit 20 (`CLAUDE_ISSUE_PICKUP_LIMIT`), resumes first, `oldest_waiting`   — PR #5061 open (blocked: twin sync); review rounds: 0; interventions: 0 — protected paths: `.claude/commands/claude-issue-pickup.md` (no twin; diff in the sync blocker per Q40)
+1. [ ] Phase 1 — pickup throughput: catch-up wake, limit 20 (`CLAUDE_ISSUE_PICKUP_LIMIT`), resumes first, `oldest_waiting`   — PR #5061 open (waiting); review rounds: 0; interventions: 0 — protected paths: `.claude/commands/claude-issue-pickup.md` (no twin; diff in the sync blocker per Q40)
    - [x] `scripts/claude_issue_route.py`: `QUEUE_PICKUP_LIMIT = 20`, `resolve_pickup_limit`, two-tier ordering, `oldest_waiting_minutes`, `catch_up_due`, `--wake` / `--now`
    - [x] `tests/test_claude_issue_route.py`: limit, ordering, oldest-waiting, catch-up tests
-   - [x] `tests/test_implement_issue_claude_command.py`: pickup catch-up assertions (fail until the twin sync)
-   - [ ] `.claude/commands/claude-issue-pickup.md`: catch-up wake, limit, ordering, report fields (diff in the sync blocker; waiting on the twin sync)
+   - [x] `tests/test_implement_issue_claude_command.py`: pickup catch-up assertions (pass after the twin sync)
+   - [x] `.claude/commands/claude-issue-pickup.md`: catch-up wake, limit, ordering, report fields (twin sync 3c69d52 by the master, Q1: A, 2026-09-29)
    - [x] `README.md`, `agents.md`, `docs/scripts-pending-removal.md`
    - [x] `changelog.d/4990-pickup-throughput.md`
 
