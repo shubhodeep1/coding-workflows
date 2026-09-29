@@ -7,14 +7,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: full poller test suite, then phase 1 PR
+- Waiting on: phase 1 PR (review workflow, Claude-fixer mode)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented; targeted tests pass (new large-body test fails on the old call); full poller suite running before the phase PR opens.
+- Last note: phase 1 implemented and verified (full poller suite 452/452; the new large-body test fails on the old call); phase PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — stream the close sweep's queue build through stdin and surface its failures (orchestrate_poll_process.sh + tests + README + changelog)   — branch pushed, PR not yet opened; review rounds: 0; interventions: 0
+1. [ ] Phase 1 — stream the close sweep's queue build through stdin and surface its failures (orchestrate_poll_process.sh + tests + README + changelog)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
