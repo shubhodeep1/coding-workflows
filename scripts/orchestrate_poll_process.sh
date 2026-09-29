@@ -12559,12 +12559,14 @@ prime_phase_concurrency_snapshot() {
 # proceeds) — no worse than the pre-fix behaviour, and the cached scan's own
 # path-based match still covers that case whenever the cache itself hits (in
 # which case this fallback is never reached).  Fails open (echoes nothing) on any
-# gh/jq/date error so a transient API failure never blocks recovery.
+# gh/jq/date error in the branch listing so a transient API failure never blocks
+# recovery; the PR-named lookup below does not (issue #4927).
 #
 # Optional $2 = PR number (issue #4701).  A review run dispatched from the
 # default branch has the default branch as its head, so the branch listing
 # never returns it.  When the listing matched no fresh review run and $2 is
-# a valid PR number, one more call (_pr_named_review_dispatch_runs) checks
+# a valid PR number, one more lookup (_pr_named_review_dispatch_runs; its
+# header documents the per-page call budget) checks
 # the workflow_dispatch runs named for that PR, with the same status and
 # freshness filters, and echoes the freshest match's databaseId.  One-argument
 # callers keep the branch-only behaviour and make no extra call.
@@ -13795,7 +13797,8 @@ STALL_EOF
           # _dispatch_review_for_conflicts or the sweep dispatched is named
           # for the PR and has the default branch as its head, so the
           # branch lookups above never see it. When they found no failed
-          # run, look at the newest PR-named dispatch run (one call, §15):
+          # run, look at the newest PR-named dispatch run (one paged lookup,
+          # §15; see _pr_named_review_dispatch_runs for its call budget):
           # it counts when it completed with a failure and is newer than
           # every completed head-branch run seen. A missing createdAt counts
           # as older, so this path only adds a redispatch when the failure
@@ -17357,11 +17360,14 @@ _CONFLICT_DISPATCH_TRACKER="${TMPDIR:-/tmp}/.conflict_dispatch_$$"
 # Default-branch dispatches: review_autofix_sweep.yml (issue #4618),
 # _dispatch_review_for_conflicts and the merge train (issue #4701) dispatch
 # from the default branch, so the guard also counts active workflow_dispatch
-# runs named for the PR (_pr_named_review_dispatch_runs: one extra call,
-# only when the head-branch lookups found nothing).
+# runs named for the PR (_pr_named_review_dispatch_runs: one paged lookup,
+# whose header documents its call budget, only when the head-branch lookups
+# found nothing).
 #
 # Usage: _has_active_autofix_run <pr_number> <head_ref>
-# Returns 0 if an active run exists (skip dispatch), 1 otherwise.
+# Returns 0 if an active run exists, or if the PR-named listing is
+# incomplete and so cannot rule one out (issue #4927) (skip dispatch);
+# 1 otherwise.
 _has_active_autofix_run()
 {
 	local pr_number="$1"
