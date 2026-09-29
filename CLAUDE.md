@@ -1791,7 +1791,17 @@ terminal report (§26.D):
    consumer sync it waits on, an action the user must take, or "none — the
    pushing session can be closed"), and what to ask if it is closed
    without merging. The checker uses them only when the terminal hand-back
-   fails (§26.C step 5). The one-shot trigger disables itself after it
+   fails (§26.C step 5). The prompt also restates the session rules of
+   §26.C step 5: the checker's own id comes from Bash, never from the
+   prompt; it never passes a subscriber's session id to
+   `set_session_title` or `archive_session`; it never archives itself
+   (the fixer archives it, §26.D); a hand-back whose Routine run
+   `SUCCEEDED` in the subscriber's session is delivered, even when the
+   fixer has not claimed the head yet; a missing Routine alone is not a
+   gone subscriber (it calls `get_session` on the subscriber, and only an
+   archived or not-found session is gone); and before starting a fresh
+   fixer it re-runs step 1's command and starts one only when `action` is
+   still `hand_back_fixer`. The one-shot trigger disables itself after it
    fires.
 4. Report the checker's session id, the instructions trigger id, and the
    hand-back trigger id in this session's reply.
@@ -1879,22 +1889,41 @@ hand-back trigger id, a session id, and a role. There is at most one
    then arm the same 10-minute check. The checker writes no report and
    sends no notification.
 5. **Hand-back check** (the 10-minute wake) → `get_trigger` on each
-   Routine you pulled forward:
+   Routine you pulled forward. **Which session you may rename:** this
+   session only, whose id you take from Bash
+   `echo "session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}"`, never from the
+   instructions or the subscriber list. Never pass a subscriber's session
+   id to `set_session_title` or `archive_session`: a subscriber's id goes
+   only to `update_trigger` / `get_trigger` (on its Routine) and
+   `get_session` (to see whether it is gone). The checker never archives
+   itself either; the fixer archives it (§26.D).
    - `last_run.status` is `ROUTINE_RUN_STATUS_SUCCEEDED`, `last_run.fired_at`
      is after the update, and `last_run.session_id` is the subscriber's
-     session (`cse_<x>` for `session_<x>`) → delivered. For a due fix,
+     session (`cse_<x>` for `session_<x>`) → delivered, even when the
+     fixer has not claimed the head yet. For a due fix,
      resume step 2 (`send_later` 60 minutes); the fixer claims the head and
      registers a fresh Routine when it is done. For a terminal PR, rename
-     this session (`set_session_title`) to
+     this session (`set_session_title` with your own id from Bash, as
+     above) to
      `PR #<n> <merged | closed> — handed to <fixer session id>` and end the
      turn. (Usually the fixer has already renamed and archived the checker
      before this check runs.)
    - Not fired yet → re-arm the 10-minute check; after the third such
      check, treat it as failed.
+   - The trigger is not found → a missing Routine alone is not a gone
+     subscriber: the §26.G sweep deletes fired hand-backs, and the fixer
+     runs that sweep before it registers again. Call `get_session` on the
+     subscriber: archived or not found → gone (below); otherwise treat it
+     as delivered (above).
    - `last_run.status` is `ROUTINE_RUN_STATUS_FAILED`, `ended_reason` is
-     `auto_disabled_session_gone`, the trigger is not found, or
-     `update_trigger` failed at step 4 → the subscriber is gone; drop it.
-     - **Due fix, fixer gone** → start a **fresh fixer**: `create_session`
+     `auto_disabled_session_gone`, `get_session` shows the subscriber
+     archived or not found, or `update_trigger` failed at step 4 → the
+     subscriber is gone; drop it.
+     - **Due fix, fixer gone** → first re-run step 1's command and start
+       the fresh fixer only when `action` is still `hand_back_fixer` (a
+       live claim, a hold, a moved head, or a terminal PR means no fresh
+       fixer: resume step 2, or step 4 for `hand_back_all`). Then start a
+       **fresh fixer**: `create_session`
        with `source_url` = the repository, `model: claude-opus-5-5`,
        `permission_mode` = this session's mode, `title` = `PR #<n> — fix
        <kind>`, and the prompt `/effort high` and nothing else; then
@@ -1911,7 +1940,8 @@ hand-back trigger id, a session id, and a role. There is at most one
      - **Terminal, fixer gone** → **fall back**: write the §26.D report in
        this session from the fallback next steps in the prompt, delete the
        fixer's hand-back Routine (`delete_trigger`, ignoring not-found),
-       rename this session with the §26.D title plus
+       rename this session (your own id from Bash, as above) with the
+       §26.D title plus
        ` (pushing session unreachable)`, and send the §26.D
        `PushNotification`. A gone `notify` subscriber needs nothing.
 
@@ -1938,11 +1968,21 @@ verdict; a woken `notify` subscriber does the same). Then, by `action`
   checker (its id is in this session's arming report) to
   `PR #<n> <state> — handed to <this session's id>` and archives it
   (`archive_session`), and only then deletes the fired Routine
-  (`delete_trigger`, ignoring not-found). The order matters: the checker's
-  10-minute check (§26.C step 5) reads a missing Routine as a failed
-  hand-back, so the checker must be gone before the Routine is. The wake
-  itself proves the hand-back arrived, so that check is no longer needed;
-  its leftover reminder is removed by the sweep.
+  (`delete_trigger`, ignoring not-found). **Check the target first:**
+  call `get_session` on the checker id and rename or archive it only
+  when its title is exactly `PR #<n> status check-in` or already starts
+  `PR #<n> merged — handed to ` or `PR #<n> closed — handed to `, it is
+  not archived, and the id is not this session's own (Bash
+  `echo "session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}"`). Otherwise
+  skip both calls and say so in one line (`checker <id> not renamed or
+  archived: <title | archived | this session | not found>`). Say
+  "archived" only after `archive_session` returned success; a failed call
+  is reported as `archive failed: <error>`, even when a later
+  `get_session` still shows a stale status. The order still matters: with
+  the checker archived first, its 10-minute check (§26.C step 5) never
+  runs, so it cannot misread the deleted Routine. The wake itself proves
+  the hand-back arrived, so that check is no longer needed; its leftover
+  reminder is removed by the sweep.
 - **Still open, claimed, or held** (any other `wait`) → the checker
   stopped renewing the Routine for 7 days, or the fix is already owned:
   re-arm from §26.B step 1 (a new hand-back Routine, registered with the
