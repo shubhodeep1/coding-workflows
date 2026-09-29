@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_019rGgoLZBfTcYZUkbRAYsRN (project checker; per-wait safety net and hand-back ids are in the stage report)
 - Last updated: 2026-09-29
-- Last note: review round 1 on PR #5187: 3 findings fixed (git env isolation in _repo_git, scenario env cannot override hook isolation, stub gh without heredoc), 3 rejected with reasons on the PR.
+- Last note: review round 2 on PR #5187: 1 finding fixed (scenario env now drops GIT_* like the caller's env), 1 rejected (per-tree rows are separate hook files, same as round 1).
 
 ## Phases
-1. [ ] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog) — PR #5187 open; review rounds: 1; interventions: 0
+1. [ ] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog) — PR #5187 open; review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -37,6 +37,7 @@
 - AD-8 [plan, 2026-09-29] Gaps the corpora show on `main` (plan Notes)? — Picked: A — record them, fix nothing in the hooks. Alternatives: B — fix them in this project (protected `.claude/**` edits, out of scope). Why: §5 and §28.C. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:intervention] When a test harness filters the caller's environment to isolate a subprocess, apply the same filter to every other source merged into that environment (scenario or fixture overrides). Otherwise a later override can undo the isolation. (files: scripts/guard_differential.py)
 
 ## Notes
 - Session started with the repo attached mid-session, so `gh` came from running `.claude/hooks/session-start.sh` by hand. No `mcp__github__*` tools were available; GitHub writes use `gh api` routine calls (§23.B/§23.H).

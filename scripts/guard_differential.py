@@ -277,8 +277,9 @@ def classify_output(returncode: int, stdout: str) -> Outcome:
 
 def hook_env(scenario_env: dict[str, str], stub_bin: Path, home: Path, cache: Path) -> dict[str, str]:
 	"""The hook's environment. The scenario's variables are applied before the
-	isolation settings, and never carry a token or a `CLAUDE_*` variable, so no
-	scenario can re-enable network access, system git config, or a kill switch.
+	isolation settings and are filtered like the caller's: never a token, a
+	`CLAUDE_*`, or a `GIT_*` variable, so no scenario can re-enable network
+	access, system git config, or a kill switch, or point git elsewhere.
 	"""
 	env = {
 		key: value
@@ -286,7 +287,11 @@ def hook_env(scenario_env: dict[str, str], stub_bin: Path, home: Path, cache: Pa
 		if not key.startswith(("CLAUDE_", "GIT_")) and key not in _STRIPPED_ENV_KEYS
 	}
 	env.update(
-		{key: value for key, value in scenario_env.items() if not key.startswith("CLAUDE_") and key not in _STRIPPED_ENV_KEYS}
+		{
+			key: value
+			for key, value in scenario_env.items()
+			if not key.startswith(("CLAUDE_", "GIT_")) and key not in _STRIPPED_ENV_KEYS
+		}
 	)
 	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', os.defpath)}"
 	env["HOME"] = str(home)

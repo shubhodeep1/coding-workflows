@@ -473,6 +473,8 @@ def test_scenario_env_cannot_override_isolation(tmp_path: Path) -> None:
 		"GIT_ALLOW_PROTOCOL": "https",
 		"GIT_CONFIG_NOSYSTEM": "0",
 		"GIT_TERMINAL_PROMPT": "1",
+		"GIT_SSH_COMMAND": "ssh -o ProxyCommand=evil",
+		"GIT_DIR": "/elsewhere/.git",
 		"GH_TOKEN": "secret",
 		"CLAUDE_PR_MERGE_GUARD": "off",
 		"SCENARIO_ONLY": "kept",
@@ -481,6 +483,7 @@ def test_scenario_env_cannot_override_isolation(tmp_path: Path) -> None:
 	assert env["GIT_ALLOW_PROTOCOL"] == "file"
 	assert env["GIT_CONFIG_NOSYSTEM"] == "1"
 	assert env["GIT_TERMINAL_PROMPT"] == "0"
+	assert "GIT_SSH_COMMAND" not in env and "GIT_DIR" not in env
 	assert "GH_TOKEN" not in env and "CLAUDE_PR_MERGE_GUARD" not in env
 	assert env["SCENARIO_ONLY"] == "kept"
 
