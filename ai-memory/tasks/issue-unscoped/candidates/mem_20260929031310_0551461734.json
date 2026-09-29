@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:lines 134-136 and 321-336 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_is_pr_dispatched_review_run` recognizes only `internal-review.yml` dispatch runs, so it does not recognize consumer-repo `ai-review.yml` runs when verifying Claude-fixer hand-offs.\n  WHY: In a consumer repo, hand-offs from `ai-review.yml` runs wait indefinitely with \u201cwaiting for verified completed review run.\u201d\n- .claude/scripts/check_in_status.py:_active_run_count at lines 300-310 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_active_run_count` counts only `internal-review.yml` dispatch runs and misses active `ai-review.yml` review runs in consumer repos.\n  WHY: The checker can report a PR as stuck or return `done: true, state: ci-failed` while a review run is still live.\n- workflow-templates/.claude/scripts/check_in_status.py:lines 130-140 (DISPATCHED_REVIEW_WORKFLOW / DISPATCHED_REVIEW_TITLE / DISPATCHED_REVIEW_RUNS_PATH); the call site in `_active_run_count` at lines 251-258 and 273-339; `_is_pr_dispatched_review_run` at lines 293-321 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The checker in the consumer template recognizes only `internal-review.yml` dispatch runs and misses `ai-review.yml` runs when counting active dispatches.\n  WHY: It can conclude that no active dispatch exists and emit a `review-round` or `conflict` state while the previous default-branch dispatch is still editing, allowing another Claude-fixer run to race on the PR head.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/check_in_status.py:lines 134-136 and 321-336 | severity=high | confidence=[4]\n  PROBLEM: `_is_pr_dispatched_review_run` recognizes only `internal-review.yml` dispatch runs, so it does not recognize consumer-repo `ai-review.yml` runs when verifying Claude-fixer hand-offs.\n  WHY: In a consumer repo, hand-offs from `ai-review.yml` runs wait indefinitely with \u201cwaiting for verified completed review run.\u201d\n- .claude/scripts/check_in_status.py:_active_run_count at lines 300-310 | severity=high | confidence=[4]\n  PROBLEM: `_active_run_count` counts only `internal-review.yml` dispatch runs and misses active `ai-review.yml` review runs in consumer repos.\n  WHY: The checker can report a PR as stuck or return `done: true, state: ci-failed` while a review run is still live.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/check_in_status.py:lines 130-140 (DISPATCHED_REVIEW_WORKFLOW / DISPATCHED_REVIEW_TITLE / DISPATCHED_REVIEW_RUNS_PATH); the call site in `_active_run_count` at lines 251-258 and 273-339; `_is_pr_dispatched_review_run` at lines 293-321 | severity=high | confidence=[4]\n  PROBLEM: The checker in the consumer template recognizes only `internal-review.yml` dispatch runs and misses `ai-review.yml` runs when counting active dispatches.\n  WHY: It can conclude that no active dispatch exists and emit a `review-round` or `conflict` state while the previous default-branch dispatch is still editing, allowing another Claude-fixer run to race on the PR head.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "dc9b1eb6ea1e1f350773316e675cd7edcfca060ace9754df96fa1f7238066972",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36515444754",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36515444754",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929031310_0551461734",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36515444754"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T03:13:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
