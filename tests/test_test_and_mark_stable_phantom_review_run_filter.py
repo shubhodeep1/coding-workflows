@@ -58,9 +58,17 @@ def _workflow_text() -> str:
 
 
 def _pinned_filter() -> str:
-	"""The head_sha-pinned filter (double-quoted in the step), bash-expanded."""
-	match = re.search(r'--jq ("\[\.workflow_runs\[\] \| select\(\.name \| test\(\\"Review\|.*?")\s*\|\|', _workflow_text())
-	assert match, "Pinned Phase 4 review-run --jq filter not found in test-and-mark-stable.yml"
+	"""The head_sha-pinned filter (double-quoted in the step), bash-expanded.
+
+	Since issue #5093 the step runs it through ``jq --argjson extra`` so the
+	registered default-branch Bug B run (leg c) can join ``$m``; ``_jq`` passes
+	``extra`` (``[]`` unless a test supplies one).
+	"""
+	match = re.search(
+		r'--argjson extra "\$\{BUG_B_EXTRA\}" \\\s*\n\s*("\(\[\.workflow_runs\[\] \| select\(\.name \| test\(\\"Review\|.*?")\s*2>/dev/null \|\|',
+		_workflow_text(),
+	)
+	assert match, "Pinned Phase 4 review-run jq filter not found in test-and-mark-stable.yml"
 	result = subprocess.run(
 		["bash", "-c", f'PIN_SHA=pinsha; BAIT_CREATED_AT=""; printf "%s" {match.group(1)}'],
 		capture_output=True,
@@ -77,11 +85,11 @@ def _pull_request_filter() -> str:
 	return match.group(1)
 
 
-def _jq(program: str, runs: list[dict]) -> object:
+def _jq(program: str, runs: list[dict], extra: list[dict] | None = None) -> object:
 	jq = shutil.which("jq")
 	assert jq, "jq is required for this test"
 	result = subprocess.run(
-		[jq, "-c", program],
+		[jq, "-c", "--argjson", "extra", json.dumps(extra or []), program],
 		input=json.dumps({"workflow_runs": runs}),
 		capture_output=True,
 		text=True,
