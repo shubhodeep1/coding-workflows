@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Validation workflow changes often span workflow YAML, validation scripts or renderers, and contract tests.",
   "timestamps": {
     "created_at": "2026-09-29T01:01:01Z",
