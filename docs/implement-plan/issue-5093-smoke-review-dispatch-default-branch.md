@@ -3,25 +3,25 @@
 - Plan: docs/plans/issue-5093-smoke-review-dispatch-default-branch-plan.md
 - Source issue: shubhodeep1/coding-workflows#5093 (https://github.com/shubhodeep1/coding-workflows/issues/5093)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch
-- Project branch: claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch   Final PR: pending
+- Project branch: claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch   Final PR: #5107 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from the issue base; phase 1 starting
+- Last note: phase 1 implemented and verified locally; phase PR opened against the project branch
 
 ## Phases
-1. [ ] Phase 1 — default-branch smoke review dispatch with checked-out-SHA correlation
-   - [ ] `scripts/smoke_review_dispatch.sh`: `smoke_review_pr_named_runs`, `smoke_review_checked_out_sha`, `smoke_review_sha_descends_from` (AD-1, AD-2, AD-9)
-   - [ ] "Validate prerequisites" (`id: prereqs`) outputs `test_repo_default_branch` from its existing `repos/${TEST_REPO}` read (AD-7)
-   - [ ] Phase 3c dispatches at `REVIEW_DISPATCH_REF`, registers `bug_b_run_id`, and stays fail-soft (AD-3)
-   - [ ] Phase 4 leg (c): the registered run is a candidate while active, and once completed only after its checked-out SHA equals `PIN_SHA` / `BAIT_SHA` (AD-4)
-   - [ ] Phase 4b adopts or registers PR-named runs, dispatches at `REVIEW_DISPATCH_REF`, and correlates, emitting `retry_run_unverified` on a definite miss (AD-5, AD-6)
-   - [ ] Tests: `tests/test_smoke_review_dispatch.py` [new], updated review-blocked budget and phantom filter tests, registered in `ci.yml`
-   - [ ] `agents.md`, `docs/INVENTORY.md`, `changelog.d/5093-smoke-review-dispatch-default-branch.md`
+1. [ ] Phase 1 — default-branch smoke review dispatch with checked-out-SHA correlation   — phase PR open (waiting); review rounds: 0; interventions: 0
+   - [x] `scripts/smoke_review_dispatch.sh`: `smoke_review_pr_named_runs`, `smoke_review_checked_out_sha`, `smoke_review_sha_descends_from` (AD-1, AD-2, AD-9)
+   - [x] "Validate prerequisites" (`id: prereqs`) outputs `test_repo_default_branch` from its existing `repos/${TEST_REPO}` read (AD-7)
+   - [x] Phase 3c dispatches at `REVIEW_DISPATCH_REF`, registers `bug_b_run_id`, and stays fail-soft (AD-3)
+   - [x] Phase 4 leg (c): the registered run is a candidate while active, and once completed only after its checked-out SHA equals `PIN_SHA` / `BAIT_SHA` (AD-4)
+   - [x] Phase 4b adopts or registers PR-named runs, dispatches at `REVIEW_DISPATCH_REF`, and correlates, emitting `retry_run_unverified` on a definite miss (AD-5, AD-6)
+   - [x] Tests: `tests/test_smoke_review_dispatch.py` [new], updated phantom filter test, registered in `ci.yml`
+   - [x] `agents.md`, `docs/INVENTORY.md`, `changelog.d/5093-smoke-review-dispatch-default-branch.md`
 
 ## Conformance
 
@@ -50,4 +50,6 @@
 ## Notes
 - Security pass skipped per the plan header (verified automation-produced `ai:security` issue).
 - The session started with no `gh` and no GitHub MCP tools; `gh` was installed by running `.claude/hooks/session-start.sh` after the repo was attached, and GitHub writes go through `gh api` via the session proxy.
-- Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5093#issuecomment-5887705973
+- Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5093#issuecomment-5887705973 (id 5887705973)
+- Phase 1: `tests/test_test_and_mark_stable_review_blocked_budget.py` needed no change (its retry assertions still hold); the phantom filter test now extracts the `jq --argjson extra` form. Local runs also needed `pytest`, `gawk`, and `yamllint` installed in the session container.
+- Out of scope (AD-8): the Phase 6 poller-wrapper dispatch still runs at `ai/issue-<N>`.
