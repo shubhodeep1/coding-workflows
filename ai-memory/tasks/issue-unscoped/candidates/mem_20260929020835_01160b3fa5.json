@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md (and twin workflow-templates/.claude/commands/implement-plan-claude.md): Lines 12, 15, 187 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The instructions defer issue-mode zombie-checker cleanup until Step 1 but provide no operational trigger there, while the cleanup-section header still directs every stage to run it in Step 0.\n  WHY: An unattended session may attempt cleanup before the source-issue identifier is available or defer it without running it after Step 1, leaving the stopped stage session unarchived.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The lint check (tests/inventory_parity.py) must pass for the PR to merge; scripts/claude_pr_sweep.py must be documented in the docs/INVENTORY.md Scripts section.\n  expected_change_site: docs/INVENTORY.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not update docs/INVENTORY.md to include scripts/claude_pr_sweep.py. The required lint check remains failing on the PR head, blocking the merge.\n- requirement: Ensure issue-mode cleanup actually fires on a /reclarify resume, after Step 1 reads the plan and the Source issue: identifier is available.\n  expected_change_site: .claude/commands/implement-plan-claude.md (and twin) Step 1\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Step 1 contains no operational hook to invoke the Zombie-checker cleanup after the plan is read. The new Step 0 bullet is a textual deferral with no operational mechanism.\n- requirement: A contract test must pin the issue-mode cleanup trigger's placement after Step 1 reads the plan and verify the cleanup section header distinguishes issue-mode timing, so a future edit cannot silently regress the trigger.\n  expected_change_site: tests/test_implement_plan_claude_command.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The existing test only checks for the existence of specific text strings and does not pin the trigger placement relative to Step 1 or verify that the header distinguishes issue-mode timing from the strict step-0 invariant.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/implement-plan-claude.md (and twin workflow-templates/.claude/commands/implement-plan-claude.md): Lines 12, 15, 187 | severity=critical | confidence=5\n  PROBLEM: The issue-mode zombie-checker cleanup is deferred until Step 1 reads the plan, but Step 1 has no operational instruction to invoke it, while the cleanup-section header still directs every stage to run it in Step 0.\n  WHY: An unattended session following the instructions literally will either attempt cleanup in Step 0 before the source-issue identifier is available (causing the cleanup to fail or be skipped) or defer the cleanup without returning to run it after Step 1, leaving the stopped stage session unarchived.\n- .claude/commands/implement-plan-claude.md (and twin workflow-templates/.claude/commands/implement-plan-claude.md): Line 187 | severity=high | confidence=5\n  PROBLEM: The cleanup-section header \"Every stage session runs this in step 0, after resume hygiene\" contradicts the deferred issue-mode timing in the new Step 0 child bullet.\n  WHY: An unattended session or operator reading the cleanup section header first will attempt cleanup in Step 0, regardless of the deferral text, leading to premature execution and failed archival.\n\nTASK_GAP:\nRequirement: The lint check (tests/inventory_parity.py) must pass for the PR to merge; scripts/claude_pr_sweep.py must be documented in the docs/INVENTORY.md Scripts section.\nExpected change site: docs/INVENTORY.md\nEvidence of absence: The PR diff does not update docs/INVENTORY.md to include scripts/claude_pr_sweep.py. The required lint check remains failing on the PR head, blocking the merge.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: Ensure issue-mode cleanup actually fires on a /reclarify resume, after Step 1 reads the plan and the Source issue: identifier is available.\nExpected change site: .claude/commands/implement-plan-claude.md (and twin) Step 1\nEvidence of absence: Step 1 contains no operational hook to invoke the Zombie-checker cleanup after the plan is read. The new Step 0 bullet is a textual deferral with no operational mechanism.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: A contract test must pin the issue-mode cleanup trigger's placement after Step 1 reads the plan and verify the cleanup section header distinguishes issue-mode timing, so a future edit cannot silently regress the trigger.\nExpected change site: tests/test_implement_plan_claude_command.py\nEvidence of absence: The existing test only checks for the existence of specific text strings and does not pin the trigger placement relative to Step 1 or verify that the header distinguishes issue-mode timing from the strict step-0 invariant.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0939a2a011e8aa1884cecb0586ffc896e2e4d6d5fa5b3e45095a38d4c49745c8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4594,
+    "run_id": "36509501454",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36509501454",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929020835_01160b3fa5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4594,
+    "run_id": "36509501454"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T02:08:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
