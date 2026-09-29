@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/gh_api_write_guard.py:747 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The ask-reason always emits `-F {field_key}=@...` even when the caller used `--field`, `--field=`, or an attached `-Fkey=` spelling.\n  WHY: The permission prompt names a flag the caller did not use, which is confusing but does not affect classification.\n- workflow-templates/.claude/hooks/gh_api_write_guard.py:754 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The GraphQL branch condition `and (parsed[\"input\"] is None)` is unreachable after the hoisted `--input` check.\n  WHY: It causes no current failure but may mislead future refactors that move the check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: plan step 3 \u2014 add parametrized test cases covering `--field`, `--field=`, attached `-Fkey=` spellings in reason-text assertions (and update changelog counts).\n  expected_change_site: tests/test_gh_api_write_guard.py + changelog.d/4619-gh-api-guard-file-backed-fields.md\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: none \u2014 this PR added the three cases to `test_file_backed_classification_names_the_flag`, updated the table row to \"17 new\", and fixed the prior nit. Twin sync (73ad50e) already landed; root hook + template parity now hold. No remaining gaps vs plan.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- workflow-templates/.claude/hooks/gh_api_write_guard.py:747 | severity=NIT | confidence=4\n  PROBLEM: ask-reason always emits `-F {field_key}=@...` even for `--field` / `--field=` / `-Fkey=` spellings (test now covers them but does not change emitted text).\n  WHY: permission prompt names a flag the caller did not use; confusing but guard still classifies correctly.\n- workflow-templates/.claude/hooks/gh_api_write_guard.py:754 | severity=NIT | confidence=4\n  PROBLEM: GraphQL branch `and (parsed[\"input\"] is None)` is unreachable after hoisted `--input` check (lines 748-749); dead condition.\n  WHY: no failure today but misleads future refactors that move the check.\n- Requirement: plan step 3 \u2014 add parametrized test cases covering `--field`, `--field=`, attached `-Fkey=` spellings in reason-text assertions (and update changelog counts).\n  Expected change site: tests/test_gh_api_write_guard.py + changelog.d/4619-gh-api-guard-file-backed-fields.md\n  Evidence of absence: none \u2014 this PR added the three cases to test_file_backed_classification_names_the_flag, updated the table row to \"17 new\", and fixed the prior nit. Twin sync (73ad50e) already landed; root hook + template parity now hold. No remaining gaps vs plan.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fa9c2f5fcdfbebcd0a4068ac71b62228fbf8ef8a08c6b1aa33e128a096b6d7b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5004,
+    "run_id": "36561863489",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36561863489",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929114153_354d7908db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5004,
+    "run_id": "36561863489"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T11:41:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
