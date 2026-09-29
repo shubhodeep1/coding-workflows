@@ -6,7 +6,7 @@ On conformance-fix PR #4575, one reviewer (`google_gemini-3_1-flash-lite`) flagg
 | The numbers that matter | Value |
 | --- | --- |
 | Rejections needed to demote a finding | a strict majority of the other successful pass-2 reviewers, and at least 2 |
-| Match between a rejection and a finding | a finding ID issued for this run (issue #4688), naming a pass-1 finding with the same file, line ranges within 3 lines, and the same flagging reviewer |
+| Match between a rejection and a finding | a finding ID issued for this run (issue #4688), naming a pass-1 finding by its `consensus_id` (issue #4687) with the same file, an overlapping line range, and the same flagging reviewer |
 | Hold reasons (`claude_fix_claim.py --reason`) | `cap`, `review-no-verdict-bot`, `conflict-decision`, `ci-outside-pr`, `workflow-failure`, `needs-human` |
 | New log lines | `CLAUDE_FIXER_NONBLOCKING demoted=<n> successful_reviewers=<m>`, `CLAUDE_FIXER_NONBLOCKING_ENTRY`, and `nonblocking=<n>` on `CLAUDE_FIXER_HANDOFF` |
 

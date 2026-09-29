@@ -97,12 +97,18 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `review_<slug>.txt` outputs of reviewers whose status is `success`. A line
    counts only when its `RF-<16 hex>` ID is in the run's
    `rejection_ids_pass1.json`, which `--issue-ids` writes after pass 1. It
-   also needs a non-empty reason and must sit outside any code block. The
-   manifest entry the ID names is matched by file, a 3-line window, and the
-   flagger. Quoted PR text and lines without an ID never count (issue
-   #4688), and no manifest means no demotion. Task gaps and multi-reviewer
-   findings never move, and a missing or failing filter keeps the original
-   ledger. The filtered copy is what the step counts, digests,
+   also needs a non-empty reason and must sit outside any code block. Quoted
+   PR text and lines without an ID (or citing only a `consensus_id`) never
+   count (issue #4688), and no manifest means no demotion. The manifest
+   records each ID's `consensus_id` (`p1-` + 12 hex digits of the SHA-256 of
+   the pass-1 entry, added to the summary by `--annotate` and recomputed from
+   the unchanged `consensus_pass1.txt`), and the vote binds by it, never by
+   proximity (issue #4687): the pass-2 entry must carry the same id, cited by
+   the flagger's own output, at an overlapping range, and an entry stays
+   blocking when another consensus entry of either pass is within 3 lines or
+   the id is duplicated (`CLAUDE_FIXER_NONBLOCKING_KEPT … reason=…`). Task
+   gaps and multi-reviewer findings never move, and a missing or failing
+   filter keeps the original ledger. The filtered copy is what the step counts, digests,
    and posts. Zero ledger entries
    with a clean check snapshot auto-merge in the run (a round whose entries
    are all non-blocking posts the ledger first); at the cap the PR itself
