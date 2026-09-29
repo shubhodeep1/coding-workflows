@@ -96,8 +96,10 @@ _SED_NAMES = frozenset({"sed", "gsed"})
 _AWK_NAMES = frozenset({"awk", "gawk"})
 
 # Wrappers that run the command after them, with the options that take a
-# separate value. `timeout` also takes a duration before the command.
+# separate value. `timeout` also takes a duration before the command, and
+# `env` also takes `NAME=VALUE` assignments.
 _WRAPPER_VALUE_OPTIONS = {
+	"env": frozenset({"-u", "--unset", "-C", "--chdir"}),
 	"sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"}),
 	"doas": frozenset({"-u", "-C"}),
 	"timeout": frozenset({"-s", "-k", "--signal", "--kill-after"}),
@@ -151,6 +153,10 @@ def program_writes(program: str) -> bool:
 def _command_start(tokens: list[str], tokenizer) -> int:
 	"""Index of the command a segment runs, past keywords, assignments, and wrappers."""
 	index = tokenizer._command_word_index(tokens)
+	# The tokenizer skips a bare `env` as a prefix word but stops at its first
+	# option (`env -i`, `env -u NAME`); step back so the loop skips its options.
+	if 0 < index < len(tokens) and tokens[index - 1] == "env" and tokens[index].startswith("-"):
+		index -= 1
 	while index < len(tokens):
 		word = os.path.basename(tokens[index])
 		options = _WRAPPER_VALUE_OPTIONS.get(word)
