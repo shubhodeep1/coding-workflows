@@ -2,19 +2,19 @@
 
 - Plan: docs/plans/issue-5298-strict-clean-vote-format-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5298-strict-clean-vote-format   Final PR: pending
+- Project branch: claude/implement-plan-issue-5298-strict-clean-vote-format   Final PR: #5305 draft
 - Source issue: shubhodeep1/coding-workflows#5298   Base branch: claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote   Security pass: skip (ai:security: automation-produced issue)
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (branch claude/implement-plan-issue-5298-strict-clean-vote-format-phase-1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from the #4835 project branch; phase 1 starting.
+- Last note: phase 1 implemented and verified (89 Claude-fixer tests incl. mawk/gawk parity, 232 regression tests, 52 changelog tests, shellcheck clean); phase PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — Strict verdict grammar for clean votes (failed-slot path of the Claude-fixer hand-off)
+1. [ ] Phase 1 — Strict verdict grammar for clean votes (failed-slot path of the Claude-fixer hand-off)   — PR open (waiting); review rounds: 0; interventions: 0
    - scripts/review_autofix_step_claude_fixer_handoff.sh: `claude_fixer_runner_output_state()` accepts only a contiguous, complete heading/`NONE` block or one bare `NONE`; free text fails on a stray `NONE`, a code location, or a severity/confidence marker; `HARDENING_SUGGESTIONS:` + `NONE` allowed
    - tests/test_review_autofix_claude_fixer_mode.py: exploit in bare form and before/between/after checklist verdicts, each location and severity marker, stray NONE, heading past the block, repeated heading, reordered block, hardening pair, clean narration/summary, mawk/gawk parity
    - README.md, agents.md, changelog.d/5298-strict-clean-vote-format.md
@@ -37,6 +37,7 @@
 - AD-4 [plan, 2026-09-29] Should the stricter rule also apply to ledgers with no failed slot? — Picked: A — no, only the failed-slot path. Alternatives: B — every ledger. Why: the issue and the audited code are the failed-slot path; the no-failed-slot rule is main's pre-existing behaviour, left alone by #5114's AD-1. Flagged for human review. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] Size a reviewer-output rule against real `review_<slug>.txt` files from several review runs (the reviewer-logs artifact) before choosing it: real clean outputs carry agent narration, summaries, reordered lenses, and a HARDENING_SUGGESTIONS section, so a rule tested only on synthetic outputs over- or under-rejects. (files: scripts/review_autofix_step_claude_fixer_handoff.sh)
 
 ## Notes
 - Issue progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5298#issuecomment-5901171187
