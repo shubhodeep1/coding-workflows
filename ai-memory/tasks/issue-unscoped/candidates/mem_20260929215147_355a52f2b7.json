@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:474-477 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A superseding hand-off on an earlier page could be missed on the marker re-read if comments are deleted between reads and pagination shifts, causing a stale marker to appear live.\n  WHY: The window is narrow and the comment volume needed is extremely unlikely.\n- scripts/claude_fixer_pending_checks.py:350-352 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A transient 404 from the head-branch runs listing raises `ReadError` rather than returning an empty list, deferring a legitimate merge.\n  WHY: This fails closed and the next sweep retries.\n- scripts/claude_fixer_pending_checks.py:218-219 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: If count lines shift from their expected positions in a malformed snapshot, `parse_check_snapshot` misses them and classifies the snapshot as invalid.\n  WHY: The hand-off script writes the six header lines contiguously, so this cannot happen with the current snapshot format and fails closed if malformed.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:189 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: An empty ledger digest would make the pending-checks marker unmatchable by `find_pending_marker`.\n  WHY: This defers the merge, and the clean-ledger guard ensures the digest is computed before this branch.\n- scripts/claude_fixer_pending_checks.py:395-416 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `enable_auto_merge` passes hardcoded defaults instead of consumer-configured values for `FORWARD_MERGE_FALLBACK_AUTO_MERGE` and `ORCH_INTEGRATION_BRANCH_PATTERN`.\n  WHY: The hardcoded defaults match the workflow defaults, and the relevant branch guards do not apply to these `claude/*` PRs.\n- scripts/claude_pr_sweep.py:255-274 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: No defect was identified in the pending-checks exception handling: the `continue` correctly advances to the next candidate after a per-PR exception.\n  WHY: The cited test confirms the second candidate is still evaluated after the first raises.\n- scripts/claude_pr_sweep.py:255-274 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The pending-checks pass broadens the sweep from queueing due fixes to also auto-merging clean PRs with green CI.\n  WHY: The pass is gated on a trusted marker, honors `--dry-run`, changes no behavior for PRs without such a marker, and is documented.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_fixer_pending_checks.py:474-477 | severity=low | confidence=2\n  PROBLEM: A superseding hand-off on an earlier page could be missed on the marker re-read if comments are deleted between reads and pagination shifts, causing a stale marker to appear live.\n  WHY: The window is narrow and the comment volume needed is extremely unlikely.\n- scripts/claude_fixer_pending_checks.py:350-352 | severity=low | confidence=2\n  PROBLEM: A transient 404 from the head-branch runs listing raises `ReadError` rather than returning an empty list, deferring a legitimate merge.\n  WHY: This fails closed and the next sweep retries.\n- scripts/claude_fixer_pending_checks.py:218-219 | severity=low | confidence=2\n  PROBLEM: If count lines shift from their expected positions in a malformed snapshot, `parse_check_snapshot` misses them and classifies the snapshot as invalid.\n  WHY: The hand-off script writes the six header lines contiguously, so this cannot happen with the current snapshot format and fails closed if malformed.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:189 | severity=low | confidence=1\n  PROBLEM: An empty ledger digest would make the pending-checks marker unmatchable by `find_pending_marker`.\n  WHY: This defers the merge, and the clean-ledger guard ensures the digest is computed before this branch.\n- scripts/claude_fixer_pending_checks.py:395-416 | severity=low | confidence=1\n  PROBLEM: `enable_auto_merge` passes hardcoded defaults instead of consumer-configured values for `FORWARD_MERGE_FALLBACK_AUTO_MERGE` and `ORCH_INTEGRATION_BRANCH_PATTERN`.\n  WHY: The hardcoded defaults match the workflow defaults, and the relevant branch guards do not apply to these `claude/*` PRs.\n- scripts/claude_pr_sweep.py:255-274 | severity=low | confidence=1\n  PROBLEM: No defect was identified in the pending-checks exception handling: the `continue` correctly advances to the next candidate after a per-PR exception.\n  WHY: The cited test confirms the second candidate is still evaluated after the first raises.\n- scripts/claude_pr_sweep.py:255-274 | severity=low | confidence=1\n  PROBLEM: The pending-checks pass broadens the sweep from queueing due fixes to also auto-merging clean PRs with green CI.\n  WHY: The pass is gated on a trusted marker, honors `--dry-run`, changes no behavior for PRs without such a marker, and is documented.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "486189721e1c4fe5cbac20166cf20d140e91efbff19554918b54ebfe3c9437d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36633412584",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36633412584",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929215147_355a52f2b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36633412584"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T21:51:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
