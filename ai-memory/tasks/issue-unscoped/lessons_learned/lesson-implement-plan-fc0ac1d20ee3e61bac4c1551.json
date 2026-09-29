@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T21:42:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A stage that stops at `Status: BLOCKED` with no PR in flight must still persist the BLOCKED state to the project branch log, or the `/reclarify` resume reads a stale `IN_PROGRESS` with a live checker and `/implement-issue-claude` step 4 refuses to resume.",
+  "phase": "implement_plan",
+  "pr_number": 5256,
+  "record_id": "lesson-implement-plan-fc0ac1d20ee3e61bac4c1551",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:validation",
+    "plan:issue-5114-verify-clean-votes-from-runner-output",
+    "file:.claude/commands/implement-issue-claude.md",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
