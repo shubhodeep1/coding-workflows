@@ -4,6 +4,8 @@ The **master session** is the interactive Claude Code session that supervises th
 
 The master runs in **Auto mode**. The operator's goal is unattended running: a human is involved only when Claude is really stuck.
 
+**The master is temporary (operator, 2026-09-29).** Future projects, in this repo and in consumer repos, will run without a master session, so every project must resolve its own questions and problems. Every master duty in this file is interim: each one has, or gets, a fix issue that moves it into the automation (see "Retiring the master" below). When you do something by hand that a future project could not do for itself, that is a gap: file its fix issue the same turn.
+
 ## Ownership
 
 - **Ours:** every `claude/*` PR, every issue labelled `ai:claude`, and every session this account's automation starts.
@@ -30,35 +32,35 @@ These are in force until the operator changes them. Cite them by Q-number when a
 | **Q63: A** (dead-checker restart) | The poller restarts a project checker when all five conditions hold (below). #4910 moves the rule into the hourly pickup; after that lands, remove it from the poller. |
 | **Q66: A** | #4695 composes the #4687 and #4688 rejection gates, with the `RF-` id as the only vote token. |
 | **Q67: A** | Batch hook and `settings.json` syncs into one approval window (#4817, #4858, and #4891 when ready). |
+| **Fix route, Q1: A** (2026-09-29) | A long-term fix is filed as an `ai:claude` issue (root cause, evidence, proposed fix) for the unattended pipeline to build; the master supervises it to merge and does not write it itself. |
+| **Q2: A** (2026-09-29) | Q46 holds for each new master session. The operator confirmed it for `session_01Qt5nTTqhWxcYA4NciTC6DL`. A new master should confirm it once with the operator: the Auto-mode classifier cannot see a standing approval written in this file and denied a follow-up to a Q46 merge as "Merge Without Review" until the operator confirmed it in the session. |
+| **Q3: A** (hook and `settings.json` changes, 2026-09-29) | Once #4785 lands, its Actions sync PR merges `.claude/hooks/**` and `settings.json` changes after the full review, security and validation passes, with no human. A change that **loosens** a guard (removes a deny, widens an allow rule, deletes a hook) still waits for the operator. |
+| **Q4: A** (failure escalations, 2026-09-29) | On a §28.C failure escalation (a cap reached, a failed security or validation run), an escalation judge (a fresh Opus session) reads the evidence and picks from a fixed menu: one more budget round with a narrower fix, de-scope the failing part as an auto-decision, or close as not planned with a report. It never skips the security pass, never merges past a failing required check, never repeats a choice for the same failure, and notifies the operator of its decision. To be built by the "Retire the master" plan. |
+| **Q5: A** (the poller, 2026-09-29) | The poller's checks (blocked-issue sweep, dead-checker restarts, waking sessions after an answer) fold into the hourly Claude issue pickup and an Actions job, which act on what they find. The operator is alerted only for §22.B / §23.C / §24.D operations. Then the poller session is retired. To be built by the "Retire the master" plan. |
 | **Q17: A** (stacked-project validation skip, 2026-09-29) | When a project's runtime validation cannot be dispatched only because its final PR targets **another project's branch** (`validate.yml` answers `Explicit validation target is not authorized`), the master answers the §28.C blocker with A: record `Validation: skipped (covered by #<parent>'s project validation)` and comment `/reclarify`. The parent project re-runs its security audit and runtime validation on a branch that contains the fix before anything reaches `main`. It never applies to a project whose final PR targets `main` or `stable`, or to a validation run that was dispatched and failed. Lasts until #4734 (validate stacked and `stable` targets) is on `main`. |
 
 ## Current priorities (operator, 2026-09-29)
 
 The operator wants these three landed first, so the automation can be synced to consumer repos and used for projects there (Q9: A):
 
-| Priority | What it fixes | Where it stands (2026-09-29 10:15Z) |
+| Priority | What it fixes | Where it stands (2026-09-29 11:20Z) |
 |---|---|---|
-| **GPT judge**: convergence project `claude-fixer-unattended-convergence`, integration PR #4648 | A `claude/*` PR whose findings were all rejected converges without a verdict bot or a human. It replaces most Q46 merges. | Phases 1–3 merged (phase 3 PR #4904 as `15a1b1c`). Phase 4 (session janitor, keep it per Q11: A) runs in `session_014AiXYFTM8rS3ZvbqtCXSWe`. The master answered its blocker with Q1: A (twin-first, Q40) and Q2: A (sync with `main` first, on `claude/implement-plan-claude-fixer-unattended-convergence-sync-main`). Next come two twin-sync stops. **Sync stop:** three `.claude/**` twins, then fast-forward the project branch. **Phase 4 stop:** `stale_sessions.py`, the `fix-claude-pr.md` twin, a `settings.json` change (needs an approval window), and a `claude-issue-pickup.md` diff (no twin). Project checker: `session_01CUoZtWt9aXXvwPvx9QwhAx`. |
-| **#4785**: automatic `.claude/` sync via Actions | Removes every twin-sync stop and approval window. | Phase 1 PR #4807 merged into the project branch. Conformance fix 1 is PR #5108, and its CI is running. Final PR #4804 comes after the conformance, security, and validation passes. |
-| **#4948**: automatic twin-first default | Removes the "how should phase N run?" stop until #4785 lands. | Phase 1 (#5008) and the completion PR (#5102) merged. Final PR #4989 to `main` is in review round 1: 17 ledger entries at `dc3541b`, 09:30Z, and the chain's session is judging them. One finding is the misleading hold text of `claude_fix_claim.py`, which is #5058. |
+| **GPT judge**: convergence project `claude-fixer-unattended-convergence`, integration PR #4648 | A `claude/*` PR whose findings were all rejected converges without a verdict bot or a human. It replaces most Q46 merges. | Phases 1–3 merged. Phase 4 (session janitor, Q11: A) runs in `session_014AiXYFTM8rS3ZvbqtCXSWe`: it syncs `main` on `claude/implement-plan-claude-fixer-unattended-convergence-sync-main` first and was told at 11:11Z to merge `main` again for `ce1db50` (#4948) and to pass `--reason` on the new twin-first hold call (#5058). Next come two twin-sync stops. **Sync stop:** `.claude/**` twins, then fast-forward the project branch. **Phase 4 stop:** `stale_sessions.py`, the `fix-claude-pr.md` twin, a `settings.json` change (needs an approval window), and a `claude-issue-pickup.md` diff (no twin). Project checker: `session_01CUoZtWt9aXXvwPvx9QwhAx`. |
+| **#4785**: automatic `.claude/` sync via Actions | Removes every twin-sync stop and, under Q3: A, every approval window except guard-loosening changes. | Phase 1 PR #4807 merged into the project branch. Conformance fix 1 is PR #5108 (in review at 11:00Z). Final PR #4804 comes after the conformance, security, and validation passes. |
+| **#4948**: automatic twin-first default | Removes the "how should phase N run?" stop until #4785 lands. | **On `main`**: final PR #4989 merged under Q46 at 10:4xZ as `ce1db50`. Its stage session was woken at 11:18Z for verify-activation. |
 
 **When all three are on `main`:** release once (Q10: B). Dispatch `test-and-mark-stable.yml` on `main`, which tags `@stable` and notifies the 13 consumer repos in `.github/ai/consumer_repos.json`. The operator approved releasing at that point (Q10: B). Because the dispatch is billed and reaches 13 repos (§23.C), confirm with the operator in one line before running it. Then confirm the run concluded `success` and tell the operator the consumers are synced.
 
-**Also pending (2026-09-29 10:15Z):**
-- **Next approval window** (Auto mode off, one `cp` command; operator answered Q6: A):
-  - **#4910**, PR #4984: copy the `settings.json` twin, which adds the four `scripts/claude_checker_restart.py scan|decide` allow rules and `set_session_tags`. The worktree `scratchpad/win/4910` is at head `48dfc46`, detached, with the pickup diff already applied. Delete its stray `test_file.txt` before committing.
-  - **#5082**, PR #5099: copy the `.claude/hooks/unattended_question_guard.py` twin (sha256 `6f539653…`), then run the suites its blocker names. #5082's project branch targets `claude/implement-plan-issue-4911-unattended-question-guard`, which already merged to `main`, so Q17 applies to its validation.
-- **#5018** (classifier "Auto-Mode Bypass" on master-answered resumes) is parked until the operator runs it in a watched session (Q3: A). Once its phase is built, it needs one approval window for its `settings.json` change.
-- **`hooks/session-start.sh` conflict:** #4938 and #4952 both edit the hook on separate branches. #4938's phase PR #5006 merged into its project branch (`72c8583`, operator Q7: A), and a trial merge with #4952's PR #5010 was clean. Whichever final PR reaches `main` second still needs a conflict check.
-- **Poller items open at 10:02Z.** Clear each with its fix issue:
-  - #4886: PR #5009 twin-sync choice (#4785).
-  - #4734 and #5063: Bash permission prompts, operator only.
-  - Conformance and review questions still waiting: #5012 conformance Q1, #4723 Q1, #4787 AD confirm, #4858 conformance 2/3 Q1.
-  - Merge questions: #4755 conformance (merge #5081?) and #4919 (merge PR #4992?).
-  - #5100: a Q58 duplicate of #4678.
-- **Q46 merges done 2026-09-29 10:24Z:** PR #5060 (#4975) `453b439`, #4963 (#4926) `051c66b`, #5027 (#4976) `d9b01d3`, and #4918 (#4885) `a4b7030`. Their stage sessions wake at 10:34Z. A Sonnet agent checked the rejections, and I ran #4963's suites locally. This "verdict-bot class" stops until the GPT judge (#4648) lands.
-- **#4934:** a Bash permission prompt at conformance 2/3. Only the operator can answer it (fix: #5068).
-- **Twin syncs done 2026-09-29 10:0xZ**, in the operator's approval window: #4619 `73ad50e`, #4891 `df89ef4`, #4786 `6b79adb`, #4985 `0e9976d`, #4952 `9a2290f`, #4887 `e0d90bb`. Each stage session was woken by a one-shot trigger at 10:11Z. If one hasn't resumed, check its issue for `ai:claude-blocked`.
+**Also pending (2026-09-29 11:20Z):**
+- **Next approval window** (Auto mode off, one `cp` command): the convergence phase 4 `settings.json` change when its stop comes, and the #4858 hook: PR #5103 merged into #4858's project branch at 09:28Z without its twin sync, so the root `.claude/hooks/inline_edit_guard.py` still lags the twin there.
+- **#5012:** the Q17 answer is posted on the issue (comment 5888990079), but the classifier denied the master's wake of `session_01Lzaupq8ei4eKF33CFQEpzH` with no reason given. It needs the operator's `/reclarify` or a wake (fix: #4734).
+- **PR #4810** (#4798): the fixer rejected every finding and held it. `lint` failed on the flaky stall-guard test (#5119), and the failed job was re-run at 11:15Z (run 36529220329, attempt 2). Merge it under Q46 if the re-run passes. The classifier denied a scheduled self-check that would merge it, so check it on a poller cycle.
+- **Stage sessions woken after a master answer, to confirm on the next cycle:** #4886 (twin sync `566aa5a`, 11:05Z), #4755 and #4723 (11:15Z), #4948 (11:18Z). #4867 and #4919 got `/reclarify` (pickup, up to an hour).
+- **Watch (no wake confirmed after the 10:03Z twin syncs):** #4891 (label still on, round-1 hand-off on PR #5033 at 10:38Z), #4619 (PR #5004), #4786 (PR #5049), #4952 (PR #5010).
+- **#5018** (classifier "Auto-Mode Bypass" on master-answered resumes) is parked until the operator runs it in a watched session (Q3: A of 2026-09-28).
+- **`hooks/session-start.sh` conflict:** #4938 and #4952 both edit the hook on separate branches. Whichever final PR reaches `main` second needs a conflict check.
+- **Operator-only permission prompts:** #4934, #4734, #5063 (fix: #5068).
+- **Q46 merges done 2026-09-29:** 10:24Z PR #5060 (#4975), #4963 (#4926), #5027 (#4976), #4918 (#4885); 10:4xZ #4989 (#4948) `ce1db50`; 11:0xZ #5081 (#4755) `025da10`, #4992 (#4919) `f70b262`, #5035 (#4723) `f56843b`.
 
 ## Routines
 
@@ -106,6 +108,28 @@ Restart a project checker only when ALL of these hold. A project checker is a no
 - **PR needs a real fix** (conflict, failing check, review round) with no live fixer: start a fresh fixer. Call `create_session` with `model: claude-opus-5-5`, `permission_mode: auto`, a numbered title, and the prompt `/effort high` alone. Then `create_trigger` into it two minutes out with `/fix-claude-pr <PR URL> — kind <kind> — head <sha>`, plus any operator context (for example that a hold was answered, so it posts a newer claim).
 - **Your own PR:** arm the §26 check-in (stale Routine sweep, hand-back Routine, Sonnet checker at `/effort low`). On a hand-back, run `/fix-claude-pr` in the master session.
 
+## Retiring the master
+
+Each duty below is done by hand today and moves into the automation through the issue named. A duty with no issue is a gap: the "Retire the master session" plan (Q4: A, Q5: A) covers the gaps. Remove a row when its fix is on `main`.
+
+| Master duty today | Automated by |
+|---|---|
+| Held merges with every finding rejected (Q46) | #4648 (GPT judge) |
+| Twin syncs of commands and scripts (Q40) | #4785 (Actions sync PR); #4948 in the meantime |
+| Hook and `settings.json` syncs (approval windows) | #4785 under Q3: A; guard-loosening changes stay with the operator |
+| Stacked-project validation skips (Q17) | #4734 |
+| Closing duplicate prompt reports (Q58) | #4867 |
+| Numbered titles and archiving finished sessions (Q60/Q61) | #4886, #4887 |
+| Restarting dead checkers (Q63) | #4910 |
+| Answering in-session questions | #4911 |
+| Replacing sessions started without a repository checkout | #4938 |
+| Resumes the classifier refuses after a master answer | #5018 |
+| Operator-only permission prompts | #5068, #4786, #4909, #4891, #4858, #4678 |
+| Waking a session after its blocker is answered (`/reclarify` waits up to an hour) | #4990 |
+| Flaky CI that holds an otherwise mergeable PR | #5119 (the stall-guard test); file one issue per flake |
+| Failure escalations: caps, failed security or validation runs (§28.C) | gap: escalation judge (Q4: A) |
+| The poller session: blocked-issue sweeps, hand-offs, operator alerts | gap: fold into the hourly pickup and an Actions job (Q5: A) |
+
 ## IDs
 
 | What | ID |
@@ -146,6 +170,8 @@ Restart a project checker only when ALL of these hold. A project checker is a no
 | Checker given an empty `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` never sees review hand-offs and waits forever | #5057 |
 | Hold claims always say "reached the cap of 3", even for twin-sync and held-merge holds | #5058 |
 | Classifier refuses optional cleanup (`delete_trigger` "Interfere With Workloads") three times, forcing a human prompt | #5068 |
+| A flaky required check (`test_codex_stall_guard_scripts.py` timing race) holds an all-rejected PR | #5119 |
+| Pickup-started fixer has no repository checkout and cannot find `/fix-claude-pr` (PR #4810, 10:33Z) | #4938 |
 
 ## Gotchas
 
