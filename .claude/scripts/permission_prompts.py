@@ -92,9 +92,16 @@ _checker_spec = importlib.util.spec_from_file_location("check_in_status", _CHECK
 check_in_status = importlib.util.module_from_spec(_checker_spec)
 _checker_spec.loader.exec_module(check_in_status)
 _SKIP_CHECK_PATH = Path(__file__).resolve().with_name("security_pass_skip.py")
-_skip_check_spec = importlib.util.spec_from_file_location("security_pass_skip", _SKIP_CHECK_PATH)
-security_pass_skip = importlib.util.module_from_spec(_skip_check_spec)
-_skip_check_spec.loader.exec_module(security_pass_skip)
+# Only `duplicate-check` needs this sibling, so a missing or broken copy must
+# not stop `report` and `file`: record the error and refuse the check instead.
+_SKIP_CHECK_ERROR = ""
+try:
+	_skip_check_spec = importlib.util.spec_from_file_location("security_pass_skip", _SKIP_CHECK_PATH)
+	security_pass_skip = importlib.util.module_from_spec(_skip_check_spec)
+	_skip_check_spec.loader.exec_module(security_pass_skip)
+except Exception as _skip_check_exc:  # noqa: BLE001 - any load failure disables duplicate-check only
+	security_pass_skip = None
+	_SKIP_CHECK_ERROR = f"{_SKIP_CHECK_PATH.name} could not be loaded: {_skip_check_exc}"
 
 FILING_REPO = "shubhodeep1/coding-workflows"
 LABEL = "ai:permission-prompt"
@@ -111,8 +118,10 @@ DUPLICATE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # with a write mode, or a file move/removal.
 _PROGRAM_WRITE_RE = re.compile(
 	r"\bwrite_text\s*\(|\bwrite_bytes\s*\("
-	r"|\bopen\s*\([^)]*?['\"](?:[wax]|r\+)[bt+]*['\"]"
-	r"|\bos\.replace\s*\(|\bshutil\.|\.unlink\s*\(|\bos\.remove\s*\("
+	r"|\bopen\s*\([^)]*?['\"](?:[wax]|r[bt]?\+)[bt+]*['\"]"
+	r"|\bos\.replace\s*\("
+	r"|\bshutil\.(?:copy(?:file|2|tree|mode|stat)?|move|rmtree|chown|make_archive|unpack_archive)\s*\("
+	r"|\.unlink\s*\(|\bos\.remove\s*\("
 )
 _PYTHON_RE = re.compile(r"^python(?:3(?:\.[0-9]+)?)?$")
 # In-place edit switches: `sed -i`/`-i.bak`/`--in-place`; `perl`/`ruby` `-i`
@@ -726,7 +735,7 @@ def decide_duplicate_close(
 	body = str(issue.get("body") or "")
 	target_body = str(target.get("body") or "")
 	# Condition 1: pipeline-filed.
-	if "pull_request" in issue:
+	if issue.get("pull_request"):
 		reasons.append(f"#{issue_number} is a pull request, not an issue")
 	if issue.get("state") != "open":
 		reasons.append(f"#{issue_number} is not open")
@@ -753,7 +762,7 @@ def decide_duplicate_close(
 	target_closed_completed = target.get("state") == "closed" and target.get("state_reason") == "completed"
 	if target_number == issue_number:
 		reasons.append("the target is the issue itself")
-	if "pull_request" in target:
+	if target.get("pull_request"):
 		reasons.append(f"#{target_number} is a pull request, not an issue")
 	elif target.get("state") != "open" and not target_closed_completed:
 		reasons.append(f"#{target_number} is closed as {target.get('state_reason') or 'unknown'}, not completed")
@@ -790,6 +799,8 @@ def duplicate_check(repo: str, issue_number: int, target_number: int, fix_pr_num
 	"""Read what `decide_duplicate_close` needs (at most five GETs) and decide; exit 2 on a read failure."""
 	if target_number == issue_number:
 		return 0, {"eligible": False, "reasons": ["the target is the issue itself"], "issue": issue_number, "target": target_number, "fix_pr": fix_pr_number}
+	if security_pass_skip is None:
+		return 2, {"eligible": False, "reasons": [_SKIP_CHECK_ERROR], "issue": issue_number, "target": target_number, "fix_pr": fix_pr_number}
 	try:
 		login = str(check_in_status.gh_api("user").get("login") or "")
 		issue = check_in_status.gh_api(f"repos/{repo}/issues/{issue_number}")
