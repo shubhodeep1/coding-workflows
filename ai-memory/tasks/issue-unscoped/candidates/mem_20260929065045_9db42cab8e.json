@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/dispatch_workflow.py:213-237 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `recent_run_ids(repo, workflow)` is called before `_post_dispatch` even though its result is only used by the polling fallback.\n  WHY: When the response includes a run ID, each dispatch performs an unused REST GET.\n- workflow-templates/.claude/scripts/dispatch_workflow.py:160-165 | severity=low | confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_post_dispatch` does not document which credential it expects when invoking `gh api`.\n  WHY: It does not fail at runtime, but a future change could pick up the wrong token without noticing.\n- workflow-templates/.claude/scripts/dispatch_workflow.py:184 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_post_dispatch` does not explicitly pre-check for an empty or non-object response before the fallback path.\n  WHY: Non-JSON but non-empty `gh` output returns `None`, forcing slower polling.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/dispatch_workflow.py:213-237 | severity=low | confidence=[2]\n  PROBLEM: `recent_run_ids(repo, workflow)` is called before `_post_dispatch` even though its result is only used by the polling fallback.\n  WHY: When the response includes a run ID, each dispatch performs an unused REST GET.\n- workflow-templates/.claude/scripts/dispatch_workflow.py:160-165 | severity=low | confidence=[1]\n  PROBLEM: `_post_dispatch` does not document which credential it expects when invoking `gh api`.\n  WHY: It does not fail at runtime, but a future change could pick up the wrong token without noticing.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- workflow-templates/.claude/scripts/dispatch_workflow.py:184 | severity=low | confidence=[3]\n  PROBLEM: `_post_dispatch` does not explicitly pre-check for an empty or non-object response before the fallback path.\n  WHY: Non-JSON but non-empty `gh` output returns `None`, forcing slower polling.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "af86d39f5bf49cff454d23638b46ade3ed9482eb1415b2549d175d22a2a5ae20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5059,
+    "run_id": "36530310734",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36530310734",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929065045_9db42cab8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5059,
+    "run_id": "36530310734"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T06:50:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
