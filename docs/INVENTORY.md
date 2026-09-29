@@ -122,6 +122,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
 - `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
 - `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
+- `scripts/claude_checker_restart.py` — Decide which dead `/implement-plan-claude` checkers the hourly Claude issue pickup restarts, and which issues whose logged checker is gone it re-queues (issue #4910).
 - `scripts/claude_issue_handoff.sh` — Claim a standalone issue routed to Claude and send its `claude-issue` repository_dispatch to coding-workflows.
 - `scripts/claude_issue_intake.sh` — Validate one `claude-issue` payload and queue it as an `ai:claude-issue-queue` issue for the Claude issue pickup.
 - `scripts/claude_issue_queue_watchdog.sh` — Flag queued Claude issues the pickup left open past `CLAUDE_ISSUE_QUEUE_STALE_HOURS` and send one Telegram alert.
