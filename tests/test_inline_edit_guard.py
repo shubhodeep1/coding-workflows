@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -329,6 +330,25 @@ def test_hook_reuses_the_gh_api_guard_tokenizer():
 	source = GUARD_PATH.read_text(encoding="utf-8")
 	assert '"gh_api_write_guard.py"' in source
 	assert "def shell_segments" not in source and "def strip_heredoc_bodies" not in source
+
+
+@pytest.mark.parametrize("hook_path", [GUARD_PATH, TEMPLATE_GUARD_PATH], ids=["root", "template"])
+def test_tokenizer_api_the_hook_calls_exists(hook_path: Path):
+	"""Pin every `tokenizer.<name>` the hook calls to the sibling gh_api_write_guard.py.
+
+	A rename there raises AttributeError inside the hook, which the fail-open path
+	swallows, so the guard would stop denying with only a systemMessage warning.
+	"""
+	source = hook_path.read_text(encoding="utf-8")
+	called = sorted(set(re.findall(r"\btokenizer\.([A-Za-z_]\w*)", source)))
+	assert {"_command_word_index", "shell_segments", "strip_heredoc_bodies"} <= set(called)
+	tokenizer_path = hook_path.parent / "gh_api_write_guard.py"
+	spec = importlib.util.spec_from_file_location(f"_tokenizer_api_{hook_path.parent.parent.parent.name}", tokenizer_path)
+	assert spec is not None and spec.loader is not None
+	tokenizer = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(tokenizer)
+	missing = [name for name in called if not callable(getattr(tokenizer, name, None))]
+	assert not missing, f"{tokenizer_path} no longer defines {missing}, which {hook_path.name} calls"
 
 
 # ──────────────────────────────────────────────────────────────────

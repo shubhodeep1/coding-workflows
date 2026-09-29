@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#4858
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4858-inline-edit-guard   Final PR: #4877 draft
-- Status: BLOCKED
-- Stage: phase 1/1
+- Status: IN_PROGRESS
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #4925 (phase 1): twin sync by the supervising session, then /reclarify
+- Waiting on: PR #4925 (phase 1): review round 2
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (no project checker yet; the resumed stage creates one when it arms the wait on PR #4925)
+- Check-in: armed by session_01UHnPGfQZkuJy56A17mPu1m after this push (ids in its report and on the #4858 progress comment)
 - Last updated: 2026-09-29
-- Last note: Phase 1 implemented twin-first (operator Q40 A): only the `workflow-templates/.claude/**` twins changed, PR #4925 opened against the project branch, and a `hold` claim is posted on its head. BLOCKED until the supervising session copies the four twins into `.claude/` as `[claude-twin-sync]`, runs the tests, pushes, and comments `/reclarify`. On resume, arm the wait on PR #4925; do not re-implement the phase.
+- Last note: Twin sync landed (`2917932`, operator Q1 A). Review round 1 on `2917932`: one finding (the hook's private tokenizer calls are not pinned by a test), judged valid and fixed test-only in `tests/test_inline_edit_guard.py`; no `.claude/**` edit.
 
 ## Phases
-1. [ ] Phase 1 — inline-edit guard hook, wiring, logging, docs, tests   — protected paths: `.claude/hooks/inline_edit_guard.py`, `.claude/settings.json`, `.claude/scripts/permission_prompts.py`, `.claude/commands/seed-repo.md` (edited only in their `workflow-templates/.claude/` twins, Q40) — PR #4925 open (hold: awaiting `[claude-twin-sync]`); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — inline-edit guard hook, wiring, logging, docs, tests   — protected paths: `.claude/hooks/inline_edit_guard.py`, `.claude/settings.json`, `.claude/scripts/permission_prompts.py`, `.claude/commands/seed-repo.md` (edited only in their `workflow-templates/.claude/` twins, Q40) — PR #4925 open (twin sync `2917932` landed); review rounds: 1; interventions: 0
    - [x] `inline_edit_guard.py` twin: deny with the issue's message; no decision for reads, `pytest`, file-path scripts, and data; fail open; `CLAUDE_INLINE_EDIT_GUARD=off` (root copy: pending twin sync)
    - [x] Twin `settings.json` wires it as a `PreToolUse` `Bash` hook (root copy: pending twin sync)
    - [x] Denies log `INLINE_EDIT_GUARD action=deny` and write a `source: inline_edit_guard` record; the `permission_prompts.py` twin counts them as `expected_denies` and never files them (root copy: pending twin sync)
@@ -44,6 +44,7 @@
 - AD-8 [phase 1/1, 2026-09-29] Should the `/seed-repo` file list name the new hook? — Picked: A — add `hooks/inline_edit_guard.py` to it. Alternatives: B — leave the list alone. Why: the list says it is the set the sync mirrors, and the sync already copies the hook. Applied in: PR #4925. Status: pending review
 
 ## Lessons
+- [source:intervention] A hook that reuses another hook's functions by path must pin every attribute it calls in a test that loads the real sibling module, because the fail-open handler turns a rename into a silently disabled guard. (files: .claude/hooks/inline_edit_guard.py, tests/test_inline_edit_guard.py)
 
 ## Notes
 - Permission mode at start: auto.
@@ -53,3 +54,5 @@
 - Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29). Operator comment 5881614126 on #4858 (answer to Q1): edit only the `workflow-templates/.claude/**` twins, open the phase PR, post a `hold` claim on its head, and stop BLOCKED. The supervising session copies the twins into `.claude/` as `[claude-twin-sync]`, the operator approves the hook and `settings.json` write in a watched session, and the supervising session then runs the tests, pushes, and comments `/reclarify`.
 - Resumed 2026-09-29 by session session_013SuQEPUzKPVwYhCCH6myWK (dispatcher trigger trig_017sFCGvt2EuXaHPahMBHjMh). That session also had no `mcp__github__*` tools; `gh` was installed by running `.claude/hooks/session-start.sh`, and GitHub calls went through `gh api` via the session proxy. The project branch was synced with `main` (`[claude-merge-resolve]`).
 - CLAUDE.md §23.I: #4678's rule text is still on its own project branch, so phase 1 adds the rule together with its enforcement in a new paragraph at the end of §23.I. It does not touch the lines #4678 edits, so the two merge in either order. The deny message names "§28.C twin-first" (added by #4785) and is kept verbatim from the issue.
+- Resumed 2026-09-29 by session session_01UHnPGfQZkuJy56A17mPu1m (dispatcher trigger trig_01NvdhtsDNaHUvsDYxvNKvNB, after the operator's twin sync `2917932` and `/reclarify`). The review workflow had already handed off round 1 on `2917932` (comment 5882947491). `check_in_status.py` reports it only when `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` is set; without it, it reads `open` (fail-closed), so the checker is given that login.
+- Review round 1 (`2917932`): 2 consensus entries, one finding: `inline_edit_guard.py` calls `tokenizer._command_word_index`, `shell_segments`, and `strip_heredoc_bodies` from `gh_api_write_guard.py` and no test pins them. Valid (a rename would be swallowed by the fail-open path). Fixed test-only: `test_tokenizer_api_the_hook_calls_exists` (root and template) loads the sibling tokenizer and asserts every `tokenizer.<name>` the hook calls exists; confirmed to fail on a renamed `_command_word_index`.
