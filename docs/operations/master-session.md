@@ -156,6 +156,8 @@ Each duty below is done by hand today and moves into the automation through the 
 | Checkers die when a re-arm fails | #4910, #4750 |
 | Unattended sessions ask in-session or via `AskUserQuestion` | #4911 |
 | Blocked sessions replaced by `/reclarify` stay open | #4817 |
+| An answer with `/reclarify` on a later line is never routed | #5243 |
+| `/reclarify` on an issue its own final PR merge closed is skipped | #5222 |
 | Finished sessions pile up; titles hide numbers | #4887, #4886 |
 | Duplicate permission-prompt issues | #4867 |
 | Parallel security follow-ups change the same code | #4934 |
@@ -192,6 +194,7 @@ Learned 2026-09-29:
 - **Read the whole blocker before a twin sync.** Blockers can list a `.claude/` file that has **no twin** (for example `.claude/commands/claude-issue-pickup.md`), with an exact edit and the expected sha256. A truncated read misses it: #4886's `72273b8` did, and `d0520f7` fixed it. Check every listed sha256 after copying.
 - **Consumer-variant commands differ on purpose.** `validate-consumer-issue`, `verify-activation`, `analyze-log`, `investigate-issue` and `deploy-activate` never match their twins, so never sync them.
 - **Wake a stage session directly** when you know its id. A one-shot trigger that says "answered on the issue (comment …); continue" costs one message. `/reclarify` goes through the pickup queue, which can take an hour (#4990) and can start a session with **no repository checkout** (#4938). Use `/reclarify` only when you don't know the session.
+- **`/reclarify` must be the first text of the comment.** `clarify.yml` starts the job only when the comment body starts with `/reclarify`. An answer that puts `/reclarify` on its last line is skipped silently: no `ai:claude-issue-routed` comment, and the project stays stalled. On 2026-09-29, 13 answered projects sat unrouted for 3–14 h this way (#5243). Put `/reclarify` on the first line and the answer below it. Within 5 minutes, check that the `ai:claude-issue-routed` comment appeared. `/reclarify` on a **closed** issue is always skipped (#5222): after merging an issue-mode final PR, start the next stage yourself with the two-step `create_session` + `— resume.` trigger.
 - **Pickup-started sessions sometimes have no `sources`** (`get_session` → `session_context` has no `sources`). They ask about push access or skill locations. Archive the session and start a replacement yourself with `create_session` and `source_url` (#4938).
 - **A session's `post_turn_summary` is frozen at its last turn.** Before acting on a "blocked" item, read the issue's newest comment and the PR head. The poller was told the same on 2026-09-29 (rule update "verify on GitHub").
 - **Q46 excludes hook changes.** A held PR whose diff touches `.claude/hooks/**` or `settings.json` needs the operator's explicit yes, even when every finding was rejected (#4870, Q16: A).
