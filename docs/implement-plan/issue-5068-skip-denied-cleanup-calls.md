@@ -14,14 +14,15 @@
 - Last note: Project started by /implement-issue-claude (session_01Auy2sKWXHcPHqbLY2N3RmG); phase 1 is being implemented twin-first.
 
 ## Phases
-1. [ ] Phase 1 — skip denied cleanup calls   — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/claude-issue-pickup.md` (twins only; the pickup, which has no twin, goes into the sync blocker as a diff)
-   - [ ] CLAUDE.md §26.I plus pointers in §26.C, §26.D, §26.G
-   - [ ] `implement-plan-claude.md` twin: resume hygiene (with the `get_trigger` ownership check), zombie-checker cleanup, arming the wait, two-step start, hand-back, steps 12–13, checker prompt 4b, Rules, Output Format
-   - [ ] `fix-claude-pr.md` twin: step 8 and Rules
-   - [ ] `claude-issue-pickup.md`: exact diff + sha256 for the sync blocker
-   - [ ] `agents.md` bullet
-   - [ ] Tests in `test_implement_plan_claude_command.py`, `test_check_in_status_hand_back.py`, `test_implement_issue_claude_command.py`
-   - [ ] `changelog.d/5068-skip-denied-cleanup-calls.md`
+1. [ ] Phase 1 — skip denied cleanup calls   — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/claude-issue-pickup.md` (twins only; the pickup, which has no twin, goes into the sync blocker as a diff) — PR pending (twin sync pending); review rounds: 0; interventions: 0
+   - [x] CLAUDE.md §26.I (`CLAUDE.md:2114-2163`) plus pointers in §26.C step 5 (`:1917`), §26.D (`:1948`, `:1981`), §26.G (sweep deletes)
+   - [x] `implement-plan-claude.md` twin: resume hygiene with the `get_trigger` ownership check (`:11`), zombie-checker cleanup (`:190`), arming the wait (`:177`), two-step start (`:138`), hand-back (`:249`), steps 12–13 (`:79`, `:83`), checker prompt (`:212`), Output Format (`:358`), Rules (`:392`) (root copy: pending twin sync)
+   - [x] `fix-claude-pr.md` twin: step 8 (`:62`) and Rules (`:72`) (root copy: pending twin sync)
+   - [x] `claude-issue-pickup.md`: exact diff + sha256 prepared for the sync blocker (no twin; not edited by this stage)
+   - [x] `agents.md` bullet (`:1036`)
+   - [x] Tests: 6 new in `test_implement_plan_claude_command.py`, 1 in `test_check_in_status_hand_back.py`, 1 in `test_implement_issue_claude_command.py`
+   - [x] `changelog.d/5068-skip-denied-cleanup-calls.md`
+   - Done: see the phase PR body for the test evidence; the real tree fails only the four sync-dependent tests until the `[claude-twin-sync]` copy
 
 ## Conformance
 
