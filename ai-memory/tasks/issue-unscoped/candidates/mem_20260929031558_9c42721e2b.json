@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/inline_edit_guard.py:153-175 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The hook depends on the private `_command_word_index` API from `gh_api_write_guard.py` without pinning that dependency in its wiring test.\n  WHY: Renaming or removing the API raises `AttributeError`, which the fail-open path catches and thereby silently disables inline-edit denial; GLM-5_2 verified the current API and tests but considered the coupling intentional.\n- workflow-templates/.claude/hooks/inline_edit_guard.py:inline_edit_kind (and `_command_start`) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The hook depends on private tokenizer APIs from `gh_api_write_guard.py`, while its wiring test does not pin those API names.\n  WHY: Renaming a private API raises `AttributeError`, which the fail-open handler catches, silently skipping inline-edit enforcement until the integration tests are run.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: .claude/hooks/inline_edit_guard.py\n  Location: line 175\n  Issue: Dependency on private `tokenizer._command_word_index` API.\n  Suggested minimal fix: Document in the hook why this dependency is acceptable (e.g., that it is the shared tokenizer for all `Bash` hooks) or refactor the tokenizer into a shared module.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: workflow-templates/.claude/hooks/inline_edit_guard.py\n  Line or code reference: `inline_edit_kind` (and `_command_start`) \u2014 `tokenizer.strip_heredoc_bodies`, `tokenizer.shell_segments`, `tokenizer._command_word_index`, plus the fail-open contract around `_FAST_PATH_RE.search` and `_load_module(\"_inline_edit_guard_tokenizer\", _TOKENIZER_PATH)`\n  Problem: The hook loads `gh_api_write_guard.py` by path with `importlib.util` and calls three of its underscore-prefixed private names (`strip_heredoc_bodies`, `shell_segments`, `_command_word_index`). AD-3 chose this approach deliberately, the fail-open contract catches an `AttributeError`/`ImportError`, and `test_hook_reuses_the_gh_api_guard_tokenizer` only asserts that the source mentions the file name \u2014 it does not pin the private API names. A rename or signature change in `gh_api_write_guard.py` would therefore be caught only by the integration tests, not by the hook's own wiring contract.\n  Why it fails at runtime: A rename raises `AttributeError` inside `inline_edit_kind`, the `try / except Exception` in `main()` swallows it, and `_warn` reports `Inline-edit guard skipped: internal error (...)`. The session retries the same `python3 - <<'EOF' ... write_text(...)` command in the next turn and hits the same prompt; no Edit/Write redirect happens. The mechanism survives, but the inline-edit enforcement silently disappears until the integration tests are re-run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: .claude/hooks/inline_edit_guard.py\n  Line or code reference: 153, 167 (`_command_start` function calling `tokenizer._command_word_index`)\n  Problem: The hook depends on the private `_command_word_index` API from `gh_api_write_guard.py`. The test `test_hook_reuses_the_gh_api_guard_tokenizer` (line 328-331) checks that the source references `gh_api_write_guard.py` and doesn't redefine `shell_segments` or `strip_heredoc_bodies`, but does not pin `_command_word_index` by name.\n  Why it fails at runtime: If `_command_word_index` is renamed or removed in `gh_api_write_guard.py`, the call at line 153 or 167 raises AttributeError. The exception is caught by the fail-open handler in `main()` (line 422), which emits a warning and returns no decision. The guard silently stops denying inline-interpreter edits until the code is updated. The behavioral tests in `test_inline_edit_guard.py` would catch this, but only if they're run; a rename in `gh_api_write_guard.py` that passes its own tests could still break this guard at runtime if the inline_edit_guard tests are not executed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .claude/hooks/inline_edit_guard.py\n  Line: ~153-175 (_command_start / tokenizer._command_word_index)\n  Problem: Relies on private underscore API from gh_api_write_guard.py\n  Why it fails at runtime: Tokenizer rename/signature change raises AttributeError caught by main()'s fail-open path, silently disabling denial for matching commands until hook update\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6a695822c914fb6c861d4205f0de58bcad9de01b4636f463e7979a7588298fac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4925,
+    "run_id": "36511983767",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36511983767",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929031558_9c42721e2b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4925,
+    "run_id": "36511983767"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T03:15:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
