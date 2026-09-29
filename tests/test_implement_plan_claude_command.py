@@ -314,6 +314,11 @@ INTERIM_TWIN_FIRST_MARKER = "Interim automatic default: twin-first (until #4785)
 INTERIM_TWIN_FIRST_CLAUDE_MD_MARKER = "Interim automatic twin-first default for protected-path phases (until #4785)"
 INTERIM_TWIN_FIRST_AGENTS_MD_MARKER = "Interim until #4785 (issue #4948):"
 INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER = "Since #4948, stages in this repo record"
+# Closing sentences that sit apart from each opening marker: the sunset guard
+# checks them too, so a partial removal cannot leave one behind.
+INTERIM_TWIN_FIRST_SUNSET_MARKER = "**Sunset:** this default ends with #4785."
+INTERIM_TWIN_FIRST_CLAUDE_MD_SUNSET_MARKER = "**Sunset:** the PR that makes #4785's Actions sync live (`scripts/claude_twin_sync.py`) removes this bullet"
+INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER = "The PR that makes #4785's sync live removes this default."
 TWIN_SYNC_SCRIPT = ROOT / "scripts" / "claude_twin_sync.py"
 AGENTS_MD = ROOT / "agents.md"
 MASTER_SESSION_MD = ROOT / "docs" / "operations" / "master-session.md"
@@ -362,6 +367,7 @@ def test_protected_path_question_remains_for_what_twin_first_cannot_cover():
 	assert "a log that already records a different `Protected-path approval: phase <n>` answer: that answer stands" in cases
 	assert "The automatic default never overwrites a recorded answer." in cases
 	assert "A repo without `workflow-templates/.claude/` (a consumer) has no twins, so it keeps the question." in cases
+	assert INTERIM_TWIN_FIRST_SUNSET_MARKER in cases
 
 
 def test_claude_md_section_28c_names_the_interim_twin_first_default():
@@ -375,7 +381,7 @@ def test_claude_md_section_28c_names_the_interim_twin_first_default():
 	assert "posts a `hold` claim and the twin-sync blocker" in section
 	assert "for an edit that is denied even in the twin tree and for a phase whose plan says it needs a watched session" in section
 	assert "stands and is never overwritten" in section
-	assert "**Sunset:** the PR that makes #4785's Actions sync live (`scripts/claude_twin_sync.py`) removes this bullet" in section
+	assert INTERIM_TWIN_FIRST_CLAUDE_MD_SUNSET_MARKER in section
 
 
 def test_operator_docs_name_the_interim_twin_first_default():
@@ -385,7 +391,7 @@ def test_operator_docs_name_the_interim_twin_first_default():
 		pytest.skip("#4785's Actions twin sync is on this branch; the interim default is removed")
 	agents = _flat(AGENTS_MD)
 	assert INTERIM_TWIN_FIRST_AGENTS_MD_MARKER in agents
-	assert "The PR that makes #4785's sync live removes this default." in agents
+	assert INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER in agents
 	assert INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER in _flat(MASTER_SESSION_MD)
 
 
@@ -395,6 +401,10 @@ def test_interim_twin_first_default_is_removed_when_the_4785_sync_lands():
 		pytest.skip("#4785's Actions twin sync is not on this branch yet; the interim default stays")
 	assert INTERIM_TWIN_FIRST_MARKER not in _flat(TEMPLATE_COMMAND), "remove the #4948 interim default from implement-plan-claude.md step 4"
 	assert INTERIM_TWIN_FIRST_MARKER not in _flat(COMMAND), "remove the #4948 interim default from implement-plan-claude.md step 4"
+	assert INTERIM_TWIN_FIRST_SUNSET_MARKER not in _flat(TEMPLATE_COMMAND), "remove the #4948 interim default's Sunset paragraph from implement-plan-claude.md step 4"
+	assert INTERIM_TWIN_FIRST_SUNSET_MARKER not in _flat(COMMAND), "remove the #4948 interim default's Sunset paragraph from implement-plan-claude.md step 4"
 	assert INTERIM_TWIN_FIRST_CLAUDE_MD_MARKER not in _flat(CLAUDE_MD), "remove the #4948 interim bullet from CLAUDE.md §28.C"
+	assert INTERIM_TWIN_FIRST_CLAUDE_MD_SUNSET_MARKER not in _flat(CLAUDE_MD), "remove the #4948 interim bullet's Sunset sentence from CLAUDE.md §28.C"
 	assert INTERIM_TWIN_FIRST_AGENTS_MD_MARKER not in _flat(AGENTS_MD), "remove the #4948 interim sentence from agents.md"
+	assert INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER not in _flat(AGENTS_MD), "remove the #4948 interim closing sentence from agents.md"
 	assert INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER not in _flat(MASTER_SESSION_MD), "remove the #4948 interim clause from the Q40 row of docs/operations/master-session.md"

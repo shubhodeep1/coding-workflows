@@ -7,18 +7,18 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5008 (phase 1): review round 2
+- Waiting on: PR #5008 (phase 1): review round 3
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01Ame2D1ptdLmTxyN2aYG1jw (project checker, reused)   safety net and hand-back: in the review-round stage report
 - Last updated: 2026-09-29
-- Last note: The `[claude-twin-sync]` copy landed in f60a3b1 and `ai:claude-blocked` was removed on 2026-09-29. Review round 1 on f60a3b1 (ledger `f8e2625c…`): both task gaps valid and fixed in one `[claude-autofix]` commit; the sunset test now also covers the agents.md sentence and the master-session.md Q40 clause, and a presence test keeps those markers from drifting. No `.claude/**` file changed, so no twin sync is needed.
+- Last note: Review round 2 on f859888 (ledger `18e9df36…`): both task gaps valid and fixed in one `[claude-autofix]` commit. The sunset test now also asserts the agents.md closing sentence is gone, plus (proactive, same defect) the command twin's separate `**Sunset:**` paragraph and the CLAUDE.md bullet's Sunset sentence; the log's test count is corrected to 6. No `.claude/**` file changed, so no twin sync is needed.
 
 ## Phases
-1. [ ] Phase 1 — interim twin-first default for protected-path phases   — protected paths: `.claude/commands/implement-plan-claude.md` (edited only in its `workflow-templates/.claude/` twin, Q40) — PR #5008 open (twin synced in f60a3b1); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — interim twin-first default for protected-path phases   — protected paths: `.claude/commands/implement-plan-claude.md` (edited only in its `workflow-templates/.claude/` twin, Q40) — PR #5008 open (twin synced in f60a3b1); review rounds: 2; interventions: 0
    - [x] Twin `implement-plan-claude.md` step 4: interim paragraph (automatic approval line, twin-only edits, no-twin diff + sha256, hold claim + twin-sync blocker, resume, later stages, the three uncovered cases, sunset) — `workflow-templates/.claude/commands/implement-plan-claude.md:35-45` (root copy: pending twin sync)
    - [x] CLAUDE.md §28.C: new bullet naming the interim automatic twin-first default and its sunset (#4785) — `CLAUDE.md:2236-2253`
    - [x] `agents.md` (`:1116-1123`) and `docs/operations/master-session.md` (Q40 row) updated
-   - [x] `tests/test_implement_plan_claude_command.py`: 5 new tests (command twin, CLAUDE.md, sunset guard)
+   - [x] `tests/test_implement_plan_claude_command.py`: 6 new tests (command twin ×3, CLAUDE.md, operator-doc presence, sunset guard)
    - [x] `changelog.d/4948-protected-path-twin-first-default.md`
    - Done: in the twin overlay the command and changelog tests pass (55 passed, 1 skipped); the real tree fails only `test_template_parity` until the twin sync. Full overlay run: 4720 passed, 122 failed — the same 122 fail on a clean `origin/main` copy (missing `jsonschema` / `gawk` in the container)
 
@@ -43,6 +43,7 @@
 
 ## Lessons
 - [source:intervention] A sunset (removal-trigger) test must assert the absence of every interim text the plan's Rollout names, in every file that carries it (docs included), and a paired presence test must pin the same markers while the interim is live so the sunset guard cannot pass vacuously. (files: tests/test_implement_plan_claude_command.py, agents.md, docs/operations/master-session.md)
+- [source:intervention] When interim text spans more than one sentence or paragraph, give the sunset test one marker per separately removable piece (the opener and every closing or Sunset sentence), not just the opener, or a partial removal passes with an orphaned sentence. (files: tests/test_implement_plan_claude_command.py)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #4948 (session session_01KWvixVyQiLvzZBHTrbRFpw, started by the master's dispatch trigger trig_017hVhQvGvbgboSSGrnNqVBF); start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
