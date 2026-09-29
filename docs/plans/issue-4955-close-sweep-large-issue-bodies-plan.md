@@ -18,7 +18,7 @@ Security pass: skip (ai:security: automation-produced issue)
 
 ## Goals
 
-- The dedup queue in `close_merged_issues_sweep` is built by a single `jq -n` that reads `merged_json` and `ready_json` from stdin (`input as $merged | input as $ready`). No issue list or body is passed as a command-line argument. The queue it produces is the same as today's for every input that works today.
+- The dedup queue in `close_merged_issues_sweep` is built by a single `jq -n` that reads `merged_json` and `ready_json` from stdin (`[inputs] as $lists`, exactly two documents). No issue list or body is passed as a command-line argument. The queue it produces is the same as today's for every input that works today.
 - When the queue cannot be built (a list is not valid JSON, or `jq` fails), the sweep logs `::warning::CLOSE_MERGED_SWEEP queue_build_failed merged_bytes=<n> ready_bytes=<n> — skipping this cycle.` and returns 0, instead of silently processing an empty queue.
 - A regression test runs the poller with three open `ai:merged` issues whose bodies are 61,440 bytes each, each with a merged closing-keyword PR into the default branch, and proves that all three are closed and no `queue_build_failed` line is logged. It fails on the current code.
 - A second test gives the sweep an unparseable `ai:ready-to-merge` list and proves that the warning is logged and nothing is closed.
@@ -55,22 +55,24 @@ issues_json="$(jq -c -n \
   ' 2>/dev/null || echo "[]")"
 ```
 
-with a stdin-fed call that keeps the same filter body, prefixed with `input as $merged | input as $ready |`:
+with a stdin-fed call that keeps the same `normalize` definition and dedup expression, and reads the two lists as `[inputs]`:
 
 ```bash
 if ! issues_json="$(printf '%s\n' "${merged_json:-[]}" "${ready_json:-[]}" | jq -c -n '
-    input as $merged
-    | input as $ready
-    | def normalize($origin): …;
-    …
+    def normalize($origin): …;
+    [inputs] as $lists
+    | if ($lists | length) != 2 then error("expected 2 issue lists, got \($lists | length)") else . end
+    | ($lists[0] | normalize("merged_label")) as $m
+    | ($lists[1] | normalize("ready_label")) as $r
+    | …
   ' 2>"${_sweep_queue_err}")"; then
-  echo "::warning::CLOSE_MERGED_SWEEP queue_build_failed merged_bytes=${#merged_json} ready_bytes=${#ready_json} — skipping this cycle. $(head -c 300 "${_sweep_queue_err}")"
+  echo "::warning::CLOSE_MERGED_SWEEP queue_build_failed merged_bytes=<wc -c> ready_bytes=<wc -c> — skipping this cycle. jq: <first 300 bytes of stderr>"
   rm -f "${_sweep_queue_err}"
   return 0
 fi
 ```
 
-`printf` is a shell builtin, so the payload never goes through `execve` and the argument limit does not apply. `jq` reads the two documents in order. If a list is not valid JSON, or holds only one document, `jq` exits non-zero, and the new branch reports it. The `def` moves after the `input` bindings, which `jq` allows in a pipeline. The later `count`, `merged_count`, and `ready_count` reads already use `echo … | jq` and stay unchanged.
+`printf` is a shell builtin, so the payload never goes through `execve` and the argument limit does not apply. `jq` must read exactly two documents, the merged list and then the ready list. If a list is not valid JSON, or a payload holds an extra document (for example a partial `gh` output followed by the `|| echo "[]"` fallback), `jq` exits non-zero and the new branch reports it, instead of silently shifting the ready list into the merged slot. The later `count`, `merged_count`, and `ready_count` reads already use `echo … | jq` and stay unchanged.
 
 Alternatives: temp files with `--slurpfile` (AD-1 B) need two files and cleanup for the same result; and dropping `body` from the list to fetch each body on its own (AD-1 C) would add one API call per issue, which §15 forbids.
 
@@ -93,7 +95,7 @@ Phase 1:
    - on failure, log the `queue_build_failed` warning with both payload sizes and up to 300 bytes of `jq`'s stderr, remove the temp file, and `return 0`; on success, remove the temp file;
    - extend the function's header comment (the API hygiene paragraph) with one sentence: the lists reach `jq` on stdin because issue bodies can exceed the per-argument limit (issue #4955), and a queue that cannot be built is logged as `queue_build_failed` and skips the cycle.
 2. `tests/test_orchestrate_poll_process.py`:
-   - harness: add an optional `mock_gh_issue_list_raw_by_label: dict[str, str] | None = None` to `_run_poller`, stored in the mock store. When the label-filtered `gh issue list` mock gets a label present in it, it prints that raw text instead of the JSON list. The default is unchanged;
+   - harness: the label-filtered `gh issue list` mock reads an optional `mock_gh_issue_list_raw_by_label` store key (set through the existing `mock_store_extra` argument, so `_run_poller` gets no new parameter). For the sweep's `--json number,labels,body` listing of a label present in it, it prints that raw text instead of the JSON list. Other listings of the same label (stall recovery lists `--json number`) and the default are unchanged;
    - new `test_close_merged_issues_sweep_closes_issues_with_large_bodies`: issues 10, 11, 12 with `ai:merged` and 61,440-byte bodies, each linked to its own merged PR into `main` whose body says `Closes #<n>`. Assert all three are in `closed_issues`, the three `CLOSE_MERGED_SWEEP issue=<n> pr=<p> origin=merged_label status=closed` lines are logged, and `queue_build_failed` is not;
    - new `test_close_merged_issues_sweep_surfaces_unparseable_issue_list`: issue 10 `ai:merged` with a merged closing PR into `main`, and `mock_gh_issue_list_raw_by_label={"ai:ready-to-merge": "not json"}`. Assert `::warning::CLOSE_MERGED_SWEEP queue_build_failed` is logged and #10 is not closed.
 3. `README.md` `ENABLE_CLOSE_MERGED_ISSUES` row (line 200): add one sentence after the API hygiene clause: both lists reach `jq` on stdin, because issue bodies can exceed the per-argument limit (issue #4955); a queue that cannot be built is logged as `::warning::CLOSE_MERGED_SWEEP queue_build_failed …` and the sweep skips that cycle instead of treating it as empty.
@@ -126,7 +128,7 @@ Lands on the #4813 project branch with this project's final PR, reaches `main` w
 
 ## Auto-decisions
 
-- AD-1 [plan, 2026-09-29] How should the dedup queue receive the two issue lists? — Picked: A — stream both lists to one `jq -n` on stdin (`printf '%s\n' … | jq -n 'input as $merged | input as $ready | …'`). Alternatives: B — write each list to a temp file and pass `--slurpfile`; C — drop `body` from `gh issue list` and fetch each issue's body separately. Why: A is the smallest change with no temp files and no argument limit; C adds one API call per issue (§15) and undoes #4813's no-extra-call design. Applied in: phase 1 PR. Status: pending review
+- AD-1 [plan, 2026-09-29] How should the dedup queue receive the two issue lists? — Picked: A — stream both lists to one `jq -n` on stdin (`printf '%s\n' … | jq -n '[inputs] as $lists | …'`). Alternatives: B — write each list to a temp file and pass `--slurpfile`; C — drop `body` from `gh issue list` and fetch each issue's body separately. Why: A is the smallest change with no temp files and no argument limit; C adds one API call per issue (§15) and undoes #4813's no-extra-call design. Applied in: phase 1 PR. Status: pending review
 - AD-2 [plan, 2026-09-29] What should the sweep do when the queue cannot be built? — Picked: A — log `::warning::CLOSE_MERGED_SWEEP queue_build_failed merged_bytes=<n> ready_bytes=<n> — skipping this cycle.` with the first 300 bytes of `jq`'s stderr, and return 0. Alternatives: B — return non-zero; C — process whichever list still parses. Why: the poller runs under `set -e` and calls the sweep bare, so B would abort the whole poll cycle; C mixes label-origin policies when the `ai:merged` list is the broken one. A surfaces the failure, as the finding recommends, without widening the blast radius. Applied in: phase 1 PR. Status: pending review
 - AD-3 [plan, 2026-09-29] Should the `gh issue list` fetch fallbacks (`|| echo "[]"`) also report failures? — Picked: A — no, leave them unchanged. Alternatives: B — add a warning on fetch failure too. Why: the finding concerns parsing issue content; a fetch failure cannot be triggered from issue content and was fail-open before #4813 (§5). Applied in: no code change. Status: pending review
 - AD-4 [plan, 2026-09-29] Should other large `--argjson` / `--arg` call sites in the poller change too? — Picked: A — no; they are listed under Non-goals. Alternatives: B — convert every large `jq` argument in the file to stdin. Why: they predate #4813, hold no list of issue bodies, and are outside this finding (§5); B would touch many unrelated paths in one security follow-up. Applied in: no code change. Status: pending review
