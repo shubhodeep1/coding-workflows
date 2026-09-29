@@ -657,9 +657,34 @@ def test_read_project_logs_reports_a_failed_show_of_an_existing_log(monkeypatch)
 	assert ["ls-tree", "--name-only", "sha2", "--", "docs/implement-plan/b.md"] in calls
 	assert errors == [
 		"project log claude/implement-plan-b: git show sha2:docs/implement-plan/b.md failed: fatal: bad object",
-		"project log claude/implement-plan-c: git show sha3:docs/implement-plan/c.md failed: fatal: bad object",
+		"project log claude/implement-plan-c: git show sha3:docs/implement-plan/c.md failed: fatal: bad object"
+		" (missing-log check also failed: git ls-tree failed: fatal: not a tree object)",
 	]
 	assert restart.read_project_logs(branches) == {"claude/implement-plan-a": "log a"}
+
+
+LONG_SLUG = "issue-5093-smoke-review-dispatch-default-branch"
+
+
+@pytest.mark.parametrize(
+	("name", "matches"),
+	[
+		# Forms read from this account's list_triggers on 2026-09-29: cut with `…`, and stored whole.
+		("implement-plan issue-5093-smoke-review-dispatch-default-bran…", True),
+		("implement-plan issue-5093-smoke-review-dispatch-default-branch: hand-back", True),
+		# Other cut forms: three dots, and no marker at all (inside the slug and right after the colon).
+		("implement-plan issue-5093-smoke-review-dispatch-default-bra...", True),
+		("implement-plan issue-5093-smoke-review-dispatch-default-bran", True),
+		("implement-plan issue-5093-smoke-review-dispatch-default-branch:", True),
+		# Another project whose slug shares the prefix.
+		("implement-plan issue-5093-smoke-review-dispatch-default-branch-2: check-in", False),
+		("implement-plan issue-5093-smoke-review-dispatch-default-branch-…", False),
+		("PR #5093 hand-back", False),
+	],
+)
+def test_project_trigger_matches_cut_and_whole_long_names(name, matches):
+	triggers = [restart.trigger_view(_trigger("trig_long", name, "session_s"))]
+	assert restart._project_trigger(triggers, LONG_SLUG) == ("trig_long" if matches else "")
 
 
 def test_scan_lists_a_failed_project_log_read_in_errors(monkeypatch):

@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4910-restart-dead-checkers   Final PR: #4965 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #4984
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01PUk3sYkLpwZZR6nKcaXnx9   safety net trig_01Nruu38N1qoh67yZLbaKs2R   hand-back trig_01DkuXJs1Q2h8PsefG5njtug
+- Check-in: checker session_01PUk3sYkLpwZZR6nKcaXnx9   safety net and hand-back: see the review-round stage report (session_012qGdaCZUujTUqTB4Vnn961)
 - Last updated: 2026-09-29
-- Last note: Q1: A — the supervising session synced the twins (`[claude-twin-sync]` 0e436d7, 2026-09-29); `ai:claude-blocked` removed; waiting on PR #4984 review rounds with project checker session_01PUk3sYkLpwZZR6nKcaXnx9.
+- Last note: review round 1 (head da3a3ec) fixed by catch-all fixer session_015ZauWeVUv9sei8KYAh9opH as ad509b2 after this stage's claim lease lapsed; review round 2 (head ad509b2) fixed here: the failed missing-log check is reported with the `git show` error, and `_project_trigger` accepts names cut with `…`, `...`, or no marker.
 
 ## Phases
-1. [ ] Phase 1 — restart script, pickup step 3b, settings twin, docs   — PR #4984 open (twin sync 0e436d7 pushed, hold lifted); review rounds: 0; interventions: 0   — protected paths: `.claude/settings.json` (edited through its `workflow-templates/.claude/` twin), `.claude/commands/claude-issue-pickup.md` (no twin; exact edit in the blocked comment)
+1. [ ] Phase 1 — restart script, pickup step 3b, settings twin, docs   — PR #4984 open (twin sync 0e436d7 pushed, hold lifted); review rounds: 2; interventions: 0   — protected paths: `.claude/settings.json` (edited through its `workflow-templates/.claude/` twin), `.claude/commands/claude-issue-pickup.md` (no twin; exact edit in the blocked comment)
    - `scripts/claude_checker_restart.py` [new] (`scan`, `decide`) + `tests/test_claude_checker_restart.py` [new] + `ci.yml` step
    - `settings.json` twin: allow the two subcommands and `set_session_tags`
    - pickup step 3b (restart + re-queue), step 0 tools, step 1 `limit: 100`, step 2 exits, step 4 report, Rules, Tool Access
@@ -48,6 +48,9 @@
 - AD-14 [plan, 2026-09-29] How does phase 1 edit `.claude/**`? — Picked: A — twin-first per Q40, as the issue says. Alternatives: B — direct edits. Why: the operator's standing rule. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:intervention] A fail-safe loop that skips an item on a read failure must still list the failure in `errors[]` with the item it concerned, including the failure of any follow-up check used to classify it; a silent `continue` hides the miss from the report. (files: scripts/claude_checker_restart.py)
+- [source:intervention] Routine names in `list_triggers` come both whole (over 60 characters) and cut with a trailing `…`; name matchers should accept a full-name prefix and a cut stem with or without a marker. (files: scripts/claude_checker_restart.py)
+- [source:intervention] A stage session that runs past the 3-hour claim lease loses its head to the catch-all sweep's fixer; re-read the PR head before pushing, and never push a duplicate round over a newer head. (files: .claude/commands/implement-plan-claude.md)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first per Q40 (issue #4910 body: "Protected paths: `.claude/**`, so use the interim twin-first rule (Q40: A)", 2026-09-29). `.claude/settings.json` changes through its twin; the `claude-issue-pickup.md` diff goes in the blocked comment; the phase PR carries a `hold` claim and the stage stops BLOCKED for the supervising session's `[claude-twin-sync]`.

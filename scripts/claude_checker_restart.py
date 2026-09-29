@@ -143,6 +143,8 @@ SUB_BRANCH_PATTERN = re.compile(
 	r"-(?:(?:phase|conformance-fix|validation-fix|activation-fix|security-fix)-\d+|complete|decision-changes)(?:-\d+)?$"
 )
 FINISHED_ACTIVATION_PREFIXES = ("LIVE", "n/a", "deploy-activate started")
+# Trailing marks a cut Routine name may carry; a cut without one matches too.
+TRUNCATION_MARKERS = ("…", "...")
 
 
 class ReadError(Exception):
@@ -216,12 +218,14 @@ def read_project_logs(branches: list[str], errors: list[str] | None = None) -> d
 		try:
 			logs[branch] = _git(["show", f"{tips[branch]}:{log_path}"], timeout=30)
 		except ReadError as exc:
+			check_failure = ""
 			try:
 				missing = not _git(["ls-tree", "--name-only", tips[branch], "--", log_path], timeout=30).strip()
-			except ReadError:
+			except ReadError as ls_exc:
 				missing = False
+				check_failure = f" (missing-log check also failed: {ls_exc})"
 			if not missing and errors is not None:
-				errors.append(f"project log {branch}: {exc}")
+				errors.append(f"project log {branch}: {exc}{check_failure}")
 	return logs
 
 
@@ -434,8 +438,11 @@ def _bound(triggers: list[dict]) -> set[str]:
 def _project_trigger(triggers: list[dict], slug: str) -> str:
 	"""Id of an enabled trigger that belongs to the project by name or prompt, or ''.
 
-	Routine names are cut at 60 characters, so a cut name matches when it is a
-	prefix of `implement-plan <slug>:`.
+	Routine names are often cut at 60 characters and marked with `…`, and some
+	are stored whole. A name matches when it starts with
+	`implement-plan <slug>:` or, with a trailing `…` or `...` removed, is a
+	prefix of it; a name cut without any marker matches the same way. A wrong
+	match only keeps the issue from being re-queued.
 	"""
 	wanted = f"implement-plan {slug}:"
 	for trigger in triggers:
@@ -444,7 +451,11 @@ def _project_trigger(triggers: list[dict], slug: str) -> str:
 		name = trigger["name"]
 		if name.startswith(wanted):
 			return trigger["id"]
-		stem = name[:-1] if name.endswith("…") else ""
+		stem = name
+		for marker in TRUNCATION_MARKERS:
+			if stem.endswith(marker):
+				stem = stem[: -len(marker)]
+				break
 		if stem.startswith("implement-plan ") and wanted.startswith(stem):
 			return trigger["id"]
 		if f"/{slug}-plan.md" in trigger["prompt"]:
