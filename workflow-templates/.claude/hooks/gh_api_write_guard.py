@@ -927,6 +927,15 @@ def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bo
 	if body[0][0][:1] != ["do"]:
 		return False
 	body[0][0] = body[0][0][1:]
+	# Every `gh api` item must be one of the calls `evaluate` classified. The
+	# fast path passes no results, and a quoted call (`gh 'api' -X DELETE ...`,
+	# `"gh" api ...`) never matches `_RAW_GH_API_RE`, so it was never
+	# classified and a loop holding one is not approvable.
+	api_items = sum(
+		1 for pipeline in body if len(pipeline[0]) >= 2 and pipeline[0][0] == "gh" and pipeline[0][1] == "api"
+	)
+	if api_items != len(results):
+		return False
 	for pipeline in body:
 		if any(not words for words in pipeline):
 			return False
