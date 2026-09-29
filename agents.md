@@ -221,7 +221,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `.claude/commands/implement-issue-claude.md`,
     `claude-issue-queue-watchdog.yml`,
     `scripts/claude_issue_queue_watchdog.sh`) — standalone issues are
-    implemented by Claude Code by default. On issue open / `/reclarify`,
+    implemented by Claude Code by default. On issue open / `/reclarify`
+    (a trusted comment that starts with `/reclarify`; on an
+    `ai:claude-blocked` / `ai:claude-handoff-failed` / `ai:blocked` issue
+    also one with `/reclarify` at the start of a later line and no
+    `<!-- ai:` marker, issue #5243; the route step repeats this rule and
+    logs `reason=not_reclarify_command` for anything else),
     clarify's `Decide clarify route` step routes each issue that would
     otherwise run Codex clarify. Orchestrator-managed issues (label or
     `Managed by: AI Orchestrator` body line), tracking / security-audit /
