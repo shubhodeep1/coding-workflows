@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4858-inline-edit-guard   Final PR: #4877 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #4925 (phase 1): review round 3
+- Waiting on: conformance fix PR (run 1) into the project branch
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_012fdy3doXASWrZZ9W5itkZu (reused), re-armed by session_012emrSDbkxsTBUpzQkXo7ua after this push (trigger ids in its report and on the #4858 progress comment)
+- Check-in: checker session_012fdy3doXASWrZZ9W5itkZu (reused), re-armed by session_01AUzXxnBGzFYg6HrxRXU4TH for the conformance fix PR (trigger ids in its report and on the #4858 progress comment)
 - Last updated: 2026-09-29
-- Last note: Review round 2 on `97d1f5e`: two findings valid (the hook's `permission_prompt_logger.py` calls and the `DENY_MESSAGE` / `EXPECTED_DENY_REASON_PREFIXES` contract were not pinned by a test), fixed test-only in `tests/test_inline_edit_guard.py`; four rejected with evidence; no `.claude/**` edit.
+- Last note: Conformance run 1 on the project branch: CONFORMANT (Correctness: CONCERNS). One EVIDENCE-BASED CONCERN: `README.md`'s list of hooks the `.claude/` sync ships still said "four" and left out `inline_edit_guard.py` (§7). Fixed in the conformance fix PR, with a README test.
 
 ## Phases
-1. [ ] Phase 1 — inline-edit guard hook, wiring, logging, docs, tests   — protected paths: `.claude/hooks/inline_edit_guard.py`, `.claude/settings.json`, `.claude/scripts/permission_prompts.py`, `.claude/commands/seed-repo.md` (edited only in their `workflow-templates/.claude/` twins, Q40) — PR #4925 open (twin sync `2917932` landed); review rounds: 2; interventions: 0
+1. [x] Phase 1 — inline-edit guard hook, wiring, logging, docs, tests   — protected paths: `.claude/hooks/inline_edit_guard.py`, `.claude/settings.json`, `.claude/scripts/permission_prompts.py`, `.claude/commands/seed-repo.md` (edited only in their `workflow-templates/.claude/` twins, Q40) — PR #4925 merged 2026-09-29 (merge commit `964c7b0`, twin sync `2917932`); review rounds: 2; interventions: 0
    - [x] `inline_edit_guard.py` twin: deny with the issue's message; no decision for reads, `pytest`, file-path scripts, and data; fail open; `CLAUDE_INLINE_EDIT_GUARD=off` (root copy: pending twin sync)
    - [x] Twin `settings.json` wires it as a `PreToolUse` `Bash` hook (root copy: pending twin sync)
    - [x] Denies log `INLINE_EDIT_GUARD action=deny` and write a `source: inline_edit_guard` record; the `permission_prompts.py` twin counts them as `expected_denies` and never files them (root copy: pending twin sync)
@@ -24,6 +24,7 @@
    - Done: in the twin overlay the new and existing guard/prompt tests pass (640 passed); the real tree fails only the parity tests and the root-importing cases until the twin sync
 
 ## Conformance
+- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — conformance fix PR for the stale `README.md` hook list (pre-security). Checks: 387 guard / prompt / `gh api` guard / PR-watch tests pass; 37 extra edge-case probes of the hook match the plan; twin copies byte-identical.
 
 ## Security pass
 
@@ -47,6 +48,8 @@
 - [source:intervention] A hook that reuses another hook's functions by path must pin every attribute it calls in a test that loads the real sibling module, because the fail-open handler turns a rename into a silently disabled guard. (files: .claude/hooks/inline_edit_guard.py, tests/test_inline_edit_guard.py)
 - [source:intervention] When one file matches another file's constant by prefix or exact text (a deny reason and the filter that recognises it), add a test that loads both real files and asserts the match, so rewording either side fails CI instead of silently changing behaviour. (files: .claude/hooks/inline_edit_guard.py, .claude/scripts/permission_prompts.py, tests/test_inline_edit_guard.py)
 
+- [source:conformance] A change that adds a hook, script, or workflow must also update every prose list that counts or names its siblings (`README.md`'s "ships N hooks" sentence, `/seed-repo`'s file list), and a doc test should pin the new name in that list. (files: README.md, tests/test_inline_edit_guard.py)
+
 ## Notes
 - Permission mode at start: auto.
 - The planning session had no `gh` CLI and no `mcp__github__*` tools. GitHub reads and writes went through REST (`curl`) via the session proxy. `security_pass_skip.py` exited 2 for that reason, so `Security pass: run` (the issue carries no skip label either).
@@ -60,3 +63,5 @@
 - Resumed 2026-09-29 by session session_012emrSDbkxsTBUpzQkXo7ua (review round 2, started by checker session_012fdy3doXASWrZZ9W5itkZu). Archived the previous stage session, deleted its safety net and hand-back, synced the project branch with `main` (clean merge `2a4bc4b`), and claimed head `97d1f5e` (comment 5883901265).
 - Review round 2 (`97d1f5e`, ledger `fd0656c1…`): 5 consensus entries and 1 task gap. Valid: (1) `record_deny` calls `logger.build_record`, `append_record`, and `log_dir` from `permission_prompt_logger.py` and no test pins them (the root copy's end-to-end test would only fail with a missing log file; nothing covers the template copy); (2) no test pins `DENY_MESSAGE` to `permission_prompts.py`'s `EXPECTED_DENY_REASON_PREFIXES`. Fixed test-only: `test_logger_api_the_hook_calls_exists` and `test_deny_message_matches_the_filing_exclusion_prefix` (root and template), each confirmed to fail on a scratch copy with a renamed `build_record` or a reworded message. Rejected: the `_command_start` endless-loop claim (line 159 always advances; `sudo sudo sudo sudo sed -i …` returns `sed`), both `timeout` claims (`timeout sed -i f` and `timeout timeout 5 …` are refused by GNU `timeout` before any command runs), the `-Wc` claim (`-Wc` gives no decision and `-bc` is denied, which matches how CPython parses those flags), and the `isinstance` hardening (the API is pinned by a test).
 - This session's own read-only `python3` heredoc probe was denied by the guard, because its test strings contained `open('x','w')`. That is the accepted false positive the plan's Risks names; the probe ran from a scratch file instead.
+- Review round 3 was clean: PR #4925 auto-merged into the project branch at 2026-09-29T05:21:58Z (merge commit `964c7b0`). Check-in for that wait: checker session_012fdy3doXASWrZZ9W5itkZu, safety net trig_012gpBf3gmNvqeKNqKhupc3n, hand-back trig_01HRqFfMzDauoLBb9kLgNHqq (both deleted by the next stage). Issue #4858 progress comment id 5881426354.
+- Conformance 1/3 by session session_01AUzXxnBGzFYg6HrxRXU4TH (started by the checker). Archived session_012emrSDbkxsTBUpzQkXo7ua, deleted its safety net and hand-back, zombie checkers archived: 0, and synced the project branch with `main` (clean merge `97502bb`). `tests/test_workflow_retro.py` does not collect under this container's Python 3.11 (`scripts/workflow_retro.py:794` uses a 3.12 f-string); that file is outside this project, and CI runs 3.12.
