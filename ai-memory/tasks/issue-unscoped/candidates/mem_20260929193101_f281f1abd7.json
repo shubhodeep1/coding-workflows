@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:~590-615, ~670-681 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `run_check()` passes the entire `corpora` dictionary to each hook-tree comparison, which the reviewer says causes duplicate results for guards present in multiple trees.\n  WHY: The reviewer says this inflates regression and intended-loosening counts in CI annotations, produces redundant log output, and increases processing time.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A changed guard with no corpus fails.\" (PR description, Summary section.)\n  expected_change_site: scripts/guard_differential.py::run_check, the missing_corpus detection block at lines ~666-674.\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The current missing_corpus gate fires only when (base_dir / f\"{stem}.py\").is_file() AND (head_dir / f\"{stem}.py\").is_file(). If a changed guard is new (present only in head_dir), it fails to trigger the missing_corpus check, allowing a new guard to be added without any corpus.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/guard_differential.py | confidence=4\n  PROBLEM: run_check() iterates over every hook tree in HOOK_TREES and calls compare_hook_dirs() with the entire corpora dictionary for every tree, rather than filtering corpora to only those guards present in the current tree.\n  WHY: For guards that exist in multiple trees (e.g., .claude/hooks/ and workflow-templates/.claude/hooks/), every comparison is performed and reported redundantly for each tree. This inflates regression and intended-loosening counts in CI annotations, produces redundant log output, and increases processing time.\n\n- TASK_GAP\n  Requirement: \"A changed guard with no corpus fails.\" (PR description, Summary section.)\n  Expected change site: scripts/guard_differential.py::run_check, the missing_corpus detection block at lines ~666-674.\n  Evidence of absence: The current missing_corpus gate fires only when (base_dir / f\"{stem}.py\").is_file() AND (head_dir / f\"{stem}.py\").is_file(). If a changed guard is new (present only in head_dir), it fails to trigger the missing_corpus check, allowing a new guard to be added without any corpus.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fed3b8e6b9aee1a23c443802db5c491546187247ca63f41de6413cfe94e502ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5187,
+    "run_id": "36617267293",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36617267293",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929193101_f281f1abd7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5187,
+    "run_id": "36617267293"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T19:31:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
