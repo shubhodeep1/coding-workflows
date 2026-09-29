@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The `claude-issue-pickup.md` edit (step 0 tools, step 1 `limit: 100`, step 2 exits into 3b, new step 3b, step 4 report, Rules and Tool Access)\n  expected_change_site: `.claude/commands/claude-issue-pickup.md`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_20]\n  EVIDENCE: No diff hunk modifies `.claude/commands/claude-issue-pickup.md`. The PR description and the `ai:claude-blocked` comment on #4910 document that the exact diff is applied by the supervising session per the interim twin-first rule (Q40: A). The test `test_pickup_restarts_dead_checkers` in `tests/test_implement_issue_claude_command.py` validates the pickup edit that will land at sync time., no hunk in this PR (intentional hold on twin sync)\n- requirement: `.claude/settings.json` edits (same allow rules as the twin)\n  expected_change_site: `.claude/settings.json`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: No diff hunk modifies `.claude/settings.json`. The twin `workflow-templates/.claude/settings.json` carries all four allow rules and `set_session_tags` for both server names. Per the twin-first rule, the supervising session copies the twin after merge. This is documented in the PR description, the hold claim, and the `ai:claude-blocked` comment on #4910.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c8973591baeed94fdaea4bbb346b5843d398e8d0ce42121c0deaa2010acf3aa9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4984,
+    "run_id": "36515903781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36515903781",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929035402_9c6716c9ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4984,
+    "run_id": "36515903781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T03:54:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
