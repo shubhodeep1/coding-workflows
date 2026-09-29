@@ -75,7 +75,7 @@ Unattended sessions cannot edit `.claude/**`: Claude Code never auto-approves th
 
 ## Constraints
 
-- §6: no identifier is renamed. New names (`claude_twin_sync.py`, `claude-twin-sync.yml`, `UPSTREAM_ONLY_PATHS`, `GUARD_PATHS`, `ai:claude-sync-approval`, `claude-twin-sync/owner-approval`, `tests/claude_twin_state.py`, `assert_claude_not_ahead`) were checked against the repo and are unused.
+- §6: no identifier is renamed. New names (`claude_twin_sync.py`, `claude-twin-sync.yml`, `UPSTREAM_ONLY_PATHS`, `GUARD_PATH_PREFIXES`, `GUARD_PATH_FILES`, `ai:claude-sync-approval`, `claude-twin-sync/owner-approval`, `tests/claude_twin_state.py`, `assert_claude_not_ahead`) were checked against the repo and are unused.
 - §15: each workflow run makes a bounded number of REST calls:
   - one call to list open PRs;
   - one call to list the sync PR's files;
@@ -100,11 +100,11 @@ One Python module holds all decisions and is unit-tested against temporary git r
   - A symlink on either side → `conflict` with a reason.
 
   It prints JSON listing `copies`, `conflicts`, and `guard` (whether any copy or conflict is a guard path).
-- `apply` writes the copies, with the twin's file mode, into a work tree.
+- The copies are written, with the twin's file mode, onto a temporary git index (`build_tree`), never into a work tree. (AD-11: the plan first named this an `apply` subcommand.)
 - `check --base <sha> --head <sha>` implements G7 on `git diff --name-status`.
 - `merge-check --pr-files <json> --head <sha> --ref <main sha>` implements G5's content test.
 
-The workflow checks out `main` with `fetch-depth: 0` and runs `plan`. It then finds the open sync PR, if any: an open PR in this repo whose head starts `claude/claude-twin-sync-` and whose author is the `GH_PAT` account. What follows:
+The workflow checks out `main` with `fetch-depth: 0` and runs `plan`. It then finds the open sync PR, if any: an open PR whose head branch is in this repo and starts `claude/claude-twin-sync-`. (AD-11: the plan first also required the `GH_PAT` account as author; every PR here is authored by the owner account, and a foreign sync-prefixed PR is rebuilt from `main` plus the copies, so the filter would add nothing.) What follows:
 
 1. **Nothing to do** → close any stale sync PR with a comment and exit.
 2. **Build the desired tree**: main's tree plus the copies. If only conflicts exist, the tree equals main's.
@@ -115,7 +115,7 @@ The workflow checks out `main` with `fetch-depth: 0` and runs `plan`. It then fi
 5. **Guard or conflict PR** → set the label, the status, and one Telegram alert per new head.
 6. **Non-guard PR with no conflict** → try the merge rule (G5). The `workflow_run` and hourly triggers retry it.
 
-The PR-review trigger only refreshes the status.
+Every trigger runs the same idempotent pass: for a PR review that refreshes the status and, on a non-guard PR, retries the merge rule (AD-11).
 
 The rejected alternatives are recorded as auto-decisions below.
 
@@ -138,8 +138,8 @@ A single phase. Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: `/
 Phase 1:
 
 1. **`scripts/claude_twin_sync.py` [new]** (tabs, `#!/usr/bin/env python3`).
-   - Constants `TWIN_ROOT = "workflow-templates/.claude"`, `CLAUDE_ROOT = ".claude"`, `UPSTREAM_ONLY_PATHS` (6 entries), `GUARD_PATHS` (`hooks/` prefix, `settings.json`, `settings.local.json`), `SYNC_BRANCH_PREFIX = "claude/claude-twin-sync-"`, `HISTORY_LIMIT = 500`.
-   - Subcommands `plan`, `apply`, `check`, `merge-check`, `approval` (the last reads a reviews JSON file and the head sha, and prints `approved: true|false`). Git access goes through `subprocess` with argument lists only.
+   - Constants `TWIN_ROOT = "workflow-templates/.claude"`, `CLAUDE_ROOT = ".claude"`, `UPSTREAM_ONLY_PATHS` (6 entries), `GUARD_PATH_PREFIXES` (`hooks/`) and `GUARD_PATH_FILES` (`settings.json`, `settings.local.json`), `SYNC_BRANCH_PREFIX = "claude/claude-twin-sync-"`, `HISTORY_LIMIT = 500`.
+   - Subcommands `plan`, `check`, `merge-check`, and `run` (the workflow driver). The copies are written by `build_tree` on a temporary index, and the owner approval is decided in-process by `owner_approved` from the reviews list and the head sha (AD-11: the plan first named these `apply` and `approval` subcommands). Git access goes through `subprocess` with argument lists only.
    - Docstring per §15: input and output shape, API calls (none — git only), and fail-closed behaviour: any error exits 2, and the workflow treats that as "do not merge".
 2. **`.github/workflows/claude-twin-sync.yml` [new]**, 2-space YAML.
    - Triggers: see G3.
@@ -147,7 +147,7 @@ Phase 1:
    - Every checkout uses `actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0` with `persist-credentials: false`.
    - Steps: plan → build → push and PR → label, status, and alert → merge attempt.
    - `GH_PAT` goes only into the env of the push, PR, and status steps. The push uses `git -c http.extraheader` scoped to that one command. Reads use `github.token`.
-3. **`review_autofix.yml` gate:** after the `[skip ai]` check (around line 542), add a head-ref case. A `claude/claude-twin-sync-*` head sets `SHOULD_RUN=false`, `SKIP_REASON=claude_twin_sync`, and never reaches the deterministic-skip auto-merge job. It also logs `AUTOFIX_GATE_CLAUDE_TWIN_SYNC_SKIP`. `pr_head_ref` must already be resolved at that point; if it is not, move the check to just after it is resolved.
+3. **`review_autofix.yml` gate:** after the `[skip ai]` check (around line 542), add a head-ref case. A `claude/claude-twin-sync-*` head sets `SHOULD_RUN=false`, `SKIP_REASON=claude_twin_sync`, and never reaches the deterministic-skip auto-merge job. It also logs `AUTOFIX_GATE_SKIP reason=claude_twin_sync`, the gate's existing skip-log convention (AD-11). `pr_head_ref` must already be resolved at that point; if it is not, move the check to just after it is resolved.
 4. **`scripts/claude_pr_sweep.py` `list_candidates`:** skip heads starting with the sync prefix and log `reason=claude_twin_sync`. The prefix is a local constant; `check_in_status.py` lives under `.claude/` and is not edited.
 5. **`ci.yml`:**
    - Add a step "Claude twin sync state (CLAUDE.md §28.C)" after the checkout. It fetches the event's base sha (`pull_request.base.sha`, or `push.before`) at depth 1 and runs `claude_twin_sync.py check`. When there is no base (a new branch, or an all-zero `before`), it only reports.
@@ -159,7 +159,7 @@ Phase 1:
    - `plan`: copy, equal, conflict, new file, symlink, `..`, excluded, and guard classification;
    - the `check` rule;
    - `merge-check`, including a twin edit smuggled onto the sync branch and a guard path;
-   - `approval`, including a stale head, a later `CHANGES_REQUESTED`, and a non-owner reviewer;
+   - `owner_approved`, including a stale head, a later `CHANGES_REQUESTED`, and a non-owner reviewer;
    - workflow contract: triggers, SHA pins, `persist-credentials: false`, and `GH_PAT` only in the allowed steps; no `GH_TOKEN`/`FUNTOKEN_IO_CF`/`FT_GAMES_CF`/`DIGITALOCEAN_ACCESS_TOKEN` session reads; `[skip ai]` in the PR body; no `--auto`; no approve call.
 8. **`review_autofix` and sweep tests:** add a case to `tests/test_review_autofix_claude_fixer_mode.py` (or the gate contract test that owns the `[skip ai]` case) and to `tests/test_claude_pr_sweep.py`.
 9. **Twin command edits** (twins only):
@@ -233,6 +233,7 @@ Phase 1:
 - AD-8 [plan, 2026-09-28] How is an open sync PR updated when the ruleset forbids non-fast-forward pushes on every branch? — Picked: A — a forward-only two-parent commit (`git commit-tree`, with parents the sync head and `main`) whose tree is `main` plus the copies. Alternatives: B — close it and open a new PR every run. Why: B duplicates PRs, which the issue forbids. Applied in: phase 1. Status: pending review
 - AD-9 [plan, 2026-09-28] What is the "old twin" in the conflict rule for a catch-up run that has no single push to compare against? — Picked: A — any version the twin path had in `git log` (up to 500 revisions): a `.claude/` copy equal to one of them is behind; otherwise it is a conflict. Alternatives: B — only the twin at the push's `before` sha, which leaves scheduled runs undefined. Why: it gives the same answer for every trigger. Applied in: phase 1. Status: pending review
 - AD-10 [plan, 2026-09-28] What happens to an open sync PR when the twins already match? — Picked: A — close it with a comment, since the workflow owns it. Alternatives: B — leave it open. Why: stale PRs would otherwise accumulate. Applied in: phase 1. Status: pending review
+- AD-11 [conformance 1/3, 2026-09-29] The shipped phase differs from the plan text in five equivalent-or-stronger ways (no `apply` / `approval` subcommands, `GUARD_PATH_PREFIXES` / `GUARD_PATH_FILES` instead of `GUARD_PATHS`, the open sync PR matched by a same-repository head instead of the `GH_PAT` author, the gate log key `AUTOFIX_GATE_SKIP reason=claude_twin_sync`, and a review running the full idempotent pass). How are they reconciled? — Picked: A — correct the plan text to the shipped behaviour. Alternatives: B — change the code to the plan text (add the two CLI subcommands, an author filter, a new log key, a status-only review path); C — leave both and record the divergence only. Why: the shipped design is equivalent or stronger (no work-tree writes; the author filter distinguishes nothing when every PR is authored by the owner account, and a foreign sync-prefixed PR is rebuilt from `main` plus the copies and refused by `merge-check`; the log key follows the gate's convention and is tested), and B adds unused surface (§5). Applied in: conformance fix PR (plan text only). Status: pending review
 
 ## Notes
 
