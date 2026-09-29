@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5222-final-merge-resume-closed-issue-plan.md
 - Source issue: shubhodeep1/coding-workflows#5222 (https://github.com/shubhodeep1/coding-workflows/issues/5222)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5222-final-merge-resume-closed-issue   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5222-final-merge-resume-closed-issue   Final PR: #5225 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5271: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: none (twin-first hold: the wait is armed by the stage `/reclarify` resumes)
 - Last updated: 2026-09-29
-- Last note: project branch opened; phase 1 starting
+- Last note: phase 1 PR #5271 opened twin-first; held (hold claim) until the supervising session copies the two command twins into .claude/commands as a [claude-twin-sync] commit and comments /reclarify on #5222
 
 ## Phases
-1. [ ] Phase 1 — final-merge resume on a closed issue   — protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md (twin-first)
+1. [ ] Phase 1 — final-merge resume on a closed issue   — PR #5271 open (held for twin sync); review rounds: 0; interventions: 0; protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md (twin-first)
 
 ## Conformance
 
@@ -35,6 +35,7 @@
 - AD-6 [plan, 2026-09-29] Should the handoff's routing comment differ for the resume? — Picked: A — yes, a resume-specific body under the same `ai:claude-issue-routed:v1` marker. Alternatives: B — reuse the "a Claude session will implement this issue" text. Why: the generic text says the issue closes when the completion PR merges, which is wrong for a closed issue. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A full local `pytest tests` run does not finish within 40 minutes on a cloud session runner; verify a phase by running each test file that references the changed paths separately with a per-file timeout, and leave the full suite to CI. (files: tests/test_orchestrate_poll_process.py)
 
 ## Notes
 - Issue progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5222#issuecomment-5898432937
