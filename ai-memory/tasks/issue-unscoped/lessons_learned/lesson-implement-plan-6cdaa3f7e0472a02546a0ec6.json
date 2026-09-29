@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-29T05:23:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When one file matches another file's constant by prefix or exact text (a deny reason and the filter that recognises it), add a test that loads both real files and asserts the match, so rewording either side fails CI instead of silently changing behaviour.",
+  "phase": "implement_plan",
+  "pr_number": 4925,
+  "record_id": "lesson-implement-plan-6cdaa3f7e0472a02546a0ec6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4858-inline-edit-guard",
+    "file:.claude/hooks/inline_edit_guard.py",
+    "file:.claude/scripts/permission_prompts.py",
+    "file:tests/test_inline_edit_guard.py"
+  ]
+}

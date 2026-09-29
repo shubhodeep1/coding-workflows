@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T05:23:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A hook that reuses another hook's functions by path must pin every attribute it calls in a test that loads the real sibling module, because the fail-open handler turns a rename into a silently disabled guard.",
+  "phase": "implement_plan",
+  "pr_number": 4925,
+  "record_id": "lesson-implement-plan-7f990118ada73b70d673a661",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4858-inline-edit-guard",
+    "file:.claude/hooks/inline_edit_guard.py",
+    "file:tests/test_inline_edit_guard.py"
+  ]
+}
