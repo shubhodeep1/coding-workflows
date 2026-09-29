@@ -1167,6 +1167,78 @@ reviews, comments, and conflicts stay a direct §12 request.
 
 ---
 
+## Guard differential check (issue #5174)
+
+The `.claude/hooks/*_guard.py` hooks are the security boundary of unattended
+sessions, and the reviewer panel only reads their diffs. PR #5173 (the
+#5144 rewrite of `pr_merge_status_guard.py`) passed review at `b6dd693`
+with three command shapes the old hook blocked and the new one allowed
+silently. `scripts/guard_differential.py` runs the old and new hooks side by
+side so that class cannot land unnoticed.
+
+- **Corpus.** One file per guard, `tests/guard_corpus/<hook>.txt`, named
+  after the hook's file stem: `pr_merge_status_guard.txt`,
+  `gh_api_write_guard.txt`, `pr_watch_guard.txt`, and
+  `inline_edit_guard.txt` (#4858's hook, still on its project branch; the
+  corpus runs as soon as the hook exists on either side of a PR). One shape
+  per line; `#` comments and blank lines are skipped. A plain line is a Bash
+  `tool_input.command`, `json: {…}` is a whole PreToolUse payload (MCP tools,
+  heredocs), and `stdin: …` is raw hook input (malformed payloads). The
+  scenario replaces `@@REPO@@` and `@@WORKTREE@@` with its scratch paths.
+  The check runs the union of the corpus at the base and at the head, so a
+  PR cannot pass by deleting the shape its hook change loosens. Add a shape
+  whenever a review or incident finds a bypass. Every
+  `*_guard.py` in `.claude/hooks/` needs a corpus
+  (`tests/test_guard_differential.py` enforces it).
+- **Scenarios.** Each shape runs in a fresh scratch git repository with
+  origin `https://github.com/o/r.git` and a stub `gh` first on `PATH`.
+  `pr_merge_status_guard` uses the #5173 review's stranded state: the
+  session checkout on `feature/x`, whose PR #41 merged with no open PR,
+  plus a detached worktree, with `gh` answering `feature/open` with an open
+  PR. Every other guard gets a clean checkout. Hooks run with `HOME` and
+  `TMPDIR` in the scratch directory, no `GH_TOKEN` / `GITHUB_TOKEN`, no
+  `CLAUDE_*` or inherited `GIT_*` variables, and `GIT_ALLOW_PROTOCOL=file`,
+  so no hook reaches GitHub (no API calls, §15).
+- **Rule.** Each side's whole hooks directory is copied (a hook may load its
+  siblings), for each tree (`.claude/hooks/` and the
+  `workflow-templates/.claude/hooks/` twin) in which any `.py` file changed.
+  Decisions are ranked block = deny > ask > none (no decision) > allow =
+  error (a crashed hook does not block). A shape fails when the head is less
+  strict than the base and the head emitted no `systemMessage` warning. A
+  hook missing on one side counts as `none`, so deleting a guard fails, and
+  a new hook fails only where it answers `allow`. A changed `*_guard.py`
+  (new, edited, or deleted) with no corpus, or with a corpus that holds no
+  shape (comments and blank lines only), fails too, so a new guard ships
+  with its corpus. A local run without `--head-ref` counts untracked hook
+  files as changed.
+- **`Intended loosening:`** A PR that means to loosen lists each shape
+  verbatim (the corpus line, placeholders included) under a heading or bold
+  line `Intended loosening:` in its body, one list item per shape,
+  optionally prefixed with the hook and a colon, with the shape in
+  backticks (``- pr_merge_status_guard: `git push` ``). The
+  section ends at the next markdown heading. A listed shape counts as a
+  loosening under the retire-master Q3: A rule, so a sync that carries it
+  waits for the operator. CI reads the body from the event payload of the
+  push, so a body edited later needs another push to count.
+- **Wiring.** `ci.yml`'s `lint` job runs `Guard differential tests (issue
+  #5174)` and, on pull requests only, `Guard differential check (issue
+  #5174)`: it fetches the base branch with git and runs `--base-ref
+  FETCH_HEAD --pr-body-file <body from GITHUB_EVENT_PATH>` against the
+  checked-out merge commit. `ci.yml` runs on pull requests into `main` and
+  `stable`, so it gates a project's final PR and every #4785 twin-sync PR,
+  whose auto-merge waits for green checks. Phase PRs into a project branch
+  do not run `ci.yml`. Run it by hand with `python3
+  scripts/guard_differential.py --base-ref origin/main [--head-ref <ref>]
+  [--pr-body-file <file>] [--all] [--json]`.
+- **Output.** `GUARD_DIFFERENTIAL regression tree=… hook=… line=… base=…
+  head=… shape=…` per failing shape (as `::error::`), `GUARD_DIFFERENTIAL
+  intended_loosening …` per listed shape, `GUARD_DIFFERENTIAL missing_corpus
+  path=…`, and a `GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> …`
+  summary. Exit 0 when clean or when no hook changed, 1 on a failure, 2 on a
+  bad ref, unreadable corpus, or unreadable PR body.
+
+---
+
 ## Repo-specific batching helpers
 
 The following helpers are the canonical batched GraphQL paths for the
@@ -1760,6 +1832,7 @@ and shipped:
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
+- `GUARD_DIFFERENTIAL`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1952,6 +2025,7 @@ LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
 LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=GUARD_DIFFERENTIAL
 
 ---
 
