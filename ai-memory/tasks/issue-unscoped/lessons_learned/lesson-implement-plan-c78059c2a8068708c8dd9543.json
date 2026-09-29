@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T18:30:06Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In tab-indented Python, keep docstring hanging indents tab-only; ruff E101 flags a tab followed by spaces, and the CI `lint` job runs `ruff check --select E,F` over `scripts/*.py`.",
+  "phase": "implement_plan",
+  "pr_number": 5176,
+  "record_id": "lesson-implement-plan-c78059c2a8068708c8dd9543",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5135-bind-watchdog-markers-to-author",
+    "file:scripts/claude_issue_route.py"
+  ]
+}
