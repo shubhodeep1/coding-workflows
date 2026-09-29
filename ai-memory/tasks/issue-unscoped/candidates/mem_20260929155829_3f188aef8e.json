@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:673-677 | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: run_check processes all corpus shapes for every tree in HOOK_TREES and appends duplicate ShapeResult entries.\n  WHY: When multiple hook trees are changed (e.g. .claude/hooks/ and workflow-templates/.claude/hooks/), the same corpus shapes are executed multiple times and duplicated in the results list, leading to redundant output and inflated regression counts.\n- scripts/guard_differential.py:~288\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The scenario_env filter strips CLAUDE_* and token keys but not GIT_* keys, while the os.environ filter strips all three.\n  WHY: A future scenario could inject other GIT_* variables (GIT_SSH_COMMAND, GIT_OBJECT_DIRECTORY, etc.) that pass through unfiltered; no current scenario sets Scenario.env, and the three critical isolation variables are overridden after the update, so this is latent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/guard_differential.py:673-677 | confidence=5\n  PROBLEM: run_check processes all corpus shapes for every tree in HOOK_TREES and appends duplicate ShapeResult entries.\n  WHY: When multiple hook trees are changed (e.g. .claude/hooks/ and workflow-templates/.claude/hooks/), the same corpus shapes are executed multiple times and duplicated in the results list, leading to redundant output and inflated regression counts.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- file: scripts/guard_differential.py\n  location: hook_env, the scenario_env filter comprehension (~line 288)\n  issue: The scenario_env filter strips CLAUDE_* and token keys but not GIT_* keys, while the os.environ filter strips all three.\n  suggested minimal fix: Add `and not key.startswith(\"GIT_\")` to the scenario_env filter comprehension, matching the os.environ filter: `{key: value for key, value in scenario_env.items() if not key.startswith((\"CLAUDE_\", \"GIT_\")) and key not in _STRIPPED_ENV_KEYS}`\n  HARDENING_RISK_SCORE: 1\n  WHY: No current scenario sets Scenario.env, and the three critical isolation variables (GIT_ALLOW_PROTOCOL, GIT_TERMINAL_PROMPT, GIT_CONFIG_NOSYSTEM) are overridden after the update, so this is latent. A future scenario could inject other GIT_* variables (GIT_SSH_COMMAND, GIT_OBJECT_DIRECTORY, etc.) that pass through unfiltered.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ed406c3f751a04a52338b3354ff95ab6867ea231c7ef727bd415c2731e6e4490",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5187,
+    "run_id": "36592392149",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36592392149",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929155829_3f188aef8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5187,
+    "run_id": "36592392149"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T15:58:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
