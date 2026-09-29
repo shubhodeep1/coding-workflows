@@ -1173,7 +1173,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   branches that land in the default branch are synced; a PR head on a
   lagging project branch syncs the project branch first. A conflict under
   `.claude/` aborts the merge and stops with the `ai:claude-blocked:v1`
-  blocker (a `hold` claim in `/fix-claude-pr`). A merged `settings.json`
+  blocker (a `hold` claim in `/fix-claude-pr`). On a PR head, a conflict
+  only outside `.claude/` is resolved inside the sync merge
+  (`git commit --no-edit` keeps the `[claude-asset-sync]` subject). The
+  merge's source is the PR's base, and the merged `.claude/` files are
+  already in the working tree, so the fix runs under the current guards.
+  When that resolution is not evident, the session aborts and stops as it
+  does on any conflict it cannot resolve, and never continues the fix on
+  the unsynced head (issue #5258). A merged `settings.json`
   change applies from the next session. Local git only, no GitHub API
   calls. The SessionStart hook logs the drift as
   `[session-start] claude_assets=stale …`, or `claude_assets=diverged …`
