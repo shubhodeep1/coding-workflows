@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:91-97 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: Importing `security_pass_skip.py` at module load time makes `permission_prompts.py` unusable if that sibling file is missing, including for subcommands that do not depend on it.\n  WHY: The missing module raises `ImportError` for `report` and `file`; severity differed (NIT vs MAJOR), so the consensus uses the higher severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: workflow-templates/.claude/scripts/permission_prompts.py\n  Line or code reference: lines 94-97 (module-level import of security_pass_skip via importlib)\n  Problem: The import of security_pass_skip.py executes at module load time. If security_pass_skip.py is not present alongside permission_prompts.py in the deployment directory, the entire script becomes unusable even for the report and file subcommands that do not depend on duplicate-check or command-class functionality.\n  Why it fails at runtime: An ImportError on a missing security_pass_skip.py would crash report and file subcommands, which run in every /implement-plan-claude stage via the stage report step. In practice this file is always co-located in .claude/scripts/, the twin-parity tests in CI verify its presence, and the two scripts are shipped together through the @stable sync, so the blast radius is limited to deployment mistakes that CI would already surface.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: workflow-templates/.claude/scripts/permission_prompts.py\n  Line or code reference: 91-96\n  Problem: Importing `security_pass_skip.py` at module load time causes the entire `permission_prompts.py` script to crash if `security_pass_skip.py` is missing in the deployment directory.\n  Why it fails at runtime: Subcommands like `report` and `file` will crash with `ImportError` even though they do not depend on the functionality provided by `security_pass_skip.py`. The import should be moved inside the `duplicate_check` function to ensure it is only required when the code path actually depends on it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0c6a9715e26b6c07ba9ab2869a6f329793f21630f78a8a43d00f5cbb5886ec9d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4903,
+    "run_id": "36507869865",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36507869865",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929020549_db8de2803e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4903,
+    "run_id": "36507869865"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T02:05:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
