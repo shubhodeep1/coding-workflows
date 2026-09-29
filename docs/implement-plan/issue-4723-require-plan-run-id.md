@@ -5,20 +5,21 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4723-require-plan-run-id   Final PR: #4729 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #4730
+- Waiting on: conformance fix PR from `claude/implement-plan-issue-4723-require-plan-run-id-conformance-fix-1` (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01SN9XdEWdK9hLtuWFjcG31M (hand-back and safety net re-armed each stage)
 - Last updated: 2026-09-28
-- Last note: review round 3 on PR #4730: 2 findings; the unbounded "unable to confirm" retry fixed per AD-7 (both retries now fail as a stall after PLAN_PHASE_TIMEOUT), the duplicate page-1 read rejected (it follows a POLL_INTERVAL sleep and must be fresh)
+- Last note: conformance run 1: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS); one EVIDENCE-BASED CONCERN fixed in the conformance fix PR: `latest_scoped_run_field` returned 0 instead of its documented 1 when a runs page could not be read
 
 ## Phases
-1. [ ] Phase 1 — paginate the scoped Plan run lookup and require the ID before success (`.github/workflows/test-and-mark-stable.yml` `wait-plan` step, `tests/test_test_and_mark_stable_plan_polling_guard.py`, `changelog.d/4723-require-plan-run-id.md`)
-   - PR #4730 open (waiting); review rounds: 3; interventions: 0
+1. [x] Phase 1 — paginate the scoped Plan run lookup and require the ID before success (`.github/workflows/test-and-mark-stable.yml` `wait-plan` step, `tests/test_test_and_mark_stable_plan_polling_guard.py`, `changelog.d/4723-require-plan-run-id.md`)
+   - PR #4730 merged 2026-09-28 (83cb4b3); review rounds: 3; interventions: 0
    - Done when: new behavioural tests (missing ID fails at capture with `status=run_id_missing`; page-2 match succeeds; unrelated title rejected) and existing guard tests pass; workflow YAML parses.
 
 ## Conformance
+- Run 1 — 2026-09-28: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR from `claude/implement-plan-issue-4723-require-plan-run-id-conformance-fix-1` (pre-security): a failed or malformed runs page made `latest_scoped_run_field` end the walk as a short page (exit 0) instead of returning 1; no behaviour change for its callers, which retry on both
 
 ## Security pass
 - Skipped (ai:workflow-heal: automation-produced issue, verified by `.claude/scripts/security_pass_skip.py`)
@@ -43,6 +44,7 @@
 - [source:intervention] A retry loop around a paginated lookup must not retry a walk that already read every page up to the cap: the result cannot change and each retry repeats the full page cost (files: .github/workflows/test-and-mark-stable.yml)
 - [source:intervention] When a lookup is fixed to page past the first 100 runs, every other check in the same step that reads the same run window needs the same paging, or the fix leaves the same false failure one branch away (files: .github/workflows/test-and-mark-stable.yml)
 - [source:intervention] A retry branch that `continue`s a poll loop before the loop's inactivity-timeout check must apply that timeout itself, or a persistent read failure polls until the job's timeout-minutes (files: .github/workflows/test-and-mark-stable.yml)
+- [source:conformance] Capturing `gh_api_safe_print` with `$(...)` also captures its `::error::gh api call failed` line, so a failed read is non-empty text, not an empty string: shape-check the JSON before trusting it, never just test for emptiness (files: .github/workflows/test-and-mark-stable.yml, scripts/comprehensive_test_and_release_gh_api.sh)
 
 ## Notes
 - Issue progress comment: 5864145856.
