@@ -40,7 +40,8 @@ Fail closed. Auto-merge is enabled only when ALL of these hold:
     issue #4618);
   * no newer review of the PR is still running (issue #5148): no run on the
     head branch, no internal-review.yml dispatch titled for this PR, and no
-    review_autofix.yml / ai-review.yml dispatch (those carry no PR binding)
+    review_autofix.yml / ai-review.yml / review_rb_judge_dispatch.yml dispatch
+    (those carry no PR binding)
     is in any status but `completed`; the latest completed review run bound
     to this PR that is newer than the marker's run concluded `success`; and
     a re-read of the comments, after those run reads, still finds the same
@@ -59,8 +60,9 @@ API budget (CLAUDE.md §15), per evaluated PR: 1 PR read and 1 read per 100
 comments. With a live marker, 1 paginated check-runs read (one call per 100
 check runs, through the collector). Only when the snapshot is ready: 1 review
 run read (+1 compare read when that run was triggered by an older push), 1
-head-branch runs read and 3 workflow_dispatch runs reads (internal-review.yml,
-review_autofix.yml, ai-review.yml; a missing workflow costs its one 404), 1
+head-branch runs read and 4 workflow_dispatch runs reads (internal-review.yml,
+review_autofix.yml, ai-review.yml, review_rb_judge_dispatch.yml; a missing
+workflow costs its one 404), 1
 read per 100 comments again, 1 repository-variable read, then
 `review_enable_auto_merge.sh` (1 paginated labels read, 1 PR read, 1 merge
 call). Every read goes through `gh api` with
@@ -116,11 +118,15 @@ AUTO_MERGE_ENABLED_LINE_PREFIX = "Auto-merge enabled."
 # 404; scripts/gh_helpers.sh recognises the same set.
 NOT_FOUND_RE = re.compile(r"HTTP 404|gh: Not Found|404 Not Found|status code 404|\"status\":\s*\"404\"", re.IGNORECASE)
 # Review workflows whose workflow_dispatch runs carry no PR in their run name
-# (review_autofix.yml here: force_rb_judge and convergence dispatches;
-# ai-review.yml in consumers). The review gate lets a force_rb_judge or
-# force-review dispatch through on a pending-checks head, so while any such
-# run is active it may be a newer review of this PR (issue #5148).
-UNBOUND_DISPATCH_REVIEW_WORKFLOWS = (".github/workflows/review_autofix.yml", ".github/workflows/ai-review.yml")
+# (review_autofix.yml here: convergence and direct dispatches; ai-review.yml
+# in consumers; review_rb_judge_dispatch.yml in both, which the orchestrator
+# stall poller dispatches with force_rb_judge=true and which, on a
+# Claude-fixer head, labels the PR ai:review-blocked). The review gate lets a
+# force_rb_judge or force-review dispatch through on a pending-checks head, so
+# while any such run is active it may be a newer review of this PR
+# (issue #5148).
+UNBOUND_DISPATCH_REVIEW_WORKFLOWS = (".github/workflows/review_autofix.yml", ".github/workflows/ai-review.yml",
+	".github/workflows/review_rb_judge_dispatch.yml")
 REVIEW_RUNS_PER_PAGE = 100
 
 
