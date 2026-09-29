@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4976-source-grounded-rejection-votes-plan.md
 - Source issue: shubhodeep1/coding-workflows#4976
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4976-source-grounded-rejection-votes   Final PR: pending
+- Project branch: claude/implement-plan-issue-4976-source-grounded-rejection-votes   Final PR: #5027 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR from claude/implement-plan-issue-4976-source-grounded-rejection-votes-phase-1 (number in the stage report and the `— resume.` block)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: project checker armed after this commit (ids in the stage report and the `— resume.` block)
 - Last updated: 2026-09-29
-- Last note: project branch opened from claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason
+- Last note: phase 1 implemented and verified (218 tests in the ci.yml Claude-fixer step pass, 475 across the related review-autofix contract tests; ruff, shellcheck, inventory parity clean); phase PR opened
 
 ## Phases
-1. [ ] Phase 1 — source-grounded rejection votes
+1. [ ] Phase 1 — source-grounded rejection votes   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
