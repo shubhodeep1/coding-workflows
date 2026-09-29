@@ -356,11 +356,14 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 	assert "is_managed_child=true" in text, "Loop must flip is_managed_child when matched"
 
 	# Close gate must include the managed-child branch — closing the
-	# issue when its PR merges into orchestrator/project-N (base != main).
+	# issue when its PR merges into orchestrator/project-N (base != the
+	# default branch). The default branch comes from the event payload and
+	# falls back to the `main` this gate hardcoded before issue #4813.
+	assert 'DEFAULT_BRANCH_NAME="${PR_BASE_DEFAULT_BRANCH:-main}"' in text
 	assert (
-		'if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ] || [ "${is_managed_child}" = "true" ]; then'
+		'if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${DEFAULT_BRANCH_NAME}" ] || [ "${is_managed_child}" = "true" ]; then'
 	) in text, (
-		"Close gate must close on PR_MERGED!=true, PR_BASE_REF==main, "
+		"Close gate must close on PR_MERGED!=true, PR_BASE_REF==default branch, "
 		"OR is_managed_child==true"
 	)
 	assert "Closing orchestrator-managed child issue #${issue_number}" in text, (

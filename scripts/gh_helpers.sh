@@ -1675,3 +1675,38 @@ extract_repo_scoped_issue_refs_from_text()
 		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
 		| sort -un || true
 }
+
+# ---------------------------------------------------------------
+# issue_body_integration_branch <issue body>
+#
+# Print the branch an issue names as its target: the canonical
+# `Integration branch:` line, else the `Target branch:` alias. Same
+# grammar as extract_integration_branch in scripts/orchestrate_lib.py
+# (INTEGRATION_BRANCH_LINE_RE / TARGET_BRANCH_LINE_RE) and in
+# scripts/resolve_integration_ref.sh; keep all three in sync
+# (tests/test_gh_helpers_issue_body_integration_branch.py checks
+# parity with the Python parser).
+#
+# Used by close_merged_issues_sweep and issue_pr_status.yml to decide
+# whether a merged PR landed on the issue's own target branch
+# (issue #4813). Reads the body from $1, issues no API call, prints
+# nothing when neither line is present or python3 fails.
+# ---------------------------------------------------------------
+issue_body_integration_branch()
+{
+	local _body="${1:-}"
+	[ -n "${_body}" ] || return 0
+	printf '%s' "${_body}" | python3 -c '
+import re
+import sys
+
+body = sys.stdin.read()
+match = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
+if match:
+	print(match.group(1).strip())
+	sys.exit(0)
+alias_match = re.search(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", body, re.MULTILINE)
+if alias_match:
+	print((alias_match.group(1) or alias_match.group(2) or "").strip())
+' 2>/dev/null || true
+}
