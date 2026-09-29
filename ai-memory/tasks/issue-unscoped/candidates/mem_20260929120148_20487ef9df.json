@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1113 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The Claude-fixer GPT judge uses `MAX_REVIEW_BLOCKED_RETRIES` for `--cap` instead of the documented `CLAUDE_FIXER_JUDGE_FIX_CAP`.\n  WHY: When the variables differ, the Claude-fixer judge can produce more `[judge-fix]` commits than the configured Claude-fixer cap.\n- .claude/scripts/check_in_status.py:line 425 | severity=critical | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The unconditional `head_branch == head_ref` requirement rejects default-branch-dispatched review runs that the sweep and evidence helper trust.\n  WHY: For sweep-dispatched runs, the checker can remain waiting for a verified completed review run and fail to wake the fixer.\n- .claude/scripts/check_in_status.py:298 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_active_run_count` removed its `pr_number` parameter, which can break callers that pass that argument.\n  WHY: The reviewer notes that all internal callers were updated and the function is internal, but callers passing the removed parameter would break.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:1113 | severity=high | confidence=[5]\n  PROBLEM: The Claude-fixer GPT judge is passed `--cap \"${MAX_REVIEW_BLOCKED_RETRIES}\"` instead of `\"${CLAUDE_FIXER_JUDGE_FIX_CAP:-2}\"`.\n  WHY: An operator setting `MAX_REVIEW_BLOCKED_RETRIES=5` and `CLAUDE_FIXER_JUDGE_FIX_CAP=2` can get up to 5 `[judge-fix]` commits instead of the documented 2.\n- .claude/scripts/check_in_status.py:298 | severity=low | confidence=[3]\n  PROBLEM: `_active_run_count` had its `pr_number` parameter removed without an alongside alias.\n  WHY: The reviewer notes that all internal callers were updated and the function is internal; removal of the dispatch-run detection is consistent with the checker no longer accepting default-branch-dispatched runs.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/check_in_status.py:line 425 | severity=critical | confidence=[5]\n  PROBLEM: The `head_branch != head_ref` check rejects default-branch-dispatched review runs, while the evidence helper trusts them.\n  WHY: Sweep-dispatched runs can leave the checker waiting for a verified completed review run, preventing the fixer from being woken.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "95adb72c3055f3e76bb1095aaa2a972da34934c517ac7a251be66d3f70221b64",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36564262987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36564262987",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929120148_20487ef9df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36564262987"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T12:01:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
