@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T15:46:20Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Before an automated job enables auto-merge from an earlier review's result, it must check for newer reviews of the same PR that are still running (including dispatches from the default branch, whose check runs never attach to the PR head) and re-read the result after that check; nothing disables auto-merge once a later review finds a problem.",
+  "phase": "implement_plan",
+  "pr_number": 5183,
+  "record_id": "lesson-implement-plan-08b55b655304215e66359b43",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-5148-pending-checks-newer-review-race",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}
