@@ -21,7 +21,9 @@ changed twin file into `.claude/**` through one pull request on
 Subcommands:
   plan         classify every twin file against `.claude/` at a ref (JSON)
   check        fail when a commit range moves a `.claude/` file anywhere but
-               its twin (the CI sync-state check: `.claude/` is never ahead)
+               its twin (the CI sync-state check: `.claude/` is never ahead);
+               with `--guard-provenance-ref`, also when a guard path differs
+               from that ref's copy (CI on `stable`, issue #5247)
   merge-check  decide whether a sync PR's file list is a pure non-guard sync
   run          the workflow driver: plan, commit, push, open or update the
                PR, label, status, and merge a non-guard PR whose checks passed
@@ -342,12 +344,19 @@ def commit_tree(repo: str, tree: str, parents: list[str], message: str) -> str:
 # --- check (CI sync-state) ---------------------------------------------------
 
 
-def check_not_ahead(repo: str, base: str, head: str) -> dict:
+def check_not_ahead(repo: str, base: str, head: str, guard_provenance_ref: str | None = None) -> dict:
 	"""Every `.claude/` file changed in base..head must equal its twin at head.
 
 	The twin may be ahead of `.claude/` (a change awaiting its sync PR); a
 	`.claude/` file may never move anywhere but its twin. Upstream-only files
 	are exempt. Both copies missing counts as equal (a synced deletion).
+
+	With `guard_provenance_ref` (CI passes the default branch's tip on
+	`stable` events, issue #5247), a guard path changed in the range must also
+	equal the same `.claude/` path at that ref: same blob and mode, or absent
+	on both. On the default branch a guard change reaches `.claude/` from its
+	twin only through the owner-reviewed sync PR, so guard content that never
+	landed there cannot enter `stable` through a PR's twin edit.
 	"""
 	out = run_git(repo, ["diff", "--name-only", "--no-renames", "-z", base, head, "--", CLAUDE_ROOT])
 	violations: list[dict] = []
@@ -366,6 +375,12 @@ def check_not_ahead(repo: str, base: str, head: str) -> dict:
 		checked.append(path)
 		local = blob_at(repo, head, path)
 		twin = blob_at(repo, head, f"{TWIN_ROOT}/{rel}")
+		if guard_provenance_ref and is_guard_path(rel):
+			# Checked before the both-missing exit: deleting a guard file on
+			# both sides is still a guard change the default branch must carry.
+			landed = blob_at(repo, guard_provenance_ref, path)
+			if (local is None) != (landed is None) or (local is not None and (local.sha, local.mode) != (landed.sha, landed.mode)):
+				violations.append({"path": path, "reason": f"is a guard path changed to content that is not on the default branch ({guard_provenance_ref[:12]}); land the change there first, through the owner-reviewed twin sync PR, then promote or backport it"})
 		if local is None and twin is None:
 			continue
 		if twin is None:
@@ -374,7 +389,7 @@ def check_not_ahead(repo: str, base: str, head: str) -> dict:
 			violations.append({"path": path, "reason": f"deleted while {TWIN_ROOT}/{rel} still exists; the sync never copies a deletion, so delete both copies together"})
 		elif local.sha != twin.sha:
 			violations.append({"path": path, "reason": f"changed to content that differs from {TWIN_ROOT}/{rel}; edit the twin and let the sync PR copy it"})
-	return {"base": base, "head": head, "checked": checked, "violations": violations, "ok": not violations}
+	return {"base": base, "head": head, "guard_provenance_ref": guard_provenance_ref, "checked": checked, "violations": violations, "ok": not violations}
 
 
 # --- merge rules -------------------------------------------------------------
@@ -792,6 +807,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_check.add_argument("--repo-root", default=".")
 	p_check.add_argument("--base", required=True)
 	p_check.add_argument("--head", default="HEAD")
+	p_check.add_argument("--guard-provenance-ref", default="", help="also require every changed guard path to equal its .claude/ copy at this ref (CI passes the default branch on stable)")
 	p_merge = sub.add_parser("merge-check")
 	p_merge.add_argument("--repo-root", default=".")
 	p_merge.add_argument("--ref", required=True)
@@ -815,7 +831,13 @@ def main(argv: list[str] | None = None) -> int:
 			if not base or base == ZERO_SHA:
 				_print({"ok": True, "skipped": "no base commit (new branch)"})
 				return 0
-			result = check_not_ahead(args.repo_root, resolve_commit(args.repo_root, base), resolve_commit(args.repo_root, args.head))
+			provenance = args.guard_provenance_ref.strip()
+			result = check_not_ahead(
+				args.repo_root,
+				resolve_commit(args.repo_root, base),
+				resolve_commit(args.repo_root, args.head),
+				resolve_commit(args.repo_root, provenance) if provenance else None,
+			)
 			for item in result["violations"]:
 				# The path comes from the checked commit range (a PR's content):
 				# escaped, so a line break in a file name cannot start a command.
