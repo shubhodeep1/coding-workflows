@@ -32,12 +32,26 @@ def _pr(**overrides):
 		"labels": [],
 		"mergeable_state": "clean",
 		"head": {"sha": "abc", "ref": "claude/x"},
+		# Every PR object carries its base repository's default branch, which
+		# check_in_status.py uses to verify PR-named review runs (issue #5152).
+		"base": {"repo": {"default_branch": "main"}},
 	}
 	pr.update(overrides)
 	return pr
 
 
 DISPATCH_RUNS = "repos/o/r/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=100"
+
+
+def _dispatch_run(status, pr_number):
+	"""A sweep-dispatched internal-review.yml run from the default branch (issue #4618)."""
+	return {
+		"status": status,
+		"event": "workflow_dispatch",
+		"path": ".github/workflows/internal-review.yml",
+		"head_branch": "main",
+		"display_title": f"Internal: AI Review & Autofix [pr:{pr_number}]",
+	}
 
 
 def _stub(monkeypatch, responses):
@@ -146,7 +160,7 @@ def test_old_head_with_active_sweep_dispatch_for_the_pr_waits(monkeypatch, capsy
 	# path must still count it by its `[pr:<N>]` title.
 	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
 	responses[DISPATCH_RUNS] = {"workflow_runs": [
-		{"status": status, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		_dispatch_run(status, 7),
 	]}
 	_stub(monkeypatch, responses)
 	_, out = _run(["--pr", "7"], capsys)
@@ -156,9 +170,9 @@ def test_old_head_with_active_sweep_dispatch_for_the_pr_waits(monkeypatch, capsy
 def test_old_head_with_sweep_dispatch_for_another_pr_or_finished_is_stuck(monkeypatch, capsys):
 	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
 	responses[DISPATCH_RUNS] = {"workflow_runs": [
-		{"status": "in_progress", "display_title": "Internal: AI Review & Autofix [pr:8]"},
-		{"status": "completed", "display_title": "Internal: AI Review & Autofix [pr:7]"},
-		{"status": "pending", "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		_dispatch_run("in_progress", 8),
+		_dispatch_run("completed", 7),
+		_dispatch_run("pending", 7),
 	]}
 	_stub(monkeypatch, responses)
 	_, out = _run(["--pr", "7"], capsys)

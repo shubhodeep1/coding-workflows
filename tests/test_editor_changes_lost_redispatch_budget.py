@@ -128,6 +128,7 @@ gh() {
 	cat "${RUNS_FIXTURE}"
 }
 
+eval "$(extract_fn _autofix_review_default_branch)"
 eval "$(extract_fn _autofix_pr_named_review_runs)"
 eval "$(extract_fn autofix_changes_lost_head_retry_consumed)"
 autofix_changes_lost_head_retry_consumed "$@"
@@ -139,6 +140,13 @@ def _run_helper(runs_json: str, *args: str, api_fail: bool = False) -> subproces
 		fixture = Path(tmp) / "runs.json"
 		fixture.write_text(runs_json, encoding="utf-8")
 		env = dict(os.environ)
+		# The PR-named lookup reads the default branch from the event payload
+		# (issue #5152); pin it instead of inheriting the CI run's own payload.
+		event_file = Path(tmp) / "event.json"
+		event_file.write_text(json.dumps({"repository": {"default_branch": "main"}}), encoding="utf-8")
+		env["GITHUB_EVENT_PATH"] = str(event_file)
+		for inherited_name in ("_AUTOFIX_REVIEW_DEFAULT_BRANCH_CACHE", "_AUTOFIX_REVIEW_DEFAULT_BRANCH_READY"):
+			env.pop(inherited_name, None)
 		env["GITHUB_REPOSITORY"] = "owner/repo"
 		env["RUNS_FIXTURE"] = str(fixture)
 		if api_fail:

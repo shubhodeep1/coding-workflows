@@ -273,13 +273,13 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 	if age_hours < stuck_hours:
 		return {"done": False, "state": "open", "reason": f"PR #{number} has {problem}, head is {age_hours:.1f}h old (< {stuck_hours:g}h)"}
 
-	active = _active_run_count(repo, head_ref, pr_number=number)
+	active = _active_run_count(repo, head_ref, pr_number=number, default_branch=_pr_default_branch(pr))
 	if active:
 		return {"done": False, "state": "open", "reason": f"PR #{number} has {problem}, but {active} workflow run(s) on {head_ref} are still queued or running"}
 	return {"done": True, "state": "stuck", "reason": f"PR #{number} stuck: {problem}, head {age_hours:.1f}h old, no workflow run active on {head_ref}"}
 
 
-def _active_run_count(repo: str, head_ref: str, include_pending: bool = False, pr_number: int | None = None) -> int:
+def _active_run_count(repo: str, head_ref: str, include_pending: bool = False, pr_number: int | None = None, default_branch: str | None = None) -> int:
 	"""Count queued / running (and, with `include_pending`, pending) runs for a PR.
 
 	One read per status filtered by the head branch. When those find nothing
@@ -287,6 +287,13 @@ def _active_run_count(repo: str, head_ref: str, include_pending: bool = False, p
 	workflow_dispatch runs and counts the active ones titled
 	DISPATCHED_REVIEW_TITLE for this PR: the sweep dispatches them from the
 	default branch (issue #4618), so the head-branch filter never sees them.
+	A run's title comes from the workflow file at the dispatched ref, so a
+	branch copy of internal-review.yml can forge it (issue #5152, the
+	follow-up to #5094): a titled run counts only through
+	`_is_active_pr_named_review_run`, which also checks its event, path, and
+	head branch against `default_branch` (the caller's PR object supplies it,
+	so no read is added). With `default_branch` None, no titled run counts
+	and one REVIEW_RUN_PROVENANCE line goes to stderr.
 	A repository without internal-review.yml (HTTP 404) counts 0; any other
 	failed read raises `ReadError`.
 	"""
@@ -297,16 +304,37 @@ def _active_run_count(repo: str, head_ref: str, include_pending: bool = False, p
 		active += int(listing.get("total_count") or 0)
 	if active or pr_number is None:
 		return active
+	if default_branch is None:
+		print(f"REVIEW_RUN_PROVENANCE repo={repo} source=check_in_status pr={pr_number} outcome=default_branch_unresolved pr_named_matching=disabled", file=sys.stderr)
+		return 0
 	try:
 		listing = gh_api(DISPATCHED_REVIEW_RUNS_PATH.format(repo=repo))
 	except ReadError as exc:
 		if "HTTP 404" in str(exc):
 			return 0
 		raise
-	title = DISPATCHED_REVIEW_TITLE.format(number=pr_number)
 	return sum(
 		1 for run in listing.get("workflow_runs") or []
-		if isinstance(run, dict) and run.get("status") in statuses and run.get("display_title") == title
+		if isinstance(run, dict) and run.get("status") in statuses
+		and _is_active_pr_named_review_run(run, pr_number, default_branch)
+	)
+
+
+def _is_active_pr_named_review_run(run: dict, number: int, default_branch: str) -> bool:
+	"""True for an internal-review.yml run dispatched for PR `number` from the default branch.
+
+	The same identity and provenance rule as `_is_pr_dispatched_review_run`,
+	except that a null or empty head_branch also counts: GitHub reports one on
+	some genuine dispatch runs (issue #4928), while a forged run always
+	reports the branch it was dispatched from. Needs no API call.
+	"""
+	path = run.get("path")
+	head_branch = run.get("head_branch")
+	return (
+		run.get("event") == "workflow_dispatch"
+		and isinstance(path, str) and path.split("@", 1)[0] == DISPATCHED_REVIEW_WORKFLOW
+		and (head_branch in (None, "") or head_branch == default_branch)
+		and run.get("display_title") == DISPATCHED_REVIEW_TITLE.format(number=number)
 	)
 
 
@@ -459,13 +487,13 @@ def _check_claude_fixer_pr(repo: str, number: int, head_sha: str, head_ref: str,
 					or not _review_run_head_on_branch_history(repo, review_run.get("head_sha"), head_sha)))):
 			return {"done": False, "state": "open", "reason": f"PR #{number} waiting for verified completed review run {run_id}"}
 	if conflicted:
-		active = _active_run_count(repo, head_ref, include_pending=True, pr_number=number)
+		active = _active_run_count(repo, head_ref, include_pending=True, pr_number=number, default_branch=default_branch)
 		if active:
 			return {"done": False, "state": "open", "reason": f"PR #{number} has a merge conflict, but {active} workflow run(s) on {head_ref} are still queued or running"}
 		return {"done": True, "state": "conflict", "since": handoff_since,
 			"reason": f"PR #{number} has a merge conflict on head {head_sha[:12]} and no workflow run is active"}
 	if latest_handoff is not None and not answered:
-		active = _active_run_count(repo, head_ref, include_pending=True, pr_number=number)
+		active = _active_run_count(repo, head_ref, include_pending=True, pr_number=number, default_branch=default_branch)
 		if active:
 			return {"done": False, "state": "open", "reason": f"PR #{number} has a review hand-off, but {active} workflow run(s) on {head_ref} are still queued or running"}
 		state = "review-round" if kind == "findings" else "conflict"
@@ -641,7 +669,7 @@ def check_pr_hand_back(repo: str, number: int, stuck_hours: float, min_age_hours
 			if head_age is None or head_age < stuck_hours:
 				return {"done": False, "state": "open", **base,
 					"reason": f"PR #{number} has failed checks: {names}, but an implement-plan head waits {stuck_hours:g}h before it counts as stuck"}
-		active = _active_run_count(repo, head_ref, include_pending=True, pr_number=number)
+		active = _active_run_count(repo, head_ref, include_pending=True, pr_number=number, default_branch=_pr_default_branch(pr))
 		if active:
 			return {"done": False, "state": "open", **base,
 				"reason": f"PR #{number} has failed checks: {names}, but {active} workflow run(s) on {head_ref} are still queued, running or pending"}

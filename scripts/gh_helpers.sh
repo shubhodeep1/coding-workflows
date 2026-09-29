@@ -1169,6 +1169,49 @@ gh_issue_timeline_with_cross_refs()
 }
 
 # ---------------------------------------------------------------
+# _autofix_review_default_branch — the default branch that a PR-named
+# review run must come from.
+#
+# Motivation (issue #5152, the follow-up to #5094): a workflow_dispatch
+# run's name is evaluated from the workflow file at the dispatched ref, so
+# anyone who can push a branch can dispatch a copy of a review wrapper from
+# that branch and name the run for another PR. Only the default branch's
+# workflow files are reviewed, and every legitimate PR-named review
+# dispatch runs there (#4618, #4701, #4898), so a PR-named match also
+# checks the run's head_branch against this value.
+#
+# Input:  none (reads GITHUB_EVENT_PATH and GITHUB_REPOSITORY).
+# Output: the default branch on stdout, or an empty line when it cannot be
+#   resolved. It is never guessed: DEFAULT_BRANCH-style "main" fallbacks
+#   must not vouch for a run.
+# Return: always 0.
+# API calls: none when the Actions event payload ($GITHUB_EVENT_PATH)
+#   carries .repository.default_branch, which every pull_request and
+#   workflow_dispatch payload does; otherwise one `gh api repos/{repo}`
+#   read, wrapped in gh_retry. The result is cached in
+#   _AUTOFIX_REVIEW_DEFAULT_BRANCH_CACHE for the current shell, so a caller
+#   that primes it in its own shell before a $(...) lookup reads it at most
+#   once (CLAUDE.md §15). This does not reuse the poller's
+#   _pr_named_review_default_branch: the processes that call this one
+#   (review_autofix.yml steps, the merge train) never source the poller.
+# ---------------------------------------------------------------
+_autofix_review_default_branch()
+{
+	if [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_READY:-false}" != "true" ]; then
+		_AUTOFIX_REVIEW_DEFAULT_BRANCH_CACHE=""
+		if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -r "${GITHUB_EVENT_PATH}" ]; then
+			_AUTOFIX_REVIEW_DEFAULT_BRANCH_CACHE="$(jq -r '(.repository.default_branch // "") | if type == "string" then . else "" end' "${GITHUB_EVENT_PATH}" 2>/dev/null || echo "")"
+		fi
+		if [ -z "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_CACHE}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+			_AUTOFIX_REVIEW_DEFAULT_BRANCH_CACHE="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+		fi
+		_AUTOFIX_REVIEW_DEFAULT_BRANCH_READY="true"
+	fi
+	printf '%s\n' "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_CACHE:-}"
+	return 0
+}
+
+# ---------------------------------------------------------------
 # _autofix_pr_named_review_runs — list the review wrapper runs that were
 # dispatched for one PR.
 #
@@ -1179,11 +1222,22 @@ gh_issue_timeline_with_cross_refs()
 # review wrappers name every workflow_dispatch run for its PR:
 #   internal-review.yml (this repo):  "Internal: AI Review & Autofix [pr:<N>]"
 #   ai-review.yml (consumer repos):   "AI Review [pr:<N>]"
-# A workflow_dispatch run's name comes from the dispatched ref's workflow
-# file, never from PR text, so an exact name match identifies the PR. This
-# is the same match as _pr_named_review_dispatch_runs in
-# scripts/orchestrate_poll_process.sh, which review_autofix.yml does not
-# source; this one uses REST like its two callers below.
+# A run's name comes from the workflow file at the dispatched ref, so the
+# name alone can be forged from a pushed branch (issues #5094, #5152). A run
+# counts only when all hold, the same rule as the poller's
+# _pr_named_review_dispatch_runs:
+#   - event is workflow_dispatch;
+#   - identity: the name is paired with the wrapper that sets it, the
+#     internal name with .github/workflows/internal-review.yml and the
+#     consumer name with .github/workflows/ai-review.yml (an "@<ref>" path
+#     suffix is ignored);
+#   - provenance: head_branch is the default branch
+#     (_autofix_review_default_branch), or GitHub reported none. A forged
+#     run always reports the branch it was dispatched from; a null
+#     head_branch is kept because GitHub does report it on genuine dispatch
+#     runs (issue #4928).
+# A PR-named run dispatched on the PR's own branch is not returned; the
+# callers' branch lookups see it.
 #
 # Input:
 #   $1 pr_number — must match ^[1-9][0-9]*$
@@ -1194,16 +1248,20 @@ gh_issue_timeline_with_cross_refs()
 #
 # Return: 0 on success (possibly []); 1 on an invalid PR number (no call),
 #   an API error, an empty response, or unparseable JSON. Each caller
-#   decides whether a failure fails open or closed.
+#   decides whether a failure fails open or closed. An unresolved default
+#   branch prints [] and returns 0 with no call, after one
+#   REVIEW_RUN_PROVENANCE line on stderr: PR-named matching is off, the
+#   behaviour before PR-named runs existed.
 #
 # API calls: exactly 1 `gh api GET /repos/{repo}/actions/runs
 #   ?event=workflow_dispatch&per_page=100` (plus `status=` when given),
-#   wrapped in gh_retry. It has no workflow filter, so one call covers both
-#   wrapper names. The page holds the newest 100 matching dispatch runs of
-#   every workflow; review runs finish well inside that window, and a run
-#   that fell off the page is treated as absent (the behaviour before
-#   PR-named runs existed). Callers issue it only after their
-#   branch-scoped lookup found nothing (CLAUDE.md §15).
+#   wrapped in gh_retry, plus the default-branch read above (none when the
+#   event payload has it). It has no workflow or branch filter, so one call
+#   covers both wrapper names and null-head runs. The page holds the newest
+#   100 matching dispatch runs of every workflow; review runs finish well
+#   inside that window, and a run that fell off the page is treated as
+#   absent (the behaviour before PR-named runs existed). Callers issue it
+#   only after their branch-scoped lookup found nothing (CLAUDE.md §15).
 # ---------------------------------------------------------------
 _autofix_pr_named_review_runs()
 {
@@ -1212,6 +1270,14 @@ _autofix_pr_named_review_runs()
 
 	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
 		return 1
+	fi
+
+	local default_branch
+	default_branch="$(_autofix_review_default_branch 2>/dev/null || echo "")"
+	if [ -z "${default_branch}" ]; then
+		echo "REVIEW_RUN_PROVENANCE repo=${GITHUB_REPOSITORY} source=gh_helpers pr=${pr_number} outcome=default_branch_unresolved pr_named_matching=disabled" >&2
+		printf '[]\n'
+		return 0
 	fi
 
 	local -a status_args=()
@@ -1236,14 +1302,17 @@ _autofix_pr_named_review_runs()
 		return 1
 	fi
 
-	printf '%s' "${response}" | jq -c --arg pr "${pr_number}" '
+	printf '%s' "${response}" | jq -c --arg pr "${pr_number}" --arg default_branch "${default_branch}" '
 		[
 			.workflow_runs[]?
 			| select(type == "object")
 			| select((.event // "") == "workflow_dispatch")
-			| select((.path // "") | test("(^|/)(internal-review|ai-review)\\.ya?ml$"))
-			| select((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-				or (.display_title // "") == ("AI Review [pr:" + $pr + "]"))
+			| select((.head_branch // "") == "" or .head_branch == $default_branch)
+			| select(((.path // "") | tostring | split("@") | .[0]) as $wrapper
+				| ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+					and $wrapper == ".github/workflows/internal-review.yml")
+				or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+					and $wrapper == ".github/workflows/ai-review.yml"))
 			| {id, status, conclusion, created_at, path}
 		]
 	' 2>/dev/null

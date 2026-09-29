@@ -32,9 +32,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SWEEP_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
 
 # The jq program is embedded in the workflow as a single-quoted argument to
-# `jq -c -s --argjson cutoff "${stale_cutoff_epoch}"`. Grab it verbatim.
+# `jq -c -s --argjson cutoff "${stale_cutoff_epoch}" --arg default_branch
+# "${sweep_default_branch}"`. Grab it verbatim.
 JQ_BLOCK = re.compile(
-	r"jq -c -s --argjson cutoff \"\$\{stale_cutoff_epoch\}\" '(?P<prog>.*?)'\s*2>/dev/null",
+	r"jq -c -s --argjson cutoff \"\$\{stale_cutoff_epoch\}\" --arg default_branch \"\$\{sweep_default_branch\}\" '(?P<prog>.*?)'\s*2>/dev/null",
 	re.DOTALL,
 )
 
@@ -57,10 +58,10 @@ def cutoff_epoch(minutes_ago: int) -> int:
 	return int((datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).timestamp())
 
 
-def run_sweep_reduce(runs: list[dict], cutoff: int) -> dict:
+def run_sweep_reduce(runs: list[dict], cutoff: int, default_branch: str = "main") -> dict:
 	payload = json.dumps({"workflow_runs": runs})
 	result = subprocess.run(
-		["jq", "-c", "-s", "--argjson", "cutoff", str(cutoff), extract_jq_program()],
+		["jq", "-c", "-s", "--argjson", "cutoff", str(cutoff), "--arg", "default_branch", default_branch, extract_jq_program()],
 		input=payload,
 		capture_output=True,
 		text=True,
@@ -164,6 +165,7 @@ class SweepPrKeyedDispatchTest(unittest.TestCase):
 			"head_branch": "main",
 			"event": "workflow_dispatch",
 			"display_title": f"Internal: AI Review & Autofix [pr:{pr}]",
+			"path": ".github/workflows/internal-review.yml",
 			"status": "in_progress",
 			"created_at": iso(-5),
 		}
@@ -260,6 +262,88 @@ class SweepPrKeyedDispatchTest(unittest.TestCase):
 		)
 		self.assertEqual(out["active"], {})
 		self.assertEqual(out["stale"], [])
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is required")
+class SweepPrKeyProvenanceTest(unittest.TestCase):
+	"""Issue #5152: a run name alone cannot claim a pr:<N> key.
+
+	The name comes from the workflow file at the dispatched ref, so a branch
+	copy of internal-review.yml can name its run for any PR. The key needs an
+	internal-review.yml run from the default branch (or with GitHub's null
+	head_branch, issue #4928); anything else keeps its head-branch key.
+	"""
+
+	def dispatch_run(self, run_id: int, pr: str, **extra: object) -> dict:
+		run = {
+			"id": run_id,
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": f"Internal: AI Review & Autofix [pr:{pr}]",
+			"path": ".github/workflows/internal-review.yml",
+			"status": "in_progress",
+			"created_at": iso(-5),
+		}
+		run.update(extra)
+		return run
+
+	def test_run_from_another_branch_stays_branch_keyed(self) -> None:
+		out = run_sweep_reduce([self.dispatch_run(1, "4618", head_branch="attacker/branch")], cutoff_epoch(120))
+		self.assertEqual(out["active"], {"attacker/branch": 1})
+
+	def test_run_of_another_workflow_stays_branch_keyed(self) -> None:
+		out = run_sweep_reduce(
+			[
+				self.dispatch_run(2, "4618", path=".github/workflows/review_autofix.yml"),
+				self.dispatch_run(3, "4618", path=".github/workflows/ai-review.yml"),
+				self.dispatch_run(4, "4618", path="nested/.github/workflows/internal-review.yml"),
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"main": 3})
+
+	def test_run_with_a_null_head_branch_and_another_path_is_dropped(self) -> None:
+		out = run_sweep_reduce([self.dispatch_run(5, "4618", head_branch=None, path=".github/workflows/review_autofix.yml")], cutoff_epoch(120))
+		self.assertEqual(out["active"], {})
+
+	def test_path_ref_suffix_is_ignored(self) -> None:
+		out = run_sweep_reduce([self.dispatch_run(6, "4618", path=".github/workflows/internal-review.yml@refs/heads/main")], cutoff_epoch(120))
+		self.assertEqual(out["active"], {"pr:4618": 1})
+
+	def test_the_resolved_default_branch_is_used(self) -> None:
+		out = run_sweep_reduce(
+			[self.dispatch_run(7, "10", head_branch="trunk"), self.dispatch_run(8, "11", head_branch="main")],
+			cutoff_epoch(120),
+			default_branch="trunk",
+		)
+		self.assertEqual(out["active"], {"pr:10": 1, "main": 1})
+
+	def test_unresolved_default_branch_gives_no_pr_keys(self) -> None:
+		out = run_sweep_reduce(
+			[self.dispatch_run(9, "10"), self.dispatch_run(10, "11", head_branch=None)],
+			cutoff_epoch(120),
+			default_branch="",
+		)
+		# The main-headed run keeps its branch key; the null-headed one has no key.
+		self.assertEqual(out["active"], {"main": 1})
+
+
+class SweepDefaultBranchContractTest(unittest.TestCase):
+	def setUp(self) -> None:
+		self.text = SWEEP_WF.read_text(encoding="utf-8")
+
+	def test_default_branch_comes_from_the_event_then_one_rest_read(self) -> None:
+		self.assertIn("EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}", self.text)
+		self.assertIn('sweep_default_branch="${EVENT_DEFAULT_BRANCH:-}"', self.text)
+		self.assertIn('sweep_default_branch="$(gh api "repos/${REPOSITORY}" --jq \'.default_branch\' 2>/dev/null || true)"', self.text)
+		self.assertNotIn('sweep_default_branch="main"', self.text)
+
+	def test_default_branch_is_resolved_once_before_the_snapshots(self) -> None:
+		self.assertEqual(self.text.count('sweep_default_branch="$(gh api'), 1)
+		self.assertLess(self.text.index('sweep_default_branch="${EVENT_DEFAULT_BRANCH:-}"'), self.text.index("snapshot_active_review_runs() {"))
+
+	def test_unresolved_default_branch_is_logged(self) -> None:
+		self.assertIn("REVIEW_RUN_PROVENANCE repo=${REPOSITORY} source=sweep outcome=default_branch_unresolved pr_named_matching=disabled", self.text)
 
 
 class SweepWorkflowContractTest(unittest.TestCase):

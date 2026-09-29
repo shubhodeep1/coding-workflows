@@ -407,10 +407,46 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # ("Internal: AI Review & Autofix [pr:<N>]" / "AI Review [pr:<N>]") also
 # prints "pr:<N>". Git refs cannot contain ":", so the two kinds of key never
 # collide, and _mt_release checks both.
+# A run name is evaluated from the workflow file at the dispatched ref, so a
+# branch copy of a wrapper can name its run for another PR (issue #5152, the
+# follow-up to #5094). A run earns the "pr:<N>" key only when its name is
+# paired with the wrapper that sets it (the internal name with
+# .github/workflows/internal-review.yml, the consumer name with
+# .github/workflows/ai-review.yml) and its head_branch is the default branch
+# (_autofix_review_default_branch in gh_helpers.sh) or null, which GitHub
+# reports on some genuine dispatch runs (issue #4928). The default branch
+# comes from the event payload, so this adds no API call in
+# cancel_on_pr_close.yml; when it cannot be resolved, no "pr:<N>" key is
+# emitted and one REVIEW_RUN_PROVENANCE line is logged.
 _mt_inflight_review_branches()
 {
-	gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?per_page=100" \
-		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | ((.head_branch // empty), (if (.event // "") == "workflow_dispatch" then ((.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)") else empty end))' 2>/dev/null | sort -u
+	local default_branch="" runs_json=""
+	if declare -F _autofix_review_default_branch >/dev/null 2>&1; then
+		default_branch="$(_autofix_review_default_branch 2>/dev/null || echo "")"
+	fi
+	if [ -z "${default_branch}" ]; then
+		echo "REVIEW_RUN_PROVENANCE repo=${MT_REPO:-unknown} source=merge_train outcome=default_branch_unresolved pr_named_matching=disabled" >&2
+	fi
+	runs_json="$(gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?per_page=100" 2>/dev/null)" || return 1
+	printf '%s' "${runs_json}" | jq -r --arg default_branch "${default_branch}" '
+		.workflow_runs[]?
+		| select(.status == "queued" or .status == "pending" or .status == "in_progress")
+		| select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
+		| (
+			(.head_branch // empty),
+			(if (.event // "") == "workflow_dispatch"
+				and $default_branch != ""
+				and ((.head_branch // "") == "" or .head_branch == $default_branch)
+			then
+				((.path // "") | tostring | split("@") | .[0]) as $wrapper
+				| (.display_title // "")
+				| capture("^(?<name>Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")?
+				| select((.name == "Internal: AI Review & Autofix" and $wrapper == ".github/workflows/internal-review.yml")
+					or (.name == "AI Review" and $wrapper == ".github/workflows/ai-review.yml"))
+				| "pr:\(.pr)"
+			else empty end)
+		)
+	' 2>/dev/null | sort -u
 }
 
 # Dispatch ref (security, issue #4701): the dispatch always runs the default

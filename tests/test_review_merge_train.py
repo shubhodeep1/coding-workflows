@@ -118,14 +118,23 @@ def _write_files(fixtures: Path, number: int, paths: list[str]) -> None:
 	)
 
 
-def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Path, **env: str) -> tuple[subprocess.CompletedProcess, str, dict]:
+DEFAULT_EVENT_PAYLOAD = {"repository": {"default_branch": "main"}}
+
+
+def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Path, event_payload: dict | None = DEFAULT_EVENT_PAYLOAD, **env: str) -> tuple[subprocess.CompletedProcess, str, dict]:
 	github_env = tmp_path / "github_env"
 	github_env.touch()
 	run_env = dict(os.environ)
 	# The review workflow exports these names in the editor process. Tests must
 	# opt in explicitly rather than inherit the live PR's paths or base branch.
-	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH"):
+	# The merge train reads the default branch from the event payload (issue
+	# #5152), so the CI run's own payload is never inherited either.
+	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH", "GITHUB_EVENT_PATH", "_AUTOFIX_REVIEW_DEFAULT_BRANCH_CACHE", "_AUTOFIX_REVIEW_DEFAULT_BRANCH_READY"):
 		run_env.pop(inherited_name, None)
+	if event_payload is not None:
+		event_file = tmp_path / "event.json"
+		event_file.write_text(json.dumps(event_payload), encoding="utf-8")
+		run_env["GITHUB_EVENT_PATH"] = str(event_file)
 	run_env.update({
 		"PATH": f"{bin_dir}:{os.environ['PATH']}",
 		"FAKE_GH_DIR": str(fixtures),
@@ -506,6 +515,89 @@ def test_release_ignores_pr_named_runs_of_other_prs_and_other_events(tmp_path: P
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
 	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def _merge_train_named_run(**overrides: object) -> dict:
+	run = {
+		"status": "in_progress",
+		"head_branch": "main",
+		"event": "workflow_dispatch",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]",
+		"path": ".github/workflows/internal-review.yml",
+	}
+	run.update(overrides)
+	return run
+
+
+def _release_with_runs(tmp_path: Path, runs: list[dict], **kwargs: object) -> tuple[subprocess.CompletedProcess, str]:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **kwargs)
+	return result, log_text
+
+
+def test_release_ignores_spoofed_pr_named_runs(tmp_path: Path) -> None:
+	"""Issue #5152: a run name alone cannot hold a PR in the queue.
+
+	A branch copy of a wrapper can name its run for any PR, so the name must
+	be paired with the wrapper that sets it and the run must come from the
+	default branch.
+	"""
+	runs = [
+		# Dispatched from a pushed branch, not the default branch.
+		_merge_train_named_run(head_branch="attacker/branch"),
+		# The internal name on the consumer wrapper, and the reverse.
+		_merge_train_named_run(path=".github/workflows/ai-review.yml"),
+		_merge_train_named_run(display_title="AI Review [pr:4077]", path=".github/workflows/internal-review.yml"),
+		# The name on review_autofix.yml, which never sets it.
+		_merge_train_named_run(path=".github/workflows/review_autofix.yml"),
+		# Not a dispatch run.
+		_merge_train_named_run(event="push"),
+	]
+	result, _log_text = _release_with_runs(tmp_path, runs)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_keeps_a_genuine_or_null_head_pr_named_run(tmp_path: Path) -> None:
+	for index, run in enumerate((
+		_merge_train_named_run(),
+		_merge_train_named_run(head_branch=None),
+	)):
+		case_dir = tmp_path / f"case{index}"
+		case_dir.mkdir()
+		result, log_text = _release_with_runs(case_dir, [run])
+		assert result.returncode == 0, result.stderr
+		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout, (run, result.stdout)
+		assert "gh workflow run" not in log_text
+
+
+def test_release_follows_the_payload_default_branch(tmp_path: Path) -> None:
+	result, _log_text = _release_with_runs(
+		tmp_path,
+		[_merge_train_named_run(head_branch="main")],
+		event_payload={"repository": {"default_branch": "trunk"}},
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+
+
+def test_release_without_a_default_branch_keys_runs_by_head_branch_only(tmp_path: Path) -> None:
+	result, log_text = _release_with_runs(
+		tmp_path,
+		[_merge_train_named_run(), _merge_train_named_run(event="pull_request", head_branch="ai/issue-4064", display_title="AI Review")],
+		event_payload={"repository": {}},
+	)
+	assert result.returncode == 0, result.stderr
+	assert "REVIEW_RUN_PROVENANCE repo=acme/consumer source=merge_train outcome=default_branch_unresolved pr_named_matching=disabled" in result.stderr
+	# The head-branch key still holds the PR.
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
 
 
 def test_release_empty_head_does_not_match_blank_run_branch(tmp_path: Path) -> None:

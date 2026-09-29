@@ -26,6 +26,19 @@ def _load(name):
 checker = _load("check_in_status")
 claimer = _load("claude_fix_claim")
 
+
+def _load_template(name):
+	spec = importlib.util.spec_from_file_location(f"template_{name}", TEMPLATE_SCRIPTS / f"{name}.py")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+# Tests of behaviour added under the interim twin-first rule (CLAUDE.md §28.C)
+# load the workflow-templates twin, which carries it before the
+# [claude-twin-sync] copy reaches .claude/scripts/ (issue #5152).
+template_checker = _load_template("check_in_status")
+
 REPO = "o/r"
 NOW = dt.datetime(2026, 9, 26, 12, 0, tzinfo=dt.timezone.utc)
 HEAD = "b" * 40
@@ -508,6 +521,14 @@ DEFAULT_BASE = {"repo": {"default_branch": "main"}}
 DISPATCH_TITLE = "Internal: AI Review & Autofix [pr:7]"
 
 
+def _active_dispatch(status, **overrides):
+	"""An entry of internal-review.yml's workflow_dispatch listing."""
+	run = {"status": status, "event": "workflow_dispatch", "path": ".github/workflows/internal-review.yml",
+		"head_branch": "main", "display_title": DISPATCH_TITLE}
+	run.update(overrides)
+	return run
+
+
 def _dispatched_run(**overrides):
 	run = {"path": ".github/workflows/internal-review.yml", "event": "workflow_dispatch",
 		"head_branch": "main", "head_sha": OTHER_HEAD, "display_title": DISPATCH_TITLE}
@@ -550,17 +571,17 @@ def test_sweep_dispatch_that_does_not_bind_to_the_pr_fails_closed(monkeypatch, c
 
 @pytest.mark.parametrize("status", ["queued", "in_progress", "pending"])
 def test_active_sweep_dispatch_for_the_pr_keeps_the_handoff_waiting(monkeypatch, capsys, status):
-	active = [{"status": status, "display_title": DISPATCH_TITLE}]
-	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=active)}
+	active = [_active_dispatch(status)]
+	responses = {"repos/o/r/pulls/7": _pr(base=DEFAULT_BASE), **_review_run(), **_runs(dispatched=active)}
 	_stub(monkeypatch, responses, [_handoff()])
 	_, out = _run(capsys)
 	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
 
 
 def test_sweep_dispatch_for_another_pr_or_finished_does_not_count(monkeypatch, capsys):
-	other = [{"status": "in_progress", "display_title": "Internal: AI Review & Autofix [pr:8]"},
-		{"status": "completed", "display_title": DISPATCH_TITLE}]
-	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=other)}
+	other = [_active_dispatch("in_progress", display_title="Internal: AI Review & Autofix [pr:8]"),
+		_active_dispatch("completed")]
+	responses = {"repos/o/r/pulls/7": _pr(base=DEFAULT_BASE), **_review_run(), **_runs(dispatched=other)}
 	_stub(monkeypatch, responses, [_handoff()])
 	_, out = _run(capsys)
 	assert out["done"] is True and out["state"] == "review-round"
@@ -569,18 +590,80 @@ def test_sweep_dispatch_for_another_pr_or_finished_does_not_count(monkeypatch, c
 def test_dispatch_listing_404_counts_zero_and_other_errors_raise(monkeypatch):
 	def missing(path):
 		if "internal-review.yml" in path:
-			raise checker.ReadError(f"gh api {path} failed: gh: Not Found (HTTP 404)")
+			raise template_checker.ReadError(f"gh api {path} failed: gh: Not Found (HTTP 404)")
 		return {"total_count": 0}
-	monkeypatch.setattr(checker, "gh_api", missing)
-	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 0
+	monkeypatch.setattr(template_checker, "gh_api", missing)
+	assert template_checker._active_run_count(REPO, REF, include_pending=True, pr_number=7, default_branch="main") == 0
 
 	def broken(path):
 		if "internal-review.yml" in path:
-			raise checker.ReadError(f"gh api {path} failed: HTTP 502")
+			raise template_checker.ReadError(f"gh api {path} failed: HTTP 502")
 		return {"total_count": 0}
-	monkeypatch.setattr(checker, "gh_api", broken)
-	with pytest.raises(checker.ReadError):
-		checker._active_run_count(REPO, REF, include_pending=True, pr_number=7)
+	monkeypatch.setattr(template_checker, "gh_api", broken)
+	with pytest.raises(template_checker.ReadError):
+		template_checker._active_run_count(REPO, REF, include_pending=True, pr_number=7, default_branch="main")
+
+
+# Issue #5152 (the follow-up to #5094): a run's title comes from the workflow
+# file at the dispatched ref, so a branch copy of internal-review.yml can name
+# its run for any PR. `_active_run_count` counts a titled run only when it is
+# an internal-review.yml workflow_dispatch run from the default branch, or one
+# with GitHub's null head_branch (issue #4928).
+def _count_dispatched(monkeypatch, runs, default_branch="main"):
+	calls = []
+
+	def fake(path):
+		calls.append(path)
+		if path == DISPATCH_RUNS:
+			return {"workflow_runs": runs}
+		return {"total_count": 0}
+	monkeypatch.setattr(template_checker, "gh_api", fake)
+	count = template_checker._active_run_count(REPO, REF, include_pending=True, pr_number=7, default_branch=default_branch)
+	return count, calls
+
+
+@pytest.mark.parametrize("spoof", [
+	{"head_branch": "attacker/branch"},
+	{"path": ".github/workflows/ai-review.yml"},
+	{"path": ".github/workflows/review_autofix.yml"},
+	{"path": "nested/.github/workflows/internal-review.yml"},
+	{"event": "push"},
+	{"event": None},
+])
+def test_spoofed_dispatch_run_is_not_counted(monkeypatch, spoof):
+	count, _ = _count_dispatched(monkeypatch, [_active_dispatch("in_progress", **spoof)])
+	assert count == 0
+
+
+@pytest.mark.parametrize("genuine", [
+	{},
+	{"head_branch": None},
+	{"head_branch": ""},
+	{"path": ".github/workflows/internal-review.yml@refs/heads/main"},
+])
+def test_genuine_dispatch_run_is_counted(monkeypatch, genuine):
+	count, _ = _count_dispatched(monkeypatch, [_active_dispatch("queued", **genuine)])
+	assert count == 1
+
+
+def test_dispatch_run_must_come_from_the_resolved_default_branch(monkeypatch):
+	runs = [_active_dispatch("in_progress", head_branch="trunk"), _active_dispatch("in_progress", head_branch="main")]
+	count, _ = _count_dispatched(monkeypatch, runs, default_branch="trunk")
+	assert count == 1
+
+
+def test_unknown_default_branch_counts_no_dispatch_run_and_skips_the_listing(monkeypatch, capsys):
+	count, calls = _count_dispatched(monkeypatch, [_active_dispatch("in_progress")], default_branch=None)
+	assert count == 0
+	assert DISPATCH_RUNS not in calls
+	assert "REVIEW_RUN_PROVENANCE repo=o/r source=check_in_status pr=7 outcome=default_branch_unresolved pr_named_matching=disabled" in capsys.readouterr().err
+
+
+def test_default_branch_reaches_every_active_run_count_call():
+	text = (TEMPLATE_SCRIPTS / "check_in_status.py").read_text(encoding="utf-8")
+	calls = [line.strip() for line in text.splitlines() if "= _active_run_count(repo" in line]
+	assert len(calls) == 4, calls
+	assert all("default_branch=" in call for call in calls), calls
 
 
 def test_branch_active_run_skips_the_dispatch_listing(monkeypatch):

@@ -106,6 +106,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
           SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}
+          EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
         run: |
           set -euo pipefail
 
@@ -142,6 +143,21 @@ jobs:
           # per-PR lookups locally so the sweep avoids N×2 workflow-run API
           # fanout while preserving the existing active-run skip semantics.
           declare -A active_review_runs=()
+
+          # A dispatched run's name comes from the workflow file at the
+          # dispatched ref, so a branch copy of internal-review.yml can name
+          # its run for another PR (issue #5152, the follow-up to #5094).
+          # dispatch_pr below trusts a name only on a run from the default
+          # branch, resolved once per sweep run: the event payload first,
+          # then one REST read. It is never guessed; when it stays empty,
+          # no run gets a pr:<N> key and every run is keyed by head branch.
+          sweep_default_branch="${EVENT_DEFAULT_BRANCH:-}"
+          if [ -z "${sweep_default_branch}" ]; then
+            sweep_default_branch="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || true)"
+          fi
+          if [ -z "${sweep_default_branch}" ]; then
+            echo "::warning::REVIEW_RUN_PROVENANCE repo=${REPOSITORY} source=sweep outcome=default_branch_unresolved pr_named_matching=disabled"
+          fi
 
           snapshot_active_review_runs() {
             local workflow="$1"
@@ -180,7 +196,7 @@ jobs:
                   -f status="${status}" \
                   -f per_page=100 \
                   2>/dev/null || true
-              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" '
+              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" --arg default_branch "${sweep_default_branch}" '
                   def created_epoch:
                     (.created_at // "")
                     | if . == "" then null
@@ -202,8 +218,16 @@ jobs:
                   # marker cannot claim another PR key. Git refs cannot
                   # contain ":", so a "pr:<N>" key never collides with a
                   # branch key. Everything else stays keyed by head branch.
+                  # The name counts only on an internal-review.yml run (the
+                  # wrapper that sets it) whose head_branch is the default
+                  # branch or null (issue #4928): a run dispatched from any
+                  # other branch could carry a forged name (issue #5152).
                   def dispatch_pr:
-                    if (.event // "") == "workflow_dispatch" then
+                    if (.event // "") == "workflow_dispatch"
+                      and $default_branch != ""
+                      and ((.head_branch // "") == "" or .head_branch == $default_branch)
+                      and ((.path // "") | tostring | split("@") | .[0]) == ".github/workflows/internal-review.yml"
+                    then
                       ((.display_title // "")
                         | [match("^Internal: AI Review & Autofix \\[pr:([1-9][0-9]*)\\]$").captures[0].string]
                         | first // "")
