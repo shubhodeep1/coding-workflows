@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T19:38:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A bot that skips rebuilding its PR head when the files it writes are current must still rebuild when the head carries any other change; otherwise a foreign push on the bot's branch blocks the PR until those files next change.",
+  "phase": "implement_plan",
+  "pr_number": 5208,
+  "record_id": "lesson-implement-plan-0912845f7d2120fa37357754",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4785-twin-first-claude-sync",
+    "file:scripts/claude_twin_sync.py"
+  ]
+}
