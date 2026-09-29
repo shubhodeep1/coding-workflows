@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T04:21:49Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-closed \"one 100-item page\" read borrowed from a budget-bound check (security_pass_skip.py) is an availability gap in a workflow gate; paginate with `--paginate --slurp` and verify every page when the call runs rarely.",
+  "phase": "implement_plan",
+  "pr_number": 4803,
+  "record_id": "lesson-implement-plan-7b9b780af019bfd328c28c69",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4791-validate-stable-heal-provenance",
+    "file:.github/workflows/validate.yml"
+  ]
+}

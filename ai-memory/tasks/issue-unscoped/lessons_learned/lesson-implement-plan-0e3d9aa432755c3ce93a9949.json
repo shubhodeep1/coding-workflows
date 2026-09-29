@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T04:21:49Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When an auto-decision changes the approach mid-project, amend the plan doc's goals, approach, and tests in the same PR; reviewers and the conformance audit read the plan as the spec and keep flagging the superseded wording.",
+  "phase": "implement_plan",
+  "pr_number": 4803,
+  "record_id": "lesson-implement-plan-0e3d9aa432755c3ce93a9949",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4791-validate-stable-heal-provenance",
+    "file:docs/plans/issue-4791-validate-stable-heal-provenance-plan.md"
+  ]
+}
