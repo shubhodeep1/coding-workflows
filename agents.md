@@ -1134,6 +1134,38 @@ reviews, comments, and conflicts stay a direct §12 request.
   so it cannot run from Actions. A byte-identical copy lives under
   `workflow-templates/.claude/scripts/`; `tests/test_stale_routines.py` has
   its own `ci.yml` step.
+- Session janitor (plan `claude-fixer-unattended-convergence` D7, D12):
+  `.claude/scripts/stale_sessions.py` reads saved `list_sessions` pages
+  (`mine: true`, newest first, the harness's untrusted-data wrapper
+  tolerated) and every `list_triggers` page (`enabled: true`), and prints the
+  session ids to archive; the hourly Claude issue pickup runs it on every
+  `— wake.` (step 3a of `.claude/commands/claude-issue-pickup.md`, never in
+  `start` mode) and calls `archive_session` on each. Only automation titles
+  are eligible (`PR [<repo>]#<N> — fix|fixed|on hold …`, `PR #<N> status
+  check-in…`, `PR #<N> merged|closed — …`, `issue [<repo>]#<N> — implement`,
+  `implement-plan <slug> — …` except `— deploy-activate`, each after one
+  optional `#<N> · ` prefix); every other title is `not_ours`. A session is
+  archived when it is not running, working, or on a permission prompt, no
+  enabled Routine is bound to it, and either its PR or issue merged or closed
+  at least 24 hours ago (`--grace-hours`; a `need_input` session too) or it
+  is a fixer superseded by a newer fixer for the same PR (not when it waits
+  on a question). An `implement-plan` slug names its issue only in the
+  issue-mode form `issue-<N>-…`; any other slug is kept. One cached REST read
+  per distinct PR or issue; a failed read keeps the session (`errors`).
+  Paging stops at 14 days (`--horizon-days`) or 10 pages (`--max-pages`,
+  `next_after_id`). It also lists `stalled_on_prompt`: any non-archived
+  session in `SESSION_STATUS_BUCKET_BLOCKED` whose `needs_action` starts
+  `Approve or deny`, idle more than 20 minutes (`--prompt-stall-minutes`).
+  A stall is `new` once per session and `updated_at`
+  (`~/.claude/stalled-sessions/reported-stalls.json`, `--stall-log-dir`), and
+  each new stall is appended to `stalled-sessions.jsonl` there as a
+  `PermissionRequest` record with tool `StalledSession(<tool>)`; the pickup
+  sends one `PushNotification` per new stall and runs `permission_prompts.py
+  file --log-dir <stall_log_dir>`, which files or comments on the
+  `ai:permission-prompt` issue with the session title and `task_summary`.
+  `/fix-claude-pr` runs `permission_prompts.py file` before every report.
+  A byte-identical copy lives under `workflow-templates/.claude/scripts/`;
+  `tests/test_stale_sessions.py` has its own `ci.yml` step.
 - Permissions: `.claude/settings.json` `permissions.allow` pre-approves the
   tools the check-in and `/implement-plan-claude` call (file edits,
   `claude/*` pushes, `gh` REST and run reads, the security-audit / validate

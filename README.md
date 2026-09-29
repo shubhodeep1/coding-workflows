@@ -1275,6 +1275,19 @@ mode).
    carries `Fixes #N`; into any other branch, the final-merge stage closes the
    issue and labels it `ai:merged`. Verify-activation and `/deploy-activate`
    run only for projects based on the default branch.
+5. On every hourly wake the pickup also runs the **session janitor**
+   (`.claude/scripts/stale_sessions.py`). It archives automation sessions
+   whose work is finished: fixer, §26 checker, issue implementation, and
+   issue-mode `implement-plan` sessions once their pull request or issue has
+   been merged or closed for 24 hours, and a fixer at once when a newer fixer
+   for the same PR exists. A session that is running, waiting on a
+   permission prompt, or bound to an enabled Routine is never archived, and
+   neither is any other title (operator sessions, the pickup,
+   `/deploy-activate`). The janitor also finds sessions waiting on a
+   permission prompt for more than 20 minutes. For each one the pickup sends
+   one push notification and files it as an `ai:permission-prompt` issue
+   through `.claude/scripts/permission_prompts.py`, once per stall. The
+   pickup's one-line report ends with `archived <a>; stalls <s>`.
 
 **No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
 poller's standalone stall recovery skip issues that carry `ai:claude` without
