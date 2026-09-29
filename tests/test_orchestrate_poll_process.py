@@ -2628,6 +2628,13 @@ if args[0] == 'api':
 
 		etag = store.get('actions_runs_etag', '"etag-initial"')
 		workflow_runs = list(store.get('actions_runs_workflow_runs', []))
+		# Honour the event/branch filters the way GitHub does (issue #5094:
+		# _pr_named_review_dispatch_runs asks for the default-branch
+		# workflow_dispatch runs only). The cache fetches pass neither.
+		if params.get('event'):
+			workflow_runs = [r for r in workflow_runs if r.get('event') == params['event'][0]]
+		if params.get('branch'):
+			workflow_runs = [r for r in workflow_runs if r.get('head_branch') == params['branch'][0]]
 		# The script calls this endpoint in two distinct shapes:
 		#   1. gh api -i ... (no --jq)  -> caller (_load_actions_runs_cached's
 		#      primary in_progress fetch) needs the full HTTP response with
@@ -2653,6 +2660,15 @@ if args[0] == 'api':
 				sys.stderr.write(p.stderr)
 				sys.exit(p.returncode)
 			sys.stdout.write(p.stdout)
+			sys.exit(0)
+		if '-i' not in args:
+			# A plain body read (no -i, no --jq): the JSON body only, as gh
+			# prints it (issue #5094's PR-named lookup).
+			save()
+			if status != 200:
+				print(f'actions runs mock failed: HTTP {status}', file=sys.stderr)
+				sys.exit(1)
+			print(json.dumps({'total_count': len(workflow_runs), 'workflow_runs': workflow_runs}))
 			sys.exit(0)
 		status_text = 'OK' if status == 200 else 'Not Modified'
 		headers = [
@@ -16756,15 +16772,18 @@ def test_retrigger_review_redispatches_when_pr_named_dispatch_run_failed():
 		issue_labels={10: ["ai:done"]},
 		issue_linked_prs={10: 92},
 		prs=prs,
-		active_autofix_runs=[
+		actions_runs_workflow_runs=[
 			{
-				"workflow": "internal-review.yml",
-				"branch": "main",
+				"id": 26088864092,
+				"name": "Internal: AI Review & Autofix [pr:92]",
+				"display_title": "Internal: AI Review & Autofix [pr:92]",
 				"event": "workflow_dispatch",
-				"displayTitle": "Internal: AI Review & Autofix [pr:92]",
+				"path": ".github/workflows/internal-review.yml",
 				"status": "completed",
 				"conclusion": "failure",
-				"createdAt": "2026-09-28T01:00:00Z",
+				"head_branch": "main",
+				"head_sha": "c" * 40,
+				"created_at": "2026-09-28T01:00:00Z",
 			},
 		],
 		mock_git_push_success=True,
@@ -16787,16 +16806,21 @@ def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_bran
 		issue_labels={10: ["ai:done"]},
 		issue_linked_prs={10: 93},
 		prs=prs,
-		active_autofix_runs=[
+		actions_runs_workflow_runs=[
 			{
-				"workflow": "internal-review.yml",
-				"branch": "main",
+				"id": 26088864093,
+				"name": "Internal: AI Review & Autofix [pr:93]",
+				"display_title": "Internal: AI Review & Autofix [pr:93]",
 				"event": "workflow_dispatch",
-				"displayTitle": "Internal: AI Review & Autofix [pr:93]",
+				"path": ".github/workflows/internal-review.yml",
 				"status": "completed",
 				"conclusion": "failure",
-				"createdAt": "2026-09-28T01:00:00Z",
+				"head_branch": "main",
+				"head_sha": "c" * 40,
+				"created_at": "2026-09-28T01:00:00Z",
 			},
+		],
+		active_autofix_runs=[
 			{
 				"workflow": "internal-review.yml",
 				"branch": "claude/retrigger-review-pr-named-superseded",
@@ -16811,6 +16835,42 @@ def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_bran
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "93"]
 	assert dispatches_for_pr == [], dispatches_for_pr
 	assert result.get("git_push_calls", []), "expected the empty-commit push path"
+
+
+def test_retrigger_review_ignores_spoofed_pr_named_dispatch_runs():
+	# Issue #5094: a workflow_dispatch run's name comes from the workflow file
+	# at the dispatched ref, so a run dispatched on another branch, or from
+	# another workflow file, can carry this PR's review name. Neither may
+	# block the empty-commit push or pass for the PR's failed review.
+	state, prs = _retrigger_review_pr_state(94, "claude/retrigger-review-pr-named-spoofed")
+	spoof = {
+		"name": "Internal: AI Review & Autofix [pr:94]",
+		"display_title": "Internal: AI Review & Autofix [pr:94]",
+		"event": "workflow_dispatch",
+		"head_sha": "e" * 40,
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 94},
+		prs=prs,
+		actions_runs_workflow_runs=[
+			dict(spoof, id=26088864941, path=".github/workflows/internal-review.yml", head_branch="attacker/branch",
+				status="in_progress", run_started_at="2999-01-01T00:00:00Z"),
+			dict(spoof, id=26088864942, path=".github/workflows/evil.yml", head_branch="main",
+				status="in_progress", run_started_at="2999-01-01T00:00:00Z"),
+			dict(spoof, id=26088864943, path=".github/workflows/evil.yml", head_branch="main",
+				status="completed", conclusion="failure", created_at="2026-09-28T01:00:00Z"),
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1, issue_entry
+	assert result.get("git_push_calls", []), "expected the empty-commit push to proceed"
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "94"]
+	assert dispatches_for_pr == [], dispatches_for_pr
 
 
 def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():

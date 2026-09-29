@@ -13874,6 +13874,7 @@ STALL_EOF
               --arg br "${head_ref}" \
               --arg sha "${_rtr_head_sha}" \
               --arg pr "${pr_num}" \
+              --arg default_branch "$(_pr_named_review_default_branch 2>/dev/null)" \
               --argjson now "${_rtr_now_epoch}" \
               --argjson threshold "${_rtr_stall_secs}" '
               [.workflow_runs[]?
@@ -13882,10 +13883,15 @@ STALL_EOF
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
                    # A default-branch dispatch (issues #4618, #4701) is named
-                   # for its PR; its head_branch is the default branch.
-                   or ($pr != "" and (.event // "") == "workflow_dispatch"
-                       and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                            or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
+                   # for its PR; its head_branch is the default branch. The
+                   # name alone can be forged (issue #5094), so it counts only
+                   # from the default branch and from the wrapper that sets it.
+                   or ($pr != "" and $default_branch != "" and (.event // "") == "workflow_dispatch"
+                       and (.head_branch // "") == $default_branch
+                       and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                             and (.path // "") == ".github/workflows/internal-review.yml")
+                            or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                             and (.path // "") == ".github/workflows/ai-review.yml")))
                  )
                | select(
                    (.name // "") == "AI Review"
@@ -14320,9 +14326,14 @@ invoke_stall_judge() {
   # A review run dispatched from the default branch (issues #4618, #4701)
   # has the default branch as head_branch/head_sha, so it is matched by
   # the run name the review wrappers give a workflow_dispatch run for its
-  # PR instead. The cached blob carries event and display_title, so this
-  # adds no API call (§15).
-  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" --arg pr "${target_pr}" '
+  # PR instead. The name alone can be forged (issue #5094), so such a run
+  # counts only with the default branch as head_branch and the path of the
+  # wrapper that sets that name. The cached blob carries event,
+  # display_title, head_branch, and path, so this adds no API call beyond
+  # the once-per-run default-branch read (§15).
+  local _wo_default_branch
+  _wo_default_branch="$(_pr_named_review_default_branch 2>/dev/null)"
+  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" --arg pr "${target_pr}" --arg default_branch "${_wo_default_branch}" '
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"
                or (.name // "") == "Internal Review"
@@ -14333,10 +14344,13 @@ invoke_stall_judge() {
                or (.path // "" | endswith("internal-review.yml"))
                or (.path // "" | endswith("review_autofix.yml")))
       | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
-               or ($pr != ""
+               or ($pr != "" and $default_branch != ""
                    and (.event // "") == "workflow_dispatch"
-                   and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                        or (.display_title // "") == ("AI Review [pr:" + $pr + "]"))))
+                   and (.head_branch // "") == $default_branch
+                   and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                         and (.path // "") == ".github/workflows/internal-review.yml")
+                        or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                         and (.path // "") == ".github/workflows/ai-review.yml"))))
       | {id: .id, workflow: (.name // ""), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.head_branch // ""), created_at: (.created_at // "")}
     ]
     | sort_by(.created_at)
@@ -16528,6 +16542,7 @@ STALL_EOF
 			    --arg br "${head_ref}" \
                 --arg sha "${head_sha}" \
                 --arg pr "${pr_num}" \
+                --arg default_branch "$(_pr_named_review_default_branch 2>/dev/null)" \
                 --argjson now "${_std_rtr_now_epoch}" \
                 --argjson threshold "${_std_rtr_stall_secs}" '
                 [.workflow_runs[]?
@@ -16536,10 +16551,15 @@ STALL_EOF
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
                      # A default-branch dispatch (issues #4618, #4701) is named
-                     # for its PR; its head_branch is the default branch.
-                     or ($pr != "" and (.event // "") == "workflow_dispatch"
-                         and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                              or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
+                     # for its PR; its head_branch is the default branch. The
+                     # name alone can be forged (issue #5094), so it counts only
+                     # from the default branch and from the wrapper that sets it.
+                     or ($pr != "" and $default_branch != "" and (.event // "") == "workflow_dispatch"
+                         and (.head_branch // "") == $default_branch
+                         and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                               and (.path // "") == ".github/workflows/internal-review.yml")
+                              or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                               and (.path // "") == ".github/workflows/ai-review.yml")))
                    )
                  | select(
                      (.name // "") == "AI Review"
@@ -17371,6 +17391,45 @@ _has_active_autofix_run()
 }
 
 # ---------------------------------------------------------------
+# Helper: the default branch that PR-named review runs must come from
+# ---------------------------------------------------------------
+# A workflow_dispatch run's name is evaluated from the workflow file at the
+# dispatched ref, so a run name alone proves nothing (issue #5094): anyone
+# who can push a branch can dispatch a workflow at that branch whose copy
+# names the run for another PR. Only the default branch's workflow files
+# are reviewed, and every legitimate PR-named review dispatch runs there
+# (issues #4618, #4701, #4898), so a PR-named match also requires the
+# run's head_branch to be this branch.
+#
+# Input:     none.
+# Output:    the default branch name on stdout, or an empty line when it
+#            cannot be resolved.
+# API calls: at most one `GET repos/<repo>` per poller run. The main flow
+#            calls this once in the main shell before processing projects,
+#            so the cache below is set for every later subshell; a call from
+#            an unprimed subshell (a test, a sourced helper) resolves it again.
+#            DEFAULT_BRANCH is not reused: the poller sets it with a "main"
+#            fallback, and a guessed branch must never vouch for a run.
+# Fail-open: an unresolved branch prints an empty line and logs one
+#            PR_NAMED_REVIEW_PROVENANCE line on stderr; every PR-named match
+#            then finds nothing, the behaviour before PR-named runs existed.
+#
+# Usage: _pr_named_review_default_branch
+declare -g _PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE=''
+declare -g _PR_NAMED_REVIEW_DEFAULT_BRANCH_READY='false'
+_pr_named_review_default_branch()
+{
+	if [ "${_PR_NAMED_REVIEW_DEFAULT_BRANCH_READY:-false}" != "true" ]; then
+		_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+		_PR_NAMED_REVIEW_DEFAULT_BRANCH_READY="true"
+		if [ -z "${_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE}" ]; then
+			echo "PR_NAMED_REVIEW_PROVENANCE repo=${GITHUB_REPOSITORY:-unknown} outcome=default_branch_unresolved pr_named_matching=disabled" >&2
+		fi
+	fi
+	printf '%s\n' "${_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE}"
+}
+
+# ---------------------------------------------------------------
 # Helper: list the review dispatch runs named for one PR
 # ---------------------------------------------------------------
 # A review run dispatched from the default branch has head_branch (and
@@ -17378,50 +17437,74 @@ _has_active_autofix_run()
 # The review wrappers name every workflow_dispatch run for its PR:
 #   internal-review.yml (this repo):  "Internal: AI Review & Autofix [pr:<N>]"
 #   ai-review.yml (consumer repos):   "AI Review [pr:<N>]"
-# A workflow_dispatch run's name is evaluated from the dispatched ref's
-# workflow file, which is always the default branch now (issues #4618,
-# #4701), never from PR text, so an exact match on the name identifies
-# the PR.
+# A run's name comes from the workflow file at the dispatched ref, so the
+# name alone can be forged (issue #5094). A run counts only when all hold:
+#   - event is workflow_dispatch;
+#   - head_branch is the default branch (_pr_named_review_default_branch),
+#     the only ref whose workflow files are reviewed (provenance);
+#   - its path is the wrapper that sets that name:
+#     .github/workflows/internal-review.yml for the internal name,
+#     .github/workflows/ai-review.yml for the consumer name (identity; a
+#     workflow's id is bound to its path).
+# A PR-named run dispatched on the PR's own branch is not returned here;
+# the callers' head-branch lookups already see it.
 #
 # Input:     $1 = PR number. Anything but ^[1-9][0-9]*$ prints [] with no call.
 # Output:    one JSON array on stdout, newest first, of the matching runs:
 #            [{databaseId, event, status, conclusion, displayTitle, createdAt, startedAt}]
-# API calls: exactly one `gh run list --event workflow_dispatch --limit 100`.
-#            It has no --workflow filter, so one call covers both wrapper
-#            names in either kind of repo (§15). Callers issue it only after
-#            their head-branch lookups found nothing. The page holds the
-#            newest 100 workflow_dispatch runs of every workflow (about
-#            2-3 hours in coding-workflows, 2026-09-28); review runs finish
-#            well inside that, and an older run that fell off the page is
-#            treated as absent, the behaviour before PR-named runs existed.
-# Fail-open: a gh or jq failure prints [], so the caller behaves as it did
-#            before PR-named runs existed.
+# API calls: exactly one REST
+#            `GET actions/runs?event=workflow_dispatch&branch=<default>&per_page=100`
+#            (plus the once-per-run default-branch read above). It has no
+#            workflow filter, so one call covers both wrapper names in either
+#            kind of repo (§15); `gh run list` cannot be used because it does
+#            not return `path`. Callers issue it only after their head-branch
+#            lookups found nothing. The page holds the newest 100
+#            default-branch workflow_dispatch runs of every workflow; review
+#            runs finish well inside that, and an older run that fell off the
+#            page is treated as absent, the behaviour before PR-named runs
+#            existed.
+# Fail-open: an unresolved default branch, or a gh or jq failure, prints [],
+#            so the caller behaves as it did before PR-named runs existed.
 #
 # Usage: _pr_named_review_dispatch_runs <pr_number>
 _pr_named_review_dispatch_runs()
 {
 	local pr_number="$1"
-	local runs_json=""
+	local runs_json="" default_branch="" default_branch_uri=""
 	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
 		printf '[]\n'
 		return 0
 	fi
-	runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
-		--event workflow_dispatch \
-		--limit 100 \
-		--json databaseId,event,status,conclusion,displayTitle,createdAt,startedAt \
+	default_branch="$(_pr_named_review_default_branch 2>/dev/null || echo "")"
+	if [ -z "${default_branch}" ]; then
+		printf '[]\n'
+		return 0
+	fi
+	default_branch_uri="$(printf '%s' "${default_branch}" | jq -sRr '@uri' 2>/dev/null || echo "")"
+	if [ -z "${default_branch_uri}" ]; then
+		printf '[]\n'
+		return 0
+	fi
+	runs_json="$(gh_retry _safe_gh_jq \
+		"repos/${GITHUB_REPOSITORY}/actions/runs?event=workflow_dispatch&branch=${default_branch_uri}&per_page=100" \
 		2>/dev/null)" || runs_json=""
 	if [ -z "${runs_json}" ]; then
 		printf '[]\n'
 		return 0
 	fi
-	printf '%s' "${runs_json}" | jq -c --arg pr "${pr_number}" '
-		(if type == "array" then . else [] end)
+	printf '%s' "${runs_json}" | jq -c --arg pr "${pr_number}" --arg default_branch "${default_branch}" '
+		(if type == "object" then (.workflow_runs // []) else [] end)
+		| (if type == "array" then . else [] end)
 		| [ .[]?
 			| select(type == "object")
-			| select((.event // "workflow_dispatch") == "workflow_dispatch")
-			| select((.displayTitle // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-				or (.displayTitle // "") == ("AI Review [pr:" + $pr + "]"))
+			| select((.event // "") == "workflow_dispatch")
+			| select((.head_branch // "") == $default_branch)
+			| select(((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+					and (.path // "") == ".github/workflows/internal-review.yml")
+				or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+					and (.path // "") == ".github/workflows/ai-review.yml"))
+			| {databaseId: .id, event: .event, status: .status, conclusion: .conclusion,
+				displayTitle: .display_title, createdAt: .created_at, startedAt: .run_started_at}
 		  ]
 		| sort_by(.createdAt // "")
 		| reverse
@@ -17685,6 +17768,10 @@ if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then
   release_staged_support_needs_human_latches
   exit 0
 fi
+
+# Resolve the default branch PR-named review runs must come from once, in
+# this shell, so every later subshell reuses the cache (issue #5094, §15).
+_pr_named_review_default_branch >/dev/null || true
 
 # ---------------------------------------------------------------
 # Process each tracking issue
