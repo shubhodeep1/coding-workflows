@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T09:00:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A rule that makes a stage post a `hold` claim for a reason other than the hand-back cap must also fix the hold comment's wording (`claude_fix_claim.py` renders the cap sentence for every hold), or each automated hold posts a false reason on the PR.",
+  "phase": "implement_plan",
+  "pr_number": 5102,
+  "record_id": "lesson-implement-plan-e974100c231542945884f84f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4948-protected-path-twin-first-default",
+    "file:.claude/scripts/claude_fix_claim.py",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
