@@ -153,9 +153,11 @@ fi
 # task-gap field (File:, Line or code reference:, Problem:, Why it fails at
 # runtime:, Requirement:, Expected change site:, Evidence of absence:,
 # SEVERITY:, ISSUE_CONFIDENCE:, markdown list and emphasis markers ignored),
-# and, when any lens heading of prompts/review-reviewer-checklist.txt appears,
-# all nine appear and the next non-blank line after each is exactly NONE.
-# Prose around those verdicts is allowed.
+# and, when any lens heading of prompts/review-reviewer-checklist.txt appears
+# (the same markdown markers and list numbering ignored, so a numbered or
+# bulleted heading still needs its NONE), all nine appear and the next
+# non-blank line after each is exactly NONE. Prose around those verdicts is
+# allowed.
 # tests/test_review_autofix_claude_fixer_mode.py pins this list to the prompt.
 claude_fixer_checklist_lens_headings="SECURITY & INPUT VALIDATION|CORRECTNESS & LOGIC|CONCURRENCY / RACES / IDEMPOTENCY|ERROR PATHS & EDGE CASES|PERFORMANCE & RESOURCE USE|INDEX-CONTRACT / DB RULES|NAMING / BACKWARD COMPATIBILITY|IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS|TASK COMPLETENESS / INTENT GAPS"
 
@@ -204,8 +206,10 @@ claude_fixer_runner_output_state()
       sub(/^[-*>#_` \t]+/, "", field)
       if (field ~ /^(file|line or code reference|problem|why it fails at runtime|requirement|expected change site|evidence of absence|severity|issue_confidence)[*_` \t]*:/) finding = 1
       heading = toupper(line)
-      sub(/^[#* \t]+/, "", heading)
-      sub(/[*: \t]+$/, "", heading)
+      sub(/^[-*>#_` \t]+/, "", heading)
+      sub(/^[0-9]+[.)][ \t]*/, "", heading)
+      sub(/^[-*>#_` \t]+/, "", heading)
+      sub(/[*_`: \t]+$/, "", heading)
       if (heading in is_heading) {
         if (!(heading in heading_seen)) {
           heading_seen[heading] = 1
