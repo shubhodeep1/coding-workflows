@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:12/190, 186-187 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The cleanup section header contradicts the deferred issue-mode cleanup timing specified for Step 1.\n  WHY: The header may direct an unattended session to run cleanup in Step 0 before the required Source issue identifier is available. Severity disagreement: Gemini rates this MAJOR; Grok calls it critical.\n- workflow-templates/.claude/commands/implement-plan-claude.md:186 | severity=critical\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The cleanup section header has a timing inconsistency with the issue-mode cleanup placement.\n  WHY: Grok identifies the header in both command files as needing an update to resolve the timing inconsistency.\n- .claude/commands/implement-plan-claude.md:12 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When a plan lacks a `Source issue:` line, cleanup is skipped without directing the session to log or report the skip.\n  WHY: Operators cannot distinguish an intentional skip from cleanup that was silently omitted, hindering troubleshooting.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The lint check (`tests/inventory_parity.py`) must pass; `scripts/claude_pr_sweep.py` must be documented in the `docs/INVENTORY.md` Scripts section or explicitly exempted in `tests/inventory_exemptions.txt`.\n  expected_change_site: `docs/INVENTORY.md` Scripts section or `tests/inventory_exemptions.txt`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not touch `docs/INVENTORY.md` or `tests/inventory_exemptions.txt`. The lint CI check (`tests/inventory_parity.py`) fails on this PR head, blocking the merge.\n- requirement: A contract test must pin the issue-mode cleanup trigger's placement to Step 1 and verify the cleanup header distinguishes issue-mode timing, so a future edit cannot silently regress the trigger.\n  expected_change_site: `tests/test_implement_plan_claude_command.py`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `test_issue_mode_archives_stopped_stage_sessions` (lines 245-264) only asserts text-string existence. It does not assert that Step 1 references the cleanup, that the cleanup-section header at line 187 distinguishes issue-mode timing, or pin the deferred cleanup to an operational hook after Step 1.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/implement-plan-claude.md:Line 187 (header) and line 12/190 (invocation) | severity=MAJOR | confidence=4\n  PROBLEM: The cleanup section header states \"Every stage session runs this in step 0, after resume hygiene\", contradicting the deferred issue-mode timing specified for Step 1.\n  WHY: An unattended session reading the cleanup section header first may be misdirected to attempt the cleanup in Step 0, potentially without the required Source issue identifier, leading to inconsistent behavior.\n- .claude/commands/implement-plan-claude.md:Line 12 (issue-mode resume bullet) | severity=NIT | confidence=4\n  PROBLEM: When a plan lacks a `Source issue:` line, cleanup is skipped without directing the session to log or report the skip.\n  WHY: Operators cannot distinguish an intentional skip from cleanup that was silently omitted, hindering troubleshooting.\n- Requirement: The lint check (`tests/inventory_parity.py`) must pass; `scripts/claude_pr_sweep.py` must be documented in the `docs/INVENTORY.md` Scripts section or explicitly exempted in `tests/inventory_exemptions.txt`.\n  Expected change site: `docs/INVENTORY.md` Scripts section or `tests/inventory_exemptions.txt`.\n  Evidence of absence: The PR diff does not touch `docs/INVENTORY.md` or `tests/inventory_exemptions.txt`. The lint CI check (`tests/inventory_parity.py`) fails on this PR head, blocking the merge.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: A contract test must pin the issue-mode cleanup trigger's placement to Step 1 and verify the cleanup header distinguishes issue-mode timing, so a future edit cannot silently regress the trigger.\n  Expected change site: `tests/test_implement_plan_claude_command.py`.\n  Evidence of absence: `test_issue_mode_archives_stopped_stage_sessions` (lines 245-264) only asserts text-string existence. It does not assert that Step 1 references the cleanup, that the cleanup-section header at line 187 distinguishes issue-mode timing, or pin the deferred cleanup to an operational hook after Step 1.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .claude/commands/implement-plan-claude.md:186 | severity=critical\n  PROBLEM: The cleanup header has a timing inconsistency with the issue-mode cleanup placement.\n  WHY: Update the cleanup header in both command files and strengthen the test to resolve the reviewer timing inconsistency.\n- workflow-templates/.claude/commands/implement-plan-claude.md:186 | severity=critical\n  PROBLEM: The cleanup header has a timing inconsistency with the issue-mode cleanup placement.\n  WHY: Update the cleanup header in both command files and strengthen the test to resolve the reviewer timing inconsistency.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ab223880b612527290ec6a325d1ac677665b3d605bf6c44413c2f33f55196550",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4594,
+    "run_id": "36526973857",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36526973857",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929054950_be5a3c1c5e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4594,
+    "run_id": "36526973857"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T05:49:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
