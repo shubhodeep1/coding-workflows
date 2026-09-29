@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T05:45:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a review-round fix adds a new state to a log or warning message, update every doc that quotes that message (the changelog fragment's contributor section in particular) in the same commit; reviewers flag the stale quote as a task gap in the next round.",
+  "phase": "implement_plan",
+  "pr_number": 4983,
+  "record_id": "lesson-implement-plan-40b9e12f35c1236cdd927456",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4885-failed-slot-runner-line-check",
+    "file:changelog.d/4885-failed-slot-runner-line-check.md"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T05:45:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a fail-closed check reads a file and reports why it rejected it, tell missing, unreadable, empty, and different apart: `$(cat f 2>/dev/null || true)` makes an unreadable file look empty, and an empty file look like a content mismatch.",
+  "phase": "implement_plan",
+  "pr_number": 4983,
+  "record_id": "lesson-implement-plan-3e339ea5942a43a787575f95",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4885-failed-slot-runner-line-check",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}
