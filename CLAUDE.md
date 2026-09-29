@@ -1411,8 +1411,9 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   comment that carries it, and never asks another tool to post it.
 
   An unauthorized protected PR stays open with one instruction comment per
-  head. The owner approves it and merges it, or lets the orchestrator
-  retry. A PR merged before the gate existed is grandfathered.
+  head, and any auto-merge pending on it is turned off. The owner approves
+  it and merges it, or lets the orchestrator retry. A PR merged before the
+  gate existed is grandfathered.
 
 **File edits use the Edit and Write tools.** Edit repository files with the
 Edit and Write tools, including the byte-identical `workflow-templates/`

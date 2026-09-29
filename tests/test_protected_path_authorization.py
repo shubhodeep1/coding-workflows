@@ -256,6 +256,81 @@ def test_check_pr_without_post_flag_posts_nothing():
 	assert fake.posts == []
 
 
+def _auto_merge_pr(head=HEAD, auto_merge=True):
+	pr = _pr(head=head)
+	pr["node_id"] = "PR_node7"
+	pr["auto_merge"] = {"merge_method": "squash"} if auto_merge else None
+	return pr
+
+
+def test_check_pr_turns_off_a_pending_auto_merge_on_a_blocked_protected_pr():
+	# GitHub keeps auto-merge across pushes by anyone with write access, so an
+	# auto-merge enabled on an earlier, unprotected head must not land an
+	# unauthorized protected one (conformance run 1, issue #4919).
+	fake = _FakeGitHub(_auto_merge_pr(), [{"filename": ".claude/settings.json"}], [])
+	disabled = []
+	decision = ppa.check_pr("o/r", 7, get=fake.get, post=fake.post, disable_auto_merge=True, disable=disabled.append)
+	assert decision["decision"] == "block" and decision["auto_merge"] == "disabled"
+	assert disabled == ["PR_node7"]
+	assert len(fake.reads) == 3, "the PR read already carries auto_merge; no extra read"
+
+
+@pytest.mark.parametrize("pr, files, comments, flag, expected", [
+	(_auto_merge_pr(auto_merge=False), [{"filename": ".claude/settings.json"}], [], True, "none pending"),
+	(_auto_merge_pr(), [{"filename": ".claude/settings.json"}], [_comment()], True, None),
+	(_auto_merge_pr(), [{"filename": "README.md"}], [], True, None),
+	(_auto_merge_pr(), [{"filename": ".claude/settings.json"}], [], False, None),
+])
+def test_check_pr_leaves_auto_merge_alone_unless_a_protected_pr_is_refused(pr, files, comments, flag, expected):
+	fake = _FakeGitHub(pr, files, comments)
+	disabled = []
+	decision = ppa.check_pr("o/r", 7, get=fake.get, post=fake.post, disable_auto_merge=flag, disable=disabled.append)
+	assert decision.get("auto_merge") == expected
+	assert disabled == []
+
+
+def test_check_pr_head_mismatch_leaves_auto_merge_alone():
+	fake = _FakeGitHub(_auto_merge_pr(head=OTHER), [{"filename": ".claude/settings.json"}], [])
+	disabled = []
+	decision = ppa.check_pr("o/r", 7, HEAD, get=fake.get, post=fake.post, disable_auto_merge=True, disable=disabled.append)
+	assert decision["decision"] == "block" and "auto_merge" not in decision and disabled == []
+
+
+def test_check_pr_still_blocks_when_turning_auto_merge_off_fails():
+	fake = _FakeGitHub(_auto_merge_pr(), [{"filename": ".claude/settings.json"}], [])
+
+	def failing(node_id):
+		raise ppa.ReadError("gh api graphql failed: HTTP 502")
+
+	decision = ppa.check_pr("o/r", 7, get=fake.get, post=fake.post, disable_auto_merge=True, disable=failing)
+	assert decision["decision"] == "block"
+	assert decision["auto_merge"] == "disable failed: gh api graphql failed: HTTP 502"
+	no_node = _FakeGitHub(_auto_merge_pr(), [{"filename": ".claude/settings.json"}], [])
+	del no_node.pr["node_id"]
+	decision = ppa.check_pr("o/r", 7, get=no_node.get, post=no_node.post, disable_auto_merge=True, disable=failing)
+	assert decision["decision"] == "block" and decision["auto_merge"].startswith("disable failed: PR node_id")
+
+
+def test_disable_auto_merge_uses_the_graphql_mutation(monkeypatch):
+	calls = []
+	monkeypatch.setattr(ppa, "_gh_json", lambda args: calls.append(args) or {})
+	ppa._disable_auto_merge("PR_node7")
+	assert calls == [["graphql", "-f", f"query={ppa.DISABLE_AUTO_MERGE_MUTATION}", "-f", "id=PR_node7"]]
+	assert "disablePullRequestAutoMerge" in ppa.DISABLE_AUTO_MERGE_MUTATION
+
+
+def test_cli_disable_auto_merge_flag(monkeypatch, capsys):
+	fake = _FakeGitHub(_auto_merge_pr(), [{"filename": ".claude/settings.json"}], [])
+	disabled = []
+	monkeypatch.setattr(ppa, "gh_get_json", fake.get)
+	monkeypatch.setattr(ppa, "_post_comment", fake.post)
+	monkeypatch.setattr(ppa, "_disable_auto_merge", disabled.append)
+	assert ppa.main(["pr", "--repo", "o/r", "--pr", "7"]) == ppa.EXIT_BLOCKED
+	assert "auto_merge" not in json.loads(capsys.readouterr().out) and disabled == []
+	assert ppa.main(["pr", "--repo", "o/r", "--pr", "7", "--disable-auto-merge"]) == ppa.EXIT_BLOCKED
+	assert json.loads(capsys.readouterr().out)["auto_merge"] == "disabled" and disabled == ["PR_node7"]
+
+
 def test_check_pr_rejects_bad_arguments():
 	for kwargs in ({"repo": "bad", "number": 7}, {"repo": "o/r", "number": 0}, {"repo": "o/r", "number": 7, "expected_head": "abc"}):
 		with pytest.raises(ValueError):
@@ -439,16 +514,52 @@ def _run_gate(tmp_path, decision_json, checker_rc, merge_call):
 
 
 def test_gate_passes_unprotected_merges_through_unchanged(tmp_path):
+	# No well-formed head in the decision (placeholder SHAs in orchestrator
+	# fakes): nothing to bind, so the call runs exactly as written.
 	proc, merges, checks = _run_gate(
 		tmp_path,
-		{"decision": "allow", "protected": False, "head": HEAD},
+		{"decision": "allow", "protected": False, "head": "sha910"},
 		0,
 		'protected_path_guarded_merge fake_merge gh pr merge 42 --repo o/r --squash --auto',
 	)
 	assert "rc=0" in proc.stdout, proc.stderr
 	assert merges == [["gh", "pr", "merge", "42", "--repo", "o/r", "--squash", "--auto"]] * 2
 	assert len(checks) == 1, "the second identical call must reuse the cached decision"
-	assert checks[0][:5] == ["pr", "--repo", "o/r", "--pr", "42"] and "--post-instructions" in checks[0]
+	assert checks[0][:5] == ["pr", "--repo", "o/r", "--pr", "42"]
+	assert "--post-instructions" in checks[0] and "--disable-auto-merge" in checks[0]
+
+
+def test_gate_binds_an_unprotected_merge_to_the_checked_head(tmp_path):
+	# A push that adds a protected path between the check and the merge must
+	# fail the merge, not ride on the unprotected decision (conformance run 1).
+	proc, merges, _checks = _run_gate(
+		tmp_path,
+		{"decision": "allow", "protected": False, "head": HEAD},
+		0,
+		'protected_path_guarded_merge fake_merge gh pr merge 42 --repo o/r --squash --auto',
+	)
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert merges == [["gh", "pr", "merge", "42", "--repo", "o/r", "--squash", "--auto", "--match-head-commit", HEAD]] * 2
+	assert "decision=allow" not in proc.stderr, "an unprotected merge logs nothing new"
+	(tmp_path / "bound").mkdir()
+	proc, merges, _checks = _run_gate(
+		tmp_path / "bound",
+		{"decision": "allow", "protected": False, "head": HEAD},
+		0,
+		f'protected_path_guarded_merge fake_merge gh pr merge 42 --repo o/r --squash --match-head-commit={OTHER}',
+	)
+	assert merges[0] == ["gh", "pr", "merge", "42", "--repo", "o/r", "--squash", f"--match-head-commit={OTHER}"]
+
+
+def test_gate_logs_what_happened_to_a_pending_auto_merge(tmp_path):
+	proc, merges, _checks = _run_gate(
+		tmp_path,
+		{"decision": "block", "protected": True, "head": HEAD, "reason": "no owner comment", "auto_merge": "disabled"},
+		3,
+		'protected_path_guarded_merge fake_merge gh pr merge 42 --repo o/r --squash --auto',
+	)
+	assert "rc=3" in proc.stdout and merges == []
+	assert f"PROTECTED_PATH_GATE pr=42 head={HEAD} decision=block rc=3 auto_merge=disabled" in proc.stderr
 
 
 def test_gate_binds_an_authorized_protected_merge_to_its_head(tmp_path):
