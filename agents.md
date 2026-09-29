@@ -118,7 +118,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    flagger's citation counts only as a `consensus_id:` line inside exactly one
    of its own `File:` finding records at the entry's file and lines, and a
    second flagger finding in that file within 3 lines (a quoted, bolded, or
-   workspace-prefixed spelling of the path counts, and a range or list of
+   prefixed spelling of the path counts, `docs/README.md` included for
+   `README.md`, and a range or list of
    lines covers every line it names) keeps the entry
    blocking (`flagger_citation_mismatch`, `ambiguous_flagger_nearby`; issue
    #4975). Task

@@ -751,8 +751,12 @@ def _record_path(path: str) -> str | None:
 
 def _same_file(first: str, second: str) -> bool:
 	"""Whether two record paths may name the same file: equal, or one ends
-	with ``/`` plus the other (an absolute or workspace-prefixed path). Used
-	only to keep an entry blocking, so an over-match fails toward blocking."""
+	with ``/`` plus the other (an absolute runner path, a workspace or repo
+	name prefix, or a diff prefix such as ``b/``). A different file that shares
+	the suffix (``docs/README.md`` for ``README.md``) matches too, by design:
+	used only to keep an entry blocking, an over-match fails toward blocking,
+	while a narrower match would let a prefixed spelling of the entry's file
+	escape the check (AD-11)."""
 	return first == second or first.endswith("/" + second) or second.endswith("/" + first)
 
 

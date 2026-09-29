@@ -470,6 +470,11 @@ def test_issue_4975_a_citation_that_does_not_bind_one_record_at_the_entry_stays_
 	"File: README.md\nLines: 1250 to 1262\nProblem: injection\n",
 	"File: README.md\nLines: 1250, 1262\nProblem: injection\n",
 	"File: README.md\nLines: 1250-1262.\nProblem: injection\n",
+	"File: README.md\nLines: 1250 & 1262\nProblem: injection\n",
+	# PR #5116 review round 1 (AD-11): a diff prefix is the same file, and a
+	# different file sharing the suffix also keeps the entry blocking.
+	"File: b/README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"File: docs/README.md\nLine or code reference: 1262\nProblem: injection\n",
 ])
 def test_issue_4975_another_flagger_finding_at_the_entry_keeps_it_blocking(tmp_path, other_record):
 	"""The summariser folded a same-line defect into the rejected entry: the flagger's output shows two findings there."""
@@ -559,6 +564,10 @@ def test_issue_4975_finding_records_parse_the_reviewer_shape():
 	("File: a.py:40, 52\n", ("a.py", (40, 52))),
 	("File: a.py\nLine: 40, `x = 3`\n", ("a.py", (40, 40))),
 	("File: a.py\nLine: 40 total\n", ("a.py", (40, 40))),
+	# PR #5116 review round 1: ``&`` lists a line only right after a reference.
+	("File: a.py\nLines: 40 & 52\n", ("a.py", (40, 52))),
+	("File: a.py\nLine: 40 set X & 52\n", ("a.py", (40, 40))),
+	("File: a.py\nLine: 40, `x & 52`\n", ("a.py", (40, 40))),
 	("File: .\nLine: 4\n", (None, (4, 4))),
 ])
 def test_issue_4975_finding_records_read_only_explicit_paths_and_lines(output, expected):
