@@ -35,8 +35,10 @@ Batching contract (CLAUDE.md §15):
           per `open` candidate (not claimed, held, or due), the pending-checks
           reads of scripts/claude_fixer_pending_checks.py (1 PR read, 1 per
           100 comments, and only with a live marker the check-run pages,
-          then only when ready 1 run read, 1 variable read and the
-          auto-merge helper's calls);
+          then only when ready 1 run read (+1 compare read when that run
+          was triggered by an older push), 1 head-branch runs read, 4
+          workflow_dispatch runs reads and 1 per 100 comments again
+          (issue #5148), 1 variable read and the auto-merge helper's calls);
   output  one `CLAUDE_PR_SWEEP` log line per decision plus a summary line;
   failure fail open per PR and per repo: a read error is logged and the
           sweep moves on; nothing is retried in a tight loop. A failed queue
