@@ -58,6 +58,12 @@ Routing order (first match wins):
   6. repository variable ``AI_ISSUE_IMPLEMENTER``: ``codex`` -> codex;
      empty or ``claude`` -> claude; anything else -> claude with a warning
 
+Closed issues are never routed, with one exception (issue #5222): a trusted
+``/reclarify`` on a closed issue that ``final_merge_resume`` accepts (a Claude
+project blocked at a ``final-merge`` stage whose final-PR merge closed the
+issue) goes to Claude with reason ``final_merge_resume``, through clarify
+(``final-merge-resume``) and the intake (``authorize-target``) alike.
+
 All functions are pure except ``fetch_open_queue`` (one ``gh api`` read),
 ``fetch_queue_bindings`` (the batched binding reads it documents),
 ``append_queue_binding`` (writes the binding file it is given), and the CLI
@@ -144,6 +150,17 @@ TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS: tuple[str, ...] = ("OWNER", "MEMBER", "COLLAB
 TRUSTED_ISSUE_BOT_AUTHOR = "github-actions[bot]"
 DISPATCHER_ALLOWED_PERMISSIONS: tuple[str, ...] = ("admin", "write")
 RECLARIFY_COMMAND_PREFIX = "/reclarify"
+
+# Final-merge resume (issue #5222): an issue-mode project blocked at a
+# `final-merge` stage asks for the final PR to be merged and then `/reclarify`.
+# The final PR carries `Fixes #<N>`, so the merge closes the issue first; this
+# route lets that one `/reclarify` through on the closed issue. The stage is
+# read from the blocked comment's `Stage:` / `**Stage:**` line (the first
+# one), whose value must start with `final-merge`.
+FINAL_MERGE_RESUME_REASON = "final_merge_resume"
+BLOCKED_COMMENT_MARKER = "<!-- ai:claude-blocked:v1 -->"
+BLOCKED_STAGE_LINE_RE = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Stage:(?:\*\*)?[ \t]*`?([^`\n]*)")
+FINAL_MERGE_STAGE_RE = re.compile(r"^final-merge(?![\w-])")
 
 ORCHESTRATOR_BODY_MARKER_RE = re.compile(r"(?mi)^\s*(?:[-*]\s*)?Managed by:\s*AI Orchestrator\b")
 E2E_FIXTURE_TITLE_RE = re.compile(r"(?i)^\[E2E ")
@@ -344,6 +361,81 @@ def has_trusted_reclarify(comments: list[Any]) -> bool:
 	return False
 
 
+def _is_trusted_user_comment(comment: Any) -> bool:
+	return (
+		isinstance(comment, dict)
+		and _user_field(comment, "type") == "User"
+		and comment.get("author_association") in TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS
+	)
+
+
+def _is_final_merge_resume_candidate(issue: dict[str, Any]) -> bool:
+	"""Label pre-check: only a Claude-routed issue blocked by a Claude stage."""
+	labels = _label_names(issue)
+	return (
+		CLAUDE_LABEL in labels
+		and BLOCKED_LABEL in labels
+		and route_issue(issue, None)["implementer"] == IMPLEMENTER_CLAUDE
+	)
+
+
+def final_merge_resume(issue: Any, comments: Any) -> dict[str, Any]:
+	"""Decide whether a ``/reclarify`` may resume a closed issue (issue #5222).
+
+	Input: ``issue`` from one ``GET repos/<repo>/issues/<N>``; ``comments`` is
+	the issue's comment array in API (chronological) order. Pure: no API calls.
+
+	Eligible only when all of these hold: the target is a closed issue (not
+	a pull request); it carries ``ai:claude`` and ``ai:claude-blocked`` and
+	``route_issue`` sends it to Claude (no ``ai:codex``, not
+	orchestrator-managed, not a Codex-only type or an ``[E2E `` fixture); its
+	latest comment starting ``<!-- ai:claude-blocked:v1 -->`` from a trusted
+	``User`` (OWNER / MEMBER / COLLABORATOR) has a ``Stage:`` line whose value
+	starts with ``final-merge`` (blocked comments from anyone else are
+	ignored); and a trusted ``User`` commented ``/reclarify`` after that
+	blocked comment.
+
+	Output: ``{"eligible": bool, "reason": str, "blocked_comment_id": int | None}``
+	with ``reason`` one of ``not_issue``, ``issue_open``, ``not_claude_routed``,
+	``not_blocked``, ``no_blocked_comment``, ``stage_not_final_merge``,
+	``no_reclarify_after_block``, or ``final_merge_resume``.
+	"""
+	def _result(eligible: bool, reason: str, comment_id: Any = None) -> dict[str, Any]:
+		return {
+			"eligible": eligible,
+			"reason": reason,
+			"blocked_comment_id": comment_id if isinstance(comment_id, int) and not isinstance(comment_id, bool) else None,
+		}
+
+	if not isinstance(issue, dict) or "pull_request" in issue:
+		return _result(False, "not_issue")
+	if issue.get("state") != "closed":
+		return _result(False, "issue_open")
+	labels = _label_names(issue)
+	if CLAUDE_LABEL not in labels or route_issue(issue, None)["implementer"] != IMPLEMENTER_CLAUDE:
+		return _result(False, "not_claude_routed")
+	if BLOCKED_LABEL not in labels:
+		return _result(False, "not_blocked")
+	items = comments if isinstance(comments, list) else []
+	blocked_index = -1
+	for index, comment in enumerate(items):
+		if not _is_trusted_user_comment(comment):
+			continue
+		body = comment.get("body")
+		if isinstance(body, str) and body.startswith(BLOCKED_COMMENT_MARKER):
+			blocked_index = index
+	if blocked_index < 0:
+		return _result(False, "no_blocked_comment")
+	blocked = items[blocked_index]
+	stage_match = BLOCKED_STAGE_LINE_RE.search(blocked.get("body") or "")
+	stage = stage_match.group(1).strip() if stage_match else ""
+	if not FINAL_MERGE_STAGE_RE.match(stage):
+		return _result(False, "stage_not_final_merge", blocked.get("id"))
+	if not has_trusted_reclarify(items[blocked_index + 1:]):
+		return _result(False, "no_reclarify_after_block", blocked.get("id"))
+	return _result(True, FINAL_MERGE_RESUME_REASON, blocked.get("id"))
+
+
 def authorize_target(
 	validated: dict[str, Any],
 	issue: Any,
@@ -357,7 +449,14 @@ def authorize_target(
 	dispatcher login of the intake run (``github.actor`` and
 	``github.triggering_actor``) to the ``permission`` field of
 	``GET repos/<repo>/collaborators/<login>/permission``; ``comments`` is the
-	issue's comment array, needed only when the author is not trusted.
+	issue's comment array, needed only when the author is not trusted or the
+	issue is a closed final-merge resume candidate.
+
+	A closed issue is refused (``issue_closed``) unless ``final_merge_resume``
+	passes for it (issue #5222), which authorizes it with reason
+	``final_merge_resume``; the issue is not reopened. A closed issue without
+	both ``ai:claude`` and ``ai:claude-blocked`` is refused without asking for
+	comments.
 
 	Output: ``{"authorized": bool, "reason": str, "needs_comments": bool}``.
 	``needs_comments`` is true only when every other check passed and the
@@ -381,6 +480,12 @@ def authorize_target(
 	if not isinstance(repository_url, str) or repository_url.lower() != expected_url.lower():
 		return _result(False, "target_repo_mismatch")
 	if issue.get("state") != "open":
+		if issue.get("state") != "closed" or not _is_final_merge_resume_candidate(issue):
+			return _result(False, "issue_closed")
+		if comments is None:
+			return _result(False, "issue_closed", needs_comments=True)
+		if final_merge_resume(issue, comments)["eligible"]:
+			return _result(True, FINAL_MERGE_RESUME_REASON)
 		return _result(False, "issue_closed")
 	if is_trusted_issue_author(issue):
 		return _result(True, "trusted_author")
@@ -1133,6 +1238,21 @@ def _cmd_authorize_target(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_final_merge_resume(args: argparse.Namespace) -> int:
+	"""Print the ``final_merge_resume`` verdict; exit 2 on unreadable input."""
+	try:
+		issue = _read_json(args.issue_json)
+		comments = _read_json(args.comments_json)
+	except (OSError, ValueError) as exc:
+		print(f"unreadable input: {exc}", file=sys.stderr)
+		return 2
+	if not isinstance(comments, list):
+		print("comments JSON is not an array", file=sys.stderr)
+		return 2
+	print(json.dumps(final_merge_resume(issue, comments)))
+	return 0
+
+
 def _cmd_fire_body(args: argparse.Namespace) -> int:
 	validated = _read_json(args.validated_json)
 	print(json.dumps({"text": build_fire_text(validated)}))
@@ -1472,8 +1592,13 @@ def main(argv: list[str] | None = None) -> int:
 	p_authorize.add_argument("--validated-json", required=True)
 	p_authorize.add_argument("--issue-json", required=True)
 	p_authorize.add_argument("--permissions-json", required=True, help='{"<login>": "<permission>"} for each dispatcher login')
-	p_authorize.add_argument("--comments-json", default="", help="the issue's comments; only needed when the author is not trusted")
+	p_authorize.add_argument("--comments-json", default="", help="the issue's comments; only needed when the author is not trusted or the issue is a closed final-merge resume candidate")
 	p_authorize.set_defaults(func=_cmd_authorize_target)
+
+	p_resume = sub.add_parser("final-merge-resume", help="decide whether /reclarify may resume a closed issue blocked at final-merge (issue #5222)")
+	p_resume.add_argument("--issue-json", required=True)
+	p_resume.add_argument("--comments-json", required=True, help="the issue's comments as one JSON array, in API order")
+	p_resume.set_defaults(func=_cmd_final_merge_resume)
 
 	p_fire = sub.add_parser("fire-body", help="build the routine /fire request body")
 	p_fire.add_argument("--validated-json", required=True)

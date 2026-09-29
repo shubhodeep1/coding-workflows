@@ -16,7 +16,9 @@
 #      coding-workflows. Its intake workflow (claude-issue-intake.yml)
 #      validates the repo against .github/ai/consumer_repos.json and fires the
 #      "Claude issue dispatcher" routine, which starts the Claude session.
-#   3. Posts one routing comment on the issue.
+#   3. Posts one routing comment on the issue (a resume-specific one when
+#      clarify routed a closed issue with reason `final_merge_resume`,
+#      issue #5222; the issue is not reopened).
 #
 # A failed dispatch is never silent: the issue gets `ai:claude-handoff-failed`,
 # a comment naming how to retry or switch to Codex, and a Telegram ERROR. The
@@ -108,13 +110,22 @@ fi
 
 if [ "${DISPATCH_OK}" = "true" ]; then
 	log "dispatched issue=${ISSUE_NUMBER} trigger=${TRIGGER} upstream=${UPSTREAM_REPO} skip_security_pass=${SKIP_SECURITY_PASS}"
-	BODY="<!-- ai:claude-issue-routed:v1 -->
+	if [ "${ROUTE_REASON}" = "final_merge_resume" ]; then
+		# Issue #5222: the final PR's merge closed the issue while its project
+		# was blocked at a final-merge stage. The issue stays closed.
+		BODY="<!-- ai:claude-issue-routed:v1 -->
+🤖 **Resuming the Claude project after its final merge** (\`${ROUTE_REASON}\`, trigger \`${TRIGGER}\`).
+
+The final PR's merge closed this issue while the project was blocked at a \`final-merge\` stage. The issue stays closed. The resumed \`/implement-issue-claude\` session removes \`ai:claude-blocked\` and continues the project from its log with the activation check."
+	else
+		BODY="<!-- ai:claude-issue-routed:v1 -->
 🤖 **Routed to Claude Code** (\`${ROUTE_REASON}\`, trigger \`${TRIGGER}\`).
 
 A Claude session will implement this issue with the \`/implement-issue-claude\` flow: a single-phase plan and PR, then conformance, security, validation, and activation checks. This issue closes when the completion PR merges.
 
 - To hand this issue to the Codex pipeline instead, add the \`ai:codex\` label and comment \`/reclarify\`.
 - To send every new issue in this repo to Codex, set the repository variable \`AI_ISSUE_IMPLEMENTER=codex\`."
+	fi
 	[ -z "${RUN_URL}" ] || BODY+=$'\n\n'"Run: ${RUN_URL}"
 	gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || \
 		log "warn routing_comment_failed issue=${ISSUE_NUMBER}"
