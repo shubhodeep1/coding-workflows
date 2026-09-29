@@ -995,6 +995,8 @@ ENV_REQUEUE_WINDOW_HOURS_DEFAULT = 24.0
 # repositories are searched in chunks of `repo:` qualifiers.
 ENV_REQUEUE_SEARCH_QUERY_MAX = 250
 ENV_REQUEUE_COMMENT_PAGES_MAX = 10
+# The search API serves at most 1,000 results (10 pages of 100) per query.
+ENV_REQUEUE_SEARCH_PAGES_MAX = 10
 
 
 def parse_blocker_marker(body: Any) -> tuple[bool, str]:
@@ -1036,8 +1038,12 @@ def env_requeue_decision(
 	  than ``stale_hours`` → ``skip`` (the fresh session is on its way). Older,
 	  with the label still on the issue, means that session died before it
 	  claimed the issue, so it is re-queued again (``stale_retry``).
-	* ``max_retries`` re-queues within the last ``window_hours`` → ``alert``
-	  once per blocker (the exhausted marker), then ``skip``.
+	* ``max_retries`` re-queues within the last ``window_hours`` → ``alert``,
+	  then ``skip``. Retries and alerts are both counted per issue, not per
+	  blocker: every failed re-queued session posts a new blocker, so a
+	  per-blocker count would never reach the cap. An exhausted marker of any
+	  blocker inside the window therefore suppresses another alert, so one
+	  issue sends at most one Telegram ERROR per window.
 
 	Pure: no API calls.
 	"""
@@ -1091,8 +1097,7 @@ def env_requeue_decision(
 			if int(requeued.group(1)) == blocker_id:
 				last_for_blocker = created
 			continue
-		exhausted = ENV_REQUEUE_EXHAUSTED_MARKER_RE.match(body)
-		if exhausted and int(exhausted.group(1)) == blocker_id:
+		if ENV_REQUEUE_EXHAUSTED_MARKER_RE.match(body) and created >= window_start:
 			alerted = True
 	result["retries_in_window"] = recent
 	if last_for_blocker is not None:
@@ -1194,6 +1199,10 @@ def env_requeue_candidates(items: list[Any], allowed_repos: list[str]) -> dict[s
 
 
 def _read_issue_comments(read: Any, repo: str, number: int) -> list[Any]:
+	# The issue-comments endpoint lists oldest first and takes no sort or
+	# direction, so the latest blocker is on the last page. A read that stops
+	# at the page cap with a full page would decide on an older blocker (maybe
+	# re-queue a plain §28.C one), so it fails instead and the issue is skipped.
 	comments: list[Any] = []
 	for page in range(1, ENV_REQUEUE_COMMENT_PAGES_MAX + 1):
 		data = read(f"repos/{repo}/issues/{number}/comments?per_page=100&page={page}")
@@ -1201,8 +1210,8 @@ def _read_issue_comments(read: Any, repo: str, number: int) -> list[Any]:
 			raise RuntimeError(f"comments of {repo}#{number} are not an array")
 		comments.extend(data)
 		if len(data) < 100:
-			break
-	return comments
+			return comments
+	raise RuntimeError(f"{repo}#{number} has more than {ENV_REQUEUE_COMMENT_PAGES_MAX * 100} comments; the latest blocker is past the read cap")
 
 
 def env_requeue_plan(
@@ -1217,12 +1226,16 @@ def env_requeue_plan(
 
 	Batching contract (CLAUDE.md §15):
 	  input   the registered repositories (``load_allowed_repos``);
-	  calls   one search per ``env_requeue_search_queries`` chunk, then one
-	          comment read per 100 comments of each candidate only;
+	  calls   one search per ``env_requeue_search_queries`` chunk and per 100
+	          results (at most ``ENV_REQUEUE_SEARCH_PAGES_MAX`` pages; one
+	          call per chunk while fewer than 100 issues are blocked), then
+	          one comment read per 100 comments of each candidate only;
 	  output  ``{"actions": [candidate fields + env_requeue_decision fields],
 	          "skipped": [...], "errors": [...], "searches": <n>}``;
 	  failure fail open: a failed search or comment read is listed under
-	          ``errors`` and that chunk or issue waits for the next hourly run.
+	          ``errors`` and that chunk or issue waits for the next hourly run;
+	          a search the API reports as incomplete, or with more results
+	          than were read, is listed under ``errors`` too.
 
 	``read`` is a ``path -> parsed JSON`` callable (``_gh_api_read`` by
 	default) that raises RuntimeError on failure.
@@ -1232,17 +1245,31 @@ def env_requeue_plan(
 	items: list[Any] = []
 	queries = env_requeue_search_queries(allowed_repos)
 	for query in queries:
-		path = "search/issues?" + urlencode({"q": query, "per_page": 100})
-		try:
-			data = read(path)
-		except RuntimeError as exc:
-			errors.append(f"search: {exc}")
-			continue
-		found = data.get("items") if isinstance(data, dict) else None
-		if not isinstance(found, list):
-			errors.append("search: answer has no items array")
-			continue
-		items.extend(found)
+		read_count = 0
+		for page in range(1, ENV_REQUEUE_SEARCH_PAGES_MAX + 1):
+			params: dict[str, Any] = {"q": query, "per_page": 100}
+			if page > 1:
+				params["page"] = page
+			try:
+				data = read("search/issues?" + urlencode(params))
+			except RuntimeError as exc:
+				errors.append(f"search: {exc}")
+				break
+			found = data.get("items") if isinstance(data, dict) else None
+			if not isinstance(found, list):
+				errors.append("search: answer has no items array")
+				break
+			items.extend(found)
+			read_count += len(found)
+			total = data.get("total_count")
+			total = total if isinstance(total, int) and not isinstance(total, bool) else read_count
+			if data.get("incomplete_results") is True:
+				errors.append(f"search: incomplete results ({read_count} of {total} read)")
+				break
+			if len(found) < 100 or read_count >= total:
+				break
+		else:
+			errors.append(f"search: {read_count} of {total} results read; the rest are past the search API cap")
 	filtered = env_requeue_candidates(items, allowed_repos)
 	actions: list[dict[str, Any]] = []
 	for candidate in filtered["candidates"]:

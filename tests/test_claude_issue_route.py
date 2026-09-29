@@ -1713,6 +1713,49 @@ def test_env_decision_alerts_once_after_two_retries_in_24h():
 	assert route.env_requeue_decision(alerted, ENV_BLOCKED_LABELS, ENV_NOW)["reason"] == "exhausted_alerted"
 
 
+def test_env_decision_alerts_once_per_issue_even_when_a_new_blocker_follows():
+	# Review round 1 (#5006): a new blocker after the alert (a human /reclarify
+	# that failed again) must not send a second Telegram ERROR in the window.
+	comments = [
+		_env_comment(1, ENV_BLOCKER, 10),
+		_env_comment(2, _requeue_marker(1), 9),
+		_env_comment(3, ENV_BLOCKER, 6),
+		_env_comment(4, _requeue_marker(3), 5),
+		_env_comment(5, ENV_BLOCKER, 3),
+		_env_comment(6, _exhausted_marker(5), 2.5),
+		_env_comment(7, "<!-- ai:claude-blocked:v1 reason=environment-checkout-missing -->", 1),
+	]
+	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "skip"
+	assert decision["reason"] == "exhausted_alerted" and decision["blocker_id"] == 7
+	# An untrusted exhausted marker cannot suppress the alert.
+	forged = [*comments[:5], _env_comment(6, _exhausted_marker(5), 2.5, assoc="NONE"), comments[6]]
+	assert route.env_requeue_decision(forged, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
+
+
+def test_env_decision_resumes_once_the_window_has_passed():
+	# The alert and both re-queues are older than 24h: retries start over,
+	# and the next exhaustion alerts again.
+	comments = [
+		_env_comment(1, ENV_BLOCKER, 40),
+		_env_comment(2, _requeue_marker(1), 39),
+		_env_comment(3, ENV_BLOCKER, 35),
+		_env_comment(4, _requeue_marker(3), 34),
+		_env_comment(5, ENV_BLOCKER, 30),
+		_env_comment(6, _exhausted_marker(5), 29.5),
+	]
+	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "requeue" and decision["retry"] == 1
+	later = [
+		*comments,
+		_env_comment(7, _requeue_marker(5), 5),
+		_env_comment(8, ENV_BLOCKER, 4),
+		_env_comment(9, _requeue_marker(8), 3),
+		_env_comment(10, ENV_BLOCKER, 1),
+	]
+	assert route.env_requeue_decision(later, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
+
+
 def test_env_decision_counts_only_the_rolling_window_and_trusted_markers():
 	comments = [
 		_env_comment(1, ENV_BLOCKER, 40),
@@ -1807,6 +1850,57 @@ def test_env_plan_paginates_comments():
 
 	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
 	assert plan["actions"][0]["blocker_id"] == 500 and plan["actions"][0]["action"] == "requeue"
+
+
+def test_env_plan_skips_an_issue_whose_comments_pass_the_read_cap():
+	# Comments are listed oldest first, so the latest blocker sits past the cap:
+	# deciding on the older environment blocker could re-queue a plain one.
+	calls = []
+
+	def read(path):
+		calls.append(path)
+		if path.startswith("search/issues?"):
+			return {"items": [_search_item("shubhodeep1/digital_pa", 3)]}
+		return [_env_comment(1, ENV_BLOCKER, 50)] + [_env_comment(i, "chatter", 40) for i in range(2, 101)]
+
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	assert plan["actions"] == []
+	assert plan["errors"] == ["comments shubhodeep1/digital_pa#3: shubhodeep1/digital_pa#3 has more than 1000 comments; the latest blocker is past the read cap"]
+	assert len(calls) == 1 + route.ENV_REQUEUE_COMMENT_PAGES_MAX
+
+
+def test_env_plan_pages_search_results_and_reports_truncation():
+	calls = []
+	total = {"value": 150}
+
+	def read(path):
+		calls.append(path)
+		if path.startswith("search/issues?"):
+			page = int(path.rsplit("page=", 1)[1]) if "&page=" in path else 1
+			start = (page - 1) * 100
+			count = max(0, min(100, total["value"] - start))
+			return {"total_count": total["value"], "incomplete_results": False, "items": [_search_item("shubhodeep1/digital_pa", start + i + 1) for i in range(count)]}
+		return []
+
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	searches = [path for path in calls if path.startswith("search/issues?")]
+	assert len(searches) == 2 and searches[1].endswith("&page=2") and "&page=" not in searches[0]
+	assert len(plan["actions"]) == 150 and plan["errors"] == []
+
+	calls.clear()
+	total["value"] = 1500
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	assert len([path for path in calls if path.startswith("search/issues?")]) == route.ENV_REQUEUE_SEARCH_PAGES_MAX
+	assert plan["errors"] == ["search: 1000 of 1500 results read; the rest are past the search API cap"]
+
+	def incomplete(path):
+		if path.startswith("search/issues?"):
+			return {"total_count": 3, "incomplete_results": True, "items": [_search_item("shubhodeep1/digital_pa", 3)]}
+		return [_env_comment(1, ENV_BLOCKER, 1)]
+
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, incomplete)
+	assert [a["issue_number"] for a in plan["actions"]] == [3]
+	assert plan["errors"] == ["search: incomplete results (1 of 3 read)"]
 
 
 # --- closed targets (issue #4912) -------------------------------------------------------
@@ -1987,6 +2081,45 @@ def test_watchdog_env_requeue_alerts_once_and_keeps_the_label(env_stubs):
 	result = _run("claude_issue_queue_watchdog.sh", env)
 	assert "reason=exhausted_alerted" in result.stdout
 	assert not (env_stubs["tmp"] / "curl.log").exists()
+
+
+def test_watchdog_env_requeue_alert_has_no_dangling_run_line_without_a_run_url(env_stubs):
+	comments = [
+		_env_comment(1, ENV_BLOCKER, 10),
+		_env_comment(2, _requeue_marker(1), 9),
+		_env_comment(3, ENV_BLOCKER, 6),
+		_env_comment(4, _requeue_marker(3), 5),
+		_env_comment(5, ENV_BLOCKER, 1),
+	]
+	env = {**env_stubs["env"], "GH_STUB_ENV_COMMENTS_JSON": _env_comments(comments), "RUN_URL": ""}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	curl_log = (env_stubs["tmp"] / "curl.log").read_text()
+	assert "Claude issue re-queue stopped for shubhodeep1/digital_pa#3" in curl_log
+	assert "Run:" not in curl_log
+
+
+def test_watchdog_env_requeue_rejects_non_integer_retry_counts(env_stubs):
+	# Every field of the plan is re-validated before it reaches a comment or a message.
+	stub_route = env_stubs["tmp"] / "route_stub.py"
+	action = {
+		"action": "requeue", "repo": "shubhodeep1/digital_pa", "issue_number": 3, "reason": "environment_blocker",
+		"blocker_id": 501, "blocker_reason": "environment-tools-missing", "retry": "1 of 99", "retries_in_window": 0,
+		"skip_security_pass": False,
+	}
+	stub_route.write_text(
+		"import json, sys\n"
+		"if sys.argv[1] == 'env-requeue-plan':\n"
+		f"    print(json.dumps({{'actions': [{action!r}], 'skipped': [], 'errors': [], 'searches': 1}}))\n"
+		"else:\n"
+		"    print('[]')\n"
+	)
+	env = {**env_stubs["env"], "CLAUDE_ISSUE_ROUTE_PY": str(stub_route)}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn env_requeue_bad_action index=1" in result.stdout
+	calls = env_stubs["log"].read_text() if env_stubs["log"].exists() else ""
+	assert "dispatches" not in calls and "comments -f body=" not in calls
 
 
 def test_watchdog_env_requeue_closes_queue_items_for_closed_issues(env_stubs):

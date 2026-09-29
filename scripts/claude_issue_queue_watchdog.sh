@@ -134,7 +134,7 @@ env_requeue()
 	done < <(jq -r '.errors[]?' "${plan_file}" 2>/dev/null || true)
 	log "env_requeue checked candidates=$(jq '.actions | length' "${plan_file}" 2>/dev/null || echo 0) skipped=$(jq '.skipped | length' "${plan_file}" 2>/dev/null || echo 0) searches=$(jq '.searches // 0' "${plan_file}" 2>/dev/null || echo 0)"
 
-	local index=0 action repo number reason blocker_id blocker_reason retry retries skip_security issue_url body
+	local index=0 action repo number reason blocker_id blocker_reason retry retries skip_security issue_url body alert_msg
 	# Fields are joined with the unit separator, not a tab: bash collapses runs of
 	# whitespace IFS characters, so an empty field (a plain blocker's reason)
 	# would shift the ones after it.
@@ -142,7 +142,8 @@ env_requeue()
 		index=$((index + 1))
 		# Every field is re-validated before it reaches a path, a comment, or a message.
 		if ! [[ "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "${number}" =~ ^[1-9][0-9]*$ && "${blocker_id}" =~ ^[0-9]+$ ]] \
-			|| ! [[ "${blocker_reason}" =~ ^[a-z0-9-]*$ && "${reason}" =~ ^[a-z_]+$ ]]; then
+			|| ! [[ "${blocker_reason}" =~ ^[a-z0-9-]*$ && "${reason}" =~ ^[a-z_]+$ ]] \
+			|| ! [[ "${retry}" =~ ^[0-9]+$ && "${retries}" =~ ^[0-9]+$ ]]; then
 			log "warn env_requeue_bad_action index=${index}"
 			continue
 		fi
@@ -179,7 +180,9 @@ Retry ${retry} of ${max_retries} in ${window_hours}h. After that the queue watch
 				if gh_retry gh api "repos/${repo}/issues/${number}/comments" -f body="${body}" >/dev/null 2>&1; then
 					log "env_requeue exhausted repo=${repo} issue=${number} blocker=${blocker_id} reason=${blocker_reason} retries=${retries}"
 					echo "::warning::Claude issue ${repo}#${number}: ${retries} environment re-queues in ${window_hours}h; automatic re-queue stopped"
-					tg_send_msg "Claude issue re-queue stopped for ${repo}#${number}: ${retries} environment re-queues in ${window_hours}h (latest ${blocker_reason}). The ai:claude-blocked label stays; fix the session environment, then comment /reclarify."$'\n'"Issue: ${issue_url}"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+					alert_msg="Claude issue re-queue stopped for ${repo}#${number}: ${retries} environment re-queues in ${window_hours}h (latest ${blocker_reason}). The ai:claude-blocked label stays; fix the session environment, then comment /reclarify."$'\n'"Issue: ${issue_url}"
+					[ -z "${RUN_URL}" ] || alert_msg+=$'\n'"Run: ${RUN_URL}"
+					tg_send_msg "${alert_msg}" "ERROR" >/dev/null 2>&1 || true
 				else
 					log "warn env_requeue_alert_marker_failed repo=${repo} issue=${number} blocker=${blocker_id}"
 				fi

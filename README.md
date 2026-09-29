@@ -1344,15 +1344,19 @@ about two hours. Each re-queue leaves
 After `CLAUDE_ISSUE_ENV_REQUEUE_MAX` (default 2) re-queues in
 `CLAUDE_ISSUE_ENV_REQUEUE_WINDOW_HOURS` (default 24), it posts
 `<!-- ai:claude-env-requeue-exhausted:v1 … -->`, sends one Telegram ERROR, and
-leaves the label in place. A re-queued issue whose label is still there after
-`CLAUDE_ISSUE_QUEUE_STALE_HOURS` counts as another failed retry. A plain
+leaves the label in place. Retries and the alert are counted per issue, not per
+blocker: a new blocker inside the window sends no second alert. A re-queued
+issue whose label is still there after `CLAUDE_ISSUE_QUEUE_STALE_HOURS` counts as another failed retry. A plain
 `<!-- ai:claude-blocked:v1 -->` blocker (a real §28.C decision) is never
 re-queued. Only markers from owners, members, collaborators, and
 `github-actions[bot]` count. The same watchdog step closes queue items whose
 target issue was closed after queueing, and the pickup's `queue-pending`
 refuses them (`issue_closed: <repo>#<N>`), so a closed issue never starts a
 session. Log prefix: `CLAUDE_ISSUE_QUEUE_WATCHDOG` (`env_requeue requeued`,
-`env_requeue exhausted`, `env_requeue skip`, `closed_target`).
+`env_requeue exhausted`, `env_requeue skip`, `closed_target`). An issue with
+more than 1,000 comments, or a search with more results than were read, is
+logged as `env_requeue_read_failed`, and the issues it could not read are left
+alone.
 
 If `claude_issue_route.py`
 itself errors, clarify falls back to the Codex pipeline with a warning, so no
