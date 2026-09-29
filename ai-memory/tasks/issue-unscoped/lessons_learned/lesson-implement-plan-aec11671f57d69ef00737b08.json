@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T07:17:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When interim text spans more than one sentence or paragraph, give the sunset test one marker per separately removable piece (the opener and every closing or Sunset sentence), not just the opener, or a partial removal passes with an orphaned sentence.",
+  "phase": "implement_plan",
+  "pr_number": 5008,
+  "record_id": "lesson-implement-plan-aec11671f57d69ef00737b08",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4948-protected-path-twin-first-default",
+    "file:tests/test_implement_plan_claude_command.py"
+  ]
+}

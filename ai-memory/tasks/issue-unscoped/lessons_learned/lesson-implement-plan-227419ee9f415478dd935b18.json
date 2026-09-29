@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-29T07:17:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A sunset (removal-trigger) test must assert the absence of every interim text the plan's Rollout names, in every file that carries it (docs included), and a paired presence test must pin the same markers while the interim is live so the sunset guard cannot pass vacuously.",
+  "phase": "implement_plan",
+  "pr_number": 5008,
+  "record_id": "lesson-implement-plan-227419ee9f415478dd935b18",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4948-protected-path-twin-first-default",
+    "file:tests/test_implement_plan_claude_command.py",
+    "file:agents.md",
+    "file:docs/operations/master-session.md"
+  ]
+}
