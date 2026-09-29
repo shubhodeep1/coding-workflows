@@ -172,3 +172,45 @@ No `TODO`, `FIXME`, or `HACK` debt marker was found in the scoped workflow and s
 | Code modularization | 2 workflows, shared helper, and one new module; review callers additionally | Medium |
 | Expression size reduction | 1 workflow and 1 extracted script | Medium |
 | Medium/Low fixes | Approximately 8 existing workflow/script files | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-29)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` authorizes implementation as described; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` identifies a possible saving that must not be auto-implemented because a protected behavior could change. Counts below are logical calls on the identified path, excluding retries.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — NEEDS_VERIFICATION.** **Calls:** `scripts/auto_release_stable.sh:162-176`. **Current → proposed:** three reads → one repository-wide runs read. **Endpoints:** three `GET /repos/{owner}/{repo}/actions/workflows/{workflow}/runs` queries → `GET /repos/{owner}/{repo}/actions/runs`. **Evidence:** `runs_json`, `promote_runs_json`, and `legacy_runs_json` separately inspect runs for activity; `runs_json` also supplies the gate’s failed-attempt count at `scripts/auto_release_stable.sh:182-193`. **Proposed fix:** Replace the three reads with one run-inventory helper in `scripts/auto_release_stable.sh` that filters by workflow identity and retains the gate’s `status`, `head_sha`, `head_branch`, `conclusion`, and `created_at` checks. **Safety rationale:** The existing calls each return 30 runs *per workflow*; a repository-wide first page need not contain those same runs, so filter and completeness equivalence is unproved. **Downstream signal:** Before changing this guard, compare both approaches on a repository with more than 100 unrelated recent runs and at least 30 runs in each target workflow; verify identical active-run and failed-attempt decisions, authentication, and API-failure behavior.
+
+- **MERGE-002 — RISKY_SKIP.** **Calls:** `.github/workflows/clarify.yml:582-588`. **Current → proposed:** two reads → one on the successful semantic-cache-enabled path; the cache-disabled path remains one. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`. **Evidence:** The step first stores 50 ascending comments in `ISSUE_COMMENTS_FILE`, then fetches the same ascending thread with `--paginate` at 100 per page for `THREAD_HISTORY_FILE`. **Proposed fix:** If manually approved, derive the bounded prompt file and full history from one validated paginated response, while retaining the existing cache-bypass and prompt-fetch failure paths. **Safety rationale:** The second call is paginated and has different failure handling; consolidating it can change page-boundary and fail-open behavior. **Downstream signal:** Do not auto-implement; manually test histories crossing both the 50- and 100-comment boundaries and failures on later pages, checking both output files and cache bypass.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — RISKY_SKIP.** **Calls:** `scripts/review_merge_train.sh:257-261` and `scripts/review_merge_train.sh:275-287`; existing-marker caller at `scripts/review_merge_train.sh:354-387`. **Current → proposed:** two reads → one when an existing marker is found. **Endpoints:** paginated `GET /repos/{owner}/{repo}/issues/{pr}/comments`, followed by `GET /repos/{owner}/{repo}/issues/comments/{comment_id}`. **Evidence:** `_mt_find_marker_comment_id` selects a comment using its body but returns only its ID; `_mt_upsert_comment` then re-fetches that comment’s body to decide whether to PATCH. **Proposed fix:** Have `_mt_find_marker_comment_id` return the selected ID *and body*, and pass both to `_mt_upsert_comment`; retain a fresh-read fallback when the snapshot cannot be trusted. **Safety rationale:** The first read is paginated, and the second may observe an intervening comment edit that a cached body would miss. **Downstream signal:** Do not auto-implement; manually review concurrent comment-edit behavior, marker selection across pages, and whether retaining the fresh body check is required.
+
+- **REUSE-002 — RISKY_SKIP.** **Calls:** `scripts/gh_helpers.sh:1238-1244` and `scripts/gh_helpers.sh:1358-1364`, invoked together at `.github/workflows/review_autofix.yml:6567-6586`. **Current → proposed:** two reads → one when the peer probe finds no peer and the budget probe runs. **Endpoint:** both call branch-filtered `GET /repos/{owner}/{repo}/actions/runs?per_page=30`. **Evidence:** The two helpers request the same branch snapshot but select different run statuses from it. **Proposed fix:** If manually approved, pass a validated response from `autofix_retrigger_has_inflight_peer` to `autofix_changes_lost_head_retry_consumed`, retaining both helpers’ output keys and separate failure decisions. **Safety rationale:** These are dispatch-dedup probes: the run set can change between reads, and the peer probe fails open while the retry-budget probe fails closed. **Downstream signal:** Do not auto-implement; manually review run-arrival races, probe failures, and preservation of `AUTOFIX_PEER_CHECK` and `AUTOFIX_CHANGES_LOST_BUDGET` logs before sharing a snapshot.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — the seven reads are in standalone stall recovery; batching requires manual completeness and fallback review.
+- API-002: RISKY_SKIP — both tracker-comment reads are paginated and occur in the race-defending poller.
+- API-003: RISKY_SKIP — the PR reads belong to a fallback following a paginated timeline read; preserve partial-failure behavior manually.
+
+### Summary Counts
+
+Net-new findings only; Deep Audit cross-references are excluded.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | MERGE-001 |
+| RISKY_SKIP | 3 | MERGE-002, REUSE-001, REUSE-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
