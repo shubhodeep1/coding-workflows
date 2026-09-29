@@ -101,6 +101,8 @@ HEREDOC_OPEN_WRITE = "cd /repo && python3 - <<'PY' 2>&1\nwith open('CLAUDE.md', 
 		"python3 -W ignore - <<'EOF'\nPath('x').write_text('y')\nEOF",
 		"python3 -- - <<'EOF'\nopen(p, 'w').write('x')\nEOF",
 		"python3 -I -- <<'EOF'\nopen(p, 'w').write('x')\nEOF",
+		"python3 - <<-'EOF'\n\topen(p, 'w').write('x')\n\tEOF",
+		"cat <<-'A'\n\tnotes\n\tA\npython3 - <<'B'\nopen(p, 'w').write('x')\nB",
 	],
 )
 def test_inline_interpreter_writes_are_classed(command):
@@ -141,6 +143,7 @@ def test_inline_interpreter_writes_are_classed(command):
 		"python3 -I -- -c \"open('x', 'w')\"",
 		"python3 -- -m mod - <<'EOF'\nopen(p, 'w').write('x')\nEOF",
 		"python3 -- tool.py - <<'EOF'\nopen(p, 'w').write('x')\nEOF",
+		"python3 - <<-'A'\n\tprint(open('a').read())\n\tA\ncat <<'B'\nopen(p, 'w')\nB",
 	],
 )
 def test_reads_scripts_and_data_are_not_classed(command):
