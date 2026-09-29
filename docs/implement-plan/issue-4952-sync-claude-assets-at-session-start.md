@@ -7,14 +7,14 @@
 - Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: `[claude-twin-sync]` on the phase 1 PR (master session), then `/reclarify` or a direct wake
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: phase 1 edits `.claude/**` (commands and the session-start hook), so it stops before it starts (CLAUDE.md §28.C). The protected-path question is posted on #4952 with `ai:claude-blocked`.
+- Last note: phase 1 implemented twin-first (Q40): only the `workflow-templates/.claude/**` twins changed; the phase PR carries a `hold` claim and waits for the master's `[claude-twin-sync]` of the four twins into `.claude/` (the hook needs the Q62/Q64 window).
 
 ## Phases
-1. [ ] Phase 1 — asset sync in the commands, drift log in the hook, tests, docs — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/hooks/session-start.sh`
+1. [ ] Phase 1 — asset sync in the commands, drift log in the hook, tests, docs — phase PR open, twin sync pending; review rounds: 0; interventions: 0 — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/hooks/session-start.sh`
    - Edit the `workflow-templates/.claude/**` twins first, then copy them into `.claude/` byte-identical.
    - `implement-plan-claude.md`: `### Claude-asset sync` under `## Helpers`, cited from step 2, step 7 Blocked, and step 7a.
    - `implement-issue-claude.md` step 4: the resume runs the sync through `/implement-plan-claude` step 2.
@@ -45,8 +45,12 @@
 - AD-8 [plan, 2026-09-29] Which diff decides "stale"? — Picked: A — three-dot `HEAD...origin/<default>`. Alternatives: B — two-dot. Why: a branch's own guard edits are not staleness. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] Put new hook behaviour tests in their own pytest file next to a plain-script contract test, and register that file in a `ci.yml` step, rather than extending the plain-script runner. (files: tests/test_session_start_claude_assets_drift.py, .github/workflows/ci.yml)
 
 ## Notes
 - Started by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#4952: deliver`) into session `session_012jKBsy2vcNfjmnK3STfpbp` (permission mode `auto`).
 - Security pass: run (`security_pass_skip.py`: `no skip label`).
 - Phase 1 is protected-path (CLAUDE.md §28.C) and has no `Protected-path approval: phase 1` line yet, so the chain stops before phase 1. The standing operator answer for this case is Q40 twin-first (`docs/operations/master-session.md`); the `session-start.sh` copy additionally needs the Q62/Q64 approval window.
+- Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29) (answered by the repo owner on #4952, comment 5883394764; relayed by master session `session_01LF9aeTnk15B7e9mKy7vDNM`).
+- Plan deviation: the drift-log tests live in the new `tests/test_session_start_claude_assets_drift.py` (pytest, own `ci.yml` step) instead of extending the plain-script `tests/test_session_start_extract_repo_slug.py`; the command-text tests are all in `tests/test_claude_asset_sync_command.py`.
+- Twin-first verification: with the four twins copied over `.claude/` in a scratch worktree, `tests/test_claude_asset_sync_command.py`, `tests/test_session_start_claude_assets_drift.py`, `tests/test_implement_plan_claude_command.py`, `tests/test_implement_issue_claude_command.py`, `tests/test_check_in_status_hand_back.py`, and `tests/test_update_workflows_guardrails.py` pass (196 passed), and `tests/test_session_start_extract_repo_slug.py` prints PASS. On the branch as pushed, only the twin-parity assertions fail, as expected until the sync.
