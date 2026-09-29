@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T16:53:14Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A `^[0-9]+$` env check does not make a value safe for bash arithmetic: leading zeros pass it and `$(( ))` then reads the value as octal or fails on 08/09. Normalise with `$(( 10#${VAR} ))` right after the check.",
+  "phase": "implement_plan",
+  "pr_number": 5098,
+  "record_id": "lesson-implement-plan-67e98cbe4f0c1573ec0673b8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4927-paginate-review-dispatch-runs",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T16:53:14Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Keep an input's validation on the line after its fallback, not after an unrelated early return: two reviewers read a re-validated env fallback as unchecked because the check sat several lines further down.",
+  "phase": "implement_plan",
+  "pr_number": 5098,
+  "record_id": "lesson-implement-plan-6d2f62192e9ff57bcdc58969",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4927-paginate-review-dispatch-runs",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}

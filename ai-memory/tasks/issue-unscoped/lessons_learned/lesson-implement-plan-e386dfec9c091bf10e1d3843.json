@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T16:53:14Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A lookback window chosen for live runs (the poller's zombie cutoff) is too short for a caller that looks for completed failures: a run can end at its job timeout just before it leaves that window. Size a failed-run lookup's window as the run budget plus the retry cadence.",
+  "phase": "implement_plan",
+  "pr_number": 5098,
+  "record_id": "lesson-implement-plan-e386dfec9c091bf10e1d3843",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4927-paginate-review-dispatch-runs",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}
