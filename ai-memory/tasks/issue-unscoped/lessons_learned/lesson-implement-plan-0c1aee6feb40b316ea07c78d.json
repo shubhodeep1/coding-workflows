@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T00:05:53Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Any rule that treats a merged PR as an issue's finished work must accept the issue's own target branch (its `Integration branch:` / `Target branch:` line, or `orchestrator/project-<N>` for managed children), not only the default branch; issue-mode and orchestrator projects routinely merge into branches other than the default.",
+  "phase": "implement_plan",
+  "pr_number": 4842,
+  "record_id": "lesson-implement-plan-0c1aee6feb40b316ea07c78d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4813-close-sweep-target-branch-merges",
+    "file:scripts/orchestrate_poll_process.sh",
+    "file:.github/workflows/issue_pr_status.yml"
+  ]
+}
