@@ -1114,10 +1114,20 @@ def test_issue_4976_git_source_reads_the_reviewed_commit_only(tmp_path):
 
 
 @pytest.mark.parametrize("path", ["../README.md", "./README.md", "/etc/passwd", "docs//a.md", "docs/../README.md", "", "a\nb", "a\\b",
-	"README.md\0"])
+	"README.md\0", "foo:bar", "docs:v1/file.md", "a:b:c"])
 def test_issue_4976_git_source_refuses_unsafe_paths(tmp_path, path):
 	root, sha = _git_repo(tmp_path)
 	assert nonblocking.git_source(root, sha)(path) is None
+
+
+def test_issue_4976_git_source_refuses_a_colon_path_that_exists(tmp_path):
+	# Review round 1 on PR #5034: a path holding ``:`` is refused even when the
+	# reviewed commit tracks it, so the read never goes through git's
+	# ``<commit>:<path>`` parsing with a second colon.
+	root, sha = _git_repo(tmp_path, {"docs:a.md": ["colon", "named"], "docs/a.md": ["first", "second"]})
+	read = nonblocking.git_source(root, sha)
+	assert read("docs:a.md") is None
+	assert read("docs/a.md") == ["first", "second"]
 
 
 @pytest.mark.parametrize("commit", ["HEAD", "main", "abc123", "G" * 40, "a" * 41, "--output=x", "a" * 40 + "\n"])

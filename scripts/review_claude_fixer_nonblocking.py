@@ -523,8 +523,13 @@ def _fence_marker(line: str) -> str | None:
 
 
 def _safe_source_path(path: str) -> bool:
-	"""A relative repository path with no empty, ``.`` or ``..`` segment and no control characters."""
-	if not path or path.startswith("/") or any(char in path for char in ("\0", "\n", "\r", "\\")):
+	"""A relative repository path with no empty, ``.`` or ``..`` segment, no control characters, and no ``:``.
+
+	Git reads everything after the commit's ``:`` in ``<commit>:<path>`` as a
+	literal path, but a ``:`` is refused anyway so the evidence read never
+	depends on git's revision syntax; no tracked path in this repository
+	contains one."""
+	if not path or path.startswith("/") or any(char in path for char in ("\0", "\n", "\r", "\\", ":")):
 		return False
 	return all(part not in ("", ".", "..") for part in path.split("/"))
 
