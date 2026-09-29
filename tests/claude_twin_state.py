@@ -7,6 +7,8 @@ ahead of `.claude/` (awaiting its sync PR), but `.claude/` may never be ahead
 of the twin. Behaviour tests therefore load the twin, and every former
 byte-parity assert calls `assert_claude_not_ahead` instead:
 
+* an upstream-only path (`UPSTREAM_ONLY_PATHS`, not a twin) → pass, the
+  same exemption as CI's `claude_twin_sync.py check`;
 * the two copies are identical → pass;
 * the `.claude/` copy is missing while the twin exists → pass (a new twin
   file awaiting sync);
@@ -43,7 +45,7 @@ def claude_ahead_reason(rel: str) -> tuple[str, str]:
 	claude_path = CLAUDE_DIR / rel
 	twin_path = TWIN_DIR / rel
 	if rel in _sync.UPSTREAM_ONLY_PATHS:
-		return "ahead", f"{rel} is upstream-only and has no twin"
+		return "ok", ""  # not a twin: exempt, as in `claude_twin_sync.py check`
 	if not twin_path.is_file():
 		return "ahead", f"{twin_path.relative_to(ROOT)} is missing: edit the twin, never .claude/ alone"
 	if not claude_path.exists() or claude_path.read_bytes() == twin_path.read_bytes():

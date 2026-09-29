@@ -41,7 +41,9 @@ Batching contract (CLAUDE.md §15), per `run`:
           reviews; for a merge attempt 1 file list per 100 files, 1 check-run
           list per 100 runs, and 1 combined-status read. Writes (GH_PAT):
           1 push, 1 PR create or body edit, at most 2 label writes, 1 status,
-          1 merge, and 1 close plus 1 comment per stale or duplicate sync PR;
+          1 merge, and 1 close plus 1 comment per stale, duplicate, or
+          orphaned (head branch deleted) sync PR. Git: 1 `ls-remote` for the
+          open sync PRs' branches when there is something to sync;
   output  one JSON summary line on stdout, `CLAUDE_TWIN_SYNC` log lines on
           stderr;
   failure fail closed: any read or git error exits 2 before a merge. Nothing
@@ -90,7 +92,6 @@ REQUIRED_CHECK_NAME = "lint"
 GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 HISTORY_LIMIT = 500
 MAX_PAGES = 20
-SYMLINK_MODE = "120000"
 REGULAR_MODES = frozenset({"100644", "100755"})
 ZERO_SHA = "0" * 40
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -327,7 +328,11 @@ def check_not_ahead(repo: str, base: str, head: str) -> dict:
 		twin = blob_at(repo, head, f"{TWIN_ROOT}/{rel}")
 		if local is None and twin is None:
 			continue
-		if local is None or twin is None or local.sha != twin.sha:
+		if twin is None:
+			violations.append({"path": path, "reason": f"has no twin at {TWIN_ROOT}/{rel}; add the file to the twin and let the sync PR copy it, or delete both copies together"})
+		elif local is None:
+			violations.append({"path": path, "reason": f"deleted while {TWIN_ROOT}/{rel} still exists; the sync never copies a deletion, so delete both copies together"})
+		elif local.sha != twin.sha:
 			violations.append({"path": path, "reason": f"changed to content that differs from {TWIN_ROOT}/{rel}; edit the twin and let the sync PR copy it"})
 	return {"base": base, "head": head, "checked": checked, "violations": violations, "ok": not violations}
 
@@ -545,6 +550,16 @@ def free_branch_name(repo: str, wanted: str, env: dict | None = None) -> str:
 	raise SyncError(f"no free branch name for {wanted}")
 
 
+def origin_sync_branches(repo: str, env: dict | None = None) -> set[str]:
+	"""Every `SYNC_BRANCH_PREFIX*` branch origin holds (one `git ls-remote`)."""
+	branches = set()
+	for line in run_git(repo, ["ls-remote", "--heads", "origin", f"{SYNC_BRANCH_PREFIX}*"], env=env).splitlines():
+		ref = line.split("\t", 1)[-1]
+		if ref.startswith("refs/heads/"):
+			branches.add(ref.removeprefix("refs/heads/"))
+	return branches
+
+
 def open_sync_prs(gh: GitHub) -> list[dict]:
 	prs = gh.get_list(f"repos/{gh.repo}/pulls?state=open")
 	found = []
@@ -565,8 +580,10 @@ def set_label(gh: GitHub, number: int, labels: list[str], wanted: bool) -> None:
 	if wanted and not present:
 		try:
 			gh.write(["api", "-X", "POST", f"repos/{gh.repo}/labels", "-f", f"name={APPROVAL_LABEL}", "-f", f"color={APPROVAL_LABEL_COLOR}", "-f", f"description={APPROVAL_LABEL_DESCRIPTION}"])
-		except SyncError:
-			pass  # 422: the label already exists
+		except SyncError as exc:
+			if "HTTP 422" not in str(exc):
+				raise
+			log(f"label exists name={APPROVAL_LABEL}")  # 422: the label already exists
 		gh.write(["api", "-X", "POST", f"repos/{gh.repo}/issues/{number}/labels", "-f", f"labels[]={APPROVAL_LABEL}"])
 	elif present and not wanted:
 		gh.write(["api", "-X", "DELETE", f"repos/{gh.repo}/issues/{number}/labels/{APPROVAL_LABEL}"])
@@ -590,6 +607,14 @@ def run_sync(repo_root: str, gh: GitHub, ref: str, default_branch: str, owner: s
 	for item in plan["rejected"]:
 		log(f"rejected path={item['path']} reason={item['reason']}")
 	prs = open_sync_prs(gh)
+	if plan["copies"] or plan["conflicts"]:
+		# A PR whose head branch was deleted can never be updated: close it
+		# so the run opens a replacement instead of failing on every trigger.
+		live = origin_sync_branches(repo_root, env=git_auth_env(gh.read_token))
+		for orphan in [pr for pr in prs if pr["head"]["ref"] not in live]:
+			log(f"close orphaned pr=#{orphan['number']} branch={orphan['head']['ref']} reason=head_branch_deleted")
+			close_pr(gh, orphan["number"], f"The head branch `{orphan['head']['ref']}` no longer exists, so this PR cannot be updated; a new sync PR replaces it.")
+		prs = [pr for pr in prs if pr["head"]["ref"] in live]
 	primary = prs[0] if prs else None
 	for extra in prs[1:]:
 		log(f"close duplicate pr=#{extra['number']} primary=#{primary['number']}")

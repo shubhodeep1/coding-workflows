@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4785-twin-first-claude-sync   Final PR: #4804 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #4807
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01S7jAxpFysQWjX6bnYiFJc4   safety net trig_011EbHCrscDFm7m8WK4ugyaz   hand-back trig_015BGv5vgCsdrRTbc7uYUWgj
-- Last updated: 2026-09-28
-- Last note: phase 1 PR #4807 opened (sync script + workflow, gate/sweep skips, CI sync-state step, tests on the twin, docs); waiting on its review round.
+- Check-in: checker session_01S7jAxpFysQWjX6bnYiFJc4   safety net trig_01RN4GreEVToDoVRMbvoVG4V   hand-back trig_01VxHtC3i2H4meVdBzzkwGtr
+- Last updated: 2026-09-29
+- Last note: review round 1 (head 070bf5fd806f): all 5 consensus findings valid and fixed in one [claude-autofix] commit (orphaned sync PR on a deleted head branch, label-create errors, violation messages, dead constant, upstream-only twin-state exemption); waiting on round 2.
 
 ## Phases
-1. [ ] Phase 1 — twin-first docs, sync workflow, sync-state checks (no `.claude/**` path is edited; protected paths: none)   — PR #4807 open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — twin-first docs, sync workflow, sync-state checks (no `.claude/**` path is edited; protected paths: none)   — PR #4807 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -40,6 +40,7 @@
 
 ## Lessons
 - [source:plan-deviation] A CI check over a commit range must only run on ranges that are one PR's net change; a promotion range (main → stable) can hold a sync followed by a newer source change and read as drift. (files: .github/workflows/ci.yml, scripts/claude_twin_sync.py)
+- [source:intervention] A driver that updates an existing PR's head branch must first confirm the branch still exists on origin and close the PR when it does not; otherwise a deleted branch turns every later scheduled run into the same failed fetch. (files: scripts/claude_twin_sync.py)
 
 ## Notes
 - Security pass: run (`security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}`).

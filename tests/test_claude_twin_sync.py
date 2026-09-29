@@ -254,6 +254,20 @@ def test_check_fails_for_a_claude_only_new_file_and_a_one_sided_delete(repo):
 	}
 
 
+def test_check_violation_messages_name_the_side_that_is_missing(repo):
+	base = git(repo, "rev-parse", "HEAD")
+	write(repo, claude("commands/only-here.md"), "x\n")
+	(repo / claude("scripts/s.py")).unlink()
+	write(repo, claude("commands/a.md"), "ahead\n")
+	head = commit(repo, "ahead")
+	reasons = {v["path"]: v["reason"] for v in sync.check_not_ahead(str(repo), base, head)["violations"]}
+	assert reasons[claude("commands/only-here.md")].startswith("has no twin at ")
+	assert "delete both copies together" in reasons[claude("commands/only-here.md")]
+	assert reasons[claude("scripts/s.py")].startswith("deleted while ")
+	assert "edit the twin" not in reasons[claude("scripts/s.py")]
+	assert "edit the twin" in reasons[claude("commands/a.md")]
+
+
 def test_check_allows_a_synced_delete_and_upstream_only_edits(repo):
 	base = git(repo, "rev-parse", "HEAD")
 	(repo / claude("scripts/s.py")).unlink()
@@ -539,6 +553,60 @@ def test_run_picks_a_free_branch_name(repo):
 	git(repo, "push", "-q", "origin", f"{main}:refs/heads/claude/claude-twin-sync-{main[:12]}")
 	summary = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")
 	assert summary["branch"] == f"claude/claude-twin-sync-{main[:12]}-2"
+
+
+def test_run_replaces_a_sync_pr_whose_branch_was_deleted(repo):
+	_twin_ahead(repo)
+	gone = {"number": 40, "body": "", "labels": [],
+		"head": {"ref": "claude/claude-twin-sync-deleted", "sha": "a" * 40, "repo": {"full_name": "o/r"}}}
+	gh = FakeGitHub(prs=[gone])
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert ["api", "-X", "PATCH", "repos/o/r/pulls/40", "-f", "state=closed"] in gh.writes
+	assert any("no longer exists" in part for w in gh.wrote("repos/o/r/issues/40/comments") for part in w)
+	assert summary["action"] == "opened" and summary["pr"] == 41
+
+
+def test_run_keeps_a_live_duplicate_when_the_oldest_branch_was_deleted(repo):
+	_twin_ahead(repo)
+	branch = sync.run_sync(str(repo), FakeGitHub(), "HEAD", "main", "owner", "77")["branch"]
+	git(repo, "fetch", "-q", "origin")
+	gone = {"number": 39, "body": "", "labels": [],
+		"head": {"ref": "claude/claude-twin-sync-deleted", "sha": "a" * 40, "repo": {"full_name": "o/r"}}}
+	gh = FakeGitHub(prs=[gone, _pr_from_origin(repo, branch, number=40)])
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["pr"] == 40
+	assert ["api", "-X", "PATCH", "repos/o/r/pulls/39", "-f", "state=closed"] in gh.writes
+	assert ["api", "-X", "PATCH", "repos/o/r/pulls/40", "-f", "state=closed"] not in gh.writes
+
+
+class _LabelGitHub(FakeGitHub):
+	def __init__(self, create_error):
+		super().__init__()
+		self.create_error = create_error
+
+	def write(self, args):
+		if args[:4] == ["api", "-X", "POST", f"repos/{self.repo}/labels"]:
+			self.writes.append(args)
+			raise sync.SyncError(f"gh api -X POST failed: {self.create_error}")
+		return super().write(args)
+
+
+def test_set_label_tolerates_only_an_existing_label():
+	exists = _LabelGitHub("gh: Validation Failed (HTTP 422)")
+	sync.set_label(exists, 40, [], True)
+	assert exists.wrote(f"labels[]={sync.APPROVAL_LABEL}")
+	denied = _LabelGitHub("gh: Resource not accessible by integration (HTTP 403)")
+	with pytest.raises(sync.SyncError, match="HTTP 403"):
+		sync.set_label(denied, 40, [], True)
+	assert denied.wrote(f"labels[]={sync.APPROVAL_LABEL}") == []
+
+
+def test_twin_state_exempts_upstream_only_paths():
+	import sys
+	sys.path.insert(0, str(ROOT / "tests"))
+	from claude_twin_state import claude_ahead_reason
+	for rel in sorted(sync.UPSTREAM_ONLY_PATHS):
+		assert claude_ahead_reason(rel) == ("ok", "")
 
 
 def test_run_cli_requires_tokens(repo, monkeypatch):
