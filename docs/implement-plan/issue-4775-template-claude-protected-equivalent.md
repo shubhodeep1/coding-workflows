@@ -1,29 +1,34 @@
 # Implement-Plan Log — Treat workflow-templates/.claude as protected-equivalent for unattended authorization
 
-- Plan: docs/plans/issue-4775-template-claude-protected-equivalent-plan.md
+- Plan: docs/completed/issue-4775-template-claude-protected-equivalent-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4775
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4678-edit-files-without-python-heredocs
 - Project branch: claude/implement-plan-issue-4775-template-claude-protected-equivalent   Final PR: #4783 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
-- Activation: not started
-- Waiting on: PR #4819
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4678-edit-files-without-python-heredocs): the project ends after the final merge, and the final-merge stage closes #4775 and labels it `ai:merged`
+- Waiting on: completion PR (the number is in the completion 1/1 stage report)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker, safety net, and hand-back ids are in the stage report and the next `— resume.` block
-- Last updated: 2026-09-28
-- Last note: review round 1 on PR #4819: fixed the `.pyc`-named symlink bypass (and committed bytecode, which the sync copies) in tests/test_claude_template_parity.py; rejected the pinned-digest finding (intended design).
+- Check-in: checker session_01QiSAKZHye73dtZzDqHuRaw (reused)   safety net and hand-back in the completion 1/1 stage report
+- Last updated: 2026-09-29
+- Last note: validation 1/3 skipped by operator (Q1: B on #4775); plan moved to docs/completed/ in the completion PR; next: final-merge 1/1.
 
 ## Phases
-1. [ ] Phase 1 — protected-equivalent template tree: CLAUDE.md §23.I/§28.C and the template parity contract test (CLAUDE.md, tests/test_claude_template_parity.py [new], tests/test_permission_prompts.py, .github/workflows/ci.yml, agents.md, changelog.d/4775-template-claude-protected-equivalent.md [new]); protected paths: none   — PR #4819 open (waiting); review rounds: 1; interventions: 0
+1. [x] Phase 1 — protected-equivalent template tree: CLAUDE.md §23.I/§28.C and the template parity contract test (CLAUDE.md, tests/test_claude_template_parity.py [new], tests/test_permission_prompts.py, .github/workflows/ci.yml, agents.md, changelog.d/4775-template-claude-protected-equivalent.md [new]); protected paths: none   — PR #4819 merged 2026-09-28 (ad00041); review rounds: 1; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-28: CONFORMANT — no fixes (pre-validation; security skipped; audited at ad00041). Every plan criterion maps to merged code; 707 tests pass (the plan's suite plus all 11 `test_template_parity` files); `yamllint -s` and `actionlint` pass on `ci.yml`; all five plan mutations fail the new test on a scratch worktree.
 
 ## Security pass
 - Skipped: `Security pass: skip (ai:security: automation-produced issue)` in the plan header.
 
 ## Validation
+- Cycle 1 — 2026-09-28: not dispatched. `validate.yml` ("Authorize explicit validation target") accepts a `target_ref` only when its single open PR goes into `main`; final PR #4783 goes into the #4678 project branch, so the run would fail with `target PR binding is missing or ambiguous` (as #4665's run 36378523375 did). Fix in progress: #4734. Stopped at `Status: BLOCKED` and asked on #4775 (comment 5872404887).
+- Skipped by operator — 2026-09-28: `Validation: skipped by operator (covered by #4678's project validation)`, answer Q1: B on #4775 (comment 5880778711, then `/reclarify`). This project changes only CLAUDE.md wording and a CI contract test, and #4678's own validation runs on a branch that will contain it.
 
 ## Completion
+- Completion PR (claude/implement-plan-issue-4775-template-claude-protected-equivalent-complete) open 2026-09-29 — doc moved to docs/completed/issue-4775-template-claude-protected-equivalent-plan.md
+- Final PR #4783 draft (into claude/implement-plan-issue-4678-edit-files-without-python-heredocs)
 
 ## Activation
 
@@ -35,9 +40,12 @@
 
 ## Lessons
 - [source:intervention] A tree-parity or allow-list walker must check symlinks before any name-based skip, and may skip `.gitignore`d runtime output (`__pycache__/`, `*.pyc`) only while git does not track it, because the `.claude/` sync copies every regular file (`find -type f`). (files: tests/test_claude_template_parity.py, .github/workflows/update_workflows.yml)
+- [source:validation] An issue-mode project whose base is another project's branch cannot run `validate.yml` with `target_ref` until the explicit-target authorization accepts a final PR into a non-default base; check that binding before dispatching, and plan the validation route (wait for the fix, or an operator skip covered by the parent project's validation) up front. (files: .github/workflows/validate.yml)
 
 ## Notes
 - Invoking session: session_013fp3SZXJQE3XBJt3SiWYkw (started by the Claude issue dispatcher routine trig_018FzWWEXvLsvqk8uNUGDReS, permission mode auto).
 - Security pass: `security_pass_skip.py` printed `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`.
 - Issue progress comment id: 5867385117.
 - Base branch check (2026-09-28): the only PR whose head is the base branch is #4684 (open, draft, into `main`), so the base has not moved.
+- Validation 1/3 stage (2026-09-28) stopped at `Status: BLOCKED` on the validation target binding; the project checker session_01QiSAKZHye73dtZzDqHuRaw was kept idle with no check-in pending.
+- Completion 1/1 stage (2026-09-29): session_017oms6bdTdZpE3Tir7NJHWB, started by the dispatcher routine trig_01YLcgSLUGqzAaex4FD2T4PP after the `/reclarify`. Base branch check: #4684 is still open (draft, into `main`), so the base has not moved. The project branch already contained the base branch (no sync push). Re-ran the plan's tests plus `tests/test_lint_plan_archival_completeness.py` on the project branch: 105 passed. The zombie-checker cleanup (`list_sessions`) and the stale Routine sweep (`list_triggers`) were denied by the Auto-mode classifier and were skipped.
