@@ -5,19 +5,19 @@
 - Source issue: shubhodeep1/coding-workflows#4934   Base branch: main   Progress comment: 5883200031
 - Project branch: claude/implement-plan-issue-4934-chain-same-file-security-followups   Final PR: #4996 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 1/3 — review round
 - Activation: not started
-- Waiting on: conformance fix 1 PR (the PR carrying this log update)
+- Waiting on: PR #5055 (conformance fix 1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01WHRV2iQsVtX3tMPC7D9ENh (reused)   safety net and hand-back: see the stage report and the issue progress comment
 - Last updated: 2026-09-29
-- Last note: conformance run 1 CONFORMANT with one EVIDENCE-BASED concern (a rate-limit HTTP 403 on a dependency read started the dependent item); fixed in the conformance fix 1 PR (341 tests, ruff, shellcheck clean)
+- Last note: PR #5055 review round 1: one valid finding fixed (the rate-limit pattern now includes HTTP 429, matching `_is_gh_rate_limit`), four rejected with reasons on the PR (341 tests, ruff clean)
 
 ## Phases
 1. [x] Phase 1 — chain same-file security follow-ups and hold dependent queue items   — PR #5002 merged 2026-09-29 (merged by the operator after the review-round-1 block, answer C on #4934); review rounds: 1; interventions: 0
 
 ## Conformance
-- Run 1 — 2026-09-29: CONFORMANT (Correctness: CONCERNS) — fix PR: conformance fix 1 (pre-security)
+- Run 1 — 2026-09-29: CONFORMANT (Correctness: CONCERNS) — fix PR #5055 (pre-security); review rounds: 1
 
 ## Security pass
 

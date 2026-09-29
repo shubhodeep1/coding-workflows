@@ -168,7 +168,7 @@ DEPENDS_ON_VALUE_RE = re.compile(r"^[1-9][0-9]{0,9}(?:,[1-9][0-9]{0,9}){0,%d}$" 
 # so it is retried like any other failure (same pattern as `_is_gh_rate_limit`
 # in scripts/gh_helpers.sh), never read as "can never succeed".
 DEPENDENCY_INACCESSIBLE_RE = re.compile(r"HTTP 40[34]\b")
-DEPENDENCY_RATE_LIMIT_RE = re.compile(r"(?i)rate limit|abuse detection|secondary rate")
+DEPENDENCY_RATE_LIMIT_RE = re.compile(r"(?i)rate limit|abuse detection|secondary rate|HTTP 429")
 QUEUE_DEPENDENCY_READ_LIMIT = 30
 
 # Pull-request fix items (CLAUDE.md §26.H): the catch-all sweep
