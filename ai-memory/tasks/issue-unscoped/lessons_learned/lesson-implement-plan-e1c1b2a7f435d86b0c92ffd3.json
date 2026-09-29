@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T20:46:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Under twin-first, a review of a twin-only head finds the runtime copy behind the twin, and `check_in_status.py` in PR mode (without `--hand-back`) ignores a `hold`, so that hand-off starts a review-round stage anyway. A stage that has nothing to push must stop without re-arming the checker on that head.",
+  "phase": "implement_plan",
+  "pr_number": 5133,
+  "record_id": "lesson-implement-plan-e1c1b2a7f435d86b0c92ffd3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:.claude/scripts/check_in_status.py"
+  ]
+}

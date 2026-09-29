@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T20:46:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An argument scanner that models an interpreter's own switches must treat `--` as the end of options, like the first operand: after it `-c` and `-m` are file names, while a following `-` (or nothing) still reads stdin.",
+  "phase": "implement_plan",
+  "pr_number": 5133,
+  "record_id": "lesson-implement-plan-6d696656f696576ea455d123",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}

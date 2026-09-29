@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T20:46:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A classifier that reads an interpreter's switches must stop at the first operand (the script, `-`, or `-m`) and step over switch values (`-W`, `-X`), or a script's own `-c` argument reads as inline code; and a `<<<` herestring is not a heredoc operator when heredoc bodies are bound to commands by count.",
+  "phase": "implement_plan",
+  "pr_number": 5133,
+  "record_id": "lesson-implement-plan-1f0c7741458becebe6c034f2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}
