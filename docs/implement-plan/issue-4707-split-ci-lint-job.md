@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4707-split-ci-lint-job   Final PR: #4874 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (the PR carrying this log update)
+- Waiting on: PR #4884
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified locally (step parity vs main: 122 steps once each; all ci.yml-reading tests pass; actionlint + yamllint clean); phase PR opened.
+- Last note: review round 1 on PR #4884: fixed the one consensus finding (`_lint_steps` read the `static-checks` job) by adding `_guard_job_steps` and keeping `_lint_steps` as an alias (AD-7); project branch synced with main.
 
 ## Phases
-1. [ ] Phase 1 — split `ci.yml` into parallel jobs behind an aggregate `lint`, raise release `validate-scripts` budget, update tests and docs   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — split `ci.yml` into parallel jobs behind an aggregate `lint`, raise release `validate-scripts` budget, update tests and docs   — PR #4884 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -34,9 +34,11 @@
 - AD-4 [plan, 2026-09-29] How to group the remaining test steps? — Picked: A — four jobs over contiguous ranges of the current step order, balanced by measured time. Alternatives: B — one job per step; C — regroup steps by topic across the file. Why: keeps order-dependent steps (inventory parity before the log collector gate) together and keeps the diff reviewable. Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-09-29] The release gates' `validate-scripts` jobs take 37 minutes against 45: split or raise? — Picked: A — raise both to 60 minutes with a note. Alternatives: B — apply the same job split to both release workflows. Why: the smallest safe change (§5); in `test-and-mark-stable.yml` the job runs beside multi-hour e2e jobs, so splitting would not shorten the release. Applied in: phase 1 PR. Status: pending review
 - AD-6 [plan, 2026-09-29] New job budgets? — Picked: A — 15 minutes for `static-checks`, 20 for each test job and poll group, 5 for `lint`. Alternatives: B — 30 for every job; C — 10 for every job. Why: about 3x the measured runtime per job, and the whole run still ends well under the old 45. Applied in: phase 1 PR. Status: pending review
+- AD-7 [phase 1/1 — review round 1, 2026-09-29] The reviewers flag `_lint_steps` in `tests/test_ci_shared_shell_block_guard.py`, which now reads the `static-checks` job: how to fix the name? — Picked: A — add `_guard_job_steps()`, switch both callers to it, and keep `_lint_steps` as an alias. Alternatives: B — keep the name and only add a docstring; C — rename in place. Why: fixes the misleading name without removing an existing identifier (§6); B leaves the name the reviewers flagged. Applied in: PR #4884. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] When splitting a long CI job, move steps as verbatim text blocks and verify parity (every old step name exactly once, bodies byte-identical) against the base branch's workflow before editing anything else; YAML round-trips reformat run blocks. (files: .github/workflows/ci.yml)
+- [source:intervention] When a CI step moves to another job, rename (alias, §6) the test helpers and constants that name the old job in the same change; reviewers read a stale job name as a missing guard. (files: tests/test_ci_shared_shell_block_guard.py)
 
 ## Notes
 - Issue mode; security pass: run (`security_pass_skip.py`: no skip label).

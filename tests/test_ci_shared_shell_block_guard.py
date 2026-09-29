@@ -63,13 +63,19 @@ WATCHDOG_SCANNED = ",".join(
 )
 
 
-def _lint_steps() -> list[dict]:
+def _guard_job_steps() -> list[dict]:
+	"""Steps of the job that runs the guard (`GUARD_JOB_ID`), not the aggregate `lint` job."""
 	workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
 	return workflow["jobs"][GUARD_JOB_ID]["steps"]
 
 
+# Former name, kept as an alias (CLAUDE.md §6); since #4707 the guard runs in
+# `static-checks`, not in `lint`, so new code calls `_guard_job_steps`.
+_lint_steps = _guard_job_steps
+
+
 def _guard_body() -> str:
-	matching_steps = [step for step in _lint_steps() if step.get("name") == GUARD_STEP_NAME]
+	matching_steps = [step for step in _guard_job_steps() if step.get("name") == GUARD_STEP_NAME]
 	if len(matching_steps) != 1:
 		raise AssertionError(f"Expected exactly one {GUARD_STEP_NAME!r} step")
 	return matching_steps[0]["run"]
@@ -131,7 +137,7 @@ def _run_guard(fixture_root: Path) -> subprocess.CompletedProcess[str]:
 
 class GuardOrderingContractTest(unittest.TestCase):
 	def test_guard_immediately_follows_checkout_and_precedes_setup_install_lint_and_tests(self) -> None:
-		step_names = [step.get("name") for step in _lint_steps()]
+		step_names = [step.get("name") for step in _guard_job_steps()]
 		checkout_index = step_names.index("Checkout repository")
 		guard_index = step_names.index(GUARD_STEP_NAME)
 		self.assertEqual(guard_index, checkout_index + 1)
