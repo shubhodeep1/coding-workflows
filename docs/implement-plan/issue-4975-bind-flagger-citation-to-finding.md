@@ -4,18 +4,18 @@
 - Source issue: shubhodeep1/coding-workflows#4975
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Base branch: claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason
-- Project branch: claude/implement-plan-issue-4975-bind-flagger-citation-to-finding   Final PR: pending (draft)
+- Project branch: claude/implement-plan-issue-4975-bind-flagger-citation-to-finding   Final PR: #5026 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (head claude/implement-plan-issue-4975-bind-flagger-citation-to-finding-phase-1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from the #4586 project branch; phase 1 starting.
+- Last note: phase 1 implemented and verified (186 tests in the two review suites, 693 in the 20 related suites, ruff); phase PR opened.
 
 ## Phases
-1. [ ] Phase 1 — bind the flagger citation to a structured finding record (scripts/review_claude_fixer_nonblocking.py, scripts/review_run_reviewers.sh header sentence, tests, README.md, agents.md, changelog fragment)
+1. [ ] Phase 1 — bind the flagger citation to a structured finding record (scripts/review_claude_fixer_nonblocking.py, scripts/review_run_reviewers.sh header sentence, tests, README.md, agents.md, changelog fragment)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -36,6 +36,7 @@
 - AD-5 [plan, 2026-09-29] Tell reviewers where the `consensus_id:` line goes? — Picked: A — add one sentence to the cross-pollination header. Alternatives: B — no prompt change. Why: well-behaved reviewers keep demotion; minimal change. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] Tightening how a reviewer's raw output is parsed breaks test fixtures that model that output loosely; search every test that writes review_<slug>.txt (tests/test_review_autofix_claude_fixer_mode.py as well as the script's own suite) before changing the parser. (files: tests/test_review_autofix_claude_fixer_mode.py, scripts/review_claude_fixer_nonblocking.py)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude from #4975; security pass skipped per plan header.
