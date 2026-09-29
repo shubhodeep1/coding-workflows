@@ -7,14 +7,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #4987
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
 - Last note: phase 1 implemented and verified (unit, contract, integration, shellcheck, drift check); phase PR opened, waiting on the Claude-fixer review
 
 ## Phases
-1. [ ] Phase 1 — paginated, completeness-aware PR-named review dispatch lookup (`scripts/orchestrate_poll_process.sh` helper + 3 call sites, tests, agents.md, README.md, changelog)   — PR (this phase) open; review rounds: 0; interventions: 0
+1. [ ] Phase 1 — paginated, completeness-aware PR-named review dispatch lookup (`scripts/orchestrate_poll_process.sh` helper + 3 call sites, tests, agents.md, README.md, changelog)   — PR #4987 open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
