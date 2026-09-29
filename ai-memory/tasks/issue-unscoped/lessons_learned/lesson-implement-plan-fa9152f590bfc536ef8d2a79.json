@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T04:02:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A summary field named first/last over records loaded from several per-session log files must take the min/max of the timestamps, not the first/last record: file-name order is not time order.",
+  "phase": "implement_plan",
+  "pr_number": 4932,
+  "record_id": "lesson-implement-plan-fa9152f590bfc536ef8d2a79",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4750-classifier-outage-get-session",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}
