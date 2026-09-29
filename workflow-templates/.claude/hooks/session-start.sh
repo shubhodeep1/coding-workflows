@@ -215,6 +215,53 @@ verify_token() {
   fi
 }
 
+# Log one structured line when the checkout lacks default-branch changes to
+# .claude/hooks/** or .claude/settings.json (issue #4952). A session runs
+# the hooks of the branch it has checked out, so a long-running branch keeps
+# running a guard version the default branch has since fixed; the commands'
+# "Claude-asset sync" merges the default branch in, and this line makes the
+# drift visible at session start:
+#   [session-start] claude_assets=stale behind=<n> files=<comma list>
+# The three-dot diff counts only changes the default branch holds and HEAD
+# lacks, so a branch's own guard edits are not reported. At most one bounded
+# fetch; offline, timeout, or auth failures fall back to the existing
+# origin/<default> ref, and every error path returns 0 so the hook never
+# fails. Local git only, no GitHub API calls (CLAUDE.md §15).
+report_claude_assets_drift() {
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+
+  local default_branch="" files="" behind="unknown"
+  default_branch=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  default_branch="${default_branch#origin/}"
+  [ -n "${default_branch}" ] || default_branch="main"
+
+  local fetch_cmd=(git fetch --quiet --no-tags origin "${default_branch}")
+  if command -v timeout >/dev/null 2>&1; then
+    fetch_cmd=(timeout 15 "${fetch_cmd[@]}")
+  fi
+  GIT_TERMINAL_PROMPT=0 "${fetch_cmd[@]}" >/dev/null 2>&1 || true
+
+  local upstream="refs/remotes/origin/${default_branch}"
+  git rev-parse --verify --quiet "${upstream}^{commit}" >/dev/null 2>&1 || return 0
+
+  if git merge-base HEAD "${upstream}" >/dev/null 2>&1; then
+    if git diff --quiet "HEAD...${upstream}" -- .claude/hooks .claude/settings.json >/dev/null 2>&1; then
+      return 0
+    fi
+    files=$(git diff --name-only "HEAD...${upstream}" -- .claude/hooks .claude/settings.json 2>/dev/null | paste -sd, - || true)
+    behind=$(git rev-list --count "HEAD..${upstream}" 2>/dev/null || echo unknown)
+  else
+    # Shallow history without a merge base: fall back to a two-dot diff.
+    if git diff --quiet "${upstream}" HEAD -- .claude/hooks .claude/settings.json >/dev/null 2>&1; then
+      return 0
+    fi
+    files=$(git diff --name-only "${upstream}" HEAD -- .claude/hooks .claude/settings.json 2>/dev/null | paste -sd, - || true)
+  fi
+  [ -n "${files}" ] || return 0
+  log "claude_assets=stale behind=${behind} files=${files}"
+  return 0
+}
+
 # Entrypoint. Gated on Claude Code Web so local sessions are unaffected.
 # Skipped when this file is sourced (so tests can call extract_repo_slug
 # directly without running install_gh / verify_token).
@@ -224,6 +271,7 @@ main() {
   fi
   install_gh || log "gh install failed (non-fatal)"
   verify_token || true
+  report_claude_assets_drift || true
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
