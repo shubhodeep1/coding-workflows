@@ -211,7 +211,7 @@ def test_checker_ignores_superseded_waits(text):
 
 def test_stage_sessions_start_no_side_sessions(text):
 	"""A stage's side session and its §26 checker add two links (PR #4601's checker hit depth 8)."""
-	assert "- **No side sessions.** A stage session calls `create_session` only where this command says so: the project checker, the next stage, the `/deploy-activate` session, and a fixer." in text
+	assert "- **No side sessions.** A stage session calls `create_session` only where this command says so: the project checker, the next stage, the `/deploy-activate` session, a fixer, and a [settings restart](#settings-restart) of its own stage." in text
 	assert "When a separate fix is wanted, file it as a GitHub issue: the Claude issue route starts it from the pickup, at depth 2 or less." in text
 
 
