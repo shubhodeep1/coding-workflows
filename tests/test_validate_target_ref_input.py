@@ -320,13 +320,15 @@ def test_stable_base_requires_verified_heal_issue(tmp_path: Path):
 	assert invoke([pr], target=branch, issue=heal, events=HEAL_EVENTS, second_failure=True) == (1, "")
 	assert invoke([pr], target=branch, issue=heal, events=HEAL_EVENTS, third_failure=True) == (1, "")
 	# The target PR author must be a plain login before anything else is read.
-	for login in ("", "two words", "owner$(id)", "-owner", "owner-", "own--er", "o" * 40, "owner[bot]x", None):
+	# The 39-character cap counts a `[bot]` suffix too (an App slug is at most
+	# 34 characters).
+	for login in ("", "two words", "owner$(id)", "-owner", "owner-", "own--er", "o" * 40, "owner[bot]x", "o" * 35 + "[bot]", "o" * 39 + "[bot]", None):
 		assert invoke([{**pr, "user": {"login": login, "type": "User"}}], target=branch, issue=heal, events=HEAL_EVENTS) == (1, ""), login
 		assert len(invoke.calls) == 1, login
 	assert invoke([{key: value for key, value in pr.items() if key != "user"}], target=branch, issue=heal, events=HEAL_EVENTS) == (1, "")
 	# Logins that follow GitHub's rules pass the pattern: single inner hyphens,
-	# the 39-character maximum, and a `[bot]` suffix after it.
-	for login in ("o-w-n-e-r", "o" * 39, "o" * 39 + "[bot]"):
+	# the 39-character maximum, and a `[bot]` suffix within it.
+	for login in ("o-w-n-e-r", "o" * 39, "o" * 34 + "[bot]"):
 		user = {"login": login, "type": "User"}
 		issue = _heal_issue(user=user)
 		assert invoke([{**pr, "user": user}], target=branch, issue=issue, events=[_labeled("ai:workflow-heal", actor=login)])[0] == 0, login

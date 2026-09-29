@@ -232,7 +232,7 @@ jobs:
                 "project \(.head.sha) \(.base.ref)"
               elif .base.ref == "stable" and ($branch | test("^claude/implement-plan-issue-[1-9][0-9]*-")) and
                 (.user | type == "object" and (.login | type == "string" and
-                  test("^[A-Za-z0-9](?:-?[A-Za-z0-9])*(\\[bot\\])?$") and (sub("\\[bot\\]$"; "") | length <= 39))) then
+                  test("^[A-Za-z0-9](?:-?[A-Za-z0-9])*(\\[bot\\])?$") and length <= 39)) then
                 "stable \(.head.sha) \($branch | capture("^claude/implement-plan-issue-(?<n>[1-9][0-9]*)-").n) \(.user.login)"
               else error("target PR base is not authorized") end
             else error("target PR is unauthorized") end' <<< "${target_prs}")" || { echo "::error::Explicit validation target is not authorized."; exit 1; }
