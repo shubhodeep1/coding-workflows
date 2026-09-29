@@ -327,6 +327,144 @@ def test_check_cli_exit_codes(repo, capsys):
 	assert sync.main(["check", "--repo-root", str(repo), "--base", "no-such-ref"]) == 2
 
 
+# --- check: guard paths fail closed (issue #5246) -----------------------------
+
+SYNC_HEAD = f"{sync.SYNC_BRANCH_PREFIX}abc123"
+PR_ORDINARY = {"event": "pull_request", "pr_head_ref": "claude/feature", "pr_head_repo": "o/r", "base_repo": "o/r"}
+PR_SYNC = {"event": "pull_request", "pr_head_ref": SYNC_HEAD, "pr_head_repo": "o/r", "base_repo": "o/r"}
+
+
+def _twin_then_copy(repo: Path, rel: str, text: str) -> tuple[str, str]:
+	"""Land a twin change (the base), then copy it into .claude/ (the head)."""
+	write(repo, twin(rel), text)
+	base = commit(repo, "twin change")
+	write(repo, claude(rel), text)
+	return base, commit(repo, "sync copy")
+
+
+def _both_in_one(repo: Path, rel: str, text: str) -> tuple[str, str]:
+	"""One commit that changes a .claude/ file and its twin to the same content."""
+	base = git(repo, "rev-parse", "HEAD")
+	write(repo, twin(rel), text)
+	write(repo, claude(rel), text)
+	return base, commit(repo, "edit both copies")
+
+
+@pytest.mark.parametrize("ref,head_repo,base_repo,expected", [
+	(SYNC_HEAD, "o/r", "o/r", True),
+	(SYNC_HEAD, "O/R", "o/r", True),
+	(SYNC_HEAD, "fork/r", "o/r", False),
+	("claude/feature", "o/r", "o/r", False),
+	("x/" + SYNC_HEAD, "o/r", "o/r", False),
+	("", "o/r", "o/r", False),
+	(SYNC_HEAD, "", "o/r", False),
+	(SYNC_HEAD, "o/r", "", False),
+])
+def test_is_sync_pr_head(ref, head_repo, base_repo, expected):
+	assert sync.is_sync_pr_head(ref, head_repo, base_repo) is expected
+
+
+@pytest.mark.parametrize("rel", ["hooks/h.py", "settings.json"])
+def test_check_ordinary_pr_editing_a_guard_path_and_its_twin_together_fails(repo, rel):
+	"""The #5246 bypass: identical content in both copies is not authorization."""
+	base, head = _both_in_one(repo, rel, "loosened\n")
+	assert sync.check_not_ahead(str(repo), base, head)["ok"] is False
+	result = sync.check_not_ahead(str(repo), base, head, **PR_ORDINARY)
+	assert not result["ok"] and result["event"] == "pull_request" and result["sync_pr"] is False
+	assert [v["path"] for v in result["violations"]] == [claude(rel)]
+	assert "outside a claude/claude-twin-sync-* PR" in result["violations"][0]["reason"]
+
+
+def test_check_push_of_a_guard_edit_made_with_its_twin_fails(repo):
+	base, head = _both_in_one(repo, "hooks/h.py", "loosened\n")
+	result = sync.check_not_ahead(str(repo), base, head)
+	assert not result["ok"] and result["event"] == "push"
+	assert "differs from workflow-templates/.claude/hooks/h.py on the base commit" in result["violations"][0]["reason"]
+
+
+def test_check_ordinary_pr_copying_the_base_twin_into_a_guard_path_fails(repo):
+	"""Only a sync PR (owner-merged) may copy a guard twin, even a reviewed one."""
+	base, head = _twin_then_copy(repo, "hooks/h.py", "h v2\n")
+	assert not sync.check_not_ahead(str(repo), base, head, **PR_ORDINARY)["ok"]
+
+
+@pytest.mark.parametrize("rel", ["hooks/h.py", "settings.json", "hooks/new_guard.py"])
+def test_check_sync_pr_and_its_merge_copying_the_base_twin_pass(repo, rel):
+	base, head = _twin_then_copy(repo, rel, "reviewed v2\n")
+	pr = sync.check_not_ahead(str(repo), base, head, **PR_SYNC)
+	assert pr["ok"] and pr["sync_pr"] is True and pr["checked"] == [claude(rel)]
+	assert sync.check_not_ahead(str(repo), base, head)["ok"]
+
+
+def test_check_sync_pr_that_also_edits_the_twin_fails(repo):
+	"""A twin edit smuggled onto the sync branch is not the twin on the base commit."""
+	base, head = _both_in_one(repo, "hooks/h.py", "smuggled\n")
+	result = sync.check_not_ahead(str(repo), base, head, **PR_SYNC)
+	assert not result["ok"] and result["sync_pr"] is True
+	assert "on the base commit" in result["violations"][0]["reason"]
+
+
+def test_check_sync_prefixed_pr_from_another_repository_fails(repo):
+	base, head = _twin_then_copy(repo, "hooks/h.py", "h v2\n")
+	fork = {**PR_SYNC, "pr_head_repo": "fork/r"}
+	assert not sync.check_not_ahead(str(repo), base, head, **fork)["ok"]
+
+
+def test_check_pull_request_without_head_context_fails_closed(repo):
+	base, head = _twin_then_copy(repo, "hooks/h.py", "h v2\n")
+	assert not sync.check_not_ahead(str(repo), base, head, event="pull_request")["ok"]
+
+
+def test_check_guard_deletion_fails_even_with_its_twin(repo):
+	base = git(repo, "rev-parse", "HEAD")
+	(repo / claude("hooks/h.py")).unlink()
+	(repo / twin("hooks/h.py")).unlink()
+	head = commit(repo, "drop a guard")
+	for kwargs in ({}, PR_ORDINARY, PR_SYNC):
+		result = sync.check_not_ahead(str(repo), base, head, **kwargs)
+		assert not result["ok"], kwargs
+		assert result["violations"][0]["reason"].startswith("guard path deleted")
+
+
+def test_check_guard_mode_change_fails(repo):
+	base = git(repo, "rev-parse", "HEAD")
+	(repo / claude("hooks/h.py")).chmod(0o755)
+	head = commit(repo, "make it executable")
+	assert not sync.check_not_ahead(str(repo), base, head, **PR_SYNC)["ok"]
+	assert not sync.check_not_ahead(str(repo), base, head)["ok"]
+
+
+def test_check_guard_rule_leaves_non_guard_paths_alone(repo):
+	"""An ordinary PR may still sync a command in the same commit as its twin."""
+	base, head = _both_in_one(repo, "commands/a.md", "a v2\n")
+	assert sync.check_not_ahead(str(repo), base, head, **PR_ORDINARY)["ok"]
+
+
+def test_check_cli_passes_the_pull_request_context(repo, capsys):
+	base, _ = _twin_then_copy(repo, "hooks/h.py", "h v2\n")
+	common = ["check", "--repo-root", str(repo), "--base", base, "--event", "pull_request", "--repo=o/r", "--pr-head-repo=o/r"]
+	assert sync.main([*common, f"--pr-head-ref={SYNC_HEAD}"]) == 0
+	assert sync.main([*common, "--pr-head-ref=claude/feature"]) == 1
+	assert "::error file=.claude/hooks/h.py::" in capsys.readouterr().out
+	assert sync.main(["check", "--repo-root", str(repo), "--base", base]) == 0
+	with pytest.raises(SystemExit):
+		sync.main(["check", "--repo-root", str(repo), "--base", base, "--event", "pull_request_target"])
+
+
+def test_ci_step_passes_the_pr_context_through_env():
+	ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+	steps = [s for job in ci["jobs"].values() for s in job.get("steps", []) if s.get("name") == "Claude twin sync state (CLAUDE.md §28.C)"]
+	assert len(steps) == 1
+	step = steps[0]
+	assert step["env"]["PR_HEAD_REF"] == "${{ github.event.pull_request.head.ref }}"
+	assert step["env"]["PR_HEAD_REPO"] == "${{ github.event.pull_request.head.repo.full_name }}"
+	assert step["env"]["REPOSITORY"] == "${{ github.repository }}"
+	assert "${{" not in step["run"]
+	assert '"--pr-head-ref=${PR_HEAD_REF:-}"' in step["run"] and '"--pr-head-repo=${PR_HEAD_REPO:-}"' in step["run"]
+	assert "--event pull_request" in step["run"] and "--event push" in step["run"]
+	assert 'check --base "${base}" --head HEAD "${event_args[@]}"' in step["run"]
+
+
 def test_check_cli_cannot_inject_workflow_commands_through_a_path(repo, capsys):
 	"""A `.claude/` file name with a newline must not start a workflow command line."""
 	base = git(repo, "rev-parse", "HEAD")

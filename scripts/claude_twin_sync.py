@@ -21,7 +21,10 @@ changed twin file into `.claude/**` through one pull request on
 Subcommands:
   plan         classify every twin file against `.claude/` at a ref (JSON)
   check        fail when a commit range moves a `.claude/` file anywhere but
-               its twin (the CI sync-state check: `.claude/` is never ahead)
+               its twin (the CI sync-state check: `.claude/` is never ahead);
+               a guard path may only become the twin on the base commit, is
+               never deleted, and on a pull request changes only from a
+               same-repository sync PR (`--event pull_request`, issue #5246)
   merge-check  decide whether a sync PR's file list is a pure non-guard sync
   run          the workflow driver: plan, commit, push, open or update the
                PR, label, status, and merge a non-guard PR whose checks passed
@@ -342,13 +345,60 @@ def commit_tree(repo: str, tree: str, parents: list[str], message: str) -> str:
 # --- check (CI sync-state) ---------------------------------------------------
 
 
-def check_not_ahead(repo: str, base: str, head: str) -> dict:
+def is_sync_pr_head(pr_head_ref: str, pr_head_repo: str, base_repo: str) -> bool:
+	"""True when a PR's head is a same-repository `SYNC_BRANCH_PREFIX*` branch.
+
+	Only such a PR may change a `.claude/` guard path: the review workflow and
+	the §26.H sweep skip it and `claude-twin-sync.yml` never merges a guard
+	change, so the repository owner merges it. Any empty value is not a sync PR.
+	"""
+	return bool(
+		pr_head_ref and pr_head_repo and base_repo
+		and pr_head_ref.startswith(SYNC_BRANCH_PREFIX)
+		and pr_head_repo.lower() == base_repo.lower()
+	)
+
+
+def guard_violation_reason(repo: str, base: str, head: str, path: str, rel: str, event: str, sync_pr: bool) -> str | None:
+	"""Why a changed `.claude/` guard path is not allowed, or None when it is.
+
+	A guard change is allowed only as a copy of the twin already on `base`
+	(reviewed in its own PR): the head blob and mode must equal the twin's at
+	`base`, and on a pull request the PR must also be a sync PR. Matching the
+	twin at `head` is not enough, because one PR could change both copies. A
+	deletion is never allowed: the sync never copies one.
+	"""
+	local = blob_at(repo, head, path)
+	if local is None:
+		return "guard path deleted; hooks and settings are never deleted through a sync, so the repository owner merges this change by hand"
+	if event == "pull_request" and not sync_pr:
+		return f"guard path changed outside a {SYNC_BRANCH_PREFIX}* PR from this repository; edit only {TWIN_ROOT}/{rel} and let the repository owner merge the sync PR"
+	twin_at_base = blob_at(repo, base, f"{TWIN_ROOT}/{rel}")
+	if (
+		twin_at_base is None
+		or local.kind != "blob" or local.mode not in REGULAR_MODES
+		or local.sha != twin_at_base.sha or local.mode != twin_at_base.mode
+	):
+		return f"guard path differs from {TWIN_ROOT}/{rel} on the base commit; only a copy of the twin already on the default branch may change it"
+	return None
+
+
+def check_not_ahead(
+	repo: str, base: str, head: str, *,
+	event: str = "push", pr_head_ref: str = "", pr_head_repo: str = "", base_repo: str = "",
+) -> dict:
 	"""Every `.claude/` file changed in base..head must equal its twin at head.
 
 	The twin may be ahead of `.claude/` (a change awaiting its sync PR); a
 	`.claude/` file may never move anywhere but its twin. Upstream-only files
 	are exempt. Both copies missing counts as equal (a synced deletion).
+
+	Guard paths (`is_guard_path`) fail closed instead (issue #5246): they may
+	only change to the twin on `base`, never be deleted, and on a pull request
+	(`event="pull_request"`) only from a same-repository sync PR
+	(`is_sync_pr_head`). `event="push"` covers a push and a local run.
 	"""
+	sync_pr = is_sync_pr_head(pr_head_ref, pr_head_repo, base_repo)
 	out = run_git(repo, ["diff", "--name-only", "--no-renames", "-z", base, head, "--", CLAUDE_ROOT])
 	violations: list[dict] = []
 	checked: list[str] = []
@@ -364,6 +414,11 @@ def check_not_ahead(repo: str, base: str, head: str) -> dict:
 			violations.append({"path": path, "reason": reason})
 			continue
 		checked.append(path)
+		if is_guard_path(rel):
+			reason = guard_violation_reason(repo, base, head, path, rel, event, sync_pr)
+			if reason:
+				violations.append({"path": path, "reason": reason})
+			continue
 		local = blob_at(repo, head, path)
 		twin = blob_at(repo, head, f"{TWIN_ROOT}/{rel}")
 		if local is None and twin is None:
@@ -374,7 +429,7 @@ def check_not_ahead(repo: str, base: str, head: str) -> dict:
 			violations.append({"path": path, "reason": f"deleted while {TWIN_ROOT}/{rel} still exists; the sync never copies a deletion, so delete both copies together"})
 		elif local.sha != twin.sha:
 			violations.append({"path": path, "reason": f"changed to content that differs from {TWIN_ROOT}/{rel}; edit the twin and let the sync PR copy it"})
-	return {"base": base, "head": head, "checked": checked, "violations": violations, "ok": not violations}
+	return {"base": base, "head": head, "event": event, "sync_pr": sync_pr, "checked": checked, "violations": violations, "ok": not violations}
 
 
 # --- merge rules -------------------------------------------------------------
@@ -792,6 +847,10 @@ def main(argv: list[str] | None = None) -> int:
 	p_check.add_argument("--repo-root", default=".")
 	p_check.add_argument("--base", required=True)
 	p_check.add_argument("--head", default="HEAD")
+	p_check.add_argument("--event", choices=("push", "pull_request"), default="push", help="pull_request: guard paths change only from a sync PR (issue #5246)")
+	p_check.add_argument("--pr-head-ref", default="", help="the PR's head branch (pull_request only)")
+	p_check.add_argument("--pr-head-repo", default="", help="the PR's head repository owner/name (pull_request only)")
+	p_check.add_argument("--repo", default="", help="the base repository owner/name (pull_request only)")
 	p_merge = sub.add_parser("merge-check")
 	p_merge.add_argument("--repo-root", default=".")
 	p_merge.add_argument("--ref", required=True)
@@ -815,7 +874,10 @@ def main(argv: list[str] | None = None) -> int:
 			if not base or base == ZERO_SHA:
 				_print({"ok": True, "skipped": "no base commit (new branch)"})
 				return 0
-			result = check_not_ahead(args.repo_root, resolve_commit(args.repo_root, base), resolve_commit(args.repo_root, args.head))
+			result = check_not_ahead(
+				args.repo_root, resolve_commit(args.repo_root, base), resolve_commit(args.repo_root, args.head),
+				event=args.event, pr_head_ref=args.pr_head_ref, pr_head_repo=args.pr_head_repo, base_repo=args.repo,
+			)
 			for item in result["violations"]:
 				# The path comes from the checked commit range (a PR's content):
 				# escaped, so a line break in a file name cannot start a command.
