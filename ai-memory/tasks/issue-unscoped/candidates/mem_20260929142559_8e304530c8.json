@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #5152 requires all four PR-named review-run matchers outside the poller to verify event, workflow-file identity, and default-branch provenance.\n  expected_change_site: `.claude/scripts/check_in_status.py`\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The root `.claude/scripts/check_in_status.py:282` still reads `def _active_run_count(repo, head_ref, include_pending=False, pr_number=None) -> int:` with NO `default_branch` argument, and its PR-named fallback at line 307-309 counts runs by `run.get(\"display_title\") == title` alone \u2014 no `event`, `path`, or `head_branch` check. Only the twin `workflow-templates/.claude/scripts/check_in_status.py` is hardened. No `[claude-twin-sync]` commit is present in the PR (the HEAD commit only touches agents.md and the plan doc), and no workflow/script automates the twin sync (greps for `claude-twin-sync` / `twin-sync` in `.github/workflows/` and `scripts/*.sh` return nothing). The spoof-rejection tests in `tests/test_check_in_status_hand_back.py` load `template_checker` (the twin), so CI passes against the hardened twin while the live root remains unhardened \u2014 a forged `internal-review.yml` branch-copy run titled `Internal: AI Review & Autofix [pr:<N>]` can still keep a PR in `open` instead of `stuck` through the production \u00a726 checker.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: Issue #5152 requires all four PR-named review-run matchers outside the poller to verify event, workflow-file identity, and default-branch provenance. Matcher #4 is `_active_run_count` in `check_in_status.py` (`scripts/gh_helpers.sh` `_autofix_pr_named_review_runs`, `_mt_inflight_review_branches`, the sweep `dispatch_pr`, and `_active_run_count` in `check_in_status.py`). The plan's done-when (docs/plans/issue-5152-review-run-provenance-outside-poller-plan.md:69) states: \"after the `[claude-twin-sync]` copy `.claude/scripts/check_in_status.py` is byte-identical to its twin.\"\n  Expected change site: `.claude/scripts/check_in_status.py` \u2014 the production copy the \u00a726 checker (`check_in_status.py --hand-back`) actually executes; it must gain the `default_branch` parameter on `_active_run_count`, the `_is_active_pr_named_review_run` predicate, and the `REVIEW_RUN_PROVENANCE` warning, matching `workflow-templates/.claude/scripts/check_in_status.py`.\n  Evidence of absence: The root `.claude/scripts/check_in_status.py:282` still reads `def _active_run_count(repo, head_ref, include_pending=False, pr_number=None) -> int:` with NO `default_branch` argument, and its PR-named fallback at line 307-309 counts runs by `run.get(\"display_title\") == title` alone \u2014 no `event`, `path`, or `head_branch` check. Only the twin `workflow-templates/.claude/scripts/check_in_status.py` is hardened. No `[claude-twin-sync]` commit is present in the PR (the HEAD commit only touches agents.md and the plan doc), and no workflow/script automates the twin sync (greps for `claude-twin-sync` / `twin-sync` in `.github/workflows/` and `scripts/*.sh` return nothing). The spoof-rejection tests in `tests/test_check_in_status_hand_back.py` load `template_checker` (the twin), so CI passes against the hardened twin while the live root remains unhardened \u2014 a forged `internal-review.yml` branch-copy run titled `Internal: AI Review & Autofix [pr:<N>]` can still keep a PR in `open` instead of `stuck` through the production \u00a726 checker.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0a14fffb2818ecf948fc9e8a2b06602d381d3ddeb21e1364482bf9f59743f708",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36580185436",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36580185436",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929142559_8e304530c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36580185436"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T14:25:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
