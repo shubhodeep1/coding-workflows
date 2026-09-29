@@ -9,9 +9,9 @@
 - Activation: not started
 - Waiting on: PR #4983
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_0194bHyqD8cWSnZbw18P8kbx (project checker, reused)
 - Last updated: 2026-09-29
-- Last note: review round 1 on PR #4983: both consensus findings fixed (runner-file read repeats the slug and PREVIOUS_REVIEWS_DIR guards; an empty or unreadable runner file is named empty / unreadable in the warning), 2 tests added; 70 Claude-fixer tests and 326 review_autofix tests pass, shellcheck and bash -n clean
+- Last note: review round 2 on PR #4983: the one consensus task gap fixed (the changelog fragment now names all four runner-file warning states: missing, empty, unreadable, different), 0 rejected; 117 Claude-fixer and changelog tests pass
 
 ## Phases
 1. [ ] Phase 1 — Bind failed reviewer slots to the runner's output line
@@ -19,7 +19,7 @@
    - tests/test_review_autofix_claude_fixer_mode.py: runner output files in _run_handoff/_panel; new tests for a non-retryable runner line, a missing runner file, an extra runner line, and a different retry-exhaustion variant
    - README.md, agents.md, changelog.d/4885-failed-slot-runner-line-check.md
    - Done: new and existing Claude-fixer tests pass, bash -n and shellcheck clean, docs describe the runner-line match
-   - PR #4983 open; review rounds: 1 (2026-09-29: 2 consensus findings fixed, 0 rejected); interventions: 0
+   - PR #4983 open; review rounds: 2 (2026-09-29: round 1 — 2 consensus findings fixed, 0 rejected; round 2 — 1 consensus task gap fixed, 0 rejected); interventions: 0
 
 ## Conformance
 
@@ -40,6 +40,7 @@
 
 ## Lessons
 - [source:intervention] When a fail-closed check reads a file and reports why it rejected it, tell missing, unreadable, empty, and different apart: `$(cat f 2>/dev/null || true)` makes an unreadable file look empty, and an empty file look like a content mismatch. (files: scripts/review_autofix_step_claude_fixer_handoff.sh)
+- [source:intervention] When a review-round fix adds a new state to a log or warning message, update every doc that quotes that message (the changelog fragment's contributor section in particular) in the same commit; reviewers flag the stale quote as a task gap in the next round. (files: changelog.d/4885-failed-slot-runner-line-check.md)
 
 ## Notes
 - Final PR #4918 opened as a draft into the base branch on 2026-09-29.
