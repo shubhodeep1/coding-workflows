@@ -96,6 +96,9 @@ HEREDOC_OPEN_WRITE = "cd /repo && python3 - <<'PY' 2>&1\nwith open('CLAUDE.md', 
 		"python3 -c \"open('a(b', 'w').write('1')\"",
 		"python3 -c \"open(mode='w', file=p).write('1')\"",
 		"python3 -c \"open(p, encoding='utf-8', mode='a').write('1')\"",
+		"grep -c x <<< \"$y\"; python3 - <<'EOF'\nopen(p, 'w').write('x')\nEOF",
+		"python3 -X utf8 -c \"open('a.txt', 'w').write('x')\"",
+		"python3 -W ignore - <<'EOF'\nPath('x').write_text('y')\nEOF",
 	],
 )
 def test_inline_interpreter_writes_are_classed(command):
@@ -128,6 +131,10 @@ def test_inline_interpreter_writes_are_classed(command):
 		"python3 -c \"print(open(os.path.join(str(p.replace('/', '_')), 'w')).read())\"",
 		"python3 -c \"print(open('a, w').read())\"",
 		"python3 - <<'PY' && echo \"<<X\"\nprint(1)\nPY\ncat <<'B'\nopen(p, 'w')\nB",
+		"python3 tool.py -c \"open('x', 'w')\"",
+		"python3 -m mod -c \"open('x', 'w')\"",
+		"python3 tool.py - <<'EOF'\nopen(p, 'w').write('x')\nEOF",
+		"python3 -Im mod - <<'EOF'\nopen(p, 'w').write('x')\nEOF",
 	],
 )
 def test_reads_scripts_and_data_are_not_classed(command):
