@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T16:25:51Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a command step says its action \"is also\" a procedure defined elsewhere, name which of that procedure's steps it replaces and whose command and commit subject win; otherwise reviewers read two commands for one action.",
+  "phase": "implement_plan",
+  "pr_number": 5010,
+  "record_id": "lesson-implement-plan-6f8f0d78cf1f0e04d4a3d957",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4952-sync-claude-assets-at-session-start",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}

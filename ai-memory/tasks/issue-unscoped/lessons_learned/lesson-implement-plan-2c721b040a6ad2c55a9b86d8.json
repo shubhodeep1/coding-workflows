@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T16:25:51Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Put new hook behaviour tests in their own pytest file next to a plain-script contract test, and register that file in a `ci.yml` step, rather than extending the plain-script runner.",
+  "phase": "implement_plan",
+  "pr_number": 5010,
+  "record_id": "lesson-implement-plan-2c721b040a6ad2c55a9b86d8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4952-sync-claude-assets-at-session-start",
+    "file:tests/test_session_start_claude_assets_drift.py",
+    "file:.github/workflows/ci.yml"
+  ]
+}

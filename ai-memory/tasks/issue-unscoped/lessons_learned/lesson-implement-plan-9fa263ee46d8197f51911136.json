@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T16:25:51Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Test a documented git command by running it in a scratch repository, not by string-matching the prose: `git merge --no-edit` never sets a custom merge subject, and `HEAD@{1}` needs a reflog; use `git merge --no-ff -m \"<subject>\"` and `HEAD^1`.",
+  "phase": "implement_plan",
+  "pr_number": 5010,
+  "record_id": "lesson-implement-plan-9fa263ee46d8197f51911136",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4952-sync-claude-assets-at-session-start",
+    "file:.claude/commands/implement-plan-claude.md",
+    "file:tests/test_claude_asset_sync_command.py"
+  ]
+}
