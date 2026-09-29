@@ -3978,7 +3978,7 @@ jobs:
     # even after sharding, and shards can be slower on a cold runner than
     # on a warm one. At 30 the serial suite was cancelled mid-run (release
     # v1.27.0, run 33073743283), which skipped `validate`/`release` and
-    # failed the release. Mirrors the `CI / lint` budget from #3844.
+    # failed the release. It mirrored the `CI / lint` budget from #3844 until #4707 split that job.
     # 60, not 45 (#4707): the job measured 37 minutes on 2026-09-28
     # (test-and-mark-stable run 36374918973: orchestrate-poll 21 minutes,
     # unit tests 14.5 minutes), too close to 45. `CI` splits the same

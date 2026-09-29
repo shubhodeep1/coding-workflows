@@ -5,7 +5,7 @@
 
 | The numbers that matter | Value |
 | --- | --- |
-| Old `lint` job | 1 job, 40–45 minutes, `timeout-minutes: 45` |
+| Old `lint` job | 1 job, 40–45 minutes; `timeout-minutes: 45`, raised to 60 by the #4706 stopgap |
 | New CI jobs | `static-checks` (15 min budget), 4 test jobs (20 each), `orchestrate-poll` × 4 groups (20 each), `lint` aggregate (5) |
 | Orchestrate-poll split | 4 matrix groups × `CI_POLL_TEST_SHARDS` (default 4) local shards |
 | First split run (run 36523765261) | 9.0 minutes wall-clock; critical path `orchestrate-poll (0)` at 8.7 minutes, slowest test job `tests-promote-stall-and-review` at 8.2 minutes |

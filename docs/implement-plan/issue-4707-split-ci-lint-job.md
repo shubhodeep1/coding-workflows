@@ -5,19 +5,20 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4707-split-ci-lint-job   Final PR: #4874 draft
 - Status: IN_PROGRESS
-- Stage: conformance 2/3
+- Stage: conformance 3/3
 - Activation: not started
-- Waiting on: conformance fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-1`
+- Waiting on: conformance fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-2`
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: project checker session_01BWX5wabwbkpvBkn9CqZcd6 (reused; trigger ids in the stage report)
 - Last updated: 2026-09-29
-- Last note: conformance 1/3: CONFORMANT (Step 3 COMPLETE, Step 4 CONCERNS) — two documentation findings fixed in the conformance fix PR: the measured critical path was missing from the changelog fragment and misstated in `agents.md`. First split CI run 36523765261: 9.0 minutes wall-clock.
+- Last note: conformance 2/3: CONFORMANT (Step 3 COMPLETE, Step 4 CONCERNS) — PR #5052's timings verified against run 36523765261's job records; two stale-doc findings fixed in the conformance fix PR: the release gates' "Mirrors the `CI / lint` budget" comments and the changelog row that gave the old `lint` budget as 45 although #4706 (same release) raised it to 60.
 
 ## Phases
 1. [x] Phase 1 — split `ci.yml` into parallel jobs behind an aggregate `lint`, raise release `validate-scripts` budget, update tests and docs   — PR #4884 merged 2026-09-29 (5f6dd77); review rounds: 2; interventions: 0
 
 ## Conformance
 - Run 1 — 2026-09-29: CONFORMANT (Step 3 COMPLETE; Step 4 CONCERNS: 2 EVIDENCE-BASED doc findings, 0 BLOCKER) — fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-1` (pre-security). Checks: 16 CI-reading test modules, yamllint, actionlint (pinned CI version), §27 size (max 351,391 bytes), step parity vs `origin/main` (125 steps, all present once; only the poll steps changed). End to end: CI run 36523765261 on 5f6dd77 via final PR #4874, success, 9.0 minutes wall-clock, critical path `orchestrate-poll (0)` 8.7 minutes.
+- Run 2 — 2026-09-29: CONFORMANT (Step 3 COMPLETE; Step 4 CONCERNS: 2 EVIDENCE-BASED doc findings, 0 BLOCKER) — fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-2` (pre-security). Re-audited after #5052 on the project branch synced with `main` (e8110b9): PR #5052's figures match run 36523765261's job records (run 8m58s, `orchestrate-poll (0)` 8m43s, `tests-promote-stall-and-review` 8m09s); `main` has not touched the three workflows since 5f6dd77. Checks: 16 CI-reading test modules, yamllint, actionlint 1.7.12, step parity vs current `origin/main` (125 steps, each once; only the two poll steps changed), `assemble_changelog.py assemble --dry-run` (9 fragments, #4706 and #4707 in the same release).
 
 ## Security pass
 
@@ -43,8 +44,9 @@
 - [source:plan-deviation] When splitting a long CI job, move steps as verbatim text blocks and verify parity (every old step name exactly once, bodies byte-identical) against the base branch's workflow before editing anything else; YAML round-trips reformat run blocks. (files: .github/workflows/ci.yml)
 - [source:intervention] When a CI step moves to another job, rename (alias, §6) the test helpers and constants that name the old job in the same change; reviewers read a stale job name as a missing guard. (files: tests/test_ci_shared_shell_block_guard.py)
 - [source:intervention] A parallel-shard judge must decide "did this shard have work" from its input (the non-empty test list), never from an output file: skipping on a missing log turns a shard that died before its runner started into a silent pass. (files: .github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml)
+- [source:conformance] When a change replaces a value that other text still describes (a "mirrors X's budget" comment, a stopgap PR's unreleased changelog fragment), grep for every mention of the old value and the old job before merging; fragments that ship in the same release must not contradict each other. (files: .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml, changelog.d/4707-split-ci-lint-job.md)
 
 ## Notes
 - The plan's "measured critical path is recorded in the PR" goal: PR #4884 merged without it (its CI could not run on a PR into the project branch); the final-merge stage puts run 36523765261's timings in final PR #4874's body (step 11a).
 - Issue mode; security pass: run (`security_pass_skip.py`: no skip label).
-- PR #4706 (open stopgap, 45 → 60 min on `lint`) edits the same timeout line and test assertion; whichever merges second resolves the conflict.
+- PR #4706 (stopgap, 45 → 60 min on `lint`) merged 2026-09-28, before this project's phase PR; its fragment `changelog.d/4706-ci-lint-timeout-60.md` ships in the same release as this project's.
