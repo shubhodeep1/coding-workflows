@@ -3881,10 +3881,13 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # repository's default branch (.base.repo.default_branch of the same PR
 # JSON; empty fails closed), the branch the issue body names on its
 # `Integration branch:` / `Target branch:` line
-# (issue_body_integration_branch), or any base when the issue is an
-# orchestrator-managed child (ai:orchestrator-managed label or the
-# "Managed by: AI Orchestrator" body marker — the same test
-# issue_pr_status.yml uses; children merge into orchestrator/project-<N>).
+# (issue_body_integration_branch), or, when the issue is an
+# orchestrator-managed child, its project branch
+# `orchestrator/project-<T>` from its `Tracking issue: #<T>` line
+# (issue_body_orchestrator_project_branch). Managed means the
+# automation-applied ai:orchestrator-managed label only: body text such
+# as "Managed by: AI Orchestrator" never counts, because any issue author
+# can write it (issue #4957; issue_pr_status.yml applies the same rule).
 # Incident: #4688's completion PR #4748 merged into #4688's own project
 # branch, and the sweep closed #4688 before the chain's final merge. A
 # merge into any other branch is logged as `rejected=non_target_base` and
@@ -3899,6 +3902,11 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # Per-issue cost is the existing single _issue_timeline_with_cross_refs_json
 # call (GraphQL-first with fail-open REST fallback) plus, in the ready_label-origin merged-PR
 # case, one `gh issue edit` to backfill ai:merged before close.
+#
+# Payload size (issue #4955): the two lists reach jq on stdin, because
+# issue bodies can push a list past the per-argument limit. A queue that
+# cannot be built is logged as `CLOSE_MERGED_SWEEP queue_build_failed` and
+# skips the cycle instead of being treated as empty.
 close_merged_issues_sweep() {
   if [ "${ENABLE_CLOSE_MERGED_ISSUES}" != "true" ]; then
     echo "Close merged issues sweep disabled by ENABLE_CLOSE_MERGED_ISSUES=${ENABLE_CLOSE_MERGED_ISSUES}."
@@ -3927,19 +3935,33 @@ close_merged_issues_sweep() {
   # Build a single deduplicated list of {number, labels, origin} entries.
   # When an issue carries BOTH labels (legitimate transition state), prefer
   # the merged_label origin so the strict alerting policy applies.
-  local issues_json
-  issues_json="$(jq -c -n \
-    --argjson merged "${merged_json:-[]}" \
-    --argjson ready "${ready_json:-[]}" '
+  #
+  # Both lists reach jq on stdin, never as --argjson arguments: they carry
+  # full issue bodies, and a few large bodies exceed the kernel's 128 KiB
+  # per-argument limit, which made jq fail to exec and the old
+  # `|| echo "[]"` fallback silently skip every closure (issue #4955). jq
+  # must read exactly two documents (merged list, then ready list); anything
+  # else is a queue_build_failed warning that skips this cycle. The sweep
+  # still returns 0 there, because the poller calls it bare under set -e.
+  local issues_json _sweep_queue_err
+  _sweep_queue_err="$(mktemp)"
+  if ! issues_json="$(printf '%s\n' "${merged_json:-[]}" "${ready_json:-[]}" | jq -c -n '
       def normalize($origin):
         map(
           select(type == "object" and (.number | type == "number"))
           | {number: .number, labels: (.labels // []), body: (.body // ""), origin: $origin}
         );
-      ($merged | normalize("merged_label")) as $m
-      | ($ready | normalize("ready_label")) as $r
+      [inputs] as $lists
+      | if ($lists | length) != 2 then error("expected 2 issue lists, got \($lists | length)") else . end
+      | ($lists[0] | normalize("merged_label")) as $m
+      | ($lists[1] | normalize("ready_label")) as $r
       | ($m + ($r | map(select(.number as $n | ($m | map(.number) | index($n)) == null))))
-    ' 2>/dev/null || echo "[]")"
+    ' 2>"${_sweep_queue_err}")"; then
+    echo "::warning::CLOSE_MERGED_SWEEP queue_build_failed merged_bytes=$(printf '%s' "${merged_json}" | wc -c | tr -d '[:space:]') ready_bytes=$(printf '%s' "${ready_json}" | wc -c | tr -d '[:space:]') — skipping this cycle. jq: $(head -c 300 "${_sweep_queue_err}" 2>/dev/null | tr '\n' ' ')"
+    rm -f "${_sweep_queue_err}"
+    return 0
+  fi
+  rm -f "${_sweep_queue_err}"
 
   local count
   count="$(echo "${issues_json}" | jq 'length' 2>/dev/null || echo "0")"
@@ -3956,6 +3978,7 @@ close_merged_issues_sweep() {
   local merged_pr_candidates _sweep_candidate_pr _sweep_candidate_pr_json
   local sweep_pr_fetch_failed
   local _sweep_issue_body _sweep_issue_base _sweep_issue_managed
+  local _sweep_issue_project_branch
   local _sweep_pr_base_ref _sweep_default_branch
   local closed_count=0
   local skipped_count=0
@@ -3991,16 +4014,22 @@ close_merged_issues_sweep() {
 
     # Target-branch inputs (issue #4813): the issue's declared integration
     # branch and its orchestrator-managed status, both from the issue list
-    # payload above (no extra call).
+    # payload above (no extra call). Managed status comes from the
+    # automation-applied label alone, never from body text (issue #4957),
+    # and a managed child's project branch comes from its tracking-issue
+    # lineage line.
     _sweep_issue_body="$(echo "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].body // ""' 2>/dev/null || echo "")"
     _sweep_issue_base=""
     if type issue_body_integration_branch >/dev/null 2>&1; then
       _sweep_issue_base="$(issue_body_integration_branch "${_sweep_issue_body}")"
     fi
     _sweep_issue_managed=false
-    if echo "${issues_json}" | jq -e --argjson i "${idx}" '[.[$i].labels[]?.name] | index("ai:orchestrator-managed") != null' >/dev/null 2>&1 \
-      || printf '%s' "${_sweep_issue_body}" | grep -qF "Managed by: AI Orchestrator"; then
+    _sweep_issue_project_branch=""
+    if echo "${issues_json}" | jq -e --argjson i "${idx}" '[.[$i].labels[]?.name] | index("ai:orchestrator-managed") != null' >/dev/null 2>&1; then
       _sweep_issue_managed=true
+      if type issue_body_orchestrator_project_branch >/dev/null 2>&1; then
+        _sweep_issue_project_branch="$(issue_body_orchestrator_project_branch "${_sweep_issue_body}")"
+      fi
     fi
 
     merged_pr_candidates="$(printf '%s' "${timeline_json}" | jq -r '
@@ -4034,18 +4063,19 @@ close_merged_issues_sweep() {
       fi
       if _pr_json_is_issue_implementation_pr "${issue_num}" "${_sweep_candidate_pr_json}"; then
         # Target-branch rule (issue #4813): only a merge into the default
-        # branch, the issue's declared integration branch, or (for an
-        # orchestrator-managed child) its integration branch finishes the
-        # issue. An empty default branch never matches (fail closed).
+        # branch, the issue's declared integration branch, or (for a
+        # labelled orchestrator-managed child) its own project branch
+        # finishes the issue (issue #4957: never any base). An empty
+        # default or project branch never matches (fail closed).
         _sweep_pr_base_ref="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
         _sweep_default_branch="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.base.repo.default_branch // ""' 2>/dev/null || echo "")"
-        if [ "${_sweep_issue_managed}" = "true" ] \
-          || { [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_default_branch}" ]; } \
-          || { [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_issue_base}" ]; }; then
+        if { [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_default_branch}" ]; } \
+          || { [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_issue_base}" ]; } \
+          || { [ "${_sweep_issue_managed}" = "true" ] && [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_issue_project_branch}" ]; }; then
           merged_pr_num="${_sweep_candidate_pr}"
           break
         fi
-        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=non_target_base base=${_sweep_pr_base_ref:-unknown} default_branch=${_sweep_default_branch:-unknown} issue_base=${_sweep_issue_base:-none}"
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=non_target_base base=${_sweep_pr_base_ref:-unknown} default_branch=${_sweep_default_branch:-unknown} issue_base=${_sweep_issue_base:-none} project_base=${_sweep_issue_project_branch:-none}"
         continue
       fi
       echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=not_implementation_pr"
