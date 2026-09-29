@@ -1,4 +1,11 @@
 name: "Internal: AI Review & Autofix"
+# Dispatched runs carry their PR in the run name. review_autofix_sweep.yml
+# dispatches from the default branch only (issue #4618: never an unmerged
+# head ref), so the run's head_branch no longer identifies the PR; the sweep's
+# active-run snapshot and the poller's _has_active_autofix_run match this
+# exact name instead. Every other event gets an empty expression, which GitHub
+# replaces with its event-specific default (PR title / commit message).
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('Internal: AI Review & Autofix [pr:{0}]', inputs.pr_number) || '' }}"
 
 on:
   pull_request:
