@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:881-888 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The docstring claims run IDs are returned \"in `queue_pending` order, so resumes come first\", and the test `test_binding_run_window_follows_the_resume_first_order` expects resume-first behavior, but the function implementation was not changed to sort resumes first.\n  WHY: The test will fail because `queue_binding_run_ids([opened, resume], ..., limit=1)` returns `[\"1\"]` (the opened issue's run) instead of `[\"2\"]` (the resume's run).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Plan step 4 \u2014 `.claude/commands/claude-issue-pickup.md` catch-up wake, limit, ordering, report fields.\n  expected_change_site: `.claude/commands/claude-issue-pickup.md`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No diff hunk in this PR modifies `.claude/commands/claude-issue-pickup.md`; the PR description explicitly defers it to a Q40 `[claude-twin-sync]` commit and documents that two pickup-text tests are intentionally failing until the supervising session applies the diff. The reviewer states this is a deliberate twin-first deferral, not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: Plan step 4 \u2014 `.claude/commands/claude-issue-pickup.md` catch-up wake, limit, ordering, report fields.\n  Expected change site: `.claude/commands/claude-issue-pickup.md`.\n  Evidence of absence: No diff hunk in this PR modifies `.claude/commands/claude-issue-pickup.md`; the PR description explicitly defers it to a Q40 `[claude-twin-sync]` commit and documents that two pickup-text tests are intentionally failing until the supervising session applies the diff. This is a deliberate twin-first deferral (the issue body prescribes it), so it is not a gap \u2014 citing the disclaimer: \"Until the supervising session applies it as a `[claude-twin-sync]` commit on this branch, two pickup-text tests fail on purpose, which also keeps this PR from merging without the command change.\" Skipped per the deferred-requirements rule.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_issue_route.py: lines 881-888 in the diff | severity=BLOCKER | confidence=5\n  PROBLEM: The docstring claims run IDs are returned \"in `queue_pending` order, so resumes come first\", and the test `test_binding_run_window_follows_the_resume_first_order` expects resume-first behavior, but the function implementation was not changed to sort resumes first. It still processes issues in input order.\n  WHY: The test will fail because `queue_binding_run_ids([opened, resume], ..., limit=1)` returns `[\"1\"]` (the opened issue's run) instead of `[\"2\"]` (the resume's run). The README also claims \"Resumes come first in that order, so their runs are always read\", but this is not implemented. The function needs to sort resume entries (issue type with trigger=\"reclarify\") before processing, or the call site in `_cmd_queue_pending` needs to pass issues in resume-first order.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5650a1ec08601cb5f40735e2b93bfe6d0503d48381620e5b29a93fd72dc9eaf7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5061,
+    "run_id": "36530480831",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36530480831",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929064500_4c352b8733",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5061,
+    "run_id": "36530480831"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T06:45:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
