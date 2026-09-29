@@ -89,6 +89,10 @@ def repo(tmp_path: Path) -> Path:
 	("commands/./a.md", True),
 	("commands//a.md", True),
 	("commands\\a.md", True),
+	("commands/a\n::warning::x.md", True),
+	("commands/a\r.md", True),
+	("commands/a\t.md", True),
+	("commands/a\x7f.md", True),
 ])
 def test_unsafe_path_reason(rel, unsafe):
 	assert bool(sync.unsafe_path_reason(rel)) is unsafe
@@ -321,6 +325,25 @@ def test_check_cli_exit_codes(repo, capsys):
 	assert "::error file=.claude/commands/a.md::" in capsys.readouterr().out
 	assert sync.main(["check", "--repo-root", str(repo), "--base", sync.ZERO_SHA]) == 0
 	assert sync.main(["check", "--repo-root", str(repo), "--base", "no-such-ref"]) == 2
+
+
+def test_check_cli_cannot_inject_workflow_commands_through_a_path(repo, capsys):
+	"""A `.claude/` file name with a newline must not start a workflow command line."""
+	base = git(repo, "rev-parse", "HEAD")
+	write(repo, claude("commands/x\n::warning title=INJECTED::pwned"), "x\n")
+	commit(repo, "crafted name")
+	assert sync.main(["check", "--repo-root", str(repo), "--base", base]) == 1
+	captured = capsys.readouterr()
+	lines = (captured.out + captured.err).splitlines()
+	assert not [line for line in lines if line.startswith("::warning")], lines
+	errors = [line for line in lines if line.startswith("::error ")]
+	assert len(errors) == 1 and "%0A" in errors[0] and "%3A%3Awarning" in errors[0]
+
+
+def test_log_escapes_line_breaks(capsys):
+	sync.log("rejected path=a\n::warning::x\rb")
+	err = capsys.readouterr().err
+	assert err.count("\n") == 1 and "\r" not in err and "::warning" not in err.splitlines()[0][:10]
 
 
 # --- merge rules -------------------------------------------------------------

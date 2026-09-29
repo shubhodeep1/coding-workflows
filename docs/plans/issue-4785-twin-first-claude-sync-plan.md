@@ -26,7 +26,7 @@ Unattended sessions cannot edit `.claude/**`: Claude Code never auto-approves th
 
 - G1: `CLAUDE.md` §28.C, `/implement-plan-claude`, `/implement-issue-claude`, and `/fix-claude-pr` tell unattended sessions to edit only `workflow-templates/.claude/**` in coding-workflows and never `.claude/**`. A phase that changes a twinned `.claude/` file no longer stops `BLOCKED` for that reason. The protected-path stop remains only for the non-twin files (G2's exclusion list), and in repos without `workflow-templates/.claude/` (consumers), where `.claude/**` is upstream-owned.
 - G2: `scripts/claude_twin_sync.py` defines the twin set: every regular file under `workflow-templates/.claude/`, minus a fixed exclusion list (`UPSTREAM_ONLY_PATHS`: the five consumer variants and `commands/claude-issue-pickup.md`).
-  - It refuses symlinks, `..` segments, absolute paths, and any path that resolves outside the twin root or `.claude/`.
+  - It refuses symlinks, `..` segments, absolute paths, control characters, and any path that resolves outside the twin root or `.claude/`.
 - G3: `.github/workflows/claude-twin-sync.yml` runs on:
   - a push to `main` that touched `workflow-templates/.claude/**`;
   - an hourly schedule (catch-up);

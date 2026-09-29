@@ -112,7 +112,19 @@ class SyncError(Exception):
 
 
 def log(message: str) -> None:
+	"""One stderr line; line breaks in `message` (a path) cannot start a workflow command."""
+	message = message.replace("\r", "\\r").replace("\n", "\\n")
 	print(f"CLAUDE_TWIN_SYNC {message}", file=sys.stderr, flush=True)
+
+
+def escape_command_data(value: str) -> str:
+	"""Escape a GitHub workflow command message (`%`, CR, LF)."""
+	return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def escape_command_property(value: str) -> str:
+	"""Escape a GitHub workflow command property value (data escapes plus `:` and `,`)."""
+	return escape_command_data(value).replace(":", "%3A").replace(",", "%2C")
 
 
 # --- paths -------------------------------------------------------------------
@@ -124,6 +136,8 @@ def unsafe_path_reason(rel: str) -> str | None:
 		return "empty path"
 	if "\\" in rel or "\x00" in rel:
 		return "backslash or NUL in path"
+	if any(ord(char) < 0x20 or char == "\x7f" for char in rel):
+		return "control character in path"
 	if rel.startswith("/"):
 		return "absolute path"
 	for segment in rel.split("/"):
@@ -770,7 +784,11 @@ def main(argv: list[str] | None = None) -> int:
 				return 0
 			result = check_not_ahead(args.repo_root, resolve_commit(args.repo_root, base), resolve_commit(args.repo_root, args.head))
 			for item in result["violations"]:
-				print(f"::error file={item['path']}::.claude/ is ahead of its twin: {item['reason']} (CLAUDE.md §28.C)", flush=True)
+				# The path comes from the checked commit range (a PR's content):
+				# escaped, so a line break in a file name cannot start a command.
+				path = escape_command_property(item["path"])
+				message = escape_command_data(f".claude/ is ahead of its twin: {item['reason']} (CLAUDE.md §28.C)")
+				print(f"::error file={path}::{message}", flush=True)
 			_print(result)
 			return 0 if result["ok"] else 1
 		if args.command == "merge-check":
