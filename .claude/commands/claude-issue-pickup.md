@@ -15,7 +15,7 @@ $ARGUMENTS
 ## Procedure
 
 0. **Preflight.**
-   - **Tools.** This command needs the claude-code-remote tools: `get_session`, `create_session`, `create_trigger`, `list_triggers`, `delete_trigger`, `archive_session`, `set_session_title` (load them with ToolSearch when deferred). If any is missing, reply `claude-issue-pickup: blocked (no claude-code-remote tools; start the pickup from a claude.ai cloud session)` and end the turn. Never fall back to anything else: no in-session implementation, no CronCreate, no polling.
+   - **Tools.** This command needs the claude-code-remote tools: `get_session`, `create_session`, `create_trigger`, `list_triggers`, `delete_trigger`, `archive_session`, `set_session_title`, `list_sessions` (load them with ToolSearch when deferred). If any is missing, reply `claude-issue-pickup: blocked (no claude-code-remote tools; start the pickup from a claude.ai cloud session)` and end the turn. Never fall back to anything else: no in-session implementation, no CronCreate, no polling.
    - **Repo.** The SessionStart slug must be `shubhodeep1/coding-workflows` (the queue lives there). Anything else → reply `claude-issue-pickup: blocked (wrong repository <slug>)` and end the turn.
    - **Identity.** Call `get_session` with no `session_id`. Record your session id and `permission_mode`.
    - **Permission mode.** Nobody approves prompts for the pickup's wakes, and outside Auto mode the claude-code-remote write tools ask on every call. In `start` mode, if the mode is not `auto` (or `bypassPermissions`), stop and ask:
@@ -55,8 +55,24 @@ $ARGUMENTS
       - `item_type` `pr_fix`: the entry's `repo` and `pr_url` as `<repo>` and `<url>`, title `PR <repo>#<N> — fix <kind>`, and that step's pull-request prompt with the entry's `kind`, `head`, and `claim`. `/fix-claude-pr` re-reads the PR and stops when the fix is no longer due or another fixer claimed it, so a stale entry is safe.
    2. On success (both calls of that step), close every queue issue in the entry's `queue_issues` with `mcp__github__issue_write` (`method` `update`): `state` `closed`, `state_reason` `completed`, and `body` = that queue issue's `body` from the script output plus a final line `Dispatched: https://claude.ai/code/<new session id> (<UTC timestamp>) by pickup <your session id>`. Do not comment: a comment by the account starts this repo's `issue_comment` workflows, while an edit and a close start none.
    3. If `create_session` fails twice for an entry, leave its queue issues open (the next wake retries) and record the error for the report. A `lineage depth` refusal means this pickup sits too deep: send one `PushNotification` (`Claude issue pickup: session depth limit — run /claude-issue-pickup start — restart from a new app session`) and stop starting sessions this wake.
+   4. **Archive the session a `/reclarify` replaces** (issue #4817). This applies only to an `item_type` `issue` entry whose `trigger` is `reclarify`, and only after both calls of sub-step 1 succeeded, so the new session exists.
+      - **List sessions once per wake**, before the first such entry: call `list_sessions` with `mine: true` and `limit: 100`. When the harness saves the result to a file, pass that file as it is. Otherwise write the result, unchanged, to a scratchpad file with the file tool.
+      - **Run the script** for the entry, exactly as written:
+        ```
+        PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py replaced-sessions --repo <repo> --issue <N> --sessions-file <that file> --exclude <new session id> --exclude <your session id>
+        ```
+        The script decides. It reads the issue's comments with one paginated REST read, then prints `archive`, the sessions to archive:
+        - the session named by the latest trusted `ai:claude-blocked:v1` comment;
+        - any other idle, blocked session whose title belongs to the issue;
+        - at most 5.
 
-4. **Report.** Keep the reply to one line so the pickup's history stays small: `claude-issue-pickup: started <n> (<repo>#<N> → <session id>, …); ignored <k>; remaining <r>; failed <f>`. When `n` > 0 or `f` > 0, `set_session_title` on your own session to `Claude issue pickup — last wake <HH:MM> UTC: <n> started, <f> failed`. End the turn. Never archive yourself.
+        When the comment read fails, as it does for a consumer repo not attached to this session, the script falls back to titles and says so in `comments_read`. Exit 2 (an unreadable sessions file) archives nothing.
+      - **Archive what it printed.** For each `archive` entry, call `get_session` on its `id`. Call `archive_session` only when `session_status` is `SESSION_STATUS_IDLE` and `title` equals the entry's `title`.
+        - Never archive a session that is `RUNNING` or `REQUIRES_ACTION`: a live permission prompt may still be answered.
+        - Never archive a session the script did not print. It never prints a checker, `/deploy-activate`, pickup, or poller session.
+      - **Failures.** Count a failed or refused call in the report. Never retry it. It never fails the entry and never reopens the entry's queue issues.
+
+4. **Report.** Keep the reply to one line so the pickup's history stays small: `claude-issue-pickup: started <n> (<repo>#<N> → <session id>, …); archived <a>; ignored <k>; remaining <r>; failed <f>`. When `n` > 0 or `f` > 0, `set_session_title` on your own session to `Claude issue pickup — last wake <HH:MM> UTC: <n> started, <f> failed`. End the turn. Never archive yourself.
 
 5. **Arm a check-in** (`— arm-check-in` mode only). The session that asked sits too deep to create its own §26 checker. The pickup creates the checker one link below itself and hands its id back; the asking session writes the checker's instructions itself (CLAUDE.md §26.B step 3), so no free text passes through the pickup.
    1. Write the arguments line (the text after `these arguments:`, exactly as received) to a file in your scratchpad with the file tool, never through the shell, and run:
@@ -70,14 +86,14 @@ $ARGUMENTS
 
 ## Rules
 
-- **Only start sessions.** The pickup never reads target issues or pull requests, edits code, comments, labels them, or implements or fixes anything; each target's own session does that under `/implement-issue-claude` or `/fix-claude-pr`. A checker it creates in `— arm-check-in` mode gets its instructions from the session that asked for it, never from the pickup.
+- **Only start sessions.** The pickup never reads target issues or pull requests, edits code, comments, labels them, or implements or fixes anything; each target's own session does that under `/implement-issue-claude` or `/fix-claude-pr`. The one exception is step 3.4: for a `reclarify` entry, `replaced-sessions` reads the issue's comments to find the blocked session it replaces, and the pickup archives only the sessions that script prints. A checker it creates in `— arm-check-in` mode gets its instructions from the session that asked for it, never from the pickup.
 - **One pickup, never deeper.** Step 1 keeps a single `Claude issue pickup: hourly` trigger, bound to the pickup session itself. The pickup never creates a session for its own next wake. Stop it with `/claude-issue-pickup stop`; move it to a new session with `/claude-issue-pickup start — restart` from that session. Never delete its trigger or archive the pickup session by hand without restarting it, or queued issues wait until the watchdog alerts.
-- **Stay lean.** Each wake is one script call plus one `create_session` and one `issue_write` per item. An `— arm-check-in` request is one script call, one `create_session`, and one `create_trigger`. Long conversations are summarized automatically, so the pickup can run for weeks; restart it from a fresh app session if its wakes grow expensive.
+- **Stay lean.** Each wake is one script call plus one `create_session` and one `issue_write` per item. A wake that started a `reclarify` item also makes one `list_sessions` call. Each such item adds one `replaced-sessions` call, plus one `get_session` and at most one `archive_session` for each session the script prints. An `— arm-check-in` request is one script call, one `create_session`, and one `create_trigger`. Long conversations are summarized automatically, so the pickup can run for weeks; restart it from a fresh app session if its wakes grow expensive.
 - **No PR watching, no polling** (CLAUDE.md §25). One wake per hour, from the trigger.
 - **Failures are visible.** `.github/workflows/claude-issue-queue-watchdog.yml` labels queue items open longer than `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (default 3) `ai:claude-issue-queue-stale` and sends a Telegram ERROR with the restart command.
 
 ## Tool Access
 
-- **claude-code-remote MCP tools** (`mcp__Claude_Code_Remote__*`, or the generated server name in a `create_session` child): `get_session`, `create_session`, `create_trigger`, `list_triggers`, `delete_trigger`, `archive_session`, `set_session_title`; `PushNotification` for the depth-limit alert. `.claude/settings.json` pre-approves them; outside Auto mode the write tools still ask, which is why the pickup runs in Auto mode.
-- **`scripts/claude_issue_route.py queue-pending --fetch-repo`** reads the queue and the producer-run bindings with `gh api` REST calls (batched, see step 2) and parses them (pre-approved). **`arm-check-in-request`** parses an `— arm-check-in` request offline (no API call; pre-approved). `git fetch` / `git checkout` refresh the checkout (pre-approved).
+- **claude-code-remote MCP tools** (`mcp__Claude_Code_Remote__*`, or the generated server name in a `create_session` child): `get_session`, `create_session`, `create_trigger`, `list_triggers`, `delete_trigger`, `archive_session`, `set_session_title`, `list_sessions` (step 3.4); `PushNotification` for the depth-limit alert. `.claude/settings.json` pre-approves them; outside Auto mode the write tools still ask, which is why the pickup runs in Auto mode.
+- **`scripts/claude_issue_route.py queue-pending --fetch-repo`** reads the queue and the producer-run bindings with `gh api` REST calls (batched, see step 2) and parses them (pre-approved). **`arm-check-in-request`** parses an `— arm-check-in` request offline (no API call; pre-approved). **`replaced-sessions`** picks the sessions step 3.4 archives, with one paginated comment read per `reclarify` entry (pre-approved). `git fetch` / `git checkout` refresh the checkout (pre-approved).
 - **`mcp__github__issue_write`** to close queue issues (pre-approved). `gh api` writes are ask-listed and would stall the pickup.
