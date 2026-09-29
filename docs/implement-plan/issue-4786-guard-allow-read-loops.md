@@ -7,11 +7,11 @@
 - Status: IN_PROGRESS
 - Stage: conformance 1/3 — review round
 - Activation: not started
-- Waiting on: PR #5049 (conformance fix 1 into the project branch), review round 2 on the `[claude-autofix]` head; next stages `conformance 2/3` on merge, `conformance 1/3 — review round` on a hand-off, `conformance 1/3 — blocked PR` on a block.
+- Waiting on: PR #5049 (conformance fix 1 into the project branch), review round 3 on the `[claude-autofix]` head; next stages `conformance 2/3` on merge, `conformance 1/3 — review round` on a hand-off, `conformance 1/3 — blocked PR` on a block.
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01Cpvhi1Fix9rbzmu8UsiabB (reused)   safety net and hand-back re-armed by session_01XQ2eQVpDxbhxPULJuo5GJP (ids in its report)
 - Last updated: 2026-09-29
-- Last note: conformance 1/3 — review round (session_01XQ2eQVpDxbhxPULJuo5GJP): the operator's `[claude-twin-sync]` 6b79adb lifted the hold (treated as the `/reclarify`). Review round 1 on 6b79adb re-reported the pre-sync root/twin divergence and phase 1's docs as gaps; at 6b79adb the twins `cmp` identical and `tests/test_gh_api_write_guard.py` passes (231), so all 13 ledger entries were rejected with reasons, and this log update is the round's commit (AD-14).
+- Last note: conformance 1/3 — review round (session_011XmSbF98ErCY2eTCpLieKw): review round 2 on 4095aed reported only three task gaps from one reviewer (`agents.md`, `CLAUDE.md`, `workflow-templates/CLAUDE.md` not in the diff). The reviewer reads #4786's body as this PR's task through `Refs #4786`; phase 1 (#4967) already shipped all three on the project branch (`agents.md:1047`, `CLAUDE.md:1330`; the templates copy is a symlink). All 6 ledger entries rejected with reasons, a scope note added to the PR body, and this log update is the round's commit (AD-15).
 
 ## Phases
 1. [x] Phase 1 — read-only loop approval in the `gh api` guard — protected paths: `.claude/hooks/gh_api_write_guard.py` — PR #4967 merged 2026-09-29 (after the operator's `[claude-twin-sync]` 1d62018)
@@ -24,7 +24,7 @@
    - Done when the pytest run in the plan passes, both twins `cmp` identical, the incident command → `allow`, and a `-X DELETE` loop → `ask`
 
 ## Conformance
-- Run 1 — 2026-09-29: INCOMPLETE (Correctness FAIL: 1 EVIDENCE-BASED BLOCKER, the fast path at `.claude/hooks/gh_api_write_guard.py:1006` allowed a loop holding a quoted `gh api` write) — fix PR #5049 (pre-security, twin-first per Q40; `[claude-twin-sync]` 6b79adb 2026-09-29; review rounds: 1)
+- Run 1 — 2026-09-29: INCOMPLETE (Correctness FAIL: 1 EVIDENCE-BASED BLOCKER, the fast path at `.claude/hooks/gh_api_write_guard.py:1006` allowed a loop holding a quoted `gh api` write) — fix PR #5049 (pre-security, twin-first per Q40; `[claude-twin-sync]` 6b79adb 2026-09-29; review rounds: 2)
 
 ## Security pass
 
@@ -49,11 +49,13 @@
 - AD-12 [phase 1/1, 2026-09-28] May the lowercase loop variable name a proxy (`https_proxy`, `no_proxy`, …)? — Picked: A — no, any name containing `proxy` is rejected. Alternatives: B — any lowercase name, as the plan's AD-3 alone allows. Why: §1; assigning to an already exported lowercase proxy variable re-routes `gh`'s traffic. Applied in: phase 1 PR. Status: pending review
 - AD-13 [phase 1/1 — resume, 2026-09-29] Push the progress-log update (Status IN_PROGRESS, Waiting on PR #4967, phase 1 sub-items verified: 230 passed, twins cmp-identical, incident loop → allow, DELETE loop → ask) to the phase branch while a review run is in progress on 1d62018? — Picked: A — defer it to the next stage's commit. Alternatives: B — push now and restart the review. Why: a docs-only push would cancel the in-flight reviewer panel; the resume block carried the state meanwhile. Applied in: no code change. Status: pending review
 - AD-14 [conformance 1/3 — review round, 2026-09-29] Every reviewer finding on PR #5049 head 6b79adb is stale (it describes the pre-sync head 47f09f4) or outside this fix PR, and this session has no dedicated verdict-bot credentials: how does round 1 close? — Picked: A — push the due progress-log update (Status BLOCKED → IN_PROGRESS) as the round's `[claude-autofix]` commit, so a fresh reviewer panel runs on the new head. Alternatives: B — leave the verdict unposted and stop BLOCKED until a bot can post it. Why: B stalls the project on a credential this session does not have, and the log on this branch is stale either way. Applied in: PR #5049. Status: pending review
+- AD-15 [conformance 1/3 — review round, 2026-09-29] Review round 2 on PR #5049 head 4095aed reports only task gaps for `agents.md`, `CLAUDE.md`, and `workflow-templates/CLAUDE.md`, which phase 1 (#4967) already shipped on the project branch, and there is still no dedicated verdict bot: how does round 2 close? — Picked: A — reject all 6 entries with evidence, add a `## Scope` note to the PR body naming where #4786's documentation requirements landed, and push the due progress-log update as the round's `[claude-autofix]` commit. Alternatives: B — leave the verdict unposted and stop BLOCKED until a bot can post it; C — drop `Refs #4786` from the PR body so the reviewers get no issue context. Why: B stalls the project on a missing credential; C removes the traceability every project PR carries and the context reviewers need for the guard fix itself. Applied in: PR #5049. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] A lowercase-only rule for a shell variable the guard lets a loop assign is not enough: exported lowercase variables such as `https_proxy` / `no_proxy` still change how `gh` connects, so reject proxy names too. (files: workflow-templates/.claude/hooks/gh_api_write_guard.py)
 - [source:conformance] A guard fast path that skips commands without raw `gh api` text must not approve anything it later finds as a dequoted `gh api` call (`gh 'api'`, `"gh" api`): the raw-text check never classified it, so require every `gh api` item to match a classified call. (files: .claude/hooks/gh_api_write_guard.py, workflow-templates/.claude/hooks/gh_api_write_guard.py)
 - [source:intervention] Reviewer ledgers can repeat findings about an earlier head of the same PR, such as a root/twin divergence that a later `[claude-twin-sync]` closed. Check each finding against the current head's files and tests before fixing it, and reject it with that evidence when it no longer holds. (files: .claude/hooks/gh_api_write_guard.py, tests/test_gh_api_write_guard.py)
+- [source:intervention] A project fix PR whose body says `Refs #<issue>` is reviewed against the whole issue body (`scripts/review_collect_pr_metadata.sh` falls back to the referenced issue when the base is not the default branch), so reviewers report the issue's other requirements as task gaps. State in the PR body which earlier PR already shipped each of them, with file:line evidence. (files: scripts/review_collect_pr_metadata.sh)
 
 ## Notes
 - Started by the Claude issue dispatcher (trigger `trig_01UiUhRwpsg5tCsavLazmm7R`) in session `session_01TnvYqW1gqscFF4mBgRJHdk`, Auto mode.
