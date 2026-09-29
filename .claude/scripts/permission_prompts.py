@@ -141,6 +141,11 @@ _PROGRAM_WRITE_RE = re.compile(
 _PYTHON_RE = re.compile(r"^python(?:3(?:\.[0-9]+)?)?$")
 # `-c`, alone or after argument-less switches (`-Ic`, `-uc`, `-IBc`).
 _PYTHON_C_RE = re.compile(r"^-[bBdEiIOPqRsSuv]*c$")
+# `-m`, alone or bundled, with or without its module attached (`-m`, `-Im`,
+# `-mpytest`): the module runs, so no inline program follows.
+_PYTHON_M_RE = re.compile(r"^-[bBdEiIOPqRsSuv]*m")
+# Interpreter switches whose value is the next argument, not an operand.
+_PYTHON_VALUE_SWITCHES = frozenset({"-W", "-X", "--check-hash-based-pycs"})
 # In-place edit switches: `sed -i`/`-i.bak`/`--in-place`; `perl`/`ruby` `-i`
 # alone or after argument-less switches (`-pi`, `-pi.bak`, `-lpi`).
 _SED_IN_PLACE_RE = re.compile(r"^(?:-[A-Za-z]*i.*|--in-place(?:=.*)?)$")
@@ -342,6 +347,11 @@ def _is_redirect(token: str) -> bool:
 	return bool(token) and set(token) <= set("<>&") and bool(set(token) & set("<>"))
 
 
+def _is_heredoc_operator(token: str) -> bool:
+	"""A `<<` or `<<-` heredoc operator; a `<<<` herestring has no heredoc body."""
+	return _is_redirect(token) and token.startswith("<<") and not token.startswith("<<<")
+
+
 def _split_redirects(args: list[str]) -> tuple[list[str], list[str]]:
 	"""Return (arguments, redirect operators): each operator's target and an fd number before it are dropped."""
 	kept: list[str] = []
@@ -407,11 +417,19 @@ def _segment_is_inline_write(segment: list[str], segment_bodies: list[str]) -> b
 	name = segment[index].rsplit("/", 1)[-1]
 	args, redirects = _split_redirects(segment[index + 1 :])
 	if _PYTHON_RE.match(name):
-		position = next((index for index, arg in enumerate(args) if _PYTHON_C_RE.match(arg)), -1)
-		if position >= 0:
-			return position + 1 < len(args) and _program_writes(args[position + 1])
-		reads_stdin = "-" in args or not any(not arg.startswith("-") for arg in args)
-		has_heredoc = any(redirect.startswith("<<") for redirect in redirects)
+		# Only the interpreter's own switches, before the first operand: in
+		# `python3 tool.py -c X` or `python3 -m mod -` the `-c` / `-` belong to
+		# the script or module, so no inline program runs.
+		position = 0
+		while position < len(args):
+			arg = args[position]
+			if _PYTHON_C_RE.match(arg):
+				return position + 1 < len(args) and _program_writes(args[position + 1])
+			if arg == "-" or not arg.startswith("-") or _PYTHON_M_RE.match(arg):
+				break
+			position += 2 if arg in _PYTHON_VALUE_SWITCHES else 1
+		reads_stdin = position >= len(args) or args[position] == "-"
+		has_heredoc = any(_is_heredoc_operator(redirect) for redirect in redirects)
 		return reads_stdin and has_heredoc and any(_program_writes(body) for body in segment_bodies)
 	if name == "sed":
 		return any(_SED_IN_PLACE_RE.match(arg) for arg in args)
@@ -435,10 +453,11 @@ def command_class(record: dict) -> str:
 	bodies = heredoc_bodies(command)
 	# Heredoc bodies follow their `<<` operators in order, so each segment gets
 	# only its own (a write in `cat <<EOF` after a reading `python3 - <<EOF` is
-	# not the interpreter's). When the counts disagree (a `<<` inside quotes),
-	# no body can be bound to its command, so none is: the pattern is then
-	# filed on its own signature rather than routed to a class issue.
-	counts = [sum(1 for token in segment if _is_redirect(token) and token.startswith("<<")) for segment in segments]
+	# not the interpreter's). A `<<<` herestring has no body and is not
+	# counted. When the counts disagree (a `<<` inside quotes), no body can be
+	# bound to its command, so none is: the pattern is then filed on its own
+	# signature rather than routed to a class issue.
+	counts = [sum(1 for token in segment if _is_heredoc_operator(token)) for segment in segments]
 	offsets = [sum(counts[:position]) for position in range(len(segments))]
 	aligned = sum(counts) == len(bodies)
 	for segment, count, offset in zip(segments, counts, offsets):
