@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:350-352 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The docstring claims `<<-` is supported, but `_is_redirect` rejects it, so the function always returns False for `<<-`.\n  WHY: The reviewer says this misleads maintainers and contradicts the stated PR scope; deepseek, qwen, and glm report that the current docstring explicitly says no `<<-` token reaches the function and consider the finding stale.\n- .claude/scripts/permission_prompts.py:350-352 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The twin-file docstring claims `<<-` is supported, but `_is_redirect` rejects it, so the function always returns False for `<<-`.\n  WHY: The reviewer says this misleads maintainers and contradicts the stated PR scope; deepseek, qwen, and glm report that the current docstring explicitly says no `<<-` token reaches the function and consider the finding stale.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: agents.md (\u00a723.I section) and README.md (unattended helpers callout): one short paragraph each on class routing and the duplicate-close carve-out.\n  expected_change_site: agents.md and README.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  EVIDENCE: No diff hunk modifies agents.md or README.md in the current PR diff., no diff hunk modifies either.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/permission_prompts.py:350-352 | severity=low | confidence=5\n  PROBLEM: The docstring claims `<<-` is supported, but `_is_redirect` rejects it, meaning the function always returns False for `<<-`.\n  WHY: No runtime impact on behavior (the operator was already silently dropped), but the docstring misleads maintainers about API capability, which contradicts the stated PR scope that `<<-` is out of scope.\n- .claude/scripts/permission_prompts.py:350-352 | severity=low | confidence=5\n  PROBLEM: Same misleading docstring in the twin file.\n  WHY: No runtime impact, but misleads maintainers and contradicts the PR description.\n- Requirement: agents.md (\u00a723.I section) and README.md (unattended helpers callout): one short paragraph each on class routing and the duplicate-close carve-out.\n  Expected change site: agents.md and README.md\n  Evidence of absence: No diff hunk modifies agents.md or README.md in the current PR diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: agents.md (\u00a723.I) + README.md (unattended helpers) need one paragraph each on class routing + duplicate-close carve-out.\n  Expected change site: agents.md, README.md\n  Evidence of absence: no diff hunk modifies either.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cccfbc4729613151d9e7534d51b941ee0c33c226bfeb6556cd3715ef104ac5d6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5133,
+    "run_id": "36607947158",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36607947158",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929182444_453b4fc2a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5133,
+    "run_id": "36607947158"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T18:24:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
