@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/unattended_question_guard.py:107-112\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Session IDs that differ only after character 120 produce the same `_stem` and share a marker file/state file.\n  WHY: Current session IDs (`cse_...`) are about 30 characters, so this cannot happen with current IDs; the reviewer noted the truncation would silently alias longer IDs.\n- .claude/hooks/unattended_question_guard.py:152-169\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Rapidly successive Stop events can both read the same block count before either writes, allowing one extra block beyond the cap.\n  WHY: The reviewer considers this inherent to the hook model because there is no cross-invocation locking; the 2-block cap and fail-open behavior above it bound the impact, and no code change was recommended.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/unattended_question_guard.py:107-108, 111-112\n  PROBLEM: `_stem` limits the filename to 120 characters via slicing. If two session IDs differ only after character 120, they produce the same stem and share a marker file/state file.\n  WHY: Current session IDs (cse_...) are ~30 chars so this cannot happen, but the slice would silently alias.\n- .claude/hooks/unattended_question_guard.py:152-169\n  PROBLEM: The block counter state has no read-write atomicity. If Claude Code were to fire two Stop events in rapid succession (e.g., a blocked stop immediately followed by another stop attempt in the same continuation), a TOCTOU gap exists between read_blocks and write_blocks where both calls could see the same count. The worst case is one extra block beyond the cap.\n  WHY: The reviewer says this is inherent to the hook model (no cross-invocation locking available). The 2-block cap plus fail-open above it already bounds the impact; no code change needed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4a5900662598adea40f00dcf5ca1ef218ef70f04b0164ff1959bbc2f5775f122",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36522633461",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36522633461",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929050001_b3e7d026a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36522633461"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T05:00:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
