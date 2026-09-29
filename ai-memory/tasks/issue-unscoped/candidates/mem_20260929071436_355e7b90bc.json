@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:1215 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: The named-session route bypasses the blocked-evidence check, allowing a trusted collaborator's forged blocked comment to cause a non-blocked idle session to be archived.\n  WHY: The archive candidate is accepted without confirming blocked status; severity was BLOCKER in deepseek_deepseek-v4-pro and MAJOR in z-ai_glm-5_2, so the highest severity is used.\n- scripts/claude_issue_route.py:1066 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `blocked_comment_session` accepts blocked comments from trusted authors without verifying they were posted through the Claude GitHub App.\n  WHY: A collaborator can manually post a comment that names a session and qualifies for the named route without Claude-session involvement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Require blocked evidence and Claude-session provenance before `replaced-sessions` archives a named session\" (issue #5063 plan: `docs/plans/issue-5063-require-blocked-named-session-plan.md`).\n  expected_change_site: `scripts/claude_issue_route.py` \u2014 `select_replaced_sessions` at line 1215 and `blocked_comment_session` at line 1066\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The #5063 plan commits to this PR's branch contain only the plan document and the implement-plan log; `select_replaced_sessions` still contains `not is_named and` at line 1215, and `blocked_comment_session` still uses only `is_trusted_issue_author` at line 1066.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_issue_route.py:1215 | severity=BLOCKER | confidence=5\n  PROBLEM: The named-session route bypasses the blocked-evidence check; a trusted-author collaborator can forge a blocked comment naming an idle issue-mode session and cause it to be archived.\n  WHY: An idle conformance-stage session holding a live hand-back Routine can be archived, silently losing the Routine and potentially making the PR unrecoverable.\n- scripts/claude_issue_route.py:1066 | severity=BLOCKER | confidence=5\n  PROBLEM: `blocked_comment_session` accepts comments from trusted authors without verifying Claude GitHub App provenance.\n  WHY: A collaborator can manually post a blocked comment naming a session, qualifying for the named route without any Claude session having posted the comment.\n- Requirement: \"Require blocked evidence and Claude-session provenance before `replaced-sessions` archives a named session\" (issue #5063 plan: `docs/plans/issue-5063-require-blocked-named-session-plan.md`).\n  Expected change site: `scripts/claude_issue_route.py` \u2014 `select_replaced_sessions` at line 1215 (remove `not is_named and`) and `blocked_comment_session` at line 1066 (add `is_claude_session_comment` filter).\n  Evidence of absence: The #5063 plan commits to this PR's branch contain only the plan document and the implement-plan log. The actual code changes described in the plan's Implementation Steps (adding `BLOCKED_COMMENT_APP_SLUG`, `is_claude_session_comment`, removing `not is_named and`) are not present in the diff. The `select_replaced_sessions` function still contains `not is_named and` at line 1215, and `blocked_comment_session` still uses only `is_trusted_issue_author` at line 1066.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_issue_route.py:1215 | severity=MAJOR | confidence=5\n  PROBLEM: The named-session route bypasses the blocked-evidence check, allowing a collaborator's forged blocked comment to archive a non-blocked idle session.\n  WHY: The pickup's live `get_session` check confirms only idle status and title, not blocked evidence, so a session waiting for review can be archived.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8b792ef0016ed80aadc89e09257297a2558d639246e8c032d5438b657133751d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36532310301",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36532310301",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929071436_355e7b90bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36532310301"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T07:14:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
