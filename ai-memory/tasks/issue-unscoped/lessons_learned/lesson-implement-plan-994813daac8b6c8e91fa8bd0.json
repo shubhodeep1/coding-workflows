@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T15:12:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A `gh api graphql` mutation that a gate relies on must have its response checked, not only its exit status: GraphQL can answer HTTP 200 with a top-level `errors` array, so request a field that proves the effect (here `pullRequest { autoMergeRequest }`) and treat anything else as a failure to retry. Retry a non-idempotent-looking mutation only after re-reading the state it changes.",
+  "phase": "implement_plan",
+  "pr_number": 5157,
+  "record_id": "lesson-implement-plan-994813daac8b6c8e91fa8bd0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_authorization.py"
+  ]
+}

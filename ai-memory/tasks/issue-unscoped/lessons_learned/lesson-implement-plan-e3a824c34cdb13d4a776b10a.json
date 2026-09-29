@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T15:12:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a stage stops at `Status: BLOCKED` without a PR in flight, the committed log keeps its last `IN_PROGRESS` line, so the resume check cannot tell \"blocked, waiting on /reclarify\" from \"in progress\". Check the checker's pending triggers, not only its session state, before reporting a project as already in progress.",
+  "phase": "implement_plan",
+  "pr_number": 5157,
+  "record_id": "lesson-implement-plan-e3a824c34cdb13d4a776b10a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:.claude/commands/implement-issue-claude.md"
+  ]
+}

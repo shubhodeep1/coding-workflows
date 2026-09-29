@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T15:12:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A merge gate that checks a PR's files must bind the merge it allows to the head it checked (`--match-head-commit`) and turn off any auto-merge pending on a PR it refuses: GitHub keeps auto-merge enabled across pushes by anyone with write access, so an unbound or earlier-enabled merge lands whatever head arrives later.",
+  "phase": "implement_plan",
+  "pr_number": 5157,
+  "record_id": "lesson-implement-plan-f22223d6ba42da14a3c8d78b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_gate.sh",
+    "file:scripts/protected_path_authorization.py"
+  ]
+}
