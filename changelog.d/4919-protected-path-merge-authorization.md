@@ -8,7 +8,7 @@ The template parity test from #4775 could not tell who changed a consumer-varian
 | Protected-equivalent paths | `.claude/**`, `workflow-templates/.claude/**`, `tests/test_claude_template_parity.py`, and the gate's two scripts |
 | Merge calls gated | 22 `gh pr merge` calls in `scripts/review_enable_auto_merge.sh` (2), `scripts/review_rb_judge.sh` (5), and `scripts/orchestrate_poll_process.sh` (15, at 9 sites) |
 | Release check | "Verify protected-path changes are authorized (issue #4919)" in the `validate` job of `test-and-mark-stable.yml` and `mark-stable.yml` |
-| Extra API cost per merge attempt | 2 REST reads for an unprotected PR (PR + files); comments are read only for a protected PR; one GraphQL mutation only when a refused PR has auto-merge pending |
+| Extra API cost per merge attempt | 2 REST reads for an unprotected PR (PR + files); comments are read only for a protected PR; one GraphQL mutation only when a refused PR has auto-merge pending (at most 3 when it fails, each retry after one PR read) |
 
 What this means for operators: a PR that touches the protected set now stays open after a clean review. It carries one comment naming the head to approve. Post `/authorize-protected-paths <sha>` yourself from the GitHub web UI or app, then merge it, or let the orchestrator retry. A new push needs a new approval. If a release stops at the new step, post the command with the merged head SHA on each PR it lists and re-run the release. Changes merged before the gate existed are grandfathered. Consumer repos get the gate with the next `@stable` release, and it applies there only to PRs that touch the same paths.
 

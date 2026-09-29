@@ -5,19 +5,19 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4678-edit-files-without-python-heredocs
 - Project branch: claude/implement-plan-issue-4919-gate-protected-path-merges   Final PR: #4973 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 1/3 — review round
 - Activation: not started
 - Waiting on: PR #5157
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01GBDF73SehLSZua8ZpT29UT (reused); safety net and hand-back ids are in the conformance 1/3 stage report and the next `— resume.` block
+- Check-in: checker session_01GBDF73SehLSZua8ZpT29UT (reused); safety net and hand-back ids are in the conformance 1/3 review-round stage report and the next `— resume.` block
 - Last updated: 2026-09-29
-- Last note: conformance 1/3 (session_01KMngqKbfnTTPVNtWwsvUxx, resumed after the owner answered Q1: A, merged PR #4992 and commented /reclarify): INCOMPLETE on one BLOCKER. A push that adds a protected path after the gate's check, or after auto-merge was enabled on an earlier unprotected head, merged without approval. Fix PR #5157 binds every gated merge to the checked head and turns off a pending auto-merge on refusal (AD-13).
+- Last note: conformance 1/3 review round 1 on PR #5157 (two reviewer runs on head b0efdf7): fixed the valid findings. The `disablePullRequestAutoMerge` response is now checked (GraphQL `errors`, or an auto-merge request still present, fail the call) and a failed disable is retried twice, each retry after a PR re-read. Rejected: the `--match-head-commit` retry cost (by design), the shell-cached decision on a later push (fails closed), and the `.auto_merge` parse cost (the gate always requests the disable).
 
 ## Phases
 1. [x] Phase 1 — protected-path merge and release authorization gate (scripts/protected_path_authorization.py, scripts/protected_path_gate.sh, merge-site wiring in review_enable_auto_merge.sh / review_rb_judge.sh / orchestrate_poll_process.sh, stage_workflow_support.sh + orchestrate_poll.yml staging, release gate in test-and-mark-stable.yml / mark-stable.yml, tests, ci.yml, CLAUDE.md §23.I, agents.md, changelog)   — PR #4992 merged 2026-09-29 (by the owner, answering the round-3 block Q1: A); review rounds: 3; interventions: 0
 
 ## Conformance
-- Run 1 — 2026-09-29: INCOMPLETE — fix PR #5157 (pre-security). Implemented: COMPLETE (provisional); Correctness: FAIL on one EVIDENCE-BASED BLOCKER: gated merges of PRs with no protected path were unbound (`scripts/protected_path_gate.sh`, and all 15 orchestrator calls lack `--match-head-commit`), and nothing turned off an auto-merge enabled on an earlier head. GitHub keeps auto-merge across pushes by anyone with write access, so a protected push after the check or after enablement merged without the owner's comment. Two CONCERNs: the gate's call sites, wrap test, `ci.yml` and release steps are outside the protected set (documented as residual risk, AD-14), and the plan described a committer-date grandfather cutoff where the code uses reachability (plan text corrected). Checks: `tests/test_protected_path_authorization.py` 98 passed (12 new tests fail on the old code), related suites listed in the fix PR.
+- Run 1 — 2026-09-29: INCOMPLETE — fix PR #5157 (pre-security). Implemented: COMPLETE (provisional); Correctness: FAIL on one EVIDENCE-BASED BLOCKER: gated merges of PRs with no protected path were unbound (`scripts/protected_path_gate.sh`, and all 15 orchestrator calls lack `--match-head-commit`), and nothing turned off an auto-merge enabled on an earlier head. GitHub keeps auto-merge across pushes by anyone with write access, so a protected push after the check or after enablement merged without the owner's comment. Two CONCERNs: the gate's call sites, wrap test, `ci.yml` and release steps are outside the protected set (documented as residual risk, AD-14), and the plan described a committer-date grandfather cutoff where the code uses reachability (plan text corrected). Checks: `tests/test_protected_path_authorization.py` 98 passed (12 new tests fail on the old code), related suites listed in the fix PR. Fix PR review rounds: 1 (2026-09-29: GraphQL disable response verified and retried).
 
 ## Security pass
 - Skipped: `Security pass: skip (ai:security: automation-produced issue)` in the plan header.
@@ -54,6 +54,7 @@
 
 - [source:conformance] A merge gate that checks a PR's files must bind the merge it allows to the head it checked (`--match-head-commit`) and turn off any auto-merge pending on a PR it refuses: GitHub keeps auto-merge enabled across pushes by anyone with write access, so an unbound or earlier-enabled merge lands whatever head arrives later. (files: scripts/protected_path_gate.sh, scripts/protected_path_authorization.py)
 - [source:intervention] When a stage stops at `Status: BLOCKED` without a PR in flight, the committed log keeps its last `IN_PROGRESS` line, so the resume check cannot tell "blocked, waiting on /reclarify" from "in progress". Check the checker's pending triggers, not only its session state, before reporting a project as already in progress. (files: .claude/commands/implement-issue-claude.md)
+- [source:intervention] A `gh api graphql` mutation that a gate relies on must have its response checked, not only its exit status: GraphQL can answer HTTP 200 with a top-level `errors` array, so request a field that proves the effect (here `pullRequest { autoMergeRequest }`) and treat anything else as a failure to retry. Retry a non-idempotent-looking mutation only after re-reading the state it changes. (files: scripts/protected_path_authorization.py)
 
 ## Notes
 - 2026-09-29 conformance 1/3 session: gh was installed by running the repo's SessionStart hook; no `mcp__github__*` tools, so GitHub writes go through the allowlisted helpers and routine `gh api` calls. The issue's `ai:claude-blocked` label was removed at resume.

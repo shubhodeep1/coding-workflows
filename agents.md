@@ -1166,8 +1166,12 @@ reviews, comments, and conflicts stay a direct §12 request.
       read shows `auto_merge`). GitHub keeps auto-merge enabled across
       pushes by anyone with write access. Without this, an auto-merge
       enabled on an earlier, unprotected head would land the unauthorized
-      one. `auto_merge=` in the log reads `disabled`, `none pending`, or
-      `disable failed: …`. A failure still refuses the merge.
+      one. The call counts only when its response carries no GraphQL
+      `errors` and shows no auto-merge request left; otherwise it is
+      retried twice (2s, 4s), each retry after a PR read that ends the
+      loop if auto-merge is already off. `auto_merge=` in the log reads
+      `disabled`, `none pending`, or `disable failed: …`. A failure still
+      refuses the merge.
     - `review_enable_auto_merge.sh` then logs
       `AUTOFIX_AUTO_MERGE_PROTECTED_PATH … action=refuse` (squash) or
       `action=refuse_merge_commit` (forward-merge fallback PR) and withholds

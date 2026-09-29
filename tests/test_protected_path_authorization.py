@@ -298,25 +298,89 @@ def test_check_pr_head_mismatch_leaves_auto_merge_alone():
 
 def test_check_pr_still_blocks_when_turning_auto_merge_off_fails():
 	fake = _FakeGitHub(_auto_merge_pr(), [{"filename": ".claude/settings.json"}], [])
+	attempts, sleeps = [], []
 
 	def failing(node_id):
-		raise ppa.ReadError("gh api graphql failed: HTTP 502")
+		attempts.append(node_id)
+		raise ppa.ReadError(f"gh api graphql failed: HTTP 502 (attempt {len(attempts)})")
 
-	decision = ppa.check_pr("o/r", 7, get=fake.get, post=fake.post, disable_auto_merge=True, disable=failing)
+	decision = ppa.check_pr(
+		"o/r", 7, get=fake.get, post=fake.post, disable_auto_merge=True, disable=failing, sleep=sleeps.append,
+	)
 	assert decision["decision"] == "block"
-	assert decision["auto_merge"] == "disable failed: gh api graphql failed: HTTP 502"
+	assert decision["auto_merge"] == "disable failed: gh api graphql failed: HTTP 502 (attempt 3)"
+	# Review round 1 on PR #5157: retried like a read, with a PR re-read
+	# before each retry.
+	assert attempts == ["PR_node7"] * ppa.READ_ATTEMPTS and sleeps == [2, 4]
+	assert fake.reads.count("repos/o/r/pulls/7") == 3
 	no_node = _FakeGitHub(_auto_merge_pr(), [{"filename": ".claude/settings.json"}], [])
 	del no_node.pr["node_id"]
 	decision = ppa.check_pr("o/r", 7, get=no_node.get, post=no_node.post, disable_auto_merge=True, disable=failing)
 	assert decision["decision"] == "block" and decision["auto_merge"].startswith("disable failed: PR node_id")
 
 
+def test_check_pr_retries_a_failed_auto_merge_disable_until_it_succeeds():
+	fake = _FakeGitHub(_auto_merge_pr(), [{"filename": ".claude/settings.json"}], [])
+	attempts, sleeps = [], []
+
+	def flaky(node_id):
+		attempts.append(node_id)
+		if len(attempts) == 1:
+			raise ppa.ReadError("gh api graphql failed: HTTP 503")
+
+	decision = ppa.check_pr(
+		"o/r", 7, get=fake.get, post=fake.post, disable_auto_merge=True, disable=flaky, sleep=sleeps.append,
+	)
+	assert decision["decision"] == "block" and decision["auto_merge"] == "disabled"
+	assert len(attempts) == 2 and sleeps == [2]
+
+
+def test_check_pr_stops_retrying_when_a_re_read_shows_auto_merge_off():
+	# A failed attempt may still have landed; a second mutation on a PR with
+	# no auto-merge fails, so the re-read decides.
+	fake = _FakeGitHub(_auto_merge_pr(), [{"filename": ".claude/settings.json"}], [])
+	attempts = []
+
+	def lands_then_errors(node_id):
+		attempts.append(node_id)
+		fake.pr = dict(fake.pr, auto_merge=None)
+		raise ppa.ReadError("gh api graphql failed: connection reset")
+
+	decision = ppa.check_pr(
+		"o/r", 7, get=fake.get, post=fake.post, disable_auto_merge=True, disable=lands_then_errors, sleep=lambda _s: None,
+	)
+	assert decision["auto_merge"] == "disabled" and attempts == ["PR_node7"]
+
+
 def test_disable_auto_merge_uses_the_graphql_mutation(monkeypatch):
 	calls = []
-	monkeypatch.setattr(ppa, "_gh_json", lambda args: calls.append(args) or {})
+	confirmed = {"data": {"disablePullRequestAutoMerge": {"pullRequest": {"autoMergeRequest": None}}}}
+	monkeypatch.setattr(ppa, "_gh_json", lambda args: calls.append(args) or confirmed)
 	ppa._disable_auto_merge("PR_node7")
 	assert calls == [["graphql", "-f", f"query={ppa.DISABLE_AUTO_MERGE_MUTATION}", "-f", "id=PR_node7"]]
 	assert "disablePullRequestAutoMerge" in ppa.DISABLE_AUTO_MERGE_MUTATION
+	assert "autoMergeRequest" in ppa.DISABLE_AUTO_MERGE_MUTATION
+
+
+@pytest.mark.parametrize("response, problem", [
+	({"errors": [{"message": "Resource not accessible by integration"}], "data": {"disablePullRequestAutoMerge": None}},
+		"GraphQL errors: Resource not accessible by integration"),
+	({"errors": "boom"}, "GraphQL errors: unreadable"),
+	({"data": {"disablePullRequestAutoMerge": None}}, "response has no disablePullRequestAutoMerge.pullRequest"),
+	({"data": None}, "response has no disablePullRequestAutoMerge.pullRequest"),
+	({}, "response has no disablePullRequestAutoMerge.pullRequest"),
+	([], "response is not a JSON object"),
+	({"data": {"disablePullRequestAutoMerge": {"pullRequest": {"autoMergeRequest": {"enabledAt": "2026-09-29T00:00:00Z"}}}}},
+		"auto-merge is still enabled after the mutation"),
+])
+def test_disable_auto_merge_fails_unless_the_response_confirms_it(monkeypatch, response, problem):
+	# Review round 1 on PR #5157: GraphQL can answer HTTP 200 with `errors`,
+	# so a discarded response could report `disabled` while auto-merge stays on.
+	monkeypatch.setattr(ppa, "_gh_json", lambda args: response)
+	with pytest.raises(ppa.ReadError) as info:
+		ppa._disable_auto_merge("PR_node7")
+	assert str(info.value) == f"gh api graphql disablePullRequestAutoMerge: {problem}"
+	assert ppa.auto_merge_disable_error(response) == problem
 
 
 def test_cli_disable_auto_merge_flag(monkeypatch, capsys):
