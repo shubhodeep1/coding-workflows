@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4911-unattended-question-guard   Final PR: #4964 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: the twin-sync follow-up PR from `claude/implement-plan-issue-4911-unattended-question-guard-phase-1-2` (number in the issue progress comment)
+- Waiting on: none (checker starts `conformance 1/3`)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01QiBbnyvC64WNSM5iiUkB8N (see Notes for trigger ids)
 - Last updated: 2026-09-29
-- Last note: PR #5003 merged into the project branch at 04:19Z before the operator's `[claude-twin-sync]` (`2008e8a`, 04:40Z) reached its branch; the reviewed sync commit is carried to the project branch as a follow-up PR (cherry-pick, hashes match the blocker).
+- Last note: PR #5029 (`.claude/` twin sync) merged into the project branch at 06:35Z (merge `4e9c30e`) by the operator (#4911 Q1: A / Q4: A) after review round 1 rejected all 6 findings and no verdict bot was available; phase 1 done.
 
 ## Phases
-1. [ ] Phase 1 — unattended question guard (`Stop` + `AskUserQuestion` hook, issue-mode marker)   — PR #5003 merged 2026-09-29 (twins only); `.claude/` sync follow-up PR from `…-phase-1-2` pending; review rounds: 0; interventions: 0 — protected paths: `.claude/hooks/unattended_question_guard.py` [new], `.claude/settings.json`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/seed-repo.md` (all edited through their `workflow-templates/.claude/` twins)
+1. [x] Phase 1 — unattended question guard (`Stop` + `AskUserQuestion` hook, issue-mode marker)   — PR #5003 merged 2026-09-29 (twins only); PR #5029 (`.claude/` sync) merged 2026-09-29 (operator merge, `4e9c30e`); review rounds: 1 (PR #5029: 6 findings, all rejected); interventions: 0 — protected paths: `.claude/hooks/unattended_question_guard.py` [new], `.claude/settings.json`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/seed-repo.md` (all edited through their `workflow-templates/.claude/` twins)
    - [x] `workflow-templates/.claude/hooks/unattended_question_guard.py`: `mark` CLI, `Stop` block with cap 2, `AskUserQuestion` deny, fail open
    - [x] `workflow-templates/.claude/settings.json`: `Stop` + `PreToolUse` `AskUserQuestion` wiring, two `mark` allow rules
    - [x] `workflow-templates/.claude/commands/implement-issue-claude.md` step 0 + `implement-plan-claude.md` step 1 / Issue Mode: run `mark`
@@ -47,6 +47,7 @@
 - [source:intervention] Under the interim twin-first rule a `hold` claim does not stop the phase PR from merging; the twin sync must land on the phase branch before the PR can merge, or be carried to the project branch in a follow-up PR when it lands after the merge. (files: .claude/scripts/claude_fix_claim.py, docs/operations/master-session.md)
 
 ## Notes
+- 2026-09-29 05:5xZ: review round 1 on PR #5029 (head `794555ca94f2`, ledger `afa61959…`): all 6 findings rejected with reasons (PR comment 5884550612); the dedicated verdict bot is not configured, so the stage stopped BLOCKED on #4911 (comment 5884552970) with a `hold`. 06:35Z: the operator merged #5029 (#4911 comment 5885013883: Q1: A, Q4: A) and woke the stage to re-arm; `ai:claude-blocked` removed.
 - 2026-09-29 04:42Z: master session `session_01LF9aeTnk15B7e9mKy7vDNM` resumed this session (trigger `trig_01PhibSPc3TR6MVh642f3n1M`) after the `[claude-twin-sync]` (`2008e8a`, 775 tests) and asked to arm the review wait on PR #5003. PR #5003 had already merged (squash `1c2c3ad`, 04:19Z) without the sync, so the stage cherry-picked `2008e8a` onto `claude/implement-plan-issue-4911-unattended-question-guard-phase-1-2` (sha256 of the hook `db5f32ba…` and `settings.json` `1121fc5f…` match the blocker; 1054 related tests pass) and waits on that PR instead. `ai:claude-blocked` removed.
 - Verification (2026-09-29, scratch copy with the 5 twins synced into `.claude/`): `tests/test_unattended_question_guard.py` 68 passed; 16 related suites 986 passed; 94 test files referencing touched paths run one by one: 83 pass, 2 collect nothing, 9 fail identically on unmodified `origin/main` (container environment: `test_family_*`, `test_render_validation_templates*`, one `test_implement_post_codex_recovery` case, `test_orchestrate_poll_process` timeout).
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher (trigger `trig_012hHLRNELGddsYm76muyywq`) in session `session_01MD1KoBnW8eNXCRP4Jn1Ysg`; permission mode auto.
