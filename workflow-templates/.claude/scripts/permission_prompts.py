@@ -32,6 +32,10 @@ nothing. For each pattern with occurrences not filed yet:
 Filed counts are kept in `filed-state.json` next to the logs, so a later run
 in the same session files only what is new.
 
+Denies a guard hook issues on purpose (`source: "inline_edit_guard"`, or a
+`PermissionDenied` carrying that guard's redirect reason) are expected: they
+are left out of the patterns, never filed, and counted as `expected_denies`.
+
 Issue text is untrusted data: the tool name, the prompt reason, and the
 command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
 token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
@@ -99,6 +103,13 @@ _SUBCOMMAND_TOOLS = frozenset(
 )
 _SCRIPT_RE = re.compile(r"\.(py|sh|js|mjs|ts)$")
 _FILE_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
+# Denies a guard hook issues on purpose, with a reason that redirects the
+# session (`.claude/hooks/inline_edit_guard.py`). They are expected, so they
+# are counted as `expected_denies` and never filed. A `PermissionDenied`
+# carrying the guard's reason counts too, in case Claude Code logs the hook's
+# deny itself without the `source` field.
+EXPECTED_DENY_SOURCES = frozenset({"inline_edit_guard"})
+EXPECTED_DENY_REASON_PREFIXES = ("Edit files with the Edit tool (exact old_string/new_string) or the Write tool",)
 _BULKY_INPUT_KEYS = frozenset({"content", "new_string", "old_string", "new_source", "edits"})
 
 
@@ -273,6 +284,23 @@ def load_records(log_dir: Path) -> list[dict]:
 	return records
 
 
+def is_expected_deny(record: dict) -> bool:
+	"""True for a deny a guard hook issued on purpose (never filed)."""
+	if record.get("source") in EXPECTED_DENY_SOURCES:
+		return True
+	reason = str(record.get("reason") or "")
+	return record.get("event") == "PermissionDenied" and reason.startswith(EXPECTED_DENY_REASON_PREFIXES)
+
+
+def split_expected_denies(records: list[dict]) -> tuple[list[dict], list[dict]]:
+	"""Split records into `(to group and file, expected guard denies)`."""
+	kept: list[dict] = []
+	expected: list[dict] = []
+	for record in records:
+		(expected if is_expected_deny(record) else kept).append(record)
+	return kept, expected
+
+
 def group_patterns(records: list[dict]) -> list[dict]:
 	"""Group records into patterns, ordered by first occurrence."""
 	patterns: dict[str, dict] = {}
@@ -304,10 +332,12 @@ def group_patterns(records: list[dict]) -> list[dict]:
 
 
 def report(log_dir: Path) -> dict:
-	patterns = group_patterns(load_records(log_dir))
+	records, expected = split_expected_denies(load_records(log_dir))
+	patterns = group_patterns(records)
 	return {
 		"total": sum(pattern["count"] for pattern in patterns),
 		"patterns": [{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons")} for pattern in patterns],
+		"expected_denies": len(expected),
 	}
 
 
@@ -446,7 +476,7 @@ def existing_issues(slug: str) -> dict[str, dict]:
 def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | None = None) -> tuple[int, dict]:
 	"""File new patterns as issues or comments; see the module docstring."""
 	slug = local_repo_slug() if slug is None else slug
-	patterns = group_patterns(load_records(log_dir))
+	patterns = group_patterns(split_expected_denies(load_records(log_dir))[0])
 	summary = report(log_dir)
 	if slug.lower() != FILING_REPO:
 		summary.update({"filed": [], "commented": [], "errors": [], "skipped": f"filing is limited to {FILING_REPO}; this checkout is {slug or 'unknown'}"})
