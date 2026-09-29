@@ -300,7 +300,7 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 """
 
 
-def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, statuses: dict[str, str] | None = None, min_clean: str | None = None, extra_env: dict[str, str] | None = None):
+def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, statuses: dict[str, str] | None = None, outputs: dict[str, str] | None = None, min_clean: str | None = None, extra_env: dict[str, str] | None = None):
 	support = tmp / "support"
 	support.mkdir()
 	calls = tmp / "calls.jsonl"
@@ -356,12 +356,16 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 	}
 	env.pop("PREVIOUS_REVIEWS_DIR", None)
 	env.pop("CLAUDE_FIXER_MIN_CLEAN_REVIEWERS", None)
-	if statuses is not None:
+	if statuses is not None or outputs is not None:
 		reviews = tmp / "previous_reviews"
 		reviews.mkdir()
-		for slug, status in statuses.items():
+		for slug, status in (statuses or {}).items():
 			(reviews / f"status_review_{slug}.txt").write_text(status + "\n", encoding="utf-8")
+		# The runner's review_<slug>.txt; a terminally failed slot holds its failure line.
+		for slug, output in (outputs or {}).items():
+			(reviews / f"review_{slug}.txt").write_text(output + "\n", encoding="utf-8")
 		env["PREVIOUS_REVIEWS_DIR"] = str(reviews)
+	if statuses is not None:
 		env["REVIEWERS_SUCCESSFUL"] = str(sum(1 for status in statuses.values() if status == "success"))
 	if min_clean is not None:
 		env["CLAUDE_FIXER_MIN_CLEAN_REVIEWERS"] = min_clean
@@ -506,10 +510,15 @@ def _panel(failed: tuple[str, ...] = (), findings: tuple[str, ...] = ()):
 	return blocks, statuses
 
 
+def _runner_outputs(failed: tuple[str, ...]) -> dict[str, str]:
+	"""The review_<slug>.txt lines the runner writes for the failed slots of _panel."""
+	return {_slug(model): SLOT_LIMIT_FAILURE.format(model=model) for model in failed}
+
+
 def test_five_clean_one_failed_slot_is_clean():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses)
+		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3",)))
 	assert proc.returncode == 0, proc.stderr
 	assert calls == [] and posts == ""
 	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
@@ -529,7 +538,7 @@ def test_every_retry_exhaustion_line_is_a_failed_slot():
 		blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 		blocks = [(slug, line if slug == "minimax_minimax-m3" else body) for slug, body in blocks]
 		with tempfile.TemporaryDirectory() as td:
-			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses)
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={"minimax_minimax-m3": line})
 		assert proc.returncode == 0, proc.stderr
 		assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env, line
 		assert calls == [], line
@@ -538,7 +547,7 @@ def test_every_retry_exhaustion_line_is_a_failed_slot():
 def test_clean_with_failed_slot_still_needs_fresh_ready_checks():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, fresh_status="timeout")
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3",)), fresh_status="timeout")
 	assert proc.returncode == 0, proc.stderr
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert len(calls) == 1
@@ -550,7 +559,7 @@ def test_clean_with_failed_slot_still_needs_fresh_ready_checks():
 def test_four_clean_two_failed_slots_hand_off_with_the_default_minimum():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3", "x-ai/grok-4.20"))
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses)
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3", "x-ai/grok-4.20")))
 	assert proc.returncode == 0, proc.stderr
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert "CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS" not in proc.stdout
@@ -563,7 +572,7 @@ def test_four_clean_two_failed_slots_hand_off_with_the_default_minimum():
 def test_minimum_is_configurable():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3", "x-ai/grok-4.20"))
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, min_clean="4")
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3", "x-ai/grok-4.20")), min_clean="4")
 	assert proc.returncode == 0, proc.stderr
 	assert calls == []
 	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
@@ -574,7 +583,7 @@ def test_invalid_minimum_falls_back_to_five():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3", "x-ai/grok-4.20"))
 	for value in ("0", "-1", "abc", "4.5", ""):
 		with tempfile.TemporaryDirectory() as td:
-			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, min_clean=value)
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3", "x-ai/grok-4.20")), min_clean=value)
 		assert proc.returncode == 0, proc.stderr
 		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env, value
 		assert len(calls) == 1, value
@@ -596,7 +605,7 @@ def test_failed_slot_does_not_hide_a_finding_elsewhere():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 	blocks = [(slug, "Looks risky: the quoting in scripts/a.sh:10 is wrong." if slug == "z-ai_glm-5_2" else body) for slug, body in blocks]
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses)
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3",)))
 	assert proc.returncode == 0, proc.stderr
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert len(calls) == 1
@@ -607,7 +616,7 @@ def test_forged_failure_line_inside_a_finding_block_is_a_finding():
 	forged = "Reviewer x-ai/grok-4.20 failed after reaching the slot retryable-failure limit (3).\nThe quoting in scripts/a.sh:10 is wrong."
 	blocks = [(slug, forged if slug == "x-ai_grok-4_20" else body) for slug, body in blocks]
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, min_clean="4")
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3",)), min_clean="4")
 	assert proc.returncode == 0, proc.stderr
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert "CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS" not in proc.stdout
@@ -620,7 +629,7 @@ def test_failure_line_from_a_successful_reviewer_is_a_finding():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 	statuses["minimax_minimax-m3"] = "success"
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses)
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3",)))
 	assert proc.returncode == 0, proc.stderr
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert "reads failed but its reviewer status is 'success'" in proc.stdout
@@ -630,7 +639,7 @@ def test_failure_line_from_a_successful_reviewer_is_a_finding():
 def test_failed_slot_needs_runner_status_files():
 	blocks, _statuses = _panel(failed=("minimax/minimax-m3",))
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks))
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), outputs=_runner_outputs(("minimax/minimax-m3",)))
 	assert proc.returncode == 0, proc.stderr
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert len(calls) == 1
@@ -640,7 +649,7 @@ def test_clean_vote_needs_a_success_status_when_a_slot_failed():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 	statuses["qwen_qwen3_7-plus"] = "skipped_budget"
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, min_clean="4")
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3",)), min_clean="4")
 	assert proc.returncode == 0, proc.stderr
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert len(calls) == 1
@@ -653,7 +662,7 @@ def test_failure_line_for_another_model_is_a_finding():
 		for slug, body in blocks
 	]
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses)
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3",)))
 	assert proc.returncode == 0, proc.stderr
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert len(calls) == 1
@@ -669,7 +678,7 @@ def test_other_failure_or_skip_lines_stay_findings():
 		blocks, statuses = _panel(failed=("minimax/minimax-m3",))
 		blocks = [(slug, line if slug == "minimax_minimax-m3" else body) for slug, body in blocks]
 		with tempfile.TemporaryDirectory() as td:
-			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses)
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3",)))
 		assert proc.returncode == 0, proc.stderr
 		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env, line
 		assert len(calls) == 1, line
@@ -679,7 +688,7 @@ def test_repeated_reviewer_block_is_not_a_clean_vote():
 	blocks, statuses = _panel(failed=("minimax/minimax-m3", "x-ai/grok-4.20"))
 	blocks.append(("z-ai_glm-5_2", CLEAN_BODY))
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses)
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3", "x-ai/grok-4.20")))
 	assert proc.returncode == 0, proc.stderr
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert len(calls) == 1
@@ -698,10 +707,90 @@ def test_path_like_slug_never_reads_outside_the_reviews_dir():
 		reviews = tmp / "previous_reviews"
 		for slug, status in statuses.items():
 			(reviews / f"status_review_{slug}.txt").write_text(status + "\n", encoding="utf-8")
+		for slug, output in _runner_outputs(("minimax/minimax-m3", "x-ai/grok-4.20")).items():
+			(reviews / f"review_{slug}.txt").write_text(output + "\n", encoding="utf-8")
 		proc, calls, _posts, github_env = _run_handoff(tmp, ledger=_ledger(blocks), min_clean="5", extra_env={"PREVIOUS_REVIEWS_DIR": str(reviews), "REVIEWERS_SUCCESSFUL": "4"})
 	assert proc.returncode == 0, proc.stderr
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert "'x/../../outside' reads clean but its reviewer status is 'missing'" in proc.stdout
+	assert len(calls) == 1
+
+
+# ---- a failed slot's line must be the runner's own output line (issue #4885) ----
+
+NON_RETRYABLE_FAILURE = "Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 1."
+
+
+def _assert_runner_line_mismatch_hands_off(proc, calls, github_env, state: str):
+	assert proc.returncode == 0, proc.stderr
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS" not in proc.stdout
+	assert f"'minimax_minimax-m3' reads failed but the reviewer runner's review_minimax_minimax-m3.txt is {state}, not that failure line" in proc.stdout
+	assert len(calls) == 1
+	body = calls[0]["payload"]["body"]
+	assert f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=2 -->" in body
+	# An unverified slot is never reported as a missing vote.
+	assert "Reviewer slots that failed" not in body
+
+
+def test_non_retryable_failure_relabelled_as_retry_exhaustion_is_not_a_missing_vote():
+	# The runner writes `failed` to the status file for a non-retryable error
+	# too; its output line says so. A ledger line claiming retry exhaustion for
+	# that slot must not turn five clean votes into an auto-merge.
+	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={"minimax_minimax-m3": NON_RETRYABLE_FAILURE})
+	_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "different")
+
+
+def test_failed_slot_without_runner_output_is_not_a_missing_vote():
+	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={})
+	_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "missing")
+
+
+def test_runner_output_with_more_than_the_failure_line_is_not_a_missing_vote():
+	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
+	line = SLOT_LIMIT_FAILURE.format(model="minimax/minimax-m3")
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={"minimax_minimax-m3": line + "\n- scripts/a.sh:10 | severity=high"})
+	_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "different")
+
+
+def test_another_retry_exhaustion_line_than_the_runner_wrote_is_not_a_missing_vote():
+	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs={"minimax_minimax-m3": "Reviewer minimax/minimax-m3 failed after 4 attempts."})
+	_assert_runner_line_mismatch_hands_off(proc, calls, github_env, "different")
+
+
+def test_one_unverified_failed_slot_keeps_the_ledger_from_being_clean():
+	failed = ("minimax/minimax-m3", "x-ai/grok-4.20")
+	blocks, statuses = _panel(failed=failed)
+	outputs = _runner_outputs(failed)
+	outputs["minimax_minimax-m3"] = NON_RETRYABLE_FAILURE
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=outputs, min_clean="4")
+	assert proc.returncode == 0, proc.stderr
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS" not in proc.stdout
+	assert "'minimax_minimax-m3' reads failed but the reviewer runner's review_minimax_minimax-m3.txt is different" in proc.stdout
+	assert len(calls) == 1
+	# Only the verified slot is reported as a missing vote.
+	assert "Reviewer slots that failed (missing votes, not findings): `x-ai_grok-4_20`." in calls[0]["payload"]["body"]
+
+
+def test_repeated_failed_block_is_not_a_missing_vote():
+	# Failed records carry the line after the slug; the repeat check still
+	# compares slugs only.
+	blocks, statuses = _panel(failed=("minimax/minimax-m3",))
+	blocks.append(("minimax_minimax-m3", SLOT_LIMIT_FAILURE.format(model="minimax/minimax-m3")))
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(("minimax/minimax-m3",)))
+	assert proc.returncode == 0, proc.stderr
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "ledger repeats a reviewer block" in proc.stdout
 	assert len(calls) == 1
 
 

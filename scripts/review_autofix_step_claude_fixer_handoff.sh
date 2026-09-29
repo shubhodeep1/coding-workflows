@@ -39,8 +39,8 @@
 # AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED, REVIEWER_CONSENSUS_FILE,
 # PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR, GITHUB_RUN_ID,
 # GITHUB_SERVER_URL, RUNTIME_DIR, PREVIOUS_REVIEWS_DIR (the reviewer
-# runner's status_review_<slug>.txt files), CLAUDE_FIXER_MIN_CLEAN_REVIEWERS
-# (default 5).
+# runner's status_review_<slug>.txt and review_<slug>.txt files),
+# CLAUDE_FIXER_MIN_CLEAN_REVIEWERS (default 5).
 # API calls: on a clean candidate, the existing check-run collector refreshes
 # its paginated check-runs GET; on findings, the ledger chunks from
 # post_review_comment.sh and one hand-off comment are posted.
@@ -133,11 +133,14 @@ fi
 # (issue #4835). Without a failed block the rule is unchanged (every block
 # clean). With one, the ledger is clean only when no block is a finding, the
 # runner's status file ${PREVIOUS_REVIEWS_DIR}/status_review_<slug>.txt reads
-# "failed" for every failed block and "success" for every clean one, no slug
+# "failed" for every failed block and "success" for every clean one, the
+# runner's output file ${PREVIOUS_REVIEWS_DIR}/review_<slug>.txt is exactly the
+# failed block's line (the status file also reads "failed" after a
+# non-retryable error, whose output line differs; issue #4885), no slug
 # repeats, and at least CLAUDE_FIXER_MIN_CLEAN_REVIEWERS (default 5) clean
 # reviewers remain. The ledger is model output over reviewer output, so its
-# text alone never proves a failure; the status files are written by the
-# runner only.
+# text alone never proves a failure; the status and output files are written
+# by the runner only.
 claude_fixer_clean_ledger="false"
 claude_fixer_failed_slots=""
 claude_fixer_clean_reviewers=0
@@ -162,7 +165,7 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
         sub(/^Reviewer /, "", model)
         sub(/ failed after .*$/, "", model)
         gsub(/[\/.:]/, "_", model)
-        if (model == slug) print "failed " slug
+        if (model == slug) print "failed " slug " " first
         else invalid = 1
       } else {
         invalid = 1
@@ -191,12 +194,20 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
     claude_fixer_clean_ledger="true"
   else
     claude_fixer_failed_slots_verified="true"
-    if [ -n "$(printf '%s\n' "${claude_fixer_ledger_blocks}" | sed -n 's/^[a-z]* //p' | sort | uniq -d)" ]; then
+    # A failed record is "failed <slug> <line>" (the slug has no space); a
+    # clean one is "clean <slug>" with the slug as written in the ledger.
+    if [ -n "$(printf '%s\n' "${claude_fixer_ledger_blocks}" | awk '$1 == "failed" { print $2; next } { sub(/^[a-z]* /, ""); print }' | sort | uniq -d)" ]; then
       echo "::warning::Claude-fixer ledger repeats a reviewer block; the ledger is not clean."
       claude_fixer_failed_slots_verified="false"
     fi
-    while read -r claude_fixer_block_kind claude_fixer_block_slug; do
+    while read -r claude_fixer_block_kind claude_fixer_block_rest; do
       [ -n "${claude_fixer_block_kind}" ] || continue
+      claude_fixer_block_slug="${claude_fixer_block_rest}"
+      claude_fixer_block_line=""
+      if [ "${claude_fixer_block_kind}" = "failed" ]; then
+        claude_fixer_block_slug="${claude_fixer_block_rest%% *}"
+        claude_fixer_block_line="${claude_fixer_block_rest#* }"
+      fi
       claude_fixer_block_status=""
       if [[ "${claude_fixer_block_slug}" =~ ^[A-Za-z0-9_-]+$ ]] && [ -n "${PREVIOUS_REVIEWS_DIR:-}" ] \
         && [ -f "${PREVIOUS_REVIEWS_DIR}/status_review_${claude_fixer_block_slug}.txt" ]; then
@@ -204,7 +215,24 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
       fi
       case "${claude_fixer_block_kind}:${claude_fixer_block_status}" in
         clean:success) claude_fixer_clean_reviewers="$((claude_fixer_clean_reviewers + 1))" ;;
-        failed:failed) claude_fixer_failed_slots="${claude_fixer_failed_slots:+${claude_fixer_failed_slots},}${claude_fixer_block_slug}" ;;
+        failed:failed)
+          # The status file reads `failed` for non-retryable errors too, so it
+          # does not prove the failure class (issue #4885). The runner writes
+          # the slot's exact terminal line to review_<slug>.txt; the ledger
+          # line must be that line, or the ledger is not clean.
+          claude_fixer_block_runner_line=""
+          claude_fixer_block_runner_state="missing"
+          if [ -f "${PREVIOUS_REVIEWS_DIR}/review_${claude_fixer_block_slug}.txt" ]; then
+            claude_fixer_block_runner_line="$(cat "${PREVIOUS_REVIEWS_DIR}/review_${claude_fixer_block_slug}.txt" 2>/dev/null || true)"
+            claude_fixer_block_runner_state="different"
+          fi
+          if [ -n "${claude_fixer_block_line}" ] && [ "${claude_fixer_block_runner_line}" = "${claude_fixer_block_line}" ]; then
+            claude_fixer_failed_slots="${claude_fixer_failed_slots:+${claude_fixer_failed_slots},}${claude_fixer_block_slug}"
+          else
+            echo "::warning::Claude-fixer ledger block '${claude_fixer_block_slug}' reads failed but the reviewer runner's review_${claude_fixer_block_slug}.txt is ${claude_fixer_block_runner_state}, not that failure line; the ledger is not clean."
+            claude_fixer_failed_slots_verified="false"
+          fi
+          ;;
         *)
           echo "::warning::Claude-fixer ledger block '${claude_fixer_block_slug}' reads ${claude_fixer_block_kind} but its reviewer status is '${claude_fixer_block_status:-missing}'; the ledger is not clean."
           claude_fixer_failed_slots_verified="false"
