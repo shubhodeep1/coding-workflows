@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/smoke_review_dispatch.sh:55-77 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: `smoke_review_pr_named_runs` can exclude `workflow_dispatch` runs with `head_branch=null` through its API branch filter and jq head-branch filter.\n  WHY: Phase 4b's registration loop can time out and hard-fail the smoke gate when it cannot find the dispatched run; reviewers disagree on severity (MAJOR versus BLOCKER), so the highest severity is used.\n- scripts/smoke_review_dispatch.sh:153-154 | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `Captured INITIAL_HEAD_SHA` grep regex depends on an exact ISO-8601 timestamp format.\n  WHY: A timestamp format change can make `smoke_review_checked_out_sha` return 2 and unnecessarily fail the smoke gate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Handle null head_branch for default-branch workflow_dispatch (as in sweep)\n  expected_change_site: scripts/smoke_review_dispatch.sh:77 + test\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: Strict filter; test fixtures lack null case\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/smoke_review_dispatch.sh: lines 55 (API call `-f \"branch=${dispatch_ref}\"`) and 77 (jq `select(.head_branch == $ref)`) | severity=high | confidence=[4]\n  PROBLEM: GitHub can report `head_branch` as null on `workflow_dispatch` runs, so the API branch filter and jq filter can exclude the run.\n  WHY: Phase 4b's registration loop can time out without finding the dispatched run and hard-fail the release gate.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/smoke_review_dispatch.sh: 55, 77 | confidence=[4]\n  PROBLEM: The API branch filter and jq head-branch filter can exclude `workflow_dispatch` runs when GitHub reports `head_branch` as null.\n  WHY: Phase 4b's registration loop can time out without finding the run and hard-fail the smoke gate.\n- scripts/smoke_review_dispatch.sh: 153-154 | confidence=[2]\n  PROBLEM: The grep regex used for `Captured INITIAL_HEAD_SHA` is fragile regarding log timestamp formats.\n  WHY: A timestamp format change can make `smoke_review_checked_out_sha` return 2 and unnecessarily fail the smoke gate.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/smoke_review_dispatch.sh: line ~76 (`select(.head_branch == $ref)` inside `smoke_review_pr_named_runs`) | severity=high | confidence=[4]\n  PROBLEM: The jq filter excludes `workflow_dispatch` runs when GitHub documents `head_branch` as null.\n  WHY: Phase 4b's registration loop can time out without finding the retry dispatch run and hard-fail the smoke gate.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/smoke_review_dispatch.sh: lines 55 and 77 \u2014 `-f \"branch=${dispatch_ref}\"` and `select(.head_branch == $ref)` | severity=critical | confidence=[4]\n  PROBLEM: The API branch filter and jq head-branch filter can exclude default-branch `workflow_dispatch` runs when GitHub reports `head_branch` as null.\n  WHY: Phase 4b's registration loop can time out without finding the run and hard-fail the smoke gate.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/smoke_review_dispatch.sh:77 | severity=high | confidence=[4]\n  PROBLEM: jq select(.head_branch == $ref) excludes null head_branch (known for workflow_dispatch per #4928/sweep)\n  WHY: Phase 4b registration times out \u2192 retry_dispatch_failed/gate failure\n- TASK_GAP\n  Requirement: Handle null head_branch for default-branch workflow_dispatch (as in sweep)\n  Expected change site: scripts/smoke_review_dispatch.sh:77 + test\n  Evidence of absence: Strict filter; test fixtures lack null case\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/smoke_review_dispatch.sh: line 55 (`-f \"branch=${dispatch_ref}\"`) and line 77 (`select(.head_branch == $ref)`) | severity=critical | confidence=[4]\n  PROBLEM: The API branch filter and jq filter exclude `workflow_dispatch` runs when GitHub reports `head_branch` as null.\n  WHY: Phase 4b's registration loop can time out without finding the dispatched run and hard-fail the smoke gate.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "816f21af273b52ed5cd2aba00a2592d91d84d30c47fc9a3d3cf2022b55b9dd7e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5111,
+    "run_id": "36555902078",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36555902078",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929110456_5fea91e2bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5111,
+    "run_id": "36555902078"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T11:04:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
