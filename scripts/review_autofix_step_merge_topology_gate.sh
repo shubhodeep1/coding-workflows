@@ -265,6 +265,31 @@ else
     echo "AUTOFIX_PRE_REVIEW_RESOLVE=true" >> "$GITHUB_ENV"
     echo "AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED=${_pre_review_unmerged}" >> "$GITHUB_ENV"
     _pre_review_resolve_enabled="handled"
+    # Plan D14: an unattended Claude session cannot resolve a conflict in a
+    # protected `.claude/**` path (Claude Code never auto-approves those
+    # edits; PR #4610 stopped on one), so such a conflict goes to the GPT
+    # resolver tail instead of a Claude hand-off. The resolver resolves every
+    # unmerged path of the conflict and its push starts a normal Claude-fixer
+    # review round. When it fails or escalates, the step "Hand unresolved
+    # protected conflict to Claude session" posts the kind=conflict hand-off.
+    # CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED=false keeps today's
+    # hand-off for every conflict.
+    _protected_conflict_paths="$(printf '%s\n' "${_pre_review_unmerged}" | tr ',' '\n' | grep '^\.claude/' | paste -sd, - || true)"
+    if [ -n "${_protected_conflict_paths}" ]; then
+      _protected_conflict_count="$(printf '%s\n' "${_protected_conflict_paths}" | tr ',' '\n' | grep -c . || true)"
+      _protected_conflict_resolver="ran"
+      if [ "$(printf '%s' "${CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
+        _protected_conflict_resolver="skipped_switch_off"
+      elif [ "${CAN_PUSH:-false}" != "true" ]; then
+        _protected_conflict_resolver="skipped_cannot_push"
+      else
+        echo "CLAUDE_FIXER_PROTECTED_CONFLICT=true" >> "$GITHUB_ENV"
+        echo "CLAUDE_FIXER_PROTECTED_CONFLICT_PATHS=${_protected_conflict_paths}" >> "$GITHUB_ENV"
+      fi
+      echo "AUTOFIX_GATE_CLAUDE_FIXER_PROTECTED_CONFLICT pr=${PR_NUMBER} head=${LOCAL_HEAD_SHA} paths=${_protected_conflict_count} resolver=${_protected_conflict_resolver}"
+      unset _protected_conflict_count _protected_conflict_resolver
+    fi
+    unset _protected_conflict_paths
   fi
   case "$(printf '%s' "${_pre_review_resolve_enabled}" | tr '[:upper:]' '[:lower:]')" in
     handled)
