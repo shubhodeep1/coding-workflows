@@ -1710,3 +1710,34 @@ if alias_match:
 	print((alias_match.group(1) or alias_match.group(2) or "").strip())
 ' 2>/dev/null || true
 }
+
+# ---------------------------------------------------------------
+# issue_body_orchestrator_project_branch <issue body>
+#
+# Print the orchestrator project branch an orchestrator-managed child
+# belongs to, `orchestrator/project-<T>`, read from the child's
+# `Tracking issue: #<T>` metadata line (plain or bold, optional leading
+# `- `, alone on its line). Prints nothing when the body has no such
+# line or names more than one distinct tracking issue (fail closed).
+# The orchestrator names every integration branch this way
+# (.github/workflows/orchestrate.yml, "Create integration branch").
+#
+# Callers use it only for issues that carry the automation-applied
+# `ai:orchestrator-managed` label: body text alone never makes an issue
+# managed (issue #4957). close_merged_issues_sweep and
+# issue_pr_status.yml accept a managed child's merge into a non-default
+# branch only when that branch is its declared integration branch or
+# this project branch. Reads the body from $1 and issues no API call.
+# ---------------------------------------------------------------
+issue_body_orchestrator_project_branch()
+{
+	local _body="${1:-}"
+	local _tracking_numbers
+	[ -n "${_body}" ] || return 0
+	_tracking_numbers="$(printf '%s\n' "${_body}" \
+		| sed -nE 's/^[[:space:]]*(-[[:space:]]*)?(\*\*Tracking issue:\*\*|Tracking issue:)[[:space:]]*#([0-9]+)[[:space:]]*$/\3/p' \
+		| sort -u 2>/dev/null)" || return 0
+	[ -n "${_tracking_numbers}" ] || return 0
+	[ "$(printf '%s\n' "${_tracking_numbers}" | wc -l | tr -d '[:space:]')" = "1" ] || return 0
+	printf 'orchestrator/project-%s\n' "${_tracking_numbers}"
+}

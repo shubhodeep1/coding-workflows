@@ -204,16 +204,32 @@ jobs:
           # target branch — the default branch (from the event payload,
           # falling back to the `main` this gate hardcoded before), the
           # branch the issue body names on its `Integration branch:` /
-          # `Target branch:` line, or any base for an orchestrator-managed
-          # child. ISSUE_INTEGRATION_BRANCHES holds `<issue>\t<branch>`
-          # lines built from issue bodies this step already fetches (no
-          # extra API call, §15).
+          # `Target branch:` line, or, for an orchestrator-managed child,
+          # its project branch `orchestrator/project-<T>` from its
+          # `Tracking issue: #<T>` line. ISSUE_INTEGRATION_BRANCHES holds
+          # `<issue>\t<branch>` lines built from issue bodies this step
+          # already fetches (no extra API call, §15).
+          #
+          # Issue #4957: for this label/close gate an issue is managed only
+          # when it carries the automation-applied `ai:orchestrator-managed`
+          # label. The "Managed by: AI Orchestrator" body text alone never
+          # counts, because any issue author can write it.
+          # ISSUE_MANAGED_PROJECT_BRANCHES holds one `<issue>\t<project
+          # branch or empty>` line per labelled issue, from the same
+          # payloads.
           DEFAULT_BRANCH_NAME="${PR_BASE_DEFAULT_BRANCH:-main}"
           ISSUE_INTEGRATION_BRANCHES=""
+          ISSUE_MANAGED_PROJECT_BRANCHES=""
           if ! type issue_body_integration_branch >/dev/null 2>&1; then
-            # Older gh_helpers.sh: no parser, so only default-branch and
-            # managed-child merges count (fail closed).
+            # Older gh_helpers.sh: no parser, so only default-branch
+            # merges count (fail closed).
             issue_body_integration_branch() { :; }
+          fi
+          if ! type issue_body_orchestrator_project_branch >/dev/null 2>&1; then
+            # Older gh_helpers.sh: no lineage parser, so a managed child's
+            # merge into a non-default branch counts only on its declared
+            # integration branch (fail closed).
+            issue_body_orchestrator_project_branch() { :; }
           fi
 
           record_issue_integration_branches() {
@@ -223,6 +239,9 @@ jobs:
             while IFS= read -r _rib_num; do
               [[ "${_rib_num}" =~ ^[0-9]+$ ]] || continue
               _rib_body="$(printf '%s' "${payload}" | jq -r --argjson n "${_rib_num}" "[${jq_nodes} | select(.number == \$n) | (.body // \"\")] | first // \"\"" 2>/dev/null || echo "")"
+              if printf '%s' "${payload}" | jq -e --argjson n "${_rib_num}" "[${jq_nodes} | select(.number == \$n) | ((.labels.nodes // []) | map(.name) | index(\"ai:orchestrator-managed\")) != null] | any" >/dev/null 2>&1; then
+                ISSUE_MANAGED_PROJECT_BRANCHES+="${_rib_num}"$'\t'"$(issue_body_orchestrator_project_branch "${_rib_body}")"$'\n'
+              fi
               _rib_branch="$(issue_body_integration_branch "${_rib_body}")"
               [ -n "${_rib_branch}" ] || continue
               ISSUE_INTEGRATION_BRANCHES+="${_rib_num}"$'\t'"${_rib_branch}"$'\n'
@@ -231,6 +250,14 @@ jobs:
 
           issue_integration_branch_for() {
             printf '%s' "${ISSUE_INTEGRATION_BRANCHES}" | awk -F '\t' -v n="$1" '$1 == n { print $2; exit }'
+          }
+
+          issue_has_managed_label() {
+            printf '%s' "${ISSUE_MANAGED_PROJECT_BRANCHES}" | awk -F '\t' -v n="$1" '$1 == n { found = 1; exit } END { exit !found }'
+          }
+
+          issue_managed_project_branch_for() {
+            printf '%s' "${ISSUE_MANAGED_PROJECT_BRANCHES}" | awk -F '\t' -v n="$1" '$1 == n { print $2; exit }'
           }
 
           export_orchestrator_issue_classification() {
@@ -384,19 +411,25 @@ jobs:
           #
           #   2. MANAGED_ISSUES — orchestrator-managed child issues
           #      (label `ai:orchestrator-managed` OR the
-          #      "Managed by: AI Orchestrator" body marker). These
-          #      always merge into orchestrator/project-N, never main,
-          #      so the default `PR_BASE_REF == main` close gate would
-          #      strand them. Apply FINAL_LABEL and close on PR merge
-          #      regardless of base ref. The orchestrator poller's
-          #      reconcile_managed_issue_labels and
-          #      close_merged_issues_sweep paths remain authoritative
+          #      "Managed by: AI Orchestrator" body marker; the marker
+          #      only suppresses the merged Telegram alert). Their PRs
+          #      usually merge into a project branch rather than the
+          #      default branch, so a default-branch-only close gate would
+          #      strand them. The label/close loop treats an issue as a
+          #      managed child only when it carries the
+          #      ai:orchestrator-managed label (issue #4957), and then
+          #      applies FINAL_LABEL and closes on a merge into the
+          #      default branch, its declared integration branch, or its
+          #      orchestrator/project-<T> branch — never any other base.
+          #      The orchestrator poller's reconcile_managed_issue_labels
+          #      and close_merged_issues_sweep paths remain authoritative
           #      backstops; this path is idempotent with them.
           #
-          #   3. Standalone issues — neither tracking nor managed. Keep
-          #      the original `PR_BASE_REF == main` gate to preserve
-          #      the workflow's long-standing safety for non-orchestrator
-          #      flows.
+          #   3. Standalone issues — neither tracking nor managed. A
+          #      merge into the default branch labels and closes them; a
+          #      merge into their declared integration branch (issue
+          #      #4813) applies FINAL_LABEL but leaves them open; any
+          #      other base leaves them unchanged.
           #
           # Single batched GraphQL call (one API request regardless of
           # N) per CLAUDE.md §15. Fail-open with a per-issue REST
@@ -463,6 +496,10 @@ jobs:
                 if [ -n "${_orch_meta_branch}" ]; then
                   ISSUE_INTEGRATION_BRANCHES+="${_orch_num}"$'\t'"${_orch_meta_branch}"$'\n'
                 fi
+                if printf '%s' "${_orch_meta}" | jq -e '((.labels // []) | index("ai:orchestrator-managed")) != null' >/dev/null 2>&1; then
+                  _orch_meta_project_branch="$(issue_body_orchestrator_project_branch "$(printf '%s' "${_orch_meta}" | jq -r '.body // ""' 2>/dev/null || echo "")")"
+                  ISSUE_MANAGED_PROJECT_BRANCHES+="${_orch_num}"$'\t'"${_orch_meta_project_branch}"$'\n'
+                fi
                 if printf '%s' "${_orch_meta}" | jq -e '((.labels // []) | index("ai:orchestrator-tracking")) != null' >/dev/null 2>&1; then
                   TRACKING_ISSUES+="${_orch_num}"$'\n'
                 elif printf '%s' "${_orch_meta}" | jq -e '
@@ -485,13 +522,26 @@ jobs:
 
             is_managed_child=false
             if [ -n "${MANAGED_ISSUES}" ] && printf '%s\n' "${MANAGED_ISSUES}" | grep -qxF "${issue_number}"; then
-              is_managed_child=true
+              if issue_has_managed_label "${issue_number}"; then
+                is_managed_child=true
+              else
+                echo "Issue #${issue_number} has the \"Managed by: AI Orchestrator\" text but not the ai:orchestrator-managed label; treating it as a standalone issue."
+              fi
             fi
 
-            if [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${DEFAULT_BRANCH_NAME}" ] && [ "${is_managed_child}" != "true" ]; then
+            if [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${DEFAULT_BRANCH_NAME}" ]; then
               issue_target_branch="$(issue_integration_branch_for "${issue_number}")"
-              if [ -z "${issue_target_branch}" ] || [ "${PR_BASE_REF}" != "${issue_target_branch}" ]; then
-                echo "PR merged into ${PR_BASE_REF}, which is not issue #${issue_number}'s target branch (default ${DEFAULT_BRANCH_NAME}, integration ${issue_target_branch:-none}); leaving its labels and state unchanged."
+              issue_project_branch=""
+              if [ "${is_managed_child}" = "true" ]; then
+                issue_project_branch="$(issue_managed_project_branch_for "${issue_number}")"
+              fi
+              if { [ -z "${issue_target_branch}" ] || [ "${PR_BASE_REF}" != "${issue_target_branch}" ]; } \
+                && { [ -z "${issue_project_branch}" ] || [ "${PR_BASE_REF}" != "${issue_project_branch}" ]; }; then
+                if [ "${is_managed_child}" = "true" ]; then
+                  echo "PR merged into ${PR_BASE_REF}, which is not orchestrator-managed issue #${issue_number}'s project branch (default ${DEFAULT_BRANCH_NAME}, integration ${issue_target_branch:-none}, project ${issue_project_branch:-none}); leaving its labels and state unchanged."
+                else
+                  echo "PR merged into ${PR_BASE_REF}, which is not issue #${issue_number}'s target branch (default ${DEFAULT_BRANCH_NAME}, integration ${issue_target_branch:-none}); leaving its labels and state unchanged."
+                fi
                 continue
               fi
             fi
