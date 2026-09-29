@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T13:48:43Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test that asserts a watchdog observed something must not race it with a fixed child sleep: the watchdog's idle clock starts when it reads the last output, so a stalled runner shrinks the window from both ends. Have the child wait for the watchdog's own written verdict, bounded under the subprocess timeout.",
+  "phase": "implement_plan",
+  "pr_number": 5156,
+  "record_id": "lesson-implement-plan-cf6c595dbec0d5d5428211b1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5119-deflake-stall-guard-observe-test",
+    "file:tests/test_codex_stall_guard_scripts.py",
+    "file:scripts/codex_stall_guard.sh"
+  ]
+}
