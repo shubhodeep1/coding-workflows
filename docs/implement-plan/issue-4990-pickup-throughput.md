@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-4990-pickup-throughput-plan.md
 - Source issue: shubhodeep1/coding-workflows#4990 (https://github.com/shubhodeep1/coding-workflows/issues/4990)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4990-pickup-throughput   Final PR: pending
+- Project branch: claude/implement-plan-issue-4990-pickup-throughput   Final PR: #5030 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,16 +11,16 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened; phase 1 starting (twin-first per Q40)
+- Last note: phase 1 implemented (script, tests, docs, changelog); the `claude-issue-pickup.md` change waits on the Q40 twin sync
 
 ## Phases
 1. [ ] Phase 1 — pickup throughput: catch-up wake, limit 20 (`CLAUDE_ISSUE_PICKUP_LIMIT`), resumes first, `oldest_waiting`   — protected paths: `.claude/commands/claude-issue-pickup.md` (no twin; diff in the sync blocker per Q40)
-   - [ ] `scripts/claude_issue_route.py`: `QUEUE_PICKUP_LIMIT = 20`, `resolve_pickup_limit`, two-tier ordering, `oldest_waiting_minutes`, `catch_up_due`, `--wake` / `--now`
-   - [ ] `tests/test_claude_issue_route.py`: limit, ordering, oldest-waiting, catch-up tests
-   - [ ] `tests/test_implement_issue_claude_command.py`: pickup catch-up assertions
-   - [ ] `.claude/commands/claude-issue-pickup.md`: catch-up wake, limit, ordering, report fields (via the sync blocker)
-   - [ ] `README.md`, `agents.md`, `docs/scripts-pending-removal.md`
-   - [ ] `changelog.d/4990-pickup-throughput.md`
+   - [x] `scripts/claude_issue_route.py`: `QUEUE_PICKUP_LIMIT = 20`, `resolve_pickup_limit`, two-tier ordering, `oldest_waiting_minutes`, `catch_up_due`, `--wake` / `--now`
+   - [x] `tests/test_claude_issue_route.py`: limit, ordering, oldest-waiting, catch-up tests
+   - [x] `tests/test_implement_issue_claude_command.py`: pickup catch-up assertions (fail until the twin sync)
+   - [ ] `.claude/commands/claude-issue-pickup.md`: catch-up wake, limit, ordering, report fields (diff in the sync blocker; waiting on the twin sync)
+   - [x] `README.md`, `agents.md`, `docs/scripts-pending-removal.md`
+   - [x] `changelog.d/4990-pickup-throughput.md`
 
 ## Conformance
 
@@ -29,6 +29,7 @@
 ## Validation
 
 ## Completion
+- Final PR #5030 draft
 
 ## Activation
 
