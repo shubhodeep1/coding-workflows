@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T10:09:17Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "The issue-comments endpoint lists oldest first and takes no direction, so a capped page loop must fail when it hits the cap with a full page rather than decide on an older marker",
+  "phase": "implement_plan",
+  "pr_number": 5006,
+  "record_id": "lesson-implement-plan-9dd32b55505644a9008fea7f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4938-environment-blocker-self-heal",
+    "file:scripts/claude_issue_route.py"
+  ]
+}

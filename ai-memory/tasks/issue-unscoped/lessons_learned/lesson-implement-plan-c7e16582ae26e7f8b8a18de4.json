@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T10:09:17Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A retry cap counted per issue needs its alert suppression keyed per issue and per window too: every failed re-queued session posts a new blocker id, so a per-blocker key never converges",
+  "phase": "implement_plan",
+  "pr_number": 5006,
+  "record_id": "lesson-implement-plan-c7e16582ae26e7f8b8a18de4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4938-environment-blocker-self-heal",
+    "file:scripts/claude_issue_route.py"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T10:09:17Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Shell-driver tests for scripts/claude_issue_*.sh belong in the stub harness of tests/test_claude_issue_route.py, which ci.yml already runs; a new test file would also need its own ci.yml wiring",
+  "phase": "implement_plan",
+  "pr_number": 5006,
+  "record_id": "lesson-implement-plan-7eb130c493517f89851eca40",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4938-environment-blocker-self-heal",
+    "file:tests/test_claude_issue_route.py",
+    "file:scripts/claude_issue_queue_watchdog.sh"
+  ]
+}
