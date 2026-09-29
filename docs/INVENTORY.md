@@ -49,6 +49,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
 - `.github/workflows/claude-issue-intake.yml` — GitHub Actions workflow: Claude Issue Intake.
 - `.github/workflows/claude-issue-queue-watchdog.yml` — GitHub Actions workflow: Claude Issue Queue Watchdog.
+- `.github/workflows/claude-twin-sync.yml` — GitHub Actions workflow: Claude Twin Sync.
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
 - `.github/workflows/drift-audit.yml` — GitHub Actions workflow: Drift Audit.
 - `.github/workflows/forward-merge-stable-to-main.yml` — GitHub Actions workflow: Forward-merge stable to main.
@@ -127,6 +128,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/claude_issue_queue_watchdog.sh` — Flag queued Claude issues the pickup left open past `CLAUDE_ISSUE_QUEUE_STALE_HOURS` and send one Telegram alert.
 - `scripts/claude_issue_route.py` — Route standalone issues to the Claude issue implementer or the Codex pipeline, and build/validate the handoff payload.
 - `scripts/claude_pr_sweep.py` — Catch-all sweep: queue a fresh Claude fixer (`/fix-claude-pr`) for `claude/*` PRs whose fix is overdue with no live claim.
+- `scripts/claude_twin_sync.py` — Copy `workflow-templates/.claude/**` into `.claude/**` through one sync PR, and check that no `.claude/` file is ahead of its twin (CLAUDE.md §28.C).
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
 - `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.

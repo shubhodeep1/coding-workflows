@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #4807
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01S7jAxpFysQWjX6bnYiFJc4   safety net trig_01RN4GreEVToDoVRMbvoVG4V   hand-back trig_01VxHtC3i2H4meVdBzzkwGtr
+- Check-in: checker session_01S7jAxpFysQWjX6bnYiFJc4   safety net / hand-back: re-armed by the round-2 stage (ids in its report)
 - Last updated: 2026-09-29
-- Last note: review round 1 (head 070bf5fd806f): all 5 consensus findings valid and fixed in one [claude-autofix] commit (orphaned sync PR on a deleted head branch, label-create errors, violation messages, dead constant, upstream-only twin-state exemption); waiting on round 2.
+- Last note: review round 2 (head 124de7f7af3b): the one consensus task gap (docs/INVENTORY.md) is valid — tests/inventory_parity.py failed on the new workflow and script — fixed in one [claude-autofix] commit; waiting on round 3.
 
 ## Phases
-1. [ ] Phase 1 — twin-first docs, sync workflow, sync-state checks (no `.claude/**` path is edited; protected paths: none)   — PR #4807 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — twin-first docs, sync workflow, sync-state checks (no `.claude/**` path is edited; protected paths: none)   — PR #4807 open (waiting); review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -41,6 +41,7 @@
 ## Lessons
 - [source:plan-deviation] A CI check over a commit range must only run on ranges that are one PR's net change; a promotion range (main → stable) can hold a sync followed by a newer source change and read as drift. (files: .github/workflows/ci.yml, scripts/claude_twin_sync.py)
 - [source:intervention] A driver that updates an existing PR's head branch must first confirm the branch still exists on origin and close the PR when it does not; otherwise a deleted branch turns every later scheduled run into the same failed fetch. (files: scripts/claude_twin_sync.py)
+- [source:intervention] A new workflow or `scripts/` file must be listed in docs/INVENTORY.md in the same PR; `tests/inventory_parity.py` fails CI otherwise, even when the plan's docs step does not name the inventory. (files: docs/INVENTORY.md, tests/inventory_parity.py)
 
 ## Notes
 - Security pass: run (`security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}`).
