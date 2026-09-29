@@ -7,11 +7,11 @@
 - Status: IN_PROGRESS
 - Stage: conformance 3/3
 - Activation: not started
-- Waiting on: conformance fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-2`
+- Waiting on: conformance fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-3` (next stage `conformance 3/3 — fix check`)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: project checker session_01BWX5wabwbkpvBkn9CqZcd6 (reused; trigger ids in the stage report)
 - Last updated: 2026-09-29
-- Last note: conformance 2/3: CONFORMANT (Step 3 COMPLETE, Step 4 CONCERNS) — PR #5052's timings verified against run 36523765261's job records; two stale-doc findings fixed in the conformance fix PR: the release gates' "Mirrors the `CI / lint` budget" comments and the changelog row that gave the old `lint` budget as 45 although #4706 (same release) raised it to 60.
+- Last note: conformance 3/3 (last run the cap allows): CONFORMANT (Step 3 COMPLETE, Step 4 CONCERNS) — one EVIDENCE-BASED doc finding fixed in the conformance fix PR: `ci.yml`'s job comments said static-checks "About 3 minutes measured" and the test jobs "measured 3-8 minutes", but the five split-layout CI runs measured 1.4-1.9 and 2.4-8.2 minutes. The fix PR gets a fix check, not a fourth run.
 
 ## Phases
 1. [x] Phase 1 — split `ci.yml` into parallel jobs behind an aggregate `lint`, raise release `validate-scripts` budget, update tests and docs   — PR #4884 merged 2026-09-29 (5f6dd77); review rounds: 2; interventions: 0
@@ -19,6 +19,7 @@
 ## Conformance
 - Run 1 — 2026-09-29: CONFORMANT (Step 3 COMPLETE; Step 4 CONCERNS: 2 EVIDENCE-BASED doc findings, 0 BLOCKER) — fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-1` (pre-security). Checks: 16 CI-reading test modules, yamllint, actionlint (pinned CI version), §27 size (max 351,391 bytes), step parity vs `origin/main` (125 steps, all present once; only the poll steps changed). End to end: CI run 36523765261 on 5f6dd77 via final PR #4874, success, 9.0 minutes wall-clock, critical path `orchestrate-poll (0)` 8.7 minutes.
 - Run 2 — 2026-09-29: CONFORMANT (Step 3 COMPLETE; Step 4 CONCERNS: 2 EVIDENCE-BASED doc findings, 0 BLOCKER) — fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-2` (pre-security). Re-audited after #5052 on the project branch synced with `main` (e8110b9): PR #5052's figures match run 36523765261's job records (run 8m58s, `orchestrate-poll (0)` 8m43s, `tests-promote-stall-and-review` 8m09s); `main` has not touched the three workflows since 5f6dd77. Checks: 16 CI-reading test modules, yamllint, actionlint 1.7.12, step parity vs current `origin/main` (125 steps, each once; only the two poll steps changed), `assemble_changelog.py assemble --dry-run` (9 fragments, #4706 and #4707 in the same release).
+- Run 3 — 2026-09-29: CONFORMANT (Step 3 COMPLETE; Step 4 CONCERNS: 1 EVIDENCE-BASED doc finding, 0 BLOCKER) — fix PR from `claude/implement-plan-issue-4707-split-ci-lint-job-conformance-fix-3` (pre-security; last run the cap allows, so its merge is followed by `conformance 3/3 — fix check`). Re-audited after #5078 on the project branch synced with `main` (aa8f74b; `main`'s #4797 added `tests/test_check_in_session_targeting.py` to the §26 hand-back step, which merged cleanly into `tests-promote-stall-and-review`). Finding: `ci.yml` job comments claimed measured runtimes (static-checks "About 3 minutes", test jobs "3-8 minutes") that CI runs 36523765261, 36527182237, 36530680439, 36533369764, and 36535570251 contradict (static-checks 1.4-1.9 minutes, test jobs 2.4-8.2); the orchestrate-poll "about 5 minutes" claim holds (groups 1-3: 3.5-6.3 minutes). Checks: 17 CI-reading test modules (incl. the new `test_check_in_session_targeting.py`), yamllint, actionlint 1.7.12 over every workflow and template, step parity vs current `origin/main` (125 steps, each once; only the two poll steps changed), cross-job side-effect scan (no step reads a `/tmp` file, `GITHUB_ENV`, or tool written by another job), §27 size (max 351,422 bytes).
 
 ## Security pass
 
