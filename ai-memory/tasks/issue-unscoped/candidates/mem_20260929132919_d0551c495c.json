@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_twin_sync.py:lines ~739-754 | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Updating an existing sync PR can fail with a false-positive `SyncError` if its head advances between the GitHub API read and the subsequent git fetch.\n  WHY: A forward-only push by another sync run can change the fetched SHA and cause an unnecessary failure until the hourly retry.\n- .github/workflows/ci.yml:lines ~200-228 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The \"Claude twin sync state\" step can fail CI if fetching the push event's base commit fails.\n  WHY: If the commit has been garbage-collected, `git fetch` fails under `set -euo pipefail`, blocking CI.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_twin_sync.py:lines ~739-754 | severity=high | confidence=[3]\n  PROBLEM: Updating an existing sync PR can fail with a false-positive `SyncError` if its head advances between the GitHub API read and the subsequent git fetch.\n  WHY: A forward-only push by another sync run could cause unnecessary failures until the hourly retry.\n- .github/workflows/ci.yml:lines ~200-228 | severity=low | confidence=[1]\n  PROBLEM: The \"Claude twin sync state\" step can fail CI if fetching the push event's base commit fails.\n  WHY: If the commit has been garbage-collected, `git fetch` fails under `set -euo pipefail`, blocking CI.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ed49b9c0189828108fb597d43081f9ed38a8d08354144ec849bf28a148ca0a03",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36572918815",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36572918815",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929132919_d0551c495c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36572918815"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T13:29:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
