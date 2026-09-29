@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:934-938 | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The added check ensures every `gh api` call in a read loop is accounted for.\n  WHY: Without it, a quoted destructive command such as `gh 'api' -X DELETE` would not be classified by the initial guard regex and could bypass the approval prompt.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/gh_api_write_guard.py:934-938 | confidence=5\n  PROBLEM: Added check ensures all `gh api` calls in a read loop are accounted for.\n  WHY: Without this verification, a quoted destructive command (e.g., `gh 'api' -X DELETE`) would not be classified by the initial guard regex and would incorrectly bypass the approval prompt.\n- .claude/hooks/gh_api_write_guard.py | Location: Docstring for _is_approvable_read_loop\n  PROBLEM: The docstring should explicitly document that all `gh api` body items must correspond to classified calls.\n  WHY: The suggested minimal fix is to add: \"Every `gh api` body item must correspond to a call `evaluate` classified.\"\n- changelog.d/4786-guard-read-only-for-loops.md | Location: Summary section\n  PROBLEM: The summary mentions \"five\" disguised writes, while the added test cases count four.\n  WHY: The suggested minimal fix is to clarify if \"five\" includes pre-existing cases or update to \"four\" if only new cases are counted.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/gh_api_write_guard.py | Location: function _is_approvable_read_loop docstring, lines 868-885 (and twin workflow-templates/.claude/hooks/gh_api_write_guard.py:868-885)\n  PROBLEM: The docstring does not mention the new `api_items != len(results)` constraint, which requires every `gh api` body item to correspond to a call `evaluate` actually classified.\n  WHY: A reader of the docstring alone has no signal that a quoted body item keeps the no-decision result; the suggested fix is to document that quoted or split-word `gh api` body items keep today's no-decision result.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c4af7ce2d425c5d6c75293eafa75a2f85f9cc59fb0b97dc80733d6917b00e553",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5049,
+    "run_id": "36605911717",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36605911717",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929180455_f4b01d3ff8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5049,
+    "run_id": "36605911717"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T18:04:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
