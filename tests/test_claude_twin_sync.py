@@ -147,6 +147,41 @@ def test_plan_behind_by_several_versions_is_still_a_copy(repo):
 	assert [c["path"] for c in plan["copies"]] == ["scripts/s.py"]
 
 
+def test_plan_a_twin_version_first_made_by_a_merge_is_behind_not_a_conflict(repo):
+	"""A merge that combines two twin edits produces a version no single-parent
+	commit ever held. When `.claude/` was synced to it and the twin then moved
+	on only through another merge (a project branch syncing the default
+	branch in), the `.claude/` copy is behind, not a conflict."""
+	lines = [f"line {n}\n" for n in range(1, 10)]
+	rel = "commands/m.md"
+	write(repo, twin(rel), "".join(lines))
+	write(repo, claude(rel), "".join(lines))
+	commit(repo, "multi-line twin")
+	git(repo, "checkout", "-q", "-b", "project")
+	write(repo, twin(rel), "".join(lines[:4] + ["project line\n"] + lines[4:]))
+	commit(repo, "project edits the twin")
+	git(repo, "checkout", "-q", "main")
+	git(repo, "checkout", "-q", "-b", "side")
+	write(repo, twin(rel), "".join(lines + ["side line\n"]))
+	commit(repo, "side edits the twin")
+	git(repo, "checkout", "-q", "main")
+	write(repo, twin(rel), "".join(["main line\n"] + lines))
+	commit(repo, "main edits the twin")
+	git(repo, "merge", "-q", "--no-edit", "side")
+	merged = (repo / twin(rel)).read_text(encoding="utf-8")
+	assert merged == "".join(["main line\n"] + lines + ["side line\n"])
+	write(repo, claude(rel), merged)
+	commit(repo, "[claude-twin-sync] copy the merge-born twin")
+	git(repo, "checkout", "-q", "project")
+	git(repo, "merge", "-q", "--no-edit", "main")
+	assert (repo / claude(rel)).read_text(encoding="utf-8") == merged
+	assert (repo / twin(rel)).read_text(encoding="utf-8") != merged
+	plan = sync.plan_sync(str(repo), "HEAD")
+	assert plan["conflicts"] == []
+	assert [(c["path"], c["reason"]) for c in plan["copies"]] == [(rel, "behind")]
+	assert not plan["needs_owner"]
+
+
 def test_plan_direct_edit_is_a_conflict_and_needs_the_owner(repo):
 	write(repo, twin("commands/a.md"), "a v2\n")
 	write(repo, claude("commands/a.md"), "operator edit\n")
