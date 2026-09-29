@@ -1169,13 +1169,24 @@ reviews, comments, and conflicts stay a direct §12 request.
   `git diff --quiet HEAD...origin/<default> -- .claude/hooks .claude/settings.json`
   right after checkout and, when it reports a change the default branch
   holds and the branch lacks, merge the default branch in with a
-  `[claude-asset-sync]` merge commit (no rebase, no force-push). Only
-  branches that land in the default branch are synced; a PR head on a
-  lagging project branch syncs the project branch first. A conflict under
+  `[claude-asset-sync]` merge commit (no rebase, no force-push). A PR head
+  whose base is not the default branch is also checked against that base
+  (`git diff --quiet HEAD...origin/<base> -- .claude/hooks .claude/settings.json`,
+  issue #5260), because the base can hold a guard change the head lacks
+  while the default branch holds nothing newer. The default branch is
+  merged only into branches that land in it. A PR head on such a project
+  branch syncs the project branch first, verifies the pushed project branch
+  holds every default-branch guard change
+  (`git diff --quiet origin/<project branch>...origin/<default> -- .claude/hooks .claude/settings.json`;
+  a failure stops like a `.claude/` conflict), then merges the project
+  branch. A PR head on any other base merges its own base when the base is
+  ahead on guards; default-only drift there is recorded as
+  `claude_assets=stale (base <base>)`. A conflict under
   `.claude/` aborts the merge and stops with the `ai:claude-blocked:v1`
   blocker (a `hold` claim in `/fix-claude-pr`). A merged `settings.json`
   change applies from the next session. Local git only, no GitHub API
-  calls. The SessionStart hook logs the drift as
+  calls. The SessionStart hook logs the drift against the default branch
+  only (it cannot learn a PR's base without an API call) as
   `[session-start] claude_assets=stale …`, or `claude_assets=diverged …`
   when shallow history has no merge base (stable log prefixes). Tests:
   `tests/test_claude_asset_sync_command.py`,
