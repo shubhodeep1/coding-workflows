@@ -140,13 +140,14 @@ REVIEWER_MAX_STEPS_EFFECTIVE="$(reviewer_positive_int_or_default "${REVIEWER_MAX
 REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE="$(reviewer_positive_int_or_default "${REVIEWER_TOOL_REPEAT_LIMIT:-}" 10 2 REVIEWER_TOOL_REPEAT_LIMIT)"
 
 # Print how many turns (OpenCode `step_start` events) the JSON event stream $1
-# has started; 0 when the file is missing or empty.
+# has started; 0 when the file is missing or empty. The match tolerates
+# whitespace around the colon so a serializer change cannot zero the count.
 reviewer_turn_count() {
   local structured_file="$1"
   local turn_count=""
 
   [ -s "${structured_file}" ] || { printf '0\n'; return 0; }
-  turn_count="$(grep -cF '"type":"step_start"' "${structured_file}" 2>/dev/null || true)"
+  turn_count="$(grep -cE '"type"[[:space:]]*:[[:space:]]*"step_start"' "${structured_file}" 2>/dev/null || true)"
   printf '%s\n' "${turn_count:-0}"
 }
 
@@ -154,14 +155,16 @@ reviewer_turn_count() {
 # the OpenCode JSON event stream $1 are identical: same tool, same input. The
 # input comparison mirrors OpenCode's own doom-loop check, which only looks
 # inside a single model response and so missed one-call-per-turn loops.
-# Unreadable or partial events never count as a repeat (fail open).
+# Unreadable or partial event lines are skipped: they never count toward a
+# repeat and never hide the valid calls around them. The tail reads twice the
+# limit so a few skipped lines still leave a full window of valid calls.
 reviewer_tool_repeat_detected() {
   local structured_file="$1"
   local repeat_limit="$2"
 
   [ -s "${structured_file}" ] || return 1
-  grep -F '"type":"tool_use"' "${structured_file}" 2>/dev/null \
-    | tail -n "${repeat_limit}" \
+  grep -E '"type"[[:space:]]*:[[:space:]]*"tool_use"' "${structured_file}" 2>/dev/null \
+    | tail -n "$((repeat_limit * 2))" \
     | PYTHONDONTWRITEBYTECODE=1 python3 -c '
 import json
 import sys
@@ -174,10 +177,11 @@ for raw_line in sys.stdin:
 		part = event["part"]
 		keys.append((part["tool"], json.dumps(part["state"].get("input"), sort_keys=True)))
 	except (ValueError, KeyError, TypeError, AttributeError):
-		sys.exit(1)
-if len(keys) < limit or len(set(keys)) != 1:
+		continue
+window = keys[-limit:]
+if len(window) < limit or len(set(window)) != 1:
 	sys.exit(1)
-print(keys[0][0])
+print(window[0][0])
 ' "${repeat_limit}"
 }
 

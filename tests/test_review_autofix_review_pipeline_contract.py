@@ -4531,6 +4531,11 @@ def test_reviewer_tool_repeat_detected_flags_only_identical_consecutive_calls() 
 		"paging_same_file": (paging_events, 1),
 		"key_order_ignored": ([grep_event] * 9 + [reordered_event], 0),
 		"partial_last_line": ([grep_event] * 9 + [grep_event[:60]], 1),
+		# A malformed or still-being-written line is skipped; it never hides
+		# the identical calls around it (review round 1 on PR #5110).
+		"malformed_line_inside_loop": ([grep_event] * 5 + ['{"type":"tool_use", broken'] + [grep_event] * 5, 0),
+		"partial_line_after_full_loop": ([grep_event] * 10 + [grep_event[:60]], 0),
+		"spaced_json": ([json.dumps(json.loads(grep_event))] * 10, 0),
 	}
 	with tempfile.TemporaryDirectory() as directory:
 		root = Path(directory)
@@ -4593,9 +4598,14 @@ def test_reviewer_turn_count_counts_opencode_step_starts() -> None:
 		root = Path(directory)
 		events = root / "events.jsonl"
 		events.write_text("\n".join([step_event, grep_event] * 121) + "\n", encoding="utf-8")
+		spaced = root / "spaced.jsonl"
+		spaced.write_text(
+			"\n".join([json.dumps({"type": "step_start", "part": {"type": "step-start"}})] * 3) + "\n",
+			encoding="utf-8",
+		)
 		empty = root / "empty.jsonl"
 		empty.write_text("", encoding="utf-8")
-		for path, expected in ((events, "121"), (empty, "0"), (root / "absent.jsonl", "0")):
+		for path, expected in ((events, "121"), (spaced, "3"), (empty, "0"), (root / "absent.jsonl", "0")):
 			result = _run_reviewer_loop_guard_function(["reviewer_turn_count"], f'reviewer_turn_count "{path}"')
 			assert result.returncode == 0
 			assert result.stdout.strip() == expected, path.name
