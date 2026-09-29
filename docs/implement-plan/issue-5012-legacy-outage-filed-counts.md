@@ -7,14 +7,14 @@
 - Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (twin sync by the master session, Q40)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch and draft final PR #5028 opened; phase 1 not started — it edits `.claude/scripts/permission_prompts.py` (protected path) and no `Protected-path approval: phase 1` line is recorded (CLAUDE.md §28.C); asked on #5012
+- Last note: phase 1 implemented twin-first (Q40): only `workflow-templates/.claude/scripts/permission_prompts.py` changed under `.claude`; phase PR opened with a `hold` claim; waiting for the `[claude-twin-sync]` into `.claude/scripts/permission_prompts.py`
 
 ## Phases
-1. [ ] Phase 1 — record-level filed state with legacy migration — protected paths: .claude/scripts/permission_prompts.py
+1. [ ] Phase 1 — record-level filed state with legacy migration — protected paths: .claude/scripts/permission_prompts.py (edited only in its workflow-templates/.claude/ twin, Q40) — PR open, awaiting twin sync; review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -33,8 +33,10 @@
 - AD-3 [plan, 2026-09-29] Does the state file keep its name? — Picked: A — keep `filed-state.json`, add `"version": 2`. Alternatives: B — a new file name. Why: §6; the version key tells the formats apart. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:security] A filer state that stores cumulative per-pattern counts breaks silently when the grouping later drops records; key filed state by stable record identity (file + line for append-only logs) and migrate old counts by their load-order prefix. (files: .claude/scripts/permission_prompts.py)
 
 ## Notes
+- Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29) (operator comment 5883926767 on #5012).
 - Blocked 2026-09-29 before phase 1: protected-path approval asked on #5012 (`ai:claude-blocked`). Answer with a `Protected-path approval: phase 1 — <letter> (<date>)` line and `/reclarify`.
 - This log update was pushed directly to the project branch as part of step 3a (no phase PR is in flight to carry it), so a resumed stage sees `Final PR: #5028` and does not open a second final PR.
 - Started by the Claude issue dispatcher routine (trigger trig_01FzNj7jt3iTsxF8CUydykuf) in session session_01FxPzZDsebojWQPAqJirYk1; `gh` was installed by running `.claude/hooks/session-start.sh` because the repository was attached mid-session; the GitHub MCP tools were not available, so issue and PR writes used `gh api` REST calls the §23.H guard classifies as routine.
