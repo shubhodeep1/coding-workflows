@@ -1256,8 +1256,9 @@ _autofix_pr_named_review_runs()
 #
 # Motivation:
 #   review_autofix.yml finishes a commit-and-push cycle and then
-#   issues `gh workflow run review_autofix.yml` as a fallback in
-#   case the merge-ref for the synchronize event is unbuildable.
+#   dispatches the next review run from the default branch (the
+#   PR-named wrapper first, issue #4898) as a fallback in case the
+#   merge-ref for the synchronize event is unbuildable.
 #   In the common case the push already fires pull_request.synchronize
 #   → internal-review.yml → review_autofix.yml, so both runs land in
 #   the same `pr-autofix-${PR}` concurrency group with
@@ -1268,7 +1269,8 @@ _autofix_pr_named_review_runs()
 #   in flight.
 #
 # Input:
-#   $1 pr_number      — PR number (informational, used in log lines)
+#   $1 pr_number      — PR number: used in log lines, and must match
+#                       ^[1-9][0-9]*$ for the PR-named lookup below
 #   $2 head_branch    — PR head branch name (required for filtering)
 #   $3 current_run_id — github.run_id of the CURRENT run, so we can
 #                       exclude ourselves from the peer check.
@@ -1427,7 +1429,8 @@ autofix_retrigger_has_inflight_peer()
 #   further dispatch is allowed.
 #
 # Input:
-#   $1 pr_number      — PR number (informational, used in log lines)
+#   $1 pr_number      — PR number: used in log lines, and must match
+#                       ^[1-9][0-9]*$ when the PR-named lookup below runs
 #   $2 head_branch    — PR head branch name (required for filtering)
 #   $3 current_run_id — github.run_id of the CURRENT run (excluded)
 #   $4 head_sha       — the PR head commit this run reviewed (required)

@@ -9,7 +9,7 @@ A run started from the default branch shows the default branch as its head, so t
 | --- | --- |
 | `review_autofix.yml` dispatches that run an unmerged branch's workflow file | 0 (was 2 steps, 6 `gh workflow run --ref` calls) |
 | New GitHub API calls per probe | at most 1 `GET actions/runs?event=workflow_dispatch&per_page=100`, only when the branch lookup found nothing |
-| `review_autofix.yml` size | 437,126 bytes (was 451,394; both step bodies moved to `scripts/`) |
+| `review_autofix.yml` size | 14,268 bytes smaller (both step bodies moved to `scripts/`) |
 
 What this means for operators: after an autofix push or an editor-changes-lost run, the next review run shows the default branch in the Actions list, with the PR in its run name (`Internal: AI Review & Autofix [pr:<N>]` here, `AI Review [pr:<N>]` in consumer repos). A consumer repo whose `ai-review.yml` predates the PR run name (#4701) still gets the default-branch dispatch, but its probes cannot see those runs until the next workflow sync.
 
