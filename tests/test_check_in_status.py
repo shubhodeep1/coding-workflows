@@ -37,6 +37,9 @@ def _pr(**overrides):
 	return pr
 
 
+DISPATCH_RUNS = "repos/o/r/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=100"
+
+
 def _stub(monkeypatch, responses):
 	"""Serve `gh_api(path)` from a {path: payload} map and record the calls."""
 	calls = []
@@ -66,6 +69,7 @@ def _stuck_responses(pr, committed_at, queued=0, in_progress=0, check_runs=None)
 		"repos/o/r/commits/abc": {"commit": {"committer": {"date": committed_at}}},
 		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1": {"total_count": queued},
 		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1": {"total_count": in_progress},
+		DISPATCH_RUNS: {"workflow_runs": []},
 	}
 
 
@@ -124,8 +128,41 @@ def test_conflict_on_old_head_without_active_run_is_stuck(monkeypatch, capsys):
 	calls = _stub(monkeypatch, _stuck_responses(_pr(mergeable_state="dirty"), OLD))
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is True and out["state"] == "stuck"
-	# A conflict needs no check-run read: pulls, commit, queued, in_progress.
-	assert len(calls) == 4
+	# A conflict needs no check-run read: pulls, commit, queued, in_progress,
+	# and the PR-named dispatch listing (issue #4618).
+	assert calls == [
+		"repos/o/r/pulls/7",
+		"repos/o/r/commits/abc",
+		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1",
+		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1",
+		DISPATCH_RUNS,
+	]
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress"])
+def test_old_head_with_active_sweep_dispatch_for_the_pr_waits(monkeypatch, capsys, status):
+	# The sweep dispatches internal-review.yml from the default branch
+	# (issue #4618), so its run is not on the head branch; check_pr's stuck
+	# path must still count it by its `[pr:<N>]` title.
+	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
+	responses[DISPATCH_RUNS] = {"workflow_runs": [
+		{"status": status, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+	]}
+	_stub(monkeypatch, responses)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
+
+
+def test_old_head_with_sweep_dispatch_for_another_pr_or_finished_is_stuck(monkeypatch, capsys):
+	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
+	responses[DISPATCH_RUNS] = {"workflow_runs": [
+		{"status": "in_progress", "display_title": "Internal: AI Review & Autofix [pr:8]"},
+		{"status": "completed", "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		{"status": "pending", "display_title": "Internal: AI Review & Autofix [pr:7]"},
+	]}
+	_stub(monkeypatch, responses)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "stuck"
 
 
 def test_failed_check_on_old_head_without_active_run_is_stuck(monkeypatch, capsys):
@@ -136,7 +173,14 @@ def test_failed_check_on_old_head_without_active_run_is_stuck(monkeypatch, capsy
 	calls = _stub(monkeypatch, _stuck_responses(_pr(mergeable_state="unstable"), OLD, check_runs=runs))
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is True and "lint" in out["reason"] and "superseded" not in out["reason"]
-	assert len(calls) <= 5
+	assert calls == [
+		"repos/o/r/pulls/7",
+		"repos/o/r/commits/abc/check-runs?per_page=100&page=1",
+		"repos/o/r/commits/abc",
+		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1",
+		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1",
+		DISPATCH_RUNS,
+	]
 
 
 def test_failed_check_on_second_page_is_detected(monkeypatch, capsys):
@@ -225,6 +269,7 @@ def _fixer_responses(pr=None, **run_overrides):
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1": {"total_count": 0},
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1": {"total_count": 0},
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1": {"total_count": 0},
+		DISPATCH_RUNS: {"workflow_runs": []},
 	}
 
 
@@ -256,7 +301,8 @@ def test_fixer_findings_handoff_for_current_head_is_a_review_round(monkeypatch, 
 		f"repos/o/r/actions/runs/{FIXER_RUN_ID}",
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1",
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1",
-		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1"]
+		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1",
+		DISPATCH_RUNS]
 
 
 def test_fixer_conflict_handoff_is_a_conflict_round(monkeypatch, capsys):
