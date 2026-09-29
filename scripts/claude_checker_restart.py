@@ -183,18 +183,20 @@ def _git(args: list[str], timeout: int = 180) -> str:
 	try:
 		proc = subprocess.run(["git", *args], capture_output=True, text=True, timeout=timeout)
 	except (OSError, subprocess.TimeoutExpired) as exc:
-		raise ReadError(f"git {args[0]} failed: {exc}") from exc
+		raise ReadError(f"git {' '.join(args)} failed: {exc}") from exc
 	if proc.returncode != 0:
 		detail = (proc.stderr or proc.stdout).strip().splitlines()
-		raise ReadError(f"git {args[0]} failed: {detail[-1] if detail else f'exit {proc.returncode}'}")
+		raise ReadError(f"git {' '.join(args)} failed: {detail[-1] if detail else f'exit {proc.returncode}'}")
 	return proc.stdout
 
 
-def read_project_logs(branches: list[str]) -> dict[str, str]:
+def read_project_logs(branches: list[str], errors: list[str] | None = None) -> dict[str, str]:
 	"""Return {branch: log text} for each `claude/implement-plan-<slug>` branch that has its log.
 
 	One `git ls-remote` for the tips and one shallow `git fetch` for all of
-	them; a branch without `docs/implement-plan/<slug>.md` is left out.
+	them; a branch without `docs/implement-plan/<slug>.md` is left out. When
+	`git show` fails, one local `git ls-tree` tells a missing log (left out
+	silently) from a failed read, which is left out and appended to `errors`.
 	"""
 	if not branches:
 		return {}
@@ -210,11 +212,16 @@ def read_project_logs(branches: list[str]) -> dict[str, str]:
 	_git(["fetch", "--quiet", "--no-tags", "--depth", "1", "origin", *[f"refs/heads/{branch}" for branch in present]])
 	logs: dict[str, str] = {}
 	for branch in present:
-		slug = branch[len(PROJECT_BRANCH_PREFIX):]
+		log_path = f"docs/implement-plan/{branch[len(PROJECT_BRANCH_PREFIX):]}.md"
 		try:
-			logs[branch] = _git(["show", f"{tips[branch]}:docs/implement-plan/{slug}.md"], timeout=30)
-		except ReadError:
-			continue
+			logs[branch] = _git(["show", f"{tips[branch]}:{log_path}"], timeout=30)
+		except ReadError as exc:
+			try:
+				missing = not _git(["ls-tree", "--name-only", tips[branch], "--", log_path], timeout=30).strip()
+			except ReadError:
+				missing = False
+			if not missing and errors is not None:
+				errors.append(f"project log {branch}: {exc}")
 	return logs
 
 
@@ -739,7 +746,7 @@ def scan_logs(repo: str, errors: list[str]) -> tuple[dict[str, list[str]], list[
 			branch for branch in list_project_branches()
 			if (issue_of(branch[len(PROJECT_BRANCH_PREFIX):]) is not None and str(issue_of(branch[len(PROJECT_BRANCH_PREFIX):])) in wanted)
 		]
-		logs = read_project_logs(branches)
+		logs = read_project_logs(branches, errors)
 	except ReadError as exc:
 		errors.append(f"project logs: {exc}")
 		return open_issues, []

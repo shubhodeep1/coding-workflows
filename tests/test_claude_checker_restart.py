@@ -525,7 +525,7 @@ def _scan(monkeypatch, issues, branches, logs):
 	requested = []
 	monkeypatch.setattr(restart, "list_project_branches", lambda: list(branches))
 
-	def fake_logs(wanted):
+	def fake_logs(wanted, errors=None):
 		requested.append(list(wanted))
 		return {branch: logs[branch] for branch in wanted if branch in logs}
 
@@ -619,14 +619,76 @@ def test_read_project_logs_uses_one_ls_remote_and_one_fetch(monkeypatch):
 			return "sha1\trefs/heads/claude/implement-plan-a\nsha2\trefs/heads/claude/implement-plan-b\n"
 		if args[0] == "fetch":
 			return ""
+		if args[0] == "ls-tree":
+			return ""
 		if args[1] == "sha1:docs/implement-plan/a.md":
 			return "log a"
 		raise restart.ReadError("git show failed: path does not exist")
 
 	monkeypatch.setattr(restart, "_git", fake_git)
-	assert restart.read_project_logs(["claude/implement-plan-a", "claude/implement-plan-b", "claude/implement-plan-gone"]) == {"claude/implement-plan-a": "log a"}
-	assert calls == ["ls-remote", "fetch", "show", "show"]
+	errors = []
+	assert restart.read_project_logs(["claude/implement-plan-a", "claude/implement-plan-b", "claude/implement-plan-gone"], errors) == {"claude/implement-plan-a": "log a"}
+	assert calls == ["ls-remote", "fetch", "show", "show", "ls-tree"]
+	assert errors == []
 	assert restart.read_project_logs([]) == {}
+
+
+def test_read_project_logs_reports_a_failed_show_of_an_existing_log(monkeypatch):
+	calls = []
+
+	def fake_git(args, timeout=180):
+		calls.append(args)
+		if args[0] == "ls-remote":
+			return "sha1\trefs/heads/claude/implement-plan-a\nsha2\trefs/heads/claude/implement-plan-b\nsha3\trefs/heads/claude/implement-plan-c\n"
+		if args[0] == "fetch":
+			return ""
+		if args[0] == "ls-tree":
+			if args[2] == "sha3":
+				raise restart.ReadError("git ls-tree failed: fatal: not a tree object")
+			return f"{args[-1]}\n"
+		if args[1] == "sha1:docs/implement-plan/a.md":
+			return "log a"
+		raise restart.ReadError(f"git show {args[1]} failed: fatal: bad object")
+
+	monkeypatch.setattr(restart, "_git", fake_git)
+	errors = []
+	branches = ["claude/implement-plan-a", "claude/implement-plan-b", "claude/implement-plan-c"]
+	assert restart.read_project_logs(branches, errors) == {"claude/implement-plan-a": "log a"}
+	assert ["ls-tree", "--name-only", "sha2", "--", "docs/implement-plan/b.md"] in calls
+	assert errors == [
+		"project log claude/implement-plan-b: git show sha2:docs/implement-plan/b.md failed: fatal: bad object",
+		"project log claude/implement-plan-c: git show sha3:docs/implement-plan/c.md failed: fatal: bad object",
+	]
+	assert restart.read_project_logs(branches) == {"claude/implement-plan-a": "log a"}
+
+
+def test_scan_lists_a_failed_project_log_read_in_errors(monkeypatch):
+	_stub(monkeypatch, {"repos/o/r/issues?": [{"number": 7, "labels": [{"name": "ai:claude"}]}]})
+	monkeypatch.setattr(restart, "list_project_branches", lambda: [f"claude/implement-plan-{SLUG}"])
+
+	def failing_logs(branches, errors=None):
+		errors.append(f"project log {branches[0]}: git show failed")
+		return {}
+
+	monkeypatch.setattr(restart, "read_project_logs", failing_logs)
+	errors = []
+	assert restart.scan_logs(REPO, errors) == ({"7": ["ai:claude"]}, [])
+	assert errors == [f"project log claude/implement-plan-{SLUG}: git show failed"]
+
+
+def test_git_failure_names_the_full_command(monkeypatch):
+	class Done:
+		returncode = 128
+		stdout = ""
+		stderr = "fatal: path 'docs/implement-plan/a.md' does not exist in 'sha1'\n"
+
+	monkeypatch.setattr(restart.subprocess, "run", lambda *args, **kwargs: Done())
+	try:
+		restart._git(["show", "sha1:docs/implement-plan/a.md"])
+	except restart.ReadError as exc:
+		assert str(exc) == "git show sha1:docs/implement-plan/a.md failed: fatal: path 'docs/implement-plan/a.md' does not exist in 'sha1'"
+	else:
+		raise AssertionError("expected ReadError")
 
 
 # --- input shapes and the CLI -------------------------------------------------------------
@@ -662,7 +724,7 @@ def test_session_view_reads_external_metadata_fallbacks():
 def test_cli_scan_then_decide(tmp_path, monkeypatch):
 	_stub(monkeypatch, {"repos/o/r/issues?": [{"number": 7, "labels": [{"name": "ai:claude"}]}], "repos/o/r/issues/7/comments": []})
 	monkeypatch.setattr(restart, "list_project_branches", lambda: [f"claude/implement-plan-{SLUG}"])
-	monkeypatch.setattr(restart, "read_project_logs", lambda branches: {f"claude/implement-plan-{SLUG}": LOG_TEXT})
+	monkeypatch.setattr(restart, "read_project_logs", lambda branches, errors=None: {f"claude/implement-plan-{SLUG}": LOG_TEXT})
 	sessions = _write(tmp_path, "s.json", json.dumps({"ccr": {"data": [_checker("session_dead", slug="plan-y")]}}))
 	triggers = _write(tmp_path, "t.json", json.dumps({"data": [], "has_more": False}))
 	state_path = str(tmp_path / "state.json")
