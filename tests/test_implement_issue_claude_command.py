@@ -293,3 +293,20 @@ def test_pickup_starts_fixer_sessions_for_pr_fix_items(pickup_cmd):
 	assert "`item_type` `pr_fix`" in pickup_cmd
 	assert "title `PR <repo>#<N> — fix <kind>`" in pickup_cmd
 	assert "`/fix-claude-pr` re-reads the PR and stops when the fix is no longer due" in pickup_cmd
+
+
+def test_pickup_skips_a_denied_cleanup_call(pickup_cmd):
+	"""Issue #5068: the pickup never retries a denied cleanup call (CLAUDE.md §26.I).
+
+	The pickup has no workflow-templates twin, so this reads the root file and
+	passes once the supervising session applies the twin-sync diff.
+	"""
+	keep_one = pickup_cmd[pickup_cmd.index("**Keep exactly one pickup.**"):pickup_cmd.index("**Read the queue.**")]
+	assert "**Cleanup calls** (all three modes)." in keep_one
+	assert "act only on triggers named exactly `Claude issue pickup: hourly` from the listing above" in keep_one
+	assert "They are cleanup calls (CLAUDE.md §26.I): if one is denied, never retry it." in keep_one
+	assert "in `start` mode create this session's trigger anyway, and in `— wake.` mode read the queue anyway" in keep_one
+	assert "; cleanup skipped: set_session_title denied (<reason>)" in pickup_cmd
+	assert "; cleanup skipped: archive_session denied (<reason>)" in pickup_cmd
+	rules = pickup_cmd[pickup_cmd.index("## Rules"):]
+	assert "**A denied cleanup call is skipped, never retried** (CLAUDE.md §26.I, issue #5068)" in rules
