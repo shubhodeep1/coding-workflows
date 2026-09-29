@@ -1109,6 +1109,33 @@ reviews, comments, and conflicts stay a direct §12 request.
   from filing the same occurrences again. No cap on open issues. Issue text
   masks token-like strings, removes heredoc bodies, and truncates commands to
   2,000 characters. In consumer repos it only reports.
+- **Command class (issue #4867).** A pattern that is an inline-interpreter
+  write (`python3 -` heredoc or `python3 -c` whose program writes a file, or
+  `sed -i`, `perl -i`, `ruby -i`, `awk -i inplace`; the #4858 definition) is
+  classed `inline-interpreter-write`, and its new issue carries
+  `<!-- ai:permission-prompt-class:v1 class=inline-interpreter-write -->`. A
+  later new pattern of that class with no signature match is a "Seen again"
+  comment on the lowest-numbered **open** issue carrying that marker, not a
+  new issue. A closed class issue attracts nothing. No extra API call: the
+  same `ai:permission-prompt` list read serves both matches.
+- **Duplicate close (CLAUDE.md §23.C carve-out, §23.I; issue #4867).**
+  `permission_prompts.py duplicate-check --repo R --issue N --target M
+  --fix-pr P` prints `eligible`, the failed `reasons`, and evidence fields.
+  It uses at most five REST GETs: `user`, the issue, one events page, the
+  target, and the PR. It checks that:
+  - N is open, labelled `ai:permission-prompt` by its author at creation
+    (the `security_pass_skip.py` 120 s rule), and carries the signature
+    marker and the "Filed by" line;
+  - N's author is the authenticated account;
+  - M is another issue, open or closed as completed;
+  - P references M (branch `issue-<M>-` or `#<M>`), and is open or merged;
+    for a closed M, P merged into the default branch.
+
+  `/implement-issue-claude` step 5a runs it before any plan exists. On
+  `"eligible": true` the session posts one evidence comment
+  (`<!-- ai:claude-duplicate-close:v1 target=<M> -->`) and closes the issue
+  with `state_reason: duplicate` and `duplicate_of`. Otherwise it keeps the
+  `ai:claude-blocked` ask.
 - `/implement-plan-claude` step 0 now refuses to run outside Auto mode
   (except issue mode, which records the mode), and a phase touching
   `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md

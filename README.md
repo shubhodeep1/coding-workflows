@@ -1078,7 +1078,12 @@ not delete wrappers that are already present in `.github/workflows/`.
 > coding-workflows only, files each new pattern as an `ai:permission-prompt`
 > issue routed to the Claude issue implementer. `/implement-plan-claude` now
 > requires Auto mode, and stops before any phase that must edit `.claude/**`
-> to ask how to run it.
+> to ask how to run it. A new shape of an inline-interpreter write is added
+> as a comment to the open issue of that command class instead of opening a
+> new issue. An `/implement-issue-claude` session may close its own
+> pipeline-filed `ai:permission-prompt` issue as a duplicate without asking,
+> but only when `permission_prompts.py duplicate-check` confirms the CLAUDE.md
+> §23.I conditions and the session has posted its evidence (issue #4867).
 
 > **Audit identity and regeneration:**
 > `scripts/security/check-npm-audit.js` matches findings on
