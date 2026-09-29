@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T10:47:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test stub for a `gh api ... --jq <filter>` call must serve the real REST payload shape and apply the caller's own filter with jq; a stub that prints the pre-transformed result cannot catch a broken `--jq` transform.",
+  "phase": "implement_plan",
+  "pr_number": 4999,
+  "record_id": "lesson-implement-plan-395f5983818e387f25ff85c5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4957-managed-status-from-label-and-lineage",
+    "file:tests/test_issue_pr_status_target_branch_gate.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T10:47:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a behaviour change forces an existing test onto a different case (a standalone fixture gaining a label to stay green), add a new test for the case it used to cover instead of only rewriting the old one.",
+  "phase": "implement_plan",
+  "pr_number": 4999,
+  "record_id": "lesson-implement-plan-a506c021937ceb7e72d7aedb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4957-managed-status-from-label-and-lineage",
+    "file:tests/test_orchestrate_poll_process.py"
+  ]
+}
