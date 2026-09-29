@@ -2281,7 +2281,9 @@ This is an explicit carve-out from §0 and §2 (including §2's
   because hooks and settings are the guards that limit what sessions can
   do. `review_autofix.yml` and the §26.H sweep skip sync PRs. CI fails a PR
   that moves `.claude/` ahead of its twin; the twin may be ahead while its
-  sync PR is pending. The protected-path stop remains for the `.claude/`
+  sync PR is pending. A hook or settings file may change only to the twin
+  already on the base commit, never be deleted, and, on a PR, only from a
+  same-repository sync PR: matching the twin in the same PR is not enough. The protected-path stop remains for the `.claude/`
   files that have no twin (`UPSTREAM_ONLY_PATHS` in
   `scripts/claude_twin_sync.py`: the consumer-variant commands and
   `claude-issue-pickup.md`) and in repos without `workflow-templates/.claude/`

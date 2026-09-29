@@ -197,16 +197,27 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
           REF_NAME: ${{ github.ref_name }}
           BASE_REF: ${{ github.base_ref }}
+          # PR context for the guard-path rule (issue #5246); read from env,
+          # never expanded into the script text.
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           # .claude/ may lag its twin (workflow-templates/.claude/) while a
           # claude-twin-sync.yml PR is pending, but it may never move anywhere
           # but the twin: the check fails when this PR or push changes a
           # .claude/ file to content that differs from its twin at HEAD.
+          # Guard paths (.claude/hooks/**, .claude/settings*.json) fail
+          # closed: they may only become the twin already on the base commit,
+          # are never deleted, and on a PR change only from a same-repository
+          # claude/claude-twin-sync-* head, which only the owner merges.
+          event_args=(--event push)
           if [ "${EVENT_NAME}" = "pull_request" ] && [ "${BASE_REF}" = "main" ]; then
             # The checkout is the PR's merge commit; its first parent is the
             # base-branch tip the merge was built on.
             base="$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')"
+            event_args=(--event pull_request "--pr-head-ref=${PR_HEAD_REF:-}" "--pr-head-repo=${PR_HEAD_REPO:-}" "--repo=${REPOSITORY}")
           elif [ "${EVENT_NAME}" = "push" ] && [ "${REF_NAME}" = "main" ]; then
             # One merged PR per push, so the range is that PR's net change.
             base="${PUSH_BEFORE:-}"
@@ -222,7 +233,7 @@ jobs:
             exit 0
           fi
           git fetch --no-tags --depth=1 origin "${base}"
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD "${event_args[@]}"
 
       - name: Setup Python
         uses: actions/setup-python@v6

@@ -1239,6 +1239,23 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `main` the two match again once it merges. Tests load the twin and call
   `tests/claude_twin_state.py::assert_claude_not_ahead`, which skips a
   differing pair in a shallow clone.
+- **Guard paths fail closed in the sync-state check** (issue #5246):
+  matching the twin at HEAD is not enough for `.claude/hooks/**`,
+  `.claude/settings.json`, or `.claude/settings.local.json`, because one PR
+  could change a hook and its twin together and skip the owner-only merge.
+  A changed guard path must equal the twin's blob and mode on the **base**
+  commit (the reviewed twin already on `main`) and is never deleted. On a PR
+  into `main` it may change only from a same-repository
+  `claude/claude-twin-sync-*` head (`check --event pull_request
+  --pr-head-ref=… --pr-head-repo=… --repo=…`, passed from the event payload
+  through the step's `env:`); on a push to `main` (`--event push`, the
+  default) the base is `github.event.before`. A deliberate direct change to
+  a hook or setting (a conflict fix, a removal) therefore fails the check,
+  and the repository owner merges that PR by hand. Claude-fixer mode never
+  auto-merges with a failing check, but `main` has no required status
+  checks and the GPT review path only feeds failing checks to its reviewers,
+  so making `lint` a required check in the `main` ruleset is the operator
+  step (CLAUDE.md §23.C) that lets GitHub enforce the rule for every PR.
 - **Credentials:** `GITHUB_TOKEN` (`contents`, `pull-requests`, `checks`,
   `statuses`: read) for reads; `GH_PAT` only in the sync step, for the push
   (passed in `GIT_CONFIG_*` environment variables to that one git command),
