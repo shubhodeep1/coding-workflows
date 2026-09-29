@@ -66,6 +66,25 @@ CALLER_CONTRACTS = [
 	},
 ]
 
+# Observe-only children wait for the guard's verdict instead of sleeping a
+# fixed time. The guard measures idle time from when it reads the child's last
+# output, so a fixed sleep races a loaded runner (issue #5119). The child reads
+# the status file path from argv[2] and exits once the guard has written
+# state=observed. The deadline stays under the 20 s subprocess timeout, so a
+# guard that never observes still fails the assertions instead of hanging.
+OBSERVED_STATUS_WAIT_SECS = 15
+WAIT_FOR_OBSERVED_STATUS_SNIPPET = (
+	"guard_status_path = pathlib.Path(sys.argv[2])\n"
+	f"observed_deadline = time.monotonic() + {OBSERVED_STATUS_WAIT_SECS}\n"
+	"while time.monotonic() < observed_deadline:\n"
+	"\ttry:\n"
+	"\t\tif 'state=observed' in guard_status_path.read_text(encoding='utf-8').splitlines():\n"
+	"\t\t\tbreak\n"
+	"\texcept OSError:\n"
+	"\t\tpass\n"
+	"\ttime.sleep(0.05)\n"
+)
+
 
 def _stall_guard_test_env() -> dict[str, str]:
 	env = os.environ.copy()
@@ -161,7 +180,7 @@ def _run_guard_for_contract(
 		cmd.extend(["--stderr-file", str(stderr_file)])
 	if activity_file is not None:
 		cmd.extend(["--activity-file", str(activity_file)])
-	cmd.extend(["--", "python3", "-c", child_body, str(child_pid_file)])
+	cmd.extend(["--", "python3", "-c", child_body, str(child_pid_file), str(status_file)])
 
 	result = subprocess.run(
 		cmd,
@@ -184,12 +203,12 @@ def _run_guard_for_contract(
 
 def test_stall_guard_caller_contracts_cover_observe_only_mode() -> None:
 	child_body = (
-		"import os, sys, time; "
-		"open(sys.argv[1], 'w', encoding='ascii').write(str(os.getpid())); "
-		"print('stdout-start'); sys.stdout.flush(); "
-		"print('stderr-start', file=sys.stderr); sys.stderr.flush(); "
-		"time.sleep(1.3); "
-		"print('stdout-done'); sys.stdout.flush()"
+		"import os, pathlib, sys, time\n"
+		"open(sys.argv[1], 'w', encoding='ascii').write(str(os.getpid()))\n"
+		"print('stdout-start'); sys.stdout.flush()\n"
+		"print('stderr-start', file=sys.stderr); sys.stderr.flush()\n"
+		+ WAIT_FOR_OBSERVED_STATUS_SNIPPET
+		+ "print('stdout-done'); sys.stdout.flush()\n"
 	)
 
 	for contract in CALLER_CONTRACTS:
@@ -307,13 +326,14 @@ def test_codex_stall_guard_observe_only_records_event_idle_without_killing_child
 				"python3",
 				"-c",
 				(
-					"import os, sys, time; "
-					"open(sys.argv[1], 'w', encoding='ascii').write(str(os.getpid())); "
-					"print('start'); sys.stdout.flush(); "
-					"time.sleep(2.4); "
-					"print('done'); sys.stdout.flush()"
+					"import os, pathlib, sys, time\n"
+					"open(sys.argv[1], 'w', encoding='ascii').write(str(os.getpid()))\n"
+					"print('start'); sys.stdout.flush()\n"
+					+ WAIT_FOR_OBSERVED_STATUS_SNIPPET
+					+ "print('done'); sys.stdout.flush()\n"
 				),
 				str(child_pid_file),
+				str(status_file),
 			],
 			env=env,
 			capture_output=True,
@@ -443,7 +463,7 @@ def test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_p
 				(
 					"import sys, time; "
 					"print('start'); sys.stdout.flush(); "
-					"time.sleep(2.4)"
+					"time.sleep(3.5)"
 				),
 			],
 			env=env,
