@@ -13,12 +13,12 @@ on:
         default: false
         type: boolean
       pr_title:
-        description: "PR title for [skip ai] gating (passed by wrapper workflows)"
+        description: "PR title for [skip ai] gating: the marker anywhere in the title skips the review (passed by wrapper workflows)"
         required: false
         default: ""
         type: string
       pr_body:
-        description: "PR body for [skip ai] gating (passed by wrapper workflows)"
+        description: "PR body for [skip ai] gating: only a line holding nothing but the marker, outside a code fence, skips the review; a quoted or mid-sentence mention does not (passed by wrapper workflows)"
         required: false
         default: ""
         type: string

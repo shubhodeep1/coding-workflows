@@ -107,6 +107,18 @@ def test_the_old_substring_checks_are_gone():
 	assert "reason=skip_ai_marker" in sweep and "reason=skip_ai_marker" in sweep_script
 
 
+def test_the_gate_input_descriptions_state_the_rule():
+	# A caller reading the reusable workflow's inputs must not take a quoted
+	# body mention for an opt-out (issue #4985).
+	workflow = yaml.safe_load(GATE_WF.read_text(encoding="utf-8"))
+	triggers = workflow.get("on", workflow.get(True))
+	inputs = triggers["workflow_call"]["inputs"]
+	assert "anywhere in the title skips" in inputs["pr_title"]["description"]
+	body_description = inputs["pr_body"]["description"]
+	assert "only a line holding nothing but the marker, outside a code fence, skips" in body_description
+	assert "a quoted or mid-sentence mention does not" in body_description
+
+
 # --- the gate's skip log and notice -----------------------------------------------
 
 def _gate_script() -> str:
