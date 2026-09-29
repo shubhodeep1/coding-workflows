@@ -1175,9 +1175,10 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `.claude/` copy.
 - **Classification** (`plan`, full history required): a `.claude/` copy that
   is missing, has another mode, or equals any version the twin had (up to
-  500 revisions, `git log --raw`) is copied. One that matches no twin
-  version (an operator changed it directly) or is a symlink is a
-  **conflict**: listed in the PR, never overwritten. Paths with `..`, `.`,
+  500 revisions, `git log -m --raw`, so a version a merge produced counts)
+  is copied. One that matches no twin version (an operator changed it
+  directly) or is a symlink is a **conflict**: listed in the PR, never
+  overwritten. Paths with `..`, `.`,
   empty segments, a backslash, or a leading `/` are rejected.
 - **The sync PR:** branch `claude/claude-twin-sync-<main sha[:12]>` (a
   `-2`…`-9` suffix when a closed PR left that name), built on a temporary

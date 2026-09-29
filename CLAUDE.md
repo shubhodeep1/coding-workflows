@@ -2298,24 +2298,6 @@ This is an explicit carve-out from §0 and §2 (including §2's
   escalation above. It never ships a smaller substitute, such as a direct edit
   without the plan, the project branch, and those passes, and never records
   one as an auto-decision.
-- **Interim automatic twin-first default for protected-path phases (until
-  #4785).** In a repo that has `workflow-templates/.claude/`
-  (coding-workflows), a protected-path phase whose log has no
-  `Protected-path approval: phase <n>` line is not stopped. The session
-  records `Protected-path approval: phase <n> — twin-first (automatic,
-  interim until #4785) (<date>)` itself (the line format is unchanged) and
-  runs the phase twin-first, the operator's standing Q40 rule: it edits only
-  the `workflow-templates/.claude/**` twins, puts the exact diff and sha256
-  of any `.claude/` path without a twin in the sync blocker, and after the
-  phase PR opens posts a `hold` claim and the twin-sync blocker, which still
-  stops the project until the `[claude-twin-sync]` copy. The
-  protected-path question above is still asked for an edit that is denied
-  even in the twin tree and for a phase whose plan says it needs a watched
-  session. A different `Protected-path approval:` answer already in the log
-  stands and is never overwritten. Repos without `workflow-templates/.claude/`
-  keep the question. **Sunset:** the PR that makes #4785's Actions sync live
-  (`scripts/claude_twin_sync.py`) removes this bullet and the matching
-  paragraph in `/implement-plan-claude` step 4.
 
 ### D) Recording
 

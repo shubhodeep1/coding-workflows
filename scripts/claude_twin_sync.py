@@ -199,10 +199,12 @@ def twin_history_blobs(repo: str, ref: str, rel: str) -> set[str]:
 	"""Every blob the twin path held in its last HISTORY_LIMIT changes up to `ref`.
 
 	One `git log --raw` call; both sides of every change are collected, so the
-	version a change replaced counts too.
+	version a change replaced counts too. `-m` adds each merge commit's diff
+	against every parent: a version first produced by a merge (a default-branch
+	sync into a project branch that both edited the twin) is a twin version too.
 	"""
 	out = run_git(repo, [
-		"log", "--format=", "--raw", "--no-abbrev", "--no-renames",
+		"log", "-m", "--format=", "--raw", "--no-abbrev", "--no-renames",
 		f"-n{HISTORY_LIMIT}", ref, "--", f"{TWIN_ROOT}/{rel}",
 	])
 	blobs: set[str] = set()
