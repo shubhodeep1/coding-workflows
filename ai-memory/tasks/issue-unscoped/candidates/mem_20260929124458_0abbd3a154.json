@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_codex_stall_guard_scripts.py:83 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The status-file polling snippet catches every `OSError`, masking filesystem errors other than the expected not-yet-created file.\n  WHY: An invalid or unreadable status-file path can poll until the 15-second deadline before failing without a diagnostic that identifies the filesystem error.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Replace fixed sleeps in observe-only tests with deterministic wait for guard's `state=observed` status file (phase 1 of plan).\n  expected_change_site: tests/test_codex_stall_guard_scripts.py (OBSERVED_STATUS_WAIT_SECS, WAIT_FOR_OBSERVED_STATUS_SNIPPET, updated _run_guard_for_contract + 3 tests).\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: None \u2014 all changes present, verification passes, assertions unchanged, negative control fails as expected.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_codex_stall_guard_scripts.py:83 | severity=NIT | confidence=3\n  PROBLEM: The `WAIT_FOR_OBSERVED_STATUS_SNIPPET` catches the broad `OSError` class instead of the narrower `FileNotFoundError`.\n  WHY: Catching `OSError` also swallows `PermissionError`, `IsADirectoryError`, and other filesystem errors, making a test setup problem harder to diagnose.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_codex_stall_guard_scripts.py:83 | severity=NIT | confidence=3\n  PROBLEM: `WAIT_FOR_OBSERVED_STATUS_SNIPPET` catches every `OSError` subclass, not just the missing-file case the comment intends to handle.\n  WHY: A wrong-typed or unreadable status-file path can be silently retried until the 15-second deadline instead of failing quickly with a diagnostic.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Replace fixed sleeps in observe-only tests with deterministic wait for guard's `state=observed` status file (phase 1 of plan).\n  Expected change site: tests/test_codex_stall_guard_scripts.py (OBSERVED_STATUS_WAIT_SECS, WAIT_FOR_OBSERVED_STATUS_SNIPPET, updated _run_guard_for_contract + 3 tests).\n  Evidence of absence: None \u2014 all changes present, verification passes, assertions unchanged, negative control fails as expected.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d97029f775f3b1f98caa1970184c7c6ee040e61ebdc5576701880c775d55e9b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5156,
+    "run_id": "36567377077",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36567377077",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929124458_0abbd3a154",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5156,
+    "run_id": "36567377077"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T12:44:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
