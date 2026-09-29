@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T06:24:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A security follow-up of a project that changes `validate.yml` target authorization is built on that project's branch, but validation runs `validate.yml@main`, so the follow-up cannot be validated until the parent merges while the parent waits on the follow-up; decide the validation route when the follow-up is planned (the parent's validation covers it).",
+  "phase": "implement_plan",
+  "pr_number": 5062,
+  "record_id": "lesson-implement-plan-2711b4e911138e5954703583",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:validation",
+    "plan:issue-4791-validate-stable-heal-provenance",
+    "file:.github/workflows/validate.yml",
+    "file:.github/workflows/internal-validate.yml"
+  ]
+}
