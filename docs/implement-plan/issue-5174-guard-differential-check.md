@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5174-guard-differential-check   Final PR: #5185 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5187
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_019rGgoLZBfTcYZUkbRAYsRN (project checker; per-wait safety net and hand-back ids are in the stage report)
 - Last updated: 2026-09-29
-- Last note: project branch and draft final PR #5185 opened; phase 1 implemented and verified locally, phase PR opened.
+- Last note: review round 1 on PR #5187: 3 findings fixed (git env isolation in _repo_git, scenario env cannot override hook isolation, stub gh without heredoc), 3 rejected with reasons on the PR.
 
 ## Phases
-1. [ ] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog)
+1. [ ] Phase 1 — guard differential check (script, corpora, tests, ci.yml steps, agents.md, changelog) — PR #5187 open; review rounds: 1; interventions: 0
 
 ## Conformance
 

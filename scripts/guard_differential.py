@@ -69,6 +69,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -82,6 +83,7 @@ LOG_KEY = "GUARD_DIFFERENTIAL"
 HOOK_TREES = (".claude/hooks", "workflow-templates/.claude/hooks")
 DEFAULT_CORPUS_DIR = "tests/guard_corpus"
 HOOK_TIMEOUT_SECONDS = 120
+_STRIPPED_ENV_KEYS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST")
 
 STRICTNESS = {
 	"block": 3,
@@ -274,11 +276,18 @@ def classify_output(returncode: int, stdout: str) -> Outcome:
 
 
 def hook_env(scenario_env: dict[str, str], stub_bin: Path, home: Path, cache: Path) -> dict[str, str]:
+	"""The hook's environment. The scenario's variables are applied before the
+	isolation settings, and never carry a token or a `CLAUDE_*` variable, so no
+	scenario can re-enable network access, system git config, or a kill switch.
+	"""
 	env = {
 		key: value
 		for key, value in os.environ.items()
-		if not key.startswith(("CLAUDE_", "GIT_")) and key not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST")
+		if not key.startswith(("CLAUDE_", "GIT_")) and key not in _STRIPPED_ENV_KEYS
 	}
+	env.update(
+		{key: value for key, value in scenario_env.items() if not key.startswith("CLAUDE_") and key not in _STRIPPED_ENV_KEYS}
+	)
 	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', os.defpath)}"
 	env["HOME"] = str(home)
 	env["TMPDIR"] = str(cache)
@@ -286,7 +295,6 @@ def hook_env(scenario_env: dict[str, str], stub_bin: Path, home: Path, cache: Pa
 	env["GIT_ALLOW_PROTOCOL"] = "file"
 	env["GIT_TERMINAL_PROMPT"] = "0"
 	env["GIT_CONFIG_NOSYSTEM"] = "1"
-	env.update(scenario_env)
 	return env
 
 
@@ -354,17 +362,22 @@ def _git(cwd: Path, *args: str) -> str:
 def _write_stub_gh(stub_bin: Path, cases: dict[str, str]) -> None:
 	"""A `gh` stub that answers REST pulls lookups by `head=` and `[]` otherwise.
 
-	It never reaches GitHub; every call is appended to `gh-calls.log`.
+	It never reaches GitHub; every call is appended to `gh-calls.log`. Each
+	payload is written to its own file and printed with `cat`, and every
+	pattern and path is shell-quoted, so no payload or head text can end a
+	heredoc early or be run as shell.
 	"""
 	stub_bin.mkdir(parents=True, exist_ok=True)
 	lines = [
 		"#!/bin/sh",
-		f'echo "$*" >> "{stub_bin / "gh-calls.log"}"',
+		f'echo "$*" >> {shlex.quote(str(stub_bin / "gh-calls.log"))}',
 		'for arg in "$@"; do',
 		'  case "$arg" in',
 	]
-	for head, payload in cases.items():
-		lines.append(f"    head={head}) cat <<'EOF'\n{payload}\nEOF\n      exit 0;;")
+	for index, (head, payload) in enumerate(cases.items()):
+		payload_file = stub_bin / f"gh-payload-{index}.json"
+		payload_file.write_text(payload, encoding="utf-8")
+		lines.append(f"    {shlex.quote(f'head={head}')}) cat {shlex.quote(str(payload_file))}; exit 0;;")
 	lines += ["  esac", "done", "echo '[]'", ""]
 	stub = stub_bin / "gh"
 	stub.write_text("\n".join(lines), encoding="utf-8")
@@ -456,7 +469,11 @@ SCENARIOS: dict[str, Callable[[Path], Scenario]] = {
 
 
 def _repo_git(repo_root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-	proc = subprocess.run(["git", *args], cwd=repo_root, capture_output=True, text=True, timeout=120)
+	"""Run git in `repo_root` without the caller's `GIT_*` variables, so an
+	inherited `GIT_DIR`, `GIT_WORK_TREE`, or `GIT_INDEX_FILE` (a git hook, a CI
+	step) cannot point it at another repository."""
+	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+	proc = subprocess.run(["git", *args], cwd=repo_root, capture_output=True, text=True, env=env, timeout=120)
 	if check and proc.returncode != 0:
 		raise SetupError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
 	return proc

@@ -468,6 +468,45 @@ def test_hook_env_never_reaches_github(tmp_path: Path, monkeypatch) -> None:
 	assert env["PATH"].split(os.pathsep)[0] == str(tmp_path / "bin")
 
 
+def test_scenario_env_cannot_override_isolation(tmp_path: Path) -> None:
+	scenario_env = {
+		"GIT_ALLOW_PROTOCOL": "https",
+		"GIT_CONFIG_NOSYSTEM": "0",
+		"GIT_TERMINAL_PROMPT": "1",
+		"GH_TOKEN": "secret",
+		"CLAUDE_PR_MERGE_GUARD": "off",
+		"SCENARIO_ONLY": "kept",
+	}
+	env = gd.hook_env(scenario_env, tmp_path / "bin", tmp_path / "home", tmp_path / "cache")
+	assert env["GIT_ALLOW_PROTOCOL"] == "file"
+	assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+	assert env["GIT_TERMINAL_PROMPT"] == "0"
+	assert "GH_TOKEN" not in env and "CLAUDE_PR_MERGE_GUARD" not in env
+	assert env["SCENARIO_ONLY"] == "kept"
+
+
+def test_stub_gh_prints_payloads_verbatim(tmp_path: Path) -> None:
+	payload = '[{"title": "a"}]\nEOF\necho pwned > ' + str(tmp_path / "pwned")
+	stub_bin = tmp_path / "bin"
+	gd._write_stub_gh(stub_bin, {"o:feat $(x)": payload})
+	stub = str(stub_bin / "gh")
+	hit = subprocess.run([stub, "api", "head=o:feat $(x)"], capture_output=True, text=True, check=True)
+	assert hit.stdout == payload
+	assert not (tmp_path / "pwned").exists()
+	miss = subprocess.run([stub, "api", "head=o:other"], capture_output=True, text=True, check=True)
+	assert miss.stdout.strip() == "[]"
+
+
+def test_repo_git_ignores_an_inherited_git_dir(hook_repo: Path, tmp_path: Path, monkeypatch) -> None:
+	other = tmp_path / "other"
+	other.mkdir()
+	_git(other, "init", "-q", "-b", "main")
+	monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+	monkeypatch.setenv("GIT_WORK_TREE", str(other))
+	(hook_repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_SILENT_HOOK, encoding="utf-8")
+	assert gd.changed_paths(hook_repo, "main", None) == [".claude/hooks/fake_guard.py"]
+
+
 def test_merged_checkout_scenario_blocks_on_the_real_merge_guard(tmp_path: Path) -> None:
 	scenario = gd.merged_checkout_scenario(tmp_path / "s")
 	env = gd.hook_env(scenario.env, scenario.stub_bin, tmp_path / "home", tmp_path / "cache")
