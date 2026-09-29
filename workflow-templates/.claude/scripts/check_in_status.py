@@ -24,6 +24,13 @@ Exit status: 0 when a verdict was reached (done or not), 2 when a read
 failed (the JSON then carries `error`, `done` is false and `action` is
 `retry`).
 
+Every JSON line also carries `retry_after_minutes`: how long a checker waits
+before its next check-in when the action is `wait` or `retry`. It is 60,
+except for `state: held`, which uses CLAUDE_CHECK_IN_HELD_RETRY_MINUTES
+(default 180, clamped to 60..1440; a non-numeric value gives 180), because a
+held head waits on a human. A checker that reads no such field keeps its
+hourly default.
+
 Every JSON line `main` prints also carries `action` (and, for
 `next_stage`, `next_stage`): the routing decision the checker follows, so no
 checker model interprets `state` itself. `main` adds it with `route_verdict`;
@@ -43,6 +50,11 @@ run and issue-list modes → `wait` / `next_stage`; --hand-back mode →
     is older than --stuck-hours (default 6), AND no workflow run on the head
     branch is queued or in progress. With --terminal-only (the §26 status
     check-in) only merged / closed count.
+  * Claude-fixer PR, held: a trusted `ai:claude-fix-claim` hold on the
+    current head reports `state: held` (not done), ahead of block labels and
+    hand-offs, so the project checker of a stage that stopped at
+    `Status: BLOCKED` on a held PR keeps waiting at the held backoff instead
+    of starting a review round (plan D11). A push or a newer claim lifts it.
   * Claude-fixer PR (head ref starts with `claude/implement-plan-`): also
     done for an authenticated, completed review hand-off on the current head
     with no matching dedicated-bot verdict, or for a merge conflict when no
@@ -140,6 +152,11 @@ FIX_CLAIM_TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 FIX_CLAIM_COUNTED_KINDS = ("conflict", "ci", "blocked")
 DEFAULT_FIX_CLAIM_LEASE_HOURS = 3.0
 DEFAULT_FIX_HAND_BACK_CAP = 3
+# Check-in backoff (plan D6): `retry_after_minutes` on every JSON line.
+DEFAULT_CHECK_IN_RETRY_MINUTES = 60
+DEFAULT_CHECK_IN_HELD_RETRY_MINUTES = 180
+CHECK_IN_RETRY_MINUTES_MIN = 60
+CHECK_IN_RETRY_MINUTES_MAX = 1440
 HAND_BACK_KIND_BY_STATE = {"conflict": "conflict", "review-round": "review", "ci-failed": "ci", "blocked": "blocked"}
 
 
@@ -235,16 +252,29 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 	if terminal_only:
 		return {"done": False, "state": "open", "reason": f"PR #{number} open"}
 
+	head = pr.get("head") or {}
+	head_sha = head.get("sha", "")
+	head_ref = head.get("ref", "")
+	fixer_head = isinstance(head_ref, str) and head_ref.startswith(CLAUDE_FIXER_HEAD_PREFIX)
+	fixer_comments = None
+	if fixer_head:
+		if not isinstance(head_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+			raise ValueError("PR head sha must be 40 lowercase hex characters")
+		# One comment listing serves the hold check and the hand-off check (§15).
+		fixer_comments = gh_api_list(f"repos/{repo}/issues/{number}/comments")
+		hold = read_fix_claims(fixer_comments, head_sha, now,
+			trusted_logins=_fix_claim_trusted_logins(pr))["claim"]
+		if hold["state"] == "held":
+			return {"done": False, "state": "held", "head_sha": head_sha, "claim": hold,
+				"reason": f"PR #{number} is on hold on head {head_sha[:12]} ({hold['by']}); a human decides next"}
+
 	blocking = [name for name in _label_names(pr) if name in BLOCKING_LABELS]
 	if blocking:
 		return {"done": True, "state": "blocked", "reason": f"PR #{number} blocked: {', '.join(blocking)}"}
 
-	head = pr.get("head") or {}
-	head_sha = head.get("sha", "")
-	head_ref = head.get("ref", "")
 	conflicted = pr.get("mergeable_state") == "dirty"
-	if isinstance(head_ref, str) and head_ref.startswith(CLAUDE_FIXER_HEAD_PREFIX):
-		fixer_verdict = _check_claude_fixer_pr(repo, number, head_sha, head_ref, conflicted)
+	if fixer_head:
+		fixer_verdict = _check_claude_fixer_pr(repo, number, head_sha, head_ref, conflicted, comments=fixer_comments)
 		if fixer_verdict is not None:
 			return fixer_verdict
 	failed_checks: list[str] = []
@@ -545,7 +575,7 @@ def check_pr_hand_back(repo: str, number: int, stuck_hours: float, min_age_hours
 	claim = claims["claim"]
 	if claim["state"] == "held":
 		return {"done": False, "state": "held", **base,
-			"reason": f"PR #{number} is on hold on head {head_sha[:12]} ({claim['by']}): the hand-back cap was reached and a human decides next"}
+			"reason": f"PR #{number} is on hold on head {head_sha[:12]} ({claim['by']}); a human decides next"}
 	if claim["state"] == "live":
 		return {"done": False, "state": "claimed", **base,
 			"reason": f"PR #{number} head {head_sha[:12]} is claimed by {claim['by']} for {claim['kind']} since {claim['at']}"}
@@ -699,6 +729,27 @@ def route_verdict(verdict: dict, mode: str) -> dict:
 	return {"action": action, "next_stage": next_stage} if next_stage else {"action": action}
 
 
+def retry_after_minutes(verdict: dict) -> int:
+	"""Minutes a checker waits before its next check-in for one verdict (plan D6).
+
+	Input: any verdict or error dict `main` prints. Output: 60, or for
+	`state: held` the CLAUDE_CHECK_IN_HELD_RETRY_MINUTES value (default 180,
+	clamped to 60..1440; unset or non-numeric gives 180). No API calls.
+	"""
+	if verdict.get("state") != "held":
+		return DEFAULT_CHECK_IN_RETRY_MINUTES
+	raw = os.environ.get("CLAUDE_CHECK_IN_HELD_RETRY_MINUTES", "").strip()
+	try:
+		minutes = int(float(raw)) if raw else DEFAULT_CHECK_IN_HELD_RETRY_MINUTES
+	except ValueError:
+		minutes = DEFAULT_CHECK_IN_HELD_RETRY_MINUTES
+	return max(CHECK_IN_RETRY_MINUTES_MIN, min(CHECK_IN_RETRY_MINUTES_MAX, minutes))
+
+
+def _print_verdict(verdict: dict) -> None:
+	print(json.dumps({**verdict, "retry_after_minutes": retry_after_minutes(verdict)}))
+
+
 def _parse_issue_list(value: str) -> list[int]:
 	numbers = [int(part.strip().lstrip("#")) for part in value.split(",") if part.strip()]
 	if not numbers:
@@ -728,10 +779,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 	args = build_parser().parse_args(argv)
 	if args.repo.count("/") != 1:
-		print(json.dumps({"done": False, "error": f"--repo must be OWNER/REPO, got {args.repo!r}", "action": "retry"}))
+		_print_verdict({"done": False, "error": f"--repo must be OWNER/REPO, got {args.repo!r}", "action": "retry"})
 		return 2
 	if args.pr is None and args.hand_back:
-		print(json.dumps({"done": False, "error": "--hand-back needs --pr", "action": "retry"}))
+		_print_verdict({"done": False, "error": "--hand-back needs --pr", "action": "retry"})
 		return 2
 	now = now or dt.datetime.now(dt.timezone.utc)
 	try:
@@ -750,9 +801,9 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 			route_mode = "issues"
 		verdict = {**verdict, **route_verdict(verdict, route_mode)}
 	except (ReadError, KeyError, TypeError, ValueError) as exc:
-		print(json.dumps({"done": False, "error": str(exc), "action": "retry"}))
+		_print_verdict({"done": False, "error": str(exc), "action": "retry"})
 		return 2
-	print(json.dumps(verdict))
+	_print_verdict(verdict)
 	return 0
 
 

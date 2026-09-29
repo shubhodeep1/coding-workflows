@@ -70,7 +70,8 @@ def test_checker_is_sonnet_every_three_hours(text):
 	assert "`model: claude-sonnet-5`" in text
 	assert "claude-haiku-4-5-20251001" not in text
 	assert '`model: "haiku"`' not in text
-	assert "call send_later with delay_minutes 60" in text
+	# Hourly, except the held backoff (plan D6): the delay follows the script.
+	assert "call send_later with delay_minutes = the JSON's `retry_after_minutes` (60 when the field is absent)" in text
 	assert "call send_later with delay_minutes 180" not in text
 
 
@@ -243,7 +244,8 @@ def test_stage_sessions_claim_before_fixing(text):
 def test_issue_mode_follows_a_base_branch_that_merged(text):
 	"""Q27: a stranded issue-mode project moves onto the branch its base merged into."""
 	assert "**A base branch that merges moves the project.**" in text
-	assert '`gh api "repos/<owner>/<repo>/pulls?state=closed&head=<owner>:<issue base>"`' in text
+	# Plan D13: the same one REST read also serves the dead-base check.
+	assert '`gh api "repos/<owner>/<repo>/pulls?head=<owner>:<issue base>&state=all&per_page=5"`' in text
 	assert "retarget the final PR (`mcp__github__update_pull_request` with `base` = `<new base>`)" in text
 	assert "a move onto the default branch switches the final PR's body to `Fixes #<N>`" in text
 
@@ -330,3 +332,95 @@ def test_fix_claude_pr_sends_rejected_rounds_to_the_judge():
 	assert "<!-- ai:claude-fixer-rejection:v1 head=<sha> round=<r> -->" in text
 	assert "This is not a hold: report and continue with step 7." in text
 	assert "gh workflow run review_autofix.yml" not in text and "gh workflow run ai-review.yml" not in text
+
+
+# ---- Plan claude-fixer-unattended-convergence, phase 3 ----
+
+NEVER_ASK = ("The checker never asks the human anything and never waits on an answer: on an unexpected state "
+	"it re-arms per step 2 and records the state in its session title only.")
+REASONING_BEFORE_HOLD = ("Before posting any hold claim, post the finding-by-finding reasoning comment (each finding "
+	"valid and fixed, or rejected with its reason); a hold that is not about findings states the blocker and the "
+	"evidence instead. A hold with no reasoning comment on the head is a rule violation.")
+
+
+def test_never_ask_rule_is_verbatim_in_every_checker(text):
+	prompt = text[text.index("### Checker prompt"):text.index("### Hand-back")]
+	assert NEVER_ASK in prompt
+	claude_md = _flat(CLAUDE_MD)
+	section_c = claude_md[claude_md.index("### C) What each check-in does"):claude_md.index("### D) What the pushing session does")]
+	assert NEVER_ASK in section_c
+	section_b = claude_md[claude_md.index("### B) How to arm"):claude_md.index("### C) What each check-in does")]
+	assert f"this line, verbatim: \"{NEVER_ASK}\"" in section_b
+
+
+def test_checkers_back_off_with_retry_after_minutes(text):
+	prompt = text[text.index("### Checker prompt"):text.index("### Hand-back")]
+	assert "delay_minutes = the JSON's `retry_after_minutes` (60 when the field is absent)" in prompt
+	assert "A held PR (`state: held`) is `wait`." in prompt
+	claude_md = _flat(CLAUDE_MD)
+	assert "`send_later` with `delay_minutes` = the JSON's `retry_after_minutes`" in claude_md
+	assert "and 60 when the field is absent" in claude_md
+
+
+def test_reasoning_before_hold_is_verbatim_in_both_commands(text):
+	assert REASONING_BEFORE_HOLD in text
+	assert REASONING_BEFORE_HOLD in _flat(FIX_CLAUDE_PR)
+
+
+def test_blocked_stop_on_a_held_pr_arms_the_checker(text):
+	"""Plan D11: a BLOCKED stop on a held PR still hands its wait to the project checker."""
+	section = text[text.index("## Blocked Stops"):text.index("## Issue Mode")]
+	assert "**Arm the checker's wait on that held PR** before ending, exactly as step 7 arms a normal wait" in section
+	assert "next stage on merge = the stage that follows that PR's merge, on a review hand-off = its review round, on a block = its blocked-PR stage" in section
+	assert "reports a held head as `state: held`, not done, and the checker re-arms at the JSON's `retry_after_minutes`" in section
+	for stop in ("as a [Blocked Stop](#blocked-stops) on a held PR (`--reason \"3 blocked-PR interventions used; the implement-plan cap\"`)",
+		"stop as a [Blocked Stop](#blocked-stops) on a held PR with `--reason \"conflict needs a side decision\"`",
+		"stop at `Status: BLOCKED` as a [Blocked Stop](#blocked-stops) on a held PR (`--reason \"all findings rejected; no verdict path\"`)"):
+		assert stop in text, stop
+
+
+def test_duplicate_resume_guard(text):
+	"""Plan D11: a /reclarify and the checker cannot both run the same stage."""
+	step0 = text[text.index("0. **Session preflight.**"):text.index("1. **Resolve the plan doc.**")]
+	assert "**Duplicate-resume guard**" in step0
+	assert "its `Stage session:` line names another session that `get_session` shows neither archived nor completed nor failed" in step0
+	assert "reply `duplicate resume: <stage> already running in <session id>` and end the turn without acting" in step0
+
+
+def test_blocked_stops_post_the_question_on_a_pr(text):
+	"""Plan D16: plan-mode stops post one ai:claude-blocked:v1 comment before arming the wait."""
+	section = text[text.index("## Blocked Stops"):text.index("## Issue Mode")]
+	assert "starts with `<!-- ai:claude-blocked:v1 -->` and holds the blocker, the evidence, every option, and the recommended one" in section
+	assert "otherwise on the project's final PR" in section
+	assert section.index("**Post the question on a PR**") < section.index("**Hold a PR the stop is about.**") < section.index("**Arm the checker's wait on that held PR**")
+	assert "`claude_fix_claim.py post … --kind hold --reason <one line>`" in section
+
+
+def test_fix_claude_pr_holds_post_the_question_and_a_reason():
+	text = _flat(FIX_CLAUDE_PR)
+	holds = text[text.index("## Holds"):text.index("## Rules")]
+	assert "starts with `<!-- ai:claude-blocked:v1 -->`" in holds
+	assert "`--kind hold --reason <one line>`" in holds and "`cap` for the step 3 cap" in holds
+	assert "Hold as [Holds](#holds) describes, with `--reason cap`" in text
+	for reason in ("all findings rejected; no verdict path", "conflict needs a side decision", "failure not caused by this PR",
+		"a human was requested"):
+		assert f'`--reason "{reason}"`' in text, reason
+
+
+def test_protected_conflict_handoff_is_a_hold(text):
+	"""Plan D14: a hand-off naming protected paths means the GPT resolver failed; never edit .claude/** unattended."""
+	for doc in (text, _flat(FIX_CLAUDE_PR)):
+		assert "`Protected paths:` line" in doc
+		assert '`--reason "conflict in protected .claude paths; the GPT resolver failed"`' in doc
+
+
+def test_issue_mode_dead_base_rebuild(text):
+	"""Plan D13: a base whose PR closed unmerged is rebuilt on the default branch."""
+	assert "the newest listed one is closed with `merged_at` null, or when the base branch is gone" in text
+	assert "Run `git apply --3way --check` on `git diff origin/<issue base>...origin/<project branch>`" in text
+	assert "Close the old final PR without merging, as superseded" in text
+	assert "The old project branch is never deleted, rewritten, or force-pushed." in text
+	assert "When the `--check` fails, write nothing, and stop at `Status: BLOCKED` naming the conflicting paths" in text
+	prompt = text[text.index("### Checker prompt"):text.index("### Hand-back")]
+	assert "1b. Dead base." in prompt and "`next_stage` `rebuild`" in prompt
+	assert "`rebuild` (step 1b) → `<stage this wait belongs to> — base rebuild`" in prompt
