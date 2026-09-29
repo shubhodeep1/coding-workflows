@@ -12,6 +12,7 @@ Usage:
 
   permission_prompts.py report [--log-dir DIR]
   permission_prompts.py file [--log-dir DIR] [--session-label ID] [--dry-run]
+  permission_prompts.py duplicate-check --repo OWNER/REPO --issue N --target M --fix-pr P
 
 A **pattern** is the event, the tool, and the command's shape: for Bash, each
 command word, its flags, subcommand, `gh api` method and endpoint (numbers
@@ -32,17 +33,45 @@ nothing. For each pattern with occurrences not filed yet:
 Filed counts are kept in `filed-state.json` next to the logs, so a later run
 in the same session files only what is new.
 
+A pattern may also carry a **command class** (`command_class`): one cause
+that produces many shapes. The only class is INLINE_INTERPRETER_WRITE_CLASS,
+an inline-interpreter write as issue #4858 defines it (`python3 -` with a
+heredoc, or `python3 -c`, whose program writes a file; `sed -i`, `perl -i`,
+`ruby -i`, `awk -i inplace`). A new issue for a classed pattern carries
+`<!-- ai:permission-prompt-class:v1 class=<class> -->`. A new pattern with no
+signature match whose class matches an **open** issue carrying that class
+marker is added to that issue as a "Seen again" comment instead of a new
+issue (issue #4867). A signature match still wins, and a closed class issue
+attracts nothing.
+
+`duplicate-check` decides whether an issue-mode session may close issue N as
+a duplicate of issue M without asking (CLAUDE.md §23.C carve-out, §23.I
+"Closing pipeline-filed duplicates"; issue #4867). It checks conditions 1
+and 2: N is open, labelled LABEL, carries the signature marker and
+FILED_BY_LINE, its author is the authenticated account, and that author
+applied LABEL at creation (`security_pass_skip._label_applied_at_creation`);
+M is another issue, open or closed as completed; fix PR P references M (head
+branch `…issue-<M>-…` or `#<M>` in its title or body) and is open or merged,
+and merged into the default branch when M is closed. It prints `eligible`,
+the failed `reasons`, and the evidence fields (`signature`, `class`,
+`target_class`, `occurrences`, `target_occurrences`). Evidence that the
+cause is the same (condition 3) stays with the session.
+
 Issue text is untrusted data: the tool name, the prompt reason, and the
 command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
 token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
 
 API calls (CLAUDE.md §15), REST only, none when nothing is new: one read of
 the `ai:permission-prompt` issues per 100 issues, then one POST per pattern
-filed or commented.
+filed or commented. The class match reuses that one list read.
+`duplicate-check`: at most five GETs (the authenticated user, issue N, one
+100-item page of its events, issue M, PR P), none when M equals N.
 
 Prints one JSON line. Exit 0 (including a partial run, whose failures are
-listed under `errors`), 1 on an invalid argument, 2 when the issue list could
-not be read.
+listed under `errors`, and a `duplicate-check` that decided either way), 1 on
+an invalid argument, 2 when the issue list (or a `duplicate-check` read)
+could not be read; exit 1 and 2 of `duplicate-check` print
+`"eligible": false`.
 """
 
 from __future__ import annotations
@@ -62,12 +91,50 @@ _CHECKER_PATH = Path(__file__).resolve().with_name("check_in_status.py")
 _checker_spec = importlib.util.spec_from_file_location("check_in_status", _CHECKER_PATH)
 check_in_status = importlib.util.module_from_spec(_checker_spec)
 _checker_spec.loader.exec_module(check_in_status)
+_SKIP_CHECK_PATH = Path(__file__).resolve().with_name("security_pass_skip.py")
+# Only `duplicate-check` needs this sibling, so a missing or broken copy must
+# not stop `report` and `file`: record the error and refuse the check instead.
+_SKIP_CHECK_ERROR = ""
+try:
+	_skip_check_spec = importlib.util.spec_from_file_location("security_pass_skip", _SKIP_CHECK_PATH)
+	security_pass_skip = importlib.util.module_from_spec(_skip_check_spec)
+	_skip_check_spec.loader.exec_module(security_pass_skip)
+except Exception as _skip_check_exc:  # noqa: BLE001 - any load failure disables duplicate-check only
+	security_pass_skip = None
+	_SKIP_CHECK_ERROR = f"{_SKIP_CHECK_PATH.name} could not be loaded: {_skip_check_exc}"
 
 FILING_REPO = "shubhodeep1/coding-workflows"
 LABEL = "ai:permission-prompt"
 ROUTE_LABEL = "ai:claude"
 MARKER_TEMPLATE = "<!-- ai:permission-prompt:v1 sig={sig} -->"
 MARKER_RE = re.compile(r"<!-- ai:permission-prompt:v1 sig=([0-9a-f]{12}) -->")
+FILED_BY_LINE = "Filed by `.claude/scripts/permission_prompts.py`"
+INLINE_INTERPRETER_WRITE_CLASS = "inline-interpreter-write"
+CLASS_MARKER_TEMPLATE = "<!-- ai:permission-prompt-class:v1 class={command_class} -->"
+CLASS_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-class:v1 class=([a-z][a-z0-9-]{0,60}) -->")
+OCCURRENCES_RE = re.compile(r"^\*\*Occurrences:\*\* .+$", re.MULTILINE)
+DUPLICATE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# A program that writes a file (issue #4858 item 1): a write call, `open(`
+# with a write mode, or a file move/removal. The mode is the argument after a
+# comma or `mode=` (`open(p, "w")`), or `Path.open`'s first one
+# (`.open("a")`), never a file name such as `open("a")`.
+_OPEN_WRITE_MODE = r"['\"](?:[wax]|r[bt]?\+)[bt+]*['\"]"
+_PROGRAM_WRITE_RE = re.compile(
+	r"\bwrite_text\s*\(|\bwrite_bytes\s*\("
+	r"|\bopen\s*\([^)]*?(?:,\s*|\bmode\s*=\s*)" + _OPEN_WRITE_MODE +
+	r"|\.open\s*\(\s*" + _OPEN_WRITE_MODE +
+	r"|\bos\.replace\s*\("
+	r"|\bshutil\.(?:copy(?:file|2|tree|mode|stat)?|move|rmtree|chown|make_archive|unpack_archive)\s*\("
+	r"|\.unlink\s*\(|\bos\.remove\s*\("
+)
+_PYTHON_RE = re.compile(r"^python(?:3(?:\.[0-9]+)?)?$")
+# `-c`, alone or after argument-less switches (`-Ic`, `-uc`, `-IBc`).
+_PYTHON_C_RE = re.compile(r"^-[bBdEiIOPqRsSuv]*c$")
+# In-place edit switches: `sed -i`/`-i.bak`/`--in-place`; `perl`/`ruby` `-i`
+# alone or after argument-less switches (`-pi`, `-pi.bak`, `-lpi`).
+_SED_IN_PLACE_RE = re.compile(r"^(?:-[A-Za-z]*i.*|--in-place(?:=.*)?)$")
+_PERL_IN_PLACE_RE = re.compile(r"^-[pnlaswtTcvW0-9]*i.*$")
+_RUBY_IN_PLACE_RE = re.compile(r"^-[pnlaswvWcd]*i.*$")
 STATE_FILE = "filed-state.json"
 DEFAULT_LOG_DIR = Path.home() / ".claude" / "permission-prompts"
 MAX_COMMAND_CHARS = 2000
@@ -218,6 +285,108 @@ def command_shape(command: str) -> str:
 	return " ".join(parts).strip()[:MAX_SHAPE_CHARS]
 
 
+def heredoc_bodies(command: str) -> list[str]:
+	"""The body text of every heredoc in `command` (the part `strip_heredocs` removes)."""
+	lines = command.split("\n")
+	bodies: list[str] = []
+	index = 0
+	while index < len(lines):
+		line = lines[index]
+		index += 1
+		for match in _HEREDOC_RE.finditer(line):
+			delimiter, strip_tabs = match.group(3), match.group(1) == "-"
+			body: list[str] = []
+			while index < len(lines):
+				body_line = lines[index]
+				index += 1
+				if (body_line.lstrip("\t") if strip_tabs else body_line) == delimiter:
+					break
+				body.append(body_line)
+			bodies.append("\n".join(body))
+	return bodies
+
+
+def _command_segments(command: str) -> list[list[str]]:
+	"""Split a Bash command (heredoc bodies removed) into simple commands; redirects stay in their segment."""
+	stripped = strip_heredocs(command, keep_delimiter=False)
+	lexer = shlex.shlex(stripped.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer.commenters = ""
+	lexer.whitespace = " \t\r"
+	lexer.whitespace_split = True
+	try:
+		tokens = list(lexer)
+	except ValueError:
+		return []
+	segments: list[list[str]] = [[]]
+	for token in tokens:
+		is_punctuation = bool(token) and set(token) <= set(_SHELL_PUNCTUATION_CHARS)
+		if is_punctuation and not (set(token) <= set("<>&") and set(token) & set("<>")):
+			segments.append([])
+			continue
+		segments[-1].append(token)
+	return [segment for segment in segments if segment]
+
+
+def _is_redirect(token: str) -> bool:
+	return bool(token) and set(token) <= set("<>&") and bool(set(token) & set("<>"))
+
+
+def _split_redirects(args: list[str]) -> tuple[list[str], list[str]]:
+	"""Return (arguments, redirect operators): each operator's target and an fd number before it are dropped."""
+	kept: list[str] = []
+	redirects: list[str] = []
+	index = 0
+	while index < len(args):
+		arg = args[index]
+		if _is_redirect(arg):
+			redirects.append(arg)
+			if kept and kept[-1].isdigit():
+				kept.pop()
+			index += 2
+			continue
+		kept.append(arg)
+		index += 1
+	return kept, redirects
+
+
+def _segment_is_inline_write(segment: list[str], command: str) -> bool:
+	index = 0
+	while index < len(segment) and _ASSIGNMENT_RE.match(segment[index]):
+		index += 1
+	if index >= len(segment):
+		return False
+	name = segment[index].rsplit("/", 1)[-1]
+	args, redirects = _split_redirects(segment[index + 1 :])
+	if _PYTHON_RE.match(name):
+		position = next((index for index, arg in enumerate(args) if _PYTHON_C_RE.match(arg)), -1)
+		if position >= 0:
+			return position + 1 < len(args) and bool(_PROGRAM_WRITE_RE.search(args[position + 1]))
+		reads_stdin = "-" in args or not any(not arg.startswith("-") for arg in args)
+		has_heredoc = any(redirect.startswith("<<") for redirect in redirects)
+		return reads_stdin and has_heredoc and any(_PROGRAM_WRITE_RE.search(body) for body in heredoc_bodies(command))
+	if name == "sed":
+		return any(_SED_IN_PLACE_RE.match(arg) for arg in args)
+	if name == "perl":
+		return any(_PERL_IN_PLACE_RE.match(arg) for arg in args)
+	if name == "ruby":
+		return any(_RUBY_IN_PLACE_RE.match(arg) for arg in args)
+	if name in ("awk", "gawk"):
+		pairs = zip(args, args[1:])
+		return "-iinplace" in args or "--include=inplace" in args or any(flag in ("-i", "--include") and value == "inplace" for flag, value in pairs)
+	return False
+
+
+def command_class(record: dict) -> str:
+	"""The pattern's command class (see the module docstring), or "" when it has none."""
+	if record.get("tool_name") != "Bash":
+		return ""
+	tool_input = record.get("tool_input") if isinstance(record.get("tool_input"), dict) else {}
+	command = str(tool_input.get("command") or "")
+	if any(_segment_is_inline_write(segment, command) for segment in _command_segments(command)):
+		return INLINE_INTERPRETER_WRITE_CLASS
+	return ""
+
+
 def record_shape(record: dict) -> str:
 	tool = record.get("tool_name") or ""
 	tool_input = record.get("tool_input") if isinstance(record.get("tool_input"), dict) else {}
@@ -293,7 +462,9 @@ def group_patterns(records: list[dict]) -> list[dict]:
 				"first_ts": record.get("ts"),
 				"last_ts": record.get("ts"),
 				"example": "",
+				"class": "",
 			}
+		pattern["class"] = pattern["class"] or command_class(record)
 		pattern["count"] += 1
 		pattern["last_ts"] = record.get("ts")
 		pattern["example"] = record_example(record)
@@ -307,7 +478,7 @@ def report(log_dir: Path) -> dict:
 	patterns = group_patterns(load_records(log_dir))
 	return {
 		"total": sum(pattern["count"] for pattern in patterns),
-		"patterns": [{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons")} for pattern in patterns],
+		"patterns": [{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons", "class")} for pattern in patterns],
 	}
 
 
@@ -353,6 +524,11 @@ def issue_body(pattern: dict, new_count: int, session_label: str) -> str:
 		"Most fixes edit `.claude/**` themselves, so the `/implement-plan-claude` phase that makes them stops at "
 		"`Status: BLOCKED` before it starts and asks a human how to run it (CLAUDE.md §28.C); expect that stop "
 		"and answer it on this issue.\n\n"
+		"If this issue has the same cause as another issue whose fix is in flight or merged, the "
+		"`/implement-issue-claude` session closes it as a duplicate itself when "
+		"`permission_prompts.py duplicate-check` allows it (CLAUDE.md §23.I, \"Closing pipeline-filed "
+		"duplicates\"); otherwise it asks here.\n\n"
+		+ (CLASS_MARKER_TEMPLATE.format(command_class=pattern["class"]) + "\n" if pattern.get("class") else "")
 		+ MARKER_TEMPLATE.format(sig=pattern["signature"])
 		+ "\n"
 	)
@@ -360,6 +536,17 @@ def issue_body(pattern: dict, new_count: int, session_label: str) -> str:
 
 def comment_body(pattern: dict, new_count: int, session_label: str) -> str:
 	return f"Seen again.\n\n{_occurrence_block(pattern, new_count, session_label)}"
+
+
+def class_comment_body(pattern: dict, new_count: int, session_label: str) -> str:
+	"""The comment for a new pattern routed to an open issue of the same command class."""
+	return (
+		f"Seen again: a new pattern of the same command class (`{pattern['class']}`), added here instead of "
+		"a new issue (CLAUDE.md §23.I).\n\n"
+		f"**Pattern:** `{pattern['shape'] or pattern['tool_name']}` (`{pattern['tool_name']}`, "
+		f"{_event_label(pattern['event'])}, signature `{pattern['signature']}`)\n\n"
+		+ _occurrence_block(pattern, new_count, session_label)
+	)
 
 
 def extract_repo_slug(url: str) -> str:
@@ -431,16 +618,39 @@ def _save_state(log_dir: Path, state: dict[str, int]) -> None:
 	(log_dir / STATE_FILE).write_text(json.dumps(state, indent=1, sort_keys=True), encoding="utf-8")
 
 
-def existing_issues(slug: str) -> dict[str, dict]:
-	"""Map signature → {number, state} for every `ai:permission-prompt` issue (1 REST read per 100)."""
+def list_permission_prompt_issues(slug: str) -> list[dict]:
+	"""Every `ai:permission-prompt` issue, open or closed (1 REST read per 100)."""
+	return check_in_status.gh_api_list(f"repos/{slug}/issues?labels={LABEL.replace(':', '%3A')}&state=all")
+
+
+def index_by_signature(issues: list[dict]) -> dict[str, dict]:
+	"""Map signature → {number, state}; the first issue listed with a marker wins."""
 	found: dict[str, dict] = {}
-	for issue in check_in_status.gh_api_list(f"repos/{slug}/issues?labels={LABEL.replace(':', '%3A')}&state=all"):
+	for issue in issues:
 		if issue.get("pull_request"):
 			continue
 		match = MARKER_RE.search(issue.get("body") or "")
 		if match and match.group(1) not in found:
 			found[match.group(1)] = {"number": issue.get("number"), "state": issue.get("state")}
 	return found
+
+
+def open_issues_by_class(issues: list[dict]) -> dict[str, int]:
+	"""Map command class → the lowest-numbered **open** issue carrying that class marker."""
+	found: dict[str, int] = {}
+	for issue in issues:
+		number = issue.get("number")
+		if issue.get("pull_request") or issue.get("state") != "open" or not isinstance(number, int):
+			continue
+		match = CLASS_MARKER_RE.search(issue.get("body") or "")
+		if match and (match.group(1) not in found or number < found[match.group(1)]):
+			found[match.group(1)] = number
+	return found
+
+
+def existing_issues(slug: str) -> dict[str, dict]:
+	"""Map signature → {number, state} for every `ai:permission-prompt` issue (1 REST read per 100)."""
+	return index_by_signature(list_permission_prompt_issues(slug))
 
 
 def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | None = None) -> tuple[int, dict]:
@@ -458,18 +668,26 @@ def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | 
 	if not pending:
 		return 0, summary
 	try:
-		existing = existing_issues(slug)
+		listed = list_permission_prompt_issues(slug)
 	except check_in_status.ReadError as exc:
 		summary["errors"].append(str(exc))
 		return 2, summary
+	existing = index_by_signature(listed)
+	class_issues = open_issues_by_class(listed)
 	for pattern, new_count in pending:
 		sig = pattern["signature"]
+		pattern_class = pattern.get("class") or ""
 		try:
 			if sig in existing:
 				number = existing[sig]["number"]
 				if not dry_run:
 					_post(f"repos/{slug}/issues/{number}/comments", {"body": comment_body(pattern, new_count, session_label)})
 				summary["commented"].append({"signature": sig, "issue": number, "occurrences": new_count})
+			elif pattern_class and pattern_class in class_issues:
+				number = class_issues[pattern_class]
+				if not dry_run:
+					_post(f"repos/{slug}/issues/{number}/comments", {"body": class_comment_body(pattern, new_count, session_label)})
+				summary["commented"].append({"signature": sig, "issue": number, "occurrences": new_count, "class": pattern_class})
 			else:
 				created = {} if dry_run else _post(
 					f"repos/{slug}/issues",
@@ -478,6 +696,8 @@ def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | 
 				summary["filed"].append({"signature": sig, "issue": created.get("number"), "title": issue_title(pattern)})
 				if created.get("number"):
 					existing[sig] = {"number": created.get("number"), "state": "open"}
+					if pattern_class and isinstance(created.get("number"), int):
+						class_issues.setdefault(pattern_class, created["number"])
 		except check_in_status.ReadError as exc:
 			summary["errors"].append(str(exc))
 			continue
@@ -486,6 +706,116 @@ def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | 
 			_save_state(log_dir, state)
 	summary["dry_run"] = dry_run
 	return 0, summary
+
+
+def _first_match(pattern: re.Pattern[str], text: str, group: int = 0) -> str | None:
+	match = pattern.search(text)
+	return match.group(group) if match else None
+
+
+def _references_issue(pull: dict, number: int) -> bool:
+	head = pull.get("head") if isinstance(pull.get("head"), dict) else {}
+	if f"issue-{number}-" in str(head.get("ref") or ""):
+		return True
+	text = f"{pull.get('title') or ''}\n{pull.get('body') or ''}"
+	return bool(re.search(rf"#{number}(?![0-9])", text))
+
+
+def decide_duplicate_close(
+	issue: dict,
+	events: list | None,
+	target: dict,
+	fix_pr: dict,
+	login: str,
+	issue_number: int,
+	target_number: int,
+) -> dict:
+	"""Pure decision over already-fetched data for `duplicate-check` (see the module docstring).
+
+	`issue` and `target` are REST issue objects, `events` the first 100-item
+	page of the issue's events (None when unreadable), `fix_pr` the REST pull
+	request, and `login` the authenticated account. Returns `eligible`,
+	`reasons` (every failed check), and the evidence fields.
+	"""
+	reasons: list[str] = []
+	body = str(issue.get("body") or "")
+	target_body = str(target.get("body") or "")
+	# Condition 1: pipeline-filed.
+	if issue.get("pull_request"):
+		reasons.append(f"#{issue_number} is a pull request, not an issue")
+	if issue.get("state") != "open":
+		reasons.append(f"#{issue_number} is not open")
+	if LABEL not in security_pass_skip._label_names(issue):
+		reasons.append(f"#{issue_number} is not labelled {LABEL}")
+	if not MARKER_RE.search(body):
+		reasons.append(f"#{issue_number} has no ai:permission-prompt signature marker")
+	if FILED_BY_LINE not in body:
+		reasons.append(f"#{issue_number} has no '{FILED_BY_LINE}' line")
+	author = security_pass_skip._login(issue.get("user"))
+	if not login:
+		reasons.append("the authenticated account is unknown")
+	elif author != login:
+		reasons.append(f"#{issue_number} author {author or 'unknown'} is not the session account {login}")
+	if events is None:
+		reasons.append(f"#{issue_number} events could not be read")
+	elif len(events) >= security_pass_skip.EVENTS_PAGE_SIZE:
+		reasons.append(f"#{issue_number} has {security_pass_skip.EVENTS_PAGE_SIZE}+ events; label history not verifiable in one page")
+	else:
+		problem = security_pass_skip._label_applied_at_creation(issue, events, LABEL)
+		if problem:
+			reasons.append(f"#{issue_number}: {problem}")
+	# Condition 2: the target and its fix.
+	target_closed_completed = target.get("state") == "closed" and target.get("state_reason") == "completed"
+	if target_number == issue_number:
+		reasons.append("the target is the issue itself")
+	if target.get("pull_request"):
+		reasons.append(f"#{target_number} is a pull request, not an issue")
+	elif target.get("state") != "open" and not target_closed_completed:
+		reasons.append(f"#{target_number} is closed as {target.get('state_reason') or 'unknown'}, not completed")
+	fix_number = fix_pr.get("number")
+	merged = bool(fix_pr.get("merged_at"))
+	if not _references_issue(fix_pr, target_number):
+		reasons.append(f"PR #{fix_number} does not reference #{target_number} (head branch issue-{target_number}-… or #{target_number} in its title or body)")
+	if target_closed_completed:
+		base = fix_pr.get("base") if isinstance(fix_pr.get("base"), dict) else {}
+		base_repo = base.get("repo") if isinstance(base.get("repo"), dict) else {}
+		default_branch = base_repo.get("default_branch")
+		if not merged:
+			reasons.append(f"#{target_number} is closed but PR #{fix_number} is not merged")
+		elif not default_branch or base.get("ref") != default_branch:
+			reasons.append(f"PR #{fix_number} merged into {base.get('ref') or 'unknown'}, not the default branch {default_branch or 'unknown'}")
+	elif fix_pr.get("state") != "open" and not merged:
+		reasons.append(f"PR #{fix_number} is closed without merging")
+	return {
+		"eligible": not reasons,
+		"reasons": reasons,
+		"issue": issue_number,
+		"target": target_number,
+		"fix_pr": fix_number,
+		"fix_pr_state": "merged" if merged else fix_pr.get("state"),
+		"signature": _first_match(MARKER_RE, body, 1),
+		"class": _first_match(CLASS_MARKER_RE, body, 1),
+		"target_class": _first_match(CLASS_MARKER_RE, target_body, 1),
+		"occurrences": _first_match(OCCURRENCES_RE, body),
+		"target_occurrences": _first_match(OCCURRENCES_RE, target_body),
+	}
+
+
+def duplicate_check(repo: str, issue_number: int, target_number: int, fix_pr_number: int) -> tuple[int, dict]:
+	"""Read what `decide_duplicate_close` needs (at most five GETs) and decide; exit 2 on a read failure."""
+	if target_number == issue_number:
+		return 0, {"eligible": False, "reasons": ["the target is the issue itself"], "issue": issue_number, "target": target_number, "fix_pr": fix_pr_number}
+	if security_pass_skip is None:
+		return 2, {"eligible": False, "reasons": [_SKIP_CHECK_ERROR], "issue": issue_number, "target": target_number, "fix_pr": fix_pr_number}
+	try:
+		login = str(check_in_status.gh_api("user").get("login") or "")
+		issue = check_in_status.gh_api(f"repos/{repo}/issues/{issue_number}")
+		events = check_in_status._gh_api_json(f"repos/{repo}/issues/{issue_number}/events?per_page={security_pass_skip.EVENTS_PAGE_SIZE}")
+		target = check_in_status.gh_api(f"repos/{repo}/issues/{target_number}")
+		fix_pr = check_in_status.gh_api(f"repos/{repo}/pulls/{fix_pr_number}")
+	except check_in_status.ReadError as exc:
+		return 2, {"eligible": False, "reasons": [str(exc)], "issue": issue_number, "target": target_number, "fix_pr": fix_pr_number}
+	return 0, decide_duplicate_close(issue, events if isinstance(events, list) else None, target, fix_pr, login, issue_number, target_number)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -497,11 +827,23 @@ def build_parser() -> argparse.ArgumentParser:
 		if name == "file":
 			command.add_argument("--session-label", default="unknown")
 			command.add_argument("--dry-run", action="store_true")
+	duplicate = sub.add_parser("duplicate-check")
+	duplicate.add_argument("--repo", required=True)
+	duplicate.add_argument("--issue", type=int, required=True)
+	duplicate.add_argument("--target", type=int, required=True)
+	duplicate.add_argument("--fix-pr", type=int, required=True)
 	return parser
 
 
 def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
+	if args.command == "duplicate-check":
+		if not DUPLICATE_REPO_RE.match(args.repo) or min(args.issue, args.target, args.fix_pr) < 1:
+			print(json.dumps({"eligible": False, "reasons": ["--repo must be OWNER/REPO and --issue, --target, --fix-pr positive numbers"]}))
+			return 1
+		code, verdict = duplicate_check(args.repo, args.issue, args.target, args.fix_pr)
+		print(json.dumps(verdict))
+		return code
 	log_dir = Path(args.log_dir)
 	if args.command == "report":
 		print(json.dumps(report(log_dir)))

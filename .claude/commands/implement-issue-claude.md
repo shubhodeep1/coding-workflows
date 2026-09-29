@@ -25,6 +25,21 @@ $ARGUMENTS
 
 5. **Read project context.** Read `README.md`, `agents.md` (or `AGENTS.md`) and `CLAUDE.md` at the repo root, plus every relevant `/db/contracts/*.yml` when the issue touches a MongoDB collection (§10). Read the actual source of every file the issue names or your search implicates (`Grep` / `Glob` / `Read`). Never guess at code, env vars, or workflow inputs.
 
+5a. **Duplicate check.** When step 5 shows that the issue has the same cause as another issue whose fix is in flight or merged, decide here, before any plan, branch, or PR exists. An `ai:permission-prompt` issue may be closed without asking under the CLAUDE.md §23.C carve-out (§23.I "Closing pipeline-filed duplicates"). Any other issue is never closed here.
+   - **Check.** Run `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/permission_prompts.py duplicate-check --repo <owner>/<repo> --issue <N> --target <M> --fix-pr <P>`, where `<M>` is the duplicate target and `<P>` is its fix PR: open or merged, or, for a closed target, the PR that put the fix on the default branch. It decides whether the issue is pipeline-filed (marker, "Filed by" line, author = this session's account, label applied by the author at creation) and whether the target and fix qualify, and prints one JSON line. Never decide this from the labels yourself.
+   - **`"eligible": true`** and you have concrete evidence that the cause is the same → post **one** comment (`mcp__github__add_issue_comment`) starting `<!-- ai:claude-duplicate-close:v1 target=<M> -->`. It names the target and the fix PR and gives the evidence:
+     - the same denial reason (for example `Classifier unavailable`), or the same command class (an inline-interpreter write, as the #4858 guard defines it; the script prints both issues' `class` markers);
+     - the session ids and timestamps involved (the `Occurrences` lines of this issue and the target).
+     
+     Then close the issue with `mcp__github__issue_write` `update`, `state: closed`, `state_reason: duplicate`, `duplicate_of: <M>`. When the tool has no `duplicate_of`, close with `state_reason: duplicate` alone; the comment names the target. If this session already opened a PR for this issue, close that PR as not merged with a comment linking the target. Close no other PR and delete no branch. Report `closed as a duplicate of #<M>` and end: no plan, no project branch, no progress comment.
+   - **Otherwise** (`"eligible": false`, a non-zero exit, evidence you cannot make concrete, or an issue that is not `ai:permission-prompt`) → closing stays a §23.C ask-first operation. Post one comment starting `<!-- ai:claude-blocked:v1 -->` that names the blocker, the script's `reasons`, and the options:
+     - **A** — close it as a duplicate of #<M> (RECOMMENDED);
+     - **B** — keep it open and implement it;
+     - **C** — close it as not planned.
+     
+     Add the `ai:claude-blocked` label, send one `PushNotification`, and end.
+   - **Not a duplicate** → continue with step 6.
+
 6. **Write the single-phase plan.** Derive `<slug>` = `issue-<N>-<topic>`: lowercase ASCII and hyphens, ≤ 60 chars, `<topic>` a few action words from the title. Write `docs/plans/<slug>-plan.md` using the Plan Structure of `.claude/commands/write-plan.md`, with these differences:
    - The first lines under the title are the issue-mode header:
      ```
@@ -57,8 +72,9 @@ $ARGUMENTS
 - **The issue closes only when the whole project merged.** The final PR carries `Fixes #<N>` into the default branch, or the final-merge stage closes the issue and labels it `ai:merged` for any other base. Every other PR uses `Refs #<N>`. An `ai:orchestrator-tracking` issue is never routed here (§19).
 - **Build on the branch the issue names.** A security follow-up is built on its project's branch and a heal issue on `stable` or the named PR branch; nothing else defaults to the default branch.
 - **Resume instead of duplicating.** Step 4 runs before any write, so a second dispatch for the same issue (`/reclarify`, a manual intake run) lands on the project already in progress.
+- **Close only a pipeline-filed duplicate, and only on the script's verdict.** Step 5a is the one place this command closes the issue before the project merges: an `ai:permission-prompt` issue for which `permission_prompts.py duplicate-check` printed `"eligible": true`, after one evidence comment, with `state_reason: duplicate`. Every other close, a PR this session did not open, and every branch deletion stay ask-first (CLAUDE.md §23.C).
 - **Never merge, never watch.** Auto-merge and `review_autofix.yml` land the PRs; the Sonnet checker waits. No `subscribe_pr_activity`, no polling, no `sleep`.
 
 ## Tool Access
 
-Same surface as `/implement-plan-claude` ([Tool Access](.claude/commands/implement-plan-claude.md#tool-access)). Issue labels and comments go through the GitHub MCP tools (`mcp__github__issue_write`, `mcp__github__add_issue_comment`, `mcp__github__update_issue_comment`), which `.claude/settings.json` pre-approves. `gh api` writes (`-X`, `-f`) are ask-listed and would stall an unattended session.
+Same surface as `/implement-plan-claude` ([Tool Access](.claude/commands/implement-plan-claude.md#tool-access)). Issue labels and comments go through the GitHub MCP tools (`mcp__github__issue_write`, `mcp__github__add_issue_comment`, `mcp__github__update_issue_comment`), which `.claude/settings.json` pre-approves. The step 5a comment and close go through the same tools; `permission_prompts.py duplicate-check` runs under its existing `permissions.allow` rule. `gh api` writes (`-X`, `-f`) are ask-listed and would stall an unattended session.

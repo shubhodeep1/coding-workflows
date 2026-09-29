@@ -1186,6 +1186,15 @@ invocation *is* the approval for the dispatch the command describes. Do not
 re-ask; the ask-first rule above covers dispatches you would be initiating on
 your own judgement.
 
+**Pipeline-filed permission-prompt duplicates may be closed.** An
+issue-mode `/implement-issue-claude` session may close the issue it was
+started for as a duplicate, without asking, only when every condition of
+§23.I "Closing pipeline-filed duplicates" holds (operator decision Q58: A,
+issue #4867). This is the one exception to "closing a PR or issue the session
+did not itself open" above. It never extends to a human-filed or relabelled
+issue, to a PR the session did not open, or to any other operation in this
+list, and anything outside those conditions keeps the ask.
+
 ### D) Transport & Tool Precedence
 
 1. **Prefer the `mcp__github__*` tools** for anything they cover. They are
@@ -1354,7 +1363,7 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   |---|---|---|
   | `.claude/scripts/dispatch_workflow.py` | dispatches one of the six workflows allowed as `gh workflow run <file> *` and prints the id of the run it started (never the previous run) | 1 read, 1 POST, 1 read per 5 s poll (90 s max) |
   | `.claude/scripts/edit_comment.py` | edits one issue or PR comment in place from a JSON list of exact-once `old`/`new` pairs, or replaces its body | 1 read, 1 PATCH |
-  | `.claude/scripts/permission_prompts.py` | reports and files the prompts below | 1 read per 100 labelled issues, 1 POST per new pattern |
+  | `.claude/scripts/permission_prompts.py` | reports and files the prompts below; `duplicate-check` decides whether a duplicate may be closed | 1 read per 100 labelled issues, 1 POST per new pattern; `duplicate-check`: at most 5 reads |
 
 - **Prompt reports.** `.claude/hooks/permission_prompt_logger.py`, wired on
   the `PermissionRequest` and `PermissionDenied` hook events, appends every
@@ -1382,9 +1391,55 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   ask-first operation is closed as not planned, because that prompt is by
   design.
 
+  One cause often produces several patterns (an inline-interpreter edit
+  followed by a different trailing read, or one outage hit by different
+  commands). An inline-interpreter write (a `python3 -` heredoc or
+  `python3 -c` whose program writes a file, or `sed -i`, `perl -i`,
+  `ruby -i`, `awk -i inplace`; the #4858 definition) is tagged with
+  `<!-- ai:permission-prompt-class:v1 class=inline-interpreter-write -->`, and
+  a later new pattern of that class is added as a "Seen again" comment on the
+  **open** issue carrying that class marker instead of a new issue. A
+  signature match still comes first, and a closed class issue attracts
+  nothing, so a new shape after the fix merged is filed again.
+
+- **Closing pipeline-filed duplicates** (the §23.C carve-out; operator
+  decision Q58: A, issue #4867). An issue-mode `/implement-issue-claude`
+  session may close the `ai:permission-prompt` issue it was started for as
+  a duplicate **without asking** when all of these hold:
+  1. **Pipeline-filed.** The issue carries `ai:permission-prompt` and was
+     opened by the pipeline: its author is the workflow/session account, the
+     author applied the label at creation, and its body holds the
+     `<!-- ai:permission-prompt:v1 sig=<sig> -->` marker and the "Filed by
+     `.claude/scripts/permission_prompts.py`" line that
+     `permission_prompts.py` writes. A human-filed or relabelled issue still
+     asks.
+  2. **An open or merged fix exists.** The duplicate target is an open
+     issue with a fix in flight or merged, or a closed-as-completed issue
+     whose fix is on the default branch.
+  3. **Matching evidence.** The session first posts one comment naming the
+     target and the fix PR and giving concrete evidence that the cause is
+     the same: the same denial reason (for example `Classifier
+     unavailable`) or the same command class (an inline-interpreter write,
+     as defined by the #4858 guard), plus the session ids and timestamps
+     involved. It then closes the issue with `state_reason: duplicate` and
+     `duplicate_of: <target>`.
+  4. **No project was created.** If the session already opened a PR for
+     this issue, it closes that PR too, as not merged, with a comment
+     linking the target. This covers only PRs it opened itself in this
+     project; branches are left in place (deleting one stays ask-first).
+
+  Conditions 1 and 2 are decided by
+  `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/permission_prompts.py duplicate-check --repo <owner>/<repo> --issue <N> --target <M> --fix-pr <P>`
+  (at most 5 REST reads), never from labels alone; the session acts only on
+  `"eligible": true`. Anything outside these conditions keeps the §23.C ask,
+  and the approval never extends to human-filed issues, PRs this session
+  did not open, or any other §23.C operation.
+
 `tests/test_dispatch_workflow.py`, `tests/test_edit_comment.py`, and
 `tests/test_permission_prompts.py` cover the helpers, the hook, the filing
 rules, and the wiring, and run in their own `ci.yml` step.
+`tests/test_permission_prompt_duplicates.py` covers the class routing, the
+duplicate check, and this carve-out's text, in the same step.
 
 ---
 
@@ -2216,7 +2271,10 @@ This is an explicit carve-out from §0 and §2 (including §2's
   (destructive and administrative GitHub writes, merges included), and
   §24.D (Cloudflare destructive and account-level writes). The chain never
   performs them; a project that needs one lists it as an operator step,
-  and `/deploy-activate` walks the human through it.
+  and `/deploy-activate` walks the human through it. The one exception is
+  §23.C's carve-out for pipeline-filed `ai:permission-prompt` duplicates:
+  `/implement-issue-claude` closes one itself only when every condition in
+  §23.I "Closing pipeline-filed duplicates" holds.
 - A question with no option that satisfies §28.B's hard rules.
 - **Protected-path edits.** A phase that must edit `.claude/**` (hooks,
   `settings.json`, commands, scripts) is never started unattended: Claude
