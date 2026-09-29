@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T11:29:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A Claude-fixer hand-off with 0 ledger findings and `failed_checks=none` is a check-snapshot timeout, not a review result: the clean-review auto-merge waits 300s for every other check run on the head, including a sibling review run on the same head. Record the round and push the next legitimate change (base merge or log update) so a new head is reviewed; never post a verdict for findings that do not exist.",
+  "phase": "implement_plan",
+  "pr_number": 5092,
+  "record_id": "lesson-implement-plan-f6cce0b0e54bb0c3ec855367",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4707-split-ci-lint-job",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}
