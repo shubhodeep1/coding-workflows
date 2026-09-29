@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T04:33:31Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A lowercase-only rule for a shell variable the guard lets a loop assign is not enough: exported lowercase variables such as `https_proxy` / `no_proxy` still change how `gh` connects, so reject proxy names too.",
+  "phase": "implement_plan",
+  "pr_number": 4967,
+  "record_id": "lesson-implement-plan-c7b5ec166e40543416c15c24",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4786-guard-allow-read-loops",
+    "file:workflow-templates/.claude/hooks/gh_api_write_guard.py"
+  ]
+}
