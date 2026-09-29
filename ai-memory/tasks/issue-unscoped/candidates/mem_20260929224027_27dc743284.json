@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"require an automation-owned PR before closing an issue on a non-default branch merge \u2014 phase 1/1: sweep + issue_pr_status identity gate\"\n  expected_change_site: scripts/gh_helpers.sh, scripts/orchestrate_poll_process.sh, .github/workflows/issue_pr_status.yml, README.md, changelog.d/5226-close-sweep-automation-identity.md, tests/test_gh_helpers_issue_automation_branch.py, tests/test_issue_pr_status_target_branch_gate.py, tests/test_orchestrate_poll_process.py, .github/workflows/ci.yml\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: All eight deliverable sites contain the expected edits (helper function added at scripts/gh_helpers.sh:1816-1851, sweep candidate loop split at scripts/orchestrate_poll_process.sh:3893-3909 and 3991-3997 and 4081-4109, workflow identity gate at .github/workflows/issue_pr_status.yml:187-193 and 232-249 and 561-571 with stub at 433-441 and updated comments at 443-452, CI registration at .github/workflows/ci.yml:912-918, README rows updated, changelog fragment added with `<!-- changelog: security -->` marker, four new tests in test_issue_pr_status_target_branch_gate.py and four in test_orchestrate_poll_process.py, plus the new test_gh_helpers_issue_automation_branch.py). PR description's verification section reports 499 passes across the listed suites.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"require an automation-owned PR before closing an issue on a non-default branch merge \u2014 phase 1/1: sweep + issue_pr_status identity gate\"\n  Expected change site: scripts/gh_helpers.sh, scripts/orchestrate_poll_process.sh, .github/workflows/issue_pr_status.yml, README.md, changelog.d/5226-close-sweep-automation-identity.md, tests/test_gh_helpers_issue_automation_branch.py, tests/test_issue_pr_status_target_branch_gate.py, tests/test_orchestrate_poll_process.py, .github/workflows/ci.yml\n  Evidence of absence: All eight deliverable sites contain the expected edits (helper function added at scripts/gh_helpers.sh:1816-1851, sweep candidate loop split at scripts/orchestrate_poll_process.sh:3893-3909 and 3991-3997 and 4081-4109, workflow identity gate at .github/workflows/issue_pr_status.yml:187-193 and 232-249 and 561-571 with stub at 433-441 and updated comments at 443-452, CI registration at .github/workflows/ci.yml:912-918, README rows updated, changelog fragment added with `<!-- changelog: security -->` marker, four new tests in test_issue_pr_status_target_branch_gate.py and four in test_orchestrate_poll_process.py, plus the new test_gh_helpers_issue_automation_branch.py). PR description's verification section reports 499 passes across the listed suites.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n  Summary: The fix is well-bounded, fail-closed in both call sites (sweep checks `type` before calling, workflow defines a `return 1` stub when the helper is missing), layered cleanly on top of the existing `_pr_json_is_issue_implementation_pr` gate so the closing-keyword check still runs first, and adds no GitHub API calls (head data comes from the existing `pulls/<n>` JSON in the sweep and from the event payload in the workflow). The regex `^fix/${_issue}-followup-[0-9]+$` correctly distinguishes the issue number (e.g. `fix/10-followup-\u2026` is rejected when the issue is 11). The default-branch path remains unconditional, matching the PR description's invariant. No new findings to report.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d28dd0ec06496c26396ecdac24280070fb8da68a4c4f60aa1699ce6d6fa6dcb8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5272,
+    "run_id": "36637535318",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36637535318",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929224027_27dc743284",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5272,
+    "run_id": "36637535318"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T22:40:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
