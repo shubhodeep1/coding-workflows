@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T13:37:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A script that prints file paths from a PR into GitHub workflow commands (`::error file=\u2026::`) must escape them (`%`, CR, LF, and `:` / `,` in properties); a newline in a file name otherwise starts a new workflow command line.",
+  "phase": "implement_plan",
+  "pr_number": 5171,
+  "record_id": "lesson-implement-plan-6f4dea995447ba0faca290f8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4785-twin-first-claude-sync",
+    "file:scripts/claude_twin_sync.py"
+  ]
+}

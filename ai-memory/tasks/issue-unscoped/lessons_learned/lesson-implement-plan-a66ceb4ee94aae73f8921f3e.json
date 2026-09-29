@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T13:37:52Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A bot that keeps a PR branch current must rebuild the head only when the PR's own diff would change; rebuilding on every default-branch commit restarts CI each time, and with a 45-minute CI on a busy default branch the PR never gets a green head to merge.",
+  "phase": "implement_plan",
+  "pr_number": 5171,
+  "record_id": "lesson-implement-plan-a66ceb4ee94aae73f8921f3e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4785-twin-first-claude-sync",
+    "file:scripts/claude_twin_sync.py"
+  ]
+}
