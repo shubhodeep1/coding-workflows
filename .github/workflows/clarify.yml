@@ -18,7 +18,7 @@ jobs:
   clarify:
     if: >-
       ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
-      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && (contains(toJson(github.event.issue.labels.*.name), '"ai:claude-blocked"') || contains(toJson(github.event.issue.labels.*.name), '"ai:claude-handoff-failed"') || contains(toJson(github.event.issue.labels.*.name), '"ai:blocked"')))))
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
@@ -432,6 +432,28 @@ jobs:
             IS_FORCED_RECLARIFY="true"
           fi
 
+          # Comment gate (issue #5243): the same rule as the job-level `if:`,
+          # case-insensitive like startsWith/contains. A comment is a
+          # /reclarify command when it starts with `/reclarify`, or when a
+          # later line starts with `/reclarify`, the comment carries no
+          # `<!-- ai:` automation marker (automation posts as the same
+          # trusted User and often says "comment `/reclarify`"), and the
+          # issue is waiting on a human answer (`ai:claude-blocked`,
+          # `ai:claude-handoff-failed`, or `ai:blocked`), so model text in an
+          # unmarked automation comment elsewhere cannot start clarify. Any
+          # other comment that reaches this step does nothing.
+          IS_RECLARIFY_COMMAND="true"
+          if [ "${EVENT_NAME}" = "issue_comment" ]; then
+            IS_RECLARIFY_COMMAND="false"
+            COMMENT_BODY_LC="${COMMENT_BODY,,}"
+            if [[ "${COMMENT_BODY_LC}" == /reclarify* ]]; then
+              IS_RECLARIFY_COMMAND="true"
+            elif [[ "${COMMENT_BODY_LC}" == *$'\n'/reclarify* && "${COMMENT_BODY_LC}" != *'<!-- ai:'* ]] && \
+              jq -e '[(.labels // [])[]?.name] | any(. == "ai:claude-blocked" or . == "ai:claude-handoff-failed" or . == "ai:blocked")' "${ISSUE_META_FILE}" >/dev/null; then
+              IS_RECLARIFY_COMMAND="true"
+            fi
+          fi
+
           # State gate: a closed issue should not produce side effects (label
           # changes, /answer auto-post that triggers plan→implement). The
           # orchestrate-decompose-test smoke (test-and-mark-stable.yml:3127)
@@ -461,6 +483,9 @@ jobs:
           elif [ "${EVENT_NAME}" = "issues" ] && [ "${EVENT_ACTION}" = "opened" ] && [ "${ISSUE_AUTHOR_TRUSTED}" != "true" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=untrusted_issue_author outcome=skip issue=${ISSUE_NUMBER}"
+          elif [ "${IS_RECLARIFY_COMMAND}" != "true" ]; then
+            SKIP_CODEX="true"
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=not_reclarify_command outcome=skip issue=${ISSUE_NUMBER}"
           elif [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_FORCED_RECLARIFY}" != "true" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}"
@@ -499,7 +524,7 @@ jobs:
           fi
 
           # Only a verified orchestrator fast path may post its automatic /answer.
-          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && \
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "${IS_RECLARIFY_COMMAND}" = "true" ] && \
             { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
             echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"
           else
@@ -515,7 +540,7 @@ jobs:
           echo "skip_security_pass=${SKIP_SECURITY_PASS}" >> "$GITHUB_OUTPUT"
           echo "release_claude_claim=${RELEASE_CLAUDE_CLAIM}" >> "$GITHUB_OUTPUT"
 
-          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX} issue_implementer=${ISSUE_IMPLEMENTER} implementer_reason=${ISSUE_IMPLEMENTER_REASON}"
+          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} reclarify_command=${IS_RECLARIFY_COMMAND} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX} issue_implementer=${ISSUE_IMPLEMENTER} implementer_reason=${ISSUE_IMPLEMENTER_REASON}"
 
       - name: Release Claude claim on switch to Codex
         if: steps.clarify_route.outputs.release_claude_claim == 'true'

@@ -1993,6 +1993,11 @@ jobs:
             echo "To restart clarification reply:"
             echo
             echo "/reclarify"
+            # Automation marker (issue #5243): the bare `/reclarify` line above
+            # would otherwise start clarify.yml, which accepts `/reclarify` at the
+            # start of any line of a marker-free trusted comment.
+            echo
+            echo "<!-- ai:implementation-plan:v1 -->"
           } > "${PLAN_COMMENT_FILE}"
 
           PLAN_COMMENT_LEN="$(wc -c < "${PLAN_COMMENT_FILE}")"
