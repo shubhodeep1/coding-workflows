@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-29T05:25:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Tightening how a reviewer's raw output is parsed breaks test fixtures that model that output loosely; search every test that writes review_<slug>.txt (tests/test_review_autofix_claude_fixer_mode.py as well as the script's own suite) before changing the parser.",
+  "phase": "implement_plan",
+  "pr_number": 5032,
+  "record_id": "lesson-implement-plan-3bebce8918e6c36e5f5bb48a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4975-bind-flagger-citation-to-finding",
+    "file:tests/test_review_autofix_claude_fixer_mode.py",
+    "file:scripts/review_claude_fixer_nonblocking.py"
+  ]
+}
