@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_fixer_pending_checks.py:430 | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The case label groups `force_rb_judge` with `convergence` for `review_autofix.yml`, but the updated comment at `scripts/claude_fixer_pending_checks.py:120-127` removes `force_rb_judge` from the `review_autofix.yml` description.\n  WHY: It does not fail at runtime; the test still passes and exercises the right code path, but this is a documentation/labeling consistency issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_claude_fixer_pending_checks.py:430 | confidence=2\n  PROBLEM: The case label groups `force_rb_judge` with `convergence` for `review_autofix.yml`, but this PR's updated comment at `scripts/claude_fixer_pending_checks.py:120-127` explicitly removes `force_rb_judge` from the `review_autofix.yml` description (it now lives under `review_rb_judge_dispatch.yml`).\n  WHY: It does not \u2014 the test still passes and exercises the right code path. This is a documentation/labeling consistency issue.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d7871c4c533d995e1aa0cd8e2868b35f6dd2233e10e4951058e7c5d9c2497562",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5209,
+    "run_id": "36616087363",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36616087363",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929192004_63314d1d05",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5209,
+    "run_id": "36616087363"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T19:20:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
