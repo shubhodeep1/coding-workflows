@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5144-merge-guard-effective-repo-plan.md
 - Source issue: shubhodeep1/coding-workflows#5144
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5144-merge-guard-effective-repo   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5144-merge-guard-effective-repo   Final PR: #5163 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5173: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-29
-- Last note: project branch opened from main; phase 1 starts twin-first.
+- Last note: phase 1 PR #5173 opened twin-first (only `workflow-templates/.claude/hooks/pr_merge_status_guard.py` edited); hold claim posted; waiting on the `[claude-twin-sync]` copy into `.claude/hooks/` and `/reclarify` on #5144.
 
 ## Phases
-1. [ ] Phase 1 — effective repository and push target ref for the §21 guard — protected paths: `.claude/hooks/pr_merge_status_guard.py`
+1. [ ] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 open (twin sync pending); review rounds: 0; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
    - Command walker: effective directory across `cd`, `git -C`, `GIT_DIR=`, `--git-dir`; unresolvable constructs fall back with a warning
    - Push refspec parser: `<src>:<dst>` judged on `<dst>` with `<src>` as tip; deletions and tags skipped; no refspec judges the current branch
    - Per-target judge with one cached REST call per `(slug, branch)`; one merged hook result
@@ -41,9 +41,11 @@
 - AD-7 [plan, 2026-09-29] How are several guarded git invocations in one command combined? — Picked: A — judge each distinct target, block if any blocks, otherwise one JSON result. Alternatives: B — judge only the last invocation. Why: §21 invariant; the hook protocol takes one JSON object. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A hook module loaded by tests through `importlib.util.spec_from_file_location` without registering it in `sys.modules` cannot use `@dataclass` under `from __future__ import annotations`; use a `NamedTuple` for small immutable records there. (files: .claude/hooks/pr_merge_status_guard.py, tests/test_pr_merge_status_guard.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the scheduled routine `dispatch shubhodeep1/coding-workflows#5144: deliver` in session session_01YLLYPSWJ9Xqr8pCYFPTRQE; permission mode auto.
 - Progress comment: issue #5144 comment 5890591928.
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-29)
 - The session had no `mcp__github__*` tools; GitHub writes go through `gh api` REST (routine §23.B writes) after running `.claude/hooks/session-start.sh` to install `gh` (the repo was attached mid-session, so the SessionStart hook had not run).
+- Twin sync needed: `workflow-templates/.claude/hooks/pr_merge_status_guard.py` → `.claude/hooks/pr_merge_status_guard.py` (twin sha256 `4f3b419ede0595ea0b332ec3e2a1b0dd2af0712852a19e1b577b7db16d40f4dc`); blocker posted on #5144.
