@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5777-5793 | severity=high | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The new protected-conflict handoff step does not set `PR_NUMBER`, which the sourced scripts use to construct handoff logs and comments.\n  WHY: Without `PR_NUMBER`, the scripts can emit an empty PR value and produce incomplete or incorrect handoff comments; severity was reported as MAJOR.\n- workflow-templates/.claude/commands/implement-plan-claude.md:113\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The dead-base rebuild bullet is appended mid-line to the base-merge bullet, so it renders as inline text rather than a separate list item.\n  WHY: A line break before the dead-base bullet would make it a distinct list item; the reviewer suggested a one-line fix and reported HARDENING_RISK_SCORE: 1.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:5777-5793 | severity=MAJOR | confidence=5\n  PROBLEM: The step's env block does not set PR_NUMBER, but the sourced script review_autofix_step_claude_fixer_protected_conflict.sh and the handoff script it sources both expect PR_NUMBER to be set.\n  WHY: The protected conflict handoff script echoes AUTOFIX_GATE_CLAUDE_FIXER_PROTECTED_CONFLICT pr=${PR_NUMBER:-} which will produce malformed log output (pr= instead of pr=42). The handoff script review_autofix_step_claude_fixer_handoff.sh uses ${PR_NUMBER} in multiple places including the CLAUDE_FIXER_HANDOFF log line and comment body construction. Without PR_NUMBER, the handoff comment will be incomplete or incorrect, and the log output will be unparseable. The test test_fallback_step_script_posts_the_protected_handoff explicitly sets PR_NUMBER: \"42\" in its environment, confirming the script expects this variable.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:113\n  PROBLEM: The dead-base rebuild section is appended mid-line (`. - **A dead base rebuilds...`) rather than as a separate markdown bullet. The `- ` does not start a new list item in the middle of a line, so the dead-base instructions render as inline text within the base-merge bullet.\n  WHY: The numbered sub-list (steps 1-6) still renders correctly, but the dead-base preamble is not visually distinguishable as its own section. Suggested minimal fix: Add a line break before `- **A dead base rebuilds...` so it starts a new bullet item on its own line. Estimated lines changed: 1. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "875056e23d21af3d8eda52a34451a82f16bf58336c6051a9618b0dacae42c272",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4904,
+    "run_id": "36508065456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36508065456",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929020840_1960b841ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4904,
+    "run_id": "36508065456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T02:08:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
