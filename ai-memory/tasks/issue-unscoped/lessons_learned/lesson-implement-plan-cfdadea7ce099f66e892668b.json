@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-29T02:37:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In Claude-fixer mode, a review with zero findings still hands off instead of auto-merging when any reviewer slot fails or another review run on the same head is still active at the pre-merge check refresh; without a configured verdict bot, only a new head or a human merge clears it.",
+  "phase": "implement_plan",
+  "pr_number": 4695,
+  "record_id": "lesson-implement-plan-cfdadea7ce099f66e892668b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4687-bind-rejections-to-consensus-ids",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}
