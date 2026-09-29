@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2133,6 +2134,70 @@ def test_security_audit_target_ref_requires_explicit_range_and_issues_mode() -> 
 	assert proc.returncode == 1
 	assert "SECURITY_AUDIT_TARGET_REF requires SECURITY_AUDIT_DIFF_BASE" in proc.stderr
 	assert not final_state.get("codex_calls")
+
+
+def test_security_audit_chains_followups_that_change_the_same_file() -> None:
+	"""Issue #4934: same-file follow-ups of one run are chained, others stay independent.
+
+	Four findings: A, B, A, A. The second A follow-up depends on the first,
+	the third on the second (a chain, so no two same-file fixes run in
+	parallel), and B depends on nothing. The line is the one the Claude
+	issue intake parses (`claude_issue_route.parse_depends_on`).
+	"""
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import claude_issue_route  # noqa: E402
+
+	file_a = "scripts/security_audit.sh"
+	file_b = "scripts/claude_issue_route.py"
+	findings = [
+		_finding_payload("chain-a-1", file_path=file_a),
+		_finding_payload("chain-b-1", file_path=file_b),
+		_finding_payload("chain-a-2", file_path=file_a),
+		_finding_payload("chain-a-3", file_path=file_a),
+	]
+	state = _security_audit_tracker_state()
+	state["api_responses"] = [[[]]]
+	state["next_issue_number"] = 9700
+	proc, final_state = _run_security_audit(state, codex_output=json.dumps(findings, ensure_ascii=True))
+
+	assert proc.returncode == 0, proc.stderr
+	assert "tracker=#9000 findings=4 followups_created=4" in proc.stdout
+	# The mock numbers follow-ups 9700, 9701, … in filing order (the filter
+	# may reorder findings, so read the order from the calls).
+	filed = final_state.get("issue_create_bodies", [])
+	assert len(filed) == 4
+	numbers_by_file: dict[str, list[int]] = {file_a: [], file_b: []}
+	for offset, body in enumerate(filed):
+		number = 9700 + offset
+		path = file_a if f"`{file_a}:1`" in body else file_b
+		depends_on = claude_issue_route.parse_depends_on(body, number)
+		earlier = numbers_by_file[path]
+		# Each follow-up names only the previous one for its file.
+		assert depends_on == earlier[-1:], (path, number, depends_on, earlier)
+		if earlier:
+			assert f"- Depends on: #{earlier[-1]} (same file; this follow-up starts after #{earlier[-1]} is closed with `ai:merged`)" in body
+		# The marker line stays first, so the security-pass skip verifier still finds it.
+		assert body.startswith("<!-- ai:security-finding:chain-")
+		assert "\nRefs #9000\n" in body
+		numbers_by_file[path].append(number)
+	assert len(numbers_by_file[file_a]) == 3 and len(numbers_by_file[file_b]) == 1
+	assert proc.stdout.count("(same file)") == 2
+
+
+def test_security_audit_followups_for_different_files_carry_no_dependency() -> None:
+	findings = [
+		_finding_payload("solo-a", file_path="scripts/security_audit.sh"),
+		_finding_payload("solo-b", file_path="scripts/claude_issue_route.py"),
+	]
+	state = _security_audit_tracker_state()
+	state["api_responses"] = [[[]]]
+	state["next_issue_number"] = 9800
+	proc, final_state = _run_security_audit(state, codex_output=json.dumps(findings, ensure_ascii=True))
+
+	assert proc.returncode == 0, proc.stderr
+	followup_bodies = final_state.get("issue_create_bodies", [])
+	assert len(followup_bodies) == 2
+	assert not any("Depends on" in body for body in followup_bodies)
 
 
 def main() -> int:

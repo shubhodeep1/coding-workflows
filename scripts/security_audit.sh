@@ -1740,6 +1740,12 @@ tracker_comment_path.write_text("\n".join(comment_lines) + "\n", encoding="utf-8
 
 followup_body_dir.mkdir(parents=True, exist_ok=True)
 index_lines: list[str] = []
+# Follow-ups that change the same file are chained (issue #4934): each one
+# names the previous follow-up of this run for that file, and the creation
+# loop below turns that index into a `Depends on: #<number>` line, so the
+# Claude issue pickup starts it only after that one is closed with
+# `ai:merged`. Follow-ups for different files stay independent.
+previous_index_by_file: dict[str, int] = {}
 for idx, finding in enumerate(planned_followups):
 	title = truncate_title(
 		f"[security-audit] {finding['finding_id']}: {finding['severity']} {finding['file']}:{finding['line']}"
@@ -1769,7 +1775,9 @@ for idx, finding in enumerate(planned_followups):
 		str(finding["recommendation"]),
 	]
 	body_path.write_text("\n".join(body_lines) + "\n", encoding="utf-8")
-	index_lines.append(f"{body_path}\t{title}\n")
+	depends_index = previous_index_by_file.get(str(finding["file"]))
+	previous_index_by_file[str(finding["file"])] = idx
+	index_lines.append(f"{body_path}\t{title}\t{'' if depends_index is None else depends_index}\n")
 
 followup_index_path.write_text("".join(index_lines), encoding="utf-8")
 followup_summary_env_path.write_text(
@@ -1788,13 +1796,31 @@ gh_retry gh issue comment "${TRACKER_NUMBER}" \
 	--repo "${GITHUB_REPOSITORY}" \
 	--body-file "${TRACKER_COMMENT_FILE}"
 
-while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE; do
+# FOLLOWUP_NUMBERS[<row>] is the issue number filed for index row <row>, so a
+# later follow-up for the same file can name it (issue #4934).
+FOLLOWUP_NUMBERS=()
+FOLLOWUP_ROW=0
+while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_DEPENDS_INDEX; do
 	[ -n "${FOLLOWUP_BODY_PATH}" ] || continue
-	gh_retry gh issue create \
+	if [[ "${FOLLOWUP_DEPENDS_INDEX}" =~ ^[0-9]+$ ]]; then
+		FOLLOWUP_DEPENDS_NUMBER="${FOLLOWUP_NUMBERS[${FOLLOWUP_DEPENDS_INDEX}]:-}"
+		if [ -n "${FOLLOWUP_DEPENDS_NUMBER}" ]; then
+			printf '\n## Depends on\n\n- Depends on: #%s (same file; this follow-up starts after #%s is closed with `ai:merged`)\n' \
+				"${FOLLOWUP_DEPENDS_NUMBER}" "${FOLLOWUP_DEPENDS_NUMBER}" >> "${FOLLOWUP_BODY_PATH}"
+			echo "security-audit: follow-up row ${FOLLOWUP_ROW} depends on #${FOLLOWUP_DEPENDS_NUMBER} (same file)"
+		else
+			echo "::warning::security-audit: ${FOLLOWUP_TITLE} shares a file with an earlier follow-up whose issue number is unknown; filed without a Depends on line"
+		fi
+	fi
+	FOLLOWUP_URL="$(gh_retry gh issue create \
 		--repo "${GITHUB_REPOSITORY}" \
 		--title "${FOLLOWUP_TITLE}" \
 		--label "ai:security" \
-		--body-file "${FOLLOWUP_BODY_PATH}" >/dev/null
+		--body-file "${FOLLOWUP_BODY_PATH}")"
+	FOLLOWUP_NUMBER="${FOLLOWUP_URL##*/}"
+	[[ "${FOLLOWUP_NUMBER}" =~ ^[1-9][0-9]*$ ]] || FOLLOWUP_NUMBER=""
+	FOLLOWUP_NUMBERS[FOLLOWUP_ROW]="${FOLLOWUP_NUMBER}"
+	FOLLOWUP_ROW=$((FOLLOWUP_ROW + 1))
 done < "${FOLLOWUP_INDEX_FILE}"
 
 if [ -n "${SECURITY_AUDIT_TARGET_REF}" ]; then

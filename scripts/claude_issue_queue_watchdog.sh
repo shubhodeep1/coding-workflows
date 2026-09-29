@@ -18,6 +18,14 @@
 # one label write per newly stale item (CLAUDE.md §15). Log lines are prefixed
 # CLAUDE_ISSUE_QUEUE_WATCHDOG.
 #
+# An item that waits on a `Depends on: #N` issue (issue #4934) is held by the
+# pickup on purpose, so `queue-stale --fetch-dependencies` judges it from its
+# dependencies instead: not stale while one is open, flagged at once when one
+# was closed without `ai:merged`, and aged from the latest close once all are
+# merged. That costs one more REST read per distinct dependency of the open
+# dependent items (none when there are none); an unreadable dependency skips
+# the item this run.
+#
 # Required env (set by the workflow):
 #   GITHUB_REPOSITORY                  this repo (coding-workflows)
 #   GH_TOKEN                           the workflow's GITHUB_TOKEN (issues: write)
@@ -64,7 +72,7 @@ if ! gh_retry gh api "repos/${SELF_REPO}/issues?labels=${QUEUE_LABEL}&state=open
 fi
 
 STALE_FILE="${RUNTIME_DIR}/stale.json"
-python3 "${ROUTE_PY}" queue-stale --issues-json "${QUEUE_FILE}" --stale-hours "${STALE_HOURS}" > "${STALE_FILE}"
+python3 "${ROUTE_PY}" queue-stale --issues-json "${QUEUE_FILE}" --stale-hours "${STALE_HOURS}" --fetch-dependencies > "${STALE_FILE}"
 OPEN_COUNT="$(jq '[.[]? | select(.pull_request == null)] | length' "${QUEUE_FILE}")"
 STALE_COUNT="$(jq 'length' "${STALE_FILE}")"
 log "checked open=${OPEN_COUNT} newly_stale=${STALE_COUNT} stale_hours=${STALE_HOURS}"
@@ -74,14 +82,31 @@ fi
 
 ensure_label_exists "${STALE_LABEL}" "${SELF_REPO}" || true
 LINES=""
-while IFS=$'\t' read -r number title age; do
+NOT_PICKED_UP=0
+HELD=0
+while IFS=$'\t' read -r number title age reason; do
 	[[ "${number}" =~ ^[1-9][0-9]*$ ]] || continue
 	gh_retry gh api -X POST "repos/${SELF_REPO}/issues/${number}/labels" -f "labels[]=${STALE_LABEL}" >/dev/null 2>&1 || \
 		log "warn label_failed queue_issue=${number}"
 	log "stale queue_issue=${number} age_hours=${age} title=${title}"
-	echo "::warning::Claude issue queue item #${number} (${title}) has waited ${age}h without being picked up"
-	LINES+=$'\n'"- #${number} ${title} (${age}h)"
-done < <(jq -r '.[] | [.number, .title, .age_hours] | @tsv' "${STALE_FILE}")
+	if [ "${reason}" = "not picked up" ]; then
+		NOT_PICKED_UP=$((NOT_PICKED_UP + 1))
+		echo "::warning::Claude issue queue item #${number} (${title}) has waited ${age}h without being picked up"
+		LINES+=$'\n'"- #${number} ${title} (${age}h)"
+	else
+		HELD=$((HELD + 1))
+		log "held queue_issue=${number} reason=${reason}"
+		echo "::warning::Claude issue queue item #${number} (${title}) is held: ${reason}"
+		LINES+=$'\n'"- #${number} ${title} (${age}h; held: ${reason})"
+	fi
+done < <(jq -r '.[] | [.number, .title, .age_hours, (.reason // "not picked up")] | @tsv' "${STALE_FILE}")
 
-tg_send_msg "Claude issue queue: ${STALE_COUNT} item(s) waiting over ${STALE_HOURS}h in ${SELF_REPO}:${LINES}"$'\n'"The pickup has likely stopped. Restart it from a new cloud session opened in the app, in Auto mode: /claude-issue-pickup start — restart"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+TG_HINTS=""
+if [ "${NOT_PICKED_UP}" -gt 0 ]; then
+	TG_HINTS+=$'\n'"The pickup has likely stopped. Restart it from a new cloud session opened in the app, in Auto mode: /claude-issue-pickup start — restart"
+fi
+if [ "${HELD}" -gt 0 ]; then
+	TG_HINTS+=$'\n'"A held item waits for its Depends on: issue to be closed with ai:merged. Finish or reopen that issue, or remove the Depends on: line from the item's issue and comment /reclarify there."
+fi
+tg_send_msg "Claude issue queue: ${STALE_COUNT} item(s) need attention in ${SELF_REPO}:${LINES}${TG_HINTS}"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 exit 0

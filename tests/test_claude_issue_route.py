@@ -1329,6 +1329,8 @@ case "$2" in
   *"/compare/"*"...refs/heads/main?per_page=1") echo ahead ;;
   *"/zip") cat "{zip_file}" ;;
   "repos/shubhodeep1/coding-workflows") echo main ;;
+  *"/issues/"[0-9]*)
+    if [ -n "${{GH_STUB_DEP_JSON:-}}" ]; then printf '%s' "${{GH_STUB_DEP_JSON}}"; else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi ;;
   *) echo "HTTP 404" >&2; exit 1 ;;
 esac
 """,
@@ -1598,3 +1600,269 @@ def test_intake_workflow_uploads_the_queue_binding_even_after_a_failure():
 	assert upload["with"]["name"] == route.QUEUE_BINDING_ARTIFACT
 	assert upload["with"]["path"] == binding_file
 	assert upload["with"]["if-no-files-found"] == "ignore"
+
+
+# --- chained issues: Depends on (issue #4934) ------------------------------------------
+
+
+def _dependent(repo="shubhodeep1/digital_pa", number=9, depends_on=(4687,), trigger="opened"):
+	return {**_validated(repo=repo, number=number, trigger=trigger), "depends_on": list(depends_on)}
+
+
+def _dep(state, closed_at="", labels=()):
+	return route.dependency_state({"state": state, "closed_at": closed_at, "labels": [{"name": name} for name in labels]})
+
+
+def test_parse_depends_on_accepts_the_line_forms_and_drops_the_rest():
+	body = "\n".join([
+		"Fix the gate.",
+		"- Depends on: #4687 (same file; this follow-up starts after #4687 is closed with `ai:merged`)",
+		"Depends on #12",
+		"**Depends on:** #7",
+		"* Depends on: #4687",
+		"Depends on: shubhodeep1/other#99",
+		"This depends on: #55 mid-sentence",
+		"Depends on: #3",
+	])
+	assert route.parse_depends_on(body, 3) == [7, 12, 4687]
+	assert route.parse_depends_on("", 3) == []
+	many = "\n".join(f"Depends on: #{n}" for n in range(100, 115))
+	assert route.parse_depends_on(many, 1) == list(range(100, 110))
+
+
+def test_fire_text_carries_depends_on_only_when_present():
+	plain = route.build_fire_text(_validated())
+	assert "depends_on" not in plain
+	text = route.build_fire_text(_dependent(depends_on=(12, 4687)))
+	assert text.splitlines()[-1] == "depends_on: 12,4687"
+	assert route.parse_fire_text(text) == _dependent(depends_on=(12, 4687))
+	assert "depends_on" not in route.parse_fire_text(plain)
+
+
+@pytest.mark.parametrize("value", ["4687,12", "12,12", "9", "x", "0", "12,", "12 ,13", ",".join(str(n) for n in range(1, 12))])
+def test_parse_fire_text_rejects_a_non_canonical_depends_on(value):
+	text = route.build_fire_text(_validated()) + f"depends_on: {value}\n"
+	with pytest.raises(ValueError):
+		route.parse_fire_text(text)
+
+
+def test_queue_item_without_a_dependency_renders_exactly_as_before():
+	# Pinned in test_queue_issue_renderings_are_pinned; a dependency only adds its line.
+	plain = route.build_queue_issue(_validated(), "https://github.com/shubhodeep1/coding-workflows/actions/runs/1")["body"]
+	chained = route.build_queue_issue(_dependent(), "https://github.com/shubhodeep1/coding-workflows/actions/runs/1")["body"]
+	assert chained == plain.replace("skip_security_pass: false\n```", "skip_security_pass: false\ndepends_on: 4687\n```")
+
+
+def test_a_bound_dependent_item_passes_the_binding_check():
+	item = _queue_item(10, _dependent())
+	bindings = _bindings({"1": _ok_record({10: item})})
+	merged = {route.dependency_key("shubhodeep1/digital_pa", 4687): _dep("closed", labels=("ai:merged",))}
+	out = route.queue_pending([item], REGISTRY_ALLOWED, bindings=bindings, dependencies=merged)
+	assert [e["issue_number"] for e in out["pending"]] == [9]
+	assert out["pending"][0]["depends_on"] == [4687]
+	# The fire text keeps the six documented keys (claude-issue-dispatch.md).
+	assert out["pending"][0]["fire_text"] == route.build_fire_text(_validated())
+
+
+def test_same_file_follow_up_waits_and_different_file_follow_ups_start_together():
+	first = _queue_item(10, _validated(number=4687))
+	other_file = _queue_item(11, _validated(number=4688))
+	second = _queue_item(12, _dependent(number=4689, depends_on=(4687,)))
+	key = route.dependency_key("shubhodeep1/digital_pa", 4687)
+	out = route.queue_pending([first, other_file, second], REGISTRY_ALLOWED, dependencies={key: _dep("open")})
+	assert [e["issue_number"] for e in out["pending"]] == [4687, 4688]
+	assert out["ignored"] == [{"queue_issue": 12, "reason": "held: waiting on #4687 (open)"}]
+	# Once #4687 is closed with ai:merged, the second one starts.
+	out = route.queue_pending([other_file, second], REGISTRY_ALLOWED, dependencies={key: _dep("closed", "2026-09-29T02:00:00Z", ("ai:merged",))})
+	assert [e["issue_number"] for e in out["pending"]] == [4688, 4689]
+	assert out["ignored"] == []
+
+
+def test_dependency_closed_without_merged_holds_the_item_and_says_why():
+	item = _queue_item(12, _dependent(depends_on=(4687,)))
+	key = route.dependency_key("shubhodeep1/digital_pa", 4687)
+	out = route.queue_pending([item], REGISTRY_ALLOWED, dependencies={key: _dep("closed", "2026-09-29T02:00:00Z", ("ai:review-blocked",))})
+	assert out["pending"] == []
+	assert out["ignored"] == [{"queue_issue": 12, "reason": "held: dependency #4687 closed without ai:merged"}]
+	assert out["remaining"] == 0
+
+
+def test_dependency_read_outcomes():
+	item = _queue_item(12, _dependent(depends_on=(4687, 4688)))
+	merged = _dep("closed", labels=("ai:merged",))
+	key_a = route.dependency_key("shubhodeep1/digital_pa", 4687)
+	key_b = route.dependency_key("shubhodeep1/digital_pa", 4688)
+	# Every dependency must be merged.
+	out = route.queue_pending([item], REGISTRY_ALLOWED, dependencies={key_a: merged, key_b: _dep("open")})
+	assert out["ignored"] == [{"queue_issue": 12, "reason": "held: waiting on #4688 (open)"}]
+	# A dependency this session can never read (403 / 404) does not strand the item.
+	out = route.queue_pending([item], REGISTRY_ALLOWED, dependencies={key_a: merged, key_b: {"state": "inaccessible", "reason": "HTTP 403"}})
+	assert [e["issue_number"] for e in out["pending"]] == [9]
+	assert out["pending"][0]["dependency_notes"] == ["#4688 is not readable here (HTTP 403); started without waiting for it"]
+	# Any other read failure holds it for this wake.
+	out = route.queue_pending([item], REGISTRY_ALLOWED, dependencies={key_a: merged, key_b: {"state": "unavailable", "reason": "HTTP 502"}})
+	assert out["ignored"] == [{"queue_issue": 12, "reason": "held: dependency #4688 unreadable this wake (HTTP 502)"}]
+	# A dependency that was not read is deferred, never started unchecked.
+	out = route.queue_pending([item], REGISTRY_ALLOWED, dependencies={key_a: merged})
+	assert out["pending"] == [] and out["ignored"] == [] and out["deferred"] == 1 and out["remaining"] == 1
+	# Without a dependency map (the sweep's dedupe) nothing is held.
+	assert [e["issue_number"] for e in route.queue_pending([item], REGISTRY_ALLOWED)["pending"]] == [9]
+
+
+def test_held_items_never_take_a_start_slot():
+	held = _queue_item(10, _dependent(number=20, depends_on=(4687,)))
+	free = _queue_item(11, _validated(number=21))
+	key = route.dependency_key("shubhodeep1/digital_pa", 4687)
+	out = route.queue_pending([held, free], REGISTRY_ALLOWED, limit=1, dependencies={key: _dep("open")})
+	assert [e["issue_number"] for e in out["pending"]] == [21]
+	assert out["remaining"] == 0
+
+
+def test_the_newest_intake_read_decides_the_dependencies():
+	older = _queue_item(10, _dependent(depends_on=(4687,)))
+	newer = _queue_item(11, _validated(trigger="reclarify"))
+	key = route.dependency_key("shubhodeep1/digital_pa", 4687)
+	out = route.queue_pending([older, newer], REGISTRY_ALLOWED, dependencies={key: _dep("open")})
+	assert [(e["issue_number"], [q["number"] for q in e["queue_issues"]]) for e in out["pending"]] == [(9, [10, 11])]
+	assert "depends_on" not in out["pending"][0]
+
+
+def test_dependency_state_and_fetch():
+	assert route.dependency_state({"state": "closed", "labels": [{"name": "ai:merged"}], "closed_at": "t"}) == {"state": "merged", "closed_at": "t"}
+	assert route.dependency_state({"state": "closed", "labels": []})["state"] == "closed_unmerged"
+	assert route.dependency_state({"state": "open"}) == {"state": "open"}
+	assert route.dependency_state([])["state"] == "unavailable"
+	calls = []
+
+	def fake_read(path, binary=False, jq=""):
+		calls.append(path)
+		if path.endswith("/1"):
+			return {"state": "open"}
+		if path.endswith("/2"):
+			raise RuntimeError("gh api repos/o/r/issues/2 exited 1: gh: Not Found (HTTP 404)")
+		raise RuntimeError("gh api repos/o/r/issues/3 exited 1: HTTP 502")
+
+	states = route.fetch_dependency_states(["o/r#1", "o/r#2", "o/r#1", "o/r#3", "bad"], gh_read=fake_read)
+	assert calls == ["repos/o/r/issues/1", "repos/o/r/issues/2", "repos/o/r/issues/3"]
+	assert {key: record["state"] for key, record in states.items()} == {"o/r#1": "open", "o/r#2": "inaccessible", "o/r#3": "unavailable", "bad": "unavailable"}
+	assert route.fetch_dependency_states([], gh_read=fake_read) == {}
+	many = [f"o/r#{n}" for n in range(10, 50)]
+	calls.clear()
+	assert len(route.fetch_dependency_states(many, gh_read=lambda path, **_: {"state": "open"})) == route.QUEUE_DEPENDENCY_READ_LIMIT
+
+
+def test_queue_stale_judges_dependent_items_by_their_dependencies():
+	from datetime import datetime, timezone
+
+	now = datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc)
+	waiting = _queue_item(1, _dependent(number=31, depends_on=(4687,)), created="2026-09-29T00:00:00Z")
+	stranded = _queue_item(2, _dependent(number=32, depends_on=(4688,)), created="2026-09-29T11:00:00Z")
+	fresh = _queue_item(3, _dependent(number=33, depends_on=(4689,)), created="2026-09-29T00:00:00Z")
+	late = _queue_item(4, _dependent(number=34, depends_on=(4690,)), created="2026-09-29T00:00:00Z")
+	unread = _queue_item(5, _dependent(number=35, depends_on=(4691,)), created="2026-09-29T00:00:00Z")
+	plain = _queue_item(6, _validated(number=36), created="2026-09-29T00:00:00Z")
+	deps = {
+		route.dependency_key("shubhodeep1/digital_pa", 4687): _dep("open"),
+		route.dependency_key("shubhodeep1/digital_pa", 4688): _dep("closed", "2026-09-29T10:00:00Z"),
+		route.dependency_key("shubhodeep1/digital_pa", 4689): _dep("closed", "2026-09-29T11:30:00Z", ("ai:merged",)),
+		route.dependency_key("shubhodeep1/digital_pa", 4690): _dep("closed", "2026-09-29T06:00:00Z", ("ai:merged",)),
+		route.dependency_key("shubhodeep1/digital_pa", 4691): {"state": "inaccessible", "reason": "HTTP 404"},
+	}
+	stale = route.queue_stale([waiting, stranded, fresh, late, unread, plain], now, 3, dependencies=deps)
+	assert [(s["number"], s["age_hours"], s["reason"]) for s in stale] == [
+		(6, 12.0, "not picked up"),
+		(4, 6.0, "not picked up"),
+		(2, 1.0, "dependency #4688 closed without ai:merged"),
+	]
+	# Without a dependency map the plain age rule applies to every item.
+	assert len(route.queue_stale([waiting, stranded, fresh, late, unread, plain], now, 3)) == 5
+	assert route.stale_dependency_keys([waiting, plain]) == [route.dependency_key("shubhodeep1/digital_pa", 4687)]
+
+
+def test_cli_queue_issue_reads_depends_on_from_the_target_issue(tmp_path):
+	validated_file = tmp_path / "validated.json"
+	validated_file.write_text(json.dumps(_validated()))
+	target_file = tmp_path / "target.json"
+	target_file.write_text(json.dumps({"number": 9, "body": "Refs #9000\n- Depends on: #4687\nDepends on: #9\n"}))
+	out = _cli("queue-issue", "--validated-json", str(validated_file), "--target-issue-json", str(target_file))
+	assert out.returncode == 0, out.stderr
+	assert "skip_security_pass: false\ndepends_on: 4687\n```" in json.loads(out.stdout)["body"]
+	target_file.write_text(json.dumps({"number": 9, "body": None}))
+	out = _cli("queue-issue", "--validated-json", str(validated_file), "--target-issue-json", str(target_file))
+	assert "depends_on" not in json.loads(out.stdout)["body"]
+
+
+def test_cli_queue_pending_reads_each_dependency_once(tmp_path):
+	gh = _binding_gh(tmp_path)
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	item = _queue_item(10, _dependent(depends_on=(4687,)))
+	gh["queue"].write_text(json.dumps([item]))
+	gh["zip"].write_bytes(_binding_zip({10: item}, run_id=1))
+	cmd = [sys.executable, str(ROOT / "scripts" / "claude_issue_route.py"), "queue-pending", "--fetch-repo", "shubhodeep1/coding-workflows", "--registry", str(registry)]
+	gh["env"]["GH_STUB_DEP_JSON"] = json.dumps({"number": 4687, "state": "closed", "labels": [{"name": "ai:review-blocked"}]})
+	result = json.loads(subprocess.run(cmd, capture_output=True, text=True, env=gh["env"]).stdout)
+	assert result["pending"] == []
+	assert result["ignored"] == [{"queue_issue": 10, "reason": "held: dependency #4687 closed without ai:merged"}]
+	assert [line for line in gh["log"].read_text().splitlines() if "/issues/4687" in line] == ["api repos/shubhodeep1/digital_pa/issues/4687"]
+	gh["env"]["GH_STUB_DEP_JSON"] = json.dumps({"number": 4687, "state": "closed", "labels": [{"name": "ai:merged"}]})
+	result = json.loads(subprocess.run(cmd, capture_output=True, text=True, env=gh["env"]).stdout)
+	assert [e["issue_number"] for e in result["pending"]] == [9]
+	# --issues-json mode without a dependency map defers the item.
+	issues_file = tmp_path / "q.json"
+	issues_file.write_text(json.dumps([item]))
+	bindings_file = tmp_path / "bindings.json"
+	bindings_file.write_text(json.dumps(_bindings({"1": _ok_record({10: item})})))
+	out = _cli("queue-pending", "--issues-json", str(issues_file), "--registry", str(registry), "--bindings-json", str(bindings_file))
+	assert json.loads(out.stdout)["deferred"] == 1
+	deps_file = tmp_path / "deps.json"
+	deps_file.write_text(json.dumps({route.dependency_key("shubhodeep1/digital_pa", 4687): {"state": "open"}}))
+	out = _cli("queue-pending", "--issues-json", str(issues_file), "--registry", str(registry), "--bindings-json", str(bindings_file), "--dependencies-json", str(deps_file))
+	assert json.loads(out.stdout)["ignored"] == [{"queue_issue": 10, "reason": "held: waiting on #4687 (open)"}]
+
+
+def test_intake_records_the_target_issues_dependencies(stubs):
+	target = {
+		"number": 9,
+		"state": "open",
+		"repository_url": "https://api.github.com/repos/shubhodeep1/digital_pa",
+		"author_association": "OWNER",
+		"user": {"login": "owner", "type": "User"},
+		"body": "<!-- ai:security-finding:x -->\nRefs #9000\n\n## Depends on\n\n- Depends on: #4687 (same file)\n",
+	}
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_QUEUE_NUMBER="88", GH_STUB_ISSUE_JSON=json.dumps(target))
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "CLAUDE_ISSUE_INTAKE depends_on repo=shubhodeep1/digital_pa issue=9 depends_on=4687" in result.stdout
+	calls = stubs["log"].read_text()
+	assert "skip_security_pass: false\ndepends_on: 4687\n```" in calls
+	assert "Waits for: #4687" in calls
+	# The binding records the same payload, so the pickup accepts the item.
+	doc = json.loads((stubs["tmp"] / "binding" / route.QUEUE_BINDING_FILENAME).read_text())
+	assert route.parse_fire_text(doc["items"][0]["payload"])["depends_on"] == [4687]
+
+
+def test_intake_without_a_dependency_writes_no_depends_on(stubs):
+	env = _intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_QUEUE_NUMBER="88")
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "depends_on" not in stubs["log"].read_text()
+	assert "CLAUDE_ISSUE_INTAKE depends_on" not in result.stdout
+
+
+def test_watchdog_flags_a_dependency_closed_without_merged_and_spares_a_waiting_item(stubs):
+	queue = [_queue_item(21, _dependent(depends_on=(4687,)), created="2999-01-01T00:00:00Z")]
+	closed = {"number": 4687, "state": "closed", "labels": [], "closed_at": "2026-09-29T00:00:00Z"}
+	result = _run("claude_issue_queue_watchdog.sh", {**_watchdog_env(stubs, queue), "GH_STUB_ISSUE_JSON": json.dumps(closed)})
+	assert result.returncode == 0, result.stderr + result.stdout
+	calls = stubs["log"].read_text()
+	assert "api repos/shubhodeep1/digital_pa/issues/4687" in calls
+	assert "repos/shubhodeep1/coding-workflows/issues/21/labels -f labels[]=ai:claude-issue-queue-stale" in calls
+	assert "held queue_issue=21 reason=dependency #4687 closed without ai:merged" in result.stdout
+	# An old item still waiting on an open dependency is not stale.
+	stubs["log"].write_text("")
+	queue = [_queue_item(22, _dependent(depends_on=(4687,)), created="2020-01-01T00:00:00Z")]
+	result = _run("claude_issue_queue_watchdog.sh", {**_watchdog_env(stubs, queue), "GH_STUB_ISSUE_JSON": json.dumps({"number": 4687, "state": "open"})})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "issues/22/labels" not in stubs["log"].read_text()
+	assert "newly_stale=0" in result.stdout
