@@ -100,7 +100,13 @@ _AWK_NAMES = frozenset({"awk", "gawk"})
 # `env` also takes `NAME=VALUE` assignments.
 _WRAPPER_VALUE_OPTIONS = {
 	"env": frozenset({"-u", "--unset", "-C", "--chdir"}),
-	"sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"}),
+	"sudo": frozenset(
+		{
+			"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T", "-R",
+			"--user", "--group", "--close-from", "--chdir", "--host", "--prompt", "--role", "--type",
+			"--other-user", "--command-timeout", "--chroot",
+		}
+	),
 	"doas": frozenset({"-u", "-C"}),
 	"timeout": frozenset({"-s", "-k", "--signal", "--kill-after"}),
 	"nice": frozenset({"-n", "--adjustment"}),
@@ -108,9 +114,13 @@ _WRAPPER_VALUE_OPTIONS = {
 
 # Program text that writes, renames, or deletes a file.
 _MODE_WRITES = r"[rRbBuU]?(['\"])[rbt]*[wax+][rwaxbt+]*\1"
+# One character of a call's arguments, or a parenthesised group nested up to
+# three deep, so a comma inside `os.path.join(os.path.dirname(p), 'x')` never
+# counts as the `open(` call's own.
+_OPEN_ARGUMENT_UNIT = r"(?:[^()]|\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))"
 _PYTHON_WRITE_PATTERNS = (
 	re.compile(r"\bwrite_(?:text|bytes)\s*\("),
-	re.compile(r"\b(?:fd)?open\s*\((?:[^()]|\([^()]*\))*?(?:,|\bmode\s*=)\s*" + _MODE_WRITES),
+	re.compile(r"\b(?:fd)?open\s*\(" + _OPEN_ARGUMENT_UNIT + r"*?(?:,|\bmode\s*=)\s*" + _MODE_WRITES),
 	re.compile(r"\.open\s*\(\s*(?:mode\s*=\s*)?" + _MODE_WRITES),
 	re.compile(r"\bos\.(?:replace|remove)\s*\("),
 	re.compile(r"\bshutil\.(?:copy|copy2|copyfile|copyfileobj|copytree|copymode|copystat|move|rmtree)\s*\("),
@@ -150,13 +160,20 @@ def program_writes(program: str) -> bool:
 	return any(pattern.search(program) for pattern in _PYTHON_WRITE_PATTERNS)
 
 
+def _skip_prefix_words(tokens: list[str], index: int, tokenizer) -> int:
+	"""Index past the keywords and assignments from `index`, stopping at `env`'s options."""
+	start = index
+	index += tokenizer._command_word_index(tokens[index:])
+	# The tokenizer skips a bare `env` as a prefix word but stops at its first
+	# option (`env -i`, `env -u NAME`); step back so the caller skips its options.
+	if start < index < len(tokens) and tokens[index - 1] == "env" and tokens[index].startswith("-"):
+		index -= 1
+	return index
+
+
 def _command_start(tokens: list[str], tokenizer) -> int:
 	"""Index of the command a segment runs, past keywords, assignments, and wrappers."""
-	index = tokenizer._command_word_index(tokens)
-	# The tokenizer skips a bare `env` as a prefix word but stops at its first
-	# option (`env -i`, `env -u NAME`); step back so the loop skips its options.
-	if 0 < index < len(tokens) and tokens[index - 1] == "env" and tokens[index].startswith("-"):
-		index -= 1
+	index = _skip_prefix_words(tokens, 0, tokenizer)
 	while index < len(tokens):
 		word = os.path.basename(tokens[index])
 		options = _WRAPPER_VALUE_OPTIONS.get(word)
@@ -170,7 +187,7 @@ def _command_start(tokens: list[str], tokenizer) -> int:
 			index += 2 if tokens[index] in options else 1
 		if word == "timeout" and index < len(tokens):
 			index += 1
-		index += tokenizer._command_word_index(tokens[index:])
+		index = _skip_prefix_words(tokens, index, tokenizer)
 	return index
 
 

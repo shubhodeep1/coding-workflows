@@ -172,6 +172,24 @@ def test_observed_prompts_are_denied(name):
 		("time env -i sed -i 's/a/b/' f", "sed"),
 		("sudo -u me sed -i 's/a/b/' f", "sed"),
 		("timeout 30 perl -pi -e 's/a/b/' f", "perl"),
+		# `env` options after another wrapper (conformance run 3).
+		("sudo -u root env -i python3 -c \"open('x','w').write('y')\"", "python"),
+		("sudo env -u HOME sed -i 's/a/b/' f", "sed"),
+		("timeout 30 env -i perl -pi -e 's/a/b/' f", "perl"),
+		("nice -n 5 env -u HOME sed -i 's/a/b/' f", "sed"),
+		("doas -u root env -i sed -i 's/a/b/' f", "sed"),
+		# `sudo` long options that take a separate value.
+		("sudo --user root sed -i 's/a/b/' f", "sed"),
+		("sudo --chdir /repo --user root sed -i 's/a/b/' f", "sed"),
+		# `open(` whose first argument nests calls two and three deep.
+		("python3 -c \"import os; open(os.path.join(os.getcwd(), 'x'), 'w').write('y')\"", "python"),
+		(
+			"python3 - <<'EOF'\nimport os\n"
+			"with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out.json'), 'w') as f:\n"
+			"\tf.write('{}')\nEOF",
+			"python",
+		),
+		("python3 -c \"open(os.path.join(str(d), 'x'), encoding='utf-8', mode='a')\"", "python"),
 		("echo start; python3 - <<'EOF' && git diff\nopen('x', 'w')\nEOF", "python"),
 	],
 )
@@ -210,6 +228,10 @@ def test_deny_message_is_the_issue_text():
 		"env -u HOME sed -n 1p f",
 		"env -i python3 -c \"print(1)\"",
 		"env -i",
+		"sudo env -u HOME sed -n 1p f",
+		"sudo --user root sed -n 1p f",
+		"python3 -c \"print(open(os.path.join(os.getcwd(), 'w')).read())\"",
+		"python3 -c \"print(open(os.path.join(os.path.dirname(p), 'a', 'x')).read())\"",
 		"sed -e 's/a/b/' f",
 		"perl -ne 'print if /x/' f",
 		"awk '{print $1}' f",
