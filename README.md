@@ -1257,8 +1257,17 @@ mode).
    (`claude_issue_route.py queue-pending`) and, following
    `.claude/commands/claude-issue-dispatch.md` step 2, starts an Opus session
    in the target repo running `/implement-issue-claude <url>` for each item,
-   then closes the queue issue. An issue therefore waits up to about an hour
-   before its session starts. A claude.ai routine cannot do this step: a
+   then closes the queue issue. It starts at most 20 items per wake
+   (`QUEUE_PICKUP_LIMIT`; set `CLAUDE_ISSUE_PICKUP_LIMIT` in the pickup
+   session's environment to change it, clamped to 1..30), and `/reclarify`
+   resumes (projects already in flight) start before new issues. A wake that
+   leaves items queued schedules **one** catch-up wake 30 minutes later, a
+   `send_later` named `Claude issue pickup: catch-up` bound to the pickup
+   session itself; a catch-up wake never schedules another (#4990). An issue
+   therefore waits up to about an hour before its session starts, and about
+   half an hour more when a backlog exceeds the limit. The pickup's one-line
+   report carries `oldest_waiting=<minutes>`, the age of the oldest queue item
+   still waiting at that read. A claude.ai routine cannot do this step: a
    routine run gets no claude-code-remote tools (`create_session`,
    `send_later`), so it can start neither the implementation session nor any
    later stage (issue #4525). The pickup starts only items whose binding
@@ -1392,9 +1401,10 @@ that queued it:
   read plus one artifact download per completed producer run, with per-run
   fallbacks
   (`fetch_queue_bindings` in `scripts/claude_issue_route.py`). It reads the
-  runs of the first 30 targets (three times the 10 it starts per wake), so
-  up to 20 stuck items that stay open cannot hold back a bound item queued
-  after them.
+  runs of the first 60 targets (three times the 20 it starts per wake by
+  default, #4990), so up to 40 stuck items that stay open cannot hold back a
+  bound item queued after them. Resumes come first in that order, so their
+  runs are always read.
 
 Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE` (adds
 `bound` and `warn binding_skipped`), `CLAUDE_ISSUE_QUEUE_WATCHDOG`.

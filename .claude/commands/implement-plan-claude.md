@@ -158,7 +158,7 @@ If step 2 fails, archive the new session (`archive_session`) and treat the start
 
 ## Helpers
 
-Stage sessions run unattended, so every GitHub write this command needs has one allowlisted command (CLAUDE.md §23.I). Do not replace a helper with a hand-built shell pipeline, loop, `$(...)`, or heredoc: those stop the session at a permission prompt or an Auto-mode denial.
+Stage sessions run unattended, so every GitHub write this command needs has one allowlisted command (CLAUDE.md §23.I). Do not replace a helper with a hand-built shell pipeline, loop, `$(...)`, or heredoc: those stop the session at a permission prompt or an Auto-mode denial. Run each helper, and every other allowlisted script call this command names (`check_in_status.py`, `claude_fix_claim.py`, `stale_routines.py`, `security_pass_skip.py`), as its own Bash call, exactly as written: chaining it with `;`, `&&`, `echo "$?"`, or other reads makes a command no allow rule matches, and the session stops at a prompt (issue #4798). One call is not allowlisted even run alone: the checker prompt's `check_in_status.py` call sets `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` and `CLAUDE_FIXER_VERDICT_BOT_LOGIN` before `python3`, which neither `check_in_status.py` rule in `.claude/settings.json` covers, so the Auto-mode classifier decides it. Run it alone all the same.
 
 ### Dispatch helper
 
