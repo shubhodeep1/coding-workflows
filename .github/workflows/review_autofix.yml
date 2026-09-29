@@ -738,7 +738,8 @@ jobs:
 
           # True when the hand-off step found a clean review with only check
           # runs still running on the current head (issue #4900) AND that
-          # review ran against the PR's current base: the comment's v2 line
+          # review ran against the PR's current base: the latest such
+          # comment's v2 line
           # must carry the PR's current base.sha and sha256 of its base.ref
           # (issue #5147). The claude-pr-catch-all sweep enables auto-merge
           # once the checks finish, so a dispatched re-run would only repeat
@@ -753,11 +754,27 @@ jobs:
               return 1
             fi
             gate_base_ref_digest="$(printf '%s' "${pr_base_ref_gate}" | sha256sum | cut -d ' ' -f 1)"
+            # Only the latest trusted pending-checks comment for the head
+            # counts, selected as find_pending_marker selects it (header plus
+            # one v1 line for the head, same round), and its single v2 line
+            # must carry that v1 line's round and ledger. An older comment
+            # bound to the current base must not skip the review while the
+            # sweep evaluates a newer one bound elsewhere: after a retarget
+            # back to an earlier reviewed base, neither would act.
             jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" \
               --arg base_sha "${pr_base_sha_gate}" --arg base_digest "${gate_base_ref_digest}" '
-                any(.[]; .author_login == $author and
+                def lines: (.body // "") | split("\n");
+                def v1: "^<!-- ai:claude-fixer-pending-checks:v1 head=" + $head + " round=(?<round>[1-9][0-9]*) ledger=(?<ledger>[0-9a-f]{64}) -->$";
+                def header_round: (.body // "") | capture("^## Review round (?<round>[1-9][0-9]*): clean review, waiting for check runs\\n").round;
+                def v1_markers: [lines[] | select(test(v1)) | capture(v1)];
+                ([.[] | select((.id | type) == "number" and .author_login == $author and
                   ((.body // "") | test("^## Review round [1-9][0-9]*: clean review, waiting for check runs\\n")) and
-                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-pending-checks:v2 head=" + $head + " round=[1-9][0-9]* ledger=[0-9a-f]{64} base_sha=" + $base_sha + " base_ref_sha256=" + $base_digest + " -->$"))))
+                  (v1_markers | length) == 1 and v1_markers[0].round == header_round)] | max_by(.id)) as $latest |
+                if $latest == null then false else
+                  ($latest | v1_markers[0]) as $marker |
+                  [$latest | lines[] | select(startswith("<!-- ai:claude-fixer-pending-checks:v2 "))]
+                    == ["<!-- ai:claude-fixer-pending-checks:v2 head=" + $head + " round=" + $marker.round + " ledger=" + $marker.ledger + " base_sha=" + $base_sha + " base_ref_sha256=" + $base_digest + " -->"]
+                end
               ' "${gate_marker_comments_file}" >/dev/null 2>&1
           }
 

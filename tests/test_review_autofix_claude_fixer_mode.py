@@ -949,8 +949,12 @@ def test_handoff_binds_any_valid_ref_name_by_digest():
 def test_gate_pr_read_carries_the_base_binding_fields():
 	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
 	assert 'base_ref: (.base.ref // ""), base_sha: (.base.sha // "")' in gate_run
-	helper = gate_run.split("gate_claude_pending_checks_on_head()", 1)[1].split("\n          }\n", 1)[0]
-	assert "pending-checks:v2 head=" in helper and "pending-checks:v1" not in helper
+	# The run script is dedented by YAML, so the function closes at column 0.
+	helper = gate_run.split("gate_claude_pending_checks_on_head()", 1)[1].split("\n}\n", 1)[0]
+	assert "gate_marker_comments_file" in helper and "Terminal same-head skip" not in helper
+	# The v1 line only selects the latest comment (as find_pending_marker
+	# does); the skip itself needs that comment's bound v2 line.
+	assert "pending-checks:v2 head=" in helper and "max_by(.id)" in helper
 
 
 @pytest.mark.parametrize("label, pr_base, comments", [
@@ -979,5 +983,38 @@ def test_gate_skips_again_once_a_fresh_review_binds_the_new_base():
 		f"base_ref_sha256={hashlib.sha256(b'main').hexdigest()} -->")
 	with tempfile.TemporaryDirectory() as td:
 		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_pending_comment(), _pending_comment(fresh)], pr_overrides={"base": new_base})
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_pending_checks"
+
+
+MAIN_BINDING = (f"<!-- ai:claude-fixer-pending-checks:v2 head={HEAD} round=1 ledger={DIGEST} base_sha={'f' * 40} "
+	f"base_ref_sha256={hashlib.sha256(b'main').hexdigest()} -->")
+
+
+@pytest.mark.parametrize("label, comments", [
+	# Clean review of the project branch, retarget to main, clean review of
+	# main, retarget back (base sha unchanged). The sweep evaluates the
+	# latest comment (bound to main) and refuses; the gate must not skip on
+	# the older one, or the PR is neither merged nor reviewed until a push.
+	("retargeted back after a fresh review", [_pending_comment(), _pending_comment(PENDING_V1 + "\n" + MAIN_BINDING)]),
+	# A later comment without a binding is `base_unbound` for the sweep.
+	("newer comment without a binding", [_pending_comment(), _pending_comment(PENDING_V1)]),
+	# The sweep only trusts a v2 line with the v1 line's round and ledger.
+	("binding for another round", [_pending_comment(PENDING_V1 + "\n" + PENDING_V2.replace(" round=1 ", " round=2 "))]),
+	("binding for another ledger", [_pending_comment(PENDING_V1 + "\n" + PENDING_V2.replace(f"ledger={DIGEST}", "ledger=" + "b" * 64))]),
+	("two binding lines", [_pending_comment(PENDING + "\n" + MAIN_BINDING)]),
+])
+def test_gate_follows_the_latest_pending_checks_comment_like_the_sweep(label, comments):
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=comments)
+	assert proc.returncode == 0, (label, proc.stderr)
+	assert out["should_run"] == "true", (label, out)
+	assert "reason=claude_fixer_pending_checks" not in proc.stdout, label
+
+
+def test_gate_skips_on_the_latest_comment_when_an_older_one_is_bound_elsewhere():
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF,
+			comments=[_pending_comment(PENDING_V1 + "\n" + MAIN_BINDING), _pending_comment()])
 	assert proc.returncode == 0, proc.stderr
 	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_pending_checks"

@@ -101,7 +101,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    binding the review to `PR_PAYLOAD_FILE`'s base (issue #5147; no valid
    payload base, no pending-checks comment); dispatch re-runs on that head
    are skipped too (`claude_fixer_pending_checks`) while the PR's current
-   `base.sha` and `base.ref` match the v2 line, and the `claude-pr-catch-all`
+   `base.sha` and `base.ref` match the v2 line of the latest such comment
+   for the head (the one the sweep evaluates), and the `claude-pr-catch-all`
    sweep enables head-bound auto-merge once those checks finish green. Doc-only and small-diff `claude/*`
    PRs take the gate's deterministic skip (`deterministic-skip-merge`, no
    reviewer panel, no hand-off) like any other PR, with two exceptions.
