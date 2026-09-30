@@ -7,18 +7,18 @@
 - Status: IN_PROGRESS
 - Stage: conformance 2/3 — review round
 - Activation: not started
-- Waiting on: PR #5494 (conformance 2/3 fix PR, review round 3)
+- Waiting on: PR #5494 (conformance 2/3 fix PR, review round 4)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: project checker session_01KsqE28FAB72xsTiHLCUEvX (per-wait safety-net and hand-back ids are in the stage report)
 - Last updated: 2026-09-30
-- Last note: conformance 2/3 review round 2 (workflow round 1 on 38bccbd): 2 low findings from one reviewer; fixed 1 (the header test now also requires the "PR-body `Intended loosening:` listing never does" clause), rejected 1 (an `AttributeError` on a renamed `gd.LOOSENING_POLICY_PATH` already names the attribute, and §6 forbids that rename).
+- Last note: conformance 2/3 review round 3 (workflow round 2 on a49a071): 1 NIT finding from one reviewer, fixed: the corpus-header test built its header from every `#` line in the file, so wording kept only in a later section comment still passed; it now reads only the leading comment block (a mutation moving the clause to a trailing comment fails it).
 
 ## Phases
 1. [x] Phase 1 — base-branch loosening policy (script, policy file, tests, ci.yml step, docs)   — PR #5389 merged 2026-09-30 (250b29f); review rounds: 1; interventions: 0
 
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT — fix PR #5449 merged 2026-09-30 (stale `--head-sha` exit-code wording in agents.md and plan G5, plus a pinning test) (pre-security)
-- Run 2 — 2026-09-30: CONFORMANT — fix PR (the four `tests/guard_corpus/*.txt` headers still said a PR-body `Intended loosening:` listing passes a shape; now name the base-branch policy, plus a pinning test) (pre-security) — PR #5494; review rounds: 2 (1: no finding; head moved by a `[claude-merge-resolve]` merge of the synced project branch. 2: 1 of 2 low findings fixed in the header test)
+- Run 2 — 2026-09-30: CONFORMANT — fix PR (the four `tests/guard_corpus/*.txt` headers still said a PR-body `Intended loosening:` listing passes a shape; now name the base-branch policy, plus a pinning test) (pre-security) — PR #5494; review rounds: 3 (1: no finding; head moved by a `[claude-merge-resolve]` merge of the synced project branch. 2: 1 of 2 low findings fixed in the header test. 3: 1 NIT fixed, the header test now reads only the leading comment block)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue), per the plan header.
@@ -45,6 +45,7 @@
 
 - [source:conformance] When a rule moves, grep every file that restates it, including data-file header comments such as `tests/guard_corpus/*.txt`, not only the docs the plan lists; pin the new wording with a test. (files: tests/guard_corpus/pr_merge_status_guard.txt, tests/test_guard_differential.py)
 - [source:intervention] Sibling projects that change the same rule on one shared base (#5325 and #5326 both rewrote the guard differential pass condition) conflict in every file that restates it; resolve by composing the rules, then re-grep the restatements and add one test for the combined case. (files: scripts/guard_differential.py, tests/guard_corpus/pr_merge_status_guard.txt, tests/test_guard_differential.py)
+- [source:intervention] A test that pins a file's header must read only the leading comment block (stop at the first non-comment line), or wording kept only in a later section comment still passes. (files: tests/test_guard_differential.py)
 
 ## Notes
 - Conformance 1/3 (2026-09-30), outside this project's scope and not fixed here: (1) `tests/inventory_parity.py` fails on the project branch (and on its base) because `docs/INVENTORY.md` lacks `scripts/guard_differential.py`, a #5174 gap that #5185's CI will report; fixing it in each of #5174's four child projects would conflict. (2) `ci.yml` runs the PR's own copy of `scripts/guard_differential.py`, so a PR can edit the checker itself (visible in the diff, unlike the body); #5327's project (final PR #5364) pins the verifier to the base branch.

@@ -742,10 +742,16 @@ def test_every_shipped_corpus_parses() -> None:
 
 def test_corpus_headers_name_the_base_policy_not_the_pr_body() -> None:
 	"""Issue #5326: a corpus header tells a hook author how a loosening is
-	approved, so it must name the base-branch policy, not the PR body."""
+	approved, so it must name the base-branch policy, not the PR body. Only
+	the leading comment block counts: a later section comment is not the
+	header a hook author reads first."""
 	for corpus in sorted(CORPUS_DIR.glob("*.txt")):
-		lines = corpus.read_text(encoding="utf-8").splitlines()
-		header = " ".join(line.lstrip("# ").strip() for line in lines if line.startswith("#"))
+		header_lines = []
+		for line in corpus.read_text(encoding="utf-8").splitlines():
+			if not line.startswith("#"):
+				break
+			header_lines.append(line.lstrip("# ").strip())
+		header = " ".join(header_lines)
 		assert "PR body lists it" not in header, corpus
 		assert gd.LOOSENING_POLICY_PATH in header, corpus
 		assert "PR-body `Intended loosening:` listing never does" in header, corpus
