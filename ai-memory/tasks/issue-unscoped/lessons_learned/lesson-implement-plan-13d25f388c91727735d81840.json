@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T00:42:18Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An issue-mode project based on another project's branch cannot pass validate.yml's explicit-target check, which requires the final PR to target the default branch; settle validation before starting such a project.",
+  "phase": "implement_plan",
+  "pr_number": 5321,
+  "record_id": "lesson-implement-plan-13d25f388c91727735d81840",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5147-bind-pending-merge-to-base",
+    "file:.github/workflows/validate.yml",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
