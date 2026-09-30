@@ -5070,6 +5070,7 @@ build_cross_pollination_summary() {
       echo "When you report a finding that is the same defect as a CONSENSUS FINDINGS entry, add the line"
       echo "  consensus_id: <consensus_id>"
       echo "to that finding. Never add an entry's consensus_id to a different defect, even one on the same or a nearby line."
+      echo "Put that line inside the finding's own File: / Line or code reference: block, with no blank line before it: a consensus_id anywhere else in your output does not count."
       echo "A finding raised by one reviewer and rejected this way by a majority of the others is not handed to the fixer."
       echo "Rejectable single-reviewer findings (ID -> file:line | flagged_by | consensus_id):"
       printf '%s\n' "${rejection_ids_list}" | sed 's/^/  /'

@@ -114,7 +114,20 @@ Phases of the unattended pipeline (each is a separate workflow file under
    proximity (issue #4687): the pass-2 entry must carry the same id, cited by
    the flagger's own output, at an overlapping range, and an entry stays
    blocking when another consensus entry of either pass is within 3 lines or
-   the id is duplicated (`CLAUDE_FIXER_NONBLOCKING_KEPT … reason=…`). Task
+   the id is duplicated (`CLAUDE_FIXER_NONBLOCKING_KEPT … reason=…`). The
+   flagger's citation counts only as a `consensus_id:` line inside exactly one
+   of its own `File:` finding records at the entry's file and lines, and a
+   second flagger finding in that file within 3 lines (a quoted, bolded, or
+   prefixed spelling of the path counts, `docs/README.md` included for
+   `README.md`, and a range or list of
+   lines covers every line it names) keeps the entry
+   blocking, and so does any other paragraph of the flagger's raw output
+   (fenced blocks included) that names that file with a number within 3
+   lines or with no number, whatever its spelling (`README.md#L1262`,
+   `*File:*`, a quoted or table-row finding, prose) and whatever characters
+   the path holds (`src/routes/+page.svelte`, `@scope` directories)
+   (`flagger_citation_mismatch`, `ambiguous_flagger_nearby`; issue
+   #4975). Task
    gaps and multi-reviewer findings never move, and a missing or failing
    filter keeps the original ledger. The filtered copy is what the step counts, digests,
    and posts. Zero ledger entries
