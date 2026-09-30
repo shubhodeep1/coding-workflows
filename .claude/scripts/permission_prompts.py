@@ -71,10 +71,14 @@ its target, and `filed-state.json` as `file` would record it.
 
 `lookup` is read-only and serves the operator's poller: it finds the newest
 session marker for a session and prints the sanitized command and the issue
-or PR link. When the search read fails (Claude Code Web's agent proxy refuses
-`search/issues`, and the poller runs there), it checks the most recently
-updated `ai:permission-prompt` issues instead, which is where `report-now`
-reports in FILING_REPO. `session-meta` records the session title for `report-now`,
+or PR link. It checks every search hit, all pages. When the search read fails
+(Claude Code Web's agent proxy refuses `search/issues`, and the poller runs
+there), it checks every `ai:permission-prompt` issue instead, newest-updated
+first, which is where `report-now` reports in FILING_REPO. It prints
+`found: false` only after every candidate was checked, never because a
+fixed-size window ran out (issue #5126); a search that answers
+`incomplete_results: true` without the report is a failed read (exit 2).
+`session-meta` records the session title for `report-now`,
 keyed by session id in `session-meta.json` under `filing.lock`.
 
 Issue text is untrusted data: the tool name, the prompt reason, and the
@@ -89,9 +93,11 @@ API calls (CLAUDE.md §15), REST only, none when nothing is new:
     read as `file` plus one POST. Elsewhere, one read of the branch's open
     PRs plus at most one POST. At most MAX_IMMEDIATE_REPORTS reports per
     session.
-  - `lookup`: one search read (when it fails, one read of the
+  - `lookup`: one search read per 100 hits (when it fails, one read of the
     `ai:permission-prompt` issues per 100 issues instead), then one comments
-    read per 100 comments for each hit it checks (at most LOOKUP_MAX_HITS).
+    read per 100 comments for each hit it checks whose `comments` count is
+    not 0. It stops at the first hit holding the report; a not-found answer
+    has checked every hit.
   - `report`, `session-meta`: none.
 
 `report` and `file` print one JSON line. Exit 0 (including a partial run,
@@ -145,6 +151,8 @@ SESSION_META_FILE = "session-meta.json"
 LOCK_FILE = "filing.lock"
 MAX_IMMEDIATE_REPORTS = 5
 MAX_SESSION_TITLE_CHARS = 200
+# No longer used: `lookup` checks every candidate instead of a fixed window
+# (issue #5126). Kept so existing importers keep working (CLAUDE.md §6).
 LOOKUP_MAX_HITS = 3
 REMOTE_SESSION_ENV = "CLAUDE_CODE_REMOTE_SESSION_ID"
 # Kill switch for `report-now`: `off` disables it; unset (the default) or any other value leaves it on.
@@ -895,26 +903,37 @@ def parse_immediate_block(text: str, session_label: str) -> dict | None:
 
 
 def _lookup_candidates(session_label: str, slug: str) -> list:
-	"""The issues `lookup` checks: its search hits, or the newest-updated `ai:permission-prompt` issues when the search read fails.
+	"""Every issue `lookup` checks: all its search hits, or every `ai:permission-prompt` issue when the search read fails.
 
-	Claude Code Web's agent proxy refuses `search/issues` (HTTP 403, "sessions
-	are bound to their configured repositories"), and the operator's poller runs
-	there. The repository-scoped list of pattern issues, which `report-now`
-	comments on or opens in FILING_REPO, still answers: 1 read per 100 labelled
-	issues, the same read as `existing_issues`. Raises ReadError when both reads fail.
+	Input: the session id and `<owner>/<repo>`. Output: the issue (or PR)
+	objects, newest-updated first, never cut to a fixed-size window (issue
+	#5126): a report outside the window was reported as not found.
+
+	The search is read in 100-hit pages until `total_count`
+	(`check_in_status._gh_api_paginated_object`, at most
+	MAX_PAGINATED_API_PAGES reads). Claude Code Web's agent proxy refuses
+	`search/issues` (HTTP 403, "sessions are bound to their configured
+	repositories"), and the operator's poller runs there. When any search read
+	fails, the repository-scoped list of pattern issues, which `report-now`
+	comments on or opens in FILING_REPO, still answers: 1 read per 100
+	labelled issues, the same read as `existing_issues`. Raises ReadError when
+	both reads fail, and when the search answers `incomplete_results: true`,
+	because a partial hit list can hide the report and "not found" would be a
+	guess.
 	"""
 	query = urllib.parse.quote(f'repo:{slug} "{session_label}"', safe="")
 	try:
-		result = check_in_status.gh_api(f"search/issues?q={query}&sort=updated&order=desc&per_page={LOOKUP_MAX_HITS}")
+		result = check_in_status._gh_api_paginated_object(f"search/issues?q={query}&sort=updated&order=desc", "items")
 	except check_in_status.ReadError:
-		return check_in_status.gh_api_list(f"repos/{slug}/issues?labels={LABEL.replace(':', '%3A')}&state=all&sort=updated&direction=desc")[:LOOKUP_MAX_HITS]
-	items = result.get("items")
-	return items if isinstance(items, list) else []
+		return check_in_status.gh_api_list(f"repos/{slug}/issues?labels={LABEL.replace(':', '%3A')}&state=all&sort=updated&direction=desc")
+	if result.get("incomplete_results") is True:
+		raise check_in_status.ReadError("search/issues returned incomplete results; a report may be missing from them")
+	return result["items"]
 
 
 def lookup(session_label: str, slug: str) -> dict:
 	"""Find the newest immediate report for a session; see the module docstring. Raises ReadError on a failed read."""
-	for item in _lookup_candidates(session_label, slug)[:LOOKUP_MAX_HITS]:
+	for item in _lookup_candidates(session_label, slug):
 		if not isinstance(item, dict) or not isinstance(item.get("number"), int):
 			continue
 		issue_url = str(item.get("html_url") or "")
@@ -922,6 +941,9 @@ def lookup(session_label: str, slug: str) -> dict:
 			parsed = parse_immediate_block(str(item.get("body") or ""), session_label)
 			if parsed:
 				return {"found": True, "session": session_label, "issue_url": issue_url, "comment_url": "", **parsed}
+		# The list and search objects carry the comment count; skip the read only when it is known to be 0.
+		if type(item.get("comments")) is int and item["comments"] == 0:
+			continue
 		comments = check_in_status.gh_api_list(f"repos/{slug}/issues/{item['number']}/comments")
 		for comment in reversed(comments):
 			if comment.get("author_association") not in _TRUSTED_ASSOCIATIONS:
