@@ -396,6 +396,17 @@ def test_wrapper_text_that_could_hide_the_real_page_exits_2(tmp_path, capsys, st
 	assert code == 2 and result["archive"] == [] and expected in result["error"]
 
 
+def test_lone_empty_page_in_wrapper_text_is_read_as_an_empty_page(tmp_path, capsys):
+	# The harness writes the result on a line of its own; a lone `{"data": []}` is that result (the last
+	# `after_id` page, or no enabled Routine), not a stray line hiding one, so it is not an error.
+	path = tmp_path / "sessions.json"
+	path.write_text('<other-session nonce="abc" untrusted="true">\n{"data": []}\n</other-session nonce="abc">\n', encoding="utf-8")
+	triggers = _write(tmp_path, "t.json", {"data": []})
+	code = janitor.main(["--sessions", str(path), "--triggers", str(triggers), "--stall-log-dir", str(tmp_path / "stalls")], now=NOW)
+	result = json.loads(capsys.readouterr().out)
+	assert code == 0 and result["archive"] == [] and "error" not in result
+
+
 def test_bare_array_is_accepted_only_as_plain_json(tmp_path, capsys):
 	path = tmp_path / "sessions.json"
 	page = [_session("session_a", "PR #12 status check-in")]
@@ -582,6 +593,11 @@ def test_fix_claude_pr_runs_the_prompt_report_on_every_early_end():
 	text = FIX_CLAUDE_PR_PATHS[1].read_text(encoding="utf-8")
 	route_step = text.split("2. **Route on `action`**", 1)[1].split("\n", 1)[0]
 	assert "Every branch below that reports and ends the turn (`hand_back_all`, `held`, `claimed`, `open`, `retry`) first runs step 8's permission prompt report" in route_step
+	# Each branch that list names says it reports, so none reads as ending the turn without the report.
+	route_branches = text.split("2. **Route on `action`**", 1)[1].split("3. **Cap.**", 1)[0]
+	for branch in ("`hand_back_all`", "`held`", "`claimed`", "`open`", "`retry`"):
+		branch_line = route_branches.split(f"- {branch}", 1)[1].split("\n", 1)[0]
+		assert "report" in branch_line.lower(), branch
 	claim_step = text.split("4. **Claim the head, before touching anything.**", 1)[1].split("5. **Fix it.**", 1)[0]
 	assert "Exit 2 → retry once, then run step 8's permission prompt report, report the error, and end the turn." in claim_step
 
