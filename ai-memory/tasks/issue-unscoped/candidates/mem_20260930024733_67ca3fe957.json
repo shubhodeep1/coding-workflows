@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The agents.md \"Stable log prefixes (contractual)\" section states \"Workflow-log-analysis and API-hygiene reporting depend on these stable log prefixes\" and lists every active prefix as a `LOG_PREFIX.name=...` entry. New log keys introduced by this PR \u2014 `AUTOFIX_AUTO_MERGE_SKIPPED` and `AUTOFIX_MERGE_HOLD_GATE` \u2014 should be registered there so the analysis pipeline recognises them.\n  expected_change_site: agents.md, the bullet list and the `LOG_PREFIX.name=...` block under \"## Stable log prefixes (contractual)\".\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The PR diff touches agents.md at lines 1007-1028 (adding prose about the gate) but does not add `AUTOFIX_AUTO_MERGE_SKIPPED` or `AUTOFIX_MERGE_HOLD_GATE` to either the bullet list or the `LOG_PREFIX.name=...` entries. Both keys are emitted in `scripts/review_enable_auto_merge.sh` (lines 229, 233) and in the `deterministic-skip-merge` job's `merge_hold_gate_allows` function (review_autofix.yml lines 1921, 1927), but neither appears in the contractual prefix list.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: The agents.md \"Stable log prefixes (contractual)\" section states \"Workflow-log-analysis and API-hygiene reporting depend on these stable log prefixes\" and lists every active prefix as a `LOG_PREFIX.name=...` entry. New log keys introduced by this PR \u2014 `AUTOFIX_AUTO_MERGE_SKIPPED` and `AUTOFIX_MERGE_HOLD_GATE` \u2014 should be registered there so the analysis pipeline recognises them.\n  Expected change site: agents.md, the bullet list and the `LOG_PREFIX.name=...` block under \"## Stable log prefixes (contractual)\".\n  Evidence of absence: The PR diff touches agents.md at lines 1007-1028 (adding prose about the gate) but does not add `AUTOFIX_AUTO_MERGE_SKIPPED` or `AUTOFIX_MERGE_HOLD_GATE` to either the bullet list or the `LOG_PREFIX.name=...` entries. Both keys are emitted in `scripts/review_enable_auto_merge.sh` (lines 229, 233) and in the `deterministic-skip-merge` job's `merge_hold_gate_allows` function (review_autofix.yml lines 1921, 1927), but neither appears in the contractual prefix list.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e9bedc5562d20c216104441b50b3423789d6be08b6dc2a3f5a12fa6d5faf4cd8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36660284225",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36660284225",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930024733_67ca3fe957",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36660284225"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T02:47:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
