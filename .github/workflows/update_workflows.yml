@@ -220,6 +220,8 @@ jobs:
           #   - .claude/<rel> missing at this commit → nothing is installed;
           #   - twin and .claude/<rel> differ (bytes) and the consumer has
           #     the file → the consumer's file is kept;
+          #   - the compare itself fails (cmp exit 2+, a read error) →
+          #     nothing is changed for that file;
           #   - otherwise the .claude/<rel> copy is synced as usual.
           # Each skipped or kept guard gets a ::warning:: line. In a shell
           # `case` pattern `*` also matches `/`, so `hooks/*` below covers
@@ -255,7 +257,15 @@ jobs:
                   printf '::warning::claude-guard-sync: .claude/%s is not in the stable .claude/ tree (its twin is not synced there yet); nothing installed.\n' "${rel}"
                   continue
                 fi
-                if ! cmp -s "${upstream_path}" "${claude_source_path}" && [ -e "${local_path}" ]; then
+                # cmp exits 1 when the files differ and 2+ when it cannot
+                # read one; a read error must not be reported as a difference.
+                guard_cmp_status=0
+                cmp -s "${upstream_path}" "${claude_source_path}" || guard_cmp_status=$?
+                if [ "${guard_cmp_status}" -gt 1 ]; then
+                  printf '::warning::claude-guard-sync: could not compare .claude/%s with its workflow-templates twin (cmp exit %s); nothing changed.\n' "${rel}" "${guard_cmp_status}"
+                  continue
+                fi
+                if [ "${guard_cmp_status}" -eq 1 ] && [ -e "${local_path}" ]; then
                   printf '::warning::claude-guard-sync: .claude/%s differs from its workflow-templates twin on stable (owner sync pending); kept the existing file.\n' "${rel}"
                   continue
                 fi

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -323,10 +324,16 @@ def test_guard_pattern_matches_claude_twin_sync_guard_paths() -> None:
 		assert result.stdout.split() == [rel for rel in samples if is_guard_path(rel)], shell
 
 
-def _run_claude_sync(twins: dict[str, str], reviewed: dict[str, str], local: dict[str, str]) -> tuple[dict[str, str], str, dict[str, str]]:
+def _run_claude_sync(
+	twins: dict[str, str],
+	reviewed: dict[str, str],
+	local: dict[str, str],
+	extra_path: str | None = None,
+) -> tuple[dict[str, str], str, dict[str, str]]:
 	"""Run the real claude_sync step body against a fake stable checkout.
 
-	Returns the consumer .claude/ tree afterwards, the step's stdout, and its outputs.
+	``extra_path`` is prepended to PATH (for stub commands). Returns the consumer
+	.claude/ tree afterwards, the step's stdout, and its outputs.
 	"""
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
@@ -344,10 +351,13 @@ def _run_claude_sync(twins: dict[str, str], reviewed: dict[str, str], local: dic
 		script = script.replace("${{ steps.fetch.outputs.upstream_dir }}", str(upstream / "workflow-templates"))
 		script = script.replace("/tmp/claude_changed_files.txt", str(changed_list))
 		assert "${{" not in script
+		run_env = {**os.environ, "GITHUB_OUTPUT": str(output_file)}
+		if extra_path:
+			run_env["PATH"] = f"{extra_path}{os.pathsep}{run_env.get('PATH', '')}"
 		result = subprocess.run(
 			["bash", "-c", script],
 			cwd=consumer if consumer.exists() else root,
-			env={**os.environ, "GITHUB_OUTPUT": str(output_file)},
+			env=run_env,
 			capture_output=True,
 			text=True,
 			check=False,
@@ -425,6 +435,30 @@ def test_claude_sync_with_matching_guards_behaves_as_before() -> None:
 	assert outputs["claude_changed"] == "3"
 
 
+def test_claude_sync_guard_compare_error_is_not_reported_as_a_difference() -> None:
+	"""A `cmp` read error (exit 2) is its own warning, not "differs", and changes nothing."""
+	real_cmp = shutil.which("cmp")
+	assert real_cmp, "cmp not found"
+	twins = {"hooks/unreadable.py": "twin\n", "hooks/unreadable_absent.py": "twin 2\n", "hooks/ok.py": "ok\n"}
+	reviewed = {"hooks/unreadable.py": "reviewed\n", "hooks/unreadable_absent.py": "reviewed 2\n", "hooks/ok.py": "ok\n"}
+	local = {"hooks/unreadable.py": "consumer\n"}
+	with tempfile.TemporaryDirectory() as stub_dir:
+		stub = Path(stub_dir) / "cmp"
+		stub.write_text(
+			f'#!/bin/sh\ncase "$*" in *unreadable*) echo "cmp: read error" >&2; exit 2;; esac\nexec "{real_cmp}" "$@"\n',
+			encoding="utf-8",
+		)
+		stub.chmod(0o755)
+		tree, stdout, outputs = _run_claude_sync(twins, reviewed, local, extra_path=stub_dir)
+	assert tree["hooks/unreadable.py"] == "consumer\n"
+	assert "hooks/unreadable_absent.py" not in tree
+	assert tree["hooks/ok.py"] == "ok\n"
+	for rel in ("hooks/unreadable.py", "hooks/unreadable_absent.py"):
+		assert f"::warning::claude-guard-sync: could not compare .claude/{rel} with its workflow-templates twin (cmp exit 2); nothing changed." in stdout
+		assert f".claude/{rel} differs from its workflow-templates twin" not in stdout
+	assert outputs["claude_changed"] == "1"
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
@@ -441,6 +475,7 @@ def main() -> int:
 	test_guard_pattern_matches_claude_twin_sync_guard_paths()
 	test_claude_sync_takes_guard_files_from_the_reviewed_claude_tree()
 	test_claude_sync_with_matching_guards_behaves_as_before()
+	test_claude_sync_guard_compare_error_is_not_reported_as_a_difference()
 	return 0
 
 
