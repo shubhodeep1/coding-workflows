@@ -535,6 +535,8 @@ def test_guard_differential_steps_read_past_outer_comment_lines() -> None:
 		    steps: []
 		"""
 	)
+	# dedent strips the source file's tab margin, so the YAML is space-indented.
+	assert "\t" not in workflow
 	steps = gd.guard_differential_steps(workflow)
 	assert len(steps) == 2
 	assert steps[0].endswith("python3 verifier.py")

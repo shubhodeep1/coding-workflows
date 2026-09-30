@@ -562,6 +562,11 @@ def _side_text(repo_root: Path, ref: str | None, path: str) -> str | None:
 	return blob.stdout if blob.returncode == 0 else None
 
 
+def _is_outer_comment(line: str, indent: int) -> bool:
+	"""True for a YAML comment line at or left of a step's `indent`."""
+	return line.lstrip().startswith("#") and len(line) - len(line.lstrip()) <= indent
+
+
 def guard_differential_steps(workflow_text: str | None) -> list[str]:
 	"""The text of every workflow step whose name starts with
 	GUARD_STEP_NAME_PREFIX: from its `- name:` line up to the next step at
@@ -582,20 +587,16 @@ def guard_differential_steps(workflow_text: str | None) -> list[str]:
 			index += 1
 			continue
 		indent = len(start.group("indent"))
-
-		def _outer_comment(line: str) -> bool:
-			return line.lstrip().startswith("#") and len(line) - len(line.lstrip()) <= indent
-
 		end = index + 1
 		while end < len(lines):
 			line = lines[end]
-			if line.strip() and not _outer_comment(line):
+			if line.strip() and not _is_outer_comment(line, indent):
 				line_indent = len(line) - len(line.lstrip())
 				if line_indent < indent or (line_indent == indent and line.lstrip().startswith("- ")):
 					break
 			end += 1
 		last = end
-		while last > index + 1 and (not lines[last - 1].strip() or _outer_comment(lines[last - 1])):
+		while last > index + 1 and (not lines[last - 1].strip() or _is_outer_comment(lines[last - 1], indent)):
 			last -= 1
 		steps.append("\n".join(lines[index:last]).rstrip())
 		index = end
