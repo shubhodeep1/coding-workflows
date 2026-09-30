@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5565-claude-sync-merge-cancel-auto-merge-plan.md
 - Source issue: shubhodeep1/coding-workflows#5565
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5565-claude-sync-merge-cancel-auto-merge   Final PR: pending
+- Project branch: claude/implement-plan-issue-5565-claude-sync-merge-cancel-auto-merge   Final PR: #5574 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (opened from claude/implement-plan-issue-5565-claude-sync-merge-cancel-auto-merge-phase-1; number in the stage report and resume block)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims
+- Last note: phase 1 implemented and verified locally (tests/test_claude_merge_hold_gate.py 50 passed; review pipeline contract, Claude-fixer mode, workflow size, changelog, inventory parity, log prefix, actionlint green); phase PR opened
 
 ## Phases
-1. [ ] Phase 1 — synchronous claude/* merge and stale auto-merge cancellation (scripts/review_enable_auto_merge.sh, review_autofix.yml gate + deterministic-skip-merge, gate docstring, tests, docs)
+1. [ ] Phase 1 — synchronous claude/* merge and stale auto-merge cancellation (scripts/review_enable_auto_merge.sh, review_autofix.yml gate + deterministic-skip-merge, gate docstring, tests, docs) — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -39,6 +39,7 @@
 ## Lessons
 
 ## Notes
+- Local verification env (2026-09-30): Python 3.11 container with a scratch venv (pytest, pyyaml, ruff, shellcheck-py) and actionlint 1.7.12. `ruff check` with the repo's pyproject config reports EXE001/BLE001 on scripts/claude_merge_hold_gate.py identically on the base; CI's selection (`--select E,F --ignore E501`) passes. shellcheck SC1007 on scripts/review_enable_auto_merge.sh:36 is pre-existing.
 - Security pass: skip (`security_pass_skip.py`: `ai:security` created and labelled by the issue automation).
 - Phase 1 has no protected paths (no `.claude/**` edit).
 - Issue base is the #5316 project branch (final PR #5323, draft into main): Activation n/a; the final-merge stage closes #5565 with `ai:merged`.
