@@ -4,9 +4,9 @@
 Covers:
   1. Decision parsing, the strictness order, and the `Intended loosening:`
      PR-body section.
-  2. The comparison on fake hooks: a silent loosening fails, a warning or an
-     intended listing passes, a deleted guard is a loosening, an added one
-     is not.
+  2. The comparison on fake hooks: a loosening fails with or without a
+     warning (issue #5325), an intended listing passes, a deleted guard is a
+     loosening, an added one is not.
   3. The git side: changed-hook detection, a missing corpus, and the CLI exit
      codes, in a scratch repository.
   4. The shipped corpora and scenarios against the real hooks, the
@@ -211,8 +211,12 @@ def _compare(tmp_path: Path, base_source, head_source, listed=None, shapes=("git
 		(FAKE_BLOCKING_HOOK, FAKE_CRASHING_HOOK, True),
 		(FAKE_ASKING_HOOK, FAKE_SILENT_HOOK, True),
 		(FAKE_SILENT_HOOK, FAKE_ALLOWING_HOOK, True),
-		(FAKE_BLOCKING_HOOK, FAKE_WARNING_HOOK, False),
-		(FAKE_BLOCKING_HOOK, FAKE_ASKING_HOOK + FAKE_WARNING_HOOK, False),
+		# A warning never excuses a loosening (issue #5325).
+		(FAKE_BLOCKING_HOOK, FAKE_WARNING_HOOK, True),
+		(FAKE_BLOCKING_HOOK, FAKE_ASKING_HOOK + FAKE_WARNING_HOOK, True),
+		(FAKE_SILENT_HOOK, FAKE_ALLOWING_HOOK + FAKE_WARNING_HOOK, True),
+		(FAKE_SILENT_HOOK, FAKE_WARNING_HOOK, False),
+		(FAKE_BLOCKING_HOOK, FAKE_BLOCKING_HOOK + FAKE_WARNING_HOOK, False),
 		(FAKE_BLOCKING_HOOK, FAKE_BLOCKING_HOOK, False),
 		(FAKE_SILENT_HOOK, FAKE_BLOCKING_HOOK, False),
 		(FAKE_ALLOWING_HOOK, FAKE_ASKING_HOOK, False),
@@ -224,6 +228,16 @@ def _compare(tmp_path: Path, base_source, head_source, listed=None, shapes=("git
 def test_loosening_rule(tmp_path: Path, base_source, head_source, regression: bool) -> None:
 	[result] = _compare(tmp_path, base_source, head_source)
 	assert result.regression is regression
+
+
+def test_warned_loosening_keeps_the_warning_as_a_diagnostic(tmp_path: Path) -> None:
+	[result] = _compare(tmp_path, FAKE_BLOCKING_HOOK, FAKE_WARNING_HOOK)
+	assert (result.head.decision, result.head.warned, result.loosened, result.regression) == (
+		"none",
+		True,
+		True,
+		True,
+	)
 
 
 def test_intended_listing_excuses_only_the_listed_shape(tmp_path: Path) -> None:
@@ -314,6 +328,20 @@ def test_cli_fails_on_a_silent_loosening_in_the_working_tree(hook_repo: Path) ->
 	assert proc.returncode == 1, proc.stdout + proc.stderr
 	assert "::error::GUARD_DIFFERENTIAL regression tree=.claude/hooks hook=fake_guard line=1" in proc.stdout
 	assert "base=block head=none" in proc.stdout
+
+
+def test_cli_fails_on_a_warned_loosening_and_reports_the_warning(hook_repo: Path) -> None:
+	"""Issue #5325: a `systemMessage` from the new hook does not turn a
+	loosening into a pass; the warning is only reported."""
+	(hook_repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_WARNING_HOOK, encoding="utf-8")
+	proc = _cli(hook_repo, "--json")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "base=block head=none+warning" in proc.stdout
+	assert "status=fail" in proc.stdout and "regressions=1" in proc.stdout
+	assert "fall back with a warning" not in proc.stdout
+	[row] = [json.loads(line) for line in proc.stdout.splitlines() if line.startswith("{")]
+	assert row["head"] == {"decision": "none", "warned": True}
+	assert row["loosened"] is True
 
 
 def test_cli_deleting_the_shape_does_not_hide_the_loosening(hook_repo: Path) -> None:
