@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:380-382 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `wrapped_subcommand` can be set to a flag or positional argument rather than a real subcommand.\n  WHY: This does not fail at runtime because the resulting compound key is absent from `_CREDENTIAL_SHORT_FLAGS`, but the reviewer identifies a potential maintainability concern if such a key is added later.\n- workflow-templates/.claude/scripts/permission_prompts.py:391-392 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The condition for applying wrapped-command credential rules allegedly fails when a flag immediately follows the wrapped command, potentially leaving the credential unmasked in the reported command shape.\n  WHY: The reviewers claim this can disclose credential values; highest severity retained, with a severity disagreement because Gemini reports BLOCKER and Grok reports BLOCKER / MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Mask credentials in permission-prompt reports before they are posted.\n  expected_change_site: workflow-templates/.claude/scripts/permission_prompts.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer reports that the credential masking for command \"shapes\" has a logic bug causing flags immediately following a wrapper command to not be masked in the \"shape\" reported.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/scripts/permission_prompts.py:380-382 | severity=NIT | confidence=2\n  PROBLEM: On `sudo mysql -pS3cretPass app`, `wrapped_subcommand` is computed as `tokens[wrapped_position + 1]`, which is a flag rather than a subcommand.\n  WHY: Does not fail at runtime because the flag token is safely unreachable through the `_CREDENTIAL_SHORT_FLAGS` dict; the concern is maintainability if a future compound entry collides with a flag prefix.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/permission_prompts.py:391-392 | severity=BLOCKER | confidence=4\n  PROBLEM: The condition used to check if a flag belongs to the wrapped command is incorrect when the flag immediately follows that command (`index - 1 == wrapped_position`).\n  WHY: The reviewer claims this causes the script to use the wrapper's credential rules instead of the wrapped command's rules, leaving the wrapped command's credential value unmasked in the reported command shape and causing a security disclosure.\n- TASK_GAP\n  Requirement: Mask credentials in permission-prompt reports before they are posted.\n  Expected change site: workflow-templates/.claude/scripts/permission_prompts.py\n  Evidence of absence: The credential masking for command \"shapes\" in permission-prompt reports has a logic bug (incorrect conditional) that causes flags immediately following a wrapper command to not be masked in the \"shape\" reported.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- workflow-templates/.claude/scripts/permission_prompts.py:391 | severity=BLOCKER / MAJOR\n  PROBLEM: The condition `index-1 > wrapped_position` allegedly excludes an immediate flag after the wrapped command, leaking the credential in the reported shape.\n  WHY: The reviewer recommends changing the condition to `>=`.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "56feae2eceb66096fc03c0872bb6ca386e0eb0c8bc33e9b35799ad19aad01ff6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5401,
+    "run_id": "36663399739",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36663399739",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930034713_21423e2c2d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5401,
+    "run_id": "36663399739"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T03:47:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
