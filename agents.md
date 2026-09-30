@@ -970,8 +970,10 @@ reviews, comments, and conflicts stay a direct §12 request.
   handed to …`), the session is not archived, and it is not the fixer's
   own; otherwise it skips and says so in one line. "Archived" is reported
   only after `archive_session` returned success. `/implement-plan-claude`
-  applies the same check (title `implement-plan <slug> — checker`) before
-  it archives its project checker, and its checker renames and archives no
+  applies the same check before it archives its project checker, except
+  that the title must contain `implement-plan <slug> — checker` (with or
+  without a `#<issue> · PR #<pr> — ` prefix, issue #4886) rather than
+  equal it, and its checker renames and archives no
   existing session (its one `archive_session` call is the cleanup of a
   stage session it just created whose start trigger failed).
 - Delivered or gone (CLAUDE.md §26.C step 5): a `SUCCEEDED` hand-back
