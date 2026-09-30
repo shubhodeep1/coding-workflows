@@ -1,0 +1,41 @@
+# Implement-Plan Log — Finalize tracking-issue lineage only from the orchestrator completion PR
+
+- Plan: docs/plans/issue-5619-tracking-lineage-completion-pr-only-plan.md
+- Source issue: shubhodeep1/coding-workflows#5619
+- Repo: shubhodeep1/coding-workflows   Default branch: main
+- Project branch: claude/implement-plan-issue-5619-tracking-lineage-completion-pr-only   Final PR: pending
+- Status: IN_PROGRESS
+- Stage: phase 1/1
+- Activation: not started
+- Waiting on: none
+- Stage model: claude-opus-5-5   Permission mode: auto
+- Check-in: none
+- Last updated: 2026-09-30
+- Last note: project branch opened from claude/implement-plan-issue-4813-close-sweep-target-branch-merges; phase 1 starting.
+
+## Phases
+1. [ ] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)
+
+## Conformance
+
+## Security pass
+- Skipped (ai:security: automation-produced issue; `security_pass_skip.py` verified)
+
+## Validation
+
+## Completion
+
+## Activation
+
+## Auto-decisions
+- AD-1 [plan, 2026-09-30] Which PR may finalize an orchestrator-tracking issue's lineage? — Picked: A — only its completion PR: merged, base the default branch, head `orchestrator/project-<T>` in this repository. Alternatives: B — none; never finalize tracking-issue lineage in `issue_pr_status.yml`; C — any PR merged into the default branch. Why: A is the audit's recommendation; B drops the legitimate path, C still lets an arbitrary linked PR finalize the project. Applied in: phase 1 PR. Status: pending review
+- AD-2 [plan, 2026-09-30] Does a PR closed without merging still write a tracking issue's lineage as `closed`? — Picked: A — no, skip it. Alternatives: B — keep writing `closed`. Why: an unmerged close never ends an orchestrator project (the poller reopens a fresh final PR), so `closed` is the same tampering as `merged`. Applied in: phase 1 PR. Status: pending review
+- AD-3 [plan, 2026-09-30] How is an issue treated whose classification lookups both failed (the step skips it as tracking)? — Picked: A — the same completion-PR rule as a tracking issue. Alternatives: B — keep #5227's rule (finalize on an unmerged close or a default-branch merge). Why: §1; the issue may be a tracking issue, and a missed standalone lineage costs only memory. Applied in: phase 1 PR. Status: pending review
+- AD-4 [plan, 2026-09-30] Should the step also derive the tracking issue from a completion PR's `orchestrator/project-<T>` head, so a body with only `Refs #<T>` still finalizes it? — Picked: A — no. Alternatives: B — yes, add `<T>` to the linked issues from the head ref. Why: §5; it adds a new linked-issue path into the label/close loop, which is out of scope for a tampering fix. Applied in: no code change. Status: pending review
+- AD-5 [plan, 2026-09-30] What happens to the existing tests that assert the old tracking and unclassified lineage behaviour? — Picked: A — add accurately named tests and keep the old function names as aliases that call them (§6). Alternatives: B — rewrite the bodies under the old names; C — delete the old tests. Why: §6 forbids removal and repurposing; aliases keep names callable without misleading readers. Applied in: phase 1 PR. Status: pending review
+
+## Lessons
+
+## Notes
+- Issue mode: the session started in `auto` permission mode (no start-up check needed).
+- Base branch `claude/implement-plan-issue-4813-close-sweep-target-branch-merges` is project #4813's branch (final PR #4826, open draft into main at start).
