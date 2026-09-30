@@ -22,7 +22,9 @@ the base and the head:
      one is given, and at the base ref, so deleting a shape does not hide a
      loosening), builds the hook's scenario (a scratch git repository and
      a stub `gh` on PATH, see SCENARIOS) and runs each shape through the base
-     hook and the head hook, each with a cold cache directory.
+     hook and the head hook, each with a cold cache directory. Every base
+     run, in every tree, finishes before the first head run, so a head hook
+     (PR code) cannot rewrite a base copy before it runs (issue #5327).
   3. Records each decision (`block`, `deny`, `ask`, `none`, `allow`, `error`)
      and whether the hook emitted a warning (`systemMessage`).
   4. Fails on every shape whose head decision is less strict than its base
@@ -638,8 +640,28 @@ def compare_hook_dirs(
 	listed: list[tuple[str, str]],
 	tree: str = "",
 ) -> list[ShapeResult]:
-	"""Run every corpus whose hook exists on either side through both sides."""
-	results: list[ShapeResult] = []
+	"""Run every corpus whose hook exists on either side through both sides,
+	every base run before the first head run (see `_run_side`)."""
+	runs = _hook_runs(base_dir, head_dir, corpora)
+	base_outcomes = _run_side(runs, scratch, "base")
+	head_outcomes = _run_side(runs, scratch, "head")
+	return _shape_results(runs, base_outcomes, head_outcomes, listed, tree)
+
+
+@dataclass(frozen=True)
+class ShapeRun:
+	"""One corpus shape and the hook file each side runs it through."""
+
+	hook: str
+	index: int
+	shape: Shape
+	base_file: Path | None
+	head_file: Path | None
+
+
+def _hook_runs(base_dir: Path, head_dir: Path, corpora: dict[str, list[Shape]]) -> list[ShapeRun]:
+	"""Every (hook, shape) pair whose hook exists on either side."""
+	runs: list[ShapeRun] = []
 	for hook, shapes in sorted(corpora.items()):
 		base_hook = base_dir / f"{hook}.py"
 		head_hook = head_dir / f"{hook}.py"
@@ -647,32 +669,55 @@ def compare_hook_dirs(
 		head_file = head_hook if head_hook.is_file() else None
 		if base_file is None and head_file is None:
 			continue
-		for index, shape in enumerate(shapes):
-			outcomes: list[Outcome] = []
-			for side, hook_file in (("base", base_file), ("head", head_file)):
-				root = scratch / f"{hook}-{index}-{side}"
-				scenario = SCENARIOS.get(hook, default_scenario)(root)
-				home = root / "home"
-				cache = root / "cache"
-				home.mkdir()
-				cache.mkdir()
-				env = hook_env(scenario.env, scenario.stub_bin, home, cache)
-				stdin = build_stdin(shape, scenario.cwd, scenario.substitutions)
-				outcomes.append(run_hook(hook_file, stdin, scenario.cwd, env))
-			base, head = outcomes
-			# A warning is a diagnostic, never an excuse: a changed guard can
-			# print any `systemMessage` (issue #5325).
-			loosened = STRICTNESS[head.decision] < STRICTNESS[base.decision]
-			results.append(
-				ShapeResult(
-					shape=shape,
-					tree=tree,
-					base=base,
-					head=head,
-					loosened=loosened,
-					intended=loosened and is_intended(shape, listed),
-				)
+		runs += [ShapeRun(hook, index, shape, base_file, head_file) for index, shape in enumerate(shapes)]
+	return runs
+
+
+def _run_side(runs: list[ShapeRun], scratch: Path, side: str) -> list[Outcome]:
+	"""Run every shape through one side's hooks, in a fresh scenario each.
+
+	A head hook is PR code running as the same user as this script, so it
+	can rewrite any file it can reach, including the base hook copies next
+	to its own (issue #5327 conformance run 2). Callers therefore finish
+	every base run, in every hook tree, before the first head run: a head
+	hook that rewrites a base copy then changes no base decision."""
+	outcomes: list[Outcome] = []
+	for run in runs:
+		hook_file = run.base_file if side == "base" else run.head_file
+		root = scratch / f"{run.hook}-{run.index}-{side}"
+		scenario = SCENARIOS.get(run.hook, default_scenario)(root)
+		home = root / "home"
+		cache = root / "cache"
+		home.mkdir()
+		cache.mkdir()
+		env = hook_env(scenario.env, scenario.stub_bin, home, cache)
+		stdin = build_stdin(run.shape, scenario.cwd, scenario.substitutions)
+		outcomes.append(run_hook(hook_file, stdin, scenario.cwd, env))
+	return outcomes
+
+
+def _shape_results(
+	runs: list[ShapeRun],
+	base_outcomes: list[Outcome],
+	head_outcomes: list[Outcome],
+	listed: list[tuple[str, str]],
+	tree: str,
+) -> list[ShapeResult]:
+	results: list[ShapeResult] = []
+	for run, base, head in zip(runs, base_outcomes, head_outcomes, strict=True):
+		# A warning is a diagnostic, never an excuse: a changed guard can
+		# print any `systemMessage` (issue #5325).
+		loosened = STRICTNESS[head.decision] < STRICTNESS[base.decision]
+		results.append(
+			ShapeResult(
+				shape=run.shape,
+				tree=tree,
+				base=base,
+				head=head,
+				loosened=loosened,
+				intended=loosened and is_intended(run.shape, listed),
 			)
+		)
 	return results
 
 
@@ -704,13 +749,17 @@ def run_check(
 	listed = intended_loosening(pr_body)
 	changed = changed_paths(repo_root, base_ref, head_ref)
 	report = Report(verifier_changes=verifier_changes(repo_root, base_ref, head_ref))
-	for tree in HOOK_TREES:
-		tree_changes = [path for path in changed if path.startswith(f"{tree}/") and path.endswith(".py")]
-		if not tree_changes and not all_trees:
-			continue
-		report.trees.append(tree)
-		with tempfile.TemporaryDirectory(prefix="guard-differential-") as tmp:
-			scratch = Path(tmp)
+	with tempfile.TemporaryDirectory(prefix="guard-differential-") as tmp:
+		# (tree, its hook runs, its scratch directory), collected for every
+		# tree before any hook runs, so every base run finishes before the
+		# first head run in any tree (see `_run_side`).
+		tree_runs: list[tuple[str, list[ShapeRun], Path]] = []
+		for tree_index, tree in enumerate(HOOK_TREES):
+			tree_changes = [path for path in changed if path.startswith(f"{tree}/") and path.endswith(".py")]
+			if not tree_changes and not all_trees:
+				continue
+			report.trees.append(tree)
+			scratch = Path(tmp) / str(tree_index)
 			base_dir = scratch / "base-hooks"
 			head_dir = scratch / "head-hooks"
 			materialize(repo_root, base_ref, tree, base_dir)
@@ -726,9 +775,13 @@ def run_check(
 					and ((base_dir / f"{stem}.py").is_file() or (head_dir / f"{stem}.py").is_file())
 				):
 					report.missing_corpus.append(path)
+			tree_runs.append((tree, _hook_runs(base_dir, head_dir, corpora), scratch / "runs"))
+		base_outcomes = [_run_side(runs, runs_scratch, "base") for _, runs, runs_scratch in tree_runs]
+		head_outcomes = [_run_side(runs, runs_scratch, "head") for _, runs, runs_scratch in tree_runs]
+		for (tree, runs, _), tree_base, tree_head in zip(tree_runs, base_outcomes, head_outcomes, strict=True):
 			# Each tree compares its own hook files (the twin is a separate
 			# file), so rows for the same shape in two trees are not duplicates.
-			report.results += compare_hook_dirs(base_dir, head_dir, corpora, scratch / "runs", listed, tree)
+			report.results += _shape_results(runs, tree_base, tree_head, listed, tree)
 	return report
 
 

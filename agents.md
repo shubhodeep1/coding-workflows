@@ -1213,7 +1213,12 @@ side so that class cannot land unnoticed.
   (new, edited, or deleted) with no corpus, or with a corpus that holds no
   shape (comments and blank lines only), fails too, so a new guard ships
   with its corpus. A local run without `--head-ref` counts untracked hook
-  files as changed.
+  files as changed. Every base-side run, in every tree, finishes before the
+  first head-side run (issue #5327): a head hook is PR code running as the
+  same user, and it could otherwise rewrite the base copies next to its own
+  so that later shapes compare the loosened hook with itself. A head hook
+  that escalates (for example with the hosted runner's `sudo`) can still
+  reach the verifier process; that is inherent to executing PR hook code.
 - **`Intended loosening:`** A PR that means to loosen lists each shape
   verbatim (the corpus line, placeholders included) under a heading or bold
   line `Intended loosening:` in its body, one list item per shape,
