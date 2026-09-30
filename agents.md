@@ -1246,8 +1246,11 @@ side so that class cannot land unnoticed.
   does not carry the script yet (`main` and `stable` before #5174's final
   PR and release) runs the PR's copy instead and prints
   `::warning::GUARD_DIFFERENTIAL verifier=head
-  reason=base-has-no-verifier`. A change to the verifier therefore applies
-  to PRs opened after it merges, and **the step may pass only flags the
+  reason=base-has-no-verifier`. The base is fetched when the step runs, so
+  on a base that carries the verifier a change to it applies only once it
+  has merged, and then to every run that starts afterwards, including new
+  runs on PRs that were already open; on a base that does not carry it
+  yet, each PR's own copy runs, as above. **The step may pass only flags the
   base copy already accepts**: land a new flag in the script first and use
   it in the step in a later PR, or the step fails with exit 2. The verifier
   also reports every change to itself or to a `ci.yml` step whose name
