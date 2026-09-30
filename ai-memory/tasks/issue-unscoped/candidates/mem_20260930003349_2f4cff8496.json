@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_checker_restart.py:439-441 | severity=medium | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `_project_trigger` matching logic `wanted.startswith(stem)` can fail to recognize an existing Routine name truncated after the `wanted` prefix.\n  WHY: This can cause the restart process to create a duplicate restart trigger for an already-monitored project.\n- scripts/claude_checker_restart.py:554 | severity=medium | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fetch for open `ai:claude` issues is not paginated (`per_page=100`, no `paginate=True`).\n  WHY: In repositories with more than 100 open `ai:claude` issues, issues beyond the first page may be ignored, leaving their checkers un-monitored.\n- File: .claude/settings.json (workflow-templates twin) lines 55-64, 97-103, 111-117, plus .claude/commands/claude-issue-pickup.md step 3b | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The pickup gains capability scopes to tag arbitrary cloud sessions and post arbitrary issue comments, gated solely by what `scripts/claude_checker_restart.py` decides to print.\n  WHY: A script bug emitting a wrong checker id could cause the pickup to tag an unintended session and post a `/reclarify` comment on the wrong issue; the reviewer characterized this as NIT and noted the blast radius is bounded.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_checker_restart.py:439-441 | severity=medium | confidence=4\n  PROBLEM: The `_project_trigger` matching logic `wanted.startswith(stem)` is flawed for Routine names truncated after the `wanted` prefix.\n  WHY: If a Routine name is truncated as `implement-plan issue-7: check-in...` (stem `implement-plan issue-7: check-in`), the matching logic `wanted.startswith(\"implement-plan issue-7: check-in\")` returns False. The guard fails to recognize the existing trigger and may create a duplicate restart trigger for an already-monitored project.\n- scripts/claude_checker_restart.py:554 | severity=medium | confidence=3\n  PROBLEM: The fetch for open `ai:claude` issues is not paginated (`per_page=100`, no `paginate=True`).\n  WHY: In repositories with more than 100 open `ai:claude` issues, the pickup will only see the first page, causing it to ignore any issues beyond the first 100 and leave their checkers un-monitored.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: .claude/settings.json (workflow-templates twin) lines 55-64, 97-103, 111-117, plus .claude/commands/claude-issue-pickup.md step 3b\n  Code reference: new allow rules `Bash(python3 scripts/claude_checker_restart.py {scan,decide} *)` and `Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_checker_restart.py {scan,decide} *)`, the new `mcp__Claude_Code_Remote__set_session_tags` (and the generated-server twin), and the new `mcp__github__add_issue_comment` already present in the root file (line 70) and now exercised by step 3b.6.\n  Problem: The pickup gains two new capability scopes (`set_session_tags` on arbitrary cloud sessions and posting arbitrary issue comments via `mcp__github__add_issue_comment`), gated solely by what `scripts/claude_checker_restart.py` decides to print.\n  Why it fails at runtime: A future script bug that emitted a wrong checker id would cause the pickup to tag an unintended session and post a `/reclarify` comment on the wrong issue. The blast radius is bounded (`set_session_tags` is add/remove tags only \u2014 no session deletion or archival; `add_issue_comment` is comment-only \u2014 no label or state mutation), and the script's fail-safe checks (5 restart conditions, 6 requeue guards, all reads fail-open and feed `errors[]`) cap the risk. No additional invocation guard or kill switch is added; the pickup reports failures but does not retry within the wake, so a one-shot bug is contained to that wake.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b854af5e7f1baba2f87fd97e8179513cf4589677c75865bf6d93d2f16cc4aea6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4984,
+    "run_id": "36648413566",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36648413566",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930003349_2f4cff8496",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4984,
+    "run_id": "36648413566"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T00:33:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
