@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T00:17:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "After syncing the default branch into a project branch, re-read the project's own docs for names the sync may have changed (a CI job, a step, a path): a clean merge can leave the docs pointing at a structure that no longer exists.",
+  "phase": "implement_plan",
+  "pr_number": 5290,
+  "record_id": "lesson-implement-plan-93d38172c959bcab3b231de1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5174-guard-differential-check",
+    "file:.github/workflows/ci.yml",
+    "file:agents.md"
+  ]
+}
