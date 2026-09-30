@@ -1231,12 +1231,25 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   queues a fixer for one.
 - **Sync-state check:** the CI step "Claude twin sync state (CLAUDE.md
   §28.C)" runs `claude_twin_sync.py check --base <base> --head HEAD` on PRs
-  into `main` (base: the merge commit's first parent) and pushes to `main`
-  (base: `github.event.before`); `stable` promotions span many PRs and are
-  skipped. It fails
+  into `main` or `stable` (base: the merge commit's first parent) and pushes
+  to `main` or `stable` (base: `github.event.before`). It fails
   when the range moves a non-excluded `.claude/` file to content other than
   its twin at HEAD. The twin may be ahead while a sync PR is pending; on
-  `main` the two match again once it merges. Tests load the twin and call
+  `main` the two match again once it merges. On `stable` (issue #5247) the
+  step also passes `--guard-provenance-ref <main tip>` (a depth-1 fetch of
+  `refs/heads/main`): a changed guard path (`.claude/hooks/**`,
+  `.claude/settings.json`, `.claude/settings.local.json`) must equal `main`'s
+  copy, blob and mode, or be absent on both, even when it matches its twin.
+  A guard change therefore reaches `stable` only after it landed on `main`,
+  where it comes through the owner-reviewed sync PR. A `stable` backport of
+  `main`'s guard content passes. A push to `stable` whose commit is already
+  on `main` is a promotion (`promote-main-to-stable.yml` fast-forwards):
+  one `GET /repos/{repo}/compare/{sha}...main` read with `github.token`
+  (status `ahead` or `identical`) skips it, because its range spans many
+  PRs already checked into `main`. Any other status, or a failed read,
+  checks the range (fail closed). A push that creates `stable` (no previous
+  tip) and is not a promotion is checked against `main`'s tip. Every PR into
+  `stable` is checked. Tests load the twin and call
   `tests/claude_twin_state.py::assert_claude_not_ahead`, which skips a
   differing pair in a shallow clone.
 - **Guard paths fail closed in the sync-state check** (issue #5246):
@@ -1249,7 +1262,11 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `claude/claude-twin-sync-*` head (`check --event pull_request
   --pr-head-ref=… --pr-head-repo=… --repo=…`, passed from the event payload
   through the step's `env:`); on a push to `main` (`--event push`, the
-  default) the base is `github.event.before`. A deliberate direct change to
+  default) the base is `github.event.before`. On `stable`, CI passes
+  `--guard-provenance-ref` instead of these flags, and the issue #5247 rule
+  above replaces this one: a guard path must equal `main`'s copy (a
+  backport, or a deletion `main` already carries, passes), and this rule on
+  `main` is what keeps that copy owner-reviewed. A deliberate direct change to
   a hook or setting (a conflict fix, a removal) therefore fails the check,
   and the repository owner merges that PR by hand. Claude-fixer mode never
   auto-merges with a failing check, but `main` has no required status

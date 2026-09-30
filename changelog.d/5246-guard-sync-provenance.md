@@ -13,4 +13,4 @@ What this means for operators: change a hook or setting by editing `workflow-tem
 
 ### For contributors
 
-`check_not_ahead` gains keyword-only `event`, `pr_head_ref`, `pr_head_repo`, and `base_repo` arguments, plus `event` and `sync_pr` result keys. `ci.yml` passes the PR head ref and repository through `env:` in `--flag=value` form. Nothing new calls the GitHub API.
+`check_not_ahead` gains keyword-only `event`, `pr_head_ref`, `pr_head_repo`, and `base_repo` arguments, plus `event` and `sync_pr` result keys. `ci.yml` passes the PR head ref and repository through `env:` in `--flag=value` form. Nothing new calls the GitHub API. On `stable` events CI passes `--guard-provenance-ref` (issue #5247) instead, and that rule replaces this one for the range: a guard path must equal `main`'s copy.

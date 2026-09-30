@@ -478,6 +478,92 @@ def test_check_cli_cannot_inject_workflow_commands_through_a_path(repo, capsys):
 	assert len(errors) == 1 and "%0A" in errors[0] and "%3A%3Awarning" in errors[0]
 
 
+# --- check with guard provenance (stable, issue #5247) -----------------------
+
+
+def _main_and_stable(repo: Path) -> tuple[str, str]:
+	"""Move `main` to hook v2 in both copies; return (main tip, stable tip = the old main)."""
+	stable = git(repo, "rev-parse", "HEAD")
+	git(repo, "branch", "stable", stable)
+	write(repo, claude("hooks/h.py"), "h v2\n")
+	write(repo, twin("hooks/h.py"), "h v2\n")
+	main = commit(repo, "hook v2 on main")
+	git(repo, "checkout", "-q", "stable")
+	return main, stable
+
+
+def test_check_guard_provenance_allows_a_backport_of_main(repo):
+	main, stable = _main_and_stable(repo)
+	write(repo, claude("hooks/h.py"), "h v2\n")
+	write(repo, twin("hooks/h.py"), "h v2\n")
+	head = commit(repo, "backport")
+	result = sync.check_not_ahead(str(repo), stable, head, main)
+	assert result["ok"] and result["guard_provenance_ref"] == main
+
+
+def test_check_guard_provenance_refuses_guard_content_main_does_not_carry(repo):
+	main, stable = _main_and_stable(repo)
+	write(repo, claude("hooks/h.py"), "loosened\n")
+	write(repo, twin("hooks/h.py"), "loosened\n")
+	write(repo, claude("settings.json"), '{"allow": ["*"]}\n')
+	write(repo, twin("settings.json"), '{"allow": ["*"]}\n')
+	head = commit(repo, "guard change straight into stable")
+	# Without the ref the issue #5246 guard rule applies: a guard path may only
+	# become the twin already on the base commit.
+	default = sync.check_not_ahead(str(repo), stable, head)
+	assert not default["ok"] and default["guard_provenance_ref"] is None
+	assert all("on the base commit" in v["reason"] for v in default["violations"])
+	result = sync.check_not_ahead(str(repo), stable, head, main)
+	assert not result["ok"]
+	assert {v["path"] for v in result["violations"]} == {claude("hooks/h.py"), claude("settings.json")}
+	assert all("not on the default branch" in v["reason"] for v in result["violations"])
+
+
+def test_check_guard_provenance_refuses_a_guard_delete_main_keeps(repo):
+	main, stable = _main_and_stable(repo)
+	(repo / claude("hooks/h.py")).unlink()
+	(repo / twin("hooks/h.py")).unlink()
+	head = commit(repo, "delete the hook on stable")
+	# Without the ref the issue #5246 rule refuses every guard deletion.
+	default = sync.check_not_ahead(str(repo), stable, head)
+	assert [v["path"] for v in default["violations"]] == [claude("hooks/h.py")]
+	assert default["violations"][0]["reason"].startswith("guard path deleted")
+	result = sync.check_not_ahead(str(repo), stable, head, main)
+	assert [v["path"] for v in result["violations"]] == [claude("hooks/h.py")]
+
+
+def test_check_guard_provenance_refuses_a_mode_change_main_does_not_carry(repo):
+	main, stable = _main_and_stable(repo)
+	write(repo, claude("hooks/h.py"), "h v2\n")
+	write(repo, twin("hooks/h.py"), "h v2\n")
+	os.chmod(repo / claude("hooks/h.py"), 0o755)
+	head = commit(repo, "backport, but executable")
+	result = sync.check_not_ahead(str(repo), stable, head, main)
+	assert [v["path"] for v in result["violations"]] == [claude("hooks/h.py")]
+
+
+def test_check_guard_provenance_ignores_non_guard_paths(repo):
+	main, stable = _main_and_stable(repo)
+	write(repo, claude("commands/a.md"), "stable-only fix\n")
+	write(repo, twin("commands/a.md"), "stable-only fix\n")
+	head = commit(repo, "command fix straight into stable")
+	assert sync.check_not_ahead(str(repo), stable, head, main)["ok"]
+
+
+def test_check_cli_guard_provenance_ref(repo, capsys):
+	main, stable = _main_and_stable(repo)
+	write(repo, claude("hooks/h.py"), "loosened\n")
+	write(repo, twin("hooks/h.py"), "loosened\n")
+	commit(repo, "guard change")
+	args = ["check", "--repo-root", str(repo), "--base", stable]
+	# Without the ref the issue #5246 guard rule already refuses the change.
+	assert sync.main(args) == 1
+	assert json.loads(capsys.readouterr().out.splitlines()[-1])["guard_provenance_ref"] is None
+	assert sync.main([*args, "--guard-provenance-ref", main]) == 1
+	assert "::error file=.claude/hooks/h.py::" in capsys.readouterr().out
+	assert sync.main([*args, "--guard-provenance-ref", "no-such-ref"]) == 2
+
+
 def test_log_escapes_line_breaks(capsys):
 	sync.log("rejected path=a\n::warning::x\rb")
 	err = capsys.readouterr().err
@@ -952,6 +1038,225 @@ def test_run_cli_requires_tokens(repo, monkeypatch):
 
 def _workflow() -> dict:
 	return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+
+
+# --- ci.yml sync-state step (issue #5247) ------------------------------------
+
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+CI_STEP_NAME = "Claude twin sync state (CLAUDE.md §28.C)"
+
+
+def _ci_step() -> dict:
+	jobs = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+	steps = [step for job in jobs.values() for step in job.get("steps", []) if step.get("name") == CI_STEP_NAME]
+	assert len(steps) == 1
+	return steps[0]
+
+
+def test_ci_step_env_is_event_data_and_the_workflow_token_only():
+	step = _ci_step()
+	assert step["env"] == {
+		"EVENT_NAME": "${{ github.event_name }}",
+		"PUSH_BEFORE": "${{ github.event.before }}",
+		"REF_NAME": "${{ github.ref_name }}",
+		"BASE_REF": "${{ github.base_ref }}",
+		# PR context for the issue #5246 guard rule.
+		"PR_HEAD_REF": "${{ github.event.pull_request.head.ref }}",
+		"PR_HEAD_REPO": "${{ github.event.pull_request.head.repo.full_name }}",
+		"REPOSITORY": "${{ github.repository }}",
+		# The token only on push events: a PR's checkout is PR content.
+		"GH_TOKEN": "${{ github.event_name == 'push' && github.token || '' }}",
+	}
+	assert "${{" not in step["run"]
+	assert step["run"].count("gh api") == 1
+
+
+@pytest.fixture
+def ci(repo: Path, tmp_path: Path):
+	"""Run the ci.yml step body in `repo`, with `stable` on origin and a stub `gh`."""
+	subprocess.run(["git", "-C", str(repo.parent / "origin.git"), "config", "uploadpack.allowAnySHA1InWant", "true"], check=True)
+	git(repo, "push", "-q", "origin", "main:refs/heads/stable")
+	stub_bin = tmp_path / "bin"
+	stub_bin.mkdir()
+	gh_log = tmp_path / "gh-args.log"
+	(stub_bin / "gh").write_text(
+		"#!/usr/bin/env bash\n"
+		f"printf '%s\\n' \"$*\" >> {gh_log}\n"
+		"[ -n \"${STUB_GH_STATUS:-}\" ] || { echo 'stub gh: HTTP 502' >&2; exit 1; }\n"
+		"printf '%s\\n' \"${STUB_GH_STATUS}\"\n",
+		encoding="utf-8",
+	)
+	(stub_bin / "gh").chmod(0o755)
+
+	def run(event: str, *, base_ref: str = "", ref_name: str = "", before: str = "", gh_status: str = "", pr_head_ref: str = "", pr_head_repo: str = "") -> subprocess.CompletedProcess:
+		# The script sits untracked in the work tree, as in the CI checkout;
+		# every commit the test makes is already in place.
+		(repo / "scripts").mkdir(exist_ok=True)
+		(repo / "scripts" / "claude_twin_sync.py").write_text((ROOT / "scripts" / "claude_twin_sync.py").read_text(encoding="utf-8"), encoding="utf-8")
+		env = {
+			**os.environ, **GIT_ENV,
+			"PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
+			"EVENT_NAME": event, "BASE_REF": base_ref, "REF_NAME": ref_name, "PUSH_BEFORE": before,
+			"GH_TOKEN": "stub", "GITHUB_REPOSITORY": "owner/repo", "STUB_GH_STATUS": gh_status,
+			"REPOSITORY": "owner/repo", "PR_HEAD_REF": pr_head_ref, "PR_HEAD_REPO": pr_head_repo,
+		}
+		proc = subprocess.run(["bash", "-c", _ci_step()["run"]], cwd=repo, capture_output=True, text=True, env=env)
+		proc.gh_calls = gh_log.read_text(encoding="utf-8").splitlines() if gh_log.exists() else []
+		return proc
+
+	return run
+
+
+def _pr_merge(repo: Path, base: str, edits: dict[str, str]) -> str:
+	"""Check out the merge commit a PR with `edits` onto `base` would produce (first parent = base tip)."""
+	git(repo, "checkout", "-q", "-B", "feature", f"origin/{base}")
+	for rel, text in edits.items():
+		write(repo, rel, text)
+	commit(repo, "pr change")
+	git(repo, "checkout", "-q", "--detach", f"origin/{base}")
+	git(repo, "merge", "-q", "--no-ff", "-m", "merge", "feature")
+	return git(repo, "rev-parse", "HEAD^1")
+
+
+def _move_origin_main(repo: Path, edits: dict[str, str]) -> str:
+	git(repo, "checkout", "-q", "main")
+	for rel, text in edits.items():
+		write(repo, rel, text)
+	sha = commit(repo, "main moves")
+	git(repo, "push", "-q", "origin", "main")
+	return sha
+
+
+def test_ci_step_pr_into_stable_fails_on_a_hook_changed_without_its_twin(repo, ci):
+	git(repo, "fetch", "-q", "origin")
+	_pr_merge(repo, "stable", {claude("hooks/h.py"): "loosened\n"})
+	proc = ci("pull_request", base_ref="stable", ref_name="42/merge")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "::error file=.claude/hooks/h.py::" in proc.stdout
+	assert proc.gh_calls == []
+
+
+def test_ci_step_pr_into_stable_fails_on_a_guard_change_main_does_not_carry(repo, ci):
+	git(repo, "fetch", "-q", "origin")
+	_pr_merge(repo, "stable", {claude("settings.json"): '{"allow": ["*"]}\n', twin("settings.json"): '{"allow": ["*"]}\n'})
+	proc = ci("pull_request", base_ref="stable", ref_name="42/merge")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "not on the default branch" in proc.stdout
+
+
+def test_ci_step_pr_into_stable_allows_a_backport_of_main(repo, ci):
+	_move_origin_main(repo, {claude("hooks/h.py"): "h v2\n", twin("hooks/h.py"): "h v2\n"})
+	git(repo, "fetch", "-q", "origin")
+	_pr_merge(repo, "stable", {claude("hooks/h.py"): "h v2\n", twin("hooks/h.py"): "h v2\n"})
+	proc = ci("pull_request", base_ref="stable", ref_name="42/merge")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert '"ok": true' in proc.stdout
+
+
+def test_ci_step_pr_into_main_keeps_the_twin_rule_only(repo, ci):
+	# PRs into main use the issue #5246 guard rule, never the stable provenance
+	# rule: a feature PR that edits a hook and its twin together fails ...
+	git(repo, "fetch", "-q", "origin")
+	_pr_merge(repo, "main", {claude("hooks/h.py"): "h v2\n", twin("hooks/h.py"): "h v2\n"})
+	proc = ci("pull_request", base_ref="main", ref_name="42/merge", pr_head_ref="feature", pr_head_repo="owner/repo")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "outside a claude/claude-twin-sync-* PR" in proc.stdout
+	assert '"guard_provenance_ref": null' in proc.stdout
+	assert proc.gh_calls == []
+
+
+def test_ci_step_pr_into_main_allows_a_sync_pr_copy_of_the_twin_on_main(repo, ci):
+	# ... and the sync PR that copies the twin already on main passes.
+	_move_origin_main(repo, {twin("hooks/h.py"): "h v2\n"})
+	git(repo, "fetch", "-q", "origin")
+	_pr_merge(repo, "main", {claude("hooks/h.py"): "h v2\n"})
+	proc = ci("pull_request", base_ref="main", ref_name="42/merge", pr_head_ref="claude/claude-twin-sync-1", pr_head_repo="owner/repo")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert '"sync_pr": true' in proc.stdout and '"guard_provenance_ref": null' in proc.stdout
+	assert proc.gh_calls == []
+
+
+def _stable_push(repo: Path, edits: dict[str, str]) -> str:
+	"""Check out a new stable commit with `edits`; return the push's `before`."""
+	git(repo, "fetch", "-q", "origin")
+	before = git(repo, "rev-parse", "origin/stable")
+	git(repo, "checkout", "-q", "--detach", before)
+	for rel, text in edits.items():
+		write(repo, rel, text)
+	commit(repo, "stable push")
+	return before
+
+
+def test_ci_step_skips_a_promotion_push_to_stable(repo, ci):
+	git(repo, "fetch", "-q", "origin")
+	before = git(repo, "rev-parse", "origin/stable")
+	# A range that would fail: .claude/ moved without its twin on main.
+	head = _move_origin_main(repo, {claude("hooks/h.py"): "direct\n"})
+	git(repo, "checkout", "-q", "--detach", head)
+	proc = ci("push", ref_name="stable", before=before, gh_status="ahead")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "a promotion; skipping" in proc.stdout
+	assert proc.gh_calls == [f"api repos/owner/repo/compare/{head}...main?per_page=1 --jq .status"]
+
+
+def test_ci_step_checks_a_push_to_stable_that_is_not_on_main(repo, ci):
+	before = _stable_push(repo, {claude("hooks/h.py"): "h v2\n", twin("hooks/h.py"): "h v2\n"})
+	proc = ci("push", ref_name="stable", before=before, gh_status="diverged")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "compare status: diverged" in proc.stdout
+	assert "not on the default branch" in proc.stdout
+
+
+def test_ci_step_checks_a_push_to_stable_when_the_lookup_fails(repo, ci):
+	before = _stable_push(repo, {claude("hooks/h.py"): "loosened\n"})
+	proc = ci("push", ref_name="stable", before=before, gh_status="")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "compare status: lookup failed" in proc.stdout
+
+
+def test_ci_step_allows_a_clean_push_to_stable(repo, ci):
+	before = _stable_push(repo, {"CHANGELOG.md": "release notes\n"})
+	proc = ci("push", ref_name="stable", before=before, gh_status="diverged")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_ci_step_checks_a_push_that_creates_stable_against_main(repo, ci):
+	_stable_push(repo, {claude("hooks/h.py"): "h v2\n", twin("hooks/h.py"): "h v2\n"})
+	proc = ci("push", ref_name="stable", before=sync.ZERO_SHA, gh_status="diverged")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "push creates stable: no previous tip" in proc.stdout
+	assert "not on the default branch" in proc.stdout
+
+
+def test_ci_step_allows_a_clean_push_that_creates_stable(repo, ci):
+	_stable_push(repo, {"CHANGELOG.md": "release notes\n"})
+	proc = ci("push", ref_name="stable", before="", gh_status="diverged")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "push creates stable: no previous tip" in proc.stdout
+	assert '"ok": true' in proc.stdout
+
+
+def test_ci_step_fetches_main_once_when_a_push_creates_stable(repo, ci, tmp_path):
+	# A `git` wrapper ahead of the real one logs every fetch the step makes.
+	real_git = subprocess.run(["bash", "-c", "command -v git"], capture_output=True, text=True, check=True).stdout.strip()
+	fetch_log = tmp_path / "git-fetch.log"
+	(tmp_path / "bin" / "git").write_text(
+		"#!/usr/bin/env bash\n"
+		f"[ \"${{1:-}}\" = fetch ] && printf '%s\\n' \"$*\" >> {fetch_log}\n"
+		f"exec {real_git} \"$@\"\n",
+		encoding="utf-8",
+	)
+	(tmp_path / "bin" / "git").chmod(0o755)
+	_stable_push(repo, {"CHANGELOG.md": "release notes\n"})
+	proc = ci("push", ref_name="stable", before=sync.ZERO_SHA, gh_status="diverged")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert fetch_log.read_text(encoding="utf-8").splitlines() == ["fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main"]
+
+
+def test_ci_step_skips_other_events(repo, ci):
+	proc = ci("pull_request", base_ref="release/x", ref_name="42/merge")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "skipping" in proc.stdout and proc.gh_calls == []
 
 
 def test_workflow_triggers():

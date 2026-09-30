@@ -202,38 +202,82 @@ jobs:
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
+          # Only for the promotion lookup on a push to stable (read-only);
+          # empty on pull_request events, whose checkout is PR content.
+          GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
         run: |
           set -euo pipefail
           # .claude/ may lag its twin (workflow-templates/.claude/) while a
           # claude-twin-sync.yml PR is pending, but it may never move anywhere
           # but the twin: the check fails when this PR or push changes a
           # .claude/ file to content that differs from its twin at HEAD.
-          # Guard paths (.claude/hooks/**, .claude/settings*.json) fail
-          # closed: they may only become the twin already on the base commit,
-          # are never deleted, and on a PR change only from a same-repository
-          # claude/claude-twin-sync-* head, which only the owner merges.
+          # On main (issue #5246), guard paths (.claude/hooks/**,
+          # .claude/settings*.json) fail closed: they may only become the twin
+          # already on the base commit, are never deleted, and on a PR change
+          # only from a same-repository claude/claude-twin-sync-* head, which
+          # only the owner merges.
+          # On stable (issue #5247) a changed guard path must instead equal
+          # main's copy: on main a guard reaches .claude/ only through the
+          # owner-reviewed sync PR, and a PR into stable must not be a way
+          # around it.
           event_args=(--event push)
-          if [ "${EVENT_NAME}" = "pull_request" ] && [ "${BASE_REF}" = "main" ]; then
+          twin_on_stable="false"
+          if [ "${EVENT_NAME}" = "pull_request" ] && { [ "${BASE_REF}" = "main" ] || [ "${BASE_REF}" = "stable" ]; }; then
             # The checkout is the PR's merge commit; its first parent is the
             # base-branch tip the merge was built on.
             base="$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')"
-            event_args=(--event pull_request "--pr-head-ref=${PR_HEAD_REF:-}" "--pr-head-repo=${PR_HEAD_REPO:-}" "--repo=${REPOSITORY}")
+            if [ "${BASE_REF}" = "stable" ]; then
+              twin_on_stable="true"
+            else
+              event_args=(--event pull_request "--pr-head-ref=${PR_HEAD_REF:-}" "--pr-head-repo=${PR_HEAD_REPO:-}" "--repo=${REPOSITORY}")
+            fi
           elif [ "${EVENT_NAME}" = "push" ] && [ "${REF_NAME}" = "main" ]; then
             # One merged PR per push, so the range is that PR's net change.
             base="${PUSH_BEFORE:-}"
+          elif [ "${EVENT_NAME}" = "push" ] && [ "${REF_NAME}" = "stable" ]; then
+            # A promotion fast-forwards stable to a main commit: its range
+            # spans many PRs, each already checked into main, and a sync
+            # followed by a newer twin change in one range is not a
+            # violation. Only a pushed commit that is already on main is
+            # skipped; a failed lookup checks the range (fail closed).
+            # §15: the only GitHub API call in this step (one compare read).
+            twin_head="$(git rev-parse HEAD)"
+            twin_compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${twin_head}...main?per_page=1" --jq '.status')" || twin_compare_status="lookup failed"
+            case "${twin_compare_status}" in
+              ahead|identical)
+                echo "push to stable: ${twin_head} is already on main (compare status ${twin_compare_status}), a promotion; skipping the twin sync-state check."
+                exit 0
+                ;;
+            esac
+            echo "push to stable: ${twin_head} is not known to be on main (compare status: ${twin_compare_status:-empty}); checking the pushed range."
+            base="${PUSH_BEFORE:-}"
+            twin_on_stable="true"
           else
-            # A stable promotion spans many PRs, each already checked into
-            # main; a sync followed by a newer twin change in one range is
-            # not a violation.
-            echo "${EVENT_NAME} on ${BASE_REF:-${REF_NAME}}: the twin sync state is enforced on PRs into main and pushes to main; skipping."
+            echo "${EVENT_NAME} on ${BASE_REF:-${REF_NAME}}: the twin sync state is enforced on PRs into main and stable and on pushes to main and stable; skipping."
             exit 0
+          fi
+          if [ "${twin_on_stable}" = "true" ]; then
+            git fetch --no-tags --depth=1 origin "+refs/heads/main:refs/remotes/origin/main"
+            twin_provenance="$(git rev-parse --verify "refs/remotes/origin/main^{commit}")"
+            if [ -z "${base}" ] || [ "${base}" = "0000000000000000000000000000000000000000" ]; then
+              # A push that creates stable from a commit not on main has no
+              # previous tip: check everything that differs from main's tip.
+              echo "push creates stable: no previous tip; checking against main's tip ${twin_provenance}."
+              base="${twin_provenance}"
+            fi
           fi
           if [ -z "${base}" ] || [ "${base}" = "0000000000000000000000000000000000000000" ]; then
             echo "No base commit for this event; skipping the twin sync-state check."
             exit 0
           fi
-          git fetch --no-tags --depth=1 origin "${base}"
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD "${event_args[@]}"
+          if [ "${base}" != "${twin_provenance:-}" ]; then
+            git fetch --no-tags --depth=1 origin "${base}"
+          fi
+          if [ "${twin_on_stable}" = "true" ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD --guard-provenance-ref "${twin_provenance}"
+          else
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD "${event_args[@]}"
+          fi
 
       - name: Setup Python
         uses: actions/setup-python@v6
