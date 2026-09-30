@@ -1212,32 +1212,46 @@ side so that class cannot land unnoticed.
   shape (comments and blank lines only), fails too, so a new guard ships
   with its corpus. A local run without `--head-ref` counts untracked hook
   files as changed.
-- **`Intended loosening:`** A PR that means to loosen lists each shape
-  verbatim (the corpus line, placeholders included) under a heading or bold
-  line `Intended loosening:` in its body, one list item per shape,
-  optionally prefixed with the hook and a colon, with the shape in
-  backticks (``- pr_merge_status_guard: `git push` ``). The
-  section ends at the next markdown heading. A listed shape counts as a
-  loosening under the retire-master Q3: A rule, so a sync that carries it
-  waits for the operator. CI reads the body from the event payload of the
-  push, so a body edited later needs another push to count.
+- **Intended loosening (base-branch policy, issue #5326).** A loosening
+  passes only when `.github/guard_differential/intended_loosening.json`
+  **at the base ref** approves it: `{"version": 1, "exceptions": [...]}`,
+  one entry per shape with the non-empty strings `hook` (the hook file
+  stem), `shape` (the corpus line verbatim, placeholders included),
+  `head_sha` (the PR's full head commit), `approved_by`, and `reason`. The
+  file is read from the base ref only, the same trust boundary as the base
+  hooks and base corpus, so a PR's own copy never approves its own
+  loosening; land the entry on the base branch first, then re-run the PR's
+  CI job. Each new push to the PR needs new entries. The head commit is
+  `--head-sha` (CI passes `github.event.pull_request.head.sha`), else the
+  `--head-ref` commit; a working-tree run with neither matches no entry. A
+  malformed policy or `--head-sha` exits 2 once a hook tree is compared. An
+  approved shape counts as a loosening under the retire-master Q3: A rule,
+  so a sync that carries it waits for the operator.
+- **`Intended loosening:` in the PR body is data, not authorization.** The
+  PR author writes the body, so a shape listed there (a heading or bold
+  line `Intended loosening:`, one list item per shape, optionally prefixed
+  with the hook and a colon, the shape in backticks, ending at the next
+  markdown heading) still fails without a policy entry; its regression
+  line carries `pr_body_listed=true` so reviewers see the claim.
 - **Wiring.** `ci.yml`'s `tests-hooks-and-orchestrator` job (reported
   through the `CI / lint` aggregate) runs `Guard differential tests (issue
   #5174)` and, on pull requests only, `Guard differential check (issue
   #5174)`: it fetches the base branch with git and runs `--base-ref
-  FETCH_HEAD --pr-body-file <body from GITHUB_EVENT_PATH>` against the
-  checked-out merge commit. `ci.yml` runs on pull requests into `main` and
+  FETCH_HEAD --head-sha <github.event.pull_request.head.sha> --pr-body-file
+  <body from GITHUB_EVENT_PATH>` against the checked-out merge commit. `ci.yml` runs on pull requests into `main` and
   `stable`, so it gates a project's final PR and every #4785 twin-sync PR,
   whose auto-merge waits for green checks. Phase PRs into a project branch
   do not run `ci.yml`. Run it by hand with `python3
   scripts/guard_differential.py --base-ref origin/main [--head-ref <ref>]
-  [--pr-body-file <file>] [--all] [--json]`.
+  [--head-sha <sha>] [--pr-body-file <file>] [--all] [--json]`.
 - **Output.** `GUARD_DIFFERENTIAL regression tree=… hook=… line=… base=…
-  head=… shape=…` per failing shape (as `::error::`), `GUARD_DIFFERENTIAL
-  intended_loosening …` per listed shape, `GUARD_DIFFERENTIAL missing_corpus
-  path=…`, and a `GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> …`
-  summary. Exit 0 when clean or when no hook changed, 1 on a failure, 2 on a
-  bad ref, unreadable corpus, or unreadable PR body.
+  head=… shape=…[ pr_body_listed=true]` per failing shape (as `::error::`),
+  `GUARD_DIFFERENTIAL intended_loosening … approved_by=…` per
+  policy-approved shape, `GUARD_DIFFERENTIAL missing_corpus path=…`, and a
+  `GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> …` summary; `--json`
+  rows carry `intended` (policy-approved) and `pr_body_listed`. Exit 0 when
+  clean or when no hook changed, 1 on a failure, 2 on a bad ref, unreadable
+  corpus, unreadable PR body, malformed policy, or malformed `--head-sha`.
 
 ---
 
