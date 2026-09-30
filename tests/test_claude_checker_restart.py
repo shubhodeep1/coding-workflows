@@ -78,7 +78,12 @@ def _safety_net(stage, checker=CHECKER, slug=SLUG, trigger_id="trig_net"):
 	)
 
 
+_PAGE_RECORDS: dict = {}  # raw page records of the last `_state`, for `_decide`'s lookups
+
+
 def _state(sessions=(), triggers=(), open_issues=None, log_projects=(), has_more=False):
+	_PAGE_RECORDS.clear()
+	_PAGE_RECORDS.update({raw["id"]: raw for raw in sessions})
 	return {
 		"repo": REPO,
 		"self": PICKUP,
@@ -120,8 +125,16 @@ def _stub(monkeypatch, responses):
 	return calls
 
 
-def _decide(state, lookups=None):
-	return restart.decide(state, lookups or {}, NOW)
+def _decide(state, lookups=None, look_up_page=True):
+	"""Decide as the pickup does: every page-listed id `lookups_needed` names is looked up, and the
+	lookup returns the session's page record unchanged. `lookups` adds or overrides entries."""
+	merged = {}
+	if look_up_page:
+		for checker in restart.lookups_needed(state, NOW):
+			if checker in _PAGE_RECORDS:
+				merged[checker] = {"ccr": _PAGE_RECORDS[checker]}
+	merged.update(lookups or {})
+	return restart.decide(state, merged, NOW)
 
 
 def _reasons(result):
@@ -288,8 +301,28 @@ def test_condition_4_the_pickup_itself_never_counts(no_api):
 	assert len(_decide(_state([pickup, _checker()]))["restart"]) == 1
 
 
-def test_condition_4_the_checker_own_recent_activity_does_not_count(no_api):
-	assert len(_decide(_state([_checker(updated=MINUTES_AGO)]))["restart"]) == 1
+@pytest.mark.parametrize("kwargs", [{"updated": MINUTES_AGO}, {"created": MINUTES_AGO, "updated": MINUTES_AGO}])
+def test_condition_4_the_checker_own_recent_activity_keeps_it(no_api, kwargs):
+	"""A checker that re-armed after step 1's trigger page was read looks idle with no trigger."""
+	result = _decide(_state([_checker(**kwargs)]))
+	assert result["restart"] == []
+	assert _reasons(result)[CHECKER] == f"checker_active_recently: {MINUTES_AGO}"
+
+
+def test_condition_4_the_checker_own_activity_older_than_the_window_does_not_count(no_api):
+	assert len(_decide(_state([_checker(updated=_ago(minutes=91))]))["restart"]) == 1
+
+
+def test_condition_4_a_looked_up_checker_that_handed_off_after_the_page_is_kept(no_api):
+	"""Live case (2026-09-30, #4723): the checker started its next stage after the session page
+	was read, then went idle. The new stage is not on the page and no trigger is bound to the
+	checker, so only the checker's own `updated_at` shows it is alive."""
+	stage = _session("session_stage", f"implement-plan {SLUG} — final-merge 1/1", updated=HOURS_AGO)
+	state = _state([stage], [_safety_net("session_stage")])
+	assert restart.lookups_needed(state, NOW) == [CHECKER]
+	result = _decide(state, {CHECKER: {"ccr": _checker(updated=_ago(minutes=2))}})
+	assert result["restart"] == []
+	assert _reasons(result)[CHECKER] == f"checker_active_recently: {_ago(minutes=2)}"
 
 
 def test_condition_5_a_recent_restart_tag_keeps_the_checker(no_api):
@@ -373,10 +406,71 @@ def test_a_missing_or_failed_lookup_keeps_the_checker(no_api):
 	assert _reasons(_decide(state, {CHECKER: "not_found"}))[CHECKER] == "checker_not_found"
 
 
-def test_no_lookup_for_checkers_on_the_page_bound_or_blocked():
-	on_page = _state([_checker()], [_safety_net("session_stage")])
-	assert restart.lookups_needed(on_page, NOW) == []
-	bound = _state([], [_safety_net("session_stage"), _trigger("trig_c", "x", CHECKER)])
+@pytest.mark.parametrize(
+	"kwargs",
+	[
+		{"updated": MINUTES_AGO},
+		{"status": "SESSION_STATUS_RUNNING"},
+		{"category": "need_input"},
+		{"bucket": "SESSION_STATUS_BUCKET_BLOCKED"},
+		{"tags": ["ai-checker-restart:20260929T1000Z"]},
+		{"status": "SESSION_STATUS_ARCHIVED"},
+	],
+)
+def test_no_lookup_for_a_page_listed_checker_whose_record_already_keeps_it(kwargs):
+	state = _state([_checker(**kwargs)], [_safety_net("session_stage")])
+	assert restart.lookups_needed(state, NOW) == []
+	assert restart.lookups_needed(_state([_checker()], has_more=True), NOW) == []
+
+
+def test_a_page_listed_checker_that_would_restart_is_looked_up():
+	assert restart.lookups_needed(_state([_checker()]), NOW) == [CHECKER]
+
+
+def test_a_page_listed_checker_is_restarted_only_from_a_fresh_record(no_api):
+	"""Review round 1 on PR #5598: the page is read before the lookups, so its record misses a
+	turn the checker took since. Without a lookup the checker is kept, and a lookup showing that
+	turn keeps it too."""
+	state = _state([_checker()])
+	kept = _decide(state, look_up_page=False)
+	assert kept["restart"] == []
+	assert _reasons(kept)[CHECKER] == "not_looked_up"
+	fresh = _decide(state, {CHECKER: {"ccr": _checker(updated=_ago(minutes=2))}})
+	assert fresh["restart"] == []
+	assert _reasons(fresh)[CHECKER] == f"checker_active_recently: {_ago(minutes=2)}"
+	stale = _decide(state, {CHECKER: {"ccr": _checker()}})
+	assert [entry["checker"] for entry in stale["restart"]] == [CHECKER]
+
+
+def test_a_failed_lookup_of_a_page_listed_checker_keeps_it(no_api):
+	state = _state([_checker()])
+	failed = _decide(state, {CHECKER: {"error": "classifier unavailable"}})
+	assert failed["restart"] == []
+	assert _reasons(failed)[CHECKER] == "not_looked_up"
+	assert failed["errors"] == [f"{CHECKER}: get_session failed: classifier unavailable"]
+	gone = _decide(state, {CHECKER: "not_found"})
+	assert gone["restart"] == [] and gone["requeue"] == []
+	assert _reasons(gone)[CHECKER] == "not_looked_up"
+	assert gone["errors"] == [f"{CHECKER}: get_session reports not found for a session on the page"]
+
+
+def test_a_checker_that_was_not_looked_up_costs_no_issue_read(monkeypatch):
+	"""Review round 2 on PR #5598: with the open-issue listing empty (a failed scan), a checker
+	known only from the page used to spend a REST read on its issue before it was kept as
+	`not_looked_up`. The free check now comes first."""
+	calls = _stub(monkeypatch, {"repos/o/r/issues/7": {"state": "open", "labels": []}})
+	state = _state([_checker()], open_issues={})
+	kept = _decide(state, look_up_page=False)
+	assert _reasons(kept)[CHECKER] == "not_looked_up"
+	failed = _decide(state, {CHECKER: {"error": "classifier unavailable"}})
+	assert _reasons(failed)[CHECKER] == "not_looked_up"
+	assert calls == []
+	assert [entry["checker"] for entry in _decide(state)["restart"]] == [CHECKER]
+	assert calls == ["repos/o/r/issues/7"]
+
+
+def test_no_lookup_for_checkers_bound_or_blocked():
+	bound =_state([], [_safety_net("session_stage"), _trigger("trig_c", "x", CHECKER)])
 	assert restart.lookups_needed(bound, NOW) == []
 	blocked = _state([], [_safety_net("session_stage")], open_issues={"7": ["ai:claude", "ai:claude-blocked"]})
 	assert restart.lookups_needed(blocked, NOW) == []
@@ -805,15 +899,16 @@ def test_cli_scan_then_decide(tmp_path, monkeypatch):
 	_stub(monkeypatch, {"repos/o/r/issues?": [{"number": 7, "labels": [{"name": "ai:claude"}]}], "repos/o/r/issues/7/comments": []})
 	monkeypatch.setattr(restart, "list_project_branches", lambda: [f"claude/implement-plan-{SLUG}"])
 	monkeypatch.setattr(restart, "read_project_logs", lambda branches, errors=None: {f"claude/implement-plan-{SLUG}": LOG_TEXT})
-	sessions = _write(tmp_path, "s.json", json.dumps({"ccr": {"data": [_checker("session_dead", slug="plan-y")]}}))
+	dead = _checker("session_dead", slug="plan-y")
+	sessions = _write(tmp_path, "s.json", json.dumps({"ccr": {"data": [dead]}}))
 	triggers = _write(tmp_path, "t.json", json.dumps({"data": [], "has_more": False}))
 	state_path = str(tmp_path / "state.json")
 	out = []
 	monkeypatch.setattr("builtins.print", lambda text: out.append(json.loads(text)))
 	assert restart.main(["scan", "--sessions-file", sessions, "--triggers-file", triggers, "--repo", REPO, "--self", PICKUP, "--state-out", state_path], now=NOW) == 0
-	assert out[-1]["lookup"] == [CHECKER]
+	assert out[-1]["lookup"] == [CHECKER, "session_dead"]
 	assert out[-1]["candidates"] == 2 and out[-1]["log_projects"] == 1
-	lookups = _write(tmp_path, "l.json", json.dumps({CHECKER: "not_found"}))
+	lookups = _write(tmp_path, "l.json", json.dumps({CHECKER: "not_found", "session_dead": {"ccr": dead}}))
 	assert restart.main(["decide", "--state", state_path, "--lookup-file", lookups], now=NOW) == 0
 	assert [entry["checker"] for entry in out[-1]["restart"]] == ["session_dead"]
 	assert [entry["issue"] for entry in out[-1]["requeue"]] == [7]

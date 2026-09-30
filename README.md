@@ -1291,9 +1291,13 @@ all five conditions hold:
 1. no enabled trigger is bound to it;
 2. for an `issue-<N>-…` project, the issue is open and not `ai:claude-blocked`;
 3. it is idle, and neither `need_input` nor waiting on a permission prompt;
-4. no other session of the project is running, waiting, or was created or
-   updated in the last 90 minutes. A session belongs to the project by
-   lineage, branch, or title;
+4. neither the checker itself nor any other session of the project was
+   created or updated in the last 90 minutes, and no other session of the
+   project is running or waiting. A session belongs to the project by
+   lineage, branch, or title. The checker's own last turn counts because
+   the trigger and session lists are read before the lookups, so a checker
+   that re-armed or started its next stage after they were read looks idle
+   with nothing pending;
 5. it was not restarted in the last 3 hours.
 
 A restart is one trigger, `implement-plan <slug>: check-in`, two minutes out.
@@ -1305,7 +1309,11 @@ is the 3-hour marker. The script finds checkers in three places:
 - the `Check-in:` line of each open, non-blocked `ai:claude` issue's
   progress log.
 
-A checker that is not on the page gets one `get_session`, at most 8 per wake.
+A checker gets one `get_session`, at most 8 per wake, when it is not on the
+page, or when it is on the page and that record alone would restart it. The
+page is read before the lookups, so its record can miss a re-arm or a stage
+start: a checker is restarted only from a fresh `get_session` record, and one
+known only from the page waits for a later wake's lookup.
 When that lookup says a logged checker no longer exists, the pickup comments
 `/reclarify` on the issue, with a hidden `ai:claude-checker-requeue:v1`
 marker. That re-queues the issue, and the resumed session arms a new checker.

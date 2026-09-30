@@ -45,8 +45,12 @@ them three ways:
     `docs/implement-plan/<slug>.md` on `claude/implement-plan-<slug>`, for
     every open `ai:claude` issue of `--repo` without `ai:claude-blocked`.
 
-A checker that is not on the page and not bound to an enabled trigger is
-looked up (at most `LOOKUP_CAP` per wake, rotated by the hour).
+A checker that is not bound to an enabled trigger is looked up (at most
+`LOOKUP_CAP` per wake, rotated by the hour) when it is not on the page, or when
+it is on the page and that record alone would restart it. The page is read
+before the lookups, so a restart is decided only from a fresh `get_session`
+record, which replaces the page record; a page-listed checker that was not
+looked up is kept (`not_looked_up`) until a later wake looks it up.
 
 Restart (Q63, all must hold; the first that fails is the `skipped` reason):
 
@@ -56,7 +60,10 @@ Restart (Q63, all must hold; the first that fails is the `skipped` reason):
      one (`sibling_checker_alive`);
   3. the checker is `SESSION_STATUS_IDLE`, its bucket is not `BLOCKED`, and
      its `status_category` is not `need_input`;
-  4. no other non-archived session of the project is `RUNNING`,
+  4. the checker itself was not created or updated in the last
+     `ACTIVE_WINDOW_MINUTES` (a checker that re-armed or started a stage after
+     the trigger and session pages were read looks idle with nothing pending),
+     and no other non-archived session of the project is `RUNNING`,
      `REQUIRES_ACTION`, or `need_input`, or was created or updated in the last
      `ACTIVE_WINDOW_MINUTES` (90). A session belongs to the project when its
      `parent_session_id` is the checker, its current branch is
@@ -68,7 +75,10 @@ Restart (Q63, all must hold; the first that fails is the `skipped` reason):
   5. the checker carries no `ai-checker-restart:<YYYYMMDDTHHMMZ>` tag younger
      than `RESTART_COOLDOWN_HOURS` (3);
   2. for an `issue-<N>-…` slug, issue #<N> is open and not labelled
-     `ai:claude-blocked` (read last: it may cost one REST call).
+     `ai:claude-blocked` (read after the free checks: it may cost one REST
+     call, which is made only for a looked-up checker);
+  6. the record checked above is a fresh `get_session` one: a checker known
+     only from the page is `not_looked_up`.
 
 A `restart` entry carries `checker`, `slug`, `repo`, `trigger_name`
 (`implement-plan <slug>: check-in`), `prompt` (`RESTART_PROMPT`), `tag_add`,
@@ -87,7 +97,7 @@ starts with `/reclarify`.
 API budget (CLAUDE.md §15): REST only, never GraphQL. `scan` issues one
 paginated `issues?labels=ai:claude&state=open` read (one call per 100 open
 issues); `decide` issues one issue read per
-distinct candidate issue outside that list and one paginated comment read per
+distinct issue outside that list whose checker was looked up, and one paginated comment read per
 re-queue candidate. The logs are read over git. Every failed read or missing
 input keeps the checker (fail safe) and is listed in `errors`.
 
@@ -505,15 +515,38 @@ def collect_candidates(state: dict) -> dict[str, dict]:
 	return candidates
 
 
+def _page_snapshot_restartable(view: dict, now: dt.datetime) -> bool:
+	"""True when a page record passes conditions 3, 4 (own activity), and 5 on its own."""
+	if view["status"] != STATUS_IDLE or view["bucket"] == BUCKET_BLOCKED or view["category"] == CATEGORY_NEED_INPUT:
+		return False
+	if _is_active(view, now):
+		return False
+	last = _last_restart(view["tags"])
+	return last is None or now - last >= dt.timedelta(hours=RESTART_COOLDOWN_HOURS)
+
+
 def lookups_needed(state: dict, now: dt.datetime) -> list[str]:
-	"""Checker ids the pickup must `get_session`: not on the page, not bound to an enabled trigger."""
-	on_page = {view["id"] for view in state["sessions"]}
+	"""Checker ids the pickup must `get_session`: not bound to an enabled trigger, and either not
+	on the page or on it with a snapshot that would restart it."""
+	on_page = {view["id"]: view for view in state["sessions"]}
 	bound = _bound(state["triggers"])
 	open_issues = state["open_issues"]
 	needed = []
 	for checker, entry in collect_candidates(state).items():
-		if checker in on_page or checker in bound:
+		if checker in bound:
 			continue
+		page_view = on_page.get(checker)
+		if page_view is not None:
+			# The page is read before the lookups, so its record misses a turn the checker took
+			# since (a re-arm, a stage start). `decide` restarts only from a fresh record, so a
+			# page-listed checker is looked up whenever its snapshot alone would restart it.
+			if (
+				state["triggers_has_more"]
+				or page_view["status"] == STATUS_ARCHIVED
+				or checker_slug(page_view["title"]) != entry["slug"]
+				or not _page_snapshot_restartable(page_view, now)
+			):
+				continue
 		if active_project_session(state["sessions"], checker, entry["slug"], {checker, state["self"]}, now):
 			continue
 		issue = issue_of(entry["slug"])
@@ -528,9 +561,14 @@ def lookups_needed(state: dict, now: dt.datetime) -> list[str]:
 	return needed
 
 
+def _issue_in_open_list(repo: str, issue: int, state: dict) -> bool:
+	"""True when condition 2 can be read from the scan's open-issue list, at no API cost."""
+	return repo == state["repo"] and str(issue) in state["open_issues"]
+
+
 def _issue_open_unblocked(repo: str, issue: int, state: dict, cache: dict) -> tuple[bool, str]:
 	"""(ok, reason) for condition 2; one cached REST read when the issue is not in the open list."""
-	if repo == state["repo"] and str(issue) in state["open_issues"]:
+	if _issue_in_open_list(repo, issue, state):
 		labels = state["open_issues"][str(issue)]
 		return (False, "issue_blocked") if BLOCKED_LABEL in labels else (True, "")
 	key = (repo, issue)
@@ -578,22 +616,26 @@ def requeue_comment(checker: str, slug: str) -> str:
 
 
 def decide(state: dict, lookups: dict[str, Any], now: dt.datetime) -> dict:
-	sessions: list[dict] = list(state["sessions"])
-	by_id = {view["id"]: view for view in sessions}
+	by_id = {view["id"]: view for view in state["sessions"]}
+	page_ids = set(by_id)
+	refreshed: set[str] = set()
 	not_found: set[str] = set()
 	errors: list[str] = list(state.get("errors") or [])
 	for checker, result in lookups.items():
-		if checker in by_id:
-			continue
 		if result == "not_found":
-			not_found.add(checker)
+			if checker in page_ids:
+				errors.append(f"{checker}: get_session reports not found for a session on the page")
+			else:
+				not_found.add(checker)
 		elif isinstance(result, dict) and "error" in result and "ccr" not in result and "id" not in result:
 			errors.append(f"{checker}: get_session failed: {result.get('error')}")
 		elif isinstance(result, dict):
 			view = session_view(result)
 			if view["id"] == checker:
+				# A lookup is newer than the page, so it replaces the page record.
 				by_id[checker] = view
-				sessions.append(view)
+				refreshed.add(checker)
+	sessions: list[dict] = list(by_id.values())
 	triggers = state["triggers"]
 	bound = _bound(triggers)
 	restart: list[dict] = []
@@ -646,6 +688,13 @@ def decide(state: dict, lookups: dict[str, Any], now: dt.datetime) -> dict:
 		if view["category"] == CATEGORY_NEED_INPUT:
 			skip(checker, slug, "checker_needs_input")
 			continue
+		if _is_active(view, now):
+			# The trigger page (pickup step 1) and the session page are read before the
+			# lookups. A checker that re-armed, or started its next stage, after they
+			# were read looks idle with nothing pending; its own last turn is the only
+			# fresh signal, so a checker that ran in the window is not dead.
+			skip(checker, slug, f"checker_active_recently: {view['updated_at'] or view['created_at']}")
+			continue
 		active = active_project_session(sessions, checker, slug, {checker, state["self"]}, now)
 		if active:
 			skip(checker, slug, f"project_session_active: {active}")
@@ -657,6 +706,11 @@ def decide(state: dict, lookups: dict[str, Any], now: dt.datetime) -> dict:
 		issue = issue_of(slug)
 		repo = view["repo"] or state["repo"]
 		if issue is not None:
+			if checker not in refreshed and not _issue_in_open_list(repo, issue, state):
+				# The issue read below costs a REST call, and a checker known only from the page
+				# is kept whatever it returns (review round 2 on PR #5598).
+				skip(checker, slug, "not_looked_up")
+				continue
 			try:
 				ok, reason = _issue_open_unblocked(repo, issue, state, issue_cache)
 			except (ReadError, KeyError, TypeError, ValueError) as exc:
@@ -666,6 +720,11 @@ def decide(state: dict, lookups: dict[str, Any], now: dt.datetime) -> dict:
 			if not ok:
 				skip(checker, slug, reason)
 				continue
+		if checker not in refreshed:
+			# Only the page record was read; the checker may have run since (review round 1 on
+			# PR #5598). A later wake looks it up (`lookups_needed`, capped and rotated).
+			skip(checker, slug, "not_looked_up")
+			continue
 		restart.append(
 			{
 				"checker": checker,
