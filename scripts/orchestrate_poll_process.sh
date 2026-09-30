@@ -17520,6 +17520,12 @@ _pr_named_review_dispatch_runs()
 		printf '[]\n'
 		return 1
 	fi
+	# When this mktemp fails, the 404 check below cannot run and a failed
+	# first page counts as page_failed (incomplete), even for an absent
+	# wrapper. That is the intended result, not a lost 404: gh_retry
+	# (scripts/gh_helpers.sh, a required bootstrap script of the poller)
+	# makes its own mktemp in the same TMPDIR and, when that fails, returns 1
+	# without running gh, so no response was read and the listing is unknown.
 	_pnr_err_file="$(mktemp "${TMPDIR:-/tmp}/pr_named_review_runs.XXXXXX" 2>/dev/null || echo "")"
 	for _pnr_wrapper in internal-review.yml ai-review.yml; do
 		_pnr_page=1
