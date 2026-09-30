@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Validation behavior is split across workflow files, shell scripts, renderers, and templates; changes often need coordinated updates across these layers.",
   "timestamps": {
     "created_at": "2026-09-30T01:12:12Z",
