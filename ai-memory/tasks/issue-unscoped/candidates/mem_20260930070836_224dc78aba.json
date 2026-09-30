@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:172 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The unchained-git guidance restricts how sessions use already-allowlisted git commands.\n  WHY: It does not fail at runtime or introduce a new execution surface; the reviewer classified it as NIT.\n- .claude/commands/implement-plan-claude.md:172 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The unchained-git guidance restricts how sessions use already-allowlisted git commands.\n  WHY: It does not fail at runtime or introduce a new execution surface; the reviewer classified it as NIT.\n- .claude/commands/implement-plan-claude.md:172 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The guidance forbids chaining `git status` and `git log` reads, but does not forbid chaining the mutating git commands with each other.\n  WHY: A session can still chain the fetch and merge exactly as in the reported denial. The compound Bash command does not match the individual `git fetch` and `git merge` allow rules, so it reaches the Auto-mode classifier and can be denied again.\n- .claude/commands/fix-claude-pr.md:47 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The guidance forbids chaining `git status` and `git log` reads, but does not forbid chaining the mutating git commands with each other.\n  WHY: A session can still chain the fetch and merge exactly as in the reported denial. The compound Bash command does not match the individual `git fetch` and `git merge` allow rules, so it reaches the Auto-mode classifier and can be denied again.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:172 | severity=NIT | confidence=1\n  PROBLEM: The guidance says \"Run the git commands this command names (`git fetch`, `git checkout -B`, `git merge --no-edit`, `git push`) exactly as written too, with no `2>&1`, no pipe into `tail` or `head`, and no `;` or `&&` chain of `git status` or `git log` reads.\" The actual steps elsewhere in the command use template variables like `<head ref>`, `<base ref>`, `<head_sha>`. A session filling in those template values with real refs and then running them as separate Bash calls still matches the exising `permissions.allow` rules (`Bash(git fetch *)`, `Bash(git checkout *)`, `Bash(git merge *)`), so no new capability is introduced. The guidance reduces the session's effective scope by telling it to avoid chaining that the Auto-mode classifier would re-intercept. The same guidance in the live `.claude/commands/` copy at line 172 has the identical text and the same properties.\n  WHY: Does not fail. The guidance restricts what an unattended session does with already-allowlisted git commands. No new execution surface, no new env var, no new gate, no capability expansion.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/commands/fix-claude-pr.md and .claude/commands/fix-claude-pr.md, step 5, the `git rev-parse HEAD` invocation named in the new guidance\n  PROBLEM: The plan lists the allowlisted git parts as `Bash(git fetch *)`, `Bash(git checkout *)`, `Bash(git merge *)`, `Bash(git status *)`, `Bash(git log *)`, and the `git push \u2026 claude/*` rules; `git rev-parse` is not in that list. The new guidance tells the session to run `git rev-parse HEAD` as its own Bash call. If `Bash(git rev-parse *)` is not in `.claude/settings.json`, the session will reach the Auto-mode classifier for that command alone, the same failure mode #5293 fixed for the chained shape.\n  WHY: Suggested minimal fix: confirm `Bash(git rev-parse *)` is allowlisted in `.claude/settings.json` (likely the case \u2014 the session has been confirming `HEAD is <head_sha>` since before this PR), or fall back to `git status -sb` (already allowlisted) for the head check, or drop `git rev-parse HEAD` from the guidance to match the plan's allowlisted set exactly. HARDENING_RISK_SCORE: 2\n- .claude/commands/implement-plan-claude.md and workflow-templates/.claude/commands/implement-plan-claude.md, Helpers intro, the `git status -sb` named standalone call\n  PROBLEM: Identical to the `fix-claude-pr.md` observation \u2014 `git status *` is allowlisted per the plan, so `git status -sb` matches, but the lesson in `docs/implement-plan/issue-5293-run-git-sync-unchained.md:47` recommends naming the exact allowlisted command. The new guidance already names `git status -sb` explicitly, which is consistent with the lesson. No runtime defect; recording for completeness only.\n  WHY: Suggested minimal fix: none. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/implement-plan-claude.md:172; .claude/commands/fix-claude-pr.md:47 | severity=MAJOR | confidence=5\n  PROBLEM: The guidance forbids chaining `git status` and `git log` reads, but does not forbid chaining the mutating git commands with each other. The reported `git fetch ... && git merge ...` shape remains unaddressed.\n  WHY: A session can still chain the fetch and merge exactly as in the reported denial. The compound Bash command does not match the individual `git fetch` and `git merge` allow rules, so it reaches the Auto-mode classifier and can be denied again.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b8c29f4e93eada0e597ae121a23406e664c23a3ac57fec2b71db60da1a5c9d32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5304,
+    "run_id": "36678755881",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36678755881",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930070836_224dc78aba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5304,
+    "run_id": "36678755881"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T07:08:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
