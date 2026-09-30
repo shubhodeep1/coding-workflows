@@ -26,7 +26,20 @@ consensus ids by issue #4687):
     rejection vote (below) for a manifest entry whose consensus_id is P's,
     whose file is P's, whose range overlaps P's, and whose flagger is F;
   * those rejecters are a strict majority of the successful reviewers other
-    than F.
+    than F;
+  * an independent automated check, the caller's ``disproof_check``, proves
+    the specific finding false (issue #5582).
+
+Votes are necessary but never sufficient (issue #5582). Every field of a vote
+(ID, reason, evidence, quote) is written by a model whose input includes
+PR-controlled text, so a PR author can prompt-inject reviewers into citing the
+run's ID and quoting source that in fact shows the defect. A verified quote
+proves only that the text is in the file, not that the finding is false. The
+CLI (and so the hand-off step) has no disproof check, so it demotes nothing:
+an entry that meets every vote condition is kept with reason
+``no_automated_proof`` and handed to the fixer, which judges it against the
+code. The vote rules below still decide the diagnostics, and a future
+disproof check plugs in through ``demote_with_diagnostics``.
 
 Rejection votes are bound to finding IDs issued for this run (issue #4688).
 After pass 1, ``--issue-ids`` gives every pass-1 CONSENSUS FINDINGS entry
@@ -102,7 +115,9 @@ quote_too_short|source_unavailable|quote_mismatch>`` line per vote whose
 evidence did not verify, then one
 ``CLAUDE_FIXER_NONBLOCKING_ENTRY`` line per demoted entry, one
 ``CLAUDE_FIXER_NONBLOCKING_KEPT file=<file:span> flagged_by=<slug>
-reason=<reason>`` line per single-reviewer entry that stays blocking, and
+reason=<reason>`` line per single-reviewer entry that stays blocking (an
+entry that meets every vote condition reads ``reason=no_automated_proof``,
+so the CLI always prints ``demoted=0``), and
 ``CLAUDE_FIXER_NONBLOCKING_LEGACY_REJECTIONS count=<n>`` when REJECTED_FINDING
 lines without a run ID were ignored. A manifest that is present but invalid
 is an error. Exit 0 on success; any other exit means the caller must keep
@@ -667,7 +682,8 @@ def _votes_in(text: str, manifest: dict[str, tuple[str, tuple[int, int], str]], 
 
 
 def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: Path | None = None, *,
-		reviewers: dict[str, Path] | None = None, stats: dict | None = None, source_reader=None) -> tuple[str, list[dict], list[dict], int]:
+		reviewers: dict[str, Path] | None = None, stats: dict | None = None, source_reader=None,
+		disproof_check=None) -> tuple[str, list[dict], list[dict], int]:
 	"""Return the filtered ledger, the demoted records, the kept single-reviewer
 	records (with the reason each stays blocking), and the number of ignored
 	REJECTED_FINDING lines without a run ID (the id-less and consensus_id shapes).
@@ -681,7 +697,15 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 	it receives ``manifest_present``, ``manifest_ids``, ``votes`` (counted,
 	evidence-verified votes over all successful reviewers) for the
 	CLAUDE_FIXER_NONBLOCKING_VOTES log line, and ``unverified`` (one
-	``(slug, id, reason)`` per vote whose evidence did not verify)."""
+	``(slug, id, reason)`` per vote whose evidence did not verify).
+
+	Votes are necessary but never sufficient (issue #5582). An entry that
+	passes every vote condition is demoted only when ``disproof_check``, called
+	with a copy of its record (``entry``, ``path``, ``lines``, ``flagger``,
+	``consensus_id``, ``rejecters``, ``others``), returns exactly ``True``: an
+	independent automated check that the specific finding is false. Without
+	one, which is how the CLI and the hand-off step call it, nothing is
+	demoted and the entry is kept with reason ``no_automated_proof``."""
 	segments = parse_ledger(ledger_text)
 	blocks = [segment for segment in segments if isinstance(segment, Block)]
 	consensus = _consensus_block(segments)
@@ -775,6 +799,22 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 		if len(rejecters) < MIN_REJECTERS or 2 * len(rejecters) <= len(others):
 			keep("too_few_rejecters")
 			continue
+		# Votes are necessary but never sufficient (issue #5582): every vote
+		# field is model-written from PR-influenced input, so only an
+		# independent automated check that proves this finding false demotes it.
+		demotion_candidate = {
+			"entry": entry,
+			"path": path,
+			"lines": lines,
+			"flagger": flagger,
+			"consensus_id": cid,
+			"rejecters": rejecters,
+			"others": len(others),
+		}
+		if disproof_check is None or disproof_check({**demotion_candidate, "entry": list(entry),
+				"rejecters": list(rejecters)}) is not True:
+			keep("no_automated_proof")
+			continue
 		moved: list[tuple[str, list[str]]] = []
 		for slug in [flagger, *rejecters]:
 			block = per_reviewer.get(slug)
@@ -789,16 +829,7 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 				else:
 					remaining.append(candidate)
 			block.entries = remaining
-		demoted.append({
-			"entry": entry,
-			"path": path,
-			"lines": lines,
-			"flagger": flagger,
-			"consensus_id": cid,
-			"rejecters": rejecters,
-			"others": len(others),
-			"moved": moved,
-		})
+		demoted.append({**demotion_candidate, "moved": moved})
 	consensus.entries = kept
 
 	if demoted:
@@ -807,7 +838,7 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 		nonblocking.preamble.append(
 			"(Not handed to Claude: each entry below was raised by one reviewer and explicitly rejected with a "
 			"REJECTED_FINDING line citing this run's finding ID, with a quote verified against the reviewed code, by a "
-			"majority of the other reviewers. Kept for visibility; "
+			"majority of the other reviewers, and proved false by an independent automated check. Kept for visibility; "
 			"no fix or verdict is needed.)")
 		for record in demoted:
 			entry = list(record["entry"])
@@ -822,15 +853,19 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 	return (text if demoted else ledger_text), demoted, kept_records, legacy_rejections
 
 
-def demote(ledger_text: str, reviews_dir: Path, manifest_path: Path | None = None, *, source_reader=None) -> tuple[str, list[dict]]:
+def demote(ledger_text: str, reviews_dir: Path, manifest_path: Path | None = None, *, source_reader=None,
+		disproof_check=None) -> tuple[str, list[dict]]:
 	"""Return the filtered ledger text and one record per demoted entry.
 
 	manifest_path defaults to reviews_dir / MANIFEST_NAME; without a manifest
 	no vote counts and nothing is demoted. ``source_reader`` reads the reviewed
 	commit's files (git_source); without it no vote's evidence verifies and
-	nothing is demoted (issue #4976).
+	nothing is demoted (issue #4976). ``disproof_check`` is the independent
+	automated disproof demote_with_diagnostics requires on top of the votes;
+	without it nothing is demoted (issue #5582).
 	"""
-	text, demoted, _kept, _legacy = demote_with_diagnostics(ledger_text, reviews_dir, manifest_path, source_reader=source_reader)
+	text, demoted, _kept, _legacy = demote_with_diagnostics(ledger_text, reviews_dir, manifest_path, source_reader=source_reader,
+		disproof_check=disproof_check)
 	return text, demoted
 
 

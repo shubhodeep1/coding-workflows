@@ -1476,7 +1476,18 @@ conflict-decision | ci-outside-pr | workflow-failure | needs-human`); only
 `cap` mentions the hand-back cap, and the marker is the same for every
 reason.
 
-**Rejected single-reviewer findings are not handed off.** After pass 1,
+**Rejection votes alone never skip the fixer (issue #5582).** Every field of
+a `REJECTED_FINDING` vote is written by a model whose input includes
+PR-controlled text, so a verified quote proves only that the text is in the
+file, not that the finding is false. The vote rules below are therefore
+necessary but never sufficient: the filter demotes a finding only when an
+independent automated check also proves it false, and the hand-off step has
+no such check. Every single-reviewer finding, however many reviewers
+rejected it, is handed to the Claude fixer, which judges it against the code;
+the votes stay in the run log as diagnostics
+(`CLAUDE_FIXER_NONBLOCKING_KEPT … reason=no_automated_proof`).
+
+**How rejection votes are collected and checked.** After pass 1,
 `scripts/review_claude_fixer_nonblocking.py --issue-ids` gives every
 consensus finding with exactly one flagger a random ID (`RF-<16 hex>`) and
 writes them, with each finding's `consensus_id`, to `rejection_ids_pass1.json`
@@ -1536,7 +1547,7 @@ reason=<reason>` per single-reviewer entry that stays blocking (`unparsed`,
 `flagger_not_successful`, `no_consensus_id`, `multiple_consensus_ids`,
 `duplicate_consensus_id`, `unknown_consensus_id`, `consensus_id_mismatch`,
 `flagger_did_not_cite`, `ambiguous_nearby_pass1`, `ambiguous_nearby`,
-`too_few_rejecters`), and `CLAUDE_FIXER_NONBLOCKING_LEGACY_REJECTIONS
+`too_few_rejecters`, `no_automated_proof`), and `CLAUDE_FIXER_NONBLOCKING_LEGACY_REJECTIONS
 count=<n>` when rejection lines without a run ID were ignored;
 `CLAUDE_FIXER_HANDOFF` gains `nonblocking=<n>`. The pass-2 header step logs
 `CLAUDE_FIXER_NONBLOCKING_IDS issued=<n>` and
