@@ -1042,7 +1042,13 @@ reviews, comments, and conflicts stay a direct §12 request.
 - Skip-AI marker and review stalls (issue #4985). The marker `[skip ai]`
   counts only when intentional: anywhere in the PR title, or on a body line
   holding only the marker (up to 3 leading spaces) outside a ``` / ~~~
-  fence. One rule, three copies: `has_skip_ai_marker` in
+  fence. A fence opens on any line starting with 3+ backticks or tildes and
+  closes only on a matching fence: up to 3 spaces, the same character, at
+  least as long as the opener, then only blanks. A ``` line inside a ````
+  fence, a `~~~` line inside a backtick fence, an indented or info-string
+  fence line inside a fence are content, and an unclosed fence runs to the
+  end of the body, so every doubtful case is reviewed (issue #5377).
+  One rule, three copies: `has_skip_ai_marker` in
   `.claude/scripts/check_in_status.py` (also used by
   `scripts/claude_pr_sweep.py`) and the identical `SKIP_AI_BODY_AWK`
   program in the review gate (`.github/workflows/review_autofix.yml`) and

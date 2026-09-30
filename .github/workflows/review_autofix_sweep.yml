@@ -135,8 +135,10 @@ jobs:
           failures=0
           # Identical to the gate's copy in review_autofix.yml (issue #4985):
           # only a body line holding nothing but the marker, outside a fenced
-          # block, counts. tests/test_skip_ai_marker_rule.py runs both copies.
-          SKIP_AI_BODY_AWK='{ sub(/\r$/, "") } /^[ \t]*(```|~~~)/ { fence = !fence; next } !fence && /^ ? ? ?\[skip ai\][ \t]*$/ { found = 1 } END { exit found ? 0 : 1 }'
+          # block, counts. A fence closes only on a matching fence (same
+          # character, at least as long, up to 3 spaces, issue #5377).
+          # tests/test_skip_ai_marker_rule.py runs both copies.
+          SKIP_AI_BODY_AWK='{ sub(/\r$/, "") } fl > 0 { if ($0 ~ /^ ? ? ?(```+|~~~+)[ \t]*$/) { r = $0; sub(/^ */, "", r); sub(/[ \t]*$/, "", r); if (substr(r, 1, 1) == fc && length(r) >= fl) fl = 0 } next } match($0, /^[ \t]*(```+|~~~+)/) { r = substr($0, RSTART, RLENGTH); sub(/^[ \t]*/, "", r); fc = substr(r, 1, 1); fl = length(r); next } /^ ? ? ?\[skip ai\][ \t]*$/ { found = 1 } END { exit found ? 0 : 1 }'
 
           if [ "${total}" -eq 0 ]; then
             echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
