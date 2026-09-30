@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T01:58:55Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change tightens what a hook or guard accepts, grep every command and doc that paraphrases the old rule (including `.claude/commands/*` twins), not only the section the plan names.",
+  "phase": "implement_plan",
+  "pr_number": 5362,
+  "record_id": "lesson-implement-plan-3162f14a769664f57415019c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5082-verify-blocked-comment-evidence",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
