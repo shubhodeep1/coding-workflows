@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_checker_restart.py:652-657 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The activity check can use a stale session-page timestamp for a page-listed checker, causing it to be restarted even if it re-armed or started a stage after the page was read.\n  WHY: `lookups_needed()` skips page-listed checkers, so `decide()` uses their page snapshot rather than a fresh `get_session` result; severity disagreement: deepseek_deepseek-v4-pro and qwen_qwen3_7-plus rate this NIT, while minimax_minimax-m3, openai_gpt-6-luna, and z-ai_glm-5_2 rate it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR title / description / README claim \"keep a checker that itself ran in the last 90 minutes\"\n  expected_change_site: scripts/claude_checker_restart.py lines 652-658 (new condition 4 sub-check) plus the supporting `lookups_needed()` skip rule at lines 511-519; supporting test coverage in tests/test_claude_checker_restart.py around line 290.\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The new check uses the page's `updated_at` for page-listed checkers; `lookups_needed()` skips `get_session` for them (line 518) and `decide()` ignores any lookup that arrives (line 589). The two new tests cover the page-stale-`updated_at`-within-window case and the not-on-page case, but no test exercises a checker that IS on the page with `updated_at` already outside the 90-minute window \u2014 the live scenario the PR description cites. README line 1293-1299, agents.md line 295-298, and changelog.d/4910-restart-dead-checkers.md line 18 all describe the behaviour as \"the checker's own last turn counts / ran in the last 90 minutes is kept\" without the page-staleness qualifier that AD-17's chosen option A actually leaves.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_checker_restart.py:652-657 | severity=NIT | confidence=3\n  PROBLEM: The new `_is_active` check uses the `view` timestamp from the session page snapshot for page-listed checkers, and `lookups_needed()` skips checker IDs already on the page (line 518: `if checker in on_page`), so `decide()` never calls `get_session` to refresh them.\n  WHY: A checker whose snapshot `updated_at` is outside the 90-minute window but that actually re-armed or started a stage in the seconds between the page read and `decide()` could be restarted; the gap is unlikely for a healthy checker, and the PR's documented AD-17 tradeoff accepts it.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_checker_restart.py:652-658 | severity=MAJOR | confidence=4\n  PROBLEM: The condition 4 check uses `view[\"updated_at\"]` for page-listed checkers, but `lookups_needed()` (line 518: `if checker in on_page or checker in bound: continue`) skips `get_session` lookups for those IDs, and `decide()` line 589 ignores lookup results for checkers already in `by_id`.\n  WHY: The page's `updated_at` can be stale, so a page-listed checker that re-armed or started a stage between the page read and `decide()` can be added to `restart`; the new tests do not cover that page-listed case, and the documentation does not describe AD-17's remaining gap.\n- TASK_GAP\n  Requirement: PR title / description / README claim \"keep a checker that itself ran in the last 90 minutes\" (closes the duplicate check-in / duplicate stage window for a checker that re-armed or started a stage after the trigger and session pages were read).\n  Expected change site: scripts/claude_checker_restart.py lines 652-658 (new condition 4 sub-check) plus the supporting `lookups_needed()` skip rule at lines 511-519; supporting test coverage in tests/test_claude_checker_restart.py around line 290.\n  Evidence of absence: The new check uses the page's `updated_at` for page-listed checkers; `lookups_needed()` skips `get_session` for them (line 518) and `decide()` ignores any lookup that arrives (line 589). The two new tests cover the page-stale-`updated_at`-within-window case and the not-on-page case, but no test exercises a checker that IS on the page with `updated_at` already outside the 90-minute window \u2014 the live scenario the PR description cites. README line 1293-1299, agents.md line 295-298, and changelog.d/4910-restart-dead-checkers.md line 18 all describe the behaviour as \"the checker's own last turn counts / ran in the last 90 minutes is kept\" without the page-staleness qualifier that AD-17's chosen option A actually leaves.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_checker_restart.py:652-657 | severity=MAJOR | confidence=5\n  PROBLEM: The check can use a stale timestamp for a checker listed on the page, so the new guard does not cover activity after the page was read.\n  WHY: If a listed checker re-arms or starts a stage after the session and trigger snapshots were read, the snapshots omit that activity; because `lookups_needed()` skips that checker, `decide()` uses its old `updated_at` and may restart it despite its recent activity, creating a duplicate check-in or stage.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_checker_restart.py:511-531, 652-658 | severity=NIT | confidence=3\n  PROBLEM: For a checker ON the session page, `view` is the page snapshot. If the checker re-armed after the page was read, the page has the old `updated_at`, so `_is_active(view, now)` returns False.\n  WHY: The test `test_condition_4_a_looked_up_checker_that_handed_off_after_the_page_is_kept` tests a looked-up checker, not a page-listed checker; the practical impact is low because the page is read recently and the live case (#4723) is NOT an example of this scenario.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_checker_restart.py:652-657 | severity=MAJOR | confidence=3\n  PROBLEM: The fix adds a `_is_active(view, now)` check to keep a checker that \"ran in the window,\" but for page-listed checkers `view` is the stale page snapshot.\n  WHY: `lookups_needed()` (line 518: `if checker in on_page ... continue`) skips page-listed checkers, so `get_session` is never called to refresh them, and `decide()` (line 589: `if checker in by_id: continue`) ignores any lookup result for a page-listed checker; a stale timestamp can cause the checker to be restarted and create a duplicate check-in or stage.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a83bcbaeb9ff435b2343bf83dde5173c7ed6095f8bca732d5f1db6fc0282e35e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5598,
+    "run_id": "36695028185",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36695028185",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930095512_4d717a3804",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5598,
+    "run_id": "36695028185"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T09:55:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
