@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-30T09:14:40Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When sibling projects stacked on one base branch both change the same check, the other project's tests encode the old default; after the base-sync merge, run both sides' tests and update only the no-flag assertions the new rule makes stale, never the new rule.",
+  "phase": "implement_plan",
+  "pr_number": 5267,
+  "record_id": "lesson-implement-plan-24f5c89612596b94ebeaa0ec",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5246-guard-sync-provenance",
+    "file:scripts/claude_twin_sync.py",
+    "file:tests/test_claude_twin_sync.py",
+    "file:.github/workflows/ci.yml"
+  ]
+}
