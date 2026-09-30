@@ -131,7 +131,10 @@ def test_project_branch_and_draft_final_pr(text):
 	# Legacy projects (log on the default branch without a Project branch line)
 	# finish the way they started.
 	assert "**Legacy mode** when the log exists on the default branch without a `Project branch:` line" in text
-	assert "`git merge --no-edit origin/<default>`" in text
+	# `--no-ff`: the sync's step 6 reads the pre-merge branch from `HEAD^1`,
+	# which a fast-forward would get wrong (PR #5511 review round 1 on bfab7b4).
+	assert "`git merge --no-edit --no-ff origin/<default>`" in text
+	assert "`git merge --no-edit origin/<default>`" not in text
 
 
 def test_review_rounds_are_fixed_by_claude(text):

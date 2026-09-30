@@ -293,3 +293,45 @@ def test_outside_conflict_resolution_runs_under_the_merged_guards(tmp_path: Path
 	assert _git(clone, env, "log", "-1", "--format=%s") == "[claude-asset-sync] merge main for .claude/ guard updates"
 	assert len(_git(clone, env, "log", "-1", "--format=%P").split()) == 2
 	assert _git(clone, env, "show", "HEAD:.claude/hooks/guard.sh") == "new guard"
+
+
+@pytest.mark.parametrize("own_commit", (True, False), ids=("diverged-branch", "fast-forwardable-branch"))
+def test_project_branch_sync_merge_never_hides_a_settings_change_from_step_6(own_commit: bool, tmp_path: Path):
+	"""Procedure step 2's merge, run exactly as written, keeps `HEAD^1` the branch
+	before the merge. A fast-forward would move `HEAD^1` to the parent of the last
+	upstream commit, and step 6 would miss a `settings.json` change in an earlier
+	one (PR #5511 review round 1 on bfab7b4). Reads the twin until the twin sync;
+	`test_twins_are_byte_identical` covers the `.claude/` copy from then on."""
+	plan = _flat(TWIN_DIR / "implement-plan-claude.md")
+	step_2 = _section(plan, "**Sync the project branch**", "This and the step 3a log commit")
+	merge = re.search(r"`(git merge [^`]*origin/<default>)`", step_2)
+	assert merge, step_2
+	merge_command = merge.group(1).replace("<default>", "main")
+	section = _section(plan, "### Claude-asset sync", "### Permission prompt report")
+	settings = _documented_command(section, r"`(git diff --name-only [^`]*-- \.claude/settings\.json)`")
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/settings.json", "{}\n", "settings")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "config", "core.logAllRefUpdates", "false")
+	_git(clone, env, "checkout", "-q", "-b", "claude/implement-plan-demo")
+	if own_commit:
+		_commit(clone, env, "docs/implement-plan/demo.md", "log\n", "log")
+	before = _git(clone, env, "rev-parse", "HEAD")
+	_commit(origin, env, ".claude/settings.json", '{"hooks": {}}\n', "wiring")
+	_commit(origin, env, "later.md", "x\n", "a later commit that leaves settings.json alone")
+	_git(clone, env, "fetch", "-q", "origin", "main")
+	subprocess.run(["bash", "-c", merge_command], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert len(_git(clone, env, "log", "-1", "--format=%P").split()) == 2
+	assert _git(clone, env, "rev-parse", "HEAD^1") == before
+	changed = subprocess.run(["bash", "-c", settings], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert changed.stdout.strip() == ".claude/settings.json"
+	# An up-to-date branch still gets no commit.
+	head = _git(clone, env, "rev-parse", "HEAD")
+	subprocess.run(["bash", "-c", merge_command], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert _git(clone, env, "rev-parse", "HEAD") == head
