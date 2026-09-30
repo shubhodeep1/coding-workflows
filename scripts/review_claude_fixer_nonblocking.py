@@ -233,9 +233,18 @@ RECORD_BREAK_RE = re.compile(rf"^\s*{RECORD_ITEM}(?:{RECORD_MARKUP}Requirement{R
 RECORD_HEADING_RE = re.compile(r"^[A-Z][A-Z0-9 /&()-]*[A-Z)]$")
 # The fail-closed second-finding scan (conformance run 3): any path-like token
 # of the flagger's output, and any number in it (``1262``, ``:1262``, ``L1262``,
-# ``#L1262``; not the digits inside a word such as a hash or ``v2``).
+# ``#L1262``; not the digits inside a word such as a hash or ``v2``). Since the
+# issue #4975 Q3 fix the scan matches the entry's path literally (see
+# _paragraph_names_path()), because a token split on this character set never
+# matched a path holding ``+``, ``@``, or other characters outside it;
+# MENTION_PATH_TOKEN_RE and _mention_names() are kept for their callers (§6).
 MENTION_PATH_TOKEN_RE = re.compile(r"[\w./\\-]+")
 MENTION_NUMBER_RE = re.compile(r"(?<![\w.])L?(?P<number>\d+)(?!\w)")
+# Around a literal path match: the text before it must not continue a file
+# name (a ``/`` may, as a directory prefix), and the text after it, past any
+# trailing ``.`` / ``;`` sentence punctuation, must not continue the path.
+MENTION_PATH_BEFORE = r"(?<![\w.-])"
+MENTION_PATH_AFTER = r"(?=[.;]*(?:[^\w./-]|\Z))"
 
 # Source-grounded rejection evidence (issue #4976). A vote counts only when
 # its evidence citation and quote verify against the reviewed commit.
@@ -776,6 +785,33 @@ def _mention_names(token: str, path: str) -> bool:
 	return bool(mentioned) and _same_file(mentioned, path.casefold())
 
 
+def _paragraph_names_path(paragraph: str, path: str) -> bool:
+	"""Whether a paragraph of the flagger's output names ``path`` (issue #4975 Q3).
+
+	The path is matched literally, whatever characters it holds (``+`` in
+	``src/routes/+page.svelte``, ``@`` in ``src/@types/index.d.ts``,
+	``docs/c++/notes.md``), case-insensitively, with backslashes read as
+	``/`` and a leading ``./`` dropped. The match must not be part of a longer
+	file name (``docs/README.md.bak`` does not name ``README.md``), but a
+	trailing ``.`` / ``;`` is sentence punctuation. As in _same_file(), a
+	prefixed spelling counts (the text before the match may end with ``/``: an
+	absolute runner path, ``b/README.md``, and, by design, ``docs/README.md``),
+	and so does any ``/``-suffix of ``path`` (``+page.svelte`` for
+	``src/routes/+page.svelte``). Used only to keep an entry blocking, so an
+	over-match fails toward blocking: a path that normalizes to nothing
+	(``./``, ``.``) names every paragraph, and an empty ``/``-suffix (a path
+	ending in ``/``) is skipped rather than matched everywhere."""
+	wanted = _norm_path(path.replace("\\", "/")).rstrip(".;").casefold()
+	if not wanted:
+		return True
+	text = paragraph.replace("\\", "/").casefold()
+	parts = wanted.split("/")
+	for tail in {"/".join(parts[index:]) for index in range(len(parts))}:
+		if tail and re.search(MENTION_PATH_BEFORE + re.escape(tail) + MENTION_PATH_AFTER, text):
+			return True
+	return False
+
+
 def _flagger_mentions_near(text: str, skip: tuple[int, int], path: str, ranges: list[tuple[int, int]]) -> bool:
 	"""Whether the flagger's raw output names ``path`` anywhere outside the
 	cited record's ``skip`` lines in a way that may be a second finding at the
@@ -783,7 +819,7 @@ def _flagger_mentions_near(text: str, skip: tuple[int, int], path: str, ranges: 
 
 	The output is split into paragraphs (runs of non-blank lines, with the
 	cited record's lines acting as a break), fenced blocks included. A
-	paragraph that names ``path`` (see _mention_names()) counts when it holds
+	paragraph that names ``path`` (see _paragraph_names_path()) counts when it holds
 	a number within LINE_TOLERANCE of one of ``ranges``, or no number at all.
 	This catches every spelling of a second finding the record parser does not
 	read (``File: README.md#L1262``, ``*File:*``, a quoted or fenced finding,
@@ -798,7 +834,7 @@ def _flagger_mentions_near(text: str, skip: tuple[int, int], path: str, ranges: 
 			continue
 		joined = "\n".join(paragraph)
 		paragraph = []
-		if not any(_mention_names(token, path) for token in MENTION_PATH_TOKEN_RE.findall(joined)):
+		if not _paragraph_names_path(joined, path):
 			continue
 		numbers = [int(match.group("number")) for match in MENTION_NUMBER_RE.finditer(joined)]
 		if not numbers or any(_near((number, number), lines) for number in numbers for lines in ranges):

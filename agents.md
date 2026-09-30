@@ -124,7 +124,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    blocking, and so does any other paragraph of the flagger's raw output
    (fenced blocks included) that names that file with a number within 3
    lines or with no number, whatever its spelling (`README.md#L1262`,
-   `*File:*`, a quoted or table-row finding, prose)
+   `*File:*`, a quoted or table-row finding, prose) and whatever characters
+   the path holds (`src/routes/+page.svelte`, `@scope` directories)
    (`flagger_citation_mismatch`, `ambiguous_flagger_nearby`; issue
    #4975). Task
    gaps and multi-reviewer findings never move, and a missing or failing
