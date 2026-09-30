@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5668 (https://github.com/shubhodeep1/coding-workflows/issues/5668)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5668-group-permission-prompt-families   Final PR: #5685 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: PR #5697: twin sync
+- Waiting on: PR #5697
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (twin-sync blocker; the stage `/reclarify` resumes arms the wait on PR #5697)
+- Check-in: checker session_0133V1fUz7ukod1UGEnYvTEY   safety net trig_01AJJgtdFW7jcN9GGgXXfypW   hand-back trig_01VZZSjFwM2fkidsfnb88DCN
 - Last updated: 2026-09-30
-- Last note: phase 1 PR #5697 opened twin-first with a `hold` claim; blocked on the `[claude-twin-sync]` copy of `permission_prompts.py` (blocker on #5668)
+- Last note: twin sync landed as `c6494fd` (hold lifted); project branch synced with `main`; wait armed on PR #5697 review
 
 ## Phases
-1. [ ] Phase 1 — family key and family-aware filing (twin script, tests, CLAUDE.md §23.I, agents.md, README.md, changelog)   — protected paths: `.claude/scripts/permission_prompts.py` — PR #5697 open (hold: twin sync pending); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — family key and family-aware filing (twin script, tests, CLAUDE.md §23.I, agents.md, README.md, changelog)   — protected paths: `.claude/scripts/permission_prompts.py` — PR #5697 open (waiting on review; twin synced in `c6494fd`); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -49,3 +49,5 @@
 - Data check: with the real code the 60 existing `ai:permission-prompt` issues map to 22 families, and legacy derivation agrees with the raw examples on all 60. The first prototype (heredoc receiver, AD-10 B) gave 21.
 - Twin sync: `workflow-templates/.claude/scripts/permission_prompts.py` → `.claude/scripts/permission_prompts.py`, twin sha256 `9a7a24efe37d6e39cd4e656599db4bc7af0b5c884e9b1d5dbcfae4c515403750`.
 - The broader doc-reading test sweep (with `-x`) stopped at `tests/test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean`. That test needs `gawk`, which is not installed in this container, and it does not involve the script or tests this phase changes.
+- Resumed 2026-09-30 by `/reclarify` (Q1: A) in session session_012ZrseTpDtRZsMwcDto9jhv: the owner's `[claude-twin-sync]` commit `c6494fd` matches the twin sha256 `9a7a24ef…`. Re-verified here: `tests/test_permission_prompts.py`, `test_update_workflows_guardrails.py`, `test_changelog_fragment_contract.py`, `test_claude_md_section_numbers.py` 130 passed; `ruff check --select E,F --ignore E501` clean. `check_in_status.py --hand-back` shows no claim on `c6494fd`.
+- Project branch synced with `main` 2026-09-30 (`b34a223`, clean merge of 6 commits; `test_claude_issue_route.py`, `test_internal_review_push_pr_grace.py`, `test_workflow_file_size_limit.py` 243 passed).
