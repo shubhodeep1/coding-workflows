@@ -1281,6 +1281,8 @@ def _valid_scan_state(state: Any) -> bool:
 		return False
 	if not isinstance(relevant, list) or not isinstance(state.get("complete"), bool):
 		return False
+	if not isinstance(state.get("updated_at"), str):
+		return False
 	return all(_env_relevant_comment(item) == item for item in relevant)
 
 

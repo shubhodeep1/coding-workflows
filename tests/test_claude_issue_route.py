@@ -2135,6 +2135,8 @@ def test_checkpoint_load_fails_open_and_save_round_trips(tmp_path):
 		"a#4": {**state, "complete": "yes"},
 		"a#5": "state",
 		"a#6": state,
+		"a#7": {**state, "updated_at": 5},
+		"a#8": {key: value for key, value in state.items() if key != "updated_at"},
 	}
 	path.write_text(json.dumps({"version": 1, "issues": bad_entries}))
 	assert route.load_env_requeue_checkpoint(str(path)) == ({"a#6": state}, "loaded")
