@@ -174,8 +174,12 @@ with the new #5012 regression test shown failing on the base branch first.
 - A new session log whose name sorts before an older one would break a
   file-order prefix for legacy counts, and could mark its never-filed real
   denials as filed. The migration therefore takes the prefix in logging order
-  (each record's `ts`, ties in load order), which the file names do not
-  affect (PR #5028 review round 1).
+  (each record's `ts`), which the file names do not affect (PR #5028 review
+  round 1). `ts` has whole-second precision, so same-second records keep
+  their line order within one log file, and a same-second real record in
+  another log file counts as filed only when the count covers it whichever
+  file came first: a tie can re-report a real denial, never hide one
+  (PR #5028 final-merge review, head c501b60).
 - State size grows with filed records; it lives next to the logs, which
   already hold every record.
 

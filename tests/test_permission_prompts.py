@@ -508,6 +508,36 @@ def test_legacy_migration_takes_its_prefix_in_logging_order_not_file_name_order(
 	assert twin._migrate_legacy_counts({sig: 3}, keyed_records) == {sig: {"sess-a.jsonl:0"}}
 
 
+def test_legacy_migration_never_lets_a_same_second_real_denial_take_an_outage_count(tmp_path):
+	# PR #5028 review round (head c501b60): `ts` has whole-second precision, so a
+	# real denial in a log whose name sorts first can tie an older outage in
+	# another log. The cross-file order of a tie is unknown, so the real record
+	# counts as filed only when the count covers it whichever file came first.
+	# Within one log file the line order is exact and still decides. Reads the
+	# workflow-templates/ twin, which carries the fix before the `.claude/` sync.
+	twin = _load("permission_prompts_twin", TEMPLATE_SCRIPT_PATH)
+	sig = _git_status_signature()
+	directory = tmp_path / "log"
+	logger.append_record(logger.build_record(dict(_git_status_denial(OUTAGE_REASON), session_id="sess-b"), NOW), directory)
+	logger.append_record(logger.build_record(dict(_git_status_denial(REAL_DENIAL_REASON), session_id="sess-a"), NOW), directory)
+	keyed_records = twin.load_keyed_records(directory)
+	assert [key for key, _ in keyed_records] == ["sess-a.jsonl:0", "sess-b.jsonl:0"]
+	# Count 1 may have covered only the outage: the real denial stays unfiled.
+	assert twin._migrate_legacy_counts({sig: 1}, keyed_records) == {}
+	# Count 2 covered both records whatever their order.
+	assert twin._migrate_legacy_counts({sig: 2}, keyed_records) == {sig: {"sess-a.jsonl:0"}}
+	# Same second, one file: the line order is the logging order.
+	one_file = tmp_path / "one-file"
+	logger.append_record(logger.build_record(_git_status_denial(REAL_DENIAL_REASON), NOW), one_file)
+	logger.append_record(logger.build_record(_git_status_denial(OUTAGE_REASON), NOW), one_file)
+	one_file_records = twin.load_keyed_records(one_file)
+	assert twin._migrate_legacy_counts({sig: 1}, one_file_records) == {sig: {"sess-1.jsonl:0"}}
+	# A later-second group is reached only after the earlier count is used up.
+	logger.append_record(logger.build_record(_git_status_denial(REAL_DENIAL_REASON), NOW + timedelta(seconds=1)), one_file)
+	assert twin._migrate_legacy_counts({sig: 2}, twin.load_keyed_records(one_file)) == {sig: {"sess-1.jsonl:0"}}
+	assert twin._migrate_legacy_counts({sig: 3}, twin.load_keyed_records(one_file)) == {sig: {"sess-1.jsonl:0", "sess-1.jsonl:2"}}
+
+
 def test_v2_state_files_each_record_once(tmp_path, issues):
 	fake = issues()
 	directory = _log(tmp_path, [_payload("ls"), _payload("ls")])

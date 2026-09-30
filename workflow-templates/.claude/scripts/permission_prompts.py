@@ -36,12 +36,15 @@ index>` (0-based over every line, so a skipped line never shifts a later key);
 the logger only appends, so a key never moves. A legacy file (a flat
 `{<signature>: <count>}` map, written before version 2) is migrated on read:
 its count covered the first `<count>` records of that signature in logging
-order (each record's `ts`, ties in load order), classifier-outage records
-included, because earlier versions grouped them into the pattern. Logging
-order, not file-name order: a session log created after the last filing can
-sort before an older one, and its records were never counted. Only the real
-records in that prefix count as filed, so an outage counted earlier never
-hides a later real denial (issue #5012). A
+order (each record's `ts`), classifier-outage records included, because
+earlier versions grouped them into the pattern. Logging order, not file-name
+order: a session log created after the last filing can sort before an older
+one, and its records were never counted. `ts` has whole-second precision, so
+records of the same second keep their line order within one log file, and a
+real record among same-second records of several files counts as filed only
+when the count covers it even if the other files' records came first. Only
+the real records in that prefix count as filed, so an outage counted earlier
+never hides a later real denial (issue #5012). A
 state file that is unreadable or of an unknown shape is treated as empty.
 
 A **classifier outage** is not a pattern. A `PermissionDenied` whose reason
@@ -516,16 +519,38 @@ def _save_state(log_dir: Path, state: dict[str, int]) -> None:
 
 def _migrate_legacy_counts(legacy_counts: dict[str, int], keyed_records: list[tuple[str, dict]]) -> dict[str, set[str]]:
 	"""Filed record keys for a pre-version-2 `{signature: count}` state (see the module docstring)."""
-	filed: dict[str, set[str]] = {}
-	counted: dict[str, int] = {}
-	# Stable sort: records with the same `ts` (or none) keep their load order.
-	for key, record in sorted(keyed_records, key=lambda keyed_record: str(keyed_record[1].get("ts") or "")):
+	records_by_signature: dict[str, list[tuple[str, dict]]] = {}
+	for key, record in keyed_records:
 		sig = record_signature(record)
-		if sig not in legacy_counts or counted.get(sig, 0) >= legacy_counts[sig]:
-			continue
-		counted[sig] = counted.get(sig, 0) + 1
-		if not is_classifier_outage(record):
-			filed.setdefault(sig, set()).add(key)
+		if sig in legacy_counts:
+			records_by_signature.setdefault(sig, []).append((key, record))
+	filed: dict[str, set[str]] = {}
+	for sig, signature_records in records_by_signature.items():
+		uncounted = legacy_counts[sig]
+		same_second_groups: dict[str, list[tuple[str, dict]]] = {}
+		for key, record in signature_records:
+			same_second_groups.setdefault(str(record.get("ts") or ""), []).append((key, record))
+		for ts in sorted(same_second_groups):
+			if uncounted <= 0:
+				break
+			group = same_second_groups[ts]
+			group_sizes_by_file: dict[str, int] = {}
+			for key, _ in group:
+				log_file_name = key.rpartition(":")[0]
+				group_sizes_by_file[log_file_name] = group_sizes_by_file.get(log_file_name, 0) + 1
+			# `ts` has whole-second precision: within one log file the line order is
+			# the logging order, across files it is unknown. A real record counts as
+			# filed only when the count covers it even if every same-second record of
+			# the other files was logged first, so a tie can re-report a real denial
+			# but never hide one behind an outage (PR #5028 review).
+			position_in_file: dict[str, int] = {}
+			for key, record in group:
+				log_file_name = key.rpartition(":")[0]
+				position_in_file[log_file_name] = position_in_file.get(log_file_name, 0) + 1
+				latest_position = position_in_file[log_file_name] + len(group) - group_sizes_by_file[log_file_name]
+				if latest_position <= uncounted and not is_classifier_outage(record):
+					filed.setdefault(sig, set()).add(key)
+			uncounted -= len(group)
 	return filed
 
 
