@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Validation changes often span workflow configuration, validation scripts, and rendered templates; keep those layers and their contract tests in sync.",
   "timestamps": {
     "created_at": "2026-09-30T13:26:57Z",
