@@ -182,8 +182,10 @@ def _load_document(path: str) -> object:
 	In wrapper text only a line holding a JSON object with a `ccr` or `data` key counts, so a stray JSON
 	line (`[]`, `{}`) is never read as an empty page. Anything that could hide the real result is rejected
 	instead of skipped: a line starting with `{` that does not parse (a truncated result), a result-shaped
-	object that `_page` refuses, and more than one result object. A stray `{"data": []}` can therefore
-	never stand in for the real page.
+	object that `_page` refuses, and more than one result object. A stray `{"data": []}` next to the real
+	page therefore never stands in for it. A lone result object is the page, empty or not: the harness
+	writes the result on a line of its own, and a lone `{"data": []}` cannot be told apart from a real
+	empty page (the last `after_id` page, or no enabled Routine), so it is read as one.
 	"""
 	with open(path, encoding="utf-8") as handle:
 		text = handle.read()

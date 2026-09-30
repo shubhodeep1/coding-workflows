@@ -24,7 +24,7 @@ $ARGUMENTS
    - `wait` → nothing for you to fix now; by `state`:
      - `held` → a human decision is pending (see step 3). Report the hold and end the turn.
      - `claimed` → another fixer owns this head (your own claim and your sweep reservation were ignored in step 1). Report and end the turn; never fix alongside it.
-     - `open` → nothing is due. If you are a fresh session, make sure the PR has a §26 check-in (step 7) and end the turn.
+     - `open` → nothing is due. If you are a fresh session, make sure the PR has a §26 check-in (step 7). Report and end the turn.
    - `retry` (exit 2) → the read failed: run step 1 once more; if it fails again, run step 8's permission prompt report, report the error, and end the turn.
    - `hand_back_fixer` (`conflict`, `review-round`, `ci-failed`, `blocked`) → continue. `kind` is the claim kind: `conflict`, `review`, `ci`, `blocked`.
 
