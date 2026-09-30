@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5270
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01DntaymvRrhdQCxacVD9Xe2   safety net / hand-back: re-armed by the review-round 1 stage (session_01LxpQSNhcioY5Sj2cgFEDzF), ids in its report
+- Check-in: checker session_01DntaymvRrhdQCxacVD9Xe2   safety net / hand-back: re-armed by the review-round 2 stage (session_01E5EfMAm2GSUbvkKzndLaS6), ids in its report
 - Last updated: 2026-09-30
-- Last note: review round 1 on PR #5270: fixed the fail-open skip on a push that creates `stable` (AD-5) and rewrapped the agents.md bullet; rejected the compare-status, comment-style, token, and task-gap findings (compare semantics verified against the live API).
+- Last note: review round 2 on PR #5270: the step no longer re-fetches `main`'s tip when a push creates `stable`; rejected the comment-style findings (no such CLAUDE.md rule) and the agents.md paragraph-boundary gap (the base line already joined the sentences).
 
 ## Phases
-1. [ ] Phase 1 — `stable` twin check with guard provenance (`scripts/claude_twin_sync.py`, `.github/workflows/ci.yml`, tests, `agents.md`, changelog fragment; protected paths: none)   — PR #5270 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — `stable` twin check with guard provenance (`scripts/claude_twin_sync.py`, `.github/workflows/ci.yml`, tests, `agents.md`, changelog fragment; protected paths: none)   — PR #5270 open (waiting); review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -37,6 +37,7 @@
 ## Lessons
 - [source:intervention] A branch-gated CI check that skips when `github.event.before` is all zeros fails open on a push that creates the branch; give the creating push a fixed base (for `stable`, `main`'s tip) instead of skipping. (files: .github/workflows/ci.yml)
 - [source:intervention] `GET /repos/{repo}/compare/{sha}...main` returns `ahead` (not `behind`) when `sha` is an ancestor of `main`; verify compare semantics against the live API before acting on a reviewer's reading. (files: .github/workflows/ci.yml)
+- [source:intervention] Reviewer models repeatedly cite a "CLAUDE.md §9 no comments" rule; §9 covers indentation and braces only, so judge comment findings against the actual CLAUDE.md text, not the reviewer's quote. (files: CLAUDE.md)
 - [source:plan-deviation] A CI step that reads a token should scope it to the events that need it (`${{ github.event_name == 'push' && github.token || '' }}`): on `pull_request` the step runs PR-controlled scripts. (files: .github/workflows/ci.yml)
 
 ## Notes
@@ -45,4 +46,5 @@
 - Issue progress comment id 5899549666. `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` = `shubhodeep1`; no verdict bot configured.
 - Base is not the default branch: the project ends after the final merge (`Activation: n/a`), and the final-merge stage closes #5247 with `ai:merged`.
 - Base-move check (2026-09-29): #4804 (head = the base branch) is open, not merged.
+- Base-move check (2026-09-30, review round 2): no closed PR has the base branch as its head; base unchanged.
 - Plan deviation (phase 1): `GH_TOKEN` in the CI step is set on push events only (plan text updated in the phase PR).

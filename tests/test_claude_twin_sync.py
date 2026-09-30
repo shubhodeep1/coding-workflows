@@ -1070,6 +1070,23 @@ def test_ci_step_allows_a_clean_push_that_creates_stable(repo, ci):
 	assert '"ok": true' in proc.stdout
 
 
+def test_ci_step_fetches_main_once_when_a_push_creates_stable(repo, ci, tmp_path):
+	# A `git` wrapper ahead of the real one logs every fetch the step makes.
+	real_git = subprocess.run(["bash", "-c", "command -v git"], capture_output=True, text=True, check=True).stdout.strip()
+	fetch_log = tmp_path / "git-fetch.log"
+	(tmp_path / "bin" / "git").write_text(
+		"#!/usr/bin/env bash\n"
+		f"[ \"${{1:-}}\" = fetch ] && printf '%s\\n' \"$*\" >> {fetch_log}\n"
+		f"exec {real_git} \"$@\"\n",
+		encoding="utf-8",
+	)
+	(tmp_path / "bin" / "git").chmod(0o755)
+	_stable_push(repo, {"CHANGELOG.md": "release notes\n"})
+	proc = ci("push", ref_name="stable", before=sync.ZERO_SHA, gh_status="diverged")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert fetch_log.read_text(encoding="utf-8").splitlines() == ["fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main"]
+
+
 def test_ci_step_skips_other_events(repo, ci):
 	proc = ci("pull_request", base_ref="release/x", ref_name="42/merge")
 	assert proc.returncode == 0, proc.stdout + proc.stderr

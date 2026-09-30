@@ -257,7 +257,9 @@ jobs:
             echo "No base commit for this event; skipping the twin sync-state check."
             exit 0
           fi
-          git fetch --no-tags --depth=1 origin "${base}"
+          if [ "${base}" != "${twin_provenance:-}" ]; then
+            git fetch --no-tags --depth=1 origin "${base}"
+          fi
           if [ "${twin_on_stable}" = "true" ]; then
             PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD --guard-provenance-ref "${twin_provenance}"
           else
