@@ -328,13 +328,17 @@ def verify_review_run(repo: str, marker: dict, head_sha: str, head_ref: str,
 	return ""
 
 
-def _read_review_run_listing(path: str, missing_ok: bool = False) -> list[dict] | None:
+def _read_review_run_listing(path: str, missing_ok: bool = False, title_bound: bool = False) -> list[dict] | None:
 	"""The `workflow_runs` of one Actions runs listing; with `missing_ok`, None when the workflow does not exist (404).
 
 	Every run must carry an integer `id` and a string `status`; a run without
 	them cannot be ordered against the marker's run or classified as active,
 	so the listing raises `check_in_status.ReadError` instead of being read
-	around (fail closed).
+	around (fail closed). With `title_bound` (the internal-review.yml
+	listing, whose runs are bound to a PR by title alone) every run must also
+	carry a string `display_title`: a run without one could be this PR's
+	review, and skipping it as unbound would fail open (PR #5178 review
+	round 2).
 	"""
 	try:
 		listing = check_in_status.gh_api(path)
@@ -344,7 +348,9 @@ def _read_review_run_listing(path: str, missing_ok: bool = False) -> list[dict] 
 		raise
 	runs = listing.get("workflow_runs")
 	if not isinstance(runs, list) or any(
-		not isinstance(run, dict) or type(run.get("id")) is not int or not isinstance(run.get("status"), str) for run in runs
+		not isinstance(run, dict) or type(run.get("id")) is not int or not isinstance(run.get("status"), str)
+		or (title_bound and not isinstance(run.get("display_title"), str))
+		for run in runs
 	):
 		raise check_in_status.ReadError(f"gh api {path} returned a malformed runs listing")
 	return runs
@@ -370,6 +376,7 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	call each; a 404 there, the workflow not existing in that repo, is no
 	runs). Any other failed read, a 404 on the head-branch listing included,
 	and a listing with a run that has no integer `id` or string `status`
+	(or, in the internal-review.yml listing, no string `display_title`)
 	raise `check_in_status.ReadError`.
 
 	Output: None, or {"state": "review_active" | "review_superseded",
@@ -391,7 +398,8 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	)
 	title = check_in_status.DISPATCHED_REVIEW_TITLE.format(number=number)
 	bound_dispatches = [
-		run for run in _read_review_run_listing(check_in_status.DISPATCHED_REVIEW_RUNS_PATH.format(repo=repo), missing_ok=True) or []
+		run for run in _read_review_run_listing(check_in_status.DISPATCHED_REVIEW_RUNS_PATH.format(repo=repo), missing_ok=True,
+			title_bound=True) or []
 		if run.get("display_title") == title
 	]
 	active = [run for run in branch_runs + bound_dispatches if run.get("status") != "completed"]

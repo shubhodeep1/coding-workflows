@@ -576,6 +576,12 @@ def _malformed(run: dict, **fields) -> dict:
 	("unbound dispatch with a null status", [],
 		{"review_autofix.yml": [_malformed(_run(RUN_ID + 3, workflow="review_autofix.yml", event="workflow_dispatch",
 			head_branch="main"), status=None)]}),
+	# PR #5178 review round 2: an internal-review.yml dispatch is bound to its
+	# PR by title alone, so one without a title could be this PR's review.
+	("sweep dispatch with no title, still running", [],
+		{"internal-review.yml": [_malformed(_dispatch(RUN_ID + 2, status="in_progress"), display_title=_DROP)]}),
+	("sweep dispatch with a null title, failed", [],
+		{"internal-review.yml": [_malformed(_dispatch(RUN_ID + 2, conclusion="failure"), display_title=None)]}),
 ])
 def test_a_malformed_run_in_a_listing_raises_for_the_sweep_to_log(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
