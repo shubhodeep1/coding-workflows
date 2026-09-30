@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T09:10:06Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A command that recognises a project branch by reading its plan file must also look in `docs/completed/` and say what a missing plan means: the completion PR moves the plan, and stacked `-phase-<n>` heads share the `claude/implement-plan-` prefix with no plan of their own.",
+  "phase": "implement_plan",
+  "pr_number": 5282,
+  "record_id": "lesson-implement-plan-fb3957c513916718c1b2bf23",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5260-asset-sync-pr-base-drift",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}

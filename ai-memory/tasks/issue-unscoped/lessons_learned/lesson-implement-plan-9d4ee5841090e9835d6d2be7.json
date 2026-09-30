@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T09:10:06Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a shared procedure has its own numbered steps, name the caller's steps as \"the procedure's step N\" rather than a bare \"step N\", and spell out every multi-branch sequence (checkout, merge, push, return) it asks for.",
+  "phase": "implement_plan",
+  "pr_number": 5282,
+  "record_id": "lesson-implement-plan-9d4ee5841090e9835d6d2be7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5260-asset-sync-pr-base-drift",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md"
+  ]
+}

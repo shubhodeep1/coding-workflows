@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T09:10:06Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Syncing a project branch whose open phase PR edits the same files as the incoming base change leaves that PR conflicted: check the open phase PR with `git merge-tree --write-tree <PR head> origin/<project branch>` right after the sync and resolve it in the same stage, before the next review round.",
+  "phase": "implement_plan",
+  "pr_number": 5282,
+  "record_id": "lesson-implement-plan-c8876d3f2fcc435296a52502",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5260-asset-sync-pr-base-drift",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md"
+  ]
+}
