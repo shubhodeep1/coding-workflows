@@ -4,14 +4,14 @@
 - Source issue: shubhodeep1/coding-workflows#5016
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5016-dispatch-exact-run-id   Final PR: #5051 draft
-- Status: BLOCKED
-- Stage: conformance 1/3
+- Status: IN_PROGRESS
+- Stage: conformance 1/3 — review round
 - Activation: not started
-- Waiting on: PR #5625: twin sync
+- Waiting on: PR #5625
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01RnAvxLYqkEtpVTb2kSW6eL   safety net none   hand-back none (held for twin sync)
+- Check-in: checker session_01RnAvxLYqkEtpVTb2kSW6eL   safety net and hand-back re-armed after the round-1 push (ids in the stage report)
 - Last updated: 2026-09-30
-- Last note: conformance 1/3 (session_01MF3T3dSpJesMjsZ57DbhRz): CONFORMANT with 2 EVIDENCE-BASED concerns, both fixed in PR #5625 (step 9–10 dispatch-time ref check unexecutable on an in-progress run, AD-6; stale CLAUDE.md §23.I API-call row); the command-file fix is twin-first, so PR #5625 carries a `hold` claim and waits for a `[claude-twin-sync]` of `implement-plan-claude.md` (request on issue #5016).
+- Last note: conformance 1/3 — review round 1 on head c979e85 (session_01WpVTi54Y34oa3cnR559cC8): after the `[claude-twin-sync]` the reviewer panel raised 2 consensus findings; the CLAUDE.md §23.I call-count row is fixed (it omitted the default-branch read and the pre-dispatch run-list read), and the first-candidate wait after an ambiguous dispatch is rejected as a bounded delay on a rare fallback path (AD-7).
 
 ## Phases
 1. [x] Phase 1 — exact run id from the dispatch response, no guessing on fallback, target-ref check in steps 9–10   — PR #5059 merged 2026-09-30 (`dcb72a9`, by the operator under Q46: A); review rounds: 2; interventions: 0
@@ -26,7 +26,7 @@
    - Done: `tests/test_dispatch_workflow.py`, `tests/test_permission_prompts.py`, `tests/test_update_workflows_guardrails.py` pass; `ruff check` clean on changed Python.
 
 ## Conformance
-- Run 1 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 2 EVIDENCE-BASED concerns, no blocker) — fix PR #5625 (pre-security)
+- Run 1 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 2 EVIDENCE-BASED concerns, no blocker) — fix PR #5625 (pre-security); fix PR review rounds: 1
 
 ## Security pass
 
@@ -43,6 +43,7 @@
 - AD-4 [plan, 2026-09-29] Should a successful response id be followed by a read of the run? — Picked: A — one best-effort read of `actions/runs/<id>` to fill `status` and `created_at`, `null` when it fails. Alternatives: B — no read; `status` and `created_at` always `null`. Why: keeps the documented output fields populated (§6) at one call. Applied in: phase 1. Status: pending review
 - AD-5 [phase 1/1 — review round 1, 2026-09-30] What should the helper do when the pre-dispatch run-list read fails? — Picked: A — keep the read before the POST but make its failure non-fatal: dispatch anyway; a returned run id is exact (exit 0), no id → exit 2 with `dispatched: true` and no polling. Alternatives: B — keep failing before the POST with `dispatched: false` (the contract on `main`); C — move the read after the POST (the reviewers' literal suggestion). Why: after #5016 the list only feeds the fallback, so a transient read failure should not cancel a dispatch GitHub can name; C would let the new run count as "already existing". Applied in: PR #5059. Status: pending review
 - AD-6 [conformance 1/3, 2026-09-30] How should a stage record a dispatch the helper could not match exactly, given a run's target ref sits in its log, which `gh run view --log` serves only once the run has completed? — Picked: A — record it unverified (an ambiguous result waits on the first candidate and records the rest) and confirm the ref at read-result, re-arming on a matching candidate still in progress. Alternatives: B — wait inside the dispatching stage until the run completes; C — add a `run-name` carrying the target ref to the audit and validate workflows. Why: keeps the read-result check the plan added as the single gate, with no workflow or consumer-wrapper change (plan non-goal) and no waiting inside a stage. Applied in: PR #5625. Status: pending review
+- AD-7 [conformance 1/3 — review round 1, 2026-09-30] Should the checker wait on every candidate of an ambiguous dispatch instead of the first one? — Picked: A — keep the first-candidate wait; the read-result stage checks every recorded candidate. Alternatives: B — add a multi-run mode to `check_in_status.py` that is done when any candidate completes; C — record the candidates and wait on each in turn from the dispatching stage. Why: the candidates are runs of the same workflow started inside the helper's 90-second window, so the delay is bounded by the difference in their durations, on a path that needs both a missing run id and a parallel dispatch; B adds a new interface to a protected script (§5, §6) and C waits inside a stage. Applied in: no code change (PR #5625 finding rejected). Status: pending review
 
 ## Lessons
 - [source:intervention] Once an API response names the object a call created, reads taken only to find that object afterwards become fallback-only: make their failure non-fatal instead of letting them block the call (files: .claude/scripts/dispatch_workflow.py)
@@ -50,6 +51,7 @@
 - [source:conformance] When a helper's cost or contract changes, update every table that describes it, including the CLAUDE.md §23.I helper table, not only README.md and agents.md (files: CLAUDE.md)
 
 ## Notes
+- Conformance fix PR #5625 review round 1 (2026-09-30, head c979e85, ledger e82a94ff…98bc): finding `CLAUDE.md:1361` (call count omits the default-branch read and the pre-dispatch run-list read) fixed; finding `.claude/commands/implement-plan-claude.md:71` (checker waits only on the first ambiguous candidate) rejected per AD-7. The fix touches no `.claude/` path, so no twin sync is needed.
 - Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29): answered Q1: A by the master session on issue #5016 (comment 5884723402).
 - Review round 1 (2026-09-30, head df70ca3, ledger c5622640…01e0): finding `dispatch_workflow.py:213` (pre-dispatch list read) fixed in part — the read stays before the POST (it must, for the fallback), its failure no longer cancels the dispatch (AD-5); finding `dispatch_workflow.py:184` (response not validated as a dict) rejected — line 185 and `_response_run_id` already return `None` for non-object JSON (covered by `test_post_dispatch_returns_the_response_object_or_none`). Twin-first: only `workflow-templates/.claude/scripts/dispatch_workflow.py` changed; scratch copy with the twin in `.claude/` → 154 passed, `ruff check` clean.
 - Phase 1 verification (2026-09-29): in a scratch copy with the twin in `.claude/scripts/`, `tests/test_dispatch_workflow.py`, `tests/test_permission_prompts.py`, `tests/test_update_workflows_guardrails.py` → 101 passed; `ruff check` clean. On the phase branch itself `test_template_parity` fails until the twin sync, by design.
