@@ -16,6 +16,9 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 GUARD_STEP_NAME = "Shared shell-block anti-regression checks"
+# Since #4707 CI runs as parallel jobs; the guard runs first in the fast
+# `static-checks` job, so it fails before the test jobs finish.
+GUARD_JOB_ID = "static-checks"
 
 INLINE_CODEX_SCANNED = ",".join(
 	(
@@ -60,13 +63,19 @@ WATCHDOG_SCANNED = ",".join(
 )
 
 
-def _lint_steps() -> list[dict]:
+def _guard_job_steps() -> list[dict]:
+	"""Steps of the job that runs the guard (`GUARD_JOB_ID`), not the aggregate `lint` job."""
 	workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
-	return workflow["jobs"]["lint"]["steps"]
+	return workflow["jobs"][GUARD_JOB_ID]["steps"]
+
+
+# Former name, kept as an alias (CLAUDE.md §6); since #4707 the guard runs in
+# `static-checks`, not in `lint`, so new code calls `_guard_job_steps`.
+_lint_steps = _guard_job_steps
 
 
 def _guard_body() -> str:
-	matching_steps = [step for step in _lint_steps() if step.get("name") == GUARD_STEP_NAME]
+	matching_steps = [step for step in _guard_job_steps() if step.get("name") == GUARD_STEP_NAME]
 	if len(matching_steps) != 1:
 		raise AssertionError(f"Expected exactly one {GUARD_STEP_NAME!r} step")
 	return matching_steps[0]["run"]
@@ -128,7 +137,7 @@ def _run_guard(fixture_root: Path) -> subprocess.CompletedProcess[str]:
 
 class GuardOrderingContractTest(unittest.TestCase):
 	def test_guard_immediately_follows_checkout_and_precedes_setup_install_lint_and_tests(self) -> None:
-		step_names = [step.get("name") for step in _lint_steps()]
+		step_names = [step.get("name") for step in _guard_job_steps()]
 		checkout_index = step_names.index("Checkout repository")
 		guard_index = step_names.index(GUARD_STEP_NAME)
 		self.assertEqual(guard_index, checkout_index + 1)
@@ -136,9 +145,24 @@ class GuardOrderingContractTest(unittest.TestCase):
 			"Setup Python",
 			"Install Python CI dependencies",
 			"YAML lint",
-			"Orchestrate poll implementation-failed regression fast-fail",
 		):
 			self.assertLess(guard_index, step_names.index(later_step))
+		self.assertEqual(
+			guard_index,
+			checkout_index + 1,
+			"every other step of the static-checks job must run after the guard",
+		)
+		self.assertEqual(checkout_index, 0)
+
+	def test_guard_runs_once_across_all_ci_jobs(self) -> None:
+		workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+		guard_jobs = [
+			job_id
+			for job_id, job in workflow["jobs"].items()
+			for step in job.get("steps", [])
+			if step.get("name") == GUARD_STEP_NAME
+		]
+		self.assertEqual(guard_jobs, [GUARD_JOB_ID])
 
 	def test_guard_contract_test_is_wired_into_ci(self) -> None:
 		workflow_text = CI_WORKFLOW.read_text(encoding="utf-8")

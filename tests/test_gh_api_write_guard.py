@@ -235,6 +235,14 @@ ASK_CALLS = {
 	"write in loop": "for n in 1 2; do gh api -X PATCH repos/shubhodeep1/coding-workflows/issues/$n -f state=closed; done",
 	"unquoted substitution": "echo $(gh api -X DELETE repos/shubhodeep1/coding-workflows/git/refs/heads/x)",
 	"quoted substitution": "echo \"$(gh api -X DELETE repos/a/b)\"",
+	"unquoted backtick": "echo `gh api -X DELETE repos/a/b`",
+	"backtick assignment": "x=`gh api -X DELETE repos/a/b`",
+	"double-quoted backtick": "echo \"`gh api -X DELETE repos/a/b`\"",
+	"backtick inside quoted substitution": "echo \"$(echo `gh api -X DELETE repos/a/b`)\"",
+	"unterminated backtick": "echo `gh api -X DELETE repos/a/b",
+	"quoted paren inside quoted substitution": "echo \"$(echo \")\"; gh api -X DELETE repos/a/b; echo \"(\")\"",
+	"single-quoted paren inside quoted substitution": "echo \"$(echo ')'; gh api -X DELETE repos/a/b)\"",
+	"backtick paren inside quoted substitution": "echo \"$(echo `echo )`; gh api -X DELETE repos/a/b)\"",
 	"substitution in field": "gh api repos/{owner}/{repo}/issues/1/comments -f body=\"$(gh api -X DELETE repos/a/b)\"",
 	"bash -c": "bash -c 'gh api -X DELETE repos/a/b'",
 	"sudo": "sudo gh api -X DELETE repos/a/b",
@@ -269,6 +277,12 @@ NO_DECISION_COMMANDS = [
 	"git commit -F- <<'EOF'\nmention gh api -X DELETE here\nEOF",
 	"git commit -m \"$(cat <<'EOF'\nDocument gh api -X DELETE\nEOF\n)\"",
 	"echo $(gh api repos/a/b --jq .id)",
+	# Single-quoted text is data: Bash runs no substitution inside it.
+	"sed -i 's|^- Last note: .*|- Last note: `gh api user` = me|' docs/log.md && git add docs/log.md",
+	"f=docs/log.md && sed -i 's|a|`gh api user`|' $f && git commit -q -m \"docs\" && git push -q origin b 2>&1 | tail -2",
+	"git commit -m 'uses `gh api user` to check auth'",
+	"echo 'later: $(gh api -X DELETE repos/a/b)'",
+	"git commit -m \"see \\`gh api user\\` in the docs\"",
 	"gh api repos/a/b/pulls/$n --jq .title",
 	"gh api -X PATCH repos/shubhodeep1/coding-workflows/pulls/1 -F body=@\"$F\"",
 	"gh api -X GET search/issues -f 'q=repo:a/b is:open' > /tmp/out.json",
@@ -387,6 +401,85 @@ def test_ask_reason_names_the_offending_call():
 	assert "PATCH repos/shubhodeep1/coding-workflows/pulls/1" in reason
 	assert "state" in reason
 	assert "§23.H" in reason
+
+
+# ──────────────────────────────────────────────────────────────────
+# jq command-line options passed to --jq are denied (#4891)
+# ──────────────────────────────────────────────────────────────────
+
+# Verbatim from #4891 (permission-prompt sig a5be406f8c21): `--arg` became the
+# `--jq` value, so `gh` would reject the call before sending any request.
+ISSUE_4891_COMMAND = (
+	'for r in 36242690892 36224773465 36205375333 36078283644 35966436009; do gh api '
+	'"repos/shubhodeep1/coding-workflows/actions/runs/$r/jobs?per_page=50" --jq --arg r "$r" '
+	"'.jobs[] | select(.name|test(\"validate-scripts\")) | [$r, .name, .conclusion, .started_at, .completed_at] | @tsv'; done"
+)
+
+
+def test_issue_4891_command_is_denied():
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": ISSUE_4891_COMMAND}})
+	assert decision == guard.DECISION_DENY
+	assert '"--arg"' in reason
+	assert "§23.H" in reason
+	assert "Nothing ran" in reason
+
+
+def test_issue_4891_loop_written_correctly_gets_no_decision():
+	command = (
+		'for r in 1 2; do gh api "repos/shubhodeep1/coding-workflows/actions/runs/$r/jobs?per_page=50" '
+		"--jq '.jobs[].name'; done"
+	)
+	assert _decide(command) is None
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"gh api repos/a/b --jq -r .default_branch",
+		"gh api repos/a/b --jq=--raw-output",
+		"gh api repos/a/b -q -c",
+		"gh api repos/a/b -q-r",
+		"gh api repos/a/b --jq --arg x 1 .x",
+		"gh api -X DELETE repos/a/b/git/refs/heads/x --jq -r",
+		"gh api repos/shubhodeep1/coding-workflows/issues/1 --jq -r .title",
+	],
+)
+def test_jq_cli_option_as_jq_value_is_denied(command):
+	assert _decide(command) == guard.DECISION_DENY
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"gh api repos/shubhodeep1/coding-workflows --jq '-.size'",
+		"gh api repos/shubhodeep1/coding-workflows --jq '(-.size)'",
+		"gh api repos/shubhodeep1/coding-workflows --jq -1",
+		"gh api repos/shubhodeep1/coding-workflows --jq .a",
+		"gh api repos/shubhodeep1/coding-workflows -q .a",
+	],
+)
+def test_valid_jq_programs_are_not_denied(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+def test_deny_wins_over_ask_for_another_call():
+	command = "gh api -X DELETE repos/a/b/git/refs/heads/x; gh api repos/a/b --jq -r .name"
+	assert _decide(command) == guard.DECISION_DENY
+
+
+def test_hidden_call_still_asks_before_the_deny():
+	command = 'echo "$(gh api repos/a/b --jq -r .name)"'
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_hook_process_emits_deny_json_for_a_jq_option():
+	payload = {"tool_name": "Bash", "tool_input": {"command": "gh api repos/a/b --jq -r .name"}}
+	result = _run_hook(json.dumps(payload))
+	assert result.returncode == 0
+	output = json.loads(result.stdout)["hookSpecificOutput"]
+	assert output["hookEventName"] == "PreToolUse"
+	assert output["permissionDecision"] == "deny"
+	assert '"-r"' in output["permissionDecisionReason"]
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -564,3 +657,27 @@ def test_seed_repo_command_ships_the_hook():
 
 def test_ci_runs_this_file():
 	assert "tests/test_gh_api_write_guard.py" in CI_WORKFLOW.read_text(encoding="utf-8")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Substitution scanning (quote-aware)
+# ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("command, bodies", [
+	("echo `a b`", ["a b"]),
+	("echo '`a b`'", []),
+	("echo \"`a b`\"", ["a b"]),
+	("echo \"$(a (b) c)\" d", ["a (b) c"]),
+	("echo $(a b)", []),
+	("echo '$(a b)' \"$(c)\"", ["c"]),
+	("echo \\`a\\` b", []),
+	("echo `a", ["a"]),
+	("echo \"$(a", ["a"]),
+	("echo \"$(echo \")\"; b)\"", ["echo \")\"; b"]),
+	("echo \"$(echo ')'; b)\"", ["echo ')'; b"]),
+	("echo \"$(echo \\) b)\"", ["echo \\) b"]),
+	("echo \"$(echo `echo )` b)\"", ["echo `echo )` b"]),
+	("echo \"$(echo `echo \"` b)\"", ["echo `echo \"` b"]),
+])
+def test_substitution_bodies_follow_bash_quoting(command, bodies):
+	assert guard.substitution_bodies(command) == bodies

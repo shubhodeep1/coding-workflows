@@ -76,3 +76,65 @@ list_dispatch_runs()
 {
 	gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=100"
 }
+
+# find_latest_scoped_run_field REPO CREATED_AFTER NAME_RE TITLE FIELD
+#
+# Prints FIELD of the newest workflow run in REPO created after
+# CREATED_AFTER whose name matches NAME_RE (case-insensitive), whose
+# conclusion is not `skipped`, and, when TITLE is non-empty, whose
+# display_title equals TITLE. Prints nothing when no run matches.
+#
+# The runs endpoint lists every workflow of the repo newest first, and the
+# release window alone can create more than 100 runs: release run
+# 36374918973 saw 166 runs between the smoke issue and the Plan capture,
+# with the real Plan run just past position 100 behind two `skipped` Plan
+# runs for the same issue, so a single page missed it and deep verify failed.
+# Pages are therefore read in order until one holds a match or comes back
+# short (the last page).
+#
+# API calls: one REST read per 100 runs, newest first, at most
+# FIND_LATEST_SCOPED_RUN_MAX_PAGES (5) reads. A page with a match ends the
+# scan, so the usual cost is one read.
+# Failure: returns 1 when a page cannot be read and nothing matched yet
+# (callers already fall back with `|| echo ""`); returns 0 otherwise.
+FIND_LATEST_SCOPED_RUN_MAX_PAGES=5
+
+find_latest_scoped_run_field()
+{
+	local repo="$1"
+	local created_after="$2"
+	local name_re="$3"
+	local title="$4"
+	local field="$5"
+	local page=1
+	local runs_json=""
+	local match=""
+	local page_count=0
+
+	while [ "${page}" -le "${FIND_LATEST_SCOPED_RUN_MAX_PAGES}" ]; do
+		if ! runs_json="$(gh_api_safe_print "repos/${repo}/actions/runs?per_page=100&page=${page}&created=>${created_after}")"; then
+			return 1
+		fi
+		match="$(printf '%s' "${runs_json}" | jq -r \
+			--arg name_re "${name_re}" \
+			--arg title "${title}" \
+			--arg field "${field}" \
+			'[.workflow_runs[]
+				| select(.name | test($name_re; "i"))
+				| select(.conclusion != "skipped")
+				| select($title == "" or .display_title == $title)]
+				| sort_by(.created_at)
+				| last
+				| .[$field] // empty' 2>/dev/null || echo "")"
+		if [ -n "${match}" ] && [ "${match}" != "null" ]; then
+			printf '%s' "${match}"
+			return 0
+		fi
+		page_count="$(printf '%s' "${runs_json}" | jq -r '.workflow_runs | length' 2>/dev/null || echo 0)"
+		if ! [[ "${page_count}" =~ ^[0-9]+$ ]] || [ "${page_count}" -lt 100 ]; then
+			return 0
+		fi
+		page=$((page + 1))
+	done
+	return 0
+}
