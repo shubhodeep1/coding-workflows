@@ -835,7 +835,7 @@ diff instead of a fourth audit, blocking only when the fix itself is
 defective), a security or validation read, the completion PR, the
 final merge, a `/verify-activation — scope activation` cycle, the
 `/deploy-activate` hand-off) runs in its own fresh session titled
-`implement-plan <slug> — <stage>`, which archives the previous stage session
+`#<issue> · PR #<pr> — implement-plan <slug> — <stage>`, which archives the previous stage session
 unless it is waiting on the user; a finished stage session is not woken to
 continue, because the gap between check-ins outlives the prompt cache and a
 wake would re-send the whole history at full price. The one exception is the
@@ -849,7 +849,16 @@ itself. A scheduled Routine fire creates no session, so the hand-back adds
 no parent link, and it leaves the project checker running for the next
 wait. Merged PRs, review rounds, finished runs, and resolved issue lists
 still start a fresh stage session, and a failed hand-back falls back to a
-fresh `… — blocked PR` stage session. New projects work on a
+fresh `… — blocked PR` stage session. Titles lead with the numbers (issue #4886):
+`#<issue> · ` when the project has a source issue, then the PR the session works
+on, else the project's final PR (the checker is
+`#<issue> · PR #<final> — implement-plan <slug> — checker`). A stage renames
+itself when it opens a PR. The checker reuse check and the zombie-checker cleanup
+match any title that contains `implement-plan <slug> — checker`, so older and
+hand-renamed checkers still match. Issue sessions start as
+`#<N> · issue <repo>#<N> — implement`, a fresh `/fix-claude-pr` session adds
+`#<I> · ` when its head is `claude/implement-plan-issue-<I>-…`, and
+`PR #<n> status check-in` titles and Routine names are unchanged. New projects work on a
 project branch `claude/implement-plan-<slug>` with a draft final PR into the
 default branch (the orchestrator's `orchestrator/project-<N>` equivalent):
 phase and fix PRs target it, security (`security-audit.yml` `ref` input) and
@@ -961,8 +970,10 @@ reviews, comments, and conflicts stay a direct §12 request.
   handed to …`), the session is not archived, and it is not the fixer's
   own; otherwise it skips and says so in one line. "Archived" is reported
   only after `archive_session` returned success. `/implement-plan-claude`
-  applies the same check (title `implement-plan <slug> — checker`) before
-  it archives its project checker, and its checker renames and archives no
+  applies the same check before it archives its project checker, except
+  that the title must contain `implement-plan <slug> — checker` (with or
+  without a `#<issue> · PR #<pr> — ` prefix, issue #4886) rather than
+  equal it, and its checker renames and archives no
   existing session (its one `archive_session` call is the cleanup of a
   stage session it just created whose start trigger failed).
 - Delivered or gone (CLAUDE.md §26.C step 5): a `SUCCEEDED` hand-back
@@ -1280,7 +1291,15 @@ committing the corresponding file:
   sourced or executed. Any other changed or deleted path rejects the entire
   replay as an isolation/transfer failure, stopping validation even for
   nonfatal hooks. An explicit `validate.yml` `target_ref` requires exactly one open
-  trusted-author same-repo project PR targeting the default branch; checkout
+  trusted-author same-repo project PR targeting the default branch, a
+  `claude/implement-plan-*` project branch whose own single open trusted
+  same-repo PR targets the default branch (one level of stacking), or `stable`
+  for a `claude/implement-plan-issue-<n>-*` head whose issue `<n>` is a
+  verified workflow-heal issue: `ai:workflow-heal`, authored by an `OWNER` User
+  or `github-actions[bot]`, the `workflow-failure-heal:fp=` marker line,
+  `stable` as its Integration/Target branch line, the label applied only by the
+  author within 120 s of creation (every events page read), and the same
+  author as the target PR (issue #4791); any other base is refused. Checkout
   pins and verifies that PR's SHA without persisting checkout credentials.
   Empty `target_ref` retains integration/default selection.
 
