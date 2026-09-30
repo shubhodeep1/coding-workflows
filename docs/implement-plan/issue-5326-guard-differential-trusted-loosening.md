@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5326-guard-differential-trusted-loosening-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5326   Progress comment: 5902380346
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5174-guard-differential-check
-- Project branch: claude/implement-plan-issue-5326-guard-differential-trusted-loosening   Final PR: #5360 draft
+- Project branch: claude/implement-plan-issue-5326-guard-differential-trusted-loosening   Final PR: #5360 ready
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-5174-guard-differential-check) — the base is not the default branch, so steps 12–13 do not run (Issue Mode)
-- Waiting on: completion PR (claude/implement-plan-issue-5326-guard-differential-trusted-loosening-complete → the project branch)
+- Waiting on: PR #5360 (final PR, review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: project checker session_01KsqE28FAB72xsTiHLCUEvX (reused; per-wait safety-net and hand-back ids are in the stage report)
 - Last updated: 2026-09-30
-- Last note: validation cycle 1 (run 36699650751, target_ref = the project branch) passed 10/10; no validation-fix PR, so no conformance re-run (all 3 runs used). Plan moved to docs/completed/ in the completion PR; next is final-merge (mark final PR #5360 ready, then close #5326 with ai:merged after it merges into the #5174 branch).
+- Last note: final-merge review round 1 (head 692b26c): 1 of 2 findings fixed in a `[claude-autofix]` commit (a git timeout or a git that cannot start in `_repo_git` / `_git` escaped as a traceback with exit 1, which reads as a regression; now `status=error` exit 2), 1 task gap rejected (approved_by provenance is the base-branch merge, AD-1 and the plan's non-goals). 115 guard-differential tests pass.
 
 ## Phases
 1. [x] Phase 1 — base-branch loosening policy (script, policy file, tests, ci.yml step, docs)   — PR #5389 merged 2026-09-30 (250b29f); review rounds: 1; interventions: 0
@@ -29,7 +29,7 @@
 
 ## Completion
 - Completion PR (branch claude/implement-plan-issue-5326-guard-differential-trusted-loosening-complete) open — doc moved to docs/completed/issue-5326-guard-differential-trusted-loosening-plan.md
-- Final PR #5360 draft (into claude/implement-plan-issue-5174-guard-differential-check)
+- Final PR #5360 ready — review rounds: 1 (into claude/implement-plan-issue-5174-guard-differential-check). Round 1 (head 692b26c, 2026-09-30): fixed the uncaught git timeout / start failure (the reviewer named `CalledProcessError`, which `_repo_git` already maps to exit 2; the timeout path was the real gap); rejected the `approved_by` provenance task gap (out of scope per the plan's non-goals and AD-1: the policy's provenance is the reviewed merge into the base ref, and §15 rules out an API check).
 
 ## Activation
 
@@ -50,6 +50,7 @@
 - [source:conformance] When a rule moves, grep every file that restates it, including data-file header comments such as `tests/guard_corpus/*.txt`, not only the docs the plan lists; pin the new wording with a test. (files: tests/guard_corpus/pr_merge_status_guard.txt, tests/test_guard_differential.py)
 - [source:intervention] Sibling projects that change the same rule on one shared base (#5325 and #5326 both rewrote the guard differential pass condition) conflict in every file that restates it; resolve by composing the rules, then re-grep the restatements and add one test for the combined case. (files: scripts/guard_differential.py, tests/guard_corpus/pr_merge_status_guard.txt, tests/test_guard_differential.py)
 - [source:intervention] A test that pins a file's header must read only the leading comment block (stop at the first non-comment line), or wording kept only in a later section comment still passes. (files: tests/test_guard_differential.py)
+- [source:intervention] Wrapping `subprocess.run` for a CLI's documented exit-2 setup errors must also catch `subprocess.TimeoutExpired` and `OSError`; checking the return code alone lets a timeout escape as a traceback whose exit 1 collides with the "failure found" code. (files: scripts/guard_differential.py)
 
 ## Notes
 - Conformance 1/3 (2026-09-30), outside this project's scope and not fixed here: (1) `tests/inventory_parity.py` fails on the project branch (and on its base) because `docs/INVENTORY.md` lacks `scripts/guard_differential.py`, a #5174 gap that #5185's CI will report; fixing it in each of #5174's four child projects would conflict. (2) `ci.yml` runs the PR's own copy of `scripts/guard_differential.py`, so a PR can edit the checker itself (visible in the diff, unlike the body); #5327's project (final PR #5364) pins the verifier to the base branch.
@@ -59,3 +60,4 @@
 - Base branch is not the default branch: the issue closes by an explicit close + `ai:merged` at final merge, and steps 12–13 do not run (`Activation: n/a`).
 - `ci.yml` runs only on PRs into `main` / `stable`, so neither this project's PRs nor its final PR (into #5174's branch) run the guard differential step; verification is local, and the step gates #5185 into `main`.
 - Sync 2026-09-30 (conformance 2/3 review round): the issue base gained sibling project #5325 (PR #5363, "a warning no longer excuses a loosened guard"). Merged it into the project branch (6601c6a) with the two rules combined: a loosening fails with or without a warning, unless the BASE branch's `intended_loosening.json` approves that hook, shape, and head commit; conflicts in `scripts/guard_differential.py`, `ci.yml`, `changelog.d/5174-guard-differential-check.md`, and `tests/test_guard_differential.py`, plus `test_policy_approval_excuses_a_warned_loosening` for the combination. #5325 left "with no warning" in #5174's plan (lines 9 and 49); plan text is historical and was not changed.
+- Final-merge review round 1 (2026-09-30): #5326 was already closed (`completed`, `ai:merged`) at 11:23Z by the orchestrator poller's `close_merged_issues_sweep` ("linked PR #5630 was merged"). #5630 merged into this project branch, not the issue base, so the close came before the final PR merged. The issue was left closed: reopening could re-route it to a new implementation session. The final-merge stage's close is now a no-op, apart from confirming `ai:merged`.

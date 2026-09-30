@@ -727,6 +727,42 @@ def test_cli_unreadable_pr_body_exits_2(hook_repo: Path, tmp_path: Path) -> None
 	assert proc.returncode == 2
 
 
+@pytest.mark.parametrize("failure", ["timeout", "oserror"])
+def test_a_git_read_that_times_out_or_cannot_start_exits_2(hook_repo: Path, monkeypatch, capsys, failure: str) -> None:
+	# PR #5360 review round 1: a failed policy read must be `status=error`
+	# (exit 2), never a traceback, whose exit 1 would read as a regression.
+	(hook_repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_SILENT_HOOK, encoding="utf-8")
+	real_run = subprocess.run
+
+	def failing_policy_read(cmd, *args, **kwargs):
+		if cmd[:2] == ["git", "cat-file"] and str(cmd[-1]).endswith(gd.LOOSENING_POLICY_PATH):
+			if failure == "timeout":
+				raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+			raise OSError("git could not start")
+		return real_run(cmd, *args, **kwargs)
+
+	(hook_repo / ".github" / "guard_differential").mkdir(parents=True)
+	(hook_repo / ".github" / "guard_differential" / "intended_loosening.json").write_text(
+		'{"version": 1, "exceptions": []}\n', encoding="utf-8"
+	)
+	_git(hook_repo, "add", ".github")
+	_git(hook_repo, "commit", "-q", "-m", "policy")
+	monkeypatch.setattr(gd.subprocess, "run", failing_policy_read)
+	assert gd.main(["--repo-root", str(hook_repo), "--base-ref", "main"]) == 2
+	out = capsys.readouterr().out
+	assert "status=error" in out
+	assert "cat-file" in out
+
+
+def test_scenario_git_that_times_out_is_a_setup_error(tmp_path: Path, monkeypatch) -> None:
+	def timing_out(cmd, *args, **kwargs):
+		raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+	monkeypatch.setattr(gd.subprocess, "run", timing_out)
+	with pytest.raises(gd.SetupError, match="git init"):
+		gd._git(tmp_path, "init", "-q")
+
+
 # ──────────────────────────────────────────────────────────────────
 # Shipped corpora, scenarios, and environment
 # ──────────────────────────────────────────────────────────────────

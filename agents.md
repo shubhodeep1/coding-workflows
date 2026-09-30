@@ -1258,7 +1258,8 @@ side so that class cannot land unnoticed.
   approving entry's `approved_by` and `approval_reason` (both `""` when
   not approved). Exit 0 when
   clean or when no hook changed, 1 on a failure, 2 on a bad ref, unreadable
-  corpus, unreadable PR body, malformed policy, or malformed `--head-sha`.
+  corpus, unreadable PR body, malformed policy, malformed `--head-sha`, or
+  a git call that fails, times out, or cannot start.
 
 ---
 
