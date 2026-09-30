@@ -45,6 +45,16 @@ Decision for the whole Bash call (a hook decides once per tool call):
     `sort -n -r -u -k K -t C`) or a standalone `cd <path>`, `sleep <n>`,
     `echo <text>`, `true`; `2>&1` as the only redirect; no `$`, backticks,
     globs, subshells, or loops → `permissionDecision: allow`;
+  - the command is exactly `for VAR in TOKEN...; do BODY; done` (VAR a
+    lowercase shell name without `proxy` in it, each TOKEN a literal `[A-Za-z0-9._-]+` not starting
+    with `-`), and every BODY item, joined by `;` / `&&`, is a `gh api` read
+    with `$VAR` / `${VAR}` only in the endpoint path, or `gh run view`,
+    `gh run list`, `gh pr view` with allowlisted flags and `$VAR` only as a
+    positional argument (each optionally piped into the filters above), or
+    `echo <literal or $VAR>`; `2>&1` as the only redirect; no other `$`,
+    backslashes, backticks, globs, subshells, or nested loops →
+    `permissionDecision: allow` (issue #4786). A write in the body still
+    asks, because writes are checked first;
   - otherwise (reads and routine writes beside other code: loops,
     `python3`, `$VAR`, file redirects) → no decision, so the allow list or
     the Auto-mode classifier decides as for any other command. An allow here
@@ -723,6 +733,232 @@ def _is_approvable_command(command: str) -> bool:
 	return saw_gh_api
 
 
+# A `for` loop over literal IDs whose body only reads (CLAUDE.md §23.H, issue
+# #4786). `_READ_LOOP_RE` is the fast-path test for a loop with no `gh api`
+# text; `_LOOP_HEADER_RE` is the exact frame `for VAR in TOKEN...; do ...`.
+# The loop variable is lowercase, so it can never be `PATH`, `IFS`, `GH_HOST`,
+# `GH_TOKEN`, or another variable that changes how `gh` runs, and it never
+# names a proxy (`https_proxy`, `no_proxy`, ...), because assigning to an
+# already exported lowercase proxy variable re-routes `gh`. Tokens are
+# literal and never start with `-`, so `$VAR` cannot word-split, glob, carry
+# `/` or `?`, or become a flag.
+_READ_LOOP_RE = re.compile(
+	r"^\s*for\s[^\n]*;\s*do\s[^\n]*\bgh\s+(?:run\s+(?:view|list)|pr\s+view)\b[^\n]*;\s*done\s*$"
+)
+_LOOP_VAR_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+_LOOP_TOKEN_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")
+_LOOP_HEADER_RE = re.compile(r"^\s*for\s+([a-z_][a-z0-9_]*)\s+in((?:\s+[A-Za-z0-9._][A-Za-z0-9._-]*)+)\s*;\s*do\s")
+_LOOP_VAR_PLACEHOLDER = "__GH_API_GUARD_LOOP_VAR__"
+
+# Flags `gh run view`, `gh run list`, and `gh pr view` may carry in an
+# approved loop: (boolean flags, flags that take a value). Anything else,
+# `--web` / `-w` included, makes the loop not approvable. The last item is
+# the number of positional arguments the subcommand accepts.
+_GH_READ_SUBCOMMAND_FLAGS = {
+	("run", "view"): (
+		frozenset({"--log", "--log-failed", "-v", "--verbose", "--exit-status"}),
+		frozenset({"--json", "-q", "--jq", "-t", "--template", "-j", "--job", "-a", "--attempt", "-R", "--repo"}),
+		1,
+	),
+	("run", "list"): (
+		frozenset({"-a", "--all"}),
+		frozenset(
+			{
+				"-L", "--limit", "-w", "--workflow", "-b", "--branch", "-u", "--user", "-e", "--event", "-s",
+				"--status", "-c", "--commit", "--created", "--json", "-q", "--jq", "-t", "--template", "-R", "--repo",
+			}
+		),
+		0,
+	),
+	("pr", "view"): (
+		frozenset({"-c", "--comments"}),
+		frozenset({"--json", "-q", "--jq", "-t", "--template", "-R", "--repo"}),
+		1,
+	),
+}
+
+
+def _substitute_loop_var(command: str, var: str) -> str | None:
+	"""Replace every `$VAR` / `${VAR}` outside single quotes with a placeholder.
+
+	Returns None when any other `$` or any backslash appears outside single
+	quotes, so the only expansion left in the command is the loop variable.
+	"""
+	var_re = re.compile(r"\$(?:\{" + re.escape(var) + r"\}|" + re.escape(var) + r"(?![A-Za-z0-9_]))")
+	kept: list[str] = []
+	single_quoted = False
+	double_quoted = False
+	index = 0
+	while index < len(command):
+		character = command[index]
+		if character == "\\" and not single_quoted:
+			return None
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif character == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		elif character == "$" and not single_quoted:
+			match = var_re.match(command, index)
+			if not match:
+				return None
+			kept.append(_LOOP_VAR_PLACEHOLDER)
+			index = match.end()
+			continue
+		kept.append(character)
+		index += 1
+	return "".join(kept)
+
+
+def _is_loop_gh_api_read(args: list[str]) -> bool:
+	"""True for `gh api` arguments with the loop variable only in the endpoint path.
+
+	The variable may appear once, in the endpoint before any `?`, and not in
+	its first path segment (so it can never choose `graphql` or another
+	top-level endpoint). Whether the call is a read is decided by `classify`.
+	"""
+	try:
+		parsed = parse_gh_api_args(args)
+	except Unreadable:
+		return False
+	with_var = [arg for arg in args if _LOOP_VAR_PLACEHOLDER in arg]
+	if not with_var:
+		return True
+	endpoint = parsed["endpoints"][0]
+	if len(with_var) != 1 or with_var[0] != endpoint:
+		return False
+	path, _separator, query = endpoint.lstrip("/").partition("?")
+	return _LOOP_VAR_PLACEHOLDER not in query and _LOOP_VAR_PLACEHOLDER not in path.split("/", 1)[0]
+
+
+def _is_loop_gh_read_subcommand(words: list[str]) -> bool:
+	"""True for `gh run view`, `gh run list`, or `gh pr view` with allowlisted flags.
+
+	Flag values must be literal; the loop variable may only be a positional
+	argument.
+	"""
+	spec = _GH_READ_SUBCOMMAND_FLAGS.get(tuple(words[1:3]))
+	if spec is None:
+		return False
+	bool_flags, value_flags, max_positionals = spec
+	positionals = 0
+	index = 3
+	while index < len(words):
+		word = words[index]
+		index += 1
+		if not word.startswith("-"):
+			positionals += 1
+			continue
+		flag, value = word, None
+		if word.startswith("--") and "=" in word:
+			flag, value = word.split("=", 1)
+		if flag in bool_flags and value is None:
+			continue
+		if flag not in value_flags:
+			return False
+		if value is None:
+			if index >= len(words):
+				return False
+			value = words[index]
+			index += 1
+		if _LOOP_VAR_PLACEHOLDER in value:
+			return False
+	return positionals <= max_positionals
+
+
+def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bool:
+	"""True for exactly `for VAR in TOKEN...; do BODY; done` whose body only reads.
+
+	CLAUDE.md §23.H, issue #4786. VAR is a lowercase shell name that does not
+	contain `proxy`; each TOKEN is
+	a literal `[A-Za-z0-9._-]+` that does not start with `-`. BODY is one or
+	more items joined by `;` or `&&`, each one of:
+	  - a `gh api` call that `classify` marks `read` (every entry of `results`
+	    must be a read; a routine write keeps today's result), with `$VAR` /
+	    `${VAR}` only in the endpoint path. Every `gh api` body item must be
+	    one of the calls `evaluate` classified, so a quoted or split-word call
+	    (`gh 'api' ...`, `"gh" api ...`, `gh ap''i ...`) keeps today's
+	    no-decision result;
+	  - `gh run view`, `gh run list`, or `gh pr view` with allowlisted flags
+	    and `$VAR` only as a positional argument;
+	each optionally piped into the safe filters (`head`/`tail -n N`, `wc -l`,
+	`sort ...`); or `echo` with literal words and `$VAR`. `2>&1` is the only
+	redirect. No other `$`, backslash, backtick, glob, subshell, nested loop,
+	file redirect, or command, so approving the loop approves nothing the
+	guard has not read.
+	"""
+	if any(kind != KIND_READ for kind, _description in results):
+		return False
+	reduced = _REDIRECT_TO_STDERR_RE.sub("", command)
+	header = _LOOP_HEADER_RE.match(reduced)
+	if not header or _LOOP_VAR_PLACEHOLDER in reduced:
+		return False
+	var, loop_tokens = header.group(1), header.group(2).split()
+	if not _LOOP_VAR_RE.match(var) or "proxy" in var:
+		return False
+	if not all(_LOOP_TOKEN_RE.match(token) for token in loop_tokens):
+		return False
+	substituted = _substitute_loop_var(reduced, var)
+	if substituted is None or _has_unsafe_shell_syntax(substituted):
+		return False
+	lexer = shlex.shlex(substituted, posix=True, punctuation_chars=";&|>")
+	lexer.commenters = ""
+	lexer.whitespace = " \t\r"
+	lexer.whitespace_split = True
+	try:
+		tokens = list(lexer)
+	except ValueError:
+		return False
+	items: list[list[list[str]]] = [[[]]]
+	separators: list[str] = []
+	for token in tokens:
+		if token in (";", "&&"):
+			separators.append(token)
+			items.append([[]])
+		elif token == "|":
+			items[-1].append([])
+		elif set(token) <= set(";&|>"):
+			return False
+		else:
+			items[-1][-1].append(token)
+	# Frame: header item, one or more body items, then `done` as the last
+	# word, with `;` right after the header and right before `done`.
+	if len(items) < 3 or items[0] != [["for", var, "in", *loop_tokens]] or items[-1] != [["done"]]:
+		return False
+	if separators[0] != ";" or separators[len(items) - 2] != ";":
+		return False
+	body = [[list(words) for words in pipeline] for pipeline in items[1:-1]]
+	if body[0][0][:1] != ["do"]:
+		return False
+	body[0][0] = body[0][0][1:]
+	# Every `gh api` item must be one of the calls `evaluate` classified. The
+	# fast path passes no results, and a quoted call (`gh 'api' -X DELETE ...`,
+	# `"gh" api ...`) never matches `_RAW_GH_API_RE`, so it was never
+	# classified and a loop holding one is not approvable.
+	api_items = sum(
+		1 for pipeline in body if len(pipeline[0]) >= 2 and pipeline[0][0] == "gh" and pipeline[0][1] == "api"
+	)
+	if api_items != len(results):
+		return False
+	for pipeline in body:
+		if any(not words for words in pipeline):
+			return False
+		head = pipeline[0]
+		if head[0] == "echo":
+			if len(pipeline) != 1:
+				return False
+			continue
+		if head[0] != "gh" or len(head) < 2:
+			return False
+		if head[1] == "api":
+			if not _is_loop_gh_api_read(head[2:]):
+				return False
+		elif not _is_loop_gh_read_subcommand(head):
+			return False
+		if not all(_is_safe_filter(words) for words in pipeline[1:]):
+			return False
+	return True
+
+
 def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 	"""Return `(kind, description)` for one parsed `gh api` call."""
 	method = parsed["method"]
@@ -776,7 +1012,11 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		return None, ""
 	tool_input = payload.get("tool_input")
 	command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-	if not isinstance(command, str) or not _RAW_GH_API_RE.search(command):
+	if not isinstance(command, str):
+		return None, ""
+	if not _RAW_GH_API_RE.search(command):
+		if _READ_LOOP_RE.match(command) and _is_approvable_read_loop(command, []):
+			return DECISION_ALLOW, "gh api guard (CLAUDE.md §23.H): for loop over literal IDs whose body only reads."
 		return None, ""
 
 	stripped_command, heredocs = strip_heredoc_bodies(command)
@@ -817,6 +1057,9 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	if invocations and _is_approvable_command(command):
 		summary = "; ".join(f"{kind} call {description}" for kind, description in results)
 		return DECISION_ALLOW, f"gh api guard (CLAUDE.md §23.H): {summary}."
+	if invocations and _is_approvable_read_loop(command, results):
+		summary = "; ".join(f"{kind} call {description}" for kind, description in results)
+		return DECISION_ALLOW, f"gh api guard (CLAUDE.md §23.H): for loop over literal IDs whose body only reads: {summary}."
 	return None, ""
 
 

@@ -4,8 +4,9 @@
 Covers the pieces that can silently detach the mechanism:
   1. The classification — reads and §23.B routine writes are not prompted,
      every other write (and any call the guard cannot read) is.
-  2. The whole-call decision — allow only for one simple call, no decision
-     for multi-part commands, ask as soon as any call is a write.
+  2. The whole-call decision — allow only for one simple call (with safe
+     helpers) or a read-only `for` loop over literal IDs, no decision for
+     other multi-part commands, ask as soon as any call is a write.
   3. The fail-closed contract for malformed payloads and internal errors.
   4. The settings.json wiring (and the removed `gh api` ask rules), template
      parity, and the prose in CLAUDE.md / seed-repo / ci.yml.
@@ -347,6 +348,110 @@ NOT_APPROVABLE_HELPERS = [
 @pytest.mark.parametrize("command", NOT_APPROVABLE_HELPERS)
 def test_gh_api_beside_anything_else_is_not_allowed(command):
 	assert _decide(command) != guard.DECISION_ALLOW
+
+
+# ──────────────────────────────────────────────────────────────────
+# Read-only for loops over literal IDs (CLAUDE.md §23.H, issue #4786)
+# ──────────────────────────────────────────────────────────────────
+
+# The #4707 implement session waited about 3.5 hours on this read.
+INCIDENT_READ_LOOP = (
+	"for r in 36242690892 36224773465 36205375333 36078283644 35966436009; "
+	"do gh run view $r --json createdAt,updatedAt,conclusion; done"
+)
+
+READ_LOOP_ALLOWED = {
+	"incident gh run view": INCIDENT_READ_LOOP,
+	"gh api jobs": "for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs --jq '.jobs[].name'; done",
+	"braced variable": "for r in 1 2; do gh api repos/o/r/actions/runs/${r}/jobs; done",
+	"two reads joined by &&": (
+		"for r in 1 2; do gh run view $r --json status && gh api repos/o/r/actions/runs/$r --jq .conclusion; done"
+	),
+	"read piped into head": "for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs --jq '.jobs[].name' | head -5; done",
+	"echo then run list": "for r in a b; do echo $r; gh run list -R o/r -L 5 --json databaseId; done",
+	"pr view": "for r in 4703 4704; do gh pr view $r --json state,mergedAt; done",
+	"stderr to stdout": "for r in 1 2; do gh run view $r --log-failed 2>&1 | tail -n 20; done",
+	"double-quoted variable": "for r in 1 2; do gh run view \"$r\" --json status; echo \"run ${r}\"; done",
+	"literal echo and long flag with value": "for r in 1; do echo ---; gh pr view $r --repo=o/r --comments; done",
+}
+
+
+@pytest.mark.parametrize("name", sorted(READ_LOOP_ALLOWED))
+def test_read_only_loop_over_literal_ids_is_allowed(name):
+	assert _decide(READ_LOOP_ALLOWED[name]) == guard.DECISION_ALLOW
+
+
+READ_LOOP_NO_DECISION = {
+	"token with $": "for r in $X 2; do gh run view $r; done",
+	"token with glob": "for r in *; do gh run view $r; done",
+	"quoted token": "for r in '1' 2; do gh run view $r; done",
+	"token starting with -": "for r in --web; do gh pr view $r; done",
+	"substitution in tokens": "for r in $(seq 3); do gh run view $r; done",
+	"variable in --jq value": "for r in 1 2; do gh run view 5 --jq $r; done",
+	"variable in -R value": "for r in 1 2; do gh pr view 5 -R $r; done",
+	"variable in field": "for r in 1 2; do gh api -X GET search/issues -f q=$r; done",
+	"variable after ?": "for r in 1 2; do gh api \"repos/o/r/pulls?page=$r\"; done",
+	"variable as first path segment": "for r in graphql; do gh api $r -X GET; done",
+	"file redirect": "for r in 1 2; do gh run view $r > /tmp/x; done",
+	"stderr file redirect": "for r in 1 2; do gh api repos/o/r/actions/runs/$r 2>/tmp/e; done",
+	"python3 in body": "for r in 1 2; do gh run view $r; python3 -c 'print(1)'; done",
+	"nested loop": "for r in 1 2; do for s in 3; do gh run view $s; done; done",
+	"while loop": "while true; do gh run view 5; done",
+	"gh run view --web": "for r in 1; do gh run view --web $r; done",
+	"gh pr view -w": "for r in 1; do gh pr view -w $r; done",
+	"uppercase loop variable": "for PATH in .; do gh run view 5; done",
+	"proxy loop variable": "for https_proxy in evil.example; do gh api repos/o/r/actions/runs/1; done",
+	"gh issue view": "for r in 1; do gh issue view $r; done",
+	"newline-separated loop": "for r in 1 2\ndo gh run view $r\ndone",
+	"loop after another command": "echo x; for r in 1; do gh run view $r; done",
+	"gh by path": "for r in 1; do /usr/bin/gh run view $r; done",
+	"other variable": "for r in 1; do gh run view $OTHER; done",
+	"longer variable name": "for r in 1; do gh run view $rx; done",
+	"backslash": "for r in 1; do gh run view \\$r; done",
+	"or-list": "for r in 1; do gh run view $r || true; done",
+	"piped into sh": "for r in 1; do gh run view $r | sh; done",
+	"done piped": "for r in 1; do gh run view $r; done | head",
+	"trailing semicolon after done": "for r in 1; do gh api repos/o/r/actions/runs/$r; done;",
+	"gh api read beside other variable": "for r in 1; do gh api repos/o/r/actions/runs/$r; echo $HOME; done",
+	"routine write in body": (
+		"for r in 1 2; do echo $r; gh api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=hi; done"
+	),
+	# A quoted `gh api` never matches the raw-text fast path, so it is never
+	# classified; the loop must not be allowed around it.
+	"single-quoted api DELETE beside a read": (
+		"for r in 1; do gh run view $r; gh 'api' -X DELETE repos/o/r/issues/$r; done"
+	),
+	"double-quoted gh DELETE beside a read": "for r in 1; do gh pr view $r; \"gh\" api -X DELETE repos/o/r/issues/1; done",
+	"split api word mutation beside a read": (
+		"for r in 1; do gh run list; gh ap''i graphql -f query='mutation{x}'; done"
+	),
+	"quoted api read beside a read": "for r in 1; do gh run view $r; gh 'api' repos/o/r/actions/runs/$r; done",
+}
+
+
+@pytest.mark.parametrize("name", sorted(READ_LOOP_NO_DECISION))
+def test_loop_outside_the_read_only_shape_gets_no_decision(name):
+	assert _decide(READ_LOOP_NO_DECISION[name]) is None
+
+
+READ_LOOP_ASK = {
+	"write in loop": ASK_CALLS["write in loop"],
+	"DELETE in loop": "for r in 1 2; do gh api -X DELETE repos/o/r/issues/$r; done",
+	"POST beside a read": (
+		"for r in 1 2; do gh api repos/o/r/actions/runs/$r; gh api repos/o/r/git/refs -f ref=x -f sha=abc; done"
+	),
+}
+
+
+@pytest.mark.parametrize("name", sorted(READ_LOOP_ASK))
+def test_write_in_a_loop_still_asks(name):
+	assert _decide(READ_LOOP_ASK[name]) == guard.DECISION_ASK
+
+
+def test_hook_process_allows_the_incident_read_loop():
+	result = _run_hook(json.dumps({"tool_name": "Bash", "tool_input": {"command": INCIDENT_READ_LOOP}}))
+	assert result.returncode == 0
+	assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
 # ──────────────────────────────────────────────────────────────────
