@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_guard_differential.py:980-985 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The install-step assertion does not require only the fixed package install and misses unapproved pip inputs, allowing PR-controlled code to run before the verifier.\n  WHY: The test can pass with appended shell commands or installs using bare local paths, long-form flags, or URLs, leaving the verifier vulnerable to a `.pth`-based verdict bypass; severity ranged from NIT (deepseek_deepseek-v4-pro) to MAJOR (the other reviewers).\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The new test `test_ci_check_runs_before_any_pr_code` fails when anything other than `actions/checkout`, `actions/setup-python` (only `python-version`), and the fixed package-name `pip install` runs before it.\"\n  expected_change_site: tests/test_guard_differential.py::test_ci_check_runs_before_any_pr_code (the install-content assertion around lines 980-985).\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: tests/test_guard_differential.py lines 980-985: the assertion does not reject bare local installs, long-form pip flags, VCS/direct-URL installs, or appended shell commands, and does not restrict the install to the fixed package set.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_guard_differential.py:985 | severity=NIT | confidence=4\n  PROBLEM: The regex misses long-form pip flags, bare local installs, and URL-based installs.\n  WHY: These install forms could execute PR-controlled code before the verifier runs.\n- tests/test_guard_differential.py:984-985 | severity=NIT | confidence=3\n  PROBLEM: The test checks for the pip install command but does not require the `run:` field to contain only that command.\n  WHY: Appended shell commands could execute PR-controlled code while the test still passes.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_guard_differential.py: lines 980-985 (test_ci_check_runs_before_any_pr_code, the `assert not re.search(r\"(?:^|\\s)(?:-r|-e|-c|\\.{0,2}/|tests/|scripts/|\\.claude/)\", ...)` line) | severity=MAJOR | confidence=4\n  PROBLEM: The install-step check allows bare local installs, long-form pip flags, URL installs, and arbitrary shell appended after the pip command.\n  WHY: These shapes can execute PR-controlled code before the verifier and plant a `.pth` file that controls its exit code.\n- Requirement: \"The new test `test_ci_check_runs_before_any_pr_code` fails when anything other than `actions/checkout`, `actions/setup-python` (only `python-version`), and the fixed package-name `pip install` runs before it.\" (PR description, \"Findings fixed\" table row 1, \"Verified by\" column.)\n  Expected change site: tests/test_guard_differential.py::test_ci_check_runs_before_any_pr_code (the install-content assertion around lines 980-985).\n  Evidence of absence: The assertion only forbids `-r|-e|-c`, `./`/`../` paths, and the literal path prefixes `tests/`, `scripts/`, `.claude/`. It does not (a) block bare `pip install .` or `pip install .[extras]`, (b) block long-form flags `--requirement`/`--editable`/`--constraint`, (c) block VCS / direct-URL installs (`git+https://\u2026`, `https://\u2026`, `http://\u2026`), or (d) restrict the step to the literal fixed package set. It also does not prevent additional shell being appended after the `python3 -m pip install` line. With these gaps, the test does not fail when \"anything other than \u2026 the fixed package-name `pip install`\" runs before the check, so the stated verification contract is unmet. The same root cause is the SECURITY finding above.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_guard_differential.py: 980-983, `test_ci_check_runs_before_any_pr_code` | severity=MAJOR | confidence=5\n  PROBLEM: The test checks for the pip install command and rejects a short list of tokens, but does not require the install step to contain only the fixed package install.\n  WHY: Appended shell could plant a `.pth` file before the verifier starts, letting the PR control its verdict while the test still passes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_guard_differential.py: test_ci_check_runs_before_any_pr_code, the regex assertion at the end of the function | severity=MAJOR | confidence=4\n  PROBLEM: The regex misses bare local installs, long-form pip flags, and VCS/direct-URL installs.\n  WHY: Such installs could execute attacker-controlled code before the verifier while passing the test.\n- tests/test_guard_differential.py: test_ci_check_runs_before_any_pr_code, the two assertions on `install` (the `run` field of the install step) | severity=MAJOR | confidence=4\n  PROBLEM: The test does not require the install step's `run` field to contain only the expected pip install command.\n  WHY: Appended shell could plant a `.pth` file and control the verifier's exit code while the test still passes.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_guard_differential.py: lines 980-983, `test_ci_check_runs_before_any_pr_code` | severity=MAJOR | confidence=4\n  PROBLEM: The install-step check permits appended shell commands and misses bare local installs, long-form pip flags, and URL-based installs.\n  WHY: A PR could execute code or plant a `.pth` file before the verifier while the test still passes.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cca56afa080188052a8cbf0c583bdf54008adeefbc3965ca24e5433978b12abe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5647,
+    "run_id": "36710976280",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36710976280",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930123216_a78b356528",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5647,
+    "run_id": "36710976280"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T12:32:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
