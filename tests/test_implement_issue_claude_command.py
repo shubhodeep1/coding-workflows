@@ -133,8 +133,10 @@ def test_git_commands_run_unchained():
 	plan_text = _flat(TEMPLATE_COMMANDS / "implement-plan-claude.md")
 	fix_text = _flat(TEMPLATE_COMMANDS / "fix-claude-pr.md")
 	assert "Run the git commands this command names (`git fetch`, `git checkout -B`, `git merge --no-edit`, `git push`) exactly as written too, with no `2>&1`, no pipe into `tail` or `head`, and no `;` or `&&` chain of `git status` or `git log` reads" in plan_text
+	assert "read their output from the tool result, and check the branch state with `git status -sb` run as its own Bash call, with nothing piped or chained to it." in plan_text
 	assert "which denied a fetch-and-merge of the project branch as `[Modify Shared Resources]` (issue #5293)." in plan_text
-	assert "Run these git commands, and the `git merge` below, exactly as written, with no `2>&1`, no pipe into `tail` or `head`, and no chained `git status` or `git log` reads; check the branch state in a separate call." in fix_text
+	assert "Run these git commands, and the `git merge` below, exactly as written, with no `2>&1`, no pipe into `tail` or `head`, and no chained `git status` or `git log` reads" in fix_text
+	assert "check the branch state with `git status -sb`, and `HEAD` with `git rev-parse HEAD`, each run as its own Bash call with nothing piped or chained to it." in fix_text
 	assert "goes to the Auto-mode classifier, which has denied it (issue #5293)." in fix_text
 
 
