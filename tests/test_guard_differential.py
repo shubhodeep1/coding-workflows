@@ -891,9 +891,11 @@ def _fake_verifier(label: str, code: int) -> str:
 	)
 
 
-def _run_check_step(tmp_path: Path, base_has_verifier: bool) -> subprocess.CompletedProcess:
+def _run_check_step(tmp_path: Path, base_has_verifier: bool, pr_files: dict[str, str] | None = None) -> subprocess.CompletedProcess:
 	"""Run the real `Guard differential check` step body in a checkout of a
-	PR branch whose own verifier exits 3, against a local `origin`."""
+	PR branch whose own verifier exits 3, against a local `origin`.
+	`pr_files` adds further files (path relative to the checkout: text) to
+	the PR's commit."""
 	origin = tmp_path / "origin"
 	origin.mkdir()
 	_git(origin, "init", "-q", "-b", "main")
@@ -914,6 +916,9 @@ def _run_check_step(tmp_path: Path, base_has_verifier: bool) -> subprocess.Compl
 	_git(workspace, "checkout", "-q", "-b", "pr")
 	(workspace / "scripts").mkdir(exist_ok=True)
 	(workspace / "scripts" / "guard_differential.py").write_text(_fake_verifier("head", 3), encoding="utf-8")
+	for relative_path, text in (pr_files or {}).items():
+		(workspace / relative_path).parent.mkdir(parents=True, exist_ok=True)
+		(workspace / relative_path).write_text(text, encoding="utf-8")
 	_git(workspace, "add", "-A")
 	_git(workspace, "commit", "-q", "-m", "pr edits the verifier")
 	runner_temp = tmp_path / "runner-temp"
@@ -958,6 +963,28 @@ def test_ci_step_falls_back_to_the_prs_verifier_with_a_warning(tmp_path: Path) -
 	assert "::warning::GUARD_DIFFERENTIAL verifier=head reason=base-has-no-verifier base=main" in proc.stdout
 
 
+def test_ci_step_does_not_import_modules_from_the_checkout(tmp_path: Path) -> None:
+	"""Issue #5327 review round 2: `python3 -c` puts the working directory,
+	the PR's checkout, first on sys.path, so a PR's json.py would run inside
+	the step before the pinned verifier. The step runs it with -P."""
+	marker = tmp_path / "checkout-code-ran"
+	proc = _run_check_step(
+		tmp_path,
+		base_has_verifier=True,
+		pr_files={"json.py": f"open({str(marker)!r}, 'w').close()\n"},
+	)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert not marker.exists()
+	assert "VERIFIER=base" in proc.stdout
+	assert "body='the pr body'" in proc.stdout
+
+
+# The packages `Install Python CI dependencies` installs before the guard
+# differential check (issue #5327). A package's build or install code runs
+# before the check, so the list is pinned here.
+CI_INSTALL_PACKAGES = ("yamllint", "coverage", "pyyaml", "jsonschema", "jinja2", "pytest", "ruff")
+
+
 def test_ci_check_runs_before_any_pr_code() -> None:
 	"""Issue #5327 conformance run 3: PR code that runs earlier in the same
 	job runs as the same user, so it could plant a `.pth` file in the
@@ -973,11 +1000,22 @@ def test_ci_check_runs_before_any_pr_code() -> None:
 			break
 	else:
 		raise AssertionError("step 'Guard differential check (issue #5174)' not found")
-	# No environment that makes the shell or pip run checkout code
-	# (BASH_ENV, PIP_REQUIREMENT, PYTHONSTARTUP, ...) and no default shell,
-	# working directory, or container for the job.
-	for scope in (workflow, job):
-		assert not re.search(r"^(?:BASH_ENV|ENV|PIP_|PYTHON)", "\n".join(scope.get("env") or {}), re.MULTILINE)
+	check = job["steps"][len(before)]
+	# No environment that could make the shell, the loader, Python, or pip
+	# run checkout code (BASH_ENV, LD_PRELOAD, PATH, VIRTUAL_ENV, PIP_*,
+	# PYTHON*, HOME, ...): workflow and job `env` may carry only the listed
+	# keys, and the check step only its base ref. Extend a list only with a
+	# key that runs no code.
+	for scope, allowed in (
+		(workflow, {"FORCE_JAVASCRIPT_ACTIONS_TO_NODE24"}),
+		(job, set()),
+		(check, {"GUARD_DIFFERENTIAL_BASE_REF"}),
+	):
+		env = scope.get("env") or {}
+		assert isinstance(env, dict), env
+		assert set(env) <= allowed, sorted(set(env) - allowed)
+	# No default shell or working directory, and no job container.
+	assert "defaults" not in workflow
 	assert not {"defaults", "container"} & set(job)
 	assert [step.get("uses", "").split("@")[0] for step in before[:2]] == ["actions/checkout", "actions/setup-python"]
 	assert set(before[0]) <= {"name", "uses", "with"}
@@ -986,12 +1024,24 @@ def test_ci_check_runs_before_any_pr_code() -> None:
 	assert set(before[1].get("with") or {}) == {"python-version"}
 	assert [step.get("name") for step in before[2:]] == ["Install Python CI dependencies"]
 	assert set(before[2]) == {"name", "run"}
-	# Exactly one pip install of plain package names and nothing else: no
-	# flag (-r, --requirement, -e, --editable, -c, ...), no local path or
-	# archive (`.`, `./x`, `x.zip`), no URL or VCS spec, no second command.
+	# Exactly one pip install of the fixed package set and nothing else: no
+	# flag (-r, --requirement, -e, --editable, -c, ...), no local path,
+	# archive, URL, or VCS spec, no other package, no second command. -P
+	# keeps the checkout off sys.path, where a PR's pip/ package would run.
+	# A new dependency is added here too.
 	lines = [line.strip() for line in before[2]["run"].splitlines() if line.strip() and line.strip() != "set -euo pipefail"]
 	assert len(lines) == 1, lines
-	assert re.fullmatch(r"python3 -m pip install(?: [A-Za-z0-9][A-Za-z0-9_-]*)+", lines[0]), lines[0]
+	install_prefix = "python3 -P -m pip install "
+	assert lines[0].startswith(install_prefix), lines[0]
+	assert sorted(lines[0][len(install_prefix):].split(" ")) == sorted(CI_INSTALL_PACKAGES), lines[0]
+	# The check step's own `python3 -c` / `-m` calls keep the checkout off
+	# sys.path too (-P, or -I which implies it), or a PR's json.py would run
+	# inside the step.
+	for python_flags in re.findall(r"\bpython3((?: +-[A-Za-z]+)+)", check["run"]):
+		flags = python_flags.split()
+		if flags[-1][-1] in "cm":
+			assert any({"P", "I"} & set(flag[1:]) for flag in flags), python_flags
+	assert "python3 -P -c " in check["run"]
 
 
 def test_ci_runs_the_unit_tests() -> None:

@@ -1267,11 +1267,18 @@ side so that class cannot land unnoticed.
   `.pth` file in the Python install the verifier runs under and decide its
   exit code, with no change to the script or the step. Keep it there;
   `tests/test_guard_differential.py` fails when a step is added before it,
-  when the install step runs anything but one `python3 -m pip install` of
-  plain package names (no flag, path, archive, URL, or second command), or
-  when a workflow, job, or step variable (`BASH_ENV`, `ENV`, `PIP_*`,
-  `PYTHON*`), job `defaults`, or a job `container` could make the shell or
-  pip run checkout code first.
+  when the install step runs anything but one `python3 -P -m pip install`
+  of the package list pinned in the test (`CI_INSTALL_PACKAGES`: no other
+  package, flag, path, archive, URL, or second command), when workflow or
+  job `env` carries a key beyond the test's allow-list (today only
+  `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` at workflow level) or the check step
+  one beyond `GUARD_DIFFERENTIAL_BASE_REF` (so no `BASH_ENV`, `LD_PRELOAD`,
+  `PATH`, `PIP_*`, `PYTHON*`, ...), when workflow or job `defaults` or a job
+  `container` is set, or when the check step runs `python3 -c` / `-m`
+  without `-P`. `-P` keeps the checkout (the working directory) off
+  `sys.path`: without it a PR's `pip/` package or `json.py` runs before the
+  verifier. A new dependency or `env` key is added to the test's list in
+  the same PR, and only when it runs no code.
   A PR that rewrites `ci.yml` (the step, or a step before it) still
   controls what that run executes, which is inherent to `pull_request`
   workflows: the edit is visible in the diff the reviewer panel reads, and
