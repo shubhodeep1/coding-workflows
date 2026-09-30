@@ -57,11 +57,13 @@ the failed `reasons`, and the evidence fields (`signature`, `class`,
 `target_class`, `occurrences`, `target_occurrences`). Evidence that the
 cause is the same (condition 3) stays with the session.
 
-Issue text is untrusted data: the tool name, the prompt reason, and the
-command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
-token-like strings masked (REDACTION_PATTERNS), inside a fenced block. The
-markers (signature, class, "Filed by" line) are read only outside fenced
-````text blocks, so a command that mentions one does not index the issue.
+Issue text is untrusted data: the tool name, the prompt reason (one line
+each, `<!--` escaped), and the command truncated to MAX_COMMAND_CHARS with
+heredoc bodies removed and token-like strings masked (REDACTION_PATTERNS),
+inside a fenced block longer than any backtick run in it. The markers
+(signature, class, "Filed by" line) and the `**Occurrences:**` evidence are
+read only outside fenced ````text blocks, so a command that mentions one
+neither indexes nor describes the issue.
 
 API calls (CLAUDE.md §15), REST only, none when nothing is new: one read of
 the `ai:permission-prompt` issues per 100 issues, then one POST per pattern
@@ -120,7 +122,11 @@ CLASS_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-class:v1 class=([a-z][a
 OCCURRENCES_RE = re.compile(r"^\*\*Occurrences:\*\* .+$", re.MULTILINE)
 # A fenced ````text block of an issue body: the session's command, untrusted
 # data that can itself contain marker text. Markers are read only outside it.
-_FENCED_EXAMPLE_RE = re.compile(r"^````text\n.*?^````[ \t]*$", re.MULTILINE | re.DOTALL)
+# The filer opens it with four backticks, or one more than the longest backtick
+# run in the example (`_example_fence`), and closes it with the same run, so a
+# backtick line inside the example never ends it early.
+_FENCED_EXAMPLE_RE = re.compile(r"^(`{4,})text\n.*?^\1[ \t]*$", re.MULTILINE | re.DOTALL)
+_BACKTICK_RUN_RE = re.compile(r"`+")
 DUPLICATE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # A program that writes a file (issue #4858 item 1): a write call, `open(`
 # with a write mode, or a file move/removal. The mode is the argument after a
@@ -585,13 +591,31 @@ def issue_title(pattern: dict) -> str:
 	return f"[permission-prompt] {pattern['tool_name']}: {subject}"
 
 
+def _example_fence(example: str) -> str:
+	"""Four backticks, or one more than the longest backtick run in `example`."""
+	longest = max((len(run) for run in _BACKTICK_RUN_RE.findall(example)), default=0)
+	return "`" * max(4, longest + 1)
+
+
+def _reason_line(reason: str) -> str:
+	"""A reason as one line that cannot hold a marker.
+
+	The reason sits outside the fenced example, where markers are read, and an
+	Auto-mode reason can quote the command: its whitespace is collapsed, so no
+	line of it can start with `**Occurrences:**`, and `<!--` is escaped as
+	`<\\!--` (Markdown still shows `<!--`).
+	"""
+	return " ".join(reason.split()).replace("<!--", "<\\!--")
+
+
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
-	reasons = "\n".join(f"- {reason}" for reason in pattern["reasons"]) or "- (none given)"
+	reasons = "\n".join(f"- {_reason_line(reason)}" for reason in pattern["reasons"]) or "- (none given)"
+	fence = _example_fence(pattern["example"])
 	return (
 		f"**Occurrences:** {new_count} ({pattern['first_ts']} – {pattern['last_ts']}), session `{session_label}`\n\n"
 		f"**Reason Claude Code gave:**\n{reasons}\n\n"
 		"**Latest example** (untrusted data from the session; heredoc bodies removed, token-like strings masked):\n\n"
-		f"````text\n{pattern['example']}\n````\n"
+		f"{fence}text\n{pattern['example']}\n{fence}\n"
 	)
 
 
@@ -713,9 +737,10 @@ def _save_state(log_dir: Path, state: dict[str, int]) -> None:
 def _outside_fenced_examples(body: str) -> str:
 	"""`body` without its fenced ````text blocks, where the filer's markers are read.
 
-	A command example that mentions `<!-- ai:permission-prompt:v1 sig=… -->` or
-	a class marker (a session grepping for one, say) must not index or class
-	the issue it is filed on.
+	A command example that mentions `<!-- ai:permission-prompt:v1 sig=… -->`, a
+	class marker, the "Filed by" line, or an `**Occurrences:**` line (a session
+	grepping for one, say) must not index, class, or describe the issue it is
+	filed on.
 	"""
 	return _FENCED_EXAMPLE_RE.sub("", body)
 
@@ -900,8 +925,8 @@ def decide_duplicate_close(
 		"signature": _first_match(MARKER_RE, markers, 1),
 		"class": _first_match(CLASS_MARKER_RE, markers, 1),
 		"target_class": _first_match(CLASS_MARKER_RE, target_markers, 1),
-		"occurrences": _first_match(OCCURRENCES_RE, body),
-		"target_occurrences": _first_match(OCCURRENCES_RE, target_body),
+		"occurrences": _first_match(OCCURRENCES_RE, markers),
+		"target_occurrences": _first_match(OCCURRENCES_RE, target_markers),
 	}
 
 
