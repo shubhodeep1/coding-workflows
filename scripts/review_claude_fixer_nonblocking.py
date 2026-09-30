@@ -16,12 +16,22 @@ consensus ids by issue #4687):
     (``consensus_pass1.txt`` in --reviews-dir, the ledger pass-2 reviewers saw
     in the cross-pollination summary), P is flagged by F alone, and P has the
     same file and an overlapping line range;
-  * F's own raw pass-2 output contains the id, so the flagger itself tied its
-    pass-2 finding to P (the summariser only copies the line);
+  * F's own raw pass-2 output ties one structured finding to P (issue
+    #4975): exactly one of its ``File:`` finding records (see
+    flagger_finding_records()) carries a whole ``consensus_id:`` line with
+    the id, and no other id, and that record names P's file with a line
+    reference overlapping both P's range and the entry's. The id quoted
+    anywhere else in the output binds nothing (the summariser only copies
+    the line);
   * the match is unambiguous: no other pass-1 CONSENSUS FINDINGS entry lies in
-    the same file within LINE_TOLERANCE lines of P, and no other CONSENSUS
+    the same file within LINE_TOLERANCE lines of P, no other CONSENSUS
     FINDINGS entry of this ledger lies in the same file within LINE_TOLERANCE
-    lines of the entry;
+    lines of the entry, and F reported no other finding record in the same
+    file (a path that ends with ``/`` plus the other counts, see _same_file())
+    within LINE_TOLERANCE lines of either range, in that file without a
+    readable line, or with an unreadable file, and no other paragraph of F's
+    output names that file with a number within LINE_TOLERANCE lines of
+    either range or with no number (see _flagger_mentions_near());
   * at least MIN_REJECTERS successful reviewers other than F each cast a
     rejection vote (below) for a manifest entry whose consensus_id is P's,
     whose file is P's, whose range overlaps P's, and whose flagger is F;
@@ -180,6 +190,61 @@ REJECTION_VOTE_RE = re.compile(r"^ {0,3}(?:[-*] +)?REJECTED_FINDING:[ \t]*`?(?P<
 VOTE_REASON_RE = re.compile(r"(?:^|\|)[ \t]*reason:[ \t]*(?P<reason>\S.*?)[ \t]*$")
 VOTE_REASON_PLACEHOLDER_RE = re.compile(r"^<[^>]*>$")
 FENCE_RE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})")
+
+# Finding records in a reviewer's raw output (issue #4975). The flagger's
+# consensus_id citation binds only as a whole line inside one of them.
+RECORD_MARKUP = r"(?:\*\*|__)?"
+# A record's File: or Requirement: line may sit in a bulleted or numbered list item.
+RECORD_ITEM = r"(?:(?:[-*]|\d+[.)])\s+)?"
+RECORD_FILE_RE = re.compile(rf"^\s*(?:#{{1,6}}\s+)?{RECORD_ITEM}{RECORD_MARKUP}File{RECORD_MARKUP}\s*:{RECORD_MARKUP}\s*(?P<value>.*?)\s*$",
+	re.IGNORECASE)
+RECORD_LINE_RE = re.compile(
+	rf"^\s*(?:[-*]\s+)?{RECORD_MARKUP}(?:Line or code reference|Line reference|Lines?){RECORD_MARKUP}\s*:{RECORD_MARKUP}"
+	r"\s*(?P<value>.*?)\s*$", re.IGNORECASE)
+# A line range may be written ``N-M``, ``N–M``, ``N to M``, or ``N through M``.
+RECORD_RANGE = r"(?:\s*(?:[-–]|to\b|through\b)\s*L?(?P<end>\d+))?"
+# A line number ends at anything but a word character, ``/``, or a ``.`` that
+# continues it (``3.14`` is a version); a sentence's closing ``.`` is allowed.
+RECORD_LINE_END = r"(?![\w/]|\.\w)"
+# The File: value's leading path, with any wrapping bold / italic markup,
+# quotes, angle brackets, or Markdown link brackets around it dropped
+# (``**README.md**``, ``"README.md"``, ``[README.md](…)``); a trailing ``.``
+# or ``;`` is dropped by _record_path().
+RECORD_PATH_RE = re.compile(
+	r"^[*\"'<\[]*`?(?P<path>[^\s`|:,()*\"'<>\[\]]+)`?[*\"'>\]]*(?::L?(?P<start>\d+)" + RECORD_RANGE + r")?")
+RECORD_LINE_NUMBER_RE = re.compile(r"(?<![\w/.-])L?(?P<start>\d+)" + RECORD_RANGE + RECORD_LINE_END)
+# Explicit line references inside a longer value: ``path:N[-M]`` (the path has a
+# ``/`` or a file extension that starts with a letter) and ``line N`` /
+# ``lines N-M`` / ``LN``. A bare number elsewhere in the value is code text, not
+# a line reference, and so are a version (``3.14:40``, ``1.2.3:40``) and a URL's
+# ``//host:port``.
+RECORD_LINE_PATH_RE = re.compile(
+	r"(?<![\w/.:-])`?[\w./-]*(?:/[\w.-]*|\.[A-Za-z][\w-]*)`?:L?(?P<start>\d+)" + RECORD_RANGE + RECORD_LINE_END)
+RECORD_LINE_WORD_RE = re.compile(r"(?<![\w-])(?:[Ll]ines?\s*|L)(?P<start>\d+)" + RECORD_RANGE + RECORD_LINE_END)
+# More lines listed right after the first reference (``1250, 1262``,
+# ``lines 1250 and 1262``): the record spans all of them.
+RECORD_LINE_MORE_RE = re.compile(
+	r"\s*(?:,|and\b|&)\s*(?:[Ll]ines?\s*)?L?(?P<start>\d+)" + RECORD_RANGE + RECORD_LINE_END)
+RECORD_LEADING_STRIP = " \t`(,;:—–-"
+RECORD_CONSENSUS_ID_RE = re.compile(
+	rf"^\s*(?:[-*]\s+)?{RECORD_MARKUP}consensus_id{RECORD_MARKUP}:{RECORD_MARKUP}\s*`?(?P<consensus_id>{CONSENSUS_ID_PATTERN})`?\s*$")
+RECORD_BREAK_RE = re.compile(rf"^\s*{RECORD_ITEM}(?:{RECORD_MARKUP}Requirement{RECORD_MARKUP}\s*:|REJECTED_FINDING\s*:|#)",
+	re.IGNORECASE)
+RECORD_HEADING_RE = re.compile(r"^[A-Z][A-Z0-9 /&()-]*[A-Z)]$")
+# The fail-closed second-finding scan (conformance run 3): any path-like token
+# of the flagger's output, and any number in it (``1262``, ``:1262``, ``L1262``,
+# ``#L1262``; not the digits inside a word such as a hash or ``v2``). Since the
+# issue #4975 Q3 fix the scan matches the entry's path literally (see
+# _paragraph_names_path()), because a token split on this character set never
+# matched a path holding ``+``, ``@``, or other characters outside it;
+# MENTION_PATH_TOKEN_RE and _mention_names() are kept for their callers (§6).
+MENTION_PATH_TOKEN_RE = re.compile(r"[\w./\\-]+")
+MENTION_NUMBER_RE = re.compile(r"(?<![\w.])L?(?P<number>\d+)(?!\w)")
+# Around a literal path match: the text before it must not continue a file
+# name (a ``/`` may, as a directory prefix), and the text after it, past any
+# trailing ``.`` / ``;`` sentence punctuation, must not continue the path.
+MENTION_PATH_BEFORE = r"(?<![\w.-])"
+MENTION_PATH_AFTER = r"(?=[.;]*(?:[^\w./-]|\Z))"
 
 # Source-grounded rejection evidence (issue #4976). A vote counts only when
 # its evidence citation and quote verify against the reviewed commit.
@@ -666,6 +731,194 @@ def _votes_in(text: str, manifest: dict[str, tuple[str, tuple[int, int], str]], 
 	return votes
 
 
+def _record_lines(value: str) -> tuple[int, int] | None:
+	"""The line range of an explicit reference: a leading number or range, else
+	the first ``path:N[-M]`` or ``line N`` / ``LN`` in the value, widened over
+	any lines listed right after it (see _widen_lines()). Code text such as
+	``retries = 3`` reads no line, so the record has no readable line."""
+	stripped = value.lstrip(RECORD_LEADING_STRIP)
+	match = RECORD_LINE_NUMBER_RE.match(stripped)
+	if match is None:
+		stripped = value
+		found = [candidate for candidate in (RECORD_LINE_PATH_RE.search(value), RECORD_LINE_WORD_RE.search(value)) if candidate]
+		match = min(found, key=lambda candidate: candidate.start()) if found else None
+	if match is None:
+		return None
+	return _widen_lines(_range(match.group("start"), match.group("end")), stripped, match.end())
+
+
+def _widen_lines(lines: tuple[int, int], value: str, position: int) -> tuple[int, int]:
+	"""Widen ``lines`` over the lines listed at ``position`` of ``value``
+	(``, 1262``, `` and lines 1270-1272``), so a record never reads narrower
+	than the lines it names (conformance run 2)."""
+	low, high = lines
+	while (more := RECORD_LINE_MORE_RE.match(value, position)) is not None:
+		extra = _range(more.group("start"), more.group("end"))
+		low, high = min(low, extra[0]), max(high, extra[1])
+		position = more.end()
+	return low, high
+
+
+def _record_path(path: str) -> str | None:
+	"""A record's normalized path: a trailing ``.`` or ``;`` (sentence
+	punctuation) is dropped, and nothing left is no path."""
+	return _norm_path(path).rstrip(".;") or None
+
+
+def _same_file(first: str, second: str) -> bool:
+	"""Whether two record paths may name the same file: equal, or one ends
+	with ``/`` plus the other (an absolute runner path, a workspace or repo
+	name prefix, or a diff prefix such as ``b/``). A different file that shares
+	the suffix (``docs/README.md`` for ``README.md``) matches too, by design:
+	used only to keep an entry blocking, an over-match fails toward blocking,
+	while a narrower match would let a prefixed spelling of the entry's file
+	escape the check (AD-11)."""
+	return first == second or first.endswith("/" + second) or second.endswith("/" + first)
+
+
+def _mention_names(token: str, path: str) -> bool:
+	"""Whether a path-like token of the flagger's output names ``path``:
+	backslashes read as ``/``, a leading ``./`` and a trailing ``.`` / ``;``
+	are dropped, case is ignored, and a prefixed spelling counts (see
+	_same_file())."""
+	mentioned = _norm_path(token.replace("\\", "/")).rstrip(".;").casefold()
+	return bool(mentioned) and _same_file(mentioned, path.casefold())
+
+
+def _paragraph_names_path(paragraph: str, path: str) -> bool:
+	"""Whether a paragraph of the flagger's output names ``path`` (issue #4975 Q3).
+
+	The path is matched literally, whatever characters it holds (``+`` in
+	``src/routes/+page.svelte``, ``@`` in ``src/@types/index.d.ts``,
+	``docs/c++/notes.md``), case-insensitively, with backslashes read as
+	``/`` and a leading ``./`` dropped. The match must not be part of a longer
+	file name (``docs/README.md.bak`` does not name ``README.md``), but a
+	trailing ``.`` / ``;`` is sentence punctuation. As in _same_file(), a
+	prefixed spelling counts (the text before the match may end with ``/``: an
+	absolute runner path, ``b/README.md``, and, by design, ``docs/README.md``),
+	and so does any ``/``-suffix of ``path`` (``+page.svelte`` for
+	``src/routes/+page.svelte``). Used only to keep an entry blocking, so an
+	over-match fails toward blocking: a path that normalizes to nothing
+	(``./``, ``.``) names every paragraph, and an empty ``/``-suffix (a path
+	ending in ``/``) is skipped rather than matched everywhere."""
+	wanted = _norm_path(path.replace("\\", "/")).rstrip(".;").casefold()
+	if not wanted:
+		return True
+	text = paragraph.replace("\\", "/").casefold()
+	parts = wanted.split("/")
+	for tail in {"/".join(parts[index:]) for index in range(len(parts))}:
+		if tail and re.search(MENTION_PATH_BEFORE + re.escape(tail) + MENTION_PATH_AFTER, text):
+			return True
+	return False
+
+
+def _flagger_mentions_near(text: str, skip: tuple[int, int], path: str, ranges: list[tuple[int, int]]) -> bool:
+	"""Whether the flagger's raw output names ``path`` anywhere outside the
+	cited record's ``skip`` lines in a way that may be a second finding at the
+	entry (conformance run 3).
+
+	The output is split into paragraphs (runs of non-blank lines, with the
+	cited record's lines acting as a break), fenced blocks included. A
+	paragraph that names ``path`` (see _paragraph_names_path()) counts when it holds
+	a number within LINE_TOLERANCE of one of ``ranges``, or no number at all.
+	This catches every spelling of a second finding the record parser does not
+	read (``File: README.md#L1262``, ``*File:*``, a quoted or fenced finding,
+	a ``Location:`` label) and fails toward blocking: prose that names the file
+	near the entry, or without a line, also keeps the entry blocking. A second
+	defect written inside the cited record itself is the flagger's own tie and
+	is not looked for here (plan: Risks & Mitigations)."""
+	paragraph: list[str] = []
+	for index, line in enumerate([*text.splitlines(), ""]):
+		if line.strip() and not skip[0] <= index < skip[1]:
+			paragraph.append(line)
+			continue
+		joined = "\n".join(paragraph)
+		paragraph = []
+		if not _paragraph_names_path(joined, path):
+			continue
+		numbers = [int(match.group("number")) for match in MENTION_NUMBER_RE.finditer(joined)]
+		if not numbers or any(_near((number, number), lines) for number in numbers for lines in ranges):
+			return True
+	return False
+
+
+def flagger_finding_records(text: str, *, with_spans: bool = False) -> list[dict]:
+	"""Return the ``File:`` finding records of a reviewer's raw output (issue #4975).
+
+	A record starts at a ``File:`` line (plain, bulleted, numbered, or a
+	heading) outside any fenced code block and runs to the first blank line,
+	the next ``File:`` or ``Requirement:`` line, a REJECTED_FINDING line, a
+	heading, or a fence. Each record is a dict with ``path`` (None when the
+	``File:`` value does not start with a path: a word with no ``.`` or ``/``
+	followed by more text is prose; wrapping markup, quotes, or link brackets
+	and a trailing ``.`` / ``;`` are dropped), ``lines`` (None when no
+	explicit line reference (see _record_lines()) is read from the ``File:``
+	value, its first ``Line or code reference:`` / ``Line:`` / ``Lines:``
+	field, or the rest of the ``File:`` value; ``N to M`` is a range and a
+	list such as ``N, M`` spans all its lines), and ``consensus_ids``, the ids of the whole
+	``consensus_id:`` lines inside it. A consensus_id anywhere else in the
+	output (prose, a quote, a code block, a REJECTED_FINDING line, a line
+	after the record's blank line) belongs to no record and binds nothing.
+	With ``with_spans``, each record also carries ``span``, the ``(start,
+	end)`` indexes of the output lines it covers (end exclusive), which
+	_flagger_mentions_near() skips for the cited record.
+	"""
+	records: list[dict] = []
+	current: dict | None = None
+	open_fence: str | None = None
+	for index, line in enumerate(text.splitlines()):
+		fence = _fence_marker(line)
+		if open_fence is not None:
+			if fence and fence[0] == open_fence[0] and len(fence) >= len(open_fence) and not line.strip()[len(fence):].strip():
+				open_fence = None
+			continue
+		if fence:
+			open_fence = fence
+			current = None
+			continue
+		file_match = RECORD_FILE_RE.match(line)
+		if file_match:
+			value = file_match.group("value")
+			path_match = RECORD_PATH_RE.match(value)
+			# A leading word is a path only when it looks like one (a "." or "/")
+			# or is the whole value: "File: the install example" names no file.
+			if path_match and not ("." in path_match.group("path") or "/" in path_match.group("path")
+					or not value[path_match.end():].strip()):
+				path_match = None
+			path = _record_path(path_match.group("path")) if path_match else None
+			lines = None
+			if path_match and path_match.group("start"):
+				lines = _widen_lines(_range(path_match.group("start"), path_match.group("end")), value, path_match.end())
+			current = {"path": path, "lines": lines, "consensus_ids": [], "line_field_seen": False,
+				"file_rest": value[path_match.end():] if path_match else value, "span": [index, index + 1]}
+			records.append(current)
+			continue
+		if current is None:
+			continue
+		if not line.strip() or RECORD_BREAK_RE.match(line) or RECORD_HEADING_RE.match(line.strip()):
+			current = None
+			continue
+		current["span"][1] = index + 1
+		id_match = RECORD_CONSENSUS_ID_RE.match(line)
+		if id_match:
+			current["consensus_ids"].append(id_match.group("consensus_id"))
+			continue
+		line_match = RECORD_LINE_RE.match(line)
+		if line_match and not current["line_field_seen"]:
+			current["line_field_seen"] = True
+			if current["lines"] is None:
+				current["lines"] = _record_lines(line_match.group("value"))
+	for record in records:
+		if record["lines"] is None and not record["line_field_seen"]:
+			record["lines"] = _record_lines(record["file_rest"])
+		del record["line_field_seen"], record["file_rest"]
+		if with_spans:
+			record["span"] = tuple(record["span"])
+		else:
+			del record["span"]
+	return records
+
+
 def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: Path | None = None, *,
 		reviewers: dict[str, Path] | None = None, stats: dict | None = None, source_reader=None) -> tuple[str, list[dict], list[dict], int]:
 	"""Return the filtered ledger, the demoted records, the kept single-reviewer
@@ -717,6 +970,7 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 	ledger_id_counts = Counter(cid for entry in consensus.entries for cid in entry_consensus_ids(entry))
 	ledger_locations = [entry_location(entry) for entry in consensus.entries]
 
+	records_by_flagger: dict[str, list[dict]] = {}
 	demoted: list[dict] = []
 	kept_records: list[dict] = []
 	kept: list[list[str]] = []
@@ -755,10 +1009,22 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 				or not _overlaps(source["location"][1], lines)):
 			keep("consensus_id_mismatch")
 			continue
-		if cid not in outputs[flagger]:
+		# The flagger ties its pass-2 finding to P only through a whole
+		# consensus_id line inside one of its own File: records at P's
+		# location, never through the id quoted elsewhere (issue #4975).
+		if flagger not in records_by_flagger:
+			records_by_flagger[flagger] = flagger_finding_records(outputs[flagger], with_spans=True)
+		flagger_records = records_by_flagger[flagger]
+		citing = [record for record in flagger_records if cid in record["consensus_ids"]]
+		if not citing:
 			keep("flagger_did_not_cite")
 			continue
 		source_lines = source["location"][1]
+		cited = citing[0]
+		if (len(citing) != 1 or set(cited["consensus_ids"]) != {cid} or cited["path"] != path or cited["lines"] is None
+				or not _overlaps(cited["lines"], source_lines) or not _overlaps(cited["lines"], lines)):
+			keep("flagger_citation_mismatch")
+			continue
 		if any(other is not source and other["location"] is not None and other["location"][0] == path
 				and _near(other["location"][1], source_lines) for other in pass1):
 			keep("ambiguous_nearby_pass1")
@@ -766,6 +1032,11 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 		if any(other_index != index and other is not None and other[0] == path and _near(other[1], lines)
 				for other_index, other in enumerate(ledger_locations)):
 			keep("ambiguous_nearby")
+			continue
+		if (any(record is not cited and (record["path"] is None or (_same_file(record["path"], path) and (record["lines"] is None
+				or _near(record["lines"], source_lines) or _near(record["lines"], lines)))) for record in flagger_records)
+				or _flagger_mentions_near(outputs[flagger], cited["span"], path, [source_lines, lines])):
+			keep("ambiguous_flagger_nearby")
 			continue
 		others = [slug for slug in reviewers if slug != flagger]
 		rejecters = sorted(slug for slug in others if any(

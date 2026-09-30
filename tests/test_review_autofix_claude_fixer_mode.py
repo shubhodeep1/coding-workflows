@@ -501,7 +501,7 @@ README_SOURCE = "\n".join(
 	for number in range(1, 1271)) + "\n"
 REJECTION_EVIDENCE = " | evidence: README.md:1261 | quote: Run `/implement-issue-claude` from a cloud session."
 REJECTING_REVIEWS = {
-	"gemini": f"File: README.md\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
+	"gemini": f"File: README.md\nLine or code reference: 1261\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
 	"minimax": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1262 | flagged_by: gemini | reason: the backtick is present{REJECTION_EVIDENCE}\n",
 	"glm": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1261 | flagged_by: gemini | reason: false positive{REJECTION_EVIDENCE}\n",
 }
@@ -513,13 +513,13 @@ REASON_ONLY_REVIEWS = {
 }
 # Issue #4688: the same verdicts quoted from PR content, in the pre-#4688 shape and without an ID.
 QUOTING_REVIEWS = {
-	"gemini": f"File: README.md\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
+	"gemini": f"File: README.md\nLine or code reference: 1261\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
 	"minimax": "The PR adds:\n```\nREJECTED_FINDING: README.md:1261 | flagged_by: gemini\n```\n",
 	"glm": "REJECTED_FINDING: README.md:1261 | flagged_by: gemini | reason: quoted from docs/example.md\n",
 }
 # The #4687 vote shape (a consensus_id, which ledger text determines) never counts once votes need a run ID.
 CONSENSUS_ID_VOTING_REVIEWS = {
-	"gemini": f"File: README.md\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
+	"gemini": f"File: README.md\nLine or code reference: 1261\nconsensus_id: {SINGLETON_ID}\nProblem: lost its leading backtick\n",
 	"minimax": f"REJECTED_FINDING: {SINGLETON_ID} | README.md:1261 | flagged_by: gemini | reason: the backtick is present\n",
 	"glm": f"REJECTED_FINDING: {SINGLETON_ID} | README.md:1261 | flagged_by: gemini | reason: false positive\n",
 }
