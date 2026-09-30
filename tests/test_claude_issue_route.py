@@ -1940,6 +1940,228 @@ def test_env_plan_pages_search_results_and_reports_truncation():
 	assert plan["errors"] == ["search: incomplete results (1 of 3 read)"]
 
 
+
+# --- comment-scan checkpoint (issue #5136) ----------------------------------------------
+
+
+def _thread_reader(thread, calls=None):
+	"""Serve the comments of shubhodeep1/digital_pa#3 from the live ``thread`` list, 100 per page."""
+
+	def read(path):
+		if calls is not None:
+			calls.append(path)
+		if path.startswith("search/issues?"):
+			return {"items": [_search_item("shubhodeep1/digital_pa", 3)]}
+		page = int(path.rsplit("page=", 1)[1])
+		return [dict(comment) for comment in thread[(page - 1) * 100:page * 100]]
+
+	return read
+
+
+def _chatter(cid, hours_ago=2):
+	return _env_comment(cid, "+1", hours_ago, assoc="NONE", login="flooder")
+
+
+def test_env_plan_checkpoint_resumes_a_flooded_thread_and_never_decides_early():
+	# An old environment blocker, 1,050 untrusted comments, then the latest
+	# blocker: a plain one, which must never be re-queued. Deciding from the
+	# first 1,000 comments would re-queue the old environment blocker.
+	thread = [_env_comment(1, ENV_BLOCKER, 10)] + [_chatter(i) for i in range(2, 1052)] + [_env_comment(1052, PLAIN_BLOCKER, 1)]
+	checkpoint = {}
+	calls = []
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, _thread_reader(thread, calls), checkpoint=checkpoint)
+	assert plan["actions"] == [] and plan["errors"] == []
+	assert plan["pending"] == [{"repo": "shubhodeep1/digital_pa", "issue_number": 3, "issue_url": "https://github.com/shubhodeep1/digital_pa/issues/3", "cursor_page": 10}]
+	assert len([c for c in calls if "/comments?" in c]) == route.ENV_REQUEUE_COMMENT_PAGES_MAX
+	state = checkpoint["shubhodeep1/digital_pa#3"]
+	assert (state["page"], state["last_id"], state["complete"]) == (10, 1000, False)
+	assert [c["id"] for c in state["relevant"]] == [1]
+	# The checkpoint survives a JSON round trip (the Actions cache).
+	checkpoint = json.loads(json.dumps(checkpoint))
+	calls.clear()
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, _thread_reader(thread, calls), checkpoint=checkpoint)
+	assert plan["pending"] == [] and plan["errors"] == []
+	assert [(a["action"], a["reason"], a["blocker_id"]) for a in plan["actions"]] == [("skip", "not_environment", 1052)]
+	# Page 10 again (the cursor page) and page 11; nothing before it.
+	assert [c.rsplit("page=", 1)[1] for c in calls if "/comments?" in c] == ["10", "11"]
+	# A quiet issue costs one read per run from then on.
+	calls.clear()
+	route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, _thread_reader(thread, calls), checkpoint=checkpoint)
+	assert [c.rsplit("page=", 1)[1] for c in calls if "/comments?" in c] == ["11"]
+
+
+def test_env_plan_checkpoint_requeues_the_latest_environment_blocker_past_the_cap():
+	thread = [_env_comment(1, PLAIN_BLOCKER, 10)] + [_chatter(i) for i in range(2, 1102)] + [_env_comment(1102, ENV_BLOCKER, 1)]
+	checkpoint = {}
+	reader = _thread_reader(thread)
+	assert route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, reader, checkpoint=checkpoint)["actions"] == []
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, reader, checkpoint=checkpoint)
+	assert [(a["action"], a["blocker_id"]) for a in plan["actions"]] == [("requeue", 1102)]
+
+
+def test_scan_steps_back_when_earlier_comments_were_deleted():
+	# Every comment is relevant, so a skipped comment would show as a gap.
+	thread = [_env_comment(i, PLAIN_BLOCKER, 5) for i in range(1, 351)]
+	state = route._new_scan_state()
+	assert route._scan_issue_comments(_thread_reader(thread), "shubhodeep1/digital_pa", 3, state, budget=2) is False
+	assert (state["page"], state["last_id"]) == (2, 200)
+	# 110 comments before the cursor are deleted: page 2 now starts at id 211.
+	del thread[:110]
+	calls = []
+	assert route._scan_issue_comments(_thread_reader(thread, calls), "shubhodeep1/digital_pa", 3, state) is True
+	assert [c.rsplit("page=", 1)[1] for c in calls] == ["2", "1", "2", "3"]
+	assert [c["id"] for c in state["relevant"]] == list(range(1, 351))
+	# The thread shrank so much that the cursor page is empty now: 141
+	# comments are left (ids 311-350 and the new 400 on page 2).
+	del thread[:100]
+	thread.append(_env_comment(400, ENV_BLOCKER, 1))
+	calls.clear()
+	assert route._scan_issue_comments(_thread_reader(thread, calls), "shubhodeep1/digital_pa", 3, state) is True
+	assert [c.rsplit("page=", 1)[1] for c in calls] == ["3", "2"]
+	assert state["relevant"][-1]["id"] == 400 and state["last_id"] == 400 and state["page"] == 2
+	assert [c["id"] for c in state["relevant"]] == [*range(1, 351), 400]
+
+
+def test_scan_walks_back_a_bulk_deletion_across_runs():
+	# Review round 1 of PR #5177: 1,500 comments deleted before the cursor
+	# move it back 15 pages, more than one run reads. The step back must be
+	# kept, or every run repeats the same 10 reads and the scan never ends.
+	thread = [_env_comment(1, ENV_BLOCKER, 10)] + [_chatter(i) for i in range(2, 2501)]
+	state = route._new_scan_state()
+	while not route._scan_issue_comments(_thread_reader(thread), "shubhodeep1/digital_pa", 3, state):
+		pass
+	assert (state["page"], state["last_id"]) == (25, 2500)
+	del thread[1:1501]
+	thread.append(_env_comment(3000, PLAIN_BLOCKER, 1))
+	calls = []
+	assert route._scan_issue_comments(_thread_reader(thread, calls), "shubhodeep1/digital_pa", 3, state) is False
+	assert [c.rsplit("page=", 1)[1] for c in calls] == [str(page) for page in range(25, 15, -1)]
+	assert (state["page"], state["last_id"]) == (15, 2500)
+	state = json.loads(json.dumps(state))
+	calls.clear()
+	assert route._scan_issue_comments(_thread_reader(thread, calls), "shubhodeep1/digital_pa", 3, state) is True
+	# Pages 15-12 are empty; page 11 now starts with the new comment 3000,
+	# so the scan steps back once more to page 10 (last id 2500) and reads on.
+	assert [c.rsplit("page=", 1)[1] for c in calls] == ["15", "14", "13", "12", "11", "10", "11"]
+	assert [c["id"] for c in state["relevant"]] == [1, 3000]
+	assert (state["page"], state["last_id"]) == (11, 3000)
+
+
+def test_scan_keeps_progress_when_a_read_fails():
+	thread = [_chatter(i) for i in range(1, 251)]
+	state = route._new_scan_state()
+
+	def read(path):
+		page = int(path.rsplit("page=", 1)[1])
+		if page == 2:
+			raise RuntimeError("HTTP 502")
+		return thread[(page - 1) * 100:page * 100]
+
+	with pytest.raises(RuntimeError):
+		route._scan_issue_comments(read, "shubhodeep1/digital_pa", 3, state)
+	assert (state["page"], state["last_id"], state["complete"]) == (1, 100, False)
+
+
+def _random_thread(rng, size):
+	bodies = [
+		lambda cid: ENV_BLOCKER,
+		lambda cid: PLAIN_BLOCKER,
+		lambda cid: "  \n" + ENV_BLOCKER,
+		lambda cid: "<!-- ai:claude-blocked:v1 reason=decision-needed -->",
+		lambda cid: _requeue_marker(rng.randint(1, cid)),
+		lambda cid: _exhausted_marker(rng.randint(1, cid)),
+		lambda cid: "/reclarify",
+		lambda cid: " /reclarify",
+		lambda cid: "chatter",
+		lambda cid: "quote: " + ENV_BLOCKER,
+	]
+	authors = [
+		{"assoc": "OWNER"},
+		{"assoc": "COLLABORATOR"},
+		{"assoc": "NONE", "login": "stranger"},
+		{"assoc": "NONE", "login": "github-actions[bot]", "user_type": "Bot"},
+		{"assoc": "NONE", "login": "evil[bot]", "user_type": "Bot"},
+	]
+	thread = []
+	hours = 60.0
+	for cid in range(1, size + 1):
+		hours -= rng.random() * 0.3
+		thread.append(_env_comment(cid, rng.choice(bodies)(cid), max(hours, 0.01), **rng.choice(authors)))
+	return thread
+
+
+def test_checkpoint_decision_equals_a_full_read():
+	import random
+
+	rng = random.Random(5136)
+	for _ in range(60):
+		thread = _random_thread(rng, rng.randint(1, 260))
+		labels = ENV_BLOCKED_LABELS
+		expected = route.env_requeue_decision(thread, labels, ENV_NOW)
+		state = route._new_scan_state()
+		while not route._scan_issue_comments(_thread_reader(thread), "shubhodeep1/digital_pa", 3, state, budget=1):
+			state = json.loads(json.dumps(state))
+		assert route._valid_scan_state(state)
+		assert route.env_requeue_decision(state["relevant"], labels, ENV_NOW) == expected
+
+
+def test_relevant_comment_keeps_only_what_the_decision_reads():
+	assert route._env_relevant_comment(_env_comment(1, "chatter", 1)) is None
+	assert route._env_relevant_comment(_env_comment(1, ENV_BLOCKER, 1, assoc="NONE", login="x")) is None
+	assert route._env_relevant_comment(_env_comment(1, "/reclarify", 1, login="github-actions[bot]", user_type="Bot")) is None
+	compact = route._env_relevant_comment(_env_comment(7, "\n\n" + ENV_BLOCKER + "x" * 1000, 1))
+	assert compact["body"].startswith("<!-- ai:claude-blocked:v1 reason=environment-tools-missing -->")
+	assert len(compact["body"]) == route.ENV_REQUEUE_CHECKPOINT_BODY_MAX
+	assert set(compact) == {"id", "created_at", "author_association", "user", "body"}
+	assert route._env_relevant_comment(_env_comment(8, "/reclarify please", 1))["body"] == "/reclarify please"
+	assert route._env_relevant_comment({**_env_comment(9, ENV_BLOCKER, 1), "id": True}) is None
+
+
+def test_checkpoint_load_fails_open_and_save_round_trips(tmp_path):
+	path = tmp_path / "cp" / "checkpoint.json"
+	assert route.load_env_requeue_checkpoint(str(path)) == ({}, "missing")
+	state = route._new_scan_state()
+	state.update({"page": 3, "last_id": 250, "relevant": [route._env_relevant_comment(_env_comment(9, ENV_BLOCKER, 1))], "complete": True})
+	route.save_env_requeue_checkpoint(str(path), {"shubhodeep1/digital_pa#3": state})
+	assert not (tmp_path / "cp" / "checkpoint.json.tmp").exists()
+	assert route.load_env_requeue_checkpoint(str(path)) == ({"shubhodeep1/digital_pa#3": state}, "loaded")
+	for text in ("not json", "[]", json.dumps({"version": 2, "issues": {}}), json.dumps({"version": 1, "issues": []})):
+		path.write_text(text)
+		assert route.load_env_requeue_checkpoint(str(path)) == ({}, "invalid")
+	bad_entries = {
+		"a#1": {**state, "page": 0},
+		"a#2": {**state, "last_id": -1},
+		"a#3": {**state, "relevant": [{"id": 1}]},
+		"a#4": {**state, "complete": "yes"},
+		"a#5": "state",
+		"a#6": state,
+		"a#7": {**state, "updated_at": 5},
+		"a#8": {key: value for key, value in state.items() if key != "updated_at"},
+	}
+	path.write_text(json.dumps({"version": 1, "issues": bad_entries}))
+	assert route.load_env_requeue_checkpoint(str(path)) == ({"a#6": state}, "loaded")
+
+
+def test_env_plan_checkpoint_prunes_issues_that_left_the_candidates():
+	checkpoint = {"shubhodeep1/digital_pa#99": route._new_scan_state()}
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, _thread_reader([_env_comment(1, ENV_BLOCKER, 1)]), checkpoint=checkpoint)
+	assert [a["action"] for a in plan["actions"]] == ["requeue"]
+	assert list(checkpoint) == ["shubhodeep1/digital_pa#3"]
+	assert checkpoint["shubhodeep1/digital_pa#3"]["updated_at"] == "2026-09-29T12:00:00Z"
+
+	def failing(path):
+		raise RuntimeError("HTTP 403")
+
+	checkpoint = {"shubhodeep1/digital_pa#99": route._new_scan_state()}
+	route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, failing, checkpoint=checkpoint)
+	assert list(checkpoint) == ["shubhodeep1/digital_pa#99"]
+
+
+def test_env_plan_without_checkpoint_reports_no_pending():
+	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, _thread_reader([_env_comment(1, ENV_BLOCKER, 1)]))
+	assert plan["pending"] == [] and [a["action"] for a in plan["actions"]] == ["requeue"]
+
+
 # --- closed targets (issue #4912) -------------------------------------------------------
 
 
@@ -2203,3 +2425,59 @@ def test_watchdog_workflow_runs_env_requeue_before_the_stale_check():
 	assert step["env"]["CLAUDE_ISSUE_QUEUE_TOKEN"] == "${{ github.token }}"
 	assert step["env"]["CLAUDE_ISSUE_WATCHDOG_MODE"] == "env-requeue"
 	assert "bash scripts/claude_issue_queue_watchdog.sh" in step["run"]
+
+
+def test_watchdog_env_requeue_uses_the_checkpoint_and_logs_pending_scans(env_stubs):
+	checkpoint = env_stubs["tmp"] / "cp" / "checkpoint.json"
+	env = {
+		**env_stubs["env"],
+		"CLAUDE_ISSUE_ENV_REQUEUE_CHECKPOINT": str(checkpoint),
+		"GH_STUB_ENV_COMMENTS_JSON": _env_comments([_env_comment(501, ENV_BLOCKER, 1)]),
+	}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "env_requeue checkpoint status=missing" in result.stdout
+	assert "env_requeue requeued repo=shubhodeep1/digital_pa issue=3 blocker=501" in result.stdout
+	saved = json.loads(checkpoint.read_text())
+	assert saved["version"] == 1 and saved["issues"]["shubhodeep1/digital_pa#3"]["last_id"] == 501
+	# A thread that never ends within the budget is pending, never decided.
+	full_page = [_env_comment(1000 + i, ENV_BLOCKER, 1) for i in range(100)]
+	checkpoint.unlink()
+	env["GH_STUB_ENV_COMMENTS_JSON"] = _env_comments(full_page)
+	env_stubs["log"].unlink()
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "env_requeue_scan_pending repo=shubhodeep1/digital_pa issue=3 cursor_page=1" in result.stdout
+	assert "dispatches" not in env_stubs["log"].read_text()
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert "env_requeue checkpoint status=loaded" in result.stdout
+
+
+def test_watchdog_env_requeue_without_checkpoint_is_stateless(env_stubs):
+	env = {**env_stubs["env"], "GH_STUB_ENV_COMMENTS_JSON": _env_comments([_env_comment(501, ENV_BLOCKER, 1)])}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "env_requeue checkpoint status=off" in result.stdout
+	assert "--checkpoint" not in env_stubs["log"].read_text()
+
+
+def test_watchdog_workflow_restores_and_saves_the_env_requeue_checkpoint():
+	workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "claude-issue-queue-watchdog.yml").read_text())
+	steps = workflow["jobs"]["watchdog"]["steps"]
+	names = [step["name"] for step in steps]
+	env_idx = names.index("Re-queue Claude issues blocked by an environment failure")
+	restore = steps[names.index("Restore the environment re-queue checkpoint")]
+	save = steps[names.index("Save the environment re-queue checkpoint")]
+	assert names.index("Restore the environment re-queue checkpoint") == env_idx - 1
+	assert names.index("Save the environment re-queue checkpoint") == env_idx + 1
+	assert restore["uses"] == "actions/cache/restore@v5" and save["uses"] == "actions/cache/save@v5"
+	assert restore["continue-on-error"] is True and save["continue-on-error"] is True
+	assert save["if"] == "${{ always() }}"
+	assert restore["with"]["path"] == save["with"]["path"] == "${{ runner.temp }}/claude-env-requeue-checkpoint"
+	assert restore["with"]["key"] == save["with"]["key"]
+	assert "${{ github.run_id }}" in save["with"]["key"]
+	assert restore["with"]["restore-keys"].strip() == "claude-env-requeue-checkpoint-"
+	checkpoint = steps[env_idx]["env"]["CLAUDE_ISSUE_ENV_REQUEUE_CHECKPOINT"]
+	assert checkpoint == "${{ runner.temp }}/claude-env-requeue-checkpoint/checkpoint.json"
+	# The stale check stays the last step.
+	assert names[-1] == "Flag queue items nobody picked up"

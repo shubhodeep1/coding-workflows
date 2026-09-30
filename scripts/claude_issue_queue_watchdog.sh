@@ -31,6 +31,8 @@
 #   CLAUDE_ISSUE_REGISTRY              env-requeue: default .github/ai/consumer_repos.json
 #   CLAUDE_ISSUE_ENV_REQUEUE_MAX       env-requeue: default 2 re-queues per issue per window
 #   CLAUDE_ISSUE_ENV_REQUEUE_WINDOW_HOURS  env-requeue: default 24
+#   CLAUDE_ISSUE_ENV_REQUEUE_CHECKPOINT    env-requeue: comment-scan checkpoint file
+#                                      (issue #5136); default empty = stateless
 #   RUN_URL, RUNTIME_DIR
 
 set -euo pipefail
@@ -81,6 +83,10 @@ fi
 #      exhausted marker and one Telegram ERROR instead, and the label stays.
 #      It then leaves that issue alone until a trusted `/reclarify` comment,
 #      which restarts the count (env_requeue_decision).
+#      With CLAUDE_ISSUE_ENV_REQUEUE_CHECKPOINT set (issue #5136), a thread
+#      longer than the per-run comment budget is read across runs from that
+#      file; until its scan reaches the end it is logged as
+#      env_requeue_scan_pending and left alone, never decided from a partial read.
 #
 # claude_issue_route.py decides (env-requeue-plan, queue-closed-targets); this
 # function only writes. Reads: see env_requeue_plan's batching contract.
@@ -93,6 +99,9 @@ env_requeue()
 	local queue_token="${CLAUDE_ISSUE_QUEUE_TOKEN:-}"
 	local max_retries="${CLAUDE_ISSUE_ENV_REQUEUE_MAX:-2}"
 	local window_hours="${CLAUDE_ISSUE_ENV_REQUEUE_WINDOW_HOURS:-24}"
+	local checkpoint="${CLAUDE_ISSUE_ENV_REQUEUE_CHECKPOINT:-}"
+	local checkpoint_args=()
+	[ -z "${checkpoint}" ] || checkpoint_args=(--checkpoint "${checkpoint}")
 	[[ "${max_retries}" =~ ^[1-9][0-9]*$ ]] || max_retries="2"
 	[[ "${window_hours}" =~ ^[0-9]+([.][0-9]+)?$ ]] || window_hours="24"
 	if [ -z "${GH_TOKEN:-}" ]; then
@@ -126,7 +135,7 @@ env_requeue()
 	local plan_file="${RUNTIME_DIR}/env_requeue_plan.json"
 	if ! python3 "${ROUTE_PY}" env-requeue-plan --registry "${registry}" --self-repo "${SELF_REPO}" \
 		--max-retries "${max_retries}" --window-hours "${window_hours}" --stale-hours "${STALE_HOURS}" \
-		> "${plan_file}" 2> "${RUNTIME_DIR}/env_requeue_plan_error.txt"; then
+		${checkpoint_args[@]+"${checkpoint_args[@]}"} > "${plan_file}" 2> "${RUNTIME_DIR}/env_requeue_plan_error.txt"; then
 		log "warn env_requeue_plan_failed detail=$(head -c 200 "${RUNTIME_DIR}/env_requeue_plan_error.txt" 2>/dev/null | tr '\n' ' ')"
 		return 0
 	fi
@@ -134,6 +143,12 @@ env_requeue()
 	while IFS= read -r error_line; do
 		log "warn env_requeue_read_failed detail=${error_line:0:200}"
 	done < <(jq -r '.errors[]?' "${plan_file}" 2>/dev/null || true)
+	log "env_requeue checkpoint status=$(jq -r '.checkpoint // "off"' "${plan_file}" 2>/dev/null | tr -cd 'a-z_' || echo unknown)"
+	local pending_repo pending_number pending_page
+	while IFS=$'\x1f' read -r pending_repo pending_number pending_page; do
+		[[ "${pending_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "${pending_number}" =~ ^[1-9][0-9]*$ && "${pending_page}" =~ ^[0-9]+$ ]] || continue
+		log "env_requeue_scan_pending repo=${pending_repo} issue=${pending_number} cursor_page=${pending_page}"
+	done < <(jq -r '.pending[]? | [.repo, .issue_number, .cursor_page] | map(tostring) | join("\u001f")' "${plan_file}" 2>/dev/null || true)
 	log "env_requeue checked candidates=$(jq '.actions | length' "${plan_file}" 2>/dev/null || echo 0) skipped=$(jq '.skipped | length' "${plan_file}" 2>/dev/null || echo 0) searches=$(jq '.searches // 0' "${plan_file}" 2>/dev/null || echo 0)"
 
 	local index=0 action repo number reason blocker_id blocker_reason retry retries skip_security issue_url body alert_msg

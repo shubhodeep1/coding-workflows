@@ -999,6 +999,11 @@ ENV_REQUEUE_SEARCH_QUERY_MAX = 250
 ENV_REQUEUE_COMMENT_PAGES_MAX = 10
 # The search API serves at most 1,000 results (10 pages of 100) per query.
 ENV_REQUEUE_SEARCH_PAGES_MAX = 10
+# Comment-scan checkpoint (issue #5136): a thread longer than the per-run page
+# budget is read across hourly runs from a persisted cursor instead of being
+# skipped forever. See _scan_issue_comments.
+ENV_REQUEUE_CHECKPOINT_VERSION = 1
+ENV_REQUEUE_CHECKPOINT_BODY_MAX = 256
 
 
 def parse_blocker_marker(body: Any) -> tuple[bool, str]:
@@ -1230,6 +1235,147 @@ def _read_issue_comments(read: Any, repo: str, number: int) -> list[Any]:
 	raise RuntimeError(f"{repo}#{number} has more than {ENV_REQUEUE_COMMENT_PAGES_MAX * 100} comments; the latest blocker is past the read cap")
 
 
+def _env_relevant_comment(comment: Any) -> dict[str, Any] | None:
+	"""Compact ``comment`` when it can change ``env_requeue_decision``, else ``None``.
+
+	The decision reads only trusted comments that start with a blocker, re-queue,
+	or exhausted marker, and trusted ``/reclarify`` comments; every other comment
+	is ignored, so the checkpoint keeps just these (issue #5136). Marker bodies
+	are kept from the marker on (the decision strips leading whitespace itself),
+	a ``/reclarify`` body as is, both cut to ``ENV_REQUEUE_CHECKPOINT_BODY_MAX``
+	characters. Pure.
+	"""
+	if not isinstance(comment, dict) or not is_trusted_issue_author(comment) or _comment_time(comment) is None:
+		return None
+	cid = comment.get("id")
+	if isinstance(cid, bool) or not isinstance(cid, int) or cid <= 0:
+		return None
+	body = comment.get("body") if isinstance(comment.get("body"), str) else ""
+	stripped = body.lstrip()
+	if parse_blocker_marker(stripped)[0] or ENV_REQUEUE_MARKER_RE.match(stripped) or ENV_REQUEUE_EXHAUSTED_MARKER_RE.match(stripped):
+		kept = stripped
+	elif _is_trusted_reclarify_comment(comment):
+		kept = body
+	else:
+		return None
+	return {
+		"id": cid,
+		"created_at": comment.get("created_at"),
+		"author_association": comment.get("author_association") if isinstance(comment.get("author_association"), str) else "",
+		"user": {"login": _user_field(comment, "login"), "type": _user_field(comment, "type")},
+		"body": kept[:ENV_REQUEUE_CHECKPOINT_BODY_MAX],
+	}
+
+
+def _new_scan_state() -> dict[str, Any]:
+	return {"page": 1, "last_id": 0, "relevant": [], "complete": False, "updated_at": ""}
+
+
+def _valid_scan_state(state: Any) -> bool:
+	if not isinstance(state, dict):
+		return False
+	page, last_id, relevant = state.get("page"), state.get("last_id"), state.get("relevant")
+	if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+		return False
+	if isinstance(last_id, bool) or not isinstance(last_id, int) or last_id < 0:
+		return False
+	if not isinstance(relevant, list) or not isinstance(state.get("complete"), bool):
+		return False
+	if not isinstance(state.get("updated_at"), str):
+		return False
+	return all(_env_relevant_comment(item) == item for item in relevant)
+
+
+def _scan_issue_comments(read: Any, repo: str, number: int, state: dict[str, Any], budget: int = ENV_REQUEUE_COMMENT_PAGES_MAX) -> bool:
+	"""Advance the resumable comment scan of one issue; True when it reached the end.
+
+	``state`` (``_new_scan_state`` or a checkpoint entry) is updated in place
+	after every page, so a read error keeps the progress made so far:
+	``page`` is the page to resume from (the page holding the last consumed
+	comment, or an earlier page a step back reached), ``last_id`` the id of
+	the last consumed comment, ``relevant`` the ``_env_relevant_comment``
+	compacts consumed so far, and
+	``complete`` whether the last read reached the end of the thread.
+
+	Comments are listed oldest first by id, so new comments only ever append.
+	The first read of a run re-reads the cursor page: when it is past page 1
+	and empty, or starts after ``last_id``, earlier comments were deleted and
+	the page boundaries moved, so the scan steps back one page and checks
+	again. Each step back is saved in ``page``, so a deletion larger than one
+	run's budget is walked back across runs (one extra run per 1,000 deleted
+	comments) instead of stalling. Re-reading an earlier page never skips or
+	duplicates a comment, because only ids above ``last_id`` are consumed.
+	Then it reads forward, keeping only comments newer than
+	``last_id``, until a short page ends the thread or ``budget`` reads were
+	spent. Calls: at most ``max(2, budget)`` comment-page reads; a budget
+	below two is raised to two, because the resume read of a full cursor page
+	adds nothing new and a one-read budget would never advance. Raises
+	RuntimeError on a failed read or a non-array answer.
+	"""
+	state["complete"] = False
+	page = state["page"]
+	resuming = state["last_id"] > 0
+	for _ in range(max(2, int(budget))):
+		data = read(f"repos/{repo}/issues/{number}/comments?per_page=100&page={page}")
+		if not isinstance(data, list):
+			raise RuntimeError(f"comments of {repo}#{number} are not an array")
+		ids = [item.get("id") if isinstance(item, dict) and isinstance(item.get("id"), int) and not isinstance(item.get("id"), bool) else 0 for item in data]
+		if resuming and page > 1 and (not data or ids[0] > state["last_id"]):
+			page -= 1
+			# Keep the step back: a bulk deletion can move the cursor back
+			# more pages than one run reads, and the next run must continue
+			# from here instead of repeating the same reads forever.
+			state["page"] = page
+			continue
+		resuming = False
+		for item, cid in zip(data, ids):
+			if cid <= state["last_id"]:
+				continue
+			compact = _env_relevant_comment(item)
+			if compact is not None:
+				state["relevant"].append(compact)
+			state["last_id"] = cid
+			state["page"] = page
+		if len(data) < 100:
+			state["complete"] = True
+			return True
+		page += 1
+	return False
+
+
+def load_env_requeue_checkpoint(path: str) -> tuple[dict[str, Any], str]:
+	"""Read the comment-scan checkpoint file (issue #5136); fail open.
+
+	Output: ``({"<repo lowercased>#<N>": state}, status)`` with status
+	``loaded``, ``missing``, or ``invalid``. A missing, unreadable, or
+	wrong-version file loads as empty (``missing`` / ``invalid``), and an
+	entry that fails validation is dropped, so its scan restarts from page 1.
+	"""
+	try:
+		text = Path(path).read_text(encoding="utf-8")
+	except FileNotFoundError:
+		return {}, "missing"
+	except OSError:
+		return {}, "invalid"
+	try:
+		data = json.loads(text)
+	except ValueError:
+		return {}, "invalid"
+	if not isinstance(data, dict) or data.get("version") != ENV_REQUEUE_CHECKPOINT_VERSION or not isinstance(data.get("issues"), dict):
+		return {}, "invalid"
+	issues = {key: state for key, state in data["issues"].items() if isinstance(key, str) and _valid_scan_state(state)}
+	return issues, "loaded"
+
+
+def save_env_requeue_checkpoint(path: str, issues: dict[str, Any]) -> None:
+	"""Write the checkpoint atomically (temp file + rename). Raises OSError."""
+	target = Path(path)
+	target.parent.mkdir(parents=True, exist_ok=True)
+	tmp = target.with_name(target.name + ".tmp")
+	tmp.write_text(json.dumps({"version": ENV_REQUEUE_CHECKPOINT_VERSION, "issues": issues}, sort_keys=True), encoding="utf-8")
+	os.replace(tmp, target)
+
+
 def env_requeue_plan(
 	allowed_repos: list[str],
 	now: datetime,
@@ -1237,24 +1383,38 @@ def env_requeue_plan(
 	max_retries: int = ENV_REQUEUE_MAX_RETRIES_DEFAULT,
 	window_hours: float = ENV_REQUEUE_WINDOW_HOURS_DEFAULT,
 	stale_hours: float = QUEUE_STALE_HOURS_DEFAULT,
+	checkpoint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
 	"""Read the blocked Claude issues and decide what to do with each (issue #4938).
 
 	Batching contract (CLAUDE.md §15):
-	  input   the registered repositories (``load_allowed_repos``);
-	  calls   one search per ``env_requeue_search_queries`` chunk and per 100
-	          results (at most ``ENV_REQUEUE_SEARCH_PAGES_MAX`` pages; one
-	          call per chunk while fewer than 100 issues are blocked), then
-	          one comment read per 100 comments of each candidate only;
-	  output  ``{"actions": [candidate fields + env_requeue_decision fields],
-	          "skipped": [...], "errors": [...], "searches": <n>}``;
-	  failure fail open: a failed search or comment read is listed under
-	          ``errors`` and that chunk or issue waits for the next hourly run;
-	          a search the API reports as incomplete, or with more results
-	          than were read, is listed under ``errors`` too.
+	input: the registered repositories (``load_allowed_repos``);
+	calls: one search per ``env_requeue_search_queries`` chunk and per 100
+		results (at most ``ENV_REQUEUE_SEARCH_PAGES_MAX`` pages; one call
+		per chunk while fewer than 100 issues are blocked), then one
+		comment read per 100 comments of each candidate only, at most
+		``ENV_REQUEUE_COMMENT_PAGES_MAX`` per candidate; with a
+		``checkpoint``, those reads resume where the last run stopped
+		(``_scan_issue_comments``), so a quiet issue costs one read;
+	output: ``{"actions": [candidate fields + env_requeue_decision fields],
+		"skipped": [...], "errors": [...], "searches": <n>,
+		"pending": [{"repo", "issue_number", "issue_url",
+		"cursor_page"}]}``;
+	failure: fail open: a failed search or comment read is listed under
+		``errors`` and that chunk or issue waits for the next hourly run; a
+		search the API reports as incomplete, or with more results than
+		were read, is listed under ``errors`` too.
 
 	``read`` is a ``path -> parsed JSON`` callable (``_gh_api_read`` by
 	default) that raises RuntimeError on failure.
+
+	``checkpoint`` (issue #5136) is the ``{"<repo lowercased>#<N>": state}``
+	map from ``load_env_requeue_checkpoint``, updated in place. Without it the
+	comments are read statelessly and a thread longer than the page budget is
+	an error on every run. With it, a scan that has not reached the end of the
+	thread yet is listed under ``pending`` and decided on a later run, never
+	from a partial thread. Entries for issues that are no longer candidates
+	are dropped, unless a search failed in this run.
 	"""
 	read = read or _gh_api_read
 	errors: list[str] = []
@@ -1286,19 +1446,45 @@ def env_requeue_plan(
 				break
 		else:
 			errors.append(f"search: {read_count} of {total} results read; the rest are past the search API cap")
+	search_failed = bool(errors)
 	filtered = env_requeue_candidates(items, allowed_repos)
 	actions: list[dict[str, Any]] = []
+	pending: list[dict[str, Any]] = []
+	scanned: set[str] = set()
 	for candidate in filtered["candidates"]:
-		try:
-			comments = _read_issue_comments(read, candidate["repo"], candidate["issue_number"])
-		except RuntimeError as exc:
-			errors.append(f"comments {candidate['repo']}#{candidate['issue_number']}: {exc}")
-			continue
+		repo, number = candidate["repo"], candidate["issue_number"]
+		if checkpoint is None:
+			try:
+				comments = _read_issue_comments(read, repo, number)
+			except RuntimeError as exc:
+				errors.append(f"comments {repo}#{number}: {exc}")
+				continue
+		else:
+			key = _target_key(repo, number)
+			scanned.add(key)
+			state = checkpoint.get(key)
+			if not _valid_scan_state(state):
+				state = _new_scan_state()
+			checkpoint[key] = state
+			try:
+				done = _scan_issue_comments(read, repo, number, state)
+			except RuntimeError as exc:
+				errors.append(f"comments {repo}#{number}: {exc}")
+				continue
+			finally:
+				state["updated_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+			if not done:
+				pending.append({"repo": repo, "issue_number": number, "issue_url": candidate["issue_url"], "cursor_page": state["page"]})
+				continue
+			comments = list(state["relevant"])
 		decision = env_requeue_decision(comments, candidate["labels"], now, max_retries, window_hours, stale_hours)
 		entry = {key: value for key, value in candidate.items() if key != "labels"}
 		entry.update(decision)
 		actions.append(entry)
-	return {"actions": actions, "skipped": filtered["skipped"], "errors": errors, "searches": len(queries)}
+	if checkpoint is not None and not search_failed:
+		for key in [key for key in checkpoint if key not in scanned]:
+			del checkpoint[key]
+	return {"actions": actions, "skipped": filtered["skipped"], "errors": errors, "searches": len(queries), "pending": pending}
 
 
 def queue_issue_targets(
@@ -1799,7 +1985,19 @@ def _cmd_env_requeue_plan(args: argparse.Namespace) -> int:
 		print(f"invalid --now: {args.now!r}", file=sys.stderr)
 		return 2
 	allowed = load_allowed_repos(Path(args.registry), args.self_repo)
-	plan = env_requeue_plan(allowed, now, None, args.max_retries, args.window_hours, args.stale_hours)
+	if not args.checkpoint:
+		plan = env_requeue_plan(allowed, now, None, args.max_retries, args.window_hours, args.stale_hours)
+		plan["checkpoint"] = "off"
+		print(json.dumps(plan))
+		return 0
+	checkpoint, status = load_env_requeue_checkpoint(args.checkpoint)
+	plan = env_requeue_plan(allowed, now, None, args.max_retries, args.window_hours, args.stale_hours, checkpoint)
+	try:
+		save_env_requeue_checkpoint(args.checkpoint, checkpoint)
+	except OSError as exc:
+		plan["errors"].append(f"checkpoint: not saved: {exc}")
+		status += "_unsaved"
+	plan["checkpoint"] = status
 	print(json.dumps(plan))
 	return 0
 
@@ -1912,6 +2110,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_env.add_argument("--max-retries", type=int, default=ENV_REQUEUE_MAX_RETRIES_DEFAULT)
 	p_env.add_argument("--window-hours", type=float, default=ENV_REQUEUE_WINDOW_HOURS_DEFAULT)
 	p_env.add_argument("--stale-hours", type=float, default=QUEUE_STALE_HOURS_DEFAULT)
+	p_env.add_argument("--checkpoint", default="", help="comment-scan checkpoint file, read and rewritten (issue #5136); empty = stateless")
 	p_env.set_defaults(func=_cmd_env_requeue_plan)
 
 	p_bind = sub.add_parser("add-queue-binding", help="record a queue issue in this run's binding file (issue #4621)")

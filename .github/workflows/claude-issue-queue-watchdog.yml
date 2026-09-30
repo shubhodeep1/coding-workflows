@@ -62,17 +62,42 @@ jobs:
       # GH_PAT reads the registered consumer repos and sends the dispatch;
       # queue-item writes use the GITHUB_TOKEN. Fail-open: never blocks the
       # stale check.
+      #
+      # Issue #5136: the comment scan of a blocked issue resumes across runs
+      # from a checkpoint kept in the Actions cache, so flooding an issue past
+      # the per-run comment budget delays its decision instead of disabling
+      # it. Cache entries are immutable, so each run restores the newest
+      # `claude-env-requeue-checkpoint-` entry and saves a new one. A missing
+      # or unusable checkpoint restarts the scans from page 1 (fail open).
+      - name: Restore the environment re-queue checkpoint
+        continue-on-error: true
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/claude-env-requeue-checkpoint
+          key: claude-env-requeue-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            claude-env-requeue-checkpoint-
+
       - name: Re-queue Claude issues blocked by an environment failure
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CLAUDE_ISSUE_QUEUE_TOKEN: ${{ github.token }}
           CLAUDE_ISSUE_WATCHDOG_MODE: env-requeue
+          CLAUDE_ISSUE_ENV_REQUEUE_CHECKPOINT: ${{ runner.temp }}/claude-env-requeue-checkpoint/checkpoint.json
         run: |
           set -euo pipefail
           RUNTIME_DIR="${RUNNER_TEMP}/claude-issue-env-requeue-${GITHUB_RUN_ID}"
           export RUNTIME_DIR
           bash scripts/claude_issue_queue_watchdog.sh
+
+      - name: Save the environment re-queue checkpoint
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/claude-env-requeue-checkpoint
+          key: claude-env-requeue-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Flag queue items nobody picked up
         run: |

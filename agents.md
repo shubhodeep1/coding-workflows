@@ -304,8 +304,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     and `claude-issue-queue-watchdog.yml` re-queues it hourly through the
     `/reclarify` dispatch (`claude_issue_route.py env-requeue-plan`, at most
     2 per issue per 24h, then one Telegram ERROR and no more re-queues until a
-    trusted `/reclarify`, which restarts the count). Plain blockers are never
-    re-queued. The same step closes queue items for closed target issues, and
+    trusted `/reclarify`, which restarts the count). Issue #5136: the comment
+    scan resumes across runs from a checkpoint in the Actions cache
+    (`CLAUDE_ISSUE_ENV_REQUEUE_CHECKPOINT`, `env-requeue-plan --checkpoint`),
+    so a thread longer than 1,000 comments is logged `env_requeue_scan_pending`
+    and decided once fully read, never from a partial read. Plain blockers are
+    never re-queued. The same step closes queue items for closed target issues, and
     `queue-pending` refuses them (`issue_closed`).
     Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`.
 
