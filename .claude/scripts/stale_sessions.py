@@ -175,22 +175,33 @@ def _parse_time(value: object) -> dt.datetime:
 
 
 def _load_document(path: str) -> object:
-	"""Parse a saved tool result: plain JSON, or the JSON line inside the harness wrapper text."""
+	"""Parse a saved tool result: plain JSON, or the one result object inside the harness wrapper text.
+
+	In wrapper text only a line holding a JSON object that `_page` accepts counts, so a stray JSON line
+	(`[]`, `{}`) is never read as an empty page; more than one such line is ambiguous and rejected.
+	"""
 	with open(path, encoding="utf-8") as handle:
 		text = handle.read()
 	try:
 		return json.loads(text)
 	except ValueError:
 		pass
+	found: list[object] = []
 	for line in text.splitlines():
 		line = line.strip()
-		if not line.startswith(("{", "[")):
+		if not line.startswith("{"):
 			continue
 		try:
-			return json.loads(line)
+			candidate = json.loads(line)
+			_page(candidate)
 		except ValueError:
 			continue
-	raise ValueError("no JSON document found")
+		found.append(candidate)
+	if len(found) > 1:
+		raise ValueError(f"{len(found)} result objects found in the wrapper text; expected one")
+	if not found:
+		raise ValueError("no JSON document found")
+	return found[0]
 
 
 def _page(payload: object) -> tuple[list[dict], bool, str | None]:
@@ -431,7 +442,7 @@ def record_stalls(stalls: list[dict], log_dir: Path, now: dt.datetime) -> None:
 						"waiting_since": stall["updated_at"],
 					},
 					"reason": f"session waited on a permission prompt for {stall['minutes']} minutes (seen by the Claude issue pickup)",
-					"permission_mode": stall.pop("permission_mode"),
+					"permission_mode": stall.pop("permission_mode", ""),
 				},
 				ensure_ascii=False,
 			)
