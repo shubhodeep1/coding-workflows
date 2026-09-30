@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When changing validation or bootstrap behavior, inspect the workflow entry point, supporting scripts, template-rendering and staging code, and any corresponding workflow templates. The repeated changes across these files indicate that updating only one layer can leave generated or staged validation behavior inconsistent.",
+  "fingerprint": "b0cd8de4db989a916c2e52fbc093145d9a49622a3d9c37f903d9938eb0e8b77a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36653788097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36653788097",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4563",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4564",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4566",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4577",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4595",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4569",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4570",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4574",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4578",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4600"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260930011212_f7ceaf150e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation behavior is split across workflow files, shell scripts, renderers, and templates; changes often need coordinated updates across these layers.",
+  "timestamps": {
+    "created_at": "2026-09-30T01:12:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
