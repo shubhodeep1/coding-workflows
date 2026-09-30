@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4619-gh-api-guard-file-backed-fields-plan.md
 - Source issue: shubhodeep1/coding-workflows#4619
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4619-gh-api-guard-file-backed-fields   Final PR: #4641 draft
-- Status: COMPLETE
-- Stage: final-merge
+- Project branch: claude/implement-plan-issue-4619-gh-api-guard-file-backed-fields   Final PR: #4641 ready — review rounds: 1
+- Status: BLOCKED
+- Stage: final-merge — review round
 - Activation: pending verify-activation
-- Waiting on: completion PR
+- Waiting on: PR #4641: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01SdjPMQ5uLDRMKgrHa86Men   safety net (re-armed each stage)   hand-back (re-armed each stage)
+- Check-in: checker session_01SdjPMQ5uLDRMKgrHa86Men   safety net none (twin-sync hold)   hand-back none
 - Last updated: 2026-09-30
-- Last note: validation cycle 1 (run 36669567556) passed 10/10 against the project branch; completion PR moves the plan to docs/completed/.
+- Last note: final-merge review round 1 fixed the shell-expansion bypass of the file-backed check in the hook twin (`[claude-autofix]` commit on the project branch); `hold` claim posted and the twin-sync blocker is on #4619. After the `[claude-twin-sync]` copy and `/reclarify`, re-arm the wait on PR #4641 (next stages `verify-activation 1/3`, `final-merge — review round`, `final-merge — blocked PR`).
 
 ## Phases
 1. [x] Phase 1 — file-backed `-F` values and `--input` always prompt in the gh api guard — protected paths: `.claude/hooks/gh_api_write_guard.py` — PR #5004 merged 2026-09-29 (964bc01); twin sync 73ad50e landed 2026-09-29; review rounds: 2; interventions: 0
@@ -27,7 +27,8 @@
 
 ## Completion
 - Completion PR (claude/implement-plan-issue-4619-gh-api-guard-file-backed-fields-complete) open 2026-09-30 — doc moved to docs/completed/issue-4619-gh-api-guard-file-backed-fields-plan.md
-- Final PR #4641 draft
+- Completion PR #5506 merged 2026-09-30
+- Final PR #4641 ready 2026-09-30 — review rounds: 1 (round 1: fixed the shell-expansion bypass of the file-backed check and named every file-backed field; waiting on the twin sync)
 
 ## Activation
 
@@ -40,9 +41,11 @@
 - AD-6 [phase 1/1 — review round 2, 2026-09-29] Fix the repeated round-2 nits or reject them? — Picked: A — reject and hold. Alternatives: B — fix them in the hook twin (another twin sync and round). Why: the rejections are correct on the code. Applied in: no code change. Status: pending review
 - AD-7 [conformance 1/3, 2026-09-30] /implement-issue-claude step 4 found checker session_01SdjPMQ5uLDRMKgrHa86Men not archived and the log at IN_PROGRESS, but the checker had no pending check-in and the owner's /reclarify asked to continue: stop as "already in progress", or resume? — Picked: A — resume at conformance 1/3. Alternatives: B — stop as already in progress. Why: the log lagged the round-2 BLOCKED stop and nothing was armed, so stopping would stall the project. Applied in: no code change. Status: pending review
 - AD-8 [conformance 1/3, 2026-09-30] The sibling path `.claude/scripts/edit_comment.py --body-file` (allowlisted, reads any file into a comment): fix it here or separately? — Picked: A — file it as issue #5452 and keep this project to its plan. Alternatives: B — fix it in a conformance fix PR (twin-first). Why: outside the plan's footprint and non-goals (§5), its own protected path, and its own issue gets its own security pass. Applied in: no code change (issue #5452). Status: pending review
+- AD-9 [final-merge — review round 1, 2026-09-30] The round-1 finding (Bash expansion hides an `@file` field) also exposed pre-existing tokenizer gaps: unquoted `$VAR` word splitting that adds a flag (`…/comments$X`), and a quoted `<<EOF` stripped as a heredoc. Fix them here too, or file them? — Picked: A — fix the file-backed expansion class plus the cheap desyncs here (an `-F` word with `$`/backtick/`~`/glob, ANSI-C `$'...'`, unquoted `#` comments, brace expansion all ask), and file the word-splitting and heredoc-marker gaps as issue #5558. Alternatives: B — also force a prompt for any `$` in any `gh api` word here. Why: B changes the documented §23.H no-decision outcome for `$VAR` reads that unattended sessions rely on (§12.D contract change; #4786 and #4909 pull the other way), while A closes every reproduced ALLOW and file-backed path at no prompt cost to current fixtures. Applied in: final PR #4641 (`[claude-autofix] review round 1`), issue #5558. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] A fix to a `.claude/hooks/**` file ships in two steps while Q40 is in force: the stage edits the `workflow-templates/.claude/` twin and its tests, and the tests that load `.claude/` (including template parity) only pass after the supervising session's `[claude-twin-sync]` commit, so verify the twin in a scratch copy with the twin placed at `.claude/` first. (files: workflow-templates/.claude/hooks/gh_api_write_guard.py, tests/test_gh_api_write_guard.py)
+- [source:intervention] A permission guard that reads a shell command with `shlex` must treat every construct Bash rewrites or parses differently as unknown: expansion and globs inside a checked word, ANSI-C `$'...'` (where `\'` is not a quote end), a word-initial `#` comment, and brace expansion with quoted spaces can each hide a flag or a whole command, so check the raw quoting, not only the tokens. (files: .claude/hooks/gh_api_write_guard.py, tests/test_gh_api_write_guard.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher; permission mode auto.
@@ -55,3 +58,4 @@
 - Review round 1 (2026-09-29, session session_01TCPp9FSuNWJRP8G8cgQYUv): fixed the reason-text test gap for the `--field` spellings (test-only, no `.claude/` edit, so no twin sync needed). Rejected: the "root hook unchanged" task gap (73ad50e synced it), the redundant GraphQL `--input` conjunct (kept as defence in depth), the hardcoded `-F` in the reason (`-F` is the short name of the same flag), and the changelog count (17 new plus 5 moved = 22 entries; the row now says `new`).
 - Main sync 2026-09-30: ce8a06d (`[claude-merge-resolve]`, CLAUDE.md §23.H table conflict: kept both the #4619 write row and main's malformed-jq row), then a clean merge d843ca7 at the validation read stage.
 - Validation read stage 2026-09-30 (session session_01Rz4Dy2CxU4zUatadVRmXQN): run 36669567556 concluded success, `validation_status.json` status=pass; no validation-fix PR, so no conformance re-run; opened the completion PR.
+- Final-merge review round 1 (2026-09-30, session session_012NzwJpgecSs3KdhDR8g9hp): all 10 ledger entries addressed. Fixed: the consensus shell-expansion bypass (`-F body=$'@f'`, `$F`, `${X:-@f}`, `~`, globs; reproduced as no-decision, and `-F{'q=1','x=@/tmp/a b'}` plus a brace endpoint as outright allows), the task gap, and the multi-field reason (every file-backed field is named). Proactive (§12.B, same flow): ANSI-C `$'\''` and word-initial `#` comments desync the tokenizer (a comment hid `gh api -X DELETE` behind an allow); both now ask. Twin-first under the phase 1 approval: only `workflow-templates/.claude/hooks/gh_api_write_guard.py` changed (sha256 8817dae51118babfe1569d42259521565b4b3410f9f13e6bd9192472be474013); in a scratch copy with the twin at `.claude/hooks/`, the four hook suites pass (441 passed). Word splitting and quoted heredoc markers filed as #5558 (AD-9).

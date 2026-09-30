@@ -1096,7 +1096,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   a file-backed `-F`/`--field` value (`@<file>` or `@-`) or `--input` on any
   method, endpoint, or repository, GraphQL included, because `gh` reads that
   file and sends it (issue #4619; `-f` values are literal, so post bodies
-  through the GitHub MCP tools or an inline `-f body=...`), allows reads and
+  through the GitHub MCP tools or an inline `-f body=...`). It also prompts
+  for an `-F` word the shell could rewrite into `@<file>` (`$`, a backtick,
+  `~`, or a glob character in it) and for any command that uses ANSI-C
+  quoting (`$'...'`), an unquoted `#` comment, or brace expansion, which
+  Bash parses unlike the guard. It allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
   to the allow list or the Auto-mode classifier beside anything else (loops,
