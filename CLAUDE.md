@@ -2074,8 +2074,9 @@ sweep runs in the sessions that create them, never in Actions:
 - **What it deletes**: only Routines these flows create, matched by name
   (`PR #<n> status check-in…`, `PR #<n> hand-back`,
   `implement-plan <slug>: …`, and the start trigger of a session the
-  dispatcher steps start, `dispatch <owner>/<repo>#<n>: …`), and only when
-  they have ended
+  dispatcher steps start, `dispatch <owner>/<repo>#<n>: …`, and the Claude
+  issue pickup's `Resume after usage limit (…)` wakes, issue #5660), and
+  only when they have ended
   (`ended_reason` set) or are a hand-back (its prompt reads `… hand-back
   for …` and names the PR URL) whose PR merged or closed more than 24
   hours ago. A Routine the user paused, and every Routine with any

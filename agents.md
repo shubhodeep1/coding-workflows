@@ -279,7 +279,53 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `— wake. — catch-up`), unless one is already pending; a catch-up wake
     never schedules another, and the one-line report adds
     `oldest_waiting=<minutes | none>` and `catch_up=<scheduled | pending |
-    none | failed>`. The pickup
+    none | failed>`.
+
+    Usage-limit resumes (#5660, pickup step 1a):
+    - **When:** on every `start`, hourly, and catch-up wake, before the queue.
+    - **Inputs:** the pickup lists sessions (`list_sessions`, `mine: true`,
+      pages of 100 while the oldest `created_at` is under 72 hours, at most
+      10 pages) and enabled triggers (at most 5 pages), and reads the login
+      with `gh api user --jq .login`.
+    - **Selector:** `.claude/scripts/usage_limit_resumes.py` reads the saved
+      files (the harness's `<other-session>` envelope included) and prints
+      `resume`, `pending`, `skipped`, `not_reset`, `limit`, `considered`, and
+      `errors`. It makes no API call, and exits 2 on an unreadable file or a
+      bad login.
+    - **Signals:**
+      - `IDLE` sessions whose `post_turn_summary.status_detail` carries the
+        usage-limit or account rate-limit error;
+      - checkers (title contains `— checker` or `status check-in`) whose
+        `rate_limit_info` is `rejected` with a passed `resetsAt`, not
+        `need_input`, and with no enabled trigger at all.
+    - **Skip reasons:** `pickup`, `archived`, `not_idle:<status>`,
+      `permission_prompt`, `needs_input`, `not_reset` (its own limit still
+      in the future), `wake_pending` (a trigger due within 30 minutes,
+      overdue, or unreadable; for a checker, any trigger, since its
+      triggers are its own check-ins).
+    - **Hold-off:** `allowed` and `allowed_warning` count as allowed. When
+      the pickup's own `rate_limit_info` is still limited, `not_reset` is
+      true and nothing is resumed.
+    - **Order and cap:** checkers first, then the oldest `updated_at`, capped
+      at `CLAUDE_USAGE_LIMIT_RESUME_LIMIT` (default 20, clamped to 1..40).
+      The rest go to `pending`.
+    - **Resume:** each resume is one `create_trigger` bound to the session,
+      two minutes out, named `Resume after usage limit (#<N>)` (else
+      `(PR #<n>)`, else the id's last 8 characters). Its prompt is fixed text
+      from the script plus the login: checkers repeat their latest
+      checker-instructions after checking that the session a step would
+      create does not exist yet; others re-read state and continue. Both
+      restate the #5068 and #4858 rules.
+    - **Pacing:** triggers are created at 10 per minute across the wake,
+      queue starts included. After each 10th call, or on `Trigger creation
+      rate limit reached`, the pickup waits with a background `sleep 60`. A
+      call refused three times waits for the next wake.
+    - **Report:** the line adds `limit_resumed=<n>; limit_pending=<n, or
+      unknown>`.
+    - **Failure modes:** a failed listing or an exit 2 reports
+      `limit_pending=unknown` and the queue still runs.
+
+    The pickup
     starts one Opus session per target issue via `claude-issue-dispatch.md`
     step 2, and closes the queue issues with a `Dispatched:` line (no
     comment). A claude.ai routine run cannot do this: it gets no
@@ -1072,7 +1118,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   prints the Routine ids to delete; the session then calls `delete_trigger`
   on each. Only Routines the check-in flows create are eligible, by name
   (`PR #<n> status check-in…`, `PR #<n> hand-back`,
-  `implement-plan <slug>: …`, `dispatch <owner>/<repo>#<n>: …`), and only
+  `implement-plan <slug>: …`, `dispatch <owner>/<repo>#<n>: …`, the
+  pickup's `Resume after usage limit (…)`), and only
   when ended (`ended_reason` set) or
   a hand-back whose PR finished more than 24 hours ago. Routine names are
   capped at 60 characters and truncated with `…`, so a hand-back and its

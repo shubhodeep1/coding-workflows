@@ -1262,7 +1262,24 @@ mode).
    resumes (projects already in flight) start before new issues. A wake that
    leaves items queued schedules **one** catch-up wake 30 minutes later, a
    `send_later` named `Claude issue pickup: catch-up` bound to the pickup
-   session itself; a catch-up wake never schedules another (#4990). An issue
+   session itself; a catch-up wake never schedules another (#4990).
+
+   The pickup also resumes sessions that the account usage limit stopped (#5660). When the limit is hit, every running session fails its turn: a checker's `send_later` chain dies, and stage, fixer, and implementation sessions stop mid-task. The pickup's cron wakes keep firing, so it is the first session to run after the reset. On every wake (step 1a):
+   - It lists sessions (3 days back) and enabled triggers, and runs `.claude/scripts/usage_limit_resumes.py`.
+   - The script selects `IDLE` sessions whose last summary carries the usage-limit error, plus checkers whose `rate_limit_info` shows a `rejected` limit that has since reset and that have no trigger at all.
+   - It skips a session that is:
+     - archived, running, or on a permission prompt;
+     - the pickup itself;
+     - still limited;
+     - bound to a trigger due within 30 minutes (for a checker, any trigger, because its triggers are its own check-ins).
+   - The pickup sends each selected session a one-shot `Resume after usage limit (#<N>)` trigger. Checkers repeat their latest checker instructions; other sessions re-read their state and continue. Each prompt names `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`.
+   - Checkers go first, then the oldest, at most `CLAUDE_USAGE_LIMIT_RESUME_LIMIT` per wake (set it in the pickup session's environment; default 20, clamped to 1..40). Triggers are created at about 10 per minute.
+   - Nothing is resumed while the account is still limited.
+   - The one-line report adds `limit_resumed=<n>; limit_pending=<n>`.
+
+   The stale Routine sweep deletes the resume triggers once they have fired.
+
+   An issue
    therefore waits up to about an hour before its session starts, and about
    half an hour more when a backlog exceeds the limit. The pickup's one-line
    report carries `oldest_waiting=<minutes>`, the age of the oldest queue item
