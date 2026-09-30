@@ -36,6 +36,10 @@
 #
 # Optional env (have defaults):
 #   CLAUDE_ISSUE_SKIP_SECURITY_PASS  "true" for automation-produced issues
+#   CLAUDE_ISSUE_RECLARIFY_COMMENT_ID  ID of the triggering `/reclarify` comment
+#                                    (default empty: none). Sent as the payload's
+#                                    `reclarify_comment_id`; the intake resumes a
+#                                    closed issue only for that comment (#5514)
 #   CLAUDE_ISSUE_UPSTREAM_REPO       dispatch target (default shubhodeep1/coding-workflows)
 #   CLAUDE_ISSUE_ROUTE_PY            path of claude_issue_route.py
 #                                    (default scripts/claude_issue_route.py)
@@ -62,6 +66,7 @@ ISSUE_META_FILE="${ISSUE_META_FILE:?ISSUE_META_FILE required}"
 TRIGGER="${CLAUDE_ISSUE_TRIGGER:-opened}"
 ROUTE_REASON="${CLAUDE_ISSUE_ROUTE_REASON:-default}"
 SKIP_SECURITY_PASS="${CLAUDE_ISSUE_SKIP_SECURITY_PASS:-false}"
+RECLARIFY_COMMENT_ID="${CLAUDE_ISSUE_RECLARIFY_COMMENT_ID:-}"
 UPSTREAM_REPO="${CLAUDE_ISSUE_UPSTREAM_REPO:-shubhodeep1/coding-workflows}"
 ROUTE_PY="${CLAUDE_ISSUE_ROUTE_PY:-scripts/claude_issue_route.py}"
 RUN_URL="${RUN_URL:-}"
@@ -100,6 +105,7 @@ if python3 "${ROUTE_PY}" build-dispatch \
 	--trigger "${TRIGGER}" \
 	--reporter-run-url "${RUN_URL}" \
 	--skip-security-pass "${SKIP_SECURITY_PASS}" \
+	--reclarify-comment-id "${RECLARIFY_COMMENT_ID}" \
 	> "${DISPATCH_FILE}" 2> "${DISPATCH_ERROR_FILE}"; then
 	if gh_retry gh api -X POST "repos/${UPSTREAM_REPO}/dispatches" --input "${DISPATCH_FILE}" >/dev/null 2> "${DISPATCH_ERROR_FILE}"; then
 		DISPATCH_OK="true"

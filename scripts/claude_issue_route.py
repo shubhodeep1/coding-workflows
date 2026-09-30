@@ -62,7 +62,11 @@ Closed issues are never routed, with one exception (issue #5222): a trusted
 ``/reclarify`` on a closed issue that ``final_merge_resume`` accepts (a Claude
 project blocked at a ``final-merge`` stage whose final-PR merge closed the
 issue) goes to Claude with reason ``final_merge_resume``, through clarify
-(``final-merge-resume``) and the intake (``authorize-target``) alike.
+(``final-merge-resume``) and the intake (``authorize-target``) alike. The
+resume is bound to that one ``/reclarify`` comment by ID (issue #5514):
+clarify passes its event's comment, the handoff carries it in the payload as
+``reclarify_comment_id``, and the comment must be created after the issue
+closed, so a ``/reclarify`` from before the closure can never be replayed.
 
 All functions are pure except ``fetch_open_queue`` (one ``gh api`` read),
 ``fetch_queue_bindings`` (the batched binding reads it documents),
@@ -156,7 +160,11 @@ RECLARIFY_COMMAND_PREFIX = "/reclarify"
 # The final PR carries `Fixes #<N>`, so the merge closes the issue first; this
 # route lets that one `/reclarify` through on the closed issue. The stage is
 # read from the blocked comment's `Stage:` / `**Stage:**` line (the first
-# one), whose value must start with `final-merge`.
+# one), whose value must start with `final-merge`. The `/reclarify` that
+# resumes it is named by comment ID (payload key `reclarify_comment_id`) and
+# must be created after the issue closed (issue #5514), so a historical
+# `/reclarify` cannot be replayed by an `opened` / `manual` payload or a
+# clarify re-run.
 FINAL_MERGE_RESUME_REASON = "final_merge_resume"
 BLOCKED_COMMENT_MARKER = "<!-- ai:claude-blocked:v1 -->"
 BLOCKED_STAGE_LINE_RE = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Stage:(?:\*\*)?[ \t]*`?([^`\n]*)")
@@ -261,14 +269,27 @@ def route_issue(issue: dict[str, Any], implementer_var: str | None) -> dict[str,
 	return _result(implementer, reason)
 
 
+def _parse_positive_comment_id(value: Any) -> int | None:
+	"""A GitHub comment ID: a positive ``int`` (not a ``bool``), else ``None``."""
+	if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+		return None
+	return value
+
+
 def build_dispatch(
 	repo: str,
 	issue: dict[str, Any],
 	trigger: str,
 	reporter_run_url: str,
 	skip_security_pass: bool,
+	reclarify_comment_id: int | None = None,
 ) -> dict[str, Any]:
-	"""Build the repository_dispatch body sent to coding-workflows."""
+	"""Build the repository_dispatch body sent to coding-workflows.
+
+	``reclarify_comment_id`` is the ID of the ``/reclarify`` comment that
+	triggered clarify. It is added to the payload only when given, and the
+	intake needs it to resume a closed issue (issue #5514).
+	"""
 	number = issue.get("number")
 	if not isinstance(number, int) or number <= 0:
 		raise ValueError("issue number missing or invalid")
@@ -276,17 +297,22 @@ def build_dispatch(
 		raise ValueError(f"invalid repo slug: {repo!r}")
 	if trigger not in VALID_TRIGGERS:
 		raise ValueError(f"invalid trigger: {trigger!r}")
+	client_payload: dict[str, Any] = {
+		"schema_version": SCHEMA_VERSION,
+		"repo": repo,
+		"issue_number": number,
+		"issue_url": f"https://github.com/{repo}/issues/{number}",
+		"trigger": trigger,
+		"skip_security_pass": bool(skip_security_pass),
+		"reporter_run_url": reporter_run_url or "",
+	}
+	if reclarify_comment_id is not None:
+		if _parse_positive_comment_id(reclarify_comment_id) is None:
+			raise ValueError(f"invalid reclarify_comment_id: {reclarify_comment_id!r}")
+		client_payload["reclarify_comment_id"] = reclarify_comment_id
 	return {
 		"event_type": DISPATCH_EVENT_TYPE,
-		"client_payload": {
-			"schema_version": SCHEMA_VERSION,
-			"repo": repo,
-			"issue_number": number,
-			"issue_url": f"https://github.com/{repo}/issues/{number}",
-			"trigger": trigger,
-			"skip_security_pass": bool(skip_security_pass),
-			"reporter_run_url": reporter_run_url or "",
-		},
+		"client_payload": client_payload,
 	}
 
 
@@ -316,6 +342,11 @@ def validate_payload(
 	trigger = payload.get("trigger")
 	if trigger not in VALID_TRIGGERS:
 		raise ValueError(f"invalid trigger: {trigger!r}")
+	# Optional (issue #5514): absent or null for a payload that names no
+	# `/reclarify` comment, including every handoff that predates the key.
+	reclarify_comment_id = payload.get("reclarify_comment_id")
+	if reclarify_comment_id is not None and _parse_positive_comment_id(reclarify_comment_id) is None:
+		raise ValueError(f"invalid reclarify_comment_id: {reclarify_comment_id!r}")
 	return {
 		"repo": repo,
 		"issue_number": number,
@@ -323,6 +354,7 @@ def validate_payload(
 		"trigger": trigger,
 		"skip_security_pass": payload.get("skip_security_pass") is True,
 		"reporter_run_url": payload.get("reporter_run_url") if isinstance(payload.get("reporter_run_url"), str) else "",
+		"reclarify_comment_id": reclarify_comment_id,
 	}
 
 
@@ -379,11 +411,14 @@ def _is_final_merge_resume_candidate(issue: dict[str, Any]) -> bool:
 	)
 
 
-def final_merge_resume(issue: Any, comments: Any) -> dict[str, Any]:
+def final_merge_resume(issue: Any, comments: Any, reclarify_comment_id: Any = None) -> dict[str, Any]:
 	"""Decide whether a ``/reclarify`` may resume a closed issue (issue #5222).
 
 	Input: ``issue`` from one ``GET repos/<repo>/issues/<N>``; ``comments`` is
-	the issue's comment array in API (chronological) order. Pure: no API calls.
+	the issue's comment array in API (chronological) order;
+	``reclarify_comment_id`` is the ID of the ``/reclarify`` comment asking
+	for the resume (clarify's event comment, or the intake payload's
+	``reclarify_comment_id``). Pure: no API calls.
 
 	Eligible only when all of these hold: the target is a closed issue (not
 	a pull request); it carries ``ai:claude`` and ``ai:claude-blocked`` and
@@ -392,13 +427,21 @@ def final_merge_resume(issue: Any, comments: Any) -> dict[str, Any]:
 	latest comment starting ``<!-- ai:claude-blocked:v1 -->`` from a trusted
 	``User`` (OWNER / MEMBER / COLLABORATOR) has a ``Stage:`` line whose value
 	starts with ``final-merge`` (blocked comments from anyone else are
-	ignored); and a trusted ``User`` commented ``/reclarify`` after that
-	blocked comment.
+	ignored); and the comment ``reclarify_comment_id`` names (issue #5514)
+	is in ``comments``, is a trusted ``User``'s ``/reclarify``, comes after
+	that blocked comment, and was created strictly after the issue's
+	``closed_at``. Any other ``/reclarify`` counts for nothing, so one posted
+	before the closure cannot be replayed.
 
 	Output: ``{"eligible": bool, "reason": str, "blocked_comment_id": int | None}``
 	with ``reason`` one of ``not_issue``, ``issue_open``, ``not_claude_routed``,
 	``not_blocked``, ``no_blocked_comment``, ``stage_not_final_merge``,
-	``no_reclarify_after_block``, or ``final_merge_resume``.
+	``no_reclarify_comment`` (no valid ID, or no comment with it),
+	``reclarify_not_trusted`` (that comment is not a trusted ``User``
+	``/reclarify``), ``no_reclarify_after_block`` (it is not after the
+	blocked comment), ``reclarify_before_close`` (it was not created after
+	``closed_at``, or either timestamp is missing or unreadable), or
+	``final_merge_resume``.
 	"""
 	def _result(eligible: bool, reason: str, comment_id: Any = None) -> dict[str, Any]:
 		return {
@@ -431,8 +474,26 @@ def final_merge_resume(issue: Any, comments: Any) -> dict[str, Any]:
 	stage = stage_match.group(1).strip() if stage_match else ""
 	if not FINAL_MERGE_STAGE_RE.match(stage):
 		return _result(False, "stage_not_final_merge", blocked.get("id"))
-	if not has_trusted_reclarify(items[blocked_index + 1:]):
+	# Issue #5514: only the named /reclarify counts, and only if it was
+	# posted after the closure.
+	wanted_id = _parse_positive_comment_id(reclarify_comment_id)
+	reclarify_index = -1
+	if wanted_id is not None:
+		for index, comment in enumerate(items):
+			if isinstance(comment, dict) and _parse_positive_comment_id(comment.get("id")) == wanted_id:
+				reclarify_index = index
+				break
+	if reclarify_index < 0:
+		return _result(False, "no_reclarify_comment", blocked.get("id"))
+	reclarify = items[reclarify_index]
+	if not has_trusted_reclarify([reclarify]):
+		return _result(False, "reclarify_not_trusted", blocked.get("id"))
+	if reclarify_index <= blocked_index:
 		return _result(False, "no_reclarify_after_block", blocked.get("id"))
+	closed_at = _parse_timestamp(issue.get("closed_at"))
+	reclarify_created_at = _parse_timestamp(reclarify.get("created_at"))
+	if closed_at is None or reclarify_created_at is None or reclarify_created_at <= closed_at:
+		return _result(False, "reclarify_before_close", blocked.get("id"))
 	return _result(True, FINAL_MERGE_RESUME_REASON, blocked.get("id"))
 
 
@@ -455,8 +516,12 @@ def authorize_target(
 	A closed issue is refused (``issue_closed``) unless ``final_merge_resume``
 	passes for it (issue #5222), which authorizes it with reason
 	``final_merge_resume``; the issue is not reopened. A closed issue without
-	both ``ai:claude`` and ``ai:claude-blocked`` is refused without asking for
-	comments.
+	both ``ai:claude`` and ``ai:claude-blocked``, or whose payload is not
+	``trigger: reclarify`` with a valid ``reclarify_comment_id`` (issue #5514:
+	an ``opened`` or ``manual`` payload carries no proof of a request made
+	after the closure), is refused without asking for comments.
+	``final_merge_resume`` then checks that exact comment against the live
+	comment list.
 
 	Output: ``{"authorized": bool, "reason": str, "needs_comments": bool}``.
 	``needs_comments`` is true only when every other check passed and the
@@ -482,9 +547,12 @@ def authorize_target(
 	if issue.get("state") != "open":
 		if issue.get("state") != "closed" or not _is_final_merge_resume_candidate(issue):
 			return _result(False, "issue_closed")
+		reclarify_comment_id = _parse_positive_comment_id(validated.get("reclarify_comment_id"))
+		if validated.get("trigger") != "reclarify" or reclarify_comment_id is None:
+			return _result(False, "issue_closed")
 		if comments is None:
 			return _result(False, "issue_closed", needs_comments=True)
-		if final_merge_resume(issue, comments)["eligible"]:
+		if final_merge_resume(issue, comments, reclarify_comment_id)["eligible"]:
 			return _result(True, FINAL_MERGE_RESUME_REASON)
 		return _result(False, "issue_closed")
 	if is_trusted_issue_author(issue):
@@ -1195,6 +1263,17 @@ def _cmd_route(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cli_reclarify_comment_id(text: str) -> int | None:
+	"""``--reclarify-comment-id``: empty → ``None``; raise ValueError unless digits > 0."""
+	value = (text or "").strip()
+	if not value:
+		return None
+	parsed = int(value) if value.isascii() and value.isdigit() else 0
+	if parsed <= 0:
+		raise ValueError(f"invalid --reclarify-comment-id: {text!r}")
+	return parsed
+
+
 def _cmd_build_dispatch(args: argparse.Namespace) -> int:
 	issue = _read_json(args.issue_json)
 	try:
@@ -1204,6 +1283,7 @@ def _cmd_build_dispatch(args: argparse.Namespace) -> int:
 			args.trigger,
 			args.reporter_run_url,
 			args.skip_security_pass == "true",
+			_cli_reclarify_comment_id(args.reclarify_comment_id),
 		)
 	except ValueError as exc:
 		print(str(exc), file=sys.stderr)
@@ -1239,17 +1319,22 @@ def _cmd_authorize_target(args: argparse.Namespace) -> int:
 
 
 def _cmd_final_merge_resume(args: argparse.Namespace) -> int:
-	"""Print the ``final_merge_resume`` verdict; exit 2 on unreadable input."""
+	"""Print the ``final_merge_resume`` verdict; exit 2 on unreadable input or a bad ID."""
 	try:
 		issue = _read_json(args.issue_json)
 		comments = _read_json(args.comments_json)
 	except (OSError, ValueError) as exc:
 		print(f"unreadable input: {exc}", file=sys.stderr)
 		return 2
+	try:
+		reclarify_comment_id = _cli_reclarify_comment_id(args.reclarify_comment_id)
+	except ValueError as exc:
+		print(str(exc), file=sys.stderr)
+		return 2
 	if not isinstance(comments, list):
 		print("comments JSON is not an array", file=sys.stderr)
 		return 2
-	print(json.dumps(final_merge_resume(issue, comments)))
+	print(json.dumps(final_merge_resume(issue, comments, reclarify_comment_id)))
 	return 0
 
 
@@ -1580,6 +1665,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_dispatch.add_argument("--trigger", required=True)
 	p_dispatch.add_argument("--reporter-run-url", default="")
 	p_dispatch.add_argument("--skip-security-pass", default="false")
+	p_dispatch.add_argument("--reclarify-comment-id", default="", help="ID of the /reclarify comment that triggered clarify (issue #5514); empty for none")
 	p_dispatch.set_defaults(func=_cmd_build_dispatch)
 
 	p_validate = sub.add_parser("validate-payload", help="validate an intake payload")
@@ -1598,6 +1684,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_resume = sub.add_parser("final-merge-resume", help="decide whether /reclarify may resume a closed issue blocked at final-merge (issue #5222)")
 	p_resume.add_argument("--issue-json", required=True)
 	p_resume.add_argument("--comments-json", required=True, help="the issue's comments as one JSON array, in API order")
+	p_resume.add_argument("--reclarify-comment-id", default="", help="ID of the /reclarify comment asking for the resume (issue #5514); empty means not eligible")
 	p_resume.set_defaults(func=_cmd_final_merge_resume)
 
 	p_fire = sub.add_parser("fire-body", help="build the routine /fire request body")

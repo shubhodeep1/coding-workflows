@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5514-bind-closed-resume-to-reclarify-plan.md
 - Source issue: shubhodeep1/coding-workflows#5514 (https://github.com/shubhodeep1/coding-workflows/issues/5514)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5222-final-merge-resume-closed-issue
-- Project branch: claude/implement-plan-issue-5514-bind-closed-resume-to-reclarify   Final PR: pending
+- Project branch: claude/implement-plan-issue-5514-bind-closed-resume-to-reclarify   Final PR: #5544 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5557
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01LQLfXaYQEafXgrfxYiScwa   safety net and hand-back: in the stage report
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; implementing phase 1
+- Last note: review round 1 on PR #5557: fixed the `final-merge-resume` CLI reporting a bad `--reclarify-comment-id` as unreadable input (5-reviewer consensus); rejected the clarify.yml:458 regex nit (outside the diff, and `\"` in the double-quoted string is a plain quote); waiting on round 2 or merge
 
 ## Phases
-1. [ ] Phase 1 — bind the closed-issue resume to its /reclarify comment
+1. [ ] Phase 1 — bind the closed-issue resume to its /reclarify comment   — PR #5557 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -36,8 +36,10 @@
 - AD-6 [plan, 2026-09-30] Which reason does the intake report for the new refusals? — Picked: A — keep `issue_closed` for every closed-issue refusal; the detailed reason shows in clarify's `final_merge_resume … reason=` notice. Alternatives: B — new intake refusal reasons. Why: §5; README, agents.md, and tests document `issue_closed` as the closed-issue refusal. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A cloud session runner may lack `gawk`, which `scripts/review_issue_ledger.sh` needs; install it (`apt-get install -y gawk`) before judging `tests/test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean` red. (files: scripts/review_issue_ledger.sh)
 
 ## Notes
 - Issue progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5514#issuecomment-5906441078
 - Invoking session: session_01RPPtrKP5x76mZs3mNmC2u5 (started by the Claude issue pickup, routine "implement-issue #5514").
 - Base check (issue mode): the issue base's own final PR #5225 is open (draft), so the base has not moved.
+- Reproduced the finding before the fix: on the base code `authorize_target` authorized `opened`, `manual`, and a replayed pre-closure bound `/reclarify` for a closed final-merge issue; after the fix all three are refused `issue_closed`.

@@ -421,6 +421,9 @@ jobs:
           # Read-only: the final-merge resume check reads a closed issue's
           # comments (issue #5222).
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # The triggering comment: a closed-issue resume is bound to this one
+          # `/reclarify`, which must postdate the closure (issue #5514).
+          RECLARIFY_COMMENT_ID: ${{ github.event.comment.id || '' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -514,15 +517,18 @@ jobs:
           # issue first, so that `/reclarify` would hit the closed-issue gate
           # below. Only a closed issue carrying both `ai:claude` and
           # `ai:claude-blocked` costs the one paginated comments read (§15);
-          # `claude_issue_route.py final-merge-resume` decides from them. A
-          # read or script failure keeps the closed-issue skip.
+          # `claude_issue_route.py final-merge-resume` decides from them,
+          # bound to this event's own `/reclarify` comment, which must be
+          # created after the issue closed (issue #5514: a re-run of a
+          # clarify run from before the closure cannot resume). A read or
+          # script failure keeps the closed-issue skip.
           FINAL_MERGE_RESUME="false"
           if [ "${IS_CLOSED}" = "true" ] && [ "${IS_FORCED_RECLARIFY}" = "true" ] && \
             jq -e '[(.labels // [])[]?.name] | (index("ai:claude") != null and index("ai:claude-blocked") != null)' "${ISSUE_META_FILE}" >/dev/null; then
             RESUME_COMMENTS_FILE="${RUNTIME_DIR}/final_merge_resume_comments.json"
             if gh_retry_to_file "${RESUME_COMMENTS_FILE}.pages" gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?per_page=100" && \
               jq -s 'add // []' "${RESUME_COMMENTS_FILE}.pages" > "${RESUME_COMMENTS_FILE}" && \
-              RESUME_JSON="$(python3 scripts/claude_issue_route.py final-merge-resume --issue-json "${ISSUE_META_FILE}" --comments-json "${RESUME_COMMENTS_FILE}")"; then
+              RESUME_JSON="$(python3 scripts/claude_issue_route.py final-merge-resume --issue-json "${ISSUE_META_FILE}" --comments-json "${RESUME_COMMENTS_FILE}" --reclarify-comment-id "${RECLARIFY_COMMENT_ID:-}")"; then
               if [ "$(printf '%s' "${RESUME_JSON}" | jq -r '.eligible')" = "true" ]; then
                 FINAL_MERGE_RESUME="true"
               else
@@ -630,6 +636,9 @@ jobs:
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           CLAUDE_ISSUE_TRIGGER: ${{ github.event_name == 'issue_comment' && 'reclarify' || 'opened' }}
+          # Sent as the payload's `reclarify_comment_id`; the intake needs it
+          # to resume a closed issue (issue #5514).
+          CLAUDE_ISSUE_RECLARIFY_COMMENT_ID: ${{ github.event_name == 'issue_comment' && github.event.comment.id || '' }}
           CLAUDE_ISSUE_ROUTE_REASON: ${{ steps.clarify_route.outputs.issue_implementer_reason }}
           CLAUDE_ISSUE_SKIP_SECURITY_PASS: ${{ steps.clarify_route.outputs.skip_security_pass }}
           CLAUDE_ISSUE_UPSTREAM_REPO: ${{ vars.CLAUDE_ISSUE_UPSTREAM_REPO || 'shubhodeep1/coding-workflows' }}
