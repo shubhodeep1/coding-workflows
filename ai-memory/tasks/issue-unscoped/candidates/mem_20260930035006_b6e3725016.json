@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:427 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The awk command incorrectly extracts metadata for non-failed reviewer blocks.\n  WHY: The reviewer says trailing text on a non-failed block can prevent exact slug membership and block auto-merge; four other reviewers specifically verified the awk behavior and classified this as a false positive.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:427 | severity=BLOCKER | confidence=5\n  PROBLEM: The awk command incorrectly extracts metadata for non-failed reviewer blocks.\n  WHY: For non-failed blocks, sub(/^[a-z]* /, \"\") removes the first word (like 'clean ' or 'success '), but leaves any subsequent content on the line. The roster check uses an exact membership test looking for \\n<slug>\\n in the ledger slugs string. If a non-failed block's slug is followed by other text, the membership check will fail to match the slug, causing the ledger to be reported as not clean even when the reviewer block is present. This blocks auto-merge on the failed-slot path.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e316c340a55256d5fbaaac0be80827d5ffc1128ec81f62d7c5915c028fa79db5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5303,
+    "run_id": "36664990687",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36664990687",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930035006_b6e3725016",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5303,
+    "run_id": "36664990687"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T03:50:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
