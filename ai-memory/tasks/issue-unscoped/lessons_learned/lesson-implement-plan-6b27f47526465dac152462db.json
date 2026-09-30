@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-09-30T04:39:40Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a rule changes, grep every file that describes it for the old wording, test fixtures and corpus comments included, not only the files the plan lists.",
+  "phase": "implement_plan",
+  "pr_number": 5455,
+  "record_id": "lesson-implement-plan-6b27f47526465dac152462db",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5325-fail-warned-guard-loosening",
+    "file:tests/guard_corpus/pr_merge_status_guard.txt",
+    "file:tests/guard_corpus/pr_watch_guard.txt",
+    "file:tests/guard_corpus/gh_api_write_guard.txt",
+    "file:tests/guard_corpus/inline_edit_guard.txt"
+  ]
+}
