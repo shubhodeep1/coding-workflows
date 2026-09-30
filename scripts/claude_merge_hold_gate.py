@@ -11,7 +11,11 @@ claims, the PR merged at once, and the twin sync landed on a merged branch
 (§21; PR #5301, PR #5182). `review_autofix.yml` therefore runs this gate
 immediately before every merge enablement a `claude/*` PR can reach:
 `scripts/review_enable_auto_merge.sh` and the `deterministic-skip-merge` job.
-A future merge path (the pending-checks merge of #4900) must call it too.
+Both also run it before merge-authorization labels (`ai:ready-to-merge`) on
+their paths that skip `gh pr merge` (ENABLE_AUTO_MERGE off, e2e-smoke-test),
+and `scripts/orchestrate_poll_process.sh` runs it before its two
+ready-to-merge merges (issue #5564). A future merge path (the pending-checks
+merge of #4900) must call it too.
 
 Usage:
 

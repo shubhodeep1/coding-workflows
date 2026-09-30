@@ -1908,6 +1908,12 @@ jobs:
               echo "::warning::PR #${PR_NUMBER} no longer points at gate-observed head ${PR_HEAD_SHA}; refusing deterministic-skip merge-authorization labels for current head ${ready_label_current_head_sha:-unknown}."
               return 1
             fi
+            # A ready label is a merge authorization (the orchestrator poller
+            # merges ready PRs), so claude/* heads pass the hold gate here too
+            # (issue #5564).
+            if [[ "${PR_HEAD_REF}" == claude/* ]] && ! merge_hold_gate_allows "Merge-authorization labels withheld"; then
+              return 1
+            fi
             return 0
           }
 
@@ -1918,6 +1924,7 @@ jobs:
           merge_hold_gate_reason=""
           merge_hold_gate_allows()
           {
+            local gate_refused_what="${1:-Auto-merge not enabled}"
             local gate_script=".codex-workflow-src/scripts/claude_merge_hold_gate.py" gate_json="" gate_rc=0 gate_skip_reason=""
             if [ ! -f "${gate_script}" ]; then
               gate_rc=2
@@ -1932,7 +1939,7 @@ jobs:
             fi
             gate_skip_reason="$(printf '%s' "${gate_json}" | jq -r '.skip_reason // empty' 2>/dev/null || true)"
             echo "AUTOFIX_AUTO_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} reason=${gate_skip_reason:-gate_unavailable}"
-            echo "::warning::Auto-merge not enabled on PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}'): ${merge_hold_gate_reason:-merge hold gate exited ${gate_rc}}."
+            echo "::warning::${gate_refused_what} on PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}'): ${merge_hold_gate_reason:-merge hold gate exited ${gate_rc}}."
             return 1
           }
 

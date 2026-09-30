@@ -799,6 +799,10 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          # claude/* merge hold gate at the ready-to-merge merges (issue
+          # #5564): the login besides the PR author whose `hold` claims count
+          # (check_in_status.py trust rules), as in review_autofix.yml.
+          CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN: ${{ vars.CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN || '' }}
         run: bash scripts/orchestrate_poll_process.sh
 
       - name: Release staged-support latches without active projects

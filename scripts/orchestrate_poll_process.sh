@@ -1510,6 +1510,55 @@ _jq_field()
 	fi
 }
 
+# _orch_claude_merge_hold_gate_allows — merge hold gate for a claude/* PR the
+# poller is about to merge because its issue is ai:ready-to-merge (issue
+# #5564). A ready label only proves the review passed; a `hold` claim posted
+# on the head, or a workflow-templates/.claude/** twin pair left out of
+# parity, must still stop the merge, exactly as in review_autofix.yml.
+#
+# Usage: _orch_claude_merge_hold_gate_allows <pr_number> <head_sha> <pr_json>
+#   <pr_json> is the `pulls/{n}` object the caller already fetched; it is
+#   passed to the gate as --pr-json, so the gate issues no PR read.
+# Returns 0 only when scripts/claude_merge_hold_gate.py exits 0 for that
+# head; 1 on a refusal, a gate that could not decide (exit 2), or a missing
+# gate (fail closed). Callers then merge with --match-head-commit <head_sha>.
+# Gate location: CLAUDE_MERGE_HOLD_GATE_SCRIPT, else the support checkout
+# (.codex-workflow-src, then .codex-workflow-src-main); the gate imports
+# .claude/scripts/check_in_status.py from that same checkout.
+# API calls (CLAUDE.md §15), inside the gate: one per 100 PR comments, one
+# compare read, and two tree reads only when the PR touches a twin.
+# Log key: ORCH_MERGE_HOLD_GATE pr=<n> head_sha=<sha> action=allow|refuse
+# reason=<skip_reason>.
+_orch_claude_merge_hold_gate_allows()
+{
+	local gate_pr="$1" gate_head_sha="$2" gate_pr_json="$3"
+	local gate_script="${CLAUDE_MERGE_HOLD_GATE_SCRIPT:-}" gate_rc=0 gate_json="" gate_pr_file="" gate_skip_reason="" gate_reason=""
+	if [ -z "${gate_script}" ]; then
+		gate_script=".codex-workflow-src/scripts/claude_merge_hold_gate.py"
+		if [ ! -f "${gate_script}" ] && [ -f ".codex-workflow-src-main/scripts/claude_merge_hold_gate.py" ]; then
+			gate_script=".codex-workflow-src-main/scripts/claude_merge_hold_gate.py"
+		fi
+	fi
+	if [ ! -f "${gate_script}" ]; then
+		gate_rc=2
+		gate_reason="gate script ${gate_script} not found"
+	else
+		gate_pr_file="$(mktemp 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/orch-hold-gate-pr-${gate_pr}-$$.json")"
+		printf '%s' "${gate_pr_json}" > "${gate_pr_file}"
+		gate_json="$(PYTHONDONTWRITEBYTECODE=1 python3 "${gate_script}" --repo "${GITHUB_REPOSITORY}" --pr "${gate_pr}" --head "${gate_head_sha}" --pr-json "${gate_pr_file}")" || gate_rc=$?
+		rm -f "${gate_pr_file}"
+		gate_reason="$(printf '%s' "${gate_json}" | jq -r '.reason // empty' 2>/dev/null || true)"
+	fi
+	if [ "${gate_rc}" -eq 0 ]; then
+		echo "ORCH_MERGE_HOLD_GATE pr=${gate_pr} head_sha=${gate_head_sha} action=allow"
+		return 0
+	fi
+	gate_skip_reason="$(printf '%s' "${gate_json}" | jq -r '.skip_reason // empty' 2>/dev/null || true)"
+	echo "ORCH_MERGE_HOLD_GATE pr=${gate_pr} head_sha=${gate_head_sha} action=refuse reason=${gate_skip_reason:-gate_unavailable}"
+	echo "::warning::Not merging claude/* PR #${gate_pr}: ${gate_reason:-merge hold gate exited ${gate_rc}}. A push to the head re-runs the review; the next poll re-checks the gate."
+	return 1
+}
+
 ENABLE_VALIDATION_RAW="${ENABLE_VALIDATION:-true}"
 ENABLE_VALIDATION="false"
 if is_truthy "${ENABLE_VALIDATION_RAW}"; then
@@ -19156,8 +19205,20 @@ The poller will resume processing on the next cycle."
                 echo "  [backward-scan] Backpressure active (ahead_by=${CWS_BACKPRESSURE_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}, effective_threshold=${_bws_effective_threshold}); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
                 continue
               fi
-              if gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
-                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null; then
+              # claude/* heads: merge hold gate on the checked head, and a
+              # merge bound to that head (#5564).
+              _pw_match_args=()
+              _pw_head_ref="$(_jq_field "${_pw_pr_json}" '.head.ref')"
+              if [[ "${_pw_head_ref}" == claude/* ]]; then
+                if ! [[ "${_pw_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
+                  || ! _orch_claude_merge_hold_gate_allows "${PW_PR}" "${_pw_head_sha}" "${_pw_pr_json}"; then
+                  echo "  [backward-scan] Deferring auto-merge of claude/* PR #${PW_PR} for prior-wave issue #${pw_inum}: merge hold gate did not allow head ${_pw_head_sha:-unknown}."
+                  continue
+                fi
+                _pw_match_args=(--match-head-commit "${_pw_head_sha}")
+              fi
+              if gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto "${_pw_match_args[@]}" 2>/dev/null \
+                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_pw_match_args[@]}" 2>/dev/null; then
                 refresh_integration_backpressure_gate_after_merge || true
               fi
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
@@ -19850,11 +19911,22 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		        ;;
 		    esac
 		  fi
+		  # claude/* heads: the merge hold gate runs last, on the head the
+		  # checks above saw, and the merge is bound to that head (#5564).
+		  _rtm_match_args=()
+		  if [[ "${_rtm_head_ref}" == claude/* ]]; then
+		    if ! [[ "${_rtm_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
+		      || ! _orch_claude_merge_hold_gate_allows "${RTM_PR}" "${_rtm_head_sha}" "${_rtm_pr_json}"; then
+		      echo "  Deferring merge of claude/* PR #${RTM_PR} for issue #${rtm_issue}: merge hold gate did not allow head ${_rtm_head_sha:-unknown}."
+		      continue
+		    fi
+		    _rtm_match_args=(--match-head-commit "${_rtm_head_sha}")
+		  fi
 		  echo "  Merging PR #${RTM_PR} (squash)..."
-		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
+		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto "${_rtm_match_args[@]}"; then
 		    echo "  PR #${RTM_PR} merge initiated."
 		    refresh_integration_backpressure_gate_after_merge || true
-		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rtm_match_args[@]}"; then
 		    echo "  PR #${RTM_PR} merged directly."
 		    refresh_integration_backpressure_gate_after_merge || true
 		  else
