@@ -284,8 +284,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     step 2, and closes the queue issues with a `Dispatched:` line (no
     comment). Each wake's step 3b restarts dead `/implement-plan-claude`
     checkers (#4910, operator rule Q63). `scripts/claude_checker_restart.py
-    scan` reads the newest `list_sessions` page and step 1's `list_triggers`
-    page (`limit: 100`; `has_more` restarts nothing). It also reads the open
+    scan` reads the newest `list_sessions` page and every `list_triggers`
+    page step 1 read (`limit: 100`, up to 5 pages, one `--triggers-file`
+    each; a listing whose last page still has `has_more` restarts and
+    re-queues nothing). It also reads the open
     `ai:claude` issues (one REST call per 100) and their progress logs over git (one
     `git ls-remote` and one shallow `git fetch`), then prints at most 8
     `get_session` lookups. Those cover checkers named by pending safety nets

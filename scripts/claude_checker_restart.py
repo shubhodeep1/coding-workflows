@@ -11,18 +11,22 @@ comments on anything itself.
 
 Two subcommands, each printing one JSON object on stdout:
 
-  scan   --sessions-file S --triggers-file T --repo OWNER/REPO --self ID
-         --state-out F
+  scan   --sessions-file S --triggers-file T [--triggers-file T2 ...]
+         --repo OWNER/REPO --self ID --state-out F
       Reads the saved newest `list_sessions` page (`mine: true`,
-      `limit: 100`) and the saved `list_triggers` page (`enabled: true`,
-      `limit: 100`), exactly as the harness saved them (an untrusted-data
-      envelope around the JSON is fine). Lists the open `ai:claude` issues of
+      `limit: 100`) and the saved `list_triggers` pages (`enabled: true`,
+      `limit: 100`, one `--triggers-file` per page in the order read; the
+      pickup reads up to 5), exactly as the harness saved them (an
+      untrusted-data envelope around the JSON is fine). The trigger listing
+      is complete only when the last file's `has_more` is false; with more
+      than 100 enabled Routines, one page never proves condition 1 (issue
+      #4910, conformance run 3). Lists the open `ai:claude` issues of
       `--repo` with one REST call and reads their progress logs from the
       project branches over git (one `git ls-remote`, one shallow
       `git fetch`, no REST). Writes everything `decide` needs to `F` and
       prints `{"lookup": [session ids], "candidates": n, "state": F,
-      "log_projects": n, "errors": [...]}`. The pickup calls `get_session`
-      once per `lookup` id.
+      "log_projects": n, "trigger_pages": n, "triggers_complete": bool,
+      "errors": [...]}`. The pickup calls `get_session` once per `lookup` id.
 
   decide --state F [--lookup-file L]
       `L` is a JSON object mapping each looked-up session id to the
@@ -54,7 +58,7 @@ looked up is kept (`not_looked_up`) until a later wake looks it up.
 
 Restart (Q63, all must hold; the first that fails is the `skipped` reason):
 
-  0. the trigger page is complete (`has_more` false);
+  0. the trigger listing is complete (the last page's `has_more` is false);
   1. no enabled trigger has `persistent_session_id` equal to the checker
      (`has_pending_trigger`), and no other checker of the slug is bound to
      one (`sibling_checker_alive`);
@@ -88,8 +92,8 @@ Re-queue (OWNER scope addition): a checker named only by a progress log that
 `get_session` reports as not found. The issue is re-queued when it is still
 open, labelled `ai:claude`, not `ai:claude-blocked`; no project session on the
 page is active; no other checker of the slug is on the page; the trigger
-page is complete (`has_more` false) and no enabled trigger on it belongs to
-the project; and no trusted `/reclarify` comment was
+listing is complete (the last page's `has_more` is false) and no enabled
+trigger on it belongs to the project; and no trusted `/reclarify` comment was
 posted in the last `REQUEUE_COOLDOWN_HOURS` (24). A `requeue` entry carries
 `repo`, `issue`, `slug`, `checker`, and the exact `comment_body`, which
 starts with `/reclarify`.
@@ -292,6 +296,29 @@ def load_triggers(path: str) -> tuple[list[dict], bool]:
 	routines = payload.get("data") if isinstance(payload, dict) else payload
 	if not isinstance(routines, list) or any(not isinstance(item, dict) for item in routines):
 		raise ValueError("expected the list_triggers result or its `data` array of objects")
+	return routines, has_more
+
+
+def load_trigger_pages(paths: list[str]) -> tuple[list[dict], bool]:
+	"""Return (routines, has_more) for the `list_triggers` pages the pickup read, in the order read.
+
+	The routines of every page are joined (a repeated id is kept once), and
+	`has_more` is the last page's: the listing is complete only when the last
+	file is the page that ended it. A missing, reordered, or repeated page
+	leaves `has_more` true, which restarts nothing (fail safe).
+	"""
+	routines: list[dict] = []
+	seen: set = set()
+	has_more = False
+	for path in paths:
+		page, has_more = load_triggers(path)
+		for routine in page:
+			key = routine.get("id")
+			if isinstance(key, str) and key:
+				if key in seen:
+					continue
+				seen.add(key)
+			routines.append(routine)
 	return routines, has_more
 
 
@@ -861,7 +888,12 @@ def build_parser() -> argparse.ArgumentParser:
 	sub = parser.add_subparsers(dest="command", required=True)
 	scan = sub.add_parser("scan", help="read the inputs, write the state file, and list the get_session lookups")
 	scan.add_argument("--sessions-file", required=True, help="saved list_sessions result (mine: true, limit: 100)")
-	scan.add_argument("--triggers-file", required=True, help="saved list_triggers result (enabled: true, limit: 100)")
+	scan.add_argument(
+		"--triggers-file",
+		required=True,
+		action="append",
+		help="saved list_triggers result (enabled: true, limit: 100); repeat once per page, in the order read",
+	)
 	scan.add_argument("--repo", required=True, help="owner/repo whose open ai:claude issues are scanned")
 	scan.add_argument("--self", default="", help="the pickup's own session id (never counted as project activity)")
 	scan.add_argument("--state-out", required=True, help="where to write the state for `decide`")
@@ -877,7 +909,7 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 	if args.command == "scan":
 		try:
 			sessions_raw = load_sessions(args.sessions_file)
-			triggers_raw, has_more = load_triggers(args.triggers_file)
+			triggers_raw, has_more = load_trigger_pages(args.triggers_file)
 		except (OSError, ValueError) as exc:
 			print(json.dumps({"lookup": [], "error": f"cannot read inputs: {exc}"}))
 			return 2
@@ -896,6 +928,8 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 					"candidates": len(collect_candidates(state)),
 					"state": args.state_out,
 					"log_projects": len(state["log_projects"]),
+					"trigger_pages": len(args.triggers_file),
+					"triggers_complete": not has_more,
 					"errors": state["errors"],
 				}
 			)

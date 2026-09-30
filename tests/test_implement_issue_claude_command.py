@@ -373,6 +373,17 @@ def test_pickup_restarts_dead_checkers(pickup_cmd):
 	assert pickup_cmd.index("**Start one session per pending entry.**") < pickup_cmd.index("3b. **Restart dead project checkers**") < pickup_cmd.index("4. **Catch-up, then report.**")
 
 
+def test_pickup_reads_every_trigger_page(pickup_cmd):
+	"""Issue #4910 conformance run 3: with more than 100 enabled Routines one page left
+	`has_more` true, so step 3b restarted and re-queued nothing. Step 1 reads up to 5 pages
+	and step 3b passes each one to `scan`."""
+	assert "While the last page read has `has_more`, call it again with the same arguments and `cursor` = that page's `next_cursor`, at most 5 pages in all." in pickup_cmd
+	assert "Every use of step 1's result below reads every page." in pickup_cmd
+	assert "Do the same with each `list_triggers` page step 1 read, one file per page." in pickup_cmd
+	assert "When step 1 read more than one page, repeat `--triggers-file` once per page, in the order read." in pickup_cmd
+	assert "up to 4 more `list_triggers` pages in step 1, read only while a page has `has_more`" in pickup_cmd
+
+
 def test_pickup_restart_tools_are_allowlisted():
 	import json as _json
 

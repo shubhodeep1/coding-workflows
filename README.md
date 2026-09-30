@@ -1322,6 +1322,10 @@ This happens at most once per 24 hours, counting any trusted `/reclarify`.
 
 Budget: one open-issue list, plus one issue or comment read per candidate. The
 logs are read over git. Every failed read or missing input keeps the checker.
+Condition 1 needs the whole list of enabled Routines, so step 1 reads up to 5
+`list_triggers` pages of 100 while a page has `has_more`, and step 3b passes
+each page to `scan`. A listing whose last page still has `has_more` restarts
+and re-queues nothing.
 
 **No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
 poller's standalone stall recovery skip issues that carry `ai:claude` without

@@ -886,6 +886,63 @@ def test_the_harness_envelope_and_bare_shapes_load(tmp_path):
 		restart.load_sessions(_write(tmp_path, "bad.txt", "no json here"))
 
 
+def test_trigger_pages_join_and_take_has_more_from_the_last_page(tmp_path):
+	# Live on 2026-09-30: 124 enabled Routines, so `limit: 100` left `has_more` true and
+	# every candidate was skipped as `triggers_page_incomplete` (conformance run 3).
+	first = _write(tmp_path, "p1.json", json.dumps({"data": [_trigger("trig_a", "a", "s1"), _trigger("trig_b", "b", "s2")], "has_more": True}))
+	last = _write(tmp_path, "p2.json", json.dumps({"data": [_trigger("trig_c", "c", CHECKER)], "has_more": False}))
+	routines, has_more = restart.load_trigger_pages([first, last])
+	assert [routine["id"] for routine in routines] == ["trig_a", "trig_b", "trig_c"] and has_more is False
+	# A page that is missing, out of order, or repeated leaves the listing incomplete.
+	assert restart.load_trigger_pages([first])[1] is True
+	assert restart.load_trigger_pages([last, first])[1] is True
+	routines, has_more = restart.load_trigger_pages([first, first])
+	assert [routine["id"] for routine in routines] == ["trig_a", "trig_b"] and has_more is True
+	# One file reads exactly as `load_triggers` does.
+	assert restart.load_trigger_pages([last]) == restart.load_triggers(last)
+
+
+def test_cli_scan_joins_trigger_pages_so_a_page_two_binding_keeps_the_checker(tmp_path, monkeypatch, no_api):
+	monkeypatch.setattr(restart, "scan_logs", lambda repo, errors: ({}, []))
+	dead = _checker("session_dead", slug="plan-y")
+	sessions = _write(tmp_path, "s.json", json.dumps({"ccr": {"data": [dead]}}))
+	page1 = _write(tmp_path, "t1.json", json.dumps({"data": [_trigger("trig_other", "other", "session_other")], "has_more": True}))
+	page2 = _write(tmp_path, "t2.json", json.dumps({"data": [_trigger("trig_checkin", "implement-plan plan-y: check-in", "session_dead")], "has_more": False}))
+	state_path = str(tmp_path / "state.json")
+	out = []
+	monkeypatch.setattr("builtins.print", lambda text: out.append(json.loads(text)))
+	argv = ["scan", "--sessions-file", sessions, "--triggers-file", page1, "--triggers-file", page2, "--repo", REPO, "--self", PICKUP, "--state-out", state_path]
+	assert restart.main(argv, now=NOW) == 0
+	assert out[-1]["trigger_pages"] == 2 and out[-1]["triggers_complete"] is True and out[-1]["lookup"] == []
+	lookups = _write(tmp_path, "l.json", json.dumps({"session_dead": {"ccr": dead}}))
+	assert restart.main(["decide", "--state", state_path, "--lookup-file", lookups], now=NOW) == 0
+	assert out[-1]["restart"] == []
+	assert out[-1]["skipped"] == [{"checker": "session_dead", "slug": "plan-y", "reason": "has_pending_trigger"}]
+	# Without the second page the same checker is kept for a different reason: the listing is incomplete.
+	argv = ["scan", "--sessions-file", sessions, "--triggers-file", page1, "--repo", REPO, "--self", PICKUP, "--state-out", state_path]
+	assert restart.main(argv, now=NOW) == 0
+	assert out[-1]["trigger_pages"] == 1 and out[-1]["triggers_complete"] is False
+	assert restart.main(["decide", "--state", state_path, "--lookup-file", lookups], now=NOW) == 0
+	assert out[-1]["restart"] == [] and out[-1]["skipped"][0]["reason"] == "triggers_page_incomplete"
+
+
+def test_cli_scan_restarts_once_the_last_page_ends_the_listing(tmp_path, monkeypatch, no_api):
+	monkeypatch.setattr(restart, "scan_logs", lambda repo, errors: ({}, []))
+	dead = _checker("session_dead", slug="plan-y")
+	sessions = _write(tmp_path, "s.json", json.dumps({"ccr": {"data": [dead]}}))
+	page1 = _write(tmp_path, "t1.json", json.dumps({"data": [_trigger("trig_other", "other", "session_other")], "has_more": True}))
+	page2 = _write(tmp_path, "t2.json", json.dumps({"data": [_trigger("trig_more", "more", "session_more")], "has_more": False}))
+	state_path = str(tmp_path / "state.json")
+	out = []
+	monkeypatch.setattr("builtins.print", lambda text: out.append(json.loads(text)))
+	argv = ["scan", "--sessions-file", sessions, "--triggers-file", page1, "--triggers-file", page2, "--repo", REPO, "--self", PICKUP, "--state-out", state_path]
+	assert restart.main(argv, now=NOW) == 0
+	assert out[-1]["lookup"] == ["session_dead"]
+	lookups = _write(tmp_path, "l.json", json.dumps({"session_dead": {"ccr": dead}}))
+	assert restart.main(["decide", "--state", state_path, "--lookup-file", lookups], now=NOW) == 0
+	assert [entry["checker"] for entry in out[-1]["restart"]] == ["session_dead"]
+
+
 def test_session_view_reads_external_metadata_fallbacks():
 	raw = _checker()
 	summary = raw.pop("post_turn_summary")
