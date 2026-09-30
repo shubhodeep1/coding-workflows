@@ -1,31 +1,37 @@
 # Implement-Plan Log — Run the Claude twin sync-state check on PRs into stable, with guard-path provenance
 
-- Plan: docs/plans/issue-5247-stable-twin-guard-check-plan.md
+- Plan: docs/completed/issue-5247-stable-twin-guard-check-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5247
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4785-twin-first-claude-sync
 - Project branch: claude/implement-plan-issue-5247-stable-twin-guard-check   Final PR: #5262 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
-- Activation: not started
-- Waiting on: PR #5270
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4785-twin-first-claude-sync) — the project ends after the final merge; #4785 carries the change to `main`
+- Waiting on: completion PR
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01DntaymvRrhdQCxacVD9Xe2   safety net / hand-back: re-armed by the review-round 2 stage (session_01E5EfMAm2GSUbvkKzndLaS6), ids in its report
+- Check-in: checker session_01DntaymvRrhdQCxacVD9Xe2   safety net / hand-back: armed by the validation 1/3 read-result stage (session_01EWb21CwpBzkQGUZ4y7iDSo), ids in its report
 - Last updated: 2026-09-30
-- Last note: review round 2 on PR #5270: the step no longer re-fetches `main`'s tip when a push creates `stable`; rejected the comment-style findings (no such CLAUDE.md rule) and the agents.md paragraph-boundary gap (the base line already joined the sentences).
+- Last note: validation cycle 1 (run 36665347481, target_ref = the project branch) passed, 10/10 tests; completion PR moves the plan to docs/completed/.
 
 ## Phases
-1. [ ] Phase 1 — `stable` twin check with guard provenance (`scripts/claude_twin_sync.py`, `.github/workflows/ci.yml`, tests, `agents.md`, changelog fragment; protected paths: none)   — PR #5270 open (waiting); review rounds: 2; interventions: 0
+1. [x] Phase 1 — `stable` twin check with guard provenance (`scripts/claude_twin_sync.py`, `.github/workflows/ci.yml`, tests, `agents.md`, changelog fragment; protected paths: none)   — PR #5270 merged 2026-09-30 (459043f); review rounds: 2; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: PASS) — no fixes (pre-security)
 
 ## Security pass
 - Skipped: `Security pass: skip (ai:security: automation-produced issue)` in the plan header.
 
 ## Validation
+- Cycle 1 — run 36665347481 2026-09-30 (target_ref: claude/implement-plan-issue-5247-stable-twin-guard-check): dispatched after #4734 landed on main (owner correction on #5247, Q1 skip withdrawn)
+- Cycle 1 result — 2026-09-30: status=pass raw_status=pass — "Runtime validation passed (10/10 tests, 290s)."; no fix issues
 
 ## Completion
+- Completion PR (this PR) — doc moved to docs/completed/issue-5247-stable-twin-guard-check-plan.md
+- Final PR #5262 draft — into claude/implement-plan-issue-4785-twin-first-claude-sync
 
 ## Activation
+- n/a: the base is #4785's project branch, so this project ends after the final merge (issue mode); the final-merge stage closes #5247 with `ai:merged`.
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-29] How does CI tell a promotion push to `stable`, which it should skip, from a push it must check? — Picked: A — ask the compare API whether the pushed commit is already on `main` (`ahead` or `identical` means promotion), and run the full check when the call fails. Alternatives: B — treat a push of more than one commit as a promotion; C — never skip `stable` pushes. Why: B misclassifies merge-commit PR merges and one-commit promotions; C reintroduces the #4785 promotion false positive, which blocks the release gate. Applied in: phase 1. Status: pending review
@@ -48,3 +54,5 @@
 - Base-move check (2026-09-29): #4804 (head = the base branch) is open, not merged.
 - Base-move check (2026-09-30, review round 2): no closed PR has the base branch as its head; base unchanged.
 - Plan deviation (phase 1): `GH_TOKEN` in the CI step is set on push events only (plan text updated in the phase PR).
+- Base-move check (2026-09-30, validation read): #4804 (head = the base branch) is still open; base unchanged, and the project branch already contains the base tip (no sync push).
+- Validation: the 02:42 blocker on #5247 (validate.yml accepted only final PRs into the default branch) was cleared by #4734 (PR #4746, on `main` 2026-09-30); the owner withdrew the Q1 skip and cycle 1 ran against the project branch.
