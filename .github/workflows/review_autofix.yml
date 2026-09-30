@@ -466,12 +466,17 @@ jobs:
           # The skip-AI marker counts only when intentional (issue #4985): in
           # the PR title, or on a body line that holds nothing but the marker
           # (up to 3 leading spaces) outside a ``` / ~~~ fenced block. A
-          # quoted, backticked or mid-sentence mention is reviewed. Keep this
+          # quoted, backticked or mid-sentence mention is reviewed. A fence
+          # opens on any line starting with 3+ backticks or tildes and closes
+          # only on a line of up to 3 spaces, then a run of the same
+          # character at least as long as the opener, then only blanks, so
+          # a ``` line inside a ```` fence stays inside it (issue #5377); an
+          # unclosed fence runs to the end of the body. Keep this
           # program identical to review_autofix_sweep.yml's copy and to
           # has_skip_ai_marker in .claude/scripts/check_in_status.py
           # (tests/test_skip_ai_marker_rule.py runs all three). It reads its
           # whole input, so pipefail never sees a SIGPIPE from printf.
-          SKIP_AI_BODY_AWK='{ sub(/\r$/, "") } /^[ \t]*(```|~~~)/ { fence = !fence; next } !fence && /^ ? ? ?\[skip ai\][ \t]*$/ { found = 1 } END { exit found ? 0 : 1 }'
+          SKIP_AI_BODY_AWK='{ sub(/\r$/, "") } fl > 0 { if ($0 ~ /^ ? ? ?(```+|~~~+)[ \t]*$/) { r = $0; sub(/^ */, "", r); sub(/[ \t]*$/, "", r); if (substr(r, 1, 1) == fc && length(r) >= fl) fl = 0 } next } match($0, /^[ \t]*(```+|~~~+)/) { r = substr($0, RSTART, RLENGTH); sub(/^[ \t]*/, "", r); fc = substr(r, 1, 1); fl = length(r); next } /^ ? ? ?\[skip ai\][ \t]*$/ { found = 1 } END { exit found ? 0 : 1 }'
           POST_MERGE_PR_TEXT_JSON='{"title":"","body":""}'
           POST_MERGE_LINKED_ISSUES_JSON='[]'
           POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY="false"
