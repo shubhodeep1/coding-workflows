@@ -46,6 +46,10 @@ def test_sync_procedure_is_defined_once_in_helpers(commands):
 	assert "git fetch origin <default>" in section
 	assert "git diff --quiet HEAD...origin/<default> -- .claude/hooks .claude/settings.json" in section
 	assert "only changes the default branch holds and the working branch lacks" in section
+	# Issue #5260: a PR head is also checked against its own base.
+	assert "git fetch origin <base>" in section
+	assert "git diff --quiet HEAD...origin/<base> -- .claude/hooks .claude/settings.json" in section
+	assert "only changes the base holds and the working branch lacks" in section
 	assert "Never rebase or force-push" in section
 	assert "[claude-asset-sync] merge <source> for .claude/ guard updates" in section
 	assert "git merge --no-edit" not in section
@@ -58,6 +62,35 @@ def test_sync_only_merges_into_branches_that_land_in_the_default_branch(commands
 	section = _section(commands["implement-plan-claude.md"], "### Claude-asset sync", "### Permission prompt report")
 	assert "skip the merge" in section
 	assert "claude_assets=stale (base <base>)" in section
+	# PR #5282 review rounds: the project-branch sync names the Procedure's step 2 bullet, not the sync's own
+	# step 2 (the drift check), and spells out its sequence.
+	assert "sync the project branch first with the **Sync the project branch** bullet of [Procedure](#procedure) step 2 (not this section's step 2, which is the drift check)" in section
+	assert "merge the default branch into it with that bullet's command and subject, resolve and push as that bullet says" in section
+	assert "the procedure's step 2" not in section
+	assert "step 2's merge" not in section
+	assert "check the PR head branch out again (`git checkout <PR head branch>`). Then merge `origin/<project branch>` into the PR head" in section
+	assert "exactly as step 2 does" not in section
+
+
+def test_project_base_is_verified_and_other_bases_merge_their_own_base(commands):
+	"""Issue #5260: sync and verify the project base; a non-default-bound PR head merges its own base."""
+	section = _section(commands["implement-plan-claude.md"], "### Claude-asset sync", "### Permission prompt report")
+	assert "git fetch origin <project branch>" in section
+	assert "git diff --quiet origin/<project branch>...origin/<default> -- .claude/hooks .claude/settings.json" in section
+	assert "stop with the caller's blocker as in step 5" in section
+	assert "it covers default drift and base drift alike" in section
+	assert "never merge the default branch" in section
+	assert "With base drift, merge `origin/<base>` into the PR head" in section
+	assert "With default drift only, skip the merge" in section
+	assert "`<source>` is the default branch, the project branch, or the PR's base, per step 3" in section
+	# PR #5282 review round 1: routing, both-drift, and failed-fetch cases.
+	assert "any non-zero exit → step 3" in section
+	assert "Up to two checks" in section
+	assert "When the default check failed too, run it again after step 4's merge" in section
+	assert "When `git fetch origin <project branch>` itself fails, it is the same stop" in section
+	# PR #5282 review round 3: a moved or missing plan never ends in a raw `git show` error.
+	assert "or `git show origin/<base>:docs/completed/<slug>-plan.md` once its completion PR moved it there" in section
+	assert "both `git show` calls failing means the branch is not a project branch, not a stop" in section
 
 
 def test_claude_conflict_aborts_and_blocks(commands):
@@ -85,6 +118,8 @@ def test_every_checkout_runs_the_sync(commands):
 	assert "It takes the place of that section's step 4 and keeps the command and subject above" in step2
 	assert "the `[claude-asset-sync]` subject marks only the sync merge into a PR head" in step2
 	section = _section(plan, "### Claude-asset sync", "### Permission prompt report")
+	assert "on the project branch itself, the merge in the **Sync the project branch** bullet of [Procedure](#procedure) step 2 is the sync merge and keeps that bullet's command and subject" in section
+	assert "The project branch itself needs only the default check: the merge in the **Sync the project branch** bullet of [Procedure](#procedure) step 2 already brings its own base in" in section
 	step7 = _section(plan, "- **Blocked**", "7a. **Review round")
 	assert "run the [Claude-asset sync](#claude-asset-sync) on it" in step7
 	step7a = _section(plan, "7a. **Review round", "- **`kind=conflict`**")
@@ -100,6 +135,13 @@ def test_resume_and_fixer_run_the_sync(commands):
 	assert "--kind hold" in fixer
 	assert "<!-- ai:claude-blocked:v1 -->" in fixer
 	assert "PushNotification" in fixer
+	assert "When its project-base check fails" in fixer
+	# PR #5282 review round: a failed fetch of the project branch has no paths to name.
+	assert "the paths it lists (or, when fetching the project branch failed, the failed fetch and its error line)" in fixer
+	assert "on the default branch or on the PR's own base" in fixer
+	# PR #5282 review round 1: the conflict notice names the branch the sync merged.
+	assert ".claude/ conflict with <source> — decision needed" in fixer
+	assert "conflict with <default>" not in fixer
 
 
 def _git_env(home: Path) -> dict[str, str]:
@@ -165,6 +207,154 @@ def test_documented_merge_and_settings_commands_behave_as_described(directory: P
 	assert changed.stdout.strip() == ".claude/settings.json"
 
 
+def _documented(section: str, pattern: str, **placeholders: str) -> str:
+	match = re.search(pattern, section)
+	assert match, pattern
+	command = match.group(1)
+	for name, value in placeholders.items():
+		command = command.replace(f"<{name.replace('_', ' ')}>", value)
+	assert "<" not in command, command
+	return command
+
+
+def _exit_code(cwd: Path, env: dict[str, str], command: str) -> int:
+	return subprocess.run(["bash", "-c", command], cwd=cwd, env=env, capture_output=True, text=True).returncode
+
+
+@pytest.mark.parametrize("directory", DIRS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_base_drift_is_found_when_the_default_branch_has_nothing_new(directory: Path, tmp_path: Path):
+	"""Issue #5260: the project base gains a guard change after the PR head was cut, and main has none.
+
+	The default-drift check alone reports the head as fresh; the documented base-drift check finds the
+	change, and the documented merge of the base clears it.
+	"""
+	section = _section(_flat(directory / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	default_check = _documented(section, r"`(git diff --quiet HEAD\.\.\.origin/<default> -- [^`]*)`", default="main")
+	base_check = _documented(section, r"`(git diff --quiet HEAD\.\.\.origin/<base> -- [^`]*)`", base="project")
+	merge = _documented(section, r"`(git merge [^`]*origin/<source>)`", source="project")
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/hooks/guard.py", "v1\n", "guard v1")
+	_git(origin, env, "checkout", "-q", "-b", "project")
+	_commit(origin, env, "docs/log.md", "log\n", "project start")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "checkout", "-q", "-b", "work", "origin/project")
+	_commit(clone, env, "work.md", "x\n", "phase work")
+	_commit(origin, env, ".claude/hooks/guard.py", "v2\n", "project guard fix")
+	_git(clone, env, "fetch", "-q", "origin", "main", "project")
+	assert _exit_code(clone, env, default_check) == 0
+	assert _exit_code(clone, env, base_check) == 1
+	subprocess.run(["bash", "-c", merge], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert _git(clone, env, "log", "-1", "--format=%s") == "[claude-asset-sync] merge project for .claude/ guard updates"
+	assert (clone / ".claude/hooks/guard.py").read_text(encoding="utf-8") == "v2\n"
+	assert _exit_code(clone, env, base_check) == 0
+	assert _exit_code(clone, env, default_check) == 0
+
+
+@pytest.mark.parametrize("directory", DIRS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_project_base_check_fails_until_the_project_branch_holds_the_default_guards(directory: Path, tmp_path: Path):
+	"""The documented project-base check exits non-zero while the pushed project branch lacks a main guard change."""
+	section = _section(_flat(directory / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	verify = _documented(
+		section,
+		r"`(git diff --quiet origin/<project branch>\.\.\.origin/<default> -- [^`]*)`",
+		project_branch="project",
+		default="main",
+	)
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/settings.json", "{}\n", "settings")
+	_git(origin, env, "branch", "project")
+	_commit(origin, env, ".claude/settings.json", '{"hooks": {}}\n', "main wiring")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "fetch", "-q", "origin", "main", "project")
+	assert _exit_code(clone, env, verify) == 1
+	_git(clone, env, "checkout", "-q", "-b", "project", "origin/project")
+	_git(clone, env, "merge", "-q", "--no-edit", "origin/main")
+	_git(clone, env, "push", "-q", "origin", "project")
+	_git(clone, env, "fetch", "-q", "origin", "project")
+	assert _exit_code(clone, env, verify) == 0
+
+
+@pytest.mark.parametrize("directory", DIRS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_default_drift_left_after_a_base_merge_is_still_detected(directory: Path, tmp_path: Path):
+	"""PR #5282 review round 1: a PR on another base lacks guard changes from both main and its base.
+
+	The documented base merge clears the base drift, and the default check, run again after the merge,
+	still exits non-zero because the base itself lacks main's change, so the stale record is due.
+	"""
+	section = _section(_flat(directory / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	default_check = _documented(section, r"`(git diff --quiet HEAD\.\.\.origin/<default> -- [^`]*)`", default="main")
+	base_check = _documented(section, r"`(git diff --quiet HEAD\.\.\.origin/<base> -- [^`]*)`", base="stable")
+	merge = _documented(section, r"`(git merge [^`]*origin/<source>)`", source="stable")
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/hooks/guard.py", "v1\n", "guard v1")
+	_commit(origin, env, ".claude/settings.json", "{}\n", "settings")
+	_git(origin, env, "branch", "stable")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "checkout", "-q", "-b", "work", "origin/stable")
+	_commit(clone, env, "work.md", "x\n", "pr work")
+	_commit(origin, env, ".claude/settings.json", '{"hooks": {}}\n', "main wiring")
+	_git(origin, env, "checkout", "-q", "stable")
+	_commit(origin, env, ".claude/hooks/guard.py", "v2\n", "stable guard fix")
+	_git(clone, env, "fetch", "-q", "origin", "main", "stable")
+	assert _exit_code(clone, env, default_check) == 1
+	assert _exit_code(clone, env, base_check) == 1
+	subprocess.run(["bash", "-c", merge], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert _git(clone, env, "log", "-1", "--format=%s") == "[claude-asset-sync] merge stable for .claude/ guard updates"
+	assert (clone / ".claude/hooks/guard.py").read_text(encoding="utf-8") == "v2\n"
+	assert _exit_code(clone, env, base_check) == 0
+	assert _exit_code(clone, env, default_check) == 1
+
+
+@pytest.mark.parametrize("directory", DIRS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_plan_lookup_finds_a_moved_plan_and_fails_on_a_non_project_branch(directory: Path, tmp_path: Path):
+	"""PR #5282 review round 3: the documented plan lookups, run as written.
+
+	A project branch whose completion PR moved its plan is found at the second path; another pull
+	request's `-phase-<n>` head has a plan at neither path, which routes to "Any other base".
+	"""
+	section = _section(_flat(directory / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	plans = r"`(git show origin/<base>:docs/plans/<slug>-plan\.md)`"
+	completed = r"`(git show origin/<base>:docs/completed/<slug>-plan\.md)`"
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, "README.md", "x\n", "init")
+	_git(origin, env, "checkout", "-q", "-b", "claude/implement-plan-foo")
+	_commit(origin, env, "docs/completed/foo-plan.md", "Base branch: main\n", "completion: move the plan")
+	_git(origin, env, "checkout", "-q", "-b", "claude/implement-plan-foo-phase-1")
+	_commit(origin, env, "work.md", "x\n", "phase work")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "fetch", "-q", "origin", "claude/implement-plan-foo", "claude/implement-plan-foo-phase-1")
+	project = {"base": "claude/implement-plan-foo", "slug": "foo"}
+	assert _exit_code(clone, env, _documented(section, plans, **project)) != 0
+	assert _exit_code(clone, env, _documented(section, completed, **project)) == 0
+	phase_head = {"base": "claude/implement-plan-foo-phase-1", "slug": "foo-phase-1"}
+	assert _exit_code(clone, env, _documented(section, plans, **phase_head)) != 0
+	assert _exit_code(clone, env, _documented(section, completed, **phase_head)) != 0
+
+
 # Issue #5258: a sync merge that conflicts only outside `.claude/` is resolved
 # inside that merge (or aborted and stopped), never aborted to let the fix go on
 # under the old guards. These read the `workflow-templates/.claude/` twins: the
@@ -197,10 +387,11 @@ def test_outside_claude_conflict_never_continues_on_the_unsynced_head():
 def test_sync_names_procedure_step_2_not_its_own_step_2():
 	"""Inside the Claude-asset sync list a bare "step 2" is its own `Stale?`
 	step, so references to the project-branch sync say "Procedure step 2"
-	(PR #5281 review round 1)."""
+	(PR #5281 review round 1). PR #5282 names the **Sync the project branch**
+	bullet of Procedure step 2 instead."""
 	section = _section(_flat(TWIN_DIR / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
-	assert "sync the project branch first exactly as Procedure step 2 does, then merge `origin/<project branch>` into the PR head" in section
-	assert "on the project branch itself, Procedure step 2's merge is the sync merge and keeps that step's command and subject" in section
+	assert "sync the project branch first with the **Sync the project branch** bullet of [Procedure](#procedure) step 2 (not this section's step 2, which is the drift check)" in section
+	assert "on the project branch itself, the merge in the **Sync the project branch** bullet of [Procedure](#procedure) step 2 is the sync merge and keeps that bullet's command and subject" in section
 	assert "exactly as step 2 does" not in section
 	assert "step 2's command" not in section
 
