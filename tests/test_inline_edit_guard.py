@@ -327,6 +327,31 @@ def test_hook_process_honours_the_kill_switch(tmp_path):
 	assert result.returncode == 0 and result.stdout == ""
 
 
+@pytest.mark.parametrize("hook_path", [GUARD_PATH, TEMPLATE_GUARD_PATH], ids=["root", "template"])
+def test_hook_process_writes_no_bytecode_beside_the_hooks(tmp_path, hook_path: Path):
+	"""settings.json runs the hook without PYTHONDONTWRITEBYTECODE; loading its siblings must not leave .pyc files."""
+	hooks_dir = tmp_path / "hooks"
+	hooks_dir.mkdir()
+	for name in ("inline_edit_guard.py", "gh_api_write_guard.py", "permission_prompt_logger.py"):
+		(hooks_dir / name).write_bytes((hook_path.parent / name).read_bytes())
+	env = dict(os.environ)
+	env.pop(guard.ENV_KILL_SWITCH, None)
+	env.pop("PYTHONDONTWRITEBYTECODE", None)
+	env["HOME"] = str(tmp_path)
+	result = subprocess.run(
+		[sys.executable, str(hooks_dir / "inline_edit_guard.py")],
+		input=_payload("sed -i s/a/b/ f"),
+		capture_output=True,
+		text=True,
+		env=env,
+		check=False,
+		cwd=str(tmp_path),
+	)
+	assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+	assert (tmp_path / ".claude" / "permission-prompts" / "sess-4858.jsonl").exists()
+	assert not (hooks_dir / "__pycache__").exists()
+
+
 @pytest.mark.parametrize("stdin_text", ["", "   \n"])
 def test_empty_payload_is_allowed_silently(tmp_path, stdin_text):
 	result = _run_hook(stdin_text, tmp_path)

@@ -150,7 +150,14 @@ def _load_module(name: str, path: Path):
 		if spec is None or spec.loader is None:
 			raise ImportError(f"cannot load {path.name}")
 		module = importlib.util.module_from_spec(spec)
-		spec.loader.exec_module(module)
+		# The hook runs from the checkout without PYTHONDONTWRITEBYTECODE, so keep the
+		# siblings' bytecode out of .claude/hooks/__pycache__ (CLAUDE.md §13).
+		previous = sys.dont_write_bytecode
+		sys.dont_write_bytecode = True
+		try:
+			spec.loader.exec_module(module)
+		finally:
+			sys.dont_write_bytecode = previous
 		_modules[name] = module
 	return _modules[name]
 
