@@ -3,15 +3,15 @@
 - Plan: docs/plans/issue-5377-nested-fence-skip-marker-plan.md
 - Source issue: shubhodeep1/coding-workflows#5377 (https://github.com/shubhodeep1/coding-workflows/issues/5377)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-4985-skip-marker-review-stall
-- Project branch: claude/implement-plan-issue-5377-nested-fence-skip-marker   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5377-nested-fence-skip-marker   Final PR: #5385 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR: twin sync (`[claude-twin-sync]` copy of `workflow-templates/.claude/scripts/check_in_status.py` into `.claude/scripts/check_in_status.py`; PR number in the issue's `ai:claude-blocked` comment)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project started by /implement-issue-claude (session_0157BaB6kKp2G3BVACYnpXhb)
+- Last note: phase 1 implemented twin-first (session_0157BaB6kKp2G3BVACYnpXhb): awk rule in both workflows and the Python twin close a fence only on a matching fence; 14 new cases fail on the old rule and pass on the new one (gawk and mawk). Blocked on the twin sync; hold claim posted on the phase PR head.
 
 ## Phases
 1. [ ] Phase 1 — fence-aware skip-AI marker rule in all three copies; protected paths: `.claude/scripts/check_in_status.py` (edited through its `workflow-templates/.claude/` twin)
