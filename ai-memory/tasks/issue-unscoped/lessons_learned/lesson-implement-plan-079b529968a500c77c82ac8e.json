@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T01:22:00Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Every exclusion a verdict function lists needs a test that drives the public entry point, not only the helper that computes it: a helper-level test cannot catch an earlier branch that returns before the exclusion is reached.",
+  "phase": "implement_plan",
+  "pr_number": 5339,
+  "record_id": "lesson-implement-plan-079b529968a500c77c82ac8e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4985-skip-marker-review-stall",
+    "file:.claude/scripts/check_in_status.py",
+    "file:tests/test_check_in_status_hand_back.py"
+  ]
+}
