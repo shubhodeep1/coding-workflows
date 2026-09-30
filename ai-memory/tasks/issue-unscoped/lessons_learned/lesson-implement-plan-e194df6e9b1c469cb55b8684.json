@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T04:41:13Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Routine names in `list_triggers` come both whole (over 60 characters) and cut with a trailing `\u2026`; name matchers should accept a full-name prefix and a cut stem with or without a marker.",
+  "phase": "implement_plan",
+  "pr_number": 4984,
+  "record_id": "lesson-implement-plan-e194df6e9b1c469cb55b8684",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py"
+  ]
+}

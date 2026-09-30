@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T04:41:13Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A stage session that runs past the 3-hour claim lease loses its head to the catch-all sweep's fixer; re-read the PR head before pushing, and never push a duplicate round over a newer head.",
+  "phase": "implement_plan",
+  "pr_number": 4984,
+  "record_id": "lesson-implement-plan-bde3fed4e6a88f649aac505b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}

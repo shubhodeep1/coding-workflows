@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T04:41:13Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A listing read that feeds a \"which items to check\" set must paginate; a single `per_page=100` page silently drops every item past the first page.",
+  "phase": "implement_plan",
+  "pr_number": 4984,
+  "record_id": "lesson-implement-plan-a03e641f994487c33820f267",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py"
+  ]
+}

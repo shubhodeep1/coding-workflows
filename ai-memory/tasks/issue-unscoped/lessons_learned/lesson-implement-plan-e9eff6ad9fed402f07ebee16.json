@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T04:41:13Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-safe loop that skips an item on a read failure must still list the failure in `errors[]` with the item it concerned, including the failure of any follow-up check used to classify it; a silent `continue` hides the miss from the report.",
+  "phase": "implement_plan",
+  "pr_number": 4984,
+  "record_id": "lesson-implement-plan-e9eff6ad9fed402f07ebee16",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py"
+  ]
+}
