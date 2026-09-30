@@ -5,18 +5,19 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5582-rejection-votes-need-automated-proof   Final PR: #5605 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #5611 (phase 1/1)
+- Waiting on: the conformance fix PR from branch claude/implement-plan-issue-5582-rejection-votes-need-automated-proof-conformance-fix-1 (this log rides it)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01EbGhNnCvS36xDxb7uEq7sz   safety net (re-armed by the round-2 stage)   hand-back (re-armed by the round-2 stage)
+- Check-in: checker session_01EbGhNnCvS36xDxb7uEq7sz   safety net (re-armed by the conformance 1/3 stage)   hand-back (re-armed by the conformance 1/3 stage)
 - Last updated: 2026-09-30
-- Last note: review round 2 on PR #5611: fixed both reviewer findings (README vote-conditions paragraph now states the disproof requirement; the misnamed hand-off test got an accurate name with the old one kept as a §6 alias, AD-5); the stale task gap was already satisfied
+- Last note: conformance run 1 (session session_01SzJmwdr4M7YuRxhSKZTFPN): CONFORMANT, 3 EVIDENCE-BASED concerns fixed in conformance-fix PR 1 (hand-off non-blocking note wording, #5582 exploit end to end through the hand-off step, restored ledger-post assertion)
 
 ## Phases
-1. [ ] Phase 1 — votes alone never demote a single-reviewer finding   — PR #5611 open (waiting); review rounds: 2; interventions: 0
+1. [x] Phase 1 — votes alone never demote a single-reviewer finding   — PR #5611 merged 2026-09-30 (cb8a7aa); review rounds: 2; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 3 EVIDENCE-BASED concerns) — fix PR from branch `claude/implement-plan-issue-5582-rejection-votes-need-automated-proof-conformance-fix-1` (pre-security; security pass skipped for this project)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue; `.claude/scripts/security_pass_skip.py` verified it)
@@ -37,6 +38,7 @@
 ## Lessons
 - [source:security] A reviewer vote is model output from PR-influenced input: verifying its fields (IDs, quotes, ranges) proves the reviewer copied text, never that a finding is false, so an unattended gate must not let votes alone clear a finding. (files: scripts/review_claude_fixer_nonblocking.py)
 - [source:intervention] When a change alters behaviour a doc describes, grep every summary of it too (the Quickstart variables table row, not only the detailed section): a stale one-line summary contradicts the new rule. (files: README.md)
+- [source:conformance] When a security fix has an end-to-end regression goal, the end-to-end test must use the exploit's own input shape (here, a vote quoting the defective line), not a benign variant the gate happens to treat the same. (files: tests/test_review_autofix_claude_fixer_mode.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher in session session_01Btdcvy38twXdNjpDgPWDBg (permission mode auto). Base branch `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason` (the issue's `Integration branch:` line; its final PR #4593 is an open draft into `main`). The issue therefore closes by an explicit close plus `ai:merged` at the final-merge stage, not by a `Fixes` keyword.
