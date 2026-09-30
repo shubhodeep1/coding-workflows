@@ -75,6 +75,8 @@ This is a single-phase plan: issue mode (CLAUDE.md §28.A) authorises it, and th
 - `scripts/gh_helpers.sh`
 - `scripts/review_autofix_step_changes_lost_redispatch.sh`
 - `tests/test_retrigger_default_branch_dispatch.py`
+- `tests/test_editor_changes_lost_redispatch_budget.py` (fixture runs gain `created_at`; see Notes)
+- `tests/test_gh_helpers_list_runs_method.py` (fixture gains the head's cancelled twin; see Notes)
 - `agents.md`
 - `changelog.d/5523-retry-budget-trusted-push-bound.md` [new]
 
@@ -105,4 +107,5 @@ Ships to consumer repos with the next `@stable` sync of `scripts/gh_helpers.sh`,
 
 ## Notes
 
+- Plan deviation (phase 1): `tests/test_editor_changes_lost_redispatch_budget.py` and `tests/test_gh_helpers_list_runs_method.py` built runs without `created_at` (the REST API always returns it) and, in two tests, with no run on the head. They passed only because the commit time supplied the bound. Their fixtures now carry `created_at` and the head's cancelled `pull_request` twin; every assertion is unchanged.
 - `security_pass_skip.py` returned `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}` (2026-09-30).
