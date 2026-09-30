@@ -7,14 +7,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: phase 1 PR (opening)
+- Waiting on: PR #5589
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: phase 1 implemented and verified locally (tests/test_claude_merge_hold_gate.py 57 passed; 5 new poller e2e tests passed; new tests fail on the unfixed code); phase PR opening
+- Last note: phase 1 PR #5589 opened (tests/test_claude_merge_hold_gate.py 57 passed, tests/test_orchestrate_poll_process.py 452 passed); waiting on its review round
 
 ## Phases
-1. [ ] Phase 1 — hold gate before ready labels and at the poller's ready-to-merge merges (scripts/review_enable_auto_merge.sh, review_autofix.yml deterministic-skip-merge, scripts/orchestrate_poll_process.sh, orchestrate_poll.yml, tests, docs)
+1. [ ] Phase 1 — hold gate before ready labels and at the poller's ready-to-merge merges (scripts/review_enable_auto_merge.sh, review_autofix.yml deterministic-skip-merge, scripts/orchestrate_poll_process.sh, orchestrate_poll.yml, tests, docs) — PR #5589 open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
