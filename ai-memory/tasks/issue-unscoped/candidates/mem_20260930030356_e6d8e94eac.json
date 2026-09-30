@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:282-330 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: `parse_loosening_policy` does not validate the policy\u2019s mandatory top-level `version` field, so missing, mistyped, or unsupported versions are parsed under v1 rules.\n  WHY: The highest reported severity is MAJOR (high), while other reviewers rated this NIT (low); the shipped policy uses version 1, but future or malformed policy documents can be silently misinterpreted.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/guard_differential.py:282-309 | severity=high | confidence=4\n  PROBLEM: The docstring (line 33-40 in the new file) and the shipped policy file both declare `{\"version\": 1, \"exceptions\": [...]}` as the format, but `parse_loosening_policy` never validates the top-level `version` field.\n  WHY: If the policy schema evolves (new mandatory fields, a changed shape structure), a publisher who bumps the version would expect the check to fail closed instead of silently parsing a v2 document with v1 rules and possibly misinterpreting entries.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/guard_differential.py:~lines 290-310 | severity=low | confidence=4\n  PROBLEM: The policy parser does not validate the mandatory top-level \"version\" field.\n  WHY: The policy schema is documented (in docstrings and the new JSON file) to require a top-level \"version\" key; if the schema evolves or a user provides an incorrect version, the parser will continue to process the policy as version 1, potentially leading to silent failures or inconsistent behavior.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/guard_differential.py:~lines 282-330 | severity=low | confidence=4\n  PROBLEM: The module docstring (lines 33-40 of the new file) and the format paragraph in the file header both declare the policy shape as `{\"version\": 1, \"exceptions\": [...]}`, but `parse_loosening_policy` never validates the top-level `version`.\n  WHY: A v2 policy committed to a base branch would still be accepted under v1, the new field would be ignored, and loosening entries under the new shape would silently fail closed (or, worse, silently pass) without any operator-visible signal that the file is the wrong version.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/guard_differential.py:parse_loosening_policy, after the document-is-dict check (~lines 290-294)\n  PROBLEM: The docstring (lines 33-40) declares the policy format as {\"version\": 1, \"exceptions\": [...]}, but `parse_loosening_policy` never validates the top-level version field.\n  WHY: A typo (version: \"1\"), missing key, or future-bumped version (version: 2) is silently accepted and parsed under v1 rules.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/guard_differential.py:parse_loosening_policy (~290) | severity=high | confidence=4\n  PROBLEM: no `document.get(\"version\") == 1` check after dict validation\n  WHY: malformed/future version silently parsed under v1 rules\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/guard_differential.py:parse_loosening_policy, after `if not isinstance(document, dict): raise SetupError(...)` (the block beginning at the `entries = document.get(\"exceptions\")` line)\n  PROBLEM: The docstring (lines 33-40 of the new header) and the shipped policy file declare the format as `{\"version\": 1, \"exceptions\": [...]}`, and the function is documented as \"strictly validate\", but `version` is never checked.\n  WHY: A missing, mistyped, or future-bumped version (e.g. `{\"version\": 2, ...}`) is silently parsed under the v1 rules, which could produce silent misinterpretation if the schema ever changes.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "30a20daddad6e31ff041cf5144429d44da04b498221c4bb2669c9c4cb3ec53c5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5389,
+    "run_id": "36661708780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36661708780",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930030356_e6d8e94eac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5389,
+    "run_id": "36661708780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T03:03:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
