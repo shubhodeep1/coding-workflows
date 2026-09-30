@@ -124,6 +124,34 @@ def test_build_dispatch_rejects_bad_input(repo, issue, trigger):
 		route.build_dispatch(repo, issue, trigger, "", False)
 
 
+def test_build_dispatch_carries_the_reclarify_comment_id():
+	# Issue #5514: added only when given, and the payload stays within
+	# GitHub's 10-property client_payload cap.
+	payload = route.build_dispatch("o/r", _issue(number=12), "reclarify", "", False, 5906441078)["client_payload"]
+	assert payload["reclarify_comment_id"] == 5906441078
+	assert len(payload) <= 10
+	assert "reclarify_comment_id" not in route.build_dispatch("o/r", _issue(number=12), "reclarify", "", False)["client_payload"]
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, "7", 7.0])
+def test_build_dispatch_rejects_a_bad_reclarify_comment_id(bad):
+	with pytest.raises(ValueError):
+		route.build_dispatch("o/r", _issue(), "reclarify", "", False, bad)
+
+
+def test_cli_build_dispatch_reclarify_comment_id(tmp_path):
+	issue = tmp_path / "issue.json"
+	issue.write_text(json.dumps(_issue(number=12)))
+	base = ("build-dispatch", "--repo", "o/r", "--issue-json", str(issue), "--trigger", "reclarify")
+	out = _cli(*base, "--reclarify-comment-id", "41")
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout)["client_payload"]["reclarify_comment_id"] == 41
+	out = _cli(*base, "--reclarify-comment-id", "")
+	assert out.returncode == 0, out.stderr
+	assert "reclarify_comment_id" not in json.loads(out.stdout)["client_payload"]
+	assert _cli(*base, "--reclarify-comment-id", "x1").returncode == 2
+
+
 def _payload(**overrides):
 	payload = {
 		"schema_version": "claude_issue.v1",
@@ -158,6 +186,28 @@ def test_validate_payload_accepts_registered_repo_case_insensitively():
 def test_validate_payload_rejects(overrides):
 	with pytest.raises(ValueError):
 		route.validate_payload(_payload(**overrides), ["owner/repo"])
+
+
+def test_validate_payload_reclarify_comment_id_is_optional():
+	# Payloads from a handoff that predates the key stay valid (issue #5514).
+	assert route.validate_payload(_payload(), ["owner/repo"])["reclarify_comment_id"] is None
+	assert route.validate_payload(_payload(reclarify_comment_id=None), ["owner/repo"])["reclarify_comment_id"] is None
+	assert route.validate_payload(_payload(reclarify_comment_id=41), ["owner/repo"])["reclarify_comment_id"] == 41
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, "41", 41.0, [41]])
+def test_validate_payload_rejects_a_bad_reclarify_comment_id(bad):
+	with pytest.raises(ValueError):
+		route.validate_payload(_payload(reclarify_comment_id=bad), ["owner/repo"])
+
+
+def test_fire_text_and_queue_ignore_the_reclarify_comment_id():
+	# The queue item and fire text keep their fixed keys (the pickup's
+	# binding check re-renders them exactly).
+	plain = route.validate_payload(_payload(), ["owner/repo"])
+	bound = route.validate_payload(_payload(reclarify_comment_id=41), ["owner/repo"])
+	assert route.build_fire_text(bound) == route.build_fire_text(plain)
+	assert route.build_queue_issue(bound, "") == route.build_queue_issue(plain, "")
 
 
 def test_skip_security_pass_must_be_literal_true():
@@ -831,13 +881,14 @@ def test_intake_workflow_binds_dispatcher_from_github_context():
 # --- queue parsing (pickup) and staleness (watchdog) -----------------------------------------
 
 
-def _validated(repo="shubhodeep1/digital_pa", number=9, trigger="opened"):
+def _validated(repo="shubhodeep1/digital_pa", number=9, trigger="opened", reclarify_comment_id=None):
 	return {
 		"repo": repo,
 		"issue_number": number,
 		"issue_url": f"https://github.com/{repo}/issues/{number}",
 		"trigger": trigger,
 		"skip_security_pass": False,
+		"reclarify_comment_id": reclarify_comment_id,
 	}
 
 
@@ -859,8 +910,11 @@ REGISTRY_ALLOWED = ["shubhodeep1/digital_pa", "shubhodeep1/coding-workflows"]
 
 
 def test_parse_fire_text_round_trips():
-	validated = _validated(trigger="reclarify")
-	assert route.parse_fire_text(route.build_fire_text(validated)) == validated
+	validated = _validated(trigger="reclarify", reclarify_comment_id=41)
+	# The fire text keeps its fixed keys; reclarify_comment_id is an intake
+	# authorization input only (issue #5514), so it does not round-trip.
+	expected = {key: value for key, value in validated.items() if key != "reclarify_comment_id"}
+	assert route.parse_fire_text(route.build_fire_text(validated)) == expected
 
 
 @pytest.mark.parametrize(
@@ -1785,21 +1839,35 @@ _FINAL_MERGE_BLOCK = (
 )
 
 
-def _blocked(stage="final-merge — review round", association="OWNER", user_type="User", login="owner", comment_id=501):
+# The #5119 timeline: blocked at final-merge, the final PR's merge closed the
+# issue at 19:01:37Z, and the owner commented /reclarify five seconds later.
+_BLOCKED_AT = "2026-09-29T18:30:00Z"
+_CLOSED_AT = "2026-09-29T19:01:37Z"
+_AFTER_CLOSE = "2026-09-29T19:01:42Z"
+_BEFORE_CLOSE = "2026-09-29T19:00:00Z"
+_RECLARIFY_ID = 503
+
+
+def _blocked(stage="final-merge — review round", association="OWNER", user_type="User", login="owner", comment_id=501, created_at=_BLOCKED_AT):
 	body = _FINAL_MERGE_BLOCK.replace("final-merge — review round", stage)
-	return {"id": comment_id, **_comment(body=body, association=association, user_type=user_type, login=login)}
+	return {"id": comment_id, "created_at": created_at, **_comment(body=body, association=association, user_type=user_type, login=login)}
+
+
+def _reclarify(comment_id=_RECLARIFY_ID, created_at=_AFTER_CLOSE, body="/reclarify", association="OWNER", user_type="User", login="owner"):
+	return {"id": comment_id, "created_at": created_at, **_comment(body=body, association=association, user_type=user_type, login=login)}
 
 
 def _closed_blocked_issue(labels=("ai:claude", "ai:claude-blocked"), **extra):
+	extra.setdefault("closed_at", _CLOSED_AT)
 	return _target(state="closed", labels=[{"name": name} for name in labels], **extra)
 
 
 def _resume_comments():
 	# The #5119 shape: routed, blocked at final-merge, then /reclarify after the merge.
 	return [
-		_comment(body="<!-- ai:claude-issue-routed:v1 -->\nRouted", association="OWNER"),
+		{"id": 500, "created_at": "2026-09-29T06:00:00Z", **_comment(body="<!-- ai:claude-issue-routed:v1 -->\nRouted", association="OWNER")},
 		_blocked(),
-		_comment(body="/reclarify", association="OWNER", login="owner"),
+		_reclarify(),
 	]
 
 
@@ -1810,7 +1878,7 @@ def _resume_comments():
 def test_final_merge_resume_accepts_a_closed_final_merge_block(stage):
 	comments = _resume_comments()
 	comments[1] = _blocked(stage=stage)
-	result = route.final_merge_resume(_closed_blocked_issue(), comments)
+	result = route.final_merge_resume(_closed_blocked_issue(), comments, _RECLARIFY_ID)
 	assert result == {"eligible": True, "reason": "final_merge_resume", "blocked_comment_id": 501}
 
 
@@ -1820,8 +1888,8 @@ def test_final_merge_resume_accepts_a_closed_final_merge_block(stage):
 )
 def test_final_merge_resume_reads_plain_and_bulleted_stage_lines(stage_line):
 	body = "<!-- ai:claude-blocked:v1 -->\n## Blocked\n\n" + stage_line + "\n"
-	comments = [{"id": 7, **_comment(body=body, association="MEMBER")}, _comment()]
-	assert route.final_merge_resume(_closed_blocked_issue(), comments)["eligible"] is True
+	comments = [{"id": 7, "created_at": _BLOCKED_AT, **_comment(body=body, association="MEMBER")}, _reclarify(association="COLLABORATOR", login="helper")]
+	assert route.final_merge_resume(_closed_blocked_issue(), comments, _RECLARIFY_ID)["eligible"] is True
 
 
 @pytest.mark.parametrize(
@@ -1839,7 +1907,7 @@ def test_final_merge_resume_reads_plain_and_bulleted_stage_lines(stage_line):
 	],
 )
 def test_final_merge_resume_refuses(issue, comments, reason):
-	result = route.final_merge_resume(issue, comments)
+	result = route.final_merge_resume(issue, comments, _RECLARIFY_ID)
 	assert result["eligible"] is False
 	assert result["reason"] == reason
 
@@ -1888,17 +1956,81 @@ def test_final_merge_resume_uses_the_latest_trusted_block():
 	"after",
 	[
 		[],
-		[_comment(body="/reclarify", association="NONE", login="stranger")],
-		[_comment(body="/reclarify", association="CONTRIBUTOR")],
-		[_comment(body="please /reclarify", association="OWNER")],
-		[_comment(body="/reclarify", user_type="Bot", login="github-actions[bot]", association="OWNER")],
+		[_reclarify(comment_id=601, association="NONE", login="stranger")],
+		[_reclarify(comment_id=601, association="CONTRIBUTOR")],
+		[_reclarify(comment_id=601, body="please /reclarify")],
+		[_reclarify(comment_id=601, user_type="Bot", login="github-actions[bot]")],
 	],
 )
-def test_final_merge_resume_needs_a_trusted_reclarify_after_the_block(after):
-	# A /reclarify before the block does not count.
-	comments = [_comment(body="/reclarify", association="OWNER"), _blocked(), *after]
-	result = route.final_merge_resume(_closed_blocked_issue(), comments)
+def test_final_merge_resume_needs_the_bound_reclarify_after_the_block(after):
+	# A /reclarify before the block does not count, even when it is the one
+	# named and later comments exist.
+	comments = [_reclarify(comment_id=400, created_at="2026-09-29T08:00:00Z"), _blocked(), *after]
+	result = route.final_merge_resume(_closed_blocked_issue(), comments, 400)
 	assert result == {"eligible": False, "reason": "no_reclarify_after_block", "blocked_comment_id": 501}
+
+
+@pytest.mark.parametrize("reclarify_comment_id", [None, 999, 0, -503, True, "503", 503.0])
+def test_final_merge_resume_needs_a_named_reclarify(reclarify_comment_id):
+	# Issue #5514: an unnamed, unknown, or malformed comment ID never resumes,
+	# even with a genuine post-closure /reclarify in the thread.
+	result = route.final_merge_resume(_closed_blocked_issue(), _resume_comments(), reclarify_comment_id)
+	assert result == {"eligible": False, "reason": "no_reclarify_comment", "blocked_comment_id": 501}
+
+
+@pytest.mark.parametrize(
+	"bound",
+	[
+		_reclarify(association="NONE", login="stranger"),
+		_reclarify(association="CONTRIBUTOR", login="helper"),
+		_reclarify(body="please /reclarify"),
+		_reclarify(body="thanks"),
+		_reclarify(user_type="Bot", login="github-actions[bot]"),
+		_reclarify(user_type="Bot", login="some-app[bot]"),
+	],
+)
+def test_final_merge_resume_refuses_an_untrusted_bound_comment(bound):
+	comments = _resume_comments()
+	comments[2] = bound
+	result = route.final_merge_resume(_closed_blocked_issue(), comments, _RECLARIFY_ID)
+	assert result == {"eligible": False, "reason": "reclarify_not_trusted", "blocked_comment_id": 501}
+
+
+@pytest.mark.parametrize(
+	("created_at", "closed_at"),
+	[
+		# Issue #5514: a /reclarify posted after the block but before the merge.
+		(_BEFORE_CLOSE, _CLOSED_AT),
+		# Same second as the close: it may predate it, so it is refused (AD-3).
+		(_CLOSED_AT, _CLOSED_AT),
+		# Missing or unreadable timestamps fail closed.
+		(None, _CLOSED_AT),
+		("yesterday", _CLOSED_AT),
+		(_AFTER_CLOSE, None),
+		(_AFTER_CLOSE, "not a time"),
+	],
+)
+def test_final_merge_resume_refuses_a_reclarify_not_after_the_close(created_at, closed_at):
+	comments = _resume_comments()
+	comments[2] = _reclarify(created_at=created_at)
+	if created_at is None:
+		del comments[2]["created_at"]
+	result = route.final_merge_resume(_closed_blocked_issue(closed_at=closed_at), comments, _RECLARIFY_ID)
+	assert result == {"eligible": False, "reason": "reclarify_before_close", "blocked_comment_id": 501}
+
+
+def test_final_merge_resume_binds_to_the_named_comment_only():
+	# The replay in #5514: a historical /reclarify (after the block, before the
+	# merge) is named while a genuine post-closure one also exists. Only the
+	# named one counts, so the replay is refused and the genuine one resumes.
+	comments = [
+		_blocked(),
+		_reclarify(comment_id=502, created_at=_BEFORE_CLOSE),
+		_reclarify(comment_id=_RECLARIFY_ID, created_at=_AFTER_CLOSE),
+	]
+	issue = _closed_blocked_issue()
+	assert route.final_merge_resume(issue, comments, 502)["reason"] == "reclarify_before_close"
+	assert route.final_merge_resume(issue, comments, _RECLARIFY_ID)["eligible"] is True
 
 
 def test_authorize_target_unrelated_closed_issue_still_refused_without_reading_comments():
@@ -1913,18 +2045,52 @@ def test_authorize_target_unrelated_closed_issue_still_refused_without_reading_c
 
 def test_authorize_target_final_merge_resume_reads_comments_then_authorizes():
 	issue = _closed_blocked_issue()
-	first = route.authorize_target(_validated(trigger="reclarify"), issue, _AUTHORIZED_DISPATCHER)
+	validated = _validated(trigger="reclarify", reclarify_comment_id=_RECLARIFY_ID)
+	first = route.authorize_target(validated, issue, _AUTHORIZED_DISPATCHER)
 	assert first == {"authorized": False, "reason": "issue_closed", "needs_comments": True}
-	second = route.authorize_target(_validated(trigger="reclarify"), issue, _AUTHORIZED_DISPATCHER, _resume_comments())
+	second = route.authorize_target(validated, issue, _AUTHORIZED_DISPATCHER, _resume_comments())
 	assert second == {"authorized": True, "reason": "final_merge_resume", "needs_comments": False}
 	# The dispatcher check still comes first.
-	assert route.authorize_target(_validated(), issue, {"mallory": "read"}, _resume_comments())["reason"] == "dispatcher_not_authorized"
+	assert route.authorize_target(validated, issue, {"mallory": "read"}, _resume_comments())["reason"] == "dispatcher_not_authorized"
+
+
+@pytest.mark.parametrize(
+	"validated",
+	[
+		# Issue #5514: an opened or manual payload carries no post-closure request.
+		_validated(trigger="opened"),
+		_validated(trigger="manual"),
+		_validated(trigger="opened", reclarify_comment_id=_RECLARIFY_ID),
+		_validated(trigger="manual", reclarify_comment_id=_RECLARIFY_ID),
+		# A reclarify payload that names no comment (a handoff before the key).
+		_validated(trigger="reclarify"),
+		_validated(trigger="reclarify", reclarify_comment_id=0),
+		_validated(trigger="reclarify", reclarify_comment_id="503"),
+	],
+)
+def test_authorize_target_closed_resume_needs_a_bound_reclarify_payload(validated):
+	# Refused before any comment read, even though a genuine post-closure
+	# /reclarify exists: the payload must name it.
+	issue = _closed_blocked_issue()
+	for comments in (None, _resume_comments()):
+		result = route.authorize_target(validated, issue, _AUTHORIZED_DISPATCHER, comments)
+		assert result == {"authorized": False, "reason": "issue_closed", "needs_comments": False}
+
+
+def test_authorize_target_refuses_a_replayed_pre_closure_reclarify():
+	# The #5514 exploit: a write-authorized dispatcher names a trusted
+	# /reclarify posted after the block but before the merge closed the issue.
+	comments = [_blocked(), _reclarify(comment_id=502, created_at=_BEFORE_CLOSE)]
+	validated = _validated(trigger="reclarify", reclarify_comment_id=502)
+	result = route.authorize_target(validated, _closed_blocked_issue(), {"attacker": "write"}, comments)
+	assert result == {"authorized": False, "reason": "issue_closed", "needs_comments": False}
 
 
 def test_authorize_target_closed_candidate_without_final_merge_block_is_refused():
 	comments = _resume_comments()
 	comments[1] = _blocked(stage="validation 2/3")
-	result = route.authorize_target(_validated(), _closed_blocked_issue(), _AUTHORIZED_DISPATCHER, comments)
+	validated = _validated(trigger="reclarify", reclarify_comment_id=_RECLARIFY_ID)
+	result = route.authorize_target(validated, _closed_blocked_issue(), _AUTHORIZED_DISPATCHER, comments)
 	assert result == {"authorized": False, "reason": "issue_closed", "needs_comments": False}
 
 
@@ -1933,9 +2099,16 @@ def test_cli_final_merge_resume(tmp_path):
 	issue.write_text(json.dumps(_closed_blocked_issue()))
 	comments = tmp_path / "comments.json"
 	comments.write_text(json.dumps(_resume_comments()))
-	out = _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments))
+	out = _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments), "--reclarify-comment-id", str(_RECLARIFY_ID))
 	assert out.returncode == 0, out.stderr
 	assert json.loads(out.stdout) == {"eligible": True, "reason": "final_merge_resume", "blocked_comment_id": 501}
+	# No comment named (clarify on a non-comment event): not eligible.
+	for extra in ((), ("--reclarify-comment-id", "")):
+		out = _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments), *extra)
+		assert out.returncode == 0, out.stderr
+		assert json.loads(out.stdout)["reason"] == "no_reclarify_comment"
+	for bad in ("abc", "-5", "0", "5.0", "٣"):
+		assert _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments), "--reclarify-comment-id", bad).returncode == 2
 	issue.write_text(json.dumps(_target(state="closed")))
 	out = _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments))
 	assert out.returncode == 0
@@ -1949,7 +2122,7 @@ def test_cli_final_merge_resume(tmp_path):
 def test_intake_queues_a_closed_final_merge_resume(stubs):
 	env = _intake_env(
 		stubs,
-		_payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="reclarify"),
+		_payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="reclarify", reclarify_comment_id=_RECLARIFY_ID),
 		GH_STUB_ISSUE_JSON=json.dumps(_closed_blocked_issue()),
 		GH_STUB_COMMENTS_JSON=json.dumps(_resume_comments()),
 	)
@@ -1991,13 +2164,57 @@ def test_intake_refuses_a_closed_candidate_whose_block_is_not_final_merge(stubs)
 	comments[1] = _blocked(stage="security-pass 1/5")
 	env = _intake_env(
 		stubs,
-		_payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="reclarify"),
+		_payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="reclarify", reclarify_comment_id=_RECLARIFY_ID),
 		GH_STUB_ISSUE_JSON=json.dumps(_closed_blocked_issue()),
 		GH_STUB_COMMENTS_JSON=json.dumps(comments),
 	)
 	result = _run("claude_issue_intake.sh", env)
 	assert result.returncode == 1
 	assert "rejected reason=issue_closed" in result.stdout
+	assert _target_writes(stubs) == []
+
+
+@pytest.mark.parametrize(
+	"payload_overrides",
+	[
+		{"trigger": "opened"},
+		{"trigger": "manual"},
+		{"trigger": "reclarify"},
+		{"trigger": "opened", "reclarify_comment_id": _RECLARIFY_ID},
+	],
+)
+def test_intake_refuses_a_closed_resume_without_a_bound_reclarify(stubs, payload_overrides):
+	# Issue #5514: a write-authorized dispatcher sends an opened / manual (or
+	# unbound reclarify) payload for a closed final-merge issue. It is refused
+	# before any comment read, and nothing is written.
+	env = _intake_env(
+		stubs,
+		_payload(repo="shubhodeep1/digital_pa", issue_number=9, **payload_overrides),
+		GH_STUB_ISSUE_JSON=json.dumps(_closed_blocked_issue()),
+		GH_STUB_COMMENTS_JSON=json.dumps(_resume_comments()),
+	)
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "CLAUDE_ISSUE_INTAKE rejected reason=issue_closed repo=shubhodeep1/digital_pa issue=9" in result.stdout
+	calls = stubs["log"].read_text()
+	assert "--paginate" not in calls
+	assert "-f title=" not in calls
+	assert _target_writes(stubs) == []
+
+
+def test_intake_refuses_a_replayed_pre_closure_reclarify(stubs):
+	comments = [_blocked(), _reclarify(comment_id=502, created_at=_BEFORE_CLOSE)]
+	env = _intake_env(
+		stubs,
+		_payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="reclarify", reclarify_comment_id=502),
+		GH_STUB_ISSUE_JSON=json.dumps(_closed_blocked_issue()),
+		GH_STUB_COMMENTS_JSON=json.dumps(comments),
+	)
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "rejected reason=issue_closed" in result.stdout
+	assert "api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100" in stubs["log"].read_text()
+	assert "-f title=" not in stubs["log"].read_text()
 	assert _target_writes(stubs) == []
 
 
@@ -2026,8 +2243,11 @@ def _run_clarify_route(stubs, issue, comment_body="/reclarify", event_name="issu
 		"RUNTIME_DIR": str(rt),
 		"GITHUB_OUTPUT": str(output),
 		"GITHUB_REPOSITORY": "shubhodeep1/digital_pa",
+		"RECLARIFY_COMMENT_ID": str(_RECLARIFY_ID),
 		**extra,
 	}
+	# A value of None drops the variable, as a caller that never sets it would.
+	env = {key: value for key, value in env.items() if value is not None}
 	result = subprocess.run(["bash", "-c", _clarify_route_step()["run"]], cwd=route_cwd, env=env, capture_output=True, text=True)
 	outputs = dict(line.split("=", 1) for line in output.read_text().splitlines() if "=" in line)
 	return result, outputs
@@ -2080,6 +2300,50 @@ def test_clarify_still_skips_an_unrelated_closed_issue(stubs, issue, comment_bod
 	calls = stubs["log"].read_text() if stubs["log"].exists() else ""
 	if comments is None:
 		assert "--paginate" not in calls
+
+
+@pytest.mark.parametrize(
+	("reclarify_comment_id", "reason"),
+	[
+		# A re-run of a clarify run whose /reclarify predates the merge.
+		("502", "reclarify_before_close"),
+		# No event comment (not an issue_comment event), or an unknown one.
+		("", "no_reclarify_comment"),
+		("999", "no_reclarify_comment"),
+	],
+)
+def test_clarify_binds_the_resume_to_the_event_comment(stubs, reclarify_comment_id, reason):
+	comments = [*_resume_comments(), _reclarify(comment_id=502, created_at=_BEFORE_CLOSE)]
+	# Keep API (chronological) order: the historical /reclarify sits before the genuine one.
+	comments = [comments[0], comments[1], comments[3], comments[2]]
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		GH_STUB_COMMENTS_JSON=json.dumps(comments),
+		RECLARIFY_COMMENT_ID=reclarify_comment_id,
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"final_merge_resume issue=9 eligible=false reason={reason}" in result.stdout
+	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=issue_closed outcome=skip issue=9" in result.stdout
+	assert outputs["final_merge_resume"] == "false"
+	assert outputs["issue_implementer"] == "codex"
+
+
+def test_clarify_route_step_reads_the_event_comment_id_nounset_safe(stubs):
+	step = _clarify_route_step()
+	assert step["env"]["RECLARIFY_COMMENT_ID"] == "${{ github.event.comment.id || '' }}"
+	assert '--reclarify-comment-id "${RECLARIFY_COMMENT_ID:-}"' in step["run"]
+	# The variable unset entirely (set -u) keeps the skip instead of crashing.
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		GH_STUB_COMMENTS_JSON=json.dumps(_resume_comments()),
+		RECLARIFY_COMMENT_ID=None,
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "unbound variable" not in result.stderr
+	assert "final_merge_resume issue=9 eligible=false reason=no_reclarify_comment" in result.stdout
+	assert outputs["final_merge_resume"] == "false"
 
 
 def test_clarify_keeps_the_skip_when_the_comment_read_fails(stubs):
@@ -2226,6 +2490,33 @@ def test_clarify_handoff_runs_for_a_final_merge_resume():
 		"(steps.clarify_route.outputs.is_closed != 'true' || steps.clarify_route.outputs.final_merge_resume == 'true')"
 	)
 	assert _clarify_route_step()["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
+	# The handoff forwards the triggering comment as the payload's
+	# reclarify_comment_id (issue #5514).
+	assert handoff["env"]["CLAUDE_ISSUE_RECLARIFY_COMMENT_ID"] == (
+		"${{ github.event_name == 'issue_comment' && github.event.comment.id || '' }}"
+	)
+
+
+@pytest.mark.parametrize(("env_value", "expected"), [("5906441078", 5906441078), ("", None)])
+def test_handoff_sends_the_reclarify_comment_id(stubs, env_value, expected):
+	issue_file = stubs["tmp"] / "issue.json"
+	issue_file.write_text(json.dumps(_closed_blocked_issue(number=41)))
+	env = {
+		**stubs["env"],
+		"GITHUB_REPOSITORY": "o/r",
+		"ISSUE_NUMBER": "41",
+		"ISSUE_META_FILE": str(issue_file),
+		"CLAUDE_ISSUE_TRIGGER": "reclarify",
+		"CLAUDE_ISSUE_ROUTE_REASON": "final_merge_resume",
+		"CLAUDE_ISSUE_RECLARIFY_COMMENT_ID": env_value,
+		"GH_TOKEN": "x",
+	}
+	result = _run("claude_issue_handoff.sh", env)
+	assert result.returncode == 0, result.stderr
+	assert "CLAUDE_ISSUE_HANDOFF dispatched issue=41" in result.stdout
+	payload = json.loads((Path(stubs["env"]["RUNTIME_DIR"]) / "claude_issue_dispatch.json").read_text())["client_payload"]
+	assert payload.get("reclarify_comment_id") == expected
+	assert ("reclarify_comment_id" in payload) is (expected is not None)
 
 
 def test_handoff_posts_a_resume_comment_for_final_merge_resume(stubs):
