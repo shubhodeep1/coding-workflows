@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T11:36:51Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A paginated read that merges pages must carry per-page status flags (such as `incomplete_results`) from every page, not only the first.",
+  "phase": "implement_plan",
+  "pr_number": 5547,
+  "record_id": "lesson-implement-plan-f7fe5fb029b665f0d98015b8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5126-lookup-full-label-scan",
+    "file:.claude/scripts/check_in_status.py"
+  ]
+}

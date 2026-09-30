@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T11:36:51Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A lookup that scans candidates in `updated_at` order must pick the newest match by its own timestamp; an issue bumped by an unrelated comment otherwise wins.",
+  "phase": "implement_plan",
+  "pr_number": 5547,
+  "record_id": "lesson-implement-plan-fd42e7afa30f105324caa640",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5126-lookup-full-label-scan",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}

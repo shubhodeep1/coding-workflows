@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T11:36:51Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test that stubs one GitHub read helper must stub every read the code path can make (or give fixtures the fields that skip them, such as `comments: 0`), or it silently reaches live GitHub and passes only where `gh` is authenticated.",
+  "phase": "implement_plan",
+  "pr_number": 5547,
+  "record_id": "lesson-implement-plan-894387f4aa26ecb1789ba7d1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5126-lookup-full-label-scan",
+    "file:tests/test_permission_prompts.py"
+  ]
+}
