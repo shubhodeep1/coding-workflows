@@ -377,7 +377,9 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	runs). Any other failed read, a 404 on the head-branch listing included,
 	and a listing with a run that has no integer `id` or string `status`
 	(or, in the internal-review.yml listing, no non-blank string `display_title`)
-	raise `check_in_status.ReadError`.
+	raise `check_in_status.ReadError`. These reads are only part of
+	`evaluate()`'s per-PR budget, which the module docstring states in full,
+	the comments re-read after them included.
 
 	Output: None, or {"state": "review_active" | "review_superseded",
 	"reason": str}. `review_active`: a run on the head branch, an
