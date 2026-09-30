@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5608-run-twin-guard-from-base-plan.md
 - Source issue: shubhodeep1/coding-workflows#5608
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-4785-twin-first-claude-sync
-- Project branch: claude/implement-plan-issue-5608-run-twin-guard-from-base   Final PR: pending
+- Project branch: claude/implement-plan-issue-5608-run-twin-guard-from-base   Final PR: #5653 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (branch claude/implement-plan-issue-5608-run-twin-guard-from-base-phase-1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; phase 1 starts next.
+- Last note: phase 1 implemented (ci.yml runs the base commit's claude_twin_sync.py; 8 new tests; 149 twin sync tests pass, the 7 behaviour tests fail on the old step); phase PR opened, waiting on its review.
 
 ## Phases
-1. [ ] Phase 1 — run the twin sync-state guard from the base commit (protected paths: none)
+1. [ ] Phase 1 — run the twin sync-state guard from the base commit (protected paths: none)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
