@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5627-resolver-private-model-index-plan.md
 - Source issue: shubhodeep1/coding-workflows#5627
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5627-resolver-private-model-index   Final PR: pending
+- Project branch: claude/implement-plan-issue-5627-resolver-private-model-index   Final PR: #5637 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (review round or merge)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from main (AD-1); phase 1 implementation starting
+- Last note: phase 1 implemented and verified (782 related tests passed, 1 skipped); phase PR opened against the project branch
 
 ## Phases
-1. [ ] Phase 1 — private resolver model index (`GIT_INDEX_FILE` copy per attempt plus OpenCode snapshot opt-out, source repo only; regression tests; agents.md; changelog fragment)
+1. [ ] Phase 1 — private resolver model index (`GIT_INDEX_FILE` copy per attempt plus OpenCode snapshot opt-out, source repo only; regression tests; agents.md; changelog fragment)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
