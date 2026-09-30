@@ -1308,7 +1308,11 @@ is the 3-hour marker. The script finds checkers in three places:
 - the `Check-in:` line of each open, non-blocked `ai:claude` issue's
   progress log.
 
-A checker that is not on the page gets one `get_session`, at most 8 per wake.
+A checker gets one `get_session`, at most 8 per wake, when it is not on the
+page, or when it is on the page and that record alone would restart it. The
+page is read before the lookups, so its record can miss a re-arm or a stage
+start: a checker is restarted only from a fresh `get_session` record, and one
+known only from the page waits for a later wake's lookup.
 When that lookup says a logged checker no longer exists, the pickup comments
 `/reclarify` on the issue, with a hidden `ai:claude-checker-requeue:v1`
 marker. That re-queues the issue, and the resumed session arms a new checker.

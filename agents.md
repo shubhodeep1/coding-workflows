@@ -289,7 +289,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `ai:claude` issues (one REST call per 100) and their progress logs over git (one
     `git ls-remote` and one shallow `git fetch`), then prints at most 8
     `get_session` lookups. Those cover checkers named by pending safety nets
-    or logs that are not on the page. `decide` then prints `restart` and
+    or logs that are not on the page, and page-listed checkers whose page
+    record alone would restart them: the page is read before the lookups, so
+    `decide` restarts only from a fresh record, which replaces the page one,
+    and keeps a checker known only from the page (`not_looked_up`). `decide` then prints `restart` and
     `requeue` entries. A restart needs all five conditions: no enabled
     trigger bound to the checker or to a sibling checker of the same slug;
     the issue open and not `ai:claude-blocked`; the checker idle, not
