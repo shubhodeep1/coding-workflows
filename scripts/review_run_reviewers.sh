@@ -1477,9 +1477,12 @@ def diff_side_paths(diff_path):
 	with open(diff_path, encoding="utf-8", errors="replace") as handle:
 		for line in handle:
 			line = line.rstrip("\n")
-			for prefix in ("--- a/", "+++ b/", "rename from ", "rename to ", "copy from ", "copy to "):
+			# git wraps paths with special characters in double quotes
+			# ("--- \"a/x y\"", "rename from \"x y\""); drop them so the
+			# globs still see the path.
+			for prefix in ('--- "a/', '+++ "b/', "--- a/", "+++ b/", "rename from ", "rename to ", "copy from ", "copy to "):
 				if line.startswith(prefix):
-					side_paths.append(line[len(prefix):])
+					side_paths.append(line[len(prefix):].strip('"'))
 					break
 	return side_paths
 
@@ -1635,6 +1638,17 @@ resolve_review_tier_active_models() {
       [ -z "${model}" ] && continue
       resolved_models+=("${model}")
     done < <(reviewer_pick_seeded_models "${random_count}" "${PR_NUMBER:-0}" "${live_models[@]}")
+    # A broken pick (e.g. no sha256sum) must never leave the tier with fewer
+    # reviewers than asked for: fail open to the full panel.
+    if [ "${random_count}" -gt "${#live_models[@]}" ]; then
+      random_count="${#live_models[@]}"
+    fi
+    if [ "${#resolved_models[@]}" -ne "${random_count}" ]; then
+      echo "::warning::Review tier ${tier} random reviewer pick returned ${#resolved_models[@]} of ${random_count} models. Failing open to full reviewer set." >&2
+      reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
+      REVIEW_TIER_ACTIVE_MODELS_SOURCE="fallback_full_random_pick_failed"
+      return 0
+    fi
     reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${resolved_models[@]}"
     REVIEW_TIER_ACTIVE_MODELS_SOURCE="random_${tier}"
     return 0
@@ -1715,6 +1729,12 @@ classify_review_tier() {
     if reviewer_env_is_truthy "${FORCE_FULL_REVIEW_TIER:-false}"; then
       REVIEW_TIER_FORCED_FULL=true
       REVIEW_TIER_REASON="force_review_marker"
+    elif [ "${REVIEWER_RISK_TIER_FORCED_FULL:-false}" = "true" ]; then
+      # classify_reviewer_risk_tier (REVIEWER_RISK_TIER_ENABLED) already
+      # forced the full panel, e.g. REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX
+      # matched; a size tier must not shrink it again.
+      REVIEW_TIER_FORCED_FULL=true
+      REVIEW_TIER_REASON="risk_tier_forced_full"
     elif [ -z "${PR_NUMBER:-}" ]; then
       REVIEW_TIER_REASON="no_pr_number"
     elif [ ! -s "${RAW_REVIEWER_PR_CHANGED_FILES_FILE:-}" ]; then
@@ -1804,6 +1824,11 @@ classify_review_tier() {
           standard) REVIEW_TIER_REASON="empty_standard_reviewer_slugs" ;;
           *) REVIEW_TIER_REASON="empty_review_tier_subset" ;;
         esac
+        ;;
+      fallback_full_random_pick_failed)
+        REVIEW_TIER="full"
+        REVIEW_TIER_FORCED_FULL=true
+        REVIEW_TIER_REASON="random_reviewer_pick_failed"
         ;;
       empty_live)
         REVIEW_TIER="full"

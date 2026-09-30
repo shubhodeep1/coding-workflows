@@ -1216,6 +1216,7 @@ def _run_review_tier_harness(
 	raw_changed_paths: list[str] | None = None,
 	extra_env: dict[str, str] | None = None,
 	unset_env: tuple[str, ...] = (),
+	pre_classify: str = "",
 ) -> dict[str, str | list[str]]:
 	helper_block = _reviewer_risk_tier_helper_block()
 	with tempfile.TemporaryDirectory(prefix="review-tier-") as td:
@@ -1269,6 +1270,7 @@ def _run_review_tier_harness(
 				"-c",
 				"set -euo pipefail\n"
 				f"{helper_block}\n"
+				f"{pre_classify}\n"
 				"classify_review_tier\n"
 				"{\n"
 				"\tprintf 'REVIEW_TIER=%s\\n' \"${REVIEW_TIER}\"\n"
@@ -4256,6 +4258,45 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert full_result["review_tier_file"] == "full"
 	assert full_result["active_models"] == reviewer_models
 
+	# Protected globs match nested paths, like the gate's bash `case`.
+	for nested_path in ("scripts/sub/README.md", ".github/CODEOWNERS", "db/contracts/x/y.yml"):
+		nested_result = _run_review_tier_harness(diff_text=_numbered_code_diff({nested_path: 3}))
+		assert nested_result["REVIEW_TIER"] == "standard", nested_path
+		assert f"protected_path={nested_path}" in nested_result["stdout"], nested_path
+
+	# Quoted git paths (special characters) are unquoted before matching.
+	quoted_rename_result = _run_review_tier_harness(
+		diff_text=textwrap.dedent(
+			"""\
+			diff --git "a/scripts/my helper.sh" "b/src/my helper.py"
+			similarity index 90%
+			rename from "scripts/my helper.sh"
+			rename to "src/my helper.py"
+			--- "a/scripts/my helper.sh"
+			+++ "b/src/my helper.py"
+			@@ -1 +1 @@
+			-echo old
+			+print("new")
+			"""
+		),
+		raw_changed_paths=["src/my helper.py"],
+	)
+	assert quoted_rename_result["REVIEW_TIER"] == "standard"
+
+	# A full panel forced by the risk-tier resolver (REVIEWER_RISK_TIER_ENABLED,
+	# e.g. its always-full regex) is never shrunk by the size tiers.
+	risk_forced_result = _run_review_tier_harness(
+		diff_text=standard_diff,
+		extra_env={"REVIEWER_RISK_TIER_ENABLED": "1", "REVIEWER_FILTER_ACTIVE": "false"},
+		pre_classify="classify_reviewer_risk_tier",
+	)
+	assert "REVIEWER_RISK_TIER: tier=full" in risk_forced_result["stdout"]
+	assert "reason=always_full_regex" in risk_forced_result["stdout"]
+	assert risk_forced_result["REVIEW_TIER"] == "full"
+	assert risk_forced_result["REVIEW_TIER_REASON"] == "risk_tier_forced_full"
+	assert risk_forced_result["REVIEW_TIER_FORCED_FULL"] == "true"
+	assert risk_forced_result["active_models"] == reviewer_models
+
 	force_full_result = _run_review_tier_harness(
 		diff_text=lite_diff,
 		extra_env={"FORCE_FULL_REVIEW_TIER": "true"},
@@ -4344,6 +4385,21 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 	)
 	assert unset_env_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_standard"
 	assert unset_env_result["active_models"] == expected("4242", 3)
+
+	# A broken pick (sha256sum failing) fails open to the full panel instead of
+	# running the tier with fewer reviewers than it asked for.
+	with tempfile.TemporaryDirectory(prefix="review-tier-nosha-") as fake_bin:
+		fake_sha = Path(fake_bin) / "sha256sum"
+		fake_sha.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+		fake_sha.chmod(0o755)
+		broken_result = _run_review_tier_harness(
+			diff_text=standard_diff,
+			extra_env={**unpinned, "PR_NUMBER": "4242", "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+		)
+	assert broken_result["REVIEW_TIER"] == "full"
+	assert broken_result["REVIEW_TIER_REASON"] == "random_reviewer_pick_failed"
+	assert broken_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "fallback_full_random_pick_failed"
+	assert broken_result["active_models"] == reviewer_models
 
 	# A repo that sets the variables keeps exactly those reviewers.
 	pinned_result = _run_review_tier_harness(
@@ -7602,6 +7658,8 @@ def main() -> int:
 	test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cleaned()
 	test_reviewer_and_consolidator_slop_scan_context_is_wired()
 	test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides()
+	test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables()
+	test_review_tier_protected_paths_match_deterministic_skip_gate()
 	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
 	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path()
 	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_skip_path()
