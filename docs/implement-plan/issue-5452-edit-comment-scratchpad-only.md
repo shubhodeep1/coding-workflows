@@ -3,22 +3,22 @@
 - Plan: docs/plans/issue-5452-edit-comment-scratchpad-only-plan.md
 - Source issue: shubhodeep1/coding-workflows#5452
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5452-edit-comment-scratchpad-only   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5452-edit-comment-scratchpad-only   Final PR: #5464 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5465: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened; phase 1 starting.
+- Last note: phase 1 PR #5465 opened twin-first; hold claim posted; waiting on the `[claude-twin-sync]` copy of 2 `.claude/` files (blocker on #5452), then `/reclarify`.
 
 ## Phases
-1. [ ] Phase 1 — restrict edit_comment.py input files to the session scratchpad   — protected paths: `.claude/scripts/edit_comment.py`, `.claude/commands/implement-plan-claude.md`
-   - [ ] twin `workflow-templates/.claude/scripts/edit_comment.py`: `read_input_file` / `is_scratchpad_path` / `_temp_roots`, used by `load_replacements` and `--body-file`
-   - [ ] `tests/test_edit_comment.py`: load the twin; scratchpad fixture; rejection and unit cases
-   - [ ] CLAUDE.md §23.I, `agents.md`, twin `implement-plan-claude.md` Comment helper
-   - [ ] `changelog.d/5452-edit-comment-scratchpad-only.md` (`security`)
+1. [ ] Phase 1 — restrict edit_comment.py input files to the session scratchpad   — PR #5465 open (hold: twin sync); review rounds: 0; interventions: 0; protected paths: `.claude/scripts/edit_comment.py`, `.claude/commands/implement-plan-claude.md`
+   - [x] twin `workflow-templates/.claude/scripts/edit_comment.py`: `read_input_file` / `is_scratchpad_path` / `_temp_roots`, used by `load_replacements` and `--body-file`
+   - [x] `tests/test_edit_comment.py`: load the twin; scratchpad fixture; rejection and unit cases
+   - [x] CLAUDE.md §23.I, `agents.md`, twin `implement-plan-claude.md` Comment helper
+   - [x] `changelog.d/5452-edit-comment-scratchpad-only.md` (`security`)
    - [ ] `[claude-twin-sync]` copy into `.claude/` (after the phase PR opens)
 
 ## Conformance
@@ -40,8 +40,10 @@
 - AD-6 [plan, 2026-09-30] Exit code for a rejected path? — Picked: A — 1 (invalid argument), before any API call, with a JSON `error`. Alternatives: B — 2 (call failed). Why: the documented contract uses 1 for an invalid argument and 2 for a failed call; nothing was called. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A helper allowlisted in `.claude/settings.json` that reads a caller-supplied file path must confine it (resolve symlinks, reject hard links and non-regular files) before the read, or it becomes a promptless exfiltration path. (files: .claude/scripts/edit_comment.py, .claude/settings.json)
 
 ## Notes
 - Permission mode: auto (issue mode records it; §28.A).
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
 - Security pass: run (`security_pass_skip.py`: no skip label).
+- Twin sync pending (2026-09-30): `workflow-templates/.claude/scripts/edit_comment.py` (sha256 bff0569b53d3f6b0abbd1078eea898614f8beae44cfad73fe899b7b75e4bc06e) → `.claude/scripts/edit_comment.py`; `workflow-templates/.claude/commands/implement-plan-claude.md` (sha256 c6f55a6fd3abcdad91b90ff9337e4f7d6452fe02fb325fb86eed92732d07b8d8) → `.claude/commands/implement-plan-claude.md`.
