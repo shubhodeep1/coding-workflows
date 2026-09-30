@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T02:39:54Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A hold claim does not stop a phase PR from merging, so a twin-sync copy must land before the PR can merge, and whoever copies must first check that the PR is still open (CLAUDE.md \u00a721).",
+  "phase": "implement_plan",
+  "pr_number": 5383,
+  "record_id": "lesson-implement-plan-02e26a774f5309dacdea95ab",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5127-permission-report-fence",
+    "file:.claude/scripts/claude_fix_claim.py"
+  ]
+}
