@@ -676,6 +676,12 @@ LONG_SLUG = "issue-5093-smoke-review-dispatch-default-branch"
 		("implement-plan issue-5093-smoke-review-dispatch-default-bra...", True),
 		("implement-plan issue-5093-smoke-review-dispatch-default-bran", True),
 		("implement-plan issue-5093-smoke-review-dispatch-default-branch:", True),
+		# Mixed or short markers, and a space before the marker.
+		("implement-plan issue-5093-smoke-review-dispatch-default-br..", True),
+		("implement-plan issue-5093-smoke-review-dispatch-default-b....", True),
+		("implement-plan issue-5093-smoke-review-dispatch-default-bra.…", True),
+		("implement-plan issue-5093-smoke-review-dispatch-default …", True),
+		("implement-plan …", False),
 		# Another project whose slug shares the prefix.
 		("implement-plan issue-5093-smoke-review-dispatch-default-branch-2: check-in", False),
 		("implement-plan issue-5093-smoke-review-dispatch-default-branch-…", False),
@@ -685,6 +691,39 @@ LONG_SLUG = "issue-5093-smoke-review-dispatch-default-branch"
 def test_project_trigger_matches_cut_and_whole_long_names(name, matches):
 	triggers = [restart.trigger_view(_trigger("trig_long", name, "session_s"))]
 	assert restart._project_trigger(triggers, LONG_SLUG) == ("trig_long" if matches else "")
+
+
+def test_scan_reads_every_page_of_open_claude_issues(monkeypatch):
+	seen = []
+
+	def fake(path, paginate=False):
+		seen.append((path, paginate))
+		return [{"number": number, "labels": [{"name": "ai:claude"}]} for number in range(1, 151)]
+
+	monkeypatch.setattr(restart, "gh_api", fake)
+	monkeypatch.setattr(restart, "list_project_branches", lambda: [])
+	errors = []
+	open_issues, projects = restart.scan_logs(REPO, errors)
+	assert seen == [("repos/o/r/issues?labels=ai:claude&state=open&per_page=100", True)]
+	assert len(open_issues) == 150 and "150" in open_issues
+	assert projects == [] and errors == []
+
+
+def test_gh_api_paginate_flattens_pages(monkeypatch):
+	class Done:
+		returncode = 0
+		stdout = '[[{"number": 1}], [{"number": 2}]]'
+		stderr = ""
+
+	commands = []
+
+	def fake_run(cmd, **kwargs):
+		commands.append(cmd)
+		return Done()
+
+	monkeypatch.setattr(restart.subprocess, "run", fake_run)
+	assert restart.gh_api("repos/o/r/issues?per_page=100", paginate=True) == [{"number": 1}, {"number": 2}]
+	assert commands == [["gh", "api", "--paginate", "--slurp", "repos/o/r/issues?per_page=100"]]
 
 
 def test_scan_lists_a_failed_project_log_read_in_errors(monkeypatch):

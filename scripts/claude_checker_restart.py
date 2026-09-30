@@ -84,7 +84,8 @@ posted in the last `REQUEUE_COOLDOWN_HOURS` (24). A `requeue` entry carries
 starts with `/reclarify`.
 
 API budget (CLAUDE.md §15): REST only, never GraphQL. `scan` issues one
-`issues?labels=ai:claude&state=open` read; `decide` issues one issue read per
+paginated `issues?labels=ai:claude&state=open` read (one call per 100 open
+issues); `decide` issues one issue read per
 distinct candidate issue outside that list and one paginated comment read per
 re-queue candidate. The logs are read over git. Every failed read or missing
 input keeps the checker (fail safe) and is listed in `errors`.
@@ -441,21 +442,20 @@ def _project_trigger(triggers: list[dict], slug: str) -> str:
 	Routine names are often cut at 60 characters and marked with `…`, and some
 	are stored whole. A name matches when it starts with
 	`implement-plan <slug>:` or, with a trailing `…` or `...` removed, is a
-	prefix of it; a name cut without any marker matches the same way. A wrong
+	prefix of it; a name cut without any marker matches the same way.
+	Any run of `…`, `.`, and spaces at the end counts as the marker, so
+	`..`, `.…`, and ` …` cuts match too. A wrong
 	match only keeps the issue from being re-queued.
 	"""
 	wanted = f"implement-plan {slug}:"
+	trail = "".join(TRUNCATION_MARKERS) + " "
 	for trigger in triggers:
 		if not trigger["enabled"]:
 			continue
 		name = trigger["name"]
 		if name.startswith(wanted):
 			return trigger["id"]
-		stem = name
-		for marker in TRUNCATION_MARKERS:
-			if stem.endswith(marker):
-				stem = stem[: -len(marker)]
-				break
+		stem = name.rstrip(trail)
 		if stem.startswith("implement-plan ") and wanted.startswith(stem):
 			return trigger["id"]
 		if f"/{slug}-plan.md" in trigger["prompt"]:
@@ -736,7 +736,7 @@ def scan_logs(repo: str, errors: list[str]) -> tuple[dict[str, list[str]], list[
 	"""(open ai:claude issues {number: labels}, log projects) — fail open on every read."""
 	open_issues: dict[str, list[str]] = {}
 	try:
-		payload = gh_api(f"repos/{repo}/issues?labels={CLAUDE_LABEL}&state=open&per_page=100")
+		payload = gh_api(f"repos/{repo}/issues?labels={CLAUDE_LABEL}&state=open&per_page=100", paginate=True)
 	except ReadError as exc:
 		errors.append(f"open issue list: {exc}")
 		return open_issues, []
