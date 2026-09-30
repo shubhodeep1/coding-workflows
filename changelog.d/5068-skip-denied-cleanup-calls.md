@@ -11,7 +11,7 @@ On 2026-09-29 the #4755 resume stage (`session_019PaJAyxWrJjeWb93aYofLY`) stoppe
 | Extra API reads per targeted delete | 1 `get_trigger` (none for a trigger taken from a `list_triggers` result) |
 | Flows covered | CLAUDE.md §26.C, §26.D, §26.G; `/implement-plan-claude` (resume hygiene, zombie-checker cleanup, re-arm cleanup, two-step start, hand-back, end-of-project archives, checker prompt); `/fix-claude-pr`; `/claude-issue-pickup` |
 
-What this means for operators: a stage whose cleanup is refused now finishes its stage and reports `cleanup skipped` instead of waiting for someone to approve a prompt. Leftover Routines and sessions are still removed later by `auto_disabled_session_gone`, the stale Routine sweep (`.claude/scripts/stale_routines.py`), the next stage's zombie-checker cleanup, and the checker's stale-wait check.
+What this means for operators: a stage whose cleanup is refused now finishes its stage and reports `cleanup skipped` instead of waiting for someone to approve a prompt. Leftover Routines and sessions are still removed later by `auto_disabled_session_gone`, the stale Routine sweep (`.claude/scripts/stale_routines.py`), the next stage's zombie-checker cleanup, and the checker's stale-wait check. A `/claude-issue-pickup start — restart` that could not archive the old pickup's session reads the queue at its first hourly wake instead of at once, so the two pickups never read it at the same time.
 
 ### For contributors
 

@@ -362,10 +362,20 @@ def test_pickup_skips_a_denied_cleanup_call(pickup_cmd):
 	assert "A not-found result means that cleanup is already done." in keep_one
 	assert "Any other failure is recorded as `cleanup skipped: <tool> failed (<error>)` and is not retried" in keep_one
 	assert "The `created_at` check keeps a single queue reader, not the delete." in keep_one
-	assert "For that one wake both pickups can read the queue." in keep_one
 	assert "That is a new cleanup call, skipped the same way when it is denied, and nothing depends on it succeeding." in keep_one
+	# PR #5097 review round on head 987fa9a: the non-atomic fixer claim cannot
+	# keep two queue readers apart, so a restart that leaves the older pickup's
+	# session unarchived defers its first queue read to its first hourly wake.
+	assert "For that one wake both pickups can read the queue." not in keep_one
+	start = keep_one[keep_one.index("**`start`**"):keep_one.index("**`— wake.`**")]
+	assert "unless this step left another pickup's session unarchived: then do not read the queue in this turn" in start
+	assert "Report `claude-issue-pickup: restarted; first queue read at the next hourly wake`" in start
+	assert "So a `start — restart` that leaves any other pickup's session unarchived creates its trigger but reads no queue in that turn." in keep_one
+	assert "the two pickups never read the queue at the same time" in keep_one
+	assert "A `/fix-claude-pr` claim is a read and then a separate comment, not an atomic lock" in keep_one
 	rules_one = pickup_cmd[pickup_cmd.index("**One pickup, never deeper.**"):pickup_cmd.index("**Stay lean.**")]
 	assert "only the pickup whose trigger has the latest `created_at` reads the queue, from the older pickup's next wake on" in rules_one
+	assert "A restart that leaves the older pickup's session unarchived reads nothing until its own first hourly wake" in rules_one
 	assert "; cleanup skipped: set_session_title denied (<reason>)" in pickup_cmd
 	assert "; cleanup skipped: archive_session denied (<reason>)" in pickup_cmd
 	rules = pickup_cmd[pickup_cmd.index("## Rules"):]
