@@ -417,3 +417,15 @@ def test_deterministic_skip_merges_an_unheld_claude_head(tmp_path):
 	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture())
 	assert proc.returncode == 0, proc.stderr
 	assert merges == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
+
+
+# --- agents.md stable log prefix registry ----------------------------------
+
+
+@pytest.mark.parametrize("prefix", ["AUTOFIX_AUTO_MERGE_SKIPPED", "AUTOFIX_MERGE_HOLD_GATE"])
+def test_gate_log_keys_are_registered_stable_prefixes(prefix):
+	agents_text = (ROOT / "agents.md").read_text(encoding="utf-8")
+	assert f"- `{prefix}`" in agents_text, prefix
+	assert f"LOG_PREFIX.name={prefix}" in agents_text, prefix
+	assert f"{prefix} pr=" in AUTO_MERGE_HELPER.read_text(encoding="utf-8"), prefix
+	assert f"{prefix} pr=" in WORKFLOW.read_text(encoding="utf-8"), prefix
