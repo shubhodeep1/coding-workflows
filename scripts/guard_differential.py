@@ -37,6 +37,23 @@ answers `allow`. A changed `*_guard.py` (new, edited, or deleted) with no
 corpus file, or with one that holds no shape, fails the check: every guard
 must be covered.
 
+Guard wiring (issue #5328). A guard only runs when a `settings.json` wires it,
+so a PR that edits only the settings could retarget a guard's command to
+`python3 -c 'pass' "$CLAUDE_PROJECT_DIR"/.claude/hooks/<guard>.py` and skip
+every check above. For each settings file in SETTINGS_FILES that changed, the
+check extracts every hook entry (any event) whose command names
+`.claude/hooks/<name>_guard.py` and fails closed on each base entry with no
+verified head counterpart: same event and hook, a command that is unchanged or
+exactly the canonical `python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/<hook>.py`
+with that hook present in the head's hooks tree, a matcher that covers the
+base matcher, a timeout no lower than the base's, and every other key equal.
+`disableAllHooks` turning on, any change to the top-level `env` object (it
+reaches every hook's process, so it could set a guard's kill switch or
+shadow `python3` on PATH), and an unparseable head file fail too. A wiring
+change is excused only when its printed identity
+(`settings:<file>:<event>:<matcher>:<hook>`) is listed under
+`Intended loosening:`, which counts as loosening like a listed shape.
+
 Corpus format (one shape per line; blank lines and `#` comments skipped):
   <command>             a Bash `tool_input.command`;
   json: <object>        a whole PreToolUse payload (for MCP tools and
@@ -53,15 +70,17 @@ the scenario's `https://github.com/o/r.git` origin fails locally instead of
 reaching the network. Every `CLAUDE_*` variable is removed, so no kill switch
 is inherited.
 
-Output: one `GUARD_DIFFERENTIAL` line per regression, per missing corpus, and
-a summary line. `--json` also prints every shape's result. Exit 0 when clean
-or when no hook changed, 1 on a regression or a missing corpus, 2 on a usage
-or setup error (bad ref, unreadable corpus).
+Output: one `GUARD_DIFFERENTIAL` line per regression, per missing corpus, per
+wiring regression (`wiring_regression`), and a summary line. `--json` also
+prints every shape's and wiring's result. Exit 0 when clean or when no hook
+or settings file changed, 1 on a regression, a missing corpus, or a wiring
+regression, 2 on a usage or setup error (bad ref, unreadable corpus).
 
 Wired as the `Guard differential check (issue #5174)` step of the
 `tests-hooks-and-orchestrator` job in `.github/workflows/ci.yml` (reported
 through the `CI / lint` aggregate), which runs on every pull request into
-`main` and `stable`, so a #4785 twin-sync PR is gated by it too.
+`main` and `stable`, so a #4785 twin-sync PR is gated by it too. It runs
+when a hook `*.py` file or either settings file changed.
 """
 
 from __future__ import annotations
@@ -85,6 +104,18 @@ HOOK_TREES = (".claude/hooks", "workflow-templates/.claude/hooks")
 DEFAULT_CORPUS_DIR = "tests/guard_corpus"
 HOOK_TIMEOUT_SECONDS = 120
 _STRIPPED_ENV_KEYS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST")
+# Each hooks tree and the settings file that wires it. Both files name
+# `.claude/hooks/...` (consumer repos receive the workflow-templates copy as
+# `.claude/`), so a command is checked against its own side's hooks tree.
+SETTINGS_FILES = {
+	".claude/hooks": ".claude/settings.json",
+	"workflow-templates/.claude/hooks": "workflow-templates/.claude/settings.json",
+}
+# Claude Code's timeout for a command hook that sets none.
+DEFAULT_HOOK_TIMEOUT_SECONDS = 60
+GUARD_COMMAND_RE = re.compile(r"\.claude/hooks/([A-Za-z0-9_]+_guard)\.py\b")
+CANONICAL_GUARD_COMMAND_RE = re.compile(r'python3 "\$CLAUDE_PROJECT_DIR"/\.claude/hooks/([A-Za-z0-9_]+_guard)\.py')
+PLAIN_MATCHER_RE = re.compile(r"[A-Za-z0-9_]+(?:\|[A-Za-z0-9_]+)*")
 
 STRICTNESS = {
 	"block": 3,
@@ -132,19 +163,60 @@ class ShapeResult:
 		return self.loosened and not self.intended
 
 
+@dataclass(frozen=True)
+class GuardWiring:
+	"""One settings hook entry whose command names a `*_guard.py` hook.
+
+	`extras` is the canonical JSON of every other key of the entry and of its
+	matcher group (everything but `command`, `timeout`, `matcher`, `hooks`).
+	"""
+
+	event: str
+	matcher: str | None
+	hook: str
+	command: str
+	timeout: object
+	extras: str
+
+
+@dataclass
+class WiringResult:
+	"""A base guard wiring with no verified head counterpart (or a file-level
+	failure: `disableAllHooks` turned on, a changed `env`, or an unparseable
+	head file)."""
+
+	settings: str
+	event: str
+	matcher: str | None
+	hook: str
+	reason: str
+	identity: str
+	intended: bool = False
+
+	@property
+	def regression(self) -> bool:
+		return not self.intended
+
+
 @dataclass
 class Report:
 	results: list[ShapeResult] = field(default_factory=list)
 	missing_corpus: list[str] = field(default_factory=list)
 	trees: list[str] = field(default_factory=list)
+	settings: list[str] = field(default_factory=list)
+	wiring: list[WiringResult] = field(default_factory=list)
 
 	@property
 	def regressions(self) -> list[ShapeResult]:
 		return [result for result in self.results if result.regression]
 
 	@property
+	def wiring_regressions(self) -> list[WiringResult]:
+		return [result for result in self.wiring if result.regression]
+
+	@property
 	def failed(self) -> bool:
-		return bool(self.regressions or self.missing_corpus)
+		return bool(self.regressions or self.missing_corpus or self.wiring_regressions)
 
 
 class SetupError(Exception):
@@ -489,12 +561,13 @@ def changed_paths(repo_root: Path, base_ref: str, head_ref: str | None) -> list[
 	args = ["diff", "--name-only", base_ref]
 	if head_ref:
 		args.append(head_ref)
-	args += ["--", *HOOK_TREES]
+	pathspecs = [*HOOK_TREES, *SETTINGS_FILES.values()]
+	args += ["--", *pathspecs]
 	output = _repo_git(repo_root, *args).stdout
 	if not head_ref:
 		# `git diff` does not list untracked files, but `materialize(None)`
 		# copies them, so a new hook that is not yet added still counts.
-		output += _repo_git(repo_root, "ls-files", "--others", "--exclude-standard", "--", *HOOK_TREES).stdout
+		output += _repo_git(repo_root, "ls-files", "--others", "--exclude-standard", "--", *pathspecs).stdout
 	return sorted({line for line in output.splitlines() if line.strip()})
 
 
@@ -536,6 +609,174 @@ def ref_corpora(repo_root: Path, ref: str, corpus_dir: str) -> dict[str, list[Sh
 		blob = _repo_git(repo_root, "cat-file", "-p", f"{ref}:{corpus_dir}/{name}")
 		corpora[name[: -len(".txt")]] = parse_corpus(blob.stdout, name[: -len(".txt")], f"{ref}:{corpus_dir}/{name}")
 	return corpora
+
+
+# ──────────────────────────────────────────────────────────────────
+# Settings guard wiring (issue #5328)
+# ──────────────────────────────────────────────────────────────────
+
+
+def read_settings_text(repo_root: Path, ref: str | None, path: str) -> str | None:
+	"""The settings file at `ref` (or in the working tree), or None when absent."""
+	if ref is None:
+		source = repo_root / path
+		if not source.is_file():
+			return None
+		try:
+			return source.read_text(encoding="utf-8")
+		except (OSError, UnicodeDecodeError):
+			return ""
+	blob = _repo_git(repo_root, "cat-file", "-p", f"{ref}:{path}", check=False)
+	return blob.stdout if blob.returncode == 0 else None
+
+
+def parse_settings(text: str | None) -> dict | None:
+	"""The settings object, or None when the text is absent, not JSON, or not an object."""
+	if text is None:
+		return None
+	try:
+		parsed = json.loads(text)
+	except ValueError:
+		return None
+	return parsed if isinstance(parsed, dict) else None
+
+
+def extract_guard_wiring(settings: dict) -> list[GuardWiring]:
+	"""Every hook entry, under any event, whose command names `.claude/hooks/<name>_guard.py`."""
+	wirings: list[GuardWiring] = []
+	events = settings.get("hooks")
+	if not isinstance(events, dict):
+		return wirings
+	for event, groups in events.items():
+		if not isinstance(groups, list):
+			continue
+		for group in groups:
+			if not isinstance(group, dict):
+				continue
+			entries = group.get("hooks")
+			if not isinstance(entries, list):
+				continue
+			raw_matcher = group.get("matcher")
+			matcher = raw_matcher if isinstance(raw_matcher, str) or raw_matcher is None else json.dumps(raw_matcher)
+			group_extras = {key: value for key, value in group.items() if key not in ("matcher", "hooks")}
+			for entry in entries:
+				if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
+					continue
+				command = entry["command"]
+				entry_extras = {key: value for key, value in entry.items() if key not in ("command", "timeout")}
+				extras = json.dumps({"entry": entry_extras, "group": group_extras}, sort_keys=True)
+				for hook in sorted(set(GUARD_COMMAND_RE.findall(command))):
+					wirings.append(GuardWiring(str(event), matcher, hook, command, entry.get("timeout"), extras))
+	return wirings
+
+
+def matcher_covers(head: str | None, base: str | None) -> bool:
+	"""True when every tool the base matcher selects is selected by the head matcher.
+
+	Only provable cases pass: an identical matcher, a match-all head (absent,
+	empty, or `*`), or two plain tool-name lists (`A|B`) where the head is a
+	superset. Any other regex change fails closed.
+	"""
+	if head == base or head in (None, "", "*"):
+		return True
+	if head is None or base is None or not PLAIN_MATCHER_RE.fullmatch(head) or not PLAIN_MATCHER_RE.fullmatch(base):
+		return False
+	return set(base.split("|")) <= set(head.split("|"))
+
+
+def _effective_timeout(value: object) -> float | None:
+	if value is None:
+		return float(DEFAULT_HOOK_TIMEOUT_SECONDS)
+	if isinstance(value, bool) or not isinstance(value, (int, float)):
+		return None
+	return float(value)
+
+
+def wiring_failures(head: GuardWiring, base: GuardWiring, head_hooks: set[str]) -> list[str]:
+	"""Why `head` does not verifiably keep `base` running (empty when it does)."""
+	failures: list[str] = []
+	canonical = CANONICAL_GUARD_COMMAND_RE.fullmatch(head.command)
+	if head.command != base.command and not (canonical and canonical.group(1) == base.hook and base.hook in head_hooks):
+		failures.append("command")
+	if not matcher_covers(head.matcher, base.matcher):
+		failures.append("matcher")
+	if head.timeout != base.timeout:
+		head_timeout = _effective_timeout(head.timeout)
+		base_timeout = _effective_timeout(base.timeout)
+		if head_timeout is None or base_timeout is None or head_timeout < base_timeout:
+			failures.append("timeout")
+	if head.extras != base.extras:
+		failures.append("keys")
+	return failures
+
+
+def _head_hook_names(repo_root: Path, head_ref: str | None, tree: str) -> set[str]:
+	if head_ref is None:
+		source = repo_root / tree
+		names = [item.name for item in source.iterdir() if item.is_file()] if source.is_dir() else []
+	else:
+		names = _ref_blob_names(repo_root, head_ref, tree)
+	return {name[: -len(".py")] for name in names if name.endswith(".py")}
+
+
+def _wiring_result(
+	settings_path: str,
+	event: str,
+	matcher: str | None,
+	hook: str,
+	reason: str,
+	identity: str,
+	listed: list[tuple[str, str]],
+) -> WiringResult:
+	intended = any(text == identity and listed_hook in ("", hook) for listed_hook, text in listed)
+	return WiringResult(settings_path, event, matcher, hook, reason, identity, intended)
+
+
+def compare_settings_wiring(
+	repo_root: Path,
+	base_ref: str,
+	head_ref: str | None,
+	settings_path: str,
+	tree: str,
+	listed: list[tuple[str, str]],
+) -> list[WiringResult]:
+	"""Fail closed on every base guard wiring that the head no longer verifiably keeps."""
+	results: list[WiringResult] = []
+	base_settings = parse_settings(read_settings_text(repo_root, base_ref, settings_path))
+	head_text = read_settings_text(repo_root, head_ref, settings_path)
+	head_settings = parse_settings(head_text)
+	if head_text is not None and head_settings is None:
+		# Claude Code drops every hook in a settings file it cannot load.
+		identity = f"settings:{settings_path}:unparseable"
+		return [_wiring_result(settings_path, "", None, "", "unparseable", identity, listed)]
+	if (head_settings or {}).get("disableAllHooks") and not (base_settings or {}).get("disableAllHooks"):
+		identity = f"settings:{settings_path}:disableAllHooks"
+		results.append(_wiring_result(settings_path, "", None, "", "disableAllHooks", identity, listed))
+	if (head_settings or {}).get("env") != (base_settings or {}).get("env"):
+		# A settings `env` reaches every hook's process: it can set a guard's
+		# kill switch (`CLAUDE_PR_MERGE_GUARD=off`) or put another `python3`
+		# first on PATH while the command stays canonical, so any change fails.
+		identity = f"settings:{settings_path}:env"
+		results.append(_wiring_result(settings_path, "", None, "", "env", identity, listed))
+	head_wirings = extract_guard_wiring(head_settings or {})
+	head_hooks = _head_hook_names(repo_root, head_ref, tree)
+	seen: set[str] = set()
+	for base in extract_guard_wiring(base_settings or {}):
+		# repr, not the dataclass hash: a malformed `timeout` may be a list.
+		if repr(base) in seen:
+			continue
+		seen.add(repr(base))
+		candidates = [
+			wiring_failures(head, base, head_hooks)
+			for head in head_wirings
+			if head.event == base.event and head.hook == base.hook
+		]
+		if any(not failures for failures in candidates):
+			continue
+		reason = ",".join(min(candidates, key=len)) if candidates else "removed"
+		identity = f"settings:{settings_path}:{base.event}:{base.matcher or ''}:{base.hook}"
+		results.append(_wiring_result(settings_path, base.event, base.matcher, base.hook, reason, identity, listed))
+	return results
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -640,6 +881,11 @@ def run_check(
 			# Each tree compares its own hook files (the twin is a separate
 			# file), so rows for the same shape in two trees are not duplicates.
 			report.results += compare_hook_dirs(base_dir, head_dir, corpora, scratch / "runs", listed, tree)
+	for tree, settings_path in SETTINGS_FILES.items():
+		if settings_path not in changed and not all_trees:
+			continue
+		report.settings.append(settings_path)
+		report.wiring += compare_settings_wiring(repo_root, base_ref, head_ref, settings_path, tree, listed)
 	return report
 
 
@@ -654,9 +900,20 @@ def _describe(outcome: Outcome) -> str:
 
 
 def print_report(report: Report, as_json: bool) -> None:
-	if not report.trees:
-		print(f"{LOG_KEY} status=skipped reason=no-hook-change")
+	if not report.trees and not report.settings:
+		# `reason=no-hook-change` stays as it was (CLAUDE.md §6); `checked=`
+		# names both gates, since a settings-file change also runs the check.
+		print(f"{LOG_KEY} status=skipped reason=no-hook-change checked=hooks,settings")
 		return
+	for wiring in report.wiring:
+		fields = (
+			f"settings={wiring.settings} event={wiring.event or '-'} matcher={json.dumps(wiring.matcher)} "
+			f"hook={wiring.hook or '-'} reason={wiring.reason} shape={json.dumps(wiring.identity)}"
+		)
+		if wiring.intended:
+			print(f"{LOG_KEY} intended_wiring_change {fields}")
+		else:
+			print(f"::error::{LOG_KEY} wiring_regression {fields}")
 	for path in report.missing_corpus:
 		print(
 			f"::error::{LOG_KEY} missing_corpus path={path} "
@@ -690,13 +947,36 @@ def print_report(report: Report, as_json: bool) -> None:
 					}
 				)
 			)
+		for wiring in report.wiring:
+			print(
+				json.dumps(
+					{
+						"settings": wiring.settings,
+						"event": wiring.event,
+						"matcher": wiring.matcher,
+						"hook": wiring.hook,
+						"reason": wiring.reason,
+						"identity": wiring.identity,
+						"intended": wiring.intended,
+					}
+				)
+			)
 	status = "fail" if report.failed else "pass"
 	intended = sum(1 for result in report.results if result.intended)
 	print(
 		f"{LOG_KEY} status={status} trees={','.join(report.trees)} shapes={len(report.results)} "
 		f"regressions={len(report.regressions)} intended_loosening={intended} "
-		f"missing_corpus={len(report.missing_corpus)}"
+		f"missing_corpus={len(report.missing_corpus)} settings={','.join(report.settings)} "
+		f"wiring_regressions={len(report.wiring_regressions)}"
 	)
+	if report.wiring_regressions:
+		print(
+			f"{LOG_KEY}: a guard's settings.json wiring changed in a way the check cannot verify still runs "
+			"the guard. Keep the entry's event, a covering matcher, a timeout no lower than before, and "
+			'the command `python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/<hook>.py`, or, if the change is '
+			"intended, list each printed `shape` verbatim under an `Intended loosening:` section of the "
+			"PR body (the sync then waits for the operator)."
+		)
 	if report.regressions:
 		print(
 			f"{LOG_KEY}: a shape the base hook blocked, denied, or asked (or left to the normal "
@@ -713,7 +993,9 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--pr-body-file", default=None, help="file holding the PR body (for `Intended loosening:`)")
 	parser.add_argument("--corpus-dir", default=None, help=f"corpus directory (default: {DEFAULT_CORPUS_DIR})")
 	parser.add_argument("--repo-root", default=".", help="repository root (default: .)")
-	parser.add_argument("--all", action="store_true", help="compare every hook tree even when no hook changed")
+	parser.add_argument(
+		"--all", action="store_true", help="compare every hook tree and settings file even when none changed"
+	)
 	parser.add_argument("--json", action="store_true", help="also print every shape's result as JSON lines")
 	args = parser.parse_args(argv)
 
