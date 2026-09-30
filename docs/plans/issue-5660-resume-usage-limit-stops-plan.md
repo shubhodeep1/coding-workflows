@@ -94,7 +94,7 @@ When the account hits its Claude usage limit, every running session fails its tu
      - `permission_prompt`: `needs_action` or `status_detail` asks to approve or deny, or says it is waiting on permission.
      - `needs_input`: snapshot path only.
      - `not_reset`: its own `rate_limit_info` is limited and `resetsAt` is still in the future.
-     - `wake_pending`: an enabled trigger bound to it fires within 30 minutes or is overdue (text path), or any enabled trigger is bound to it (snapshot path).
+     - `wake_pending`: for a checker, any enabled trigger is bound to it, since its triggers are its own check-ins and one means its chain is alive; for another session, an enabled bound trigger fires within 30 minutes, is overdue, or has an unreadable time.
    - **Kind:** `checker` when the title contains `— checker` or `status check-in`, otherwise `other`.
    - **Ordering:** checkers first, then the oldest `updated_at`.
    - **Cap:** the first `limit` entries go to `resume`. The rest go to `pending` (ids only), for the next wake.
@@ -229,7 +229,7 @@ Ships with the final PR into `main`. The pickup reads its command file and scrip
   - Alternatives: B, stop at the first refusal; C, a foreground `sleep`.
   - Why: the issue says to wait out the limit instead of failing, and the harness blocks foreground `sleep`.
 - AD-6 **Q6: Which bound triggers block a resume?**
-  - Picked: A. Text path: an enabled trigger whose `next_run_at` is within 30 minutes, overdue, or unreadable. Snapshot path: any enabled trigger.
+  - Picked: A. A checker (on either signal): any enabled trigger, since its triggers are its own check-ins (at most an hour out), so one means its chain is alive and a resume would start a second chain. Any other session: an enabled trigger whose `next_run_at` is within 30 minutes, overdue, or unreadable. (Refined while implementing phase 1: the plan first applied "any trigger" to the snapshot signal only.)
   - Alternatives: B, any enabled trigger on both paths.
   - Why: the issue body names 30 minutes. A stage session keeps a 7-day hand-back Routine that would block its resume under B. The owner's comment names "no enabled trigger" for the snapshot case.
 - AD-7 **Q7: How is a resume trigger named when the session has no issue number?**
