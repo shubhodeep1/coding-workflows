@@ -91,8 +91,8 @@ token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
 Before any of that, a Bash command is parsed fail-closed (issue #5124): the
 values of credential-named assignments, credential headers, credential long
 flags (`--user`, `--password`, `--token`, …, even when the value starts with
-`-`), and per-command credential short flags (`curl -u`, `mysql -p`, …)
-become `***`. A command that cannot be parsed, or whose credential does not
+`-`), and per-command credential short flags (`curl -u`, `mysql -p`, …,
+also behind a wrapper such as `sudo`, `env`, or `timeout`) become `***`. A command that cannot be parsed, or whose credential does not
 occur verbatim or is shorter than MIN_MASKED_VALUE_CHARS, is withheld and
 only its shape is shown; the shape itself keeps no raw text (an unparseable
 command keeps only its command word, an attached credential short flag
@@ -180,7 +180,8 @@ _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 REDACTION_PATTERNS = (
 	# URL userinfo first (issue #5124), so `https://x-access-token:<t>@host/…` keeps its host.
-	(re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@'\"]+@"), r"\1***@"),
+	# Up to the last `@` before the path, so an unencoded `@` in the password is masked too.
+	(re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/'\"]+@"), r"\1***@"),
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
 	(re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "github_pat_***"),
 	(re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"), "sk-***"),
@@ -231,9 +232,15 @@ _CREDENTIAL_SHORT_FLAGS = {
 }
 # Commands whose `-H` takes a header; an attached header value is cut from the shape.
 _HEADER_SHORT_FLAG_TOOLS = frozenset({"curl", "gh", "http", "https"})
+# Commands that run another command from their arguments (`sudo mysql -p…`, `timeout 30 curl -u …`):
+# the credential flags of the command they run still apply.
+_COMMAND_WRAPPERS = frozenset(
+	{"sudo", "doas", "env", "timeout", "nice", "nohup", "time", "command", "exec", "xargs", "stdbuf", "ionice", "setsid", "chrt", "watch", "unbuffer", "caffeinate", "strace", "ltrace"}
+)
+_CREDENTIAL_COMMANDS = frozenset(key.split(" ", 1)[0] for key in _CREDENTIAL_SHORT_FLAGS) | _HEADER_SHORT_FLAG_TOOLS
 _HEADER_WORD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(\S.*?)\s*$", re.DOTALL)
 _CREDENTIAL_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)=(.*)$", re.DOTALL)
-_URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@")
+_URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@")
 
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>()"
 _HEREDOC_RE = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
@@ -291,6 +298,21 @@ def _attached_value_letters(command: str, subcommand: str) -> str:
 	"""The short-flag letters whose attached value is cut from a shape: credential flags, plus `-H` for header tools."""
 	letters = _CREDENTIAL_SHORT_FLAGS.get(command, "") + _CREDENTIAL_SHORT_FLAGS.get(f"{command} {subcommand}", "")
 	return letters + ("H" if command in _HEADER_SHORT_FLAG_TOOLS else "")
+
+
+def _wrapped_command_index(words: list[str], start: int) -> int:
+	"""Index of the command a wrapper at `start` runs (`sudo -u root mysql …` → `mysql`), else `start`.
+
+	The wrapped command is the first later word naming a command in
+	_CREDENTIAL_COMMANDS, so a wrapper's own options (`sudo -u root`) are never
+	read as that command's credential flags.
+	"""
+	if start >= len(words) or words[start].rsplit("/", 1)[-1] not in _COMMAND_WRAPPERS:
+		return start
+	for position in range(start + 1, len(words)):
+		if words[position].rsplit("/", 1)[-1] in _CREDENTIAL_COMMANDS:
+			return position
+	return start
 
 
 def _credential_flag_position(token: str, letters: str) -> int | None:
@@ -354,6 +376,10 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 	positionals = 0
 	subcommand = ""
 	seen_flags: set[str] = set()
+	# Behind a wrapper (`sudo mysql -pS3cret`), flags after the wrapped command follow that command's credential rules.
+	wrapped_position = _wrapped_command_index(tokens, index)
+	wrapped = tokens[wrapped_position].rsplit("/", 1)[-1] if wrapped_position != index else ""
+	wrapped_subcommand = tokens[wrapped_position + 1] if wrapped and wrapped_position + 1 < len(tokens) else ""
 	index += 1
 	while index < len(tokens):
 		token = tokens[index]
@@ -362,8 +388,9 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			shape.append(token[1:])
 			continue
 		if token.startswith("-") and len(token) > 1:
+			flag_command, flag_subcommand = (wrapped, wrapped_subcommand) if wrapped and index - 1 > wrapped_position else (command, subcommand)
 			# An attached credential or header value (`-udeploy:pwd`) never reaches the shape.
-			cut = _cut_attached_value(token, _attached_value_letters(command, subcommand))
+			cut = _cut_attached_value(token, _attached_value_letters(flag_command, flag_subcommand))
 			flag = cut if cut is not None else token.split("=", 1)[0] + ("=*" if "=" in token else "")
 			if flag in ("-X", "--method") and index < len(tokens):
 				flag = f"{flag} {tokens[index].upper()}"
@@ -371,7 +398,7 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			if flag not in seen_flags:
 				seen_flags.add(flag)
 				shape.append(flag)
-			if index < len(tokens) and tokens[index].startswith("-") and _credential_flag_awaits_value(token, command, subcommand):
+			if index < len(tokens) and tokens[index].startswith("-") and _credential_flag_awaits_value(token, flag_command, flag_subcommand):
 				# A next word that starts with `-` may be this flag's value (`--password -s3cret`): it never reaches the shape.
 				index += 1
 				if shape[-1] != "*":
@@ -469,6 +496,8 @@ def _segment_credentials(words: list[str]) -> set[str]:
 	"""Credential values in one simple command: word credentials, credential long flags, and the command's credential short flags."""
 	values: set[str] = set()
 	start = next((position for position, word in enumerate(words) if not _ASSIGNMENT_RE.match(word)), len(words))
+	# Look past a wrapper (`sudo`, `env`, `timeout`, …) to the command it runs.
+	start = _wrapped_command_index(words, start)
 	command = words[start].rsplit("/", 1)[-1] if start < len(words) else ""
 	subcommand = words[start + 1] if start + 1 < len(words) else ""
 	letters = _CREDENTIAL_SHORT_FLAGS.get(command, "") + _CREDENTIAL_SHORT_FLAGS.get(f"{command} {subcommand}", "")
@@ -491,7 +520,8 @@ def _segment_credentials(words: list[str]) -> set[str]:
 					# another flag: mask it either way, and still read it as a word of its own.
 					values.add(words[index])
 		else:
-			position = _credential_flag_position(word, letters)
+			# Short flags before the command are a wrapper's own (`sudo -u root`), not the command's.
+			position = _credential_flag_position(word, letters) if index - 1 > start else None
 			if position is None:
 				continue
 			if len(word) > position + 1:
