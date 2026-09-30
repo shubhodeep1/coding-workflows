@@ -328,6 +328,16 @@ def _bash(command):
 		("docker --config /d login -p S3cretPass reg", "S3cretPass", "docker --config /d login -p *** reg"),
 		("docker -H tcp://x login -pS3cretPass reg", "S3cretPass", "docker -H tcp://x login -p*** reg"),
 		("sudo docker --config /d login -pS3cretPass reg", "S3cretPass", "sudo docker --config /d login -p*** reg"),
+		# A credential command behind any command that runs another (`runuser`, `docker exec`, `kubectl exec`) keeps its flags.
+		("runuser -u postgres -- mysql -pS3cretPass app", "S3cretPass", "runuser -u postgres -- mysql -p*** app"),
+		("docker exec db mysql -pS3cretPass app", "S3cretPass", "docker exec db mysql -p*** app"),
+		("kubectl exec db-0 -- mysql -pS3cretPass app", "S3cretPass", "kubectl exec db-0 -- mysql -p*** app"),
+		# A shell's (or `su`'s) `-c` command line is parsed like the command itself.
+		("su postgres -c 'mysql -pS3cretPass app'", "S3cretPass", "su postgres -c 'mysql -p*** app'"),
+		("su --command='mysql -pS3cretPass app' postgres", "S3cretPass", "su --command='mysql -p*** app' postgres"),
+		("sudo sh -c 'mysql -pS3cretPass app'", "S3cretPass", "sudo sh -c 'mysql -p*** app'"),
+		("docker exec db bash -lc 'redis-cli -a S3cretPass ping'", "S3cretPass", "docker exec db bash -lc 'redis-cli -a *** ping'"),
+		("bash -c \"su pg -c 'mysql -pS3cretPass'\"", "S3cretPass", "bash -c \"su pg -c 'mysql -p***'\""),
 		# An unencoded `@` in the password: userinfo runs to the last `@` before the path.
 		("git clone https://user:pa@ss1234@github.com/o/r.git", "ss1234", "git clone https://***@github.com/o/r.git"),
 	],
@@ -350,6 +360,10 @@ def test_example_masks_credentials(command, secret, expected):
 		("TOKEN=abc curl https://a.b", "abc", "TOKEN=* curl *"),
 		# A long credential flag's `-`-prefixed value shorter than MIN_MASKED_VALUE_CHARS.
 		("tool --password -ab run", "-ab", "tool --password *"),
+		# A shell's `-c` command line that cannot be parsed is withheld like the command itself.
+		("su pg -c \"mysql -pS3cretPass 'unterminated\"", "S3cretPass", "su * -c *"),
+		# `-c` command lines nested deeper than MAX_NESTED_COMMAND_DEPTH are withheld.
+		("sh -c \"sh -c 'sh -c \\\"sh -c mysql\\\\ -pS3cretPass\\\"'\"", "S3cretPass", "sh -c *"),
 	],
 )
 def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):
@@ -390,6 +404,10 @@ def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
 		"sudo apt-get install curl -y",
 		# `-p` before the `login` subcommand is not `docker login -p`.
 		"docker run -p 8080:80 nginx",
+		# A `-c` command line without credentials, and `-c` of a command that is not a shell, change nothing.
+		"bash -c 'cd /x && gh api repos/o/r'",
+		"docker exec db sh -c 'ls -la /var/lib/mysql'",
+		"kubectl exec db-0 -- psql -c 'select 1'",
 	],
 )
 def test_credential_free_commands_are_unchanged(command):
@@ -426,6 +444,10 @@ def test_credential_free_commands_are_unchanged(command):
 		("sudo -u http mysql -pS3cretPass app", "sudo -u * -p* *"),
 		("docker --config /d login -pS3cretPass reg", "docker --config * -p* *"),
 		("podman login -pS3cretPass reg", "podman * -p* *"),
+		("runuser -u postgres -- mysql -pS3cretPass app", "runuser -u * -- * -p* *"),
+		("docker exec db mysql -pS3cretPass app", "docker exec * -p* *"),
+		# A `-c` command line is one value in the shape.
+		("su postgres -c 'mysql -pS3cretPass app'", "su * -c *"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):

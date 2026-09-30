@@ -233,13 +233,17 @@ _CREDENTIAL_SHORT_FLAGS = {
 }
 # Commands whose `-H` takes a header; an attached header value is cut from the shape.
 _HEADER_SHORT_FLAG_TOOLS = frozenset({"curl", "gh", "http", "https"})
-# Commands that run another command from their arguments (`sudo mysql -p…`, `timeout 30 curl -u …`):
-# the credential flags of the command they run still apply (_segment_flag_letters).
-_COMMAND_WRAPPERS = frozenset(
-	{"sudo", "doas", "env", "timeout", "nice", "nohup", "time", "command", "exec", "xargs", "stdbuf", "ionice", "setsid", "chrt", "watch", "unbuffer", "caffeinate", "strace", "ltrace"}
-)
 # Every command with credential short flags, `docker` and `podman` included through their `login` keys.
+# Wherever one appears in a segment, its credential flags apply to the words after it: behind a wrapper
+# (`sudo mysql -p…`, `runuser -u pg -- mysql -p…`) or another command's arguments (`docker exec db mysql -p…`)
+# (_segment_flag_letters).
 _CREDENTIAL_COMMANDS = frozenset(key.split(" ", 1)[0] for key in _CREDENTIAL_SHORT_FLAGS) | _HEADER_SHORT_FLAG_TOOLS
+# Commands whose `-c` (or `--command`) argument is a command line of its own (`su pg -c 'mysql -p…'`,
+# `sudo sh -c 'curl -u …'`): it is parsed like the command and its credentials are masked too.
+_SHELL_COMMAND_RUNNERS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "su", "runuser"})
+_SHELL_COMMAND_FLAG_RE = re.compile(r"^(-[A-Za-z]*c|--(session-)?command)$")
+# Deeper nesting of `-c` command lines than this withholds the command (fail closed).
+MAX_NESTED_COMMAND_DEPTH = 3
 _HEADER_WORD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(\S.*?)\s*$", re.DOTALL)
 _CREDENTIAL_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)=(.*)$", re.DOTALL)
 _URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@")
@@ -305,25 +309,22 @@ def _attached_value_letters(command: str, subcommand: str) -> str:
 def _segment_flag_letters(words: list[str], start: int, position: int, header: bool = False) -> str:
 	"""Short-flag letters that apply to the word at `position` of a segment whose command is at `start`.
 
-	The letters are the credential short flags of the segment's command, plus
-	those of its credential subcommand: the first word between the command and
-	`position` that forms a _CREDENTIAL_SHORT_FLAGS key with it, so global
-	options before the subcommand never hide it (`docker --config d login -p…`).
-	Behind a wrapper (`sudo`, `env`, `timeout`, …) every word between the
-	wrapper and `position` that names a command in _CREDENTIAL_COMMANDS adds
-	its letters the same way: a wrapper's option value (`sudo -u http mysql
-	-p…`) or the wrapped command's own argument (`sudo mysql -h curl -p…`) can
+	Every word from the command up to `position` that names a command in
+	_CREDENTIAL_COMMANDS adds its credential short flags, plus those of its
+	credential subcommand: the first word between it and `position` that forms
+	a _CREDENTIAL_SHORT_FLAGS key with it, so global options before the
+	subcommand never hide it (`docker --config d login -p…`). No list of
+	wrappers is needed: a credential command behind any command that runs
+	another (`sudo`, `timeout`, `runuser -u pg --`, `docker exec db`, `kubectl
+	exec pod --`) still applies its flags. A wrapper's option value (`sudo -u
+	http mysql -p…`) or a command's own argument (`sudo mysql -h curl -p…`) can
 	name such a command too, and masking one value too many is safe where one
-	too few leaks. A wrapper's own flags before any such word get no letters
-	(`sudo -u root`). With `header`, a header tool also adds `H`
-	(_attached_value_letters).
+	too few leaks. Flags before any such word get no letters (`sudo -u root`).
+	With `header`, a header tool also adds `H` (_attached_value_letters).
 	"""
 	if start >= len(words):
 		return ""
-	if words[start].rsplit("/", 1)[-1] in _COMMAND_WRAPPERS:
-		commands = [later for later in range(start + 1, min(position, len(words))) if words[later].rsplit("/", 1)[-1] in _CREDENTIAL_COMMANDS]
-	else:
-		commands = [start]
+	commands = [later for later in range(start, min(position, len(words))) if words[later].rsplit("/", 1)[-1] in _CREDENTIAL_COMMANDS]
 	letters = ""
 	for command_position in commands:
 		command = words[command_position].rsplit("/", 1)[-1]
@@ -516,8 +517,11 @@ def _word_credentials(word: str) -> set[str]:
 	return values
 
 
-def _segment_credentials(words: list[str]) -> set[str]:
-	"""Credential values in one simple command: word credentials, credential long flags, and the command's credential short flags."""
+def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
+	"""Credential values in one simple command: word credentials, credential long flags, the credential short flags of its credential commands, and the credentials of a shell's `-c` command line.
+
+	Raises ValueError, like _command_line_credentials, when a `-c` command line cannot be parsed.
+	"""
 	values: set[str] = set()
 	start = next((position for position, word in enumerate(words) if not _ASSIGNMENT_RE.match(word)), len(words))
 	index = 0
@@ -526,6 +530,17 @@ def _segment_credentials(words: list[str]) -> set[str]:
 		index += 1
 		following = words[index] if index < len(words) and not words[index].startswith("-") else None
 		values.update(_word_credentials(word))
+		flag_name, has_attached, attached = word.partition("=")
+		if index - 1 > start and _SHELL_COMMAND_FLAG_RE.match(flag_name if flag_name.startswith("--") else word) and any(
+			earlier.rsplit("/", 1)[-1] in _SHELL_COMMAND_RUNNERS for earlier in words[start : index - 1]
+		):
+			# `su pg -c 'mysql -p…'`, `sudo sh -c 'curl -u …'`: the argument is a command line of its own.
+			if has_attached and flag_name.startswith("--"):
+				values.update(_command_line_credentials(attached, depth + 1))
+			elif index < len(words):
+				values.update(_command_line_credentials(words[index], depth + 1))
+				index += 1
+			continue
 		if word.startswith("--"):
 			name, has_value, value = word.partition("=")
 			if _CREDENTIAL_LONG_FLAG_RE.match(name):
@@ -552,6 +567,31 @@ def _segment_credentials(words: list[str]) -> set[str]:
 	return {value for value in values if value}
 
 
+def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
+	"""Credential values in a command line: those of each simple command in it (_segment_credentials).
+
+	`text` is split into shell words with the lexer `command_shape` uses.
+	Raises ValueError when it cannot be tokenized, or when `-c` command lines
+	nest deeper than MAX_NESTED_COMMAND_DEPTH, so the caller fails closed.
+	"""
+	if depth > MAX_NESTED_COMMAND_DEPTH:
+		raise ValueError("nested command lines too deep")
+	lexer = shlex.shlex(text.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer.commenters = ""
+	lexer.whitespace = " \t\r"
+	lexer.whitespace_split = True
+	tokens = list(lexer)
+	values: set[str] = set()
+	segment: list[str] = []
+	for token in tokens + [";"]:
+		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
+			values.update(_segment_credentials(segment, depth))
+			segment = []
+		else:
+			segment.append(token)
+	return values
+
+
 def _sanitize_bash_command(display: str, parse_text: str) -> str | None:
 	"""`display` with every credential value masked as `***`, or None when that cannot be done safely.
 
@@ -559,27 +599,17 @@ def _sanitize_bash_command(display: str, parse_text: str) -> str | None:
 	bodies or delimiters) is split into shell words with the lexer
 	`command_shape` uses. Credential values are the values of credential-named
 	assignments, credential header fields, credential long flags, and the
-	`_CREDENTIAL_SHORT_FLAGS` of the segment's command. Returns None when the
-	text cannot be tokenized, or when a value is shorter than
-	MIN_MASKED_VALUE_CHARS or does not occur verbatim in `display` (quoting or
-	escapes changed it), so the caller posts the shape instead.
+	`_CREDENTIAL_SHORT_FLAGS` of every credential command in a segment,
+	including those inside a shell's `-c` command line. Returns None when the
+	text (or a `-c` command line) cannot be tokenized, or when a value is
+	shorter than MIN_MASKED_VALUE_CHARS or does not occur verbatim in
+	`display` (quoting or escapes changed it), so the caller posts the shape
+	instead.
 	"""
-	lexer = shlex.shlex(parse_text.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
-	lexer.commenters = ""
-	lexer.whitespace = " \t\r"
-	lexer.whitespace_split = True
 	try:
-		tokens = list(lexer)
+		values = _command_line_credentials(parse_text)
 	except ValueError:
 		return None
-	values: set[str] = set()
-	segment: list[str] = []
-	for token in tokens + [";"]:
-		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
-			values.update(_segment_credentials(segment))
-			segment = []
-		else:
-			segment.append(token)
 	ordered = sorted(values, key=len, reverse=True)
 	if any(len(value) < MIN_MASKED_VALUE_CHARS or value not in display for value in ordered):
 		return None
