@@ -47,7 +47,11 @@ run and issue-list modes → `wait` / `next_stage`; --hand-back mode →
     done for an authenticated, completed review hand-off on the current head
     with no matching dedicated-bot verdict, or for a merge conflict when no
     workflow run is active (no 6-hour wait). An empty
-    CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN disables comment hand-offs.
+    CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN disables comment hand-offs. A trusted
+    `hold` claim on the current head (same trust rules as --hand-back) is
+    never done: `state: held`, whatever labels, hand-off, conflict or checks
+    the PR shows, until a push moves the head (issue #5667). Merged / closed
+    still end the wait.
   * PR with --hand-back (the CLAUDE.md §26 checker and the catch-all sweep,
     scripts/claude_pr_sweep.py): merged / closed are terminal. On a
     `claude/*` head, a Claude fix is also due for a block label
@@ -77,7 +81,8 @@ run and issue-list modes → `wait` / `next_stage`; --hand-back mode →
 API budget (CLAUDE.md §15): REST only, never GraphQL. PR mode issues 1 call
 (`pulls/N`), one call per 100 check runs when the PR is not conflicted, and
 at most 3 further calls when a failure is old (head commit, queued runs,
-in-progress runs). A Claude-fixer PR adds one call per 100 PR comments, at
+in-progress runs). A Claude-fixer PR adds one call per 100 PR comments (read
+once, before the label check, for both the hold and the hand-off), at
 most one hand-off run read (plus 1 compare read when the run was triggered
 by an older push than the head it reviewed), and 3 active-run reads when
 needed. Hand-back mode on a `claude/*` head issues 1 call plus one per 100
@@ -242,17 +247,33 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 	if terminal_only:
 		return {"done": False, "state": "open", "reason": f"PR #{number} open"}
 
+	head = pr.get("head") or {}
+	head_sha = head.get("sha", "")
+	head_ref = head.get("ref", "")
+	fixer_head = isinstance(head_ref, str) and head_ref.startswith(CLAUDE_FIXER_HEAD_PREFIX)
+	fixer_comments = None
+	if fixer_head:
+		# A trusted hold on the current head (the twin-first blocker's, or the
+		# §26.H cap's) waits for a human whatever else the PR shows; only a
+		# push that moves the head lifts it (issue #5667). The comment listing
+		# is read once here and reused for the hand-off check below.
+		if not isinstance(head_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+			raise ValueError("PR head sha must be 40 lowercase hex characters")
+		fixer_comments = gh_api_list(f"repos/{repo}/issues/{number}/comments")
+		hold_claims = read_fix_claims(fixer_comments, head_sha, now, trusted_logins=_fix_claim_trusted_logins(pr))
+		hold_claim = hold_claims["claim"]
+		if hold_claim["state"] == "held":
+			return {"done": False, "state": "held", "head_sha": head_sha, "claim": hold_claim,
+				"reason": f"PR #{number} is on hold on head {head_sha[:12]} ({hold_claim['by']}): a human answers its blocker, and the push that answers it moves the head"}
+
 	blocking = [name for name in _label_names(pr) if name in BLOCKING_LABELS]
 	if blocking:
 		return {"done": True, "state": "blocked", "reason": f"PR #{number} blocked: {', '.join(blocking)}"}
 
-	head = pr.get("head") or {}
-	head_sha = head.get("sha", "")
-	head_ref = head.get("ref", "")
 	conflicted = pr.get("mergeable_state") == "dirty"
-	if isinstance(head_ref, str) and head_ref.startswith(CLAUDE_FIXER_HEAD_PREFIX):
+	if fixer_head:
 		fixer_verdict = _check_claude_fixer_pr(repo, number, head_sha, head_ref, conflicted,
-			default_branch=_pr_default_branch(pr))
+			comments=fixer_comments, default_branch=_pr_default_branch(pr))
 		if fixer_verdict is not None:
 			return fixer_verdict
 	failed_checks: list[str] = []

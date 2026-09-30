@@ -1466,7 +1466,11 @@ can forge a claim or a hold), live for
 `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3) on the current head. After
 `CLAUDE_FIX_HAND_BACK_CAP` (default 3) conflict, CI, and block fixes on one
 PR, the fixer posts a `hold` claim, sends one push notification, and asks;
-nothing touches a held head until someone pushes or the fixer resumes.
+nothing touches a held head until someone pushes or the fixer resumes. The
+`/implement-plan-claude` project checker honours a hold too: a
+`claude/implement-plan-*` PR whose current head is held reports `held` and
+the checker keeps waiting, even when a review hand-off for that head arrives
+before the twin sync (issue #5667).
 
 Setup: the catch-all needs the Claude issue pickup session to be running
 (`/claude-issue-pickup start`, see [Claude issue implementer](#claude-issue-implementer)),
