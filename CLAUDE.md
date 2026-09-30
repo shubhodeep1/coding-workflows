@@ -2313,7 +2313,9 @@ This is an explicit carve-out from §0 and §2 (including §2's
   - a consumer wrapper that predates `target_ref`.
 
   **Sunset:** the PR that puts #4734's `validate.yml` change (validating
-  stacked and `stable` targets) on the default branch removes this bullet.
+  stacked and `stable` targets) on the default branch removes this bullet,
+  the *Stacked project* sentence in `/implement-plan-claude` step 10, and
+  the matching exception in that command's Auto-Decisions section.
 
 ### D) Recording
 
