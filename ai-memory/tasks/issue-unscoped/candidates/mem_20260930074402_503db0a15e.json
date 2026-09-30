@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:310-330 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The PR-named branch of `_active_run_count` filters runs by `(path, display_title)` pair but does not check `head_branch == default_branch`.\n  WHY: A branch author with push access could dispatch a workflow whose `path` is `.github/workflows/internal-review.yml` (or `ai-review.yml`) and whose `run-name` matches `[pr:<N>]`, and the \u00a726 checker would count that run as \"active\" for the target PR. The hand-off then waits for a run whose head_sha is not the PR head, eventually timing out, and the active-run guard in `scripts/claude_pr_sweep.py` would skip a real fixer.\n- .claude/scripts/check_in_status.py:295-308 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new docstring removes the documented \"A repository without internal-review.yml (HTTP 404) counts 0\" behavior, since the repo-wide listing `PR_NAMED_REVIEW_RUNS_PATH` has no per-workflow 404 case.\n  WHY: The function now raises `ReadError` on any failure rather than returning 0 for an absent wrapper. The runtime path is correct; this is a documentation/test alignment note.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Bound the changes-lost retry budget by GitHub-recorded run times, not the head commit's committer time\"\n  expected_change_site: scripts/gh_helpers.sh, autofix_changes_lost_head_retry_consumed, the push_bound jq program near line 1575\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The plan and progress log for #5523 are committed (docs/plans/issue-5523-retry-budget-trusted-push-bound-plan.md, docs/implement-plan/issue-5523-retry-budget-trusted-push-bound.md) but the progress log shows Status: IN_PROGRESS with Phase 1 not started. The push_bound at scripts/gh_helpers.sh:1575 still includes the committer time term ($commit_epoch | select(test(\"^[0-9]+$\")) | tonumber). The changelog fragment changelog.d/5523-retry-budget-trusted-push-bound.md is not in the PR changed files list. This security finding is documented as in-scope but the implementation has not yet landed in this PR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"Bound the changes-lost retry budget by GitHub-recorded run times, not the head commit's committer time\" (from issue #5523, plan at docs/plans/issue-5523-retry-budget-trusted-push-bound-plan.md)\n  Expected change site: scripts/gh_helpers.sh, autofix_changes_lost_head_retry_consumed, the push_bound jq program near line 1575\n  Evidence of absence: The plan and progress log for #5523 are committed (docs/plans/issue-5523-retry-budget-trusted-push-bound-plan.md, docs/implement-plan/issue-5523-retry-budget-trusted-push-bound.md) but the progress log shows Status: IN_PROGRESS with Phase 1 not started. The push_bound at scripts/gh_helpers.sh:1575 still includes the committer time term ($commit_epoch | select(test(\"^[0-9]+$\")) | tonumber). The changelog fragment changelog.d/5523-retry-budget-trusted-push-bound.md is not in the PR changed files list. This security finding is documented as in-scope but the implementation has not yet landed in this PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/check_in_status.py:310-330 | severity=low | confidence=3\n  PROBLEM: The PR-named branch of `_active_run_count` filters runs by `(path, display_title)` pair but does not check `head_branch == default_branch`. `_is_pr_dispatched_review_run` (the other match path) does check `head_branch == default_branch`; the active-run count does not, so a `workflow_dispatch` run on any branch whose `path` and `display_title` are a configured pair counts as \"active\" for the PR.\n  WHY: A branch author with push access could dispatch a workflow whose `path` is `.github/workflows/internal-review.yml` (or `ai-review.yml`) and whose `run-name` matches `[pr:<N>]`, and the \u00a726 checker would count that run as \"active\" for the target PR. The hand-off then waits for a run whose head_sha is not the PR head, eventually timing out, and the active-run guard in `scripts/claude_pr_sweep.py` would skip a real fixer.\n  ISSUE_CONFIDENCE: 3\n- .claude/scripts/check_in_status.py:295-308 | severity=low | confidence=3\n  PROBLEM: The new docstring removes the documented \"A repository without internal-review.yml (HTTP 404) counts 0\" behavior, since the repo-wide listing `PR_NAMED_REVIEW_RUNS_PATH` has no per-workflow 404 case. The function now raises `ReadError` on any failure rather than returning 0 for an absent wrapper. The docstring update matches this, but the test file's old \"absent-wrapper\" test path may now expect a different behavior.\n  WHY: Tests in `tests/test_check_in_status_hand_back.py` (per the plan's Tests section) replace the 404 test with one that asserts `ReadError` on a failed repo-wide read. The runtime path is correct; this is a documentation/test alignment note.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f954b0c8c116073f61ddcae8f02f01300b3d4d7faacd59e45d35e7bfcbf2b76d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36684449408",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36684449408",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930074402_503db0a15e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36684449408"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T07:44:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
