@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:Route step fence-close logic (lines ~450-455) | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The fence-close logic was reviewed for whether an opening fence with an info string is incorrectly rejected.\n  WHY: The reviewer found no runtime failure: the opening regex captures the fence token, and the closing-fence length check handles it correctly.\n- .github/workflows/clarify.yml:Route-step IS_RECLARIFY_COMMAND initialization (line ~437) | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: If EVENT_NAME is empty or unset, IS_RECLARIFY_COMMAND stays \"true\" and skips the not_reclarify_command gate.\n  WHY: The reviewer found no runtime failure because EVENT_NAME is always set by the GitHub Actions runner.\n- .github/workflows/plan.yml:Clarification-required marker conditional (line ~1866) | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: If IS_ORCHESTRATOR_MANAGED is set to a non-'true' truthy value, the clarification-required marker is added.\n  WHY: The reviewer found no runtime failure and considered adding the marker unnecessarily safer than omitting it.\n- .github/workflows/clarify.yml:Release Claude claim step (~line 578) | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: If the API is unreachable, the three Claude claim label deletions fail silently and stale labels remain.\n  WHY: The reviewer noted this may make the later-line `/reclarify` form available on a Codex-routed issue, but the fence and `<!--` exclusions still apply and no Claude implementation runs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/clarify.yml:Route step fence-close logic (lines ~450-455) | severity=NIT | confidence=3\n  PROBLEM: The fence-detection regex RECLARIFY_FENCE_CLOSE_RE (`^ {0,3}(\\`{3,}|~{3,}) *$`) correctly handles indented closing fences per CommonMark. However, lines with content after the closing fence token and optional spaces (e.g., `\\`\\`\\` some text`) are valid CommonMark and are NOT closing fences, and the regex correctly rejects them with ` *$`. The `RECLARIFY_FENCE_OPEN_RE` regex (`^ {0,3}(\\`{3,}|~{3,})`) lacks the ` *$` anchor, meaning a line like `\\`\\`\\`text info_string` correctly opens a fence but `\\`\\`\\`text info_string` with trailing content could also open a fence if the content happens to start with backticks. This is correct per CommonMark: info strings are allowed after the opening fence token.\n  WHY: No runtime failure \u2014 the fence logic correctly follows CommonMark opening-fence rules (info strings allowed) and closing-fence rules (only spaces after). The information-string after opening backticks is correctly not matched by CLOSE_RE, so a line like `\\`\\`\\`text` opens a fence and `\\`\\`\\`` with 3 backticks on the next line closes it (4 < 3 is false, but the CLOSE_RE matches 3 backticks and the >= length check would fail since open had 3+info-string chars... wait, RECLARIFY_OPEN_FENCE captures the matched group: `\\`\\`\\`` which is 3 backticks). Actually, `RECLARIFY_FENCE_OPEN_RE` captures only the backtick/tilde group in BASH_REMATCH[1], not any trailing info string. So opening with `\\`\\`\\`text` captures `\\`\\`\\`` (3 backticks), and closing with `\\`\\`\\`` matches CLOSE_RE with 3 backticks, type matches, length 3 >= 3. \u2713 Correct.\n- .github/workflows/clarify.yml:Route-step IS_RECLARIFY_COMMAND initialization (line ~437) | severity=NIT | confidence=1\n  PROBLEM: IS_RECLARIFY_COMMAND is initialized to \"true\" and only set to \"false\" inside the `if [ \"${EVENT_NAME}\" = \"issue_comment\" ]` block. This is correct for issue-opened events (where the command check is irrelevant and the route should proceed). However, if EVENT_NAME is ever empty or unset, IS_RECLARIFY_COMMAND stays \"true\" and skips the not_reclarify_command gate, which would let an undefined event through. At runtime, EVENT_NAME is always set by the workflow.\n  WHY: No failure \u2014 EVENT_NAME is always set by the GitHub Actions runner.\n- .github/workflows/plan.yml:Clarification-required marker conditional (line ~1866) | severity=NIT | confidence=1\n  PROBLEM: The `<!-- ai:clarification-required:v1 -->` marker is added only when `[ \"${IS_ORCHESTRATOR_MANAGED}\" != 'true' ]`. If the variable is unset or empty (not equal to 'true'), the marker IS added, which is correct \u2014 an unset variable means the issue is not orchestrator-managed, so the marker should be added. If IS_ORCHESTRATOR_MANAGED is accidentally set to a non-'true' truthy value like '1' or 'yes', the marker would still be added, but this is the safe direction (adding a marker when it might not be needed).\n  WHY: No runtime failure \u2014 adding a marker unnecessarily is safer than omitting one.\n- .github/workflows/clarify.yml:Release Claude claim step (~line 578) | severity=NIT | confidence=2\n  PROBLEM: The release step now deletes three labels (`ai:claude`, `ai:claude-blocked`, `ai:claude-handoff-failed`) all with `> /dev/null 2>&1 || true`. If the issue has none of these labels, each DELETE returns 404, swallowed by `|| true`. If the GitHub API is unreachable, all three fail silently with no telemetry. This is consistent with the existing pattern (the original single `ai:claude` deletion also used this pattern). A transient API failure would leave stale labels that could affect the next route, but the safe direction is preserved: the labels are only deleted when switching TO Codex, and stale labels would only make the later-line form slightly more permissive (still gated by the route-step label check).\n  WHY: On API failure, stale Claude labels remain, making the later-line `/reclarify` form available on that issue. The fence and `<!--` exclusions still apply, and the issue is Codex-routed, so no Claude implementation runs. Minimal risk.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "256412b99a2377d877d3f9f151b8f4cec5c9ff625cf879e40ba759a22a9ad2b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36716344947",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36716344947",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930130001_84ecc0006a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36716344947"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T13:00:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
