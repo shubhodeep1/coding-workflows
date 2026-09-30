@@ -798,10 +798,12 @@ def _paragraph_names_path(paragraph: str, path: str) -> bool:
 	absolute runner path, ``b/README.md``, and, by design, ``docs/README.md``),
 	and so does any ``/``-suffix of ``path`` (``+page.svelte`` for
 	``src/routes/+page.svelte``). Used only to keep an entry blocking, so an
-	over-match fails toward blocking."""
+	over-match fails toward blocking: a path that normalizes to nothing
+	(``./``, ``.``) names every paragraph, and an empty ``/``-suffix (a path
+	ending in ``/``) is skipped rather than matched everywhere."""
 	wanted = _norm_path(path.replace("\\", "/")).rstrip(".;").casefold()
 	if not wanted:
-		return False
+		return True
 	text = paragraph.replace("\\", "/").casefold()
 	parts = wanted.split("/")
 	for tail in {"/".join(parts[index:]) for index in range(len(parts))}:

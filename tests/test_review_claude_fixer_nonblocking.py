@@ -600,6 +600,11 @@ def test_issue_4975_a_second_finding_at_any_probe_path_keeps_the_entry_blocking(
 	("File: src/routes/page.svelte", "src/routes/+page.svelte", False),
 	("File: docs/c++/notes.mdx", "docs/c++/notes.md", False),
 	("no file here", "README.md", False),
+	("no file here", "./", True),
+	("no file here", ".", True),
+	("(no file here)", "docs/", False),
+	("the docs/ folder", "docs/", True),
+	("File: docs/README.md", "docs//README.md", True),
 ])
 def test_issue_4975_paragraph_names_path_matches_the_path_literally(paragraph, path, expected):
 	assert nonblocking._paragraph_names_path(paragraph, path) is expected
