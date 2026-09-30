@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:Lines 144-148 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The comment incorrectly says this checker uses the same repo-wide newest-100 run listing as the poller, although the poller now pages per wrapper.\n  WHY: A busy consumer repo can push a relevant review run outside this checker's 100-run window, leaving the hand-off waiting despite the poller finding the run; the source rates this NIT.\n- agents.md:Lines 1064-1077 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: This section says PR-named runs use one repo-wide newest-100 listing, contradicting the later documentation that the helper pages per wrapper.\n  WHY: The conflicting descriptions make the documented behavior unclear; the source rates this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/check_in_status.py:Lines 144-148 | severity=NIT | confidence=4\n  PROBLEM: The comment describes the repo-wide listing as \"the same listing and newest-100 window the poller's `_pr_named_review_dispatch_runs` reads (issue #4701)\". After issue #4927 was merged, the poller's `_pr_named_review_dispatch_runs` was rewritten in `scripts/orchestrate_poll_process.sh` to issue paged per-wrapper REST listings (`actions/workflows/<wrapper>/runs?event=workflow_dispatch&created=>=<cutoff>&per_page=100&page=<p>`, at most 10 pages per wrapper), NOT a single 100-run repo-wide page.\n  WHY: A consumer-repo poller with a busy `workflow_dispatch` history could push a live `AI Review [pr:<N>]` run off the 100-run window, leaving the hand-off stuck at `waiting for verified completed review run` even though the poller's `_pr_named_review_dispatch_runs` would have found it. The plan for #4927 explicitly scopes this checker out (AD-16 of the plan), so it is a documented deferral \u2014 but the inline comment now misrepresents the two callers' behaviour and will mislead the next reader.\n- agents.md:Lines 1064-1077 | severity=NIT | confidence=4\n  PROBLEM: The bullet for the verdict helper says PR-named runs are \"counted from one repo-wide `workflow_dispatch` listing (newest 100 runs) read only when the head-branch reads found nothing\". The text below the same bullet (lines 2077-2093) is up to date and says the helper pages per wrapper in three calls in this repo. So `agents.md` carries both the old (newest-100-page) and the new (paged-per-wrapper) descriptions in different sections of the same file.\n  WHY: It does not \u2014 but it is a contract break in the `agents.md` doc, which \u00a76 treats as a behaviour contract for operator-facing surfaces. The new description is the one true behaviour; the old description should be removed.\n- scripts/orchestrate_poll_process.sh, `_pr_named_review_dispatch_runs`, the block that calls `printf '%s\\n%s\\n' \"${_pnr_runs}\" \"${_pnr_wrapper_runs}\" | jq -cs '.[0] + .[1]'` after the `for` loop\n  HARDENING_SUGGESTION: When the listing is incomplete the function still prints a JSON array (possibly empty, possibly partial) on stdout and returns 1. Every caller checks the return code and discards the array, so this is safe \u2014 but a future caller that forgets the return-code check (or that uses `set -e` and `$(...)` substitution) could silently treat a partial array as a complete one. The function already logs `PR_NAMED_REVIEW_RUNS \u2026 outcome=incomplete` on stderr; it could also emit the empty array on stdout when incomplete.\n  SUGGESTED_MINIMAL_FIX: Replace the final `printf '%s\\n' \"${_pnr_matches:-[]}\"` with `if [ -n \"${_pnr_reason}\" ]; then printf '[]\\n'; else printf '%s\\n' \"${_pnr_matches:-[]}\"; fi`. ~3 lines.\n  HARDENING_RISK_SCORE: 2\n- scripts/orchestrate_poll_process.sh, `_mt_release`, the `grep -Fxq -e \"pr:${num}\" ${head:+-e \"${head}\"}` line\n  HARDENING_SUGGESTION: `${head:+-e \"${head}\"}` correctly avoids the empty-pattern bug, but `${head}` itself is a head branch like `claude/issue-10`, which can contain characters that are not `regex` literals but are valid `grep -F` (fixed-string) literals. No issue today, but if a future head ref contains a literal `-e` (extremely unlikely in a Git ref but possible in a synthetic test fixture), the `${head}` expansion would be parsed as a new `-e` flag. Pin the position with `--`: `grep -Fxq -- -e \"pr:${num}\" ${head:+-e \"${head}\"} --` and place the head-branch pattern after a second `--` so it can never be read as a flag.\n  SUGGESTED_MINIMAL_FIX: `printf '%s\\n' \"${inflight_review_branches}\" | grep -Fxq -e \"pr:${num}\" ${head:+-e \"${head}\"}` becomes `printf '%s\\n' \"${inflight_review_branches}\" | grep -Fxq -- -e \"pr:${num}\" ${head:+-e \"${head}\"} --`. 1 line.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "de3c0968f3fc1a1cd1e7ad0bb976b11dfcc0ea3e556e798907bb8ee0f8a4f1ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36670330416",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36670330416",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930051725_c0de554683",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36670330416"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T05:17:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
