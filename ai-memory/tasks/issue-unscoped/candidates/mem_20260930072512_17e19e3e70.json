@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:487-500 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The pagination guard can treat a listing as complete when its membership changes but `total_count` stays constant, allowing `_mt_release` to dispatch a duplicate review.\n  WHY: A run can leave the status filter and a new run enter between page reads, causing page 2 to omit the new run at the top while the distinct IDs read still reach the unchanged total.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_merge_train.sh\n  Line or code reference: 487-497 (new listing_shifted guard)\n  severity=high | confidence=4\n  PROBLEM: The guard treats a listing as stable when `total_count` stays equal between page 1 and later pages, even though membership can change.\n  WHY: A same-count membership swap can leave a new active run on page 1, which has already been read, and the listing can be reported complete, allowing release to dispatch a duplicate review.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_merge_train.sh\n  Line or code reference: 487-497 (the new `__mt_runs_first_total` capture and shift check)\n  severity=high | confidence=3\n  PROBLEM: The fix detects a shifted listing only when `total_count` changes, missing membership-only shifts where the count remains the same.\n  WHY: If one run finishes and another enters the same status between page reads, page 2 can omit the new run at the top while `__mt_runs_read` reaches `__mt_runs_total`, allowing release to dispatch a duplicate review.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_merge_train.sh\n  Line or code reference: `_mt_inflight_review_branches`, lines 492-498\n  severity=high | confidence=5\n  PROBLEM: The pagination guard detects a changed `total_count` but treats the listing as complete when membership changes while the count stays the same.\n  WHY: A run can finish and another enter `in_progress` before page 2 is fetched, causing the listing to appear complete and `_mt_release` to release a queued PR despite its active review run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_merge_train.sh\n  Line or code reference: 492-500 (the new first_total check + the read>=total break at 498)\n  severity=high | confidence=3\n  PROBLEM: A same-count membership shift evades the listing guard, so page 2 can omit a new run at the top while the distinct IDs read reach `total_count`.\n  WHY: If the new run is a review run for the queued PR, `_mt_release` can dispatch a duplicate review.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "50b263379dfc45a47f3c8b2ab5b32345d9a0b9e298a27af6372d3cf5b3a2b269",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5512,
+    "run_id": "36679796564",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36679796564",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930072512_17e19e3e70",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5512,
+    "run_id": "36679796564"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T07:25:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
