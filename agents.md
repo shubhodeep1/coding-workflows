@@ -1265,7 +1265,16 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   PRs already checked into `main`. Any other status, or a failed read,
   checks the range (fail closed). A push that creates `stable` (no previous
   tip) and is not a promotion is checked against `main`'s tip. Every PR into
-  `stable` is checked. Tests load the twin and call
+  `stable` is checked. The step runs the copy of `claude_twin_sync.py`
+  on the protected base commit, never the checkout's (issue #5608): it
+  extracts `scripts/claude_twin_sync.py` from the event's base (the merge
+  commit's first parent, or `github.event.before`) into a temporary
+  directory, with `main`'s tip as the fallback on `stable`, and logs `twin
+  sync guard: running scripts/claude_twin_sync.py from <sha>`. A base commit
+  that cannot be resolved or read fails the step. Only when every trusted
+  commit resolves and none carries the script yet (`main` before #4804
+  merges, `stable` before its next promotion) does it run the
+  checkout's copy, with a `::warning::` (bootstrap). Tests load the twin and call
   `tests/claude_twin_state.py::assert_claude_not_ahead`, which skips a
   differing pair in a shallow clone.
 - **Guard paths fail closed in the sync-state check** (issue #5246):
@@ -1288,12 +1297,14 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   auto-merges with a failing check, but `main` has no required status
   checks and the GPT review path only feeds failing checks to its reviewers,
   so making `lint` a required check in the `main` ruleset is the operator
-  step (CLAUDE.md §23.C) that lets GitHub block a PR the check fails. It
-  does not cover a PR that also edits `.github/workflows/ci.yml` or
-  `scripts/claude_twin_sync.py`: a `pull_request` run uses the PR's own
-  copies of both, so such a PR can skip or weaken the check and still turn
-  `lint` green. A PR that changes a guard path together with either file
-  needs the owner's review of those files as well.
+  step (CLAUDE.md §23.C) that lets GitHub block a PR the check fails. A PR
+  that also edits `scripts/claude_twin_sync.py` no longer weakens the
+  check, because the step runs the base commit's copy (issue #5608, outside
+  the bootstrap above). It does not cover a PR that also edits
+  `.github/workflows/ci.yml`: a `pull_request` run uses the PR's own copy of
+  the workflow, so such a PR can skip or change the step and still turn
+  `lint` green. A PR that changes a guard path together with that file
+  needs the owner's review of it as well.
 - **Credentials:** `GITHUB_TOKEN` (`contents`, `pull-requests`, `checks`,
   `statuses`: read) for reads; `GH_PAT` only in the sync step, for the push
   (passed in `GIT_CONFIG_*` environment variables to that one git command),

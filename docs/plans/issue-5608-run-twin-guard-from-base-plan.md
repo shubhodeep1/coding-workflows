@@ -40,7 +40,7 @@ The CI step "Claude twin sync state (CLAUDE.md §28.C)" in `.github/workflows/ci
 
 ## Constraints
 
-- §6: new shell variables `twin_guard_script`, `twin_guard_dir`, `twin_guard_source`, `twin_guard_candidates` were checked against the step (which uses `event_args`, `twin_on_stable`, `twin_head`, `twin_compare_status`, `twin_provenance`, `base`) and are unique there. No identifier is renamed.
+- §6: new shell variables `twin_guard_script`, `twin_guard_dir`, `twin_guard_source`, `twin_guard_candidates`, `twin_guard_listing` were checked against the step (which uses `event_args`, `twin_on_stable`, `twin_head`, `twin_compare_status`, `twin_provenance`, `base`) and are unique there. No identifier is renamed.
 - §15: no GitHub API call is added. Only local `git ls-tree` / `git show` reads of commits the step already fetched.
 - §23.E: the step's `env:` is unchanged; `GH_TOKEN` stays push-only.
 - §27: the step grows by about 40 lines (about 2 KB).
