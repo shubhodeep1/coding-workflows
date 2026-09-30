@@ -336,3 +336,22 @@ def test_pickup_starts_fixer_sessions_for_pr_fix_items(pickup_cmd):
 	assert "`item_type` `pr_fix`" in pickup_cmd
 	assert "title `PR <repo>#<N> — fix <kind>`" in pickup_cmd
 	assert "`/fix-claude-pr` re-reads the PR and stops when the fix is no longer due" in pickup_cmd
+
+
+def test_closed_issue_final_merge_resume_contract():
+	# Issue #5222. Read from the workflow-templates twins, which lead the
+	# `.claude/` copies until the twin sync (CLAUDE.md §28.C interim rule).
+	issue_twin = _flat(TEMPLATE_COMMANDS / "implement-issue-claude.md")
+	plan_twin = _flat(TEMPLATE_COMMANDS / "implement-plan-claude.md")
+	assert "**Closed** → report `issue closed — nothing to do` and stop, **unless it is a final-merge resume** (issue #5222)" in issue_twin
+	assert "the same rule as `final_merge_resume` in `scripts/claude_issue_route.py`" in issue_twin
+	assert "it carries `ai:claude` and `ai:claude-blocked`" in issue_twin
+	assert "has a `Stage:` line whose value starts with `final-merge`" in issue_twin
+	assert "commented `/reclarify` after that comment" in issue_twin
+	assert "Never reopen the issue." in issue_twin
+	assert "The comment names the stage on its own line, `**Stage:** \\`<stage>\\``" in plan_twin
+	assert "clarify and the intake route it as `final_merge_resume` (issue #5222)" in plan_twin
+	# The stage line format the command prescribes is the one the route reads.
+	body = route.BLOCKED_COMMENT_MARKER + "\n## Blocked\n\n**Stage:** `final-merge — review round`\n"
+	match = route.BLOCKED_STAGE_LINE_RE.search(body)
+	assert match and route.FINAL_MERGE_STAGE_RE.match(match.group(1).strip())

@@ -14,6 +14,11 @@
 #      repo, the target is an open issue (not a pull request) in that repo,
 #      and its author passes clarify's gate (OWNER / MEMBER / COLLABORATOR
 #      User or github-actions[bot]) or a trusted User commented `/reclarify`.
+#      A closed issue passes only as a final-merge resume (issue #5222,
+#      reason `final_merge_resume`): it carries `ai:claude` and
+#      `ai:claude-blocked`, its latest trusted `ai:claude-blocked:v1` comment
+#      names a `final-merge` stage, and a trusted `/reclarify` follows it.
+#      Its comments are read for that check; it is not reopened.
 #      A refusal writes nothing to the target issue (see reject()).
 #   2. Opens one `ai:claude-issue-queue` issue in this repo with the fixed-key
 #      payload (no issue prose), using the workflow's GITHUB_TOKEN so no
@@ -174,7 +179,8 @@ log "validated repo=${REPO} issue=${ISSUE_NUMBER} trigger=${TRIGGER}"
 # §15: the only other reads in this script are the open-queue list below,
 # which answers none of these questions. New calls: one collaborator
 # permission read per distinct dispatcher login, one issue read, and the
-# issue's comments only when its author is not trusted.
+# issue's comments only when its author is not trusted or it is a closed
+# issue carrying `ai:claude` and `ai:claude-blocked` (final-merge resume).
 
 DISPATCHER_LOGINS=()
 for dispatcher_login in "${CLAUDE_ISSUE_DISPATCHER:-}" "${CLAUDE_ISSUE_TRIGGERING_ACTOR:-}"; do

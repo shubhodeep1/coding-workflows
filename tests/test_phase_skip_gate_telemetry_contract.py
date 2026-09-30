@@ -57,6 +57,12 @@ def test_clarify_route_emits_stable_gate_telemetry() -> None:
 	block = _step_block(CLARIFY_WF, "Decide clarify route")
 
 	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}" in block
+	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=final_merge_resume outcome=handoff issue=${ISSUE_NUMBER}" in block
+	_assert_before(
+		block,
+		"AI_PHASE_GATE_V1 phase=clarify gate=route reason=final_merge_resume outcome=handoff issue=${ISSUE_NUMBER}",
+		"AI_PHASE_GATE_V1 phase=clarify gate=route reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}",
+	)
 	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=untrusted_issue_author outcome=skip issue=${ISSUE_NUMBER}" in block
 	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}" in block
 	assert "ISSUE_AUTHOR_TRUSTED" in block

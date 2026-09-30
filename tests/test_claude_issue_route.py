@@ -267,7 +267,7 @@ if [[ "$*" == *"/collaborators/"*"/permission"* ]]; then
   exit 0
 fi
 if [[ "$*" == "api --paginate "*"/comments?per_page=100" ]]; then
-  [ -z "${{GH_STUB_FAIL_COMMENTS:-}}" ] || {{ echo "HTTP 500" >&2; exit 1; }}
+  [ -z "${{GH_STUB_FAIL_COMMENTS:-}}" ] || {{ echo "${{GH_STUB_FAIL_COMMENTS_ERR:-HTTP 500}}" >&2; exit 1; }}
   printf '%s' "${{GH_STUB_COMMENTS_JSON:-[]}}"
   exit 0
 fi
@@ -1772,3 +1772,481 @@ def test_intake_workflow_uploads_the_queue_binding_even_after_a_failure():
 	assert upload["with"]["name"] == route.QUEUE_BINDING_ARTIFACT
 	assert upload["with"]["path"] == binding_file
 	assert upload["with"]["if-no-files-found"] == "ignore"
+
+
+# --- final-merge resume on a closed issue (issue #5222) ---------------------------------------
+
+
+_FINAL_MERGE_BLOCK = (
+	"<!-- ai:claude-blocked:v1 -->\n"
+	"## Blocked: final PR #5151 is clean but cannot converge without a verdict bot\n\n"
+	"**Stage:** `final-merge — review round` (session `session_x`). Final PR #5151 into `main` is at head `36839af7d6c0`.\n\n"
+	"> - **A** — The master session merges it, then comments `/reclarify` here (RECOMMENDED)\n"
+)
+
+
+def _blocked(stage="final-merge — review round", association="OWNER", user_type="User", login="owner", comment_id=501):
+	body = _FINAL_MERGE_BLOCK.replace("final-merge — review round", stage)
+	return {"id": comment_id, **_comment(body=body, association=association, user_type=user_type, login=login)}
+
+
+def _closed_blocked_issue(labels=("ai:claude", "ai:claude-blocked"), **extra):
+	return _target(state="closed", labels=[{"name": name} for name in labels], **extra)
+
+
+def _resume_comments():
+	# The #5119 shape: routed, blocked at final-merge, then /reclarify after the merge.
+	return [
+		_comment(body="<!-- ai:claude-issue-routed:v1 -->\nRouted", association="OWNER"),
+		_blocked(),
+		_comment(body="/reclarify", association="OWNER", login="owner"),
+	]
+
+
+@pytest.mark.parametrize(
+	"stage",
+	["final-merge — review round", "final-merge", "final-merge 1/1", "final-merge — blocked PR"],
+)
+def test_final_merge_resume_accepts_a_closed_final_merge_block(stage):
+	comments = _resume_comments()
+	comments[1] = _blocked(stage=stage)
+	result = route.final_merge_resume(_closed_blocked_issue(), comments)
+	assert result == {"eligible": True, "reason": "final_merge_resume", "blocked_comment_id": 501}
+
+
+@pytest.mark.parametrize(
+	"stage_line",
+	["Stage: final-merge", "- **Stage:** `final-merge — review round`", "* Stage: `final-merge 1/1`"],
+)
+def test_final_merge_resume_reads_plain_and_bulleted_stage_lines(stage_line):
+	body = "<!-- ai:claude-blocked:v1 -->\n## Blocked\n\n" + stage_line + "\n"
+	comments = [{"id": 7, **_comment(body=body, association="MEMBER")}, _comment()]
+	assert route.final_merge_resume(_closed_blocked_issue(), comments)["eligible"] is True
+
+
+@pytest.mark.parametrize(
+	("issue", "comments", "reason"),
+	[
+		(None, [], "not_issue"),
+		(_closed_blocked_issue(pull_request={"url": "x"}), _resume_comments(), "not_issue"),
+		(_target(state="open", labels=[{"name": "ai:claude"}, {"name": "ai:claude-blocked"}]), _resume_comments(), "issue_open"),
+		(_closed_blocked_issue(labels=("ai:claude-blocked",)), _resume_comments(), "not_claude_routed"),
+		(_closed_blocked_issue(labels=("ai:claude", "ai:claude-blocked", "ai:codex")), _resume_comments(), "not_claude_routed"),
+		(_closed_blocked_issue(labels=("ai:claude", "ai:claude-blocked", "ai:orchestrator-managed")), _resume_comments(), "not_claude_routed"),
+		(_closed_blocked_issue(labels=("ai:claude",)), _resume_comments(), "not_blocked"),
+		(_closed_blocked_issue(), [_comment()], "no_blocked_comment"),
+		(_closed_blocked_issue(), "not a list", "no_blocked_comment"),
+	],
+)
+def test_final_merge_resume_refuses(issue, comments, reason):
+	result = route.final_merge_resume(issue, comments)
+	assert result["eligible"] is False
+	assert result["reason"] == reason
+
+
+@pytest.mark.parametrize(
+	"stage",
+	["security-pass 2/5", "validation 1/3 — run failed", "phase 1/1 — blocked PR", "final-merged", "final-merge-x", ""],
+)
+def test_final_merge_resume_refuses_other_stages(stage):
+	comments = _resume_comments()
+	comments[1] = _blocked(stage=stage)
+	if not stage:
+		comments[1]["body"] = "<!-- ai:claude-blocked:v1 -->\nNo stage line here.\n"
+	result = route.final_merge_resume(_closed_blocked_issue(), comments)
+	assert result == {"eligible": False, "reason": "stage_not_final_merge", "blocked_comment_id": 501}
+
+
+@pytest.mark.parametrize(
+	"blocked",
+	[
+		_blocked(association="NONE", login="stranger"),
+		_blocked(association="CONTRIBUTOR", login="stranger"),
+		_blocked(user_type="Bot", login="github-actions[bot]", association="NONE"),
+		_blocked(user_type="Bot", login="some-app[bot]", association="OWNER"),
+	],
+)
+def test_final_merge_resume_ignores_untrusted_blocked_comments(blocked):
+	comments = [blocked, _comment(body="/reclarify", association="OWNER")]
+	assert route.final_merge_resume(_closed_blocked_issue(), comments)["reason"] == "no_blocked_comment"
+
+
+def test_final_merge_resume_uses_the_latest_trusted_block():
+	# A newer trusted block at another stage wins over the older final-merge one;
+	# an untrusted forged final-merge block after it changes nothing.
+	comments = [
+		_blocked(comment_id=1),
+		_blocked(stage="security-pass 1/5", comment_id=2),
+		_blocked(association="NONE", login="stranger", comment_id=3),
+		_comment(body="/reclarify", association="OWNER"),
+	]
+	result = route.final_merge_resume(_closed_blocked_issue(), comments)
+	assert result == {"eligible": False, "reason": "stage_not_final_merge", "blocked_comment_id": 2}
+
+
+@pytest.mark.parametrize(
+	"after",
+	[
+		[],
+		[_comment(body="/reclarify", association="NONE", login="stranger")],
+		[_comment(body="/reclarify", association="CONTRIBUTOR")],
+		[_comment(body="please /reclarify", association="OWNER")],
+		[_comment(body="/reclarify", user_type="Bot", login="github-actions[bot]", association="OWNER")],
+	],
+)
+def test_final_merge_resume_needs_a_trusted_reclarify_after_the_block(after):
+	# A /reclarify before the block does not count.
+	comments = [_comment(body="/reclarify", association="OWNER"), _blocked(), *after]
+	result = route.final_merge_resume(_closed_blocked_issue(), comments)
+	assert result == {"eligible": False, "reason": "no_reclarify_after_block", "blocked_comment_id": 501}
+
+
+def test_authorize_target_unrelated_closed_issue_still_refused_without_reading_comments():
+	# Regression: a closed issue without both labels is refused as before, and
+	# no comments are requested (no extra API call, §15).
+	for issue in (_target(state="closed"), _closed_blocked_issue(labels=("ai:claude",)), _closed_blocked_issue(labels=("ai:claude-blocked",))):
+		result = route.authorize_target(_validated(), issue, _AUTHORIZED_DISPATCHER)
+		assert result == {"authorized": False, "reason": "issue_closed", "needs_comments": False}
+		result = route.authorize_target(_validated(), issue, _AUTHORIZED_DISPATCHER, _resume_comments())
+		assert result == {"authorized": False, "reason": "issue_closed", "needs_comments": False}
+
+
+def test_authorize_target_final_merge_resume_reads_comments_then_authorizes():
+	issue = _closed_blocked_issue()
+	first = route.authorize_target(_validated(trigger="reclarify"), issue, _AUTHORIZED_DISPATCHER)
+	assert first == {"authorized": False, "reason": "issue_closed", "needs_comments": True}
+	second = route.authorize_target(_validated(trigger="reclarify"), issue, _AUTHORIZED_DISPATCHER, _resume_comments())
+	assert second == {"authorized": True, "reason": "final_merge_resume", "needs_comments": False}
+	# The dispatcher check still comes first.
+	assert route.authorize_target(_validated(), issue, {"mallory": "read"}, _resume_comments())["reason"] == "dispatcher_not_authorized"
+
+
+def test_authorize_target_closed_candidate_without_final_merge_block_is_refused():
+	comments = _resume_comments()
+	comments[1] = _blocked(stage="validation 2/3")
+	result = route.authorize_target(_validated(), _closed_blocked_issue(), _AUTHORIZED_DISPATCHER, comments)
+	assert result == {"authorized": False, "reason": "issue_closed", "needs_comments": False}
+
+
+def test_cli_final_merge_resume(tmp_path):
+	issue = tmp_path / "issue.json"
+	issue.write_text(json.dumps(_closed_blocked_issue()))
+	comments = tmp_path / "comments.json"
+	comments.write_text(json.dumps(_resume_comments()))
+	out = _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments))
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout) == {"eligible": True, "reason": "final_merge_resume", "blocked_comment_id": 501}
+	issue.write_text(json.dumps(_target(state="closed")))
+	out = _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments))
+	assert out.returncode == 0
+	assert json.loads(out.stdout)["eligible"] is False
+	comments.write_text(json.dumps({"not": "a list"}))
+	assert _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments)).returncode == 2
+	comments.write_text("not json")
+	assert _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments)).returncode == 2
+
+
+def test_intake_queues_a_closed_final_merge_resume(stubs):
+	env = _intake_env(
+		stubs,
+		_payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="reclarify"),
+		GH_STUB_ISSUE_JSON=json.dumps(_closed_blocked_issue()),
+		GH_STUB_COMMENTS_JSON=json.dumps(_resume_comments()),
+	)
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "authorized repo=shubhodeep1/digital_pa issue=9 reason=final_merge_resume" in result.stdout
+	assert "queued repo=shubhodeep1/digital_pa issue=9 trigger=reclarify" in result.stdout
+	calls = stubs["log"].read_text()
+	assert "api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100" in calls
+	# The issue is never reopened: no state write to the target issue.
+	assert not any("digital_pa/issues/9" in line and "state=" in line for line in calls.splitlines())
+
+
+@pytest.mark.parametrize(
+	"issue",
+	[
+		_target(state="closed"),
+		_closed_blocked_issue(labels=("ai:claude",)),
+	],
+)
+def test_intake_still_refuses_an_unrelated_closed_issue(stubs, issue):
+	env = _intake_env(
+		stubs,
+		_payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="reclarify"),
+		GH_STUB_ISSUE_JSON=json.dumps(issue),
+		GH_STUB_COMMENTS_JSON=json.dumps(_resume_comments()),
+	)
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "CLAUDE_ISSUE_INTAKE rejected reason=issue_closed repo=shubhodeep1/digital_pa issue=9" in result.stdout
+	calls = stubs["log"].read_text()
+	assert "--paginate" not in calls
+	assert "-f title=" not in calls
+	assert _target_writes(stubs) == []
+
+
+def test_intake_refuses_a_closed_candidate_whose_block_is_not_final_merge(stubs):
+	comments = _resume_comments()
+	comments[1] = _blocked(stage="security-pass 1/5")
+	env = _intake_env(
+		stubs,
+		_payload(repo="shubhodeep1/digital_pa", issue_number=9, trigger="reclarify"),
+		GH_STUB_ISSUE_JSON=json.dumps(_closed_blocked_issue()),
+		GH_STUB_COMMENTS_JSON=json.dumps(comments),
+	)
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 1
+	assert "rejected reason=issue_closed" in result.stdout
+	assert _target_writes(stubs) == []
+
+
+def _clarify_route_step():
+	steps = yaml.safe_load(CLARIFY.read_text())["jobs"]["clarify"]["steps"]
+	return next(step for step in steps if step.get("name") == "Decide clarify route")
+
+
+def _run_clarify_route(stubs, issue, comment_body="/reclarify", event_name="issue_comment", *, route_cwd=ROOT, **extra):
+	rt = stubs["tmp"] / "clarify_rt"
+	rt.mkdir(exist_ok=True)
+	meta = rt / "issue_meta.json"
+	meta.write_text(json.dumps(issue))
+	output = rt / "github_output"
+	output.write_text("")
+	env = {
+		**stubs["env"],
+		"EVENT_NAME": event_name,
+		"EVENT_ACTION": "created",
+		"COMMENT_BODY": comment_body,
+		"RUN_ID": "36616307042",
+		"AI_ISSUE_IMPLEMENTER": "",
+		"GH_TOKEN": "pat-token",
+		"ISSUE_META_FILE": str(meta),
+		"ISSUE_NUMBER": str(issue.get("number", 9)),
+		"RUNTIME_DIR": str(rt),
+		"GITHUB_OUTPUT": str(output),
+		"GITHUB_REPOSITORY": "shubhodeep1/digital_pa",
+		**extra,
+	}
+	result = subprocess.run(["bash", "-c", _clarify_route_step()["run"]], cwd=route_cwd, env=env, capture_output=True, text=True)
+	outputs = dict(line.split("=", 1) for line in output.read_text().splitlines() if "=" in line)
+	return result, outputs
+
+
+def test_clarify_routes_a_closed_final_merge_block_to_claude(stubs):
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix it", body=""),
+		GH_STUB_COMMENTS_JSON=json.dumps(_resume_comments()),
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=final_merge_resume outcome=handoff issue=9" in result.stdout
+	assert "reason=issue_closed" not in result.stdout
+	assert outputs["is_closed"] == "true"
+	assert outputs["final_merge_resume"] == "true"
+	assert outputs["skip_codex"] == "true"
+	assert outputs["issue_implementer"] == "claude"
+	assert outputs["issue_implementer_reason"] == "final_merge_resume"
+	assert outputs["release_claude_claim"] == "false"
+	assert outputs["orchestrator_fast_path"] == "false"
+	assert "api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100" in stubs["log"].read_text()
+
+
+@pytest.mark.parametrize(
+	("issue", "comment_body", "comments"),
+	[
+		# No Claude labels: the plain closed-issue skip, no comments read.
+		(_target(state="closed", title="Fix", body=""), "/reclarify", None),
+		(_closed_blocked_issue(labels=("ai:claude",), title="Fix", body=""), "/reclarify", None),
+		# Blocked at another stage.
+		(_closed_blocked_issue(title="Fix", body=""), "/reclarify", "other_stage"),
+		# Not a /reclarify comment.
+		(_closed_blocked_issue(title="Fix", body=""), "thanks", None),
+	],
+)
+def test_clarify_still_skips_an_unrelated_closed_issue(stubs, issue, comment_body, comments):
+	extra = {}
+	if comments == "other_stage":
+		thread = _resume_comments()
+		thread[1] = _blocked(stage="validation 1/3")
+		extra["GH_STUB_COMMENTS_JSON"] = json.dumps(thread)
+	result, outputs = _run_clarify_route(stubs, issue, comment_body=comment_body, **extra)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=issue_closed outcome=skip issue=9" in result.stdout
+	assert "reason=final_merge_resume" not in result.stdout
+	assert outputs["final_merge_resume"] == "false"
+	assert outputs["issue_implementer"] == "codex"
+	assert outputs["skip_codex"] == "true"
+	calls = stubs["log"].read_text() if stubs["log"].exists() else ""
+	if comments is None:
+		assert "--paginate" not in calls
+
+
+def test_clarify_keeps_the_skip_when_the_comment_read_fails(stubs):
+	result, outputs = _run_clarify_route(stubs, _closed_blocked_issue(title="Fix", body=""), GH_STUB_FAIL_COMMENTS="1")
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "final_merge_resume check failed for closed issue #9" in result.stdout
+	assert "reason=issue_closed outcome=skip" in result.stdout
+	assert outputs["final_merge_resume"] == "false"
+
+
+def _clarify_cwd_without_gh_helpers(stubs):
+	"""A checkout whose scripts/ lacks gh_helpers.sh, so the step's fallback runs."""
+	workdir = stubs["tmp"] / "no_gh_helpers"
+	(workdir / "scripts").mkdir(parents=True, exist_ok=True)
+	link = workdir / "scripts" / "claude_issue_route.py"
+	if not link.exists():
+		link.symlink_to(ROOT / "scripts" / "claude_issue_route.py")
+	return workdir
+
+
+def test_clarify_fallback_retries_and_warns_without_gh_helpers(stubs):
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		route_cwd=_clarify_cwd_without_gh_helpers(stubs),
+		GH_STUB_FAIL_COMMENTS="1",
+		GH_RETRY_MAX_ATTEMPTS="2",
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "scripts/gh_helpers.sh did not load; gh_retry_to_file falls back to 2 plain attempts" in result.stdout
+	assert stubs["log"].read_text().count("api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100") == 2
+	# Every failed attempt is logged, so a degraded read is visible per retry.
+	assert "::warning::gh_retry_to_file fallback: gh command failed (attempt 1/2), retrying in 2s" in result.stdout
+	assert "::warning::gh_retry_to_file fallback: gh command failed after 2 attempts" in result.stdout
+	assert "(attempt 2/2)" not in result.stdout
+	assert "final_merge_resume check failed for closed issue #9" in result.stdout
+	assert outputs["final_merge_resume"] == "false"
+
+
+@pytest.mark.parametrize(
+	("max_attempts", "expected"),
+	[
+		# Not a positive integer: the default 3, so the loop always ends.
+		("abc", 3),
+		("0", 3),
+		("", 3),
+		# Above the cap: at most 5 attempts, 20s of backoff in total.
+		("9", 5),
+		("12345", 5),
+	],
+)
+def test_clarify_fallback_validates_and_caps_max_attempts(stubs, max_attempts, expected):
+	# The backoff sleeps are not what this test checks; skip them.
+	sleep_stub = stubs["tmp"] / "sleep_bin"
+	sleep_stub.mkdir(exist_ok=True)
+	(sleep_stub / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n")
+	(sleep_stub / "sleep").chmod(0o755)
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		route_cwd=_clarify_cwd_without_gh_helpers(stubs),
+		GH_STUB_FAIL_COMMENTS="1",
+		GH_RETRY_MAX_ATTEMPTS=max_attempts,
+		PATH=f"{sleep_stub}:{stubs['env']['PATH']}",
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"gh_retry_to_file falls back to {expected} plain attempts" in result.stdout
+	assert stubs["log"].read_text().count("api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100") == expected
+	assert f"::warning::gh_retry_to_file fallback: gh command failed after {expected} attempts" in result.stdout
+	assert "integer expression expected" not in result.stdout + result.stderr
+	assert outputs["final_merge_resume"] == "false"
+
+
+def test_clarify_fallback_does_not_retry_a_permanent_failure(stubs):
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		route_cwd=_clarify_cwd_without_gh_helpers(stubs),
+		GH_STUB_FAIL_COMMENTS="1",
+		GH_STUB_FAIL_COMMENTS_ERR="HTTP 404: Not Found",
+		GH_RETRY_MAX_ATTEMPTS="3",
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert stubs["log"].read_text().count("api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100") == 1
+	assert "gh_retry_to_file fallback: gh command failed with a non-retryable error (attempt 1/3); not retrying" in result.stdout
+	assert "retrying in" not in result.stdout
+	assert "final_merge_resume check failed for closed issue #9" in result.stdout
+	assert outputs["final_merge_resume"] == "false"
+
+
+def test_clarify_fallback_stops_on_a_permanent_failure_without_mktemp(stubs):
+	# A runner where mktemp fails must still stop on a 404 at attempt 1.
+	mktemp_stub = stubs["tmp"] / "mktemp_bin"
+	mktemp_stub.mkdir(exist_ok=True)
+	(mktemp_stub / "mktemp").write_text("#!/usr/bin/env bash\nexit 1\n")
+	(mktemp_stub / "mktemp").chmod(0o755)
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		route_cwd=_clarify_cwd_without_gh_helpers(stubs),
+		GH_STUB_FAIL_COMMENTS="1",
+		GH_STUB_FAIL_COMMENTS_ERR="HTTP 404: Not Found",
+		GH_RETRY_MAX_ATTEMPTS="3",
+		PATH=f"{mktemp_stub}:{stubs['env']['PATH']}",
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert stubs["log"].read_text().count("api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100") == 1
+	assert "gh_retry_to_file fallback: gh command failed with a non-retryable error (attempt 1/3); not retrying" in result.stdout
+	assert "retrying in" not in result.stdout
+	assert outputs["final_merge_resume"] == "false"
+
+
+def test_clarify_fallback_still_routes_a_final_merge_resume(stubs):
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		route_cwd=_clarify_cwd_without_gh_helpers(stubs),
+		GH_STUB_COMMENTS_JSON=json.dumps(_resume_comments()),
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "gh_retry_to_file falls back to" in result.stdout
+	# A first-attempt success logs no retry warning.
+	assert "gh_retry_to_file fallback: gh command failed" not in result.stdout
+	assert "reason=final_merge_resume outcome=handoff issue=9" in result.stdout
+	assert outputs["final_merge_resume"] == "true"
+	assert outputs["issue_implementer"] == "claude"
+
+
+def test_clarify_open_issue_route_is_unchanged(stubs):
+	issue = _target(state="open", title="Fix", body="", labels=[{"name": "ai:claude"}])
+	result, outputs = _run_clarify_route(stubs, issue)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "reason=claude_routed outcome=handoff issue=9 route_reason=label_override" in result.stdout
+	assert outputs["final_merge_resume"] == "false"
+	assert outputs["is_closed"] == "false"
+	assert "--paginate" not in (stubs["log"].read_text() if stubs["log"].exists() else "")
+
+
+def test_clarify_handoff_runs_for_a_final_merge_resume():
+	steps = yaml.safe_load(CLARIFY.read_text())["jobs"]["clarify"]["steps"]
+	handoff = next(step for step in steps if step.get("name") == "Claude issue handoff")
+	assert handoff["if"] == (
+		"steps.clarify_route.outputs.issue_implementer == 'claude' && "
+		"(steps.clarify_route.outputs.is_closed != 'true' || steps.clarify_route.outputs.final_merge_resume == 'true')"
+	)
+	assert _clarify_route_step()["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
+
+
+def test_handoff_posts_a_resume_comment_for_final_merge_resume(stubs):
+	issue_file = stubs["tmp"] / "issue.json"
+	issue_file.write_text(json.dumps(_closed_blocked_issue(number=41)))
+	env = {
+		**stubs["env"],
+		"GITHUB_REPOSITORY": "o/r",
+		"ISSUE_NUMBER": "41",
+		"ISSUE_META_FILE": str(issue_file),
+		"CLAUDE_ISSUE_TRIGGER": "reclarify",
+		"CLAUDE_ISSUE_ROUTE_REASON": "final_merge_resume",
+		"GH_TOKEN": "x",
+	}
+	result = _run("claude_issue_handoff.sh", env)
+	assert result.returncode == 0, result.stderr
+	calls = stubs["log"].read_text()
+	assert "repos/shubhodeep1/coding-workflows/dispatches" in calls
+	assert "ai:claude-issue-routed:v1" in calls
+	assert "Resuming the Claude project after its final merge" in calls
+	assert "The issue stays closed." in calls
+	assert "This issue closes when the completion PR merges." not in calls
+	# The handoff never reopens the issue.
+	assert "state=open" not in calls

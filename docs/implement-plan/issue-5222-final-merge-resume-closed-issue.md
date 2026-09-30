@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5222-final-merge-resume-closed-issue-plan.md
 - Source issue: shubhodeep1/coding-workflows#5222 (https://github.com/shubhodeep1/coding-workflows/issues/5222)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5222-final-merge-resume-closed-issue   Final PR: pending
+- Project branch: claude/implement-plan-issue-5222-final-merge-resume-closed-issue   Final PR: #5225 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5271
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
-- Last updated: 2026-09-29
-- Last note: project branch opened; phase 1 starting
+- Check-in: checker session_01KfkvbMJgMjDKZBQ8DTiARb   safety net and hand-back: see the review-round-1 stage report
+- Last updated: 2026-09-30
+- Last note: review round 4 on head 87c9689: the clarify.yml gh_retry_to_file fallback now captures stderr in a variable and matches the permanent-failure patterns in-process, so a failed mktemp no longer turns a 404 into retries; waiting on review round 5
 
 ## Phases
-1. [ ] Phase 1 — final-merge resume on a closed issue   — protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md (twin-first)
+1. [ ] Phase 1 — final-merge resume on a closed issue   — PR #5271 open (waiting); review rounds: 4; interventions: 0; protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md (twin-first)
 
 ## Conformance
 
@@ -35,7 +35,16 @@
 - AD-6 [plan, 2026-09-29] Should the handoff's routing comment differ for the resume? — Picked: A — yes, a resume-specific body under the same `ai:claude-issue-routed:v1` marker. Alternatives: B — reuse the "a Claude session will implement this issue" text. Why: the generic text says the issue closes when the completion PR merges, which is wrong for a closed issue. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A full local `pytest tests` run does not finish within 40 minutes on a cloud session runner; verify a phase by running each test file that references the changed paths separately with a per-file timeout, and leave the full suite to CI. (files: tests/test_orchestrate_poll_process.py)
+- [source:intervention] A new stable `AI_PHASE_GATE_V1` telemetry line must also be pinned in tests/test_phase_skip_gate_telemetry_contract.py, and a workflow step's inline fallback for a gh_helpers.sh function should keep bounded retries and warn when it is used. (files: .github/workflows/clarify.yml, tests/test_phase_skip_gate_telemetry_contract.py)
+- [source:intervention] Once a `[claude-twin-sync]` copy lands on a twin-first phase PR, update the PR body's twin-first section in the same stage; a body that still says the sync is pending makes reviewers flag the synced `.claude/` diff as a task gap. (files: .claude/commands/implement-plan-claude.md)
+- [source:intervention] An inline fallback for a shared shell helper must keep the helper's termination guarantees: validate any env-var loop bound before an integer test (a failed `[ -ge ]` inside `if` is just false, so `while :` never ends) and stop on the helper's permanent-failure patterns. (files: .github/workflows/clarify.yml, scripts/gh_helpers.sh)
 
 ## Notes
+- 2026-09-29 twin-sync resume stage (session_01QCEtm4U1UmHqXfWHjCRj5Q): owner answered Q1: A; [claude-twin-sync] 63ee422 verified (both .claude/commands sha256 match the twins); ai:claude-blocked removed from #5222; project branch synced with main (a06a40e, clean merge); wait armed on PR #5271.
+- 2026-09-29 review round 1 (session_019WoLVxBYnoYozUC6qZQHLn): finding clarify.yml:426-428 (no-retry gh_retry_to_file fallback) fixed with bounded retries and a degraded-mode warning; task gap in tests/test_phase_skip_gate_telemetry_contract.py fixed with a final_merge_resume assertion.
+- 2026-09-30 review round 2 (session_01N33hrjC3qxNQNw3GyAuXEV): finding clarify.yml:425-428 (fallback logged no per-retry warning) fixed with a warning per failed attempt and a final one after the last; task gap "`.claude/commands/` edited in a twin-first PR" rejected: the `.claude/` edits are the owner-approved `[claude-twin-sync]` 63ee422 (Q1: A), and both copies match their twins byte for byte; the PR body's twin-first section, which still said the sync was pending, was corrected.
+- 2026-09-30 review round 3 (session_01MEAuT2pSkwNS6CpB5QsXYz): all three consensus findings on clarify.yml:426-450 fixed in the gh_retry_to_file fallback: a non-numeric GH_RETRY_MAX_ATTEMPTS made the `-ge` test fail inside `if`, so `while :` never ended (reproduced: the old step hung until killed); the count is now validated and capped at 5, and the real helper's `_is_gh_permanent_failure` patterns (404, 422, resource not accessible) stop the retries. Tests: test_clarify_fallback_validates_and_caps_max_attempts, test_clarify_fallback_does_not_retry_a_permanent_failure. Project branch synced with main (ad84c01, clean merge of analysis/ docs).
+- 2026-09-30 review round 4 (session_01Fg2kw2zjMznWYCjFezqxdS): the one consensus finding on clarify.yml:425-461 (when mktemp failed, the fallback ran the command without capturing stderr, so a 404/422 was retried with backoff) fixed by capturing stderr in a variable and matching the helper's patterns with `[[ =~ ]]`, which needs no temp file (a here-string can fall back to one on older bash). Reproduced first: with a failing mktemp on PATH the old step made 3 attempts on a 404, the new one makes 1. Test: test_clarify_fallback_stops_on_a_permanent_failure_without_mktemp. Project branch synced with main (1f87fa2, clean merge of #4746, #4943, #4920).
 - Issue progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5222#issuecomment-5898432937
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-29)

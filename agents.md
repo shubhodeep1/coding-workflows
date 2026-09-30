@@ -240,6 +240,21 @@ Phases of the unattended pipeline (each is a separate workflow file under
     issue in that repo (one issue read; PRs and transferred issues refused),
     and its author must pass clarify's gate or a trusted `User` must have
     commented `/reclarify` (comments read only for an untrusted author). A
+    closed issue passes only as a **final-merge resume** (#5222,
+    `claude_issue_route.py final_merge_resume` / `final-merge-resume`):
+    it carries `ai:claude` + `ai:claude-blocked` and routes to Claude, its
+    latest trusted-`User` `<!-- ai:claude-blocked:v1 -->` comment has a
+    `Stage:` line starting `final-merge`, and a trusted `/reclarify` follows
+    it. clarify runs the same check (one paginated comments read, only for a
+    closed `/reclarify` issue carrying both labels; a read failure keeps the
+    skip) and logs `AI_PHASE_GATE_V1 phase=clarify gate=route
+    reason=final_merge_resume outcome=handoff`, with outputs
+    `final_merge_resume=true` and `issue_implementer_reason=final_merge_resume`.
+    The handoff posts a resume-specific routed comment, and the intake
+    authorizes with reason `final_merge_resume`. The issue is never reopened.
+    `/implement-issue-claude` step 2 continues it, and its Claim removes
+    `ai:claude-blocked`. Every other closed issue keeps
+    `reason=issue_closed outcome=skip` / `issue_closed`. A
     refusal (`CLAUDE_ISSUE_INTAKE rejected reason=<dispatcher_unknown |
     dispatcher_not_authorized | target_not_issue | target_repo_mismatch |
     issue_closed | untrusted_issue_author | authorization_read_failed>`)
