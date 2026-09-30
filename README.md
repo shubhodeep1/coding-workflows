@@ -1498,8 +1498,13 @@ text), and that ID list, and can reject an entry it verified to be wrong
 with one line, `REJECTED_FINDING: <ID> | <file>:<line> | flagged_by: <slug>
 | reason: … | evidence: <file>:<line or start-end> | quote: …`. A reviewer
 that re-reports the same defect adds `consensus_id: <id>` to it, and the summariser copies that line. Before the
-hand-off step counts the ledger, the same script moves a consensus finding
-into a `NON-BLOCKING FINDINGS` block when it was raised by exactly one
+hand-off step counts the ledger, the same script checks the vote conditions
+for moving a consensus finding into a `NON-BLOCKING FINDINGS` block. They
+are necessary, never sufficient: the finding moves only when an independent
+automated check also proves it false, and the hand-off step supplies none,
+so in production it always stays blocking (one that meets every condition
+below is logged `reason=no_automated_proof`). The conditions are that it
+was raised by exactly one
 reviewer, carries one `consensus_id` that the flagger itself cited as a
 `consensus_id:` line inside one of its own `File:` finding records, at the
 same file and a line overlapping the entry (issue #4975: the id quoted
@@ -1543,7 +1548,7 @@ finding with a line number within 3 lines or with no line number at all
 finding, or prose, and any path, `src/routes/+page.svelte` and `@scope`
 directories included), or its `consensus_id` is duplicated, so a rejection of one finding can never demote
 a distinct one next to it. A round left with only non-blocking
-entries still posts the ledger and then takes the zero-findings auto-merge
+entries (possible only with a disproof check, so never in production today) still posts the ledger and then takes the zero-findings auto-merge
 path (fresh ready checks still required); a mixed round hands off the rest,
 and the fixer ignores the non-blocking block. Task gaps, findings two or more
 reviewers raised, and singletons the others did not reject stay blocking. A

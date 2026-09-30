@@ -525,7 +525,7 @@ CONSENSUS_ID_VOTING_REVIEWS = {
 }
 
 
-def test_handoff_rejected_singleton_auto_merges_and_stays_visible():
+def test_handoff_rejected_singleton_is_handed_off_not_auto_merged():
 	"""Issue #4586's #4575 shape, since #5582: a verified majority of votes no longer demotes the
 	singleton, so the round is handed to the Claude session instead of auto-merging."""
 	with tempfile.TemporaryDirectory() as td:
@@ -542,6 +542,10 @@ def test_handoff_rejected_singleton_auto_merges_and_stays_visible():
 	assert "action=auto_merge" not in proc.stdout
 	assert "kind=findings findings=2 ledger=ok failed_checks=none nonblocking=0" in proc.stdout
 	assert "<!-- ai:claude-fixer-handoff:v1 kind=findings" in calls[0]["payload"]["body"]
+
+
+# The name this test had before #5582 inverted its outcome, kept as an alias (CLAUDE.md §6).
+test_handoff_rejected_singleton_auto_merges_and_stays_visible = test_handoff_rejected_singleton_is_handed_off_not_auto_merged
 
 
 @pytest.mark.parametrize(("reviews", "source_files", "evidence_line"), [
