@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch
 - Project branch: claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch   Final PR: #5107 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 2/3
 - Activation: not started
-- Waiting on: conformance-fix PR from `claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch-conformance-fix-1`
+- Waiting on: conformance-fix PR from `claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch-conformance-fix-2`
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01DeJ3bVofrAPjfdXYapCF43 (reused)   safety net and hand-back: new triggers armed by the conformance 1/3 stage (ids in its report and the next `— resume.` block)
-- Last updated: 2026-09-29
-- Last note: conformance run 1: CONFORMANT (Correctness: CONCERNS); one plan divergence (null/empty head_branch accepted as provenance) fixed per AD-11 in the conformance-fix PR
+- Check-in: checker session_01DeJ3bVofrAPjfdXYapCF43 (reused)   safety net and hand-back: new triggers armed by the conformance 2/3 stage (ids in its report and the next `— resume.` block)
+- Last updated: 2026-09-30
+- Last note: conformance run 2: INCOMPLETE (Correctness: FAIL): `smoke_review_checked_out_sha` read job logs without `--allow-escape-sequences`, so every real run read as rc=1; fixed in the conformance-fix-2 PR
 
 ## Phases
 1. [x] Phase 1 — default-branch smoke review dispatch with checked-out-SHA correlation   — PR #5111 merged 2026-09-29 (as `c7ec923`, merged by hand per the answer to the round-3 block); review rounds: 3; interventions: 0
@@ -24,7 +24,8 @@
    - [x] `agents.md`, `docs/INVENTORY.md`, `changelog.d/5093-smoke-review-dispatch-default-branch.md`
 
 ## Conformance
-- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — fix PR from `claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch-conformance-fix-1` (AD-11) (pre-security)
+- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — fix PR #5268 merged 2026-09-29 as `1e094ed` (AD-11) (pre-security)
+- Run 2 — 2026-09-30: INCOMPLETE (Implemented: PARTIAL, Correctness: FAIL) — fix PR from `claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch-conformance-fix-2` (pre-security). BLOCKER, EVIDENCE-BASED: `scripts/smoke_review_dispatch.sh:160` fetched the `codex-agent` job log without `--allow-escape-sequences`; gh refuses a body with terminal escape sequences, so every genuine run read as rc=1. Phase 4 leg (c) never verified a completed Bug B run, and every dispatched Phase 4b retry ended in `retry_run_unverified`. Verified live on run 36571421143 (2,091 escape sequences; the flag yields its reviewed head `99f48e5`). The test stub did not model the refusal (CONCERN), fixed in the same PR.
 
 ## Security pass
 - Skipped: `Security pass: skip (ai:security: automation-produced issue)` in the plan header, verified by `.claude/scripts/security_pass_skip.py`.
@@ -50,6 +51,7 @@
 
 ## Lessons
 - [source:conformance] A PR-named `workflow_dispatch` run counts as trusted evidence only when its `head_branch` is the dispatch (default) branch: `run-name` is evaluated from the workflow file at the dispatched ref, so a null or empty `head_branch` proves nothing and must fail closed; tolerate null only where the run is used to suppress work, never to accept it. (files: scripts/smoke_review_dispatch.sh)
+- [source:conformance] A `gh api .../actions/jobs/<id>/logs` read must pass `--allow-escape-sequences`: job logs carry ANSI colour codes and gh refuses such a body even into a file, so a helper without it fails on every real log; a test `gh` stub must refuse an escape-carrying body without the flag, or the suite passes on a helper that never works. (files: scripts/smoke_review_dispatch.sh, tests/test_smoke_review_dispatch.py)
 
 ## Notes
 - Security pass skipped per the plan header (verified automation-produced `ai:security` issue).
@@ -60,3 +62,4 @@
 - Review round 3 on PR #5111 (head `99f48e5`): every finding was rejected with reasons, and convergence needed the dedicated verdict bot (`CLAUDE_FIXER_VERDICT_BOT_LOGIN` unset), so the project stopped BLOCKED (issue comment 5893188350). The owner answered C: PR #5111 was verified and merged by hand as `c7ec923` (issue comment 5894291806); the `/reclarify` that routed the resume is issue comment 5898554835.
 - Resume (2026-09-29, session_01YBuZoB6J3QZBSieDnAMR1Z): the log still read `Status: IN_PROGRESS` because the block was never committed, but the checker had no pending check-in and the round-3 stage session was archived, so the project resumed at conformance 1/3 instead of reporting `already in progress`.
 - Project branch synced with the base as `a3795f3`: `agents.md` conflict resolved by keeping the base's #5094 provenance text in the sweep/poller bullet and this project's #4898/#5093 bullets.
+- Conformance run 2, outside this plan's scope (Non-goals: the live-log shortcuts): Phase 4's pre-existing live-log reads in `test-and-mark-stable.yml` (`gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs"` near line 1878, and the `LOG_SIZE` read near line 2038) have the same missing `--allow-escape-sequences`: they fail soft, so the editor-noop and reviewer-count shortcuts stay inactive and `log_sz` stays 0. Not fixed here (§5, plan Non-goals); listed for the final PR's review.
