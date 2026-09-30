@@ -135,6 +135,12 @@ _DIRECTORY_KEYWORD_PREFIXES = frozenset({"if", "then", "else", "elif", "do", "wh
 # `git push` options that consume the following word as their value.
 _PUSH_OPTS_WITH_VALUE = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
 _PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
+# `git push` options that write every local branch. git accepts any
+# unambiguous prefix of a long option (`--al`, `--mir`), so a word of four or
+# more characters that starts one of these counts as it.
+_PUSH_BULK_FLAGS = ("--all", "--branches", "--mirror")
+# The only `git push` option that, given with no refspec, writes no branch.
+_PUSH_TAGS_ONLY_FLAG = "--tags"
 # A push refspec word containing any of these is a shell expansion or a
 # pattern the guard cannot turn into one branch name.
 _UNRESOLVABLE_REFSPEC_MARKERS = ("$", "`", "*", "?", "[", "{", "~")
@@ -449,6 +455,10 @@ class GuardTarget(NamedTuple):
 	be resolved (then `fallback_reason` says why). `branch` is the branch the
 	write lands on, "" for the checked-out branch of `cwd`. `tip` is the
 	commit that would stack on it: HEAD, or a push refspec's source.
+	`bulk_reason` is set for a push that writes more branches than the one
+	judged (`--all`, `--branches`, `--mirror`, the `:` matching refspec, a
+	`*` pattern): the checked-out branch is judged as before and the push
+	also asks for confirmation.
 	"""
 
 	subcommand: str
@@ -457,6 +467,7 @@ class GuardTarget(NamedTuple):
 	tip: str
 	reaches_remote: bool
 	fallback_reason: str = ""
+	bulk_reason: str = ""
 
 
 def _resolve_guard_path(value: str, base: str) -> tuple[str | None, str]:
@@ -507,18 +518,27 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 	judged on `<dst>` with `<src>` as the tip; a refspec without a colon on
 	the branch it names; `HEAD` on the checked-out branch. Deletions
 	(`--delete`, `:<dst>`) and non-branch refs (`refs/tags/…`) land no commits
-	on a branch and yield no target. A push that names no refspec judges the
+	on a branch and yield no target, and so does `--tags` with no refspec,
+	which pushes only tags. A push that names no refspec judges the
 	checked-out branch with HEAD, as before.
+
+	A bulk push — `--all`, `--branches`, `--mirror` (or a prefix git expands
+	to one), or the `:` matching refspec — writes branches the guard cannot
+	list one by one: it judges the checked-out branch and carries a
+	`bulk_reason`, so the hook also asks for confirmation.
 
 	A refspec the guard cannot turn into one branch — a shell expansion or
 	pattern (`$B`, `refs/heads/*`), a `heads/` / `tags/` / `remotes/`
 	shorthand git expands against the remote, or a source starting with `-`
 	that git would read as an option — keeps the old behaviour: the session
-	checkout's branch and HEAD, with a `fallback_reason`.
+	checkout's branch and HEAD, with a `fallback_reason`. A `*` pattern that
+	can write several branches also carries a `bulk_reason`.
 	"""
 	positionals: list[str] = []
 	index = 0
 	options_done = False
+	bulk_option_reason = ""
+	pushes_tags = False
 	while index < len(args):
 		token = args[index]
 		if not options_done:
@@ -531,25 +551,53 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 			if token in _PUSH_OPTS_WITH_VALUE:
 				index += 2
 				continue
+			if _is_push_bulk_flag(token):
+				bulk_option_reason = bulk_option_reason or f"`git push {token}` writes every local branch"
+				index += 1
+				continue
+			if token == _PUSH_TAGS_ONLY_FLAG:
+				pushes_tags = True
+				index += 1
+				continue
 			if token.startswith("-") and len(token) > 1:
 				index += 1
 				continue
 		positionals.append(token)
 		index += 1
 
+	if bulk_option_reason:
+		# git refuses a refspec beside these options, so nothing narrows the push.
+		return [GuardTarget("push", repo_dir, "", "HEAD", True, bulk_reason=bulk_option_reason)]
 	refspecs = positionals[1:]
 	if not refspecs:
+		if pushes_tags:
+			# `git push --tags <remote>` pushes refs/tags/* and no branch.
+			return []
 		return [GuardTarget("push", repo_dir, "", "HEAD", True)]
 	targets: list[GuardTarget] = []
 	for refspec in refspecs:
-		unresolvable_reason = _unresolvable_refspec_reason(refspec)
-		if unresolvable_reason:
-			targets.append(GuardTarget("push", session_cwd, "", "HEAD", True, unresolvable_reason))
-			continue
 		spec = refspec[1:] if refspec.startswith("+") else refspec
 		if spec == ":":
-			# "Matching" push: judge the checked-out branch, as before.
-			targets.append(GuardTarget("push", repo_dir, "", "HEAD", True))
+			# "Matching" push: it writes every branch that also exists on the
+			# remote. Judge the checked-out branch, as before, and ask.
+			targets.append(
+				GuardTarget(
+					"push",
+					repo_dir,
+					"",
+					"HEAD",
+					True,
+					bulk_reason="`git push` with the `:` refspec writes every branch that also exists on the remote",
+				)
+			)
+			continue
+		unresolvable_reason = _unresolvable_refspec_reason(refspec)
+		if unresolvable_reason:
+			targets.append(
+				GuardTarget(
+					"push", session_cwd, "", "HEAD", True, unresolvable_reason, _pattern_refspec_bulk_reason(spec)
+				)
+			)
 			continue
 		source, colon, destination = spec.partition(":")
 		if not colon:
@@ -565,6 +613,29 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 		tip = "HEAD" if source in ("HEAD", "@") else source
 		targets.append(GuardTarget("push", repo_dir, destination, tip, True))
 	return targets
+
+
+def _is_push_bulk_flag(token: str) -> bool:
+	"""Whether a `git push` word is `--all`, `--branches` or `--mirror`, or a
+	prefix of four or more characters git would expand to one."""
+	return len(token) >= 4 and any(flag.startswith(token) for flag in _PUSH_BULK_FLAGS)
+
+
+def _pattern_refspec_bulk_reason(spec: str) -> str:
+	"""The `bulk_reason` for a `*` pattern refspec (without its leading `+`)
+	that can write several branches; "" for anything else.
+
+	A word with `$` or a backtick is a shell expansion, not a pattern; a
+	deletion (`:<dst>`) or a tag pattern writes no branch.
+	"""
+	if "*" not in spec or "$" in spec or "`" in spec or spec.startswith("-"):
+		return ""
+	pattern_source, pattern_colon, pattern_destination = spec.partition(":")
+	if not pattern_colon:
+		pattern_destination = pattern_source
+	if not pattern_source or pattern_destination.startswith("refs/tags/"):
+		return ""
+	return f"`git push` with the pattern refspec `{spec}` can write several branches"
 
 
 def _unresolvable_refspec_reason(refspec: str) -> str:
@@ -632,7 +703,18 @@ def _git_invocation_targets(
 			reason = f"the git directory is {path_reason}"
 	reaches_remote = subcommand == "push"
 	if repo_dir is None:
-		return [GuardTarget(subcommand, session_cwd, "", "HEAD", reaches_remote, reason)]
+		# A bulk push still asks when its directory is unknown.
+		fallback_bulk_reason = ""
+		if reaches_remote:
+			fallback_bulk_reason = next(
+				(
+					target.bulk_reason
+					for target in _push_refspec_targets(args[index:], session_cwd, session_cwd)
+					if target.bulk_reason
+				),
+				"",
+			)
+		return [GuardTarget(subcommand, session_cwd, "", "HEAD", reaches_remote, reason, fallback_bulk_reason)]
 	if subcommand == "commit":
 		return [GuardTarget(subcommand, repo_dir, "", "HEAD", False)]
 	return _push_refspec_targets(args[index:], repo_dir, session_cwd)
@@ -1370,10 +1452,22 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		)
 		if code == 2:
 			blocks.append(message)
-		elif kind == "ask":
+			continue
+		if kind == "ask":
 			asks.append((reason, prompt_reason))
 		elif kind == "warn":
 			notices.append(f"merged-PR guard skipped: {reason}")
+		if target.bulk_reason:
+			# The checked-out branch passed; the other branches the push
+			# writes are not listed, so a human confirms none of them is
+			# stranded (issue #5144 review). No API calls, and not skipped on
+			# the default branch.
+			bulk_ask_reason = (
+				f"{target.bulk_reason} in `{target.cwd}`, and the guard judges only the checked-out "
+				"branch, so it cannot check the others. Confirm that none of them belongs to a "
+				"merged pull request with no open one."
+			)
+			asks.append((bulk_ask_reason, bulk_ask_reason))
 
 	if blocks:
 		# Keep every notice (fallback and skip warnings) beside the block, so a
