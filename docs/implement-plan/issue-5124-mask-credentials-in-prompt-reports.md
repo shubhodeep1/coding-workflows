@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4755-report-blocking-permission-prompts
 - Project branch: claude/implement-plan-issue-5124-mask-credentials-in-prompt-reports   Final PR: #5166 (draft)
 - Status: BLOCKED
-- Stage: conformance 1/3 (BLOCKED on the operator's [claude-twin-sync] of the conformance-fix twin)
+- Stage: conformance 1/3 — review round 1 on PR #5401 (BLOCKED on the operator's [claude-twin-sync] of the round-1 twin)
 - Activation: not started
-- Waiting on: PR #5401: twin sync (operator copies the twin into .claude/, then /reclarify on #5124)
+- Waiting on: PR #5401: twin sync of the review-round-1 fix (operator copies the twin into .claude/, then /reclarify on #5124)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01Cm4tzQ6puzR8RdWUi6ZggJ (idle, kept for reuse; no wait armed while held)   safety net none   hand-back none
 - Last updated: 2026-09-30
-- Last note: Conformance 1/3 (session_011NFbuhokq1RhpF2eJrPVqc): INCOMPLETE, one EVIDENCE-BASED BLOCKER (credential flags behind wrapper commands leaked) plus one CONCERN (URL userinfo with an unencoded @); fixed twin-first in PR #5401, held for the operator's [claude-twin-sync].
+- Last note: Review round 1 on PR #5401 (session_01AFC2jUGPeZeEA6Yyb5Ws7n, head 2e16cf8): the two NIT findings pointed at real leaks (`sudo -u http mysql -p…`, `docker --config d login -p…`), fixed twin-first; the immediate-flag finding was invalid. Held for the operator's [claude-twin-sync].
 
 ## Phases
 1. [x] Phase 1 — sanitize every posted command fail-closed   — protected paths: .claude/scripts/permission_prompts.py   — PR #5217 merged 2026-09-29 (f00db5c, merged by the master session after the all-rejected round 2, Q1: A on #5124); review rounds: 2; interventions: 0
@@ -22,6 +22,7 @@
 
 ## Conformance
 - Run 1 — 2026-09-30: INCOMPLETE — fix PR #5401 (pre-security). Findings: [BLOCKER] `_segment_credentials()` / `_segment_shape()` read the wrapper (`sudo`, `env`, `timeout`, `xargs`, …) as the command, so `sudo mysql -pS3cretPass` reached the example and the shape; [CONCERN] URL userinfo stopped at the first `@`. Both fixed in the twin (d776488).
+  - Review round 1 (head 2e16cf8, 2026-09-30): fixed — `_wrapped_command_index` took the first word after the wrapper naming a credential command, so `sudo -u http mysql -pS3cretPass` (sudo user `http`) leaked; the credential subcommand was the raw next word, so `docker --config /d login -pS3cretPass` leaked (also unwrapped, pre-existing). Replaced by `_segment_flag_letters()` (AD-7). Rejected — `index - 1 > wrapped_position` misses an immediate flag: `index` is already advanced, and `sudo mysql -pS3cretPass app` is a test case.
 
 ## Security pass
 
@@ -38,9 +39,11 @@
 - AD-4 [plan, 2026-09-29] Mask credential-named keys in non-Bash tool input too? — Picked: A — yes, recursively, plus credential headers inside a `headers` mapping. Alternatives: B — leave non-Bash input to `redact()`. Why: the same leak through another tool in the same function (§12.B). Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-09-29] Add a switch to post raw or shape-only commands? — Picked: A — no switch; the parse decides. Alternatives: B — a new env var for shape-only. Why: §5, §4; the fail-closed default already posts the shape when unsure. Applied in: no code change. Status: pending review
 - AD-6 [conformance 1/3, 2026-09-30] How should commands behind a wrapper be handled? — Picked: A — look past known wrapper commands to the first word naming a command with credential flags, and apply that command's rules only to the flags after it. Alternatives: B — withhold every command that starts with a wrapper; C — rely on `redact()`. Why: closes the leak with the smallest change and keeps credential-free wrapper commands and their signatures unchanged (§1, §5). Applied in: PR #5401. Status: pending review
+- AD-7 [conformance 1/3 review round 1, 2026-09-30] Behind a wrapper, which words' credential flags apply to a flag? — Picked: A — every word between the wrapper and the flag that names a credential command adds its letters, and a credential subcommand is the first word after its command (before the flag) that forms a `_CREDENTIAL_SHORT_FLAGS` key. Alternatives: B — only the nearest such word before the flag; C — only the first such word (the round-0 behaviour). Why: B leaks on `sudo mysql -h curl -p…` and C on `sudo -u http mysql -p…`; A can only mask one value too many (§1). Applied in: PR #5401. Status: pending review
 
 ## Lessons
 - [source:conformance] A credential rule keyed on a segment's command word must look past wrapper commands (`sudo`, `env`, `timeout`, `xargs`) or `sudo <tool> -p<secret>` bypasses it, in both the posted text and any derived shape. (files: .claude/scripts/permission_prompts.py)
+- [source:intervention] When a credential rule has to guess which word is the command that runs (behind `sudo -u <user>`, after global options such as `docker --config d`), take the union of every candidate's rules: over-masking is safe, a wrong single guess leaks. (files: .claude/scripts/permission_prompts.py)
 
 ## Notes
 - Security pass: skip (security_pass_skip.py: {"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}).

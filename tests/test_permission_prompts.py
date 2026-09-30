@@ -321,6 +321,13 @@ def _bash(command):
 		("env curl -udeploy:mycustompwd https://a.b", "mycustompwd", "env curl -u*** https://a.b"),
 		("xargs -n1 curl -sSu deploy:mycustompwd", "mycustompwd", "xargs -n1 curl -sSu ***"),
 		("sudo docker login -p S3cretPass registry.example.com", "S3cretPass", "sudo docker login -p *** registry.example.com"),
+		# A wrapper option value or a wrapped command's argument that names another credential command hides nothing.
+		("sudo -u http mysql -pS3cretPass app", "S3cretPass", "sudo -u http mysql -p*** app"),
+		("sudo mysql -h curl -pS3cretPass app", "S3cretPass", "sudo mysql -h curl -p*** app"),
+		# Global options before the credential subcommand (`docker --config d login`) do not hide it.
+		("docker --config /d login -p S3cretPass reg", "S3cretPass", "docker --config /d login -p *** reg"),
+		("docker -H tcp://x login -pS3cretPass reg", "S3cretPass", "docker -H tcp://x login -p*** reg"),
+		("sudo docker --config /d login -pS3cretPass reg", "S3cretPass", "sudo docker --config /d login -p*** reg"),
 		# An unencoded `@` in the password: userinfo runs to the last `@` before the path.
 		("git clone https://user:pa@ss1234@github.com/o/r.git", "ss1234", "git clone https://***@github.com/o/r.git"),
 	],
@@ -379,6 +386,10 @@ def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
 		"sudo -u postgres psql -c 'select 1'",
 		"env -u HOME curl https://a.b",
 		"timeout 30 curl -XPUT -H 'Accept: application/json' https://a.b",
+		# A word after the wrapper that only happens to name a credential command changes nothing without its flags.
+		"sudo apt-get install curl -y",
+		# `-p` before the `login` subcommand is not `docker login -p`.
+		"docker run -p 8080:80 nginx",
 	],
 )
 def test_credential_free_commands_are_unchanged(command):
@@ -412,6 +423,9 @@ def test_credential_free_commands_are_unchanged(command):
 		("env curl -udeploy:mycustompwd https://a.b", "env * -u* *"),
 		("timeout 30 curl --user -deploy:mycustompwd https://a.b", "timeout * --user *"),
 		("sudo gh api -H'Authorization: token abcdefgh' user", "sudo * -H* *"),
+		("sudo -u http mysql -pS3cretPass app", "sudo -u * -p* *"),
+		("docker --config /d login -pS3cretPass reg", "docker --config * -p* *"),
+		("podman login -pS3cretPass reg", "podman * -p* *"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):
