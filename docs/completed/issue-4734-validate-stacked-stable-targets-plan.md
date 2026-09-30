@@ -52,6 +52,13 @@ workflow-heal issue, and keeps every existing check.
    listing for `target_ref`, plus one parent-PR listing (case 2) or one issue
    read (case 3). A comment in the step documents the count.
 
+> **Superseded for the `stable` case by #4791** (security follow-up, final PR
+> #4793 merged into this project branch, AD-6). A label and a branch name are
+> forgeable, so goal 3 now also requires verified heal-automation provenance
+> for issue `<n>` and the target PR's author to be the issue's author, and the
+> `stable` case reads every issue-events page (goal 5: three reads for a
+> typical heal issue). See `docs/completed/issue-4791-validate-stable-heal-provenance-plan.md`.
+
 ## Non-goals
 
 - Changing `Verify authorized checkout`, the `target_ref` regex, or
@@ -169,7 +176,9 @@ tests/test_workflow_file_size_limit.py`, and `actionlint` when available.
 - Anyone who can label an issue could add `ai:workflow-heal` — ACCEPTED: the
   target PR must still be authored by an `OWNER` / `MEMBER` / `COLLABORATOR`,
   which is the existing trust boundary; the label only scopes which `stable`
-  targets qualify, as the issue specifies.
+  targets qualify, as the issue specifies. **Superseded:** the security pass
+  found this acceptance insufficient (#4791); the `stable` case now verifies
+  heal provenance and binds the PR author to the issue author (#4793).
 - Consumer repos pick the change up with the next `@stable` sync — no wrapper
   change is needed (the inputs are unchanged).
 
@@ -185,6 +194,7 @@ owner posts `/reclarify` on #4665 (AD-5).
 - AD-3 [plan, 2026-09-28] What must issue `<n>` satisfy for a `stable` base? — Picked: A — an issue (no `pull_request` key) carrying `ai:workflow-heal`, any state. Alternatives: B — also require it to be open; C — label only. Why: the issue says "issue `<n>` carries `ai:workflow-heal`"; excluding pull requests keeps the number bound to an issue, and requiring open state would reject a re-run after an explicit close. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-09-28] Update the "Validation target trust boundary" line in `.claude/commands/implement-plan-claude.md`? — Picked: A — leave `.claude/**` unchanged and document the new cases in `README.md` and `agents.md`. Alternatives: B — edit both `.claude/commands/` and `workflow-templates/.claude/commands/` copies. Why: a `.claude/**` edit stops an unattended phase (CLAUDE.md §28.C), and the existing line stays true for default-base projects. Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-09-28] Post `/reclarify` on #4665 after merge? — Picked: A — leave it to the owner and list it as the next step in the progress comment and final report. Alternatives: B — the chain posts it. Why: `/reclarify` starts an unattended pipeline, which CLAUDE.md §23.C keeps ask-first. Applied in: no code change. Status: pending review
+- AD-6 [completion, 2026-09-29] The security follow-up #4791 replaced goal 3's label-only `stable` rule and the "ACCEPTED" label risk, so this plan no longer matches the shipped code. How to archive it? — Picked: A — add a short superseded note under the goals and on the risk, pointing at the #4791 plan. Alternatives: B — rewrite goals 3 and 5, the approach, and the tests to the final rule; C — archive it unchanged. Why: the final PR's reviewer panel reads the plan as the spec; a note fixes the misleading text without rewriting the history of what this project planned (§5). Applied in: completion PR. Status: pending review
 
 ## Notes
 
