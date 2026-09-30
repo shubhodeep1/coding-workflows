@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5619-tracking-lineage-completion-pr-only   Final PR: #5632 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #5643
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01LHayV9tdHEAgtpejcbwf7v   safety net trig_01WyMaSNwDH1P32kYFRRvMPC   hand-back trig_015EJREqUqnKTmNfq6Jey3ka
+- Check-in: checker session_01LHayV9tdHEAgtpejcbwf7v   safety net and hand-back re-armed after the round 1 push (ids in the stage report)
 - Last updated: 2026-09-30
-- Last note: phase 1 implemented and verified (63 tests pass); phase PR #5643 opened against the project branch; checker armed.
+- Last note: review round 1 on PR #5643: 1 finding fixed (README row wording on unmerged closes), 8 rejected with reasons on the PR; project branch synced with its issue base.
 
 ## Phases
-1. [ ] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)   — PR #5643 open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)   — PR #5643 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -39,5 +39,6 @@
 - [source:plan-deviation] A bash list built from `$(...)` output has no trailing newline, so appending with `+="<n>"$'\n'` fuses numbers (`5` + `10` → `510`) and silently breaks `grep -qxF` membership; merge list items with a helper such as `merge_issue_number_list`. (files: .github/workflows/issue_pr_status.yml)
 
 ## Notes
+- 2026-09-30 review round 1 (head 9b450c8, two reviewer runs, ledgers afd8b85b… and ae6fb495…): fixed the README `issue_pr_status.yml` row's unmerged-close wording; rejected the rest (helper scope, `+=` on a newline-terminated list, alias names kept per AD-5, `ORCH_INTEGRATION_BRANCH_PATTERN`, defensive `-n` guard, env defaults, body-URL-only test gap).
 - Issue mode: the session started in `auto` permission mode (no start-up check needed).
 - Base branch `claude/implement-plan-issue-4813-close-sweep-target-branch-merges` is project #4813's branch (final PR #4826, open draft into main at start).
