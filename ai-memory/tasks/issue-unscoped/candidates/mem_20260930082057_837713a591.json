@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:e2e_review_dispatch_resolve_head() function (added in both wait-review and verify-bait-removed steps, ~line 1505 and ~line 2410) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The function does not explicitly handle `mktemp` failure, so a temporary-directory failure can be misreported as \u201cCould not read the reviewed PR head.\u201d\n  WHY: When `TMPDIR` is full or unwritable, the caller's error message misattributes the cause.\n- .github/workflows/test-and-mark-stable.yml:e2e_review_dispatch_pick() in wait-review step, line `pick_rows=$(printf '%s' \"${pick_runs}\" | jq -r ...)` | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `pick_rows` assignment does not report jq filter failures, which can leave the result empty and be treated as a silent no-match.\n  WHY: An unexpected row field type can make jq fail, leaving the dispatch runs empty without logging that the listing was unusable.\n- .github/workflows/test-and-mark-stable.yml:e2e_review_dispatch_resolve_head() (both inline copies) | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: An empty or partial job log is treated the same as a successful log fetch with no reviewed-head line.\n  WHY: Both cases set the head to `none`, so triage cannot distinguish a partial log fetch from a job that did not write the expected line.\n- .github/workflows/test-and-mark-stable.yml:e2e_review_dispatch_runs() in wait-review step | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The helper does not distinguish a malformed dispatch listing from documented cases that return an empty listing.\n  WHY: Missing-wrapper, missing-default-branch, and malformed-listing cases can produce inconsistent failure messages.\n- scripts/review_autofix_step_changes_lost_redispatch.sh:end of the step body | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The moved script may no longer set `CHANGES_LOST_REDISPATCHED`.\n  WHY: If the export is missing, downstream conditionals or job-summary aggregation that use it receive an empty value.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Issue #4898 closes the last two sites of security finding `review-dispatches-unmerged-workflow`\"\n  expected_change_site: scripts/review_autofix_step_post_commit_retrigger.sh and scripts/review_autofix_step_changes_lost_redispatch.sh (new files)\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Both new scripts are listed in pr_changed_files.txt as added, but the diff content for those files is not in the inlined original_pr_diff.patch (the diff_truncated markers cover the script region).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:e2e_review_dispatch_resolve_head() function (added in both wait-review and verify-bait-removed steps, ~line 1505 and ~line 2410) | severity=low | confidence=3\n  PROBLEM: The function uses `head_log_file=\"$(mktemp)\"` without an explicit failure check.\n  WHY: When TMPDIR is full/unwritable, the caller's error message \u201cCould not read the reviewed PR head\u201d misattributes the cause.\n- .github/workflows/test-and-mark-stable.yml:e2e_review_dispatch_pick() in wait-review step, line `pick_rows=$(printf '%s' \"${pick_runs}\" | jq -r ...)` | severity=low | confidence=3\n  PROBLEM: The `pick_rows` assignment does not gate on jq's exit code.\n  WHY: When jq fails on a malformed row, the helper returns an empty `pick_rows` rather than logging an incomplete listing.\n- .github/workflows/test-and-mark-stable.yml:e2e_review_dispatch_resolve_head() (both inline copies) | severity=low | confidence=2\n  PROBLEM: The function's `|| true` swallows grep's exit code and does not distinguish an empty or unreadable log from a successful fetch with no captured head.\n  WHY: A flaky or partial log fetch yields the same \u201cnone\u201d verdict as a genuine \u201cran the wrong code\u201d defect.\n- .github/workflows/test-and-mark-stable.yml:e2e_review_dispatch_runs() in wait-review step | severity=low | confidence=2\n  PROBLEM: The function does not distinguish documented cases that return an empty listing from a malformed listing.\n  WHY: Missing-wrapper, missing-default-branch, and malformed-listing cases produce inconsistent failure messages.\n- scripts/review_autofix_step_changes_lost_redispatch.sh:end of the step body | severity=low | confidence=2\n  PROBLEM: The moved script may not preserve the `CHANGES_LOST_REDISPATCHED` export.\n  WHY: If it is no longer set, downstream conditionals or job-summary aggregation that use it see an empty value silently.\n- Requirement: \"Issue #4898 closes the last two sites of security finding `review-dispatches-unmerged-workflow`\"\n  Expected change site: scripts/review_autofix_step_post_commit_retrigger.sh and scripts/review_autofix_step_changes_lost_redispatch.sh (new files)\n  Evidence of absence: Both new scripts are listed in pr_changed_files.txt as added, but the diff content for those files is not in the inlined original_pr_diff.patch (the diff_truncated markers cover the script region). Without the content, the reviewer cannot confirm that the dispatch chain in the moved scripts matches the documented order (caller-as-wrapper, ai-review.yml, internal-review.yml, named-caller, review_autofix.yml) and that the PR-number validation `^[1-9][0-9]*$` and `allow_workflow_edits` normalization are preserved.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c45e44e7757ee069c57bb8dd951c57b089a5d659c557d9fd740f231d6ae01911",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36687632891",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36687632891",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930082057_837713a591",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36687632891"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T08:20:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
