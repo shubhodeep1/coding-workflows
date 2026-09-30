@@ -1,31 +1,35 @@
 # Implement-Plan Log — Merge-train release: match `@ref`-suffixed run paths and read every active run before releasing a queued PR
 
-- Plan: docs/plans/issue-5443-merge-train-complete-run-listing-plan.md
+- Plan: docs/completed/issue-5443-merge-train-complete-run-listing-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5443
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4701-review-dispatch-default-branch
 - Project branch: claude/implement-plan-issue-5443-merge-train-complete-run-listing   Final PR: #5451 draft
-- Status: IN_PROGRESS
-- Stage: conformance 1/3 — review round
-- Activation: not started
-- Waiting on: PR #5512 (conformance fix 1 into the project branch)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a once the final PR merges (base claude/implement-plan-issue-4701-review-dispatch-default-branch is not the default branch)
+- Waiting on: completion PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_018ZxuZKFeRNRTtGvjHSjwZa   safety net and hand-back: see the conformance 1/3 — review round stage report
+- Check-in: checker session_018ZxuZKFeRNRTtGvjHSjwZa (project checker)   safety net and hand-back: see the validation 1/3 — read result stage report
 - Last updated: 2026-09-30
-- Last note: PR #5512 review round 1: the reviewer panel's same-count membership-shift finding is valid (an older run entering the status below the page boundary while a page-1 run finishes skipped a still-active review run with total_count unchanged); fixed by replacing offset pages with created_at-bounded follow-up queries (AD-8).
+- Last note: validation cycle 1 passed on the project branch at 7cef44d (10/10 tests); completion PR moves the plan to docs/completed/; final PR #5451 is marked ready once it merges.
 
 ## Phases
 1. [x] Phase 1 — complete, suffix-tolerant active-run listing for the merge-train release   — PR #5458 merged 2026-09-30; review rounds: 0; interventions: 0
 
 ## Conformance
 - Run 1 — 2026-09-30: INCOMPLETE — fix PR #5512 (pre-security). Correctness FAIL: `scripts/review_merge_train.sh:486` compared the runs read with the latest page's total_count, so a status-filtered listing that shrank between pages (runs finishing) skipped an active review run and released beside it; fixed by treating any total_count change after page 1 as listing_shifted (AD-7). Not fixed: the same path regex in `scripts/gh_helpers.sh:1264`, `:1388` (plan non-goal, AD-5). PR #5512 review rounds: 1 (round 1, 2026-09-30: every reviewer flagged that a same-count membership shift still skipped a run under AD-7's check; valid, fixed by AD-8's created_at-bounded queries, which replace the offset pages and AD-7's page-1 total_count comparison).
+- Run 2 — 2026-09-30: CONFORMANT — no fixes (pre-security). Correctness CONCERNS: one HYPOTHESIS, not verifiable live: the keyset assumes a re-run attempt keeps its created_at sort position (no re-run appeared in the repo's recent listings).
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue)
 
 ## Validation
+- Cycle 1 — run 36714864057 2026-09-30 (target_ref: project branch, 7cef44d): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 285s); no fixes
 
 ## Completion
-- Final PR #5451 draft (project mode, base claude/implement-plan-issue-4701-review-dispatch-default-branch)
+- Completion PR (this log update) — doc moved to docs/completed/issue-5443-merge-train-complete-run-listing-plan.md
+- Merged PRs: phase 1 #5458, conformance fix #5512
+- Final PR #5451 draft (project mode, base claude/implement-plan-issue-4701-review-dispatch-default-branch; marked ready in the final-merge stage)
 
 ## Activation
 
