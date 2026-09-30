@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T07:09:38Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A claude/* PR opened after its first push gets two review runs on one head (the push-triggered branch review, then the pull_request review); whichever finishes first sees the other's job in progress, so a clean review hands off with 0 findings instead of auto-merging. Read the run log's `Claude-fixer clean review has no fresh ready same-head check-run snapshot` warning before judging such a round, and close it with the next real push (a due base sync or the log update), never a verdict or an empty commit.",
+  "phase": "implement_plan",
+  "pr_number": 5468,
+  "record_id": "lesson-implement-plan-b546598b01893c92f5f11364",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4887-archive-finished-sessions",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}

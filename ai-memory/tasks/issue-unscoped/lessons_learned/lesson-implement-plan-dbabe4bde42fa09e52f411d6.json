@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T07:09:38Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a new mechanism archives or deletes sessions from outside the chain, update every doc that says only the chain does (agents.md, the implement-plan command) in the same change.",
+  "phase": "implement_plan",
+  "pr_number": 5468,
+  "record_id": "lesson-implement-plan-dbabe4bde42fa09e52f411d6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4887-archive-finished-sessions",
+    "file:agents.md",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}

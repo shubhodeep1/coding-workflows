@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-30T07:09:38Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A sweep that matches session titles must pin the title forms the creating commands produce, with a test that reads those command files, so a title change there cannot silently take sessions out of the sweep.",
+  "phase": "implement_plan",
+  "pr_number": 5468,
+  "record_id": "lesson-implement-plan-8d3792ec70149fcb9407e62b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4887-archive-finished-sessions",
+    "file:tests/test_claude_session_janitor.py",
+    "file:.claude/commands/claude-issue-dispatch.md",
+    "file:.claude/commands/fix-claude-pr.md"
+  ]
+}
