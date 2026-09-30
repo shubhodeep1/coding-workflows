@@ -7,14 +7,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5643
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01LHayV9tdHEAgtpejcbwf7v   safety net trig_01WyMaSNwDH1P32kYFRRvMPC   hand-back trig_015EJREqUqnKTmNfq6Jey3ka
 - Last updated: 2026-09-30
-- Last note: phase 1 implemented and verified (63 tests pass); phase PR opened against the project branch.
+- Last note: phase 1 implemented and verified (63 tests pass); phase PR #5643 opened against the project branch; checker armed.
 
 ## Phases
-1. [ ] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)
+1. [ ] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)   — PR #5643 open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
