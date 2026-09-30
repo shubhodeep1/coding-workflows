@@ -664,6 +664,18 @@ def test_cli_a_deleted_settings_file_fails(settings_repo: Path) -> None:
 	assert "reason=removed" in line
 
 
+def test_cli_a_deleted_settings_file_with_only_env_fails(settings_repo: Path) -> None:
+	# The `env` regression is the only line when the deleted file wires no
+	# guard, so it is not a duplicate of the per-entry `removed` lines.
+	_write_settings(settings_repo, _with_env(_without_guard(_settings()), CLAUDE_PR_MERGE_GUARD="on"), paths=(".claude/settings.json",))
+	_git(settings_repo, "commit", "-q", "-am", "env only")
+	(settings_repo / ".claude" / "settings.json").unlink()
+	proc = _cli(settings_repo, "--base-ref", "HEAD")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert 'reason=env shape="settings:.claude/settings.json:env"' in line, line
+
+
 def _permissions_only(settings: dict) -> dict:
 	settings["permissions"]["allow"].append("Bash(git log)")
 	return settings
