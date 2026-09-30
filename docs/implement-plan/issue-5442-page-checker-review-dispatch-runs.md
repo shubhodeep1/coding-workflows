@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5442-page-checker-review-dispatch-runs-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5442 (https://github.com/shubhodeep1/coding-workflows/issues/5442)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4701-review-dispatch-default-branch
-- Project branch: claude/implement-plan-issue-5442-page-checker-review-dispatch-runs   Final PR: #5453 draft
-- Status: COMPLETE
-- Stage: final-merge
+- Project branch: claude/implement-plan-issue-5442-page-checker-review-dispatch-runs   Final PR: #5453 ready (2026-09-30) — review rounds: 1
+- Status: BLOCKED
+- Stage: final-merge — review round
 - Activation: pending final merge — n/a while the base is `claude/implement-plan-issue-4701-review-dispatch-default-branch` (issue mode: steps 12–13 run only if the base moves onto `main` first)
-- Waiting on: completion PR (this PR)
+- Waiting on: PR #5453: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01GoBiesiKrDTtnVG3iojnNw   safety net and hand-back: see the validation 1/3 stage report
+- Check-in: checker session_01GoBiesiKrDTtnVG3iojnNw   safety net none   hand-back none (twin-sync hold; the resumed stage arms the wait)
 - Last updated: 2026-09-30
-- Last note: validation cycle 1 (run 36697460144, target_ref project branch at c610ce5) passed 10/10; completion PR opened, next stage final-merge 1/1.
+- Last note: final PR #5453 review round 1 (head 8c88130): 1 valid finding fixed in the twin (status reads in lifecycle order); hold claim posted, waiting on the `[claude-twin-sync]` copy of `.claude/scripts/check_in_status.py`.
 
 ## Phases
 1. [x] Phase 1 — per-wrapper, paginated, completeness-checked active dispatch count in `check_in_status.py` — protected paths: `.claude/scripts/check_in_status.py` — PR #5471 merged 2026-09-30 into the project branch as c610ce5 (head 8055fd8); review rounds: 1; interventions: 0
@@ -34,7 +34,8 @@
 
 ## Completion
 - Completion PR (this PR) — doc moved to docs/completed/issue-5442-page-checker-review-dispatch-runs-plan.md
-- Final PR #5453 draft (into `claude/implement-plan-issue-4701-review-dispatch-default-branch`)
+- Final PR #5453 ready 2026-09-30 (into `claude/implement-plan-issue-4701-review-dispatch-default-branch`) — review rounds: 1
+  - Review round 1 (head 8c88130e0d50, ledger 1a2656aa…0cf2): 1 of 1 finding valid and fixed in the twin (`_active_run_count` reads statuses in lifecycle order pending, queued, in_progress; test `test_run_leaving_pending_during_the_reads_is_still_counted`). This resolves the conformance run 1 CONCERN. Waiting on the twin sync.
 
 ## Activation
 
@@ -51,6 +52,7 @@
 ## Lessons
 - [source:plan-deviation] A paged GitHub listing whose 404 means "absent" only on the first page needs its own page loop: the shared paginator's error cannot say which page failed. (files: workflow-templates/.claude/scripts/check_in_status.py)
 - [source:conformance] Reading several status-filtered run listings one after another can miss a run that changes status between the reads; read them in lifecycle order (pending, queued, in_progress) so a forward transition lands in a later read. (files: .claude/scripts/check_in_status.py)
+- [source:intervention] A conformance CONCERN tagged HYPOTHESIS but cheap to fix (a read order) should be fixed in the conformance stage: the whole-project review raised it again as a finding and cost a review round. (files: .claude/scripts/check_in_status.py)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #5442; start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
@@ -59,3 +61,4 @@
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
 - Project branch synced with its base as 7bcdfd9 (2026-09-30); base re-checked at the validation 1/3 stage (2026-09-30): PR #4709 still open, project branch already up to date.
 - Issue progress comment id 5904114209.
+- Base branch re-checked at the final-merge review-round stage (2026-09-30): PR #4709 still open; project branch already up to date with it.

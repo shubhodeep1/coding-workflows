@@ -46,7 +46,7 @@ INTERNAL_REVIEW_PATH = ".github/workflows/internal-review.yml"
 AI_REVIEW_PATH = ".github/workflows/ai-review.yml"
 REVIEW_WRAPPERS = ("internal-review.yml", "ai-review.yml")
 STUCK_STATUSES = ("queued", "in_progress")
-FIXER_STATUSES = ("queued", "in_progress", "pending")
+FIXER_STATUSES = ("pending", "queued", "in_progress")
 
 
 def _dispatch_path(workflow, status, page=1):
@@ -378,9 +378,9 @@ def test_fixer_findings_handoff_for_current_head_is_a_review_round(monkeypatch, 
 	assert out["done"] is True and out["state"] == "review-round" and out["round"] == 2
 	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments",
 		f"repos/o/r/actions/runs/{FIXER_RUN_ID}",
+		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1",
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1",
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1",
-		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1",
 		*_dispatch_calls(FIXER_STATUSES)]
 
 

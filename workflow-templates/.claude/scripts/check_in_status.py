@@ -312,8 +312,14 @@ def _active_run_count(repo: str, head_ref: str, include_pending: bool = False, p
 	train dispatch (issues #4701, #4926). Both start from the default
 	branch, so the head-branch filter never sees them. Any failed read, and
 	any incomplete wrapper listing (issue #5442), raises `ReadError`.
+
+	Statuses are read in lifecycle order (pending, queued, in_progress), so
+	a run that moves forward between two reads is seen by the later read; in
+	any other order a run that left `pending` after the `queued` and
+	`in_progress` reads but before the `pending` read is seen by none. A run
+	seen twice only raises the count, which callers use as a yes/no.
 	"""
-	statuses = ("queued", "in_progress", "pending") if include_pending else ("queued", "in_progress")
+	statuses = ("pending", "queued", "in_progress") if include_pending else ("queued", "in_progress")
 	active = 0
 	for status in statuses:
 		listing = gh_api(f"repos/{repo}/actions/runs?branch={head_ref}&status={status}&per_page=1")
