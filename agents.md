@@ -1265,7 +1265,9 @@ side so that class cannot land unnoticed.
   shape=…` per wiring failure (as `::error::`; `reason` joins several with
   commas), `GUARD_DIFFERENTIAL intended_wiring_change …` per listed one, and a
   `GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> …` summary ending in
-  `settings=… wiring_regressions=<n>`. Exit 0 when clean or when no hook or
+  `settings=… wiring_regressions=<n>`, or `GUARD_DIFFERENTIAL status=skipped
+  reason=no-hook-change checked=hooks,settings` when no hook `*.py` file and
+  no settings file changed. Exit 0 when clean or when no hook or
   settings file changed, 1 on a failure, 2 on a bad ref, unreadable corpus,
   or unreadable PR body.
 

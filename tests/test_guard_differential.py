@@ -305,7 +305,7 @@ def test_cli_skips_when_no_hook_changed(hook_repo: Path) -> None:
 	(hook_repo / "README.md").write_text("changed\n", encoding="utf-8")
 	proc = _cli(hook_repo)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
-	assert "status=skipped reason=no-hook-change" in proc.stdout
+	assert "status=skipped reason=no-hook-change checked=hooks,settings" in proc.stdout
 
 
 def test_cli_fails_on_a_silent_loosening_in_the_working_tree(hook_repo: Path) -> None:

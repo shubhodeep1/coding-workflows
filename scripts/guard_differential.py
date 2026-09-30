@@ -901,7 +901,9 @@ def _describe(outcome: Outcome) -> str:
 
 def print_report(report: Report, as_json: bool) -> None:
 	if not report.trees and not report.settings:
-		print(f"{LOG_KEY} status=skipped reason=no-hook-change")
+		# `reason=no-hook-change` stays as it was (CLAUDE.md §6); `checked=`
+		# names both gates, since a settings-file change also runs the check.
+		print(f"{LOG_KEY} status=skipped reason=no-hook-change checked=hooks,settings")
 		return
 	for wiring in report.wiring:
 		fields = (
