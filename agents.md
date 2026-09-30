@@ -1051,7 +1051,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
   running); a failed read, or a snapshot whose temp directory cannot be
-  written (`OSError`), logs `pending_checks_failed` and moves on. Tests:
+  written (`OSError`), logs `pending_checks_failed` and moves on. A runs
+  listing that needs more than 10 pages to reach the marker's run (1,000 or
+  more newer runs in one listing; in coding-workflows 100
+  `internal-review.yml` dispatches span about 90 minutes) is such a failed
+  read. It recurs on every hourly run, and the gate skips sweep re-reviews
+  while the marker is live, so the sweep does not enable auto-merge for that
+  PR until a push, a base change, or a forced review (`force-review`) sends
+  the head through a new review. Tests:
   `tests/test_check_in_status_hand_back.py`,
   `tests/test_claude_pr_sweep.py`, `tests/test_claude_fixer_pending_checks.py`.
 

@@ -9,8 +9,9 @@ The sweep's pending-checks pass (issue #4900) enabled auto-merge from an earlier
 | Extra reads per PR that is ready to merge | 1 head-branch runs listing, 4 `workflow_dispatch` runs listings (a missing workflow costs its one 404), each paged 100 runs per call down to the marker's run (usually 1 call, at most 10), 1 comments re-read |
 | Extra reads for every other PR | 0 |
 | Longest added delay | one sweep tick (`17 * * * *`) per active review |
+| Listing with 1,000 or more runs newer than the marker's run (10 pages) | failed read every tick, no merge until a push, base change, or forced review re-reviews the head |
 
-What this means for operators: a PR someone forces a new review on is not merged from the earlier clean result. It merges on the next hourly tick after that review finished cleanly, or goes to a Claude fixer when that review hands off findings. `review_autofix.yml`, `ai-review.yml`, and `review_rb_judge_dispatch.yml` dispatches carry no PR in their run name, so any one of them still running delays every pending-checks merge in that repository by one tick. The sweep logs `pending_checks ... state=review_active` or `state=review_superseded` with the run it waited on.
+What this means for operators: a PR someone forces a new review on is not merged from the earlier clean result. It merges on the next hourly tick after that review finished cleanly, or goes to a Claude fixer when that review hands off findings. `review_autofix.yml`, `ai-review.yml`, and `review_rb_judge_dispatch.yml` dispatches carry no PR in their run name, so any one of them still running delays every pending-checks merge in that repository by one tick. The sweep logs `pending_checks ... state=review_active` or `state=review_superseded` with the run it waited on. When a runs listing holds 1,000 or more runs newer than the marker's run, the sweep logs `pending_checks_failed` every hour instead and leaves the PR alone until a push, a base change, or a forced review sends the head through a new review.
 
 ### For contributors
 

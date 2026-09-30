@@ -1471,8 +1471,11 @@ running (issue #5148): any run on the head branch, an `internal-review.yml`
 dispatch titled for the PR, or any `review_autofix.yml` / `ai-review.yml` /
 `review_rb_judge_dispatch.yml` dispatch that has not completed (`review_active`), and it never merges when
 the latest newer completed review of the PR did not succeed or the marker
-changed while it checked (`review_superseded`). A check that fails instead
-is a `ci-failed` Claude fix, and a push starts a new review round.
+changed while it checked (`review_superseded`). A runs listing that holds
+1,000 or more runs newer than the marker's run is a failed read
+(`pending_checks_failed`), repeated every hour until a push, a base change,
+or a forced review sends the head through a new review. A check that fails
+instead is a `ci-failed` Claude fix, and a push starts a new review round.
 
 The comment is bound to the base it reviewed (issue #5147): a second line,
 `<!-- ai:claude-fixer-pending-checks:v2 head=<sha> round=<n> ledger=<sha256> base_sha=<sha> base_ref_sha256=<sha256> -->`,
