@@ -248,3 +248,51 @@ No `TODO`, `FIXME`, or `HACK` markers were found in the scoped workflow and scri
 | Code modularization | `label_helpers.sh`, `validate_process.sh`, `orchestrate_poll_process.sh`, `review_run_reviewers.sh`, two diagnosis/triage scripts, `implement.yml`, and tests | Medium |
 | Expression size reduction | `implement.yml`, one staged `scripts/` helper, and contract tests | Medium |
 | Medium/Low fixes | `review_autofix.yml`, `review_collect_pr_metadata.sh`, `stage_workflow_support.sh`, applicable shared helpers, and tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-30)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` meets the static safety conditions and is authorized for implementation. `NEEDS_VERIFICATION` requires the stated checks first. `RISKY_SKIP` must not be auto-implemented because it touches a protected retry, pagination, race, or recovery behavior.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** MERGE-001 · **Safety tag:** `RISKY_SKIP` · **Calls:** `.github/workflows/clarify.yml:583` and `.github/workflows/clarify.yml:585-599`  
+  **Current → proposed:** With semantic caching enabled, 2 logical GET invocations → 1; actual requests depend on pagination and retries. With caching disabled, retain the existing 1 GET.  
+  **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`, ordered by creation ascending.  
+  **Evidence:** The “Fetch issue comments” step retrieves a first page of 50 comments for `${ISSUE_COMMENTS_FILE}`, then fetches the same ordered history with `--paginate --slurp` for `${THREAD_HISTORY_FILE}`. The full history contains the bounded prompt subset, but the calls have different page sizes and failure behavior.  
+  **Proposed fix:** In the “Fetch issue comments” step, assess deriving the first 50 comments from the complete paginated response when semantic caching is enabled; retain the existing bounded GET when it is disabled. Preserve both output-file formats and the cache-bypass behavior on history-fetch failure.  
+  **Safety rationale:** The history call implements pagination, and its failure currently bypasses the semantic cache without discarding the separately fetched prompt context; a direct merge could change both page-boundary and error-handling semantics.  
+  **Downstream signal:** Do not auto-implement. Manually test histories spanning multiple pages and a failure after a successful first page; confirm identical comment ordering, prompt content, retry behavior, and cache-bypass output before considering consolidation.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — Stall-recovery path; the same title/body pattern also occurs at `scripts/orchestrate_poll_process.sh:16631-16632` and `scripts/orchestrate_poll_process.sh:21640-21641`, which need the same recovery-path review.
+- API-002: `RISKY_SKIP` — Final-PR reconciliation is in the race-defending poller; review snapshot freshness and failure behavior manually.
+- BATCH-001: `RISKY_SKIP` — Poller recovery and the existing 1,000-item list limit require completeness and pagination review.
+- BATCH-002: `RISKY_SKIP` — Paginated comment histories feed poller recovery state; incomplete histories cannot replace the existing reads.
+- API-003: `RISKY_SKIP` — Changing the retry classifier affects authentication failures and backoff behavior.
+- API-004: `RISKY_SKIP` — Non-idempotent issue creation sits in a retry path; ambiguous outcomes require manual reconciliation design.
+- API-005: `RISKY_SKIP` — The marker lookup is paginated; retaining its latest-match and failure semantics requires manual review.
+
+### Summary Counts
+
+Counts cover **new findings in this pass**, excluding the seven Deep Audit cross-references.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
