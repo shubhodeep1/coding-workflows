@@ -183,7 +183,7 @@ Dispatches one of the six workflows `.claude/settings.json` allows as `gh workfl
 ```
 PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/edit_comment.py --repo <owner>/<repo> --comment-id <id> --replacements <file>
 ```
-Edits one issue or PR comment in place. Write the replacements file (a JSON list of `{"old": "...", "new": "..."}`) with the Write tool into your scratchpad; every `old` must occur exactly once in the current body or nothing is written. `--body-file <file>` replaces the whole body instead, and `--dry-run` prints the result without writing. Find the comment id with `mcp__github__issue_read` (`get_comments`).
+Edits one issue or PR comment in place. Write the replacements file (a JSON list of `{"old": "...", "new": "..."}`) with the Write tool into your scratchpad; every `old` must occur exactly once in the current body or nothing is written. `--body-file <file>` replaces the whole body instead (for a whole-body rewrite, `mcp__github__update_issue_comment` is simpler), and `--dry-run` prints the result without writing. The helper reads either file only from the session scratchpad (a regular file, no symlink or hard link out of it) and exits 1 on any other path (#5452). Find the comment id with `mcp__github__issue_read` (`get_comments`).
 
 ### Permission prompt report
 

@@ -1143,7 +1143,13 @@ reviews, comments, and conflicts stay a direct §12 request.
     dispatching a duplicate.
   - `.claude/scripts/edit_comment.py --repo --comment-id (--replacements
     FILE | --body-file FILE) [--dry-run]`: one read and one PATCH; each
-    `old` must occur exactly once or nothing is written.
+    `old` must occur exactly once or nothing is written. Both files are
+    read only when the path resolves, after symlinks, to a regular file
+    with one hard link under a session scratchpad
+    (`<temp dir>/claude-*/…/scratchpad/`, temp dir = `tempfile.gettempdir()`
+    or `/tmp`); any other path exits 1 before the comment read and never
+    prints the file (#5452: the helper is allowlisted, so an unchecked path
+    could publish a credential file with no prompt).
   - `.claude/scripts/permission_prompts.py report | file`: see below.
 - `.claude/hooks/permission_prompt_logger.py` on `PermissionRequest` and
   `PermissionDenied`: appends one JSON line per event to

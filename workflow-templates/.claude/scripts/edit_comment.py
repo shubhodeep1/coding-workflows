@@ -21,6 +21,14 @@ order, each to the result of the previous one. `--body-file` replaces the
 whole body with the file's text instead. `--dry-run` prints the new body and
 writes nothing.
 
+Both files are read only from a Claude Code session scratchpad
+(`<temp dir>/claude-<…>/…/scratchpad/`, the temp dir being
+`tempfile.gettempdir()` or `/tmp`), and only when the path resolves, after
+symlinks, to a regular file with a single hard link (issue #5452). The helper
+is allowlisted, so without this check one command could publish any local
+file, such as a credential file, as a comment with no prompt. Any other path
+exits 1 before the comment is read, and its content is never printed.
+
 API calls (CLAUDE.md §15), REST only: one read of the comment and, unless
 `--dry-run` or the body is unchanged, one PATCH.
 
@@ -35,7 +43,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -49,13 +59,79 @@ _checker_spec.loader.exec_module(check_in_status)
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # GitHub caps issue comment bodies at 65,536 characters.
 MAX_BODY_CHARS = 65536
+# Claude Code keeps each session's scratchpad at
+# <temp dir>/claude-<uid>/<project>/<session>/scratchpad/.
+SCRATCHPAD_DIR_NAME = "scratchpad"
+SESSION_TEMP_DIR_PREFIX = "claude-"
+
+
+def _temp_roots() -> list[Path]:
+	"""Resolved temp directories a session scratchpad can live under."""
+	roots: list[Path] = []
+	for candidate in (tempfile.gettempdir(), "/tmp"):
+		try:
+			resolved = Path(candidate).resolve(strict=True)
+		except (OSError, RuntimeError):
+			continue
+		if resolved not in roots:
+			roots.append(resolved)
+	return roots
+
+
+def is_scratchpad_path(resolved: Path, roots: list[Path]) -> bool:
+	"""True when `resolved` is a file below `<root>/claude-<…>/…/scratchpad/`."""
+	for root in roots:
+		try:
+			parts = resolved.relative_to(root).parts
+		except ValueError:
+			continue
+		if len(parts) >= 3 and parts[0].startswith(SESSION_TEMP_DIR_PREFIX) and SCRATCHPAD_DIR_NAME in parts[1:-1]:
+			return True
+	return False
+
+
+def read_input_file(flag: str, path: str) -> str:
+	"""Read a `--replacements` / `--body-file` file from the session scratchpad only.
+
+	Raises ValueError, without reading the file, when the path does not
+	resolve to a regular, singly-linked file inside a session scratchpad.
+	"""
+	try:
+		resolved = Path(path).resolve(strict=True)
+	except (OSError, RuntimeError) as exc:
+		raise ValueError(f"{flag} {path}: {exc}") from exc
+	if not is_scratchpad_path(resolved, _temp_roots()):
+		raise ValueError(
+			f"{flag} {path}: only files in the Claude Code session scratchpad (<temp dir>/claude-*/.../scratchpad/) are read; "
+			"write the file there with the Write tool, or rewrite the comment with mcp__github__update_issue_comment"
+		)
+	# O_NONBLOCK keeps a FIFO from blocking the open; fstat rejects it below.
+	try:
+		fd = os.open(resolved, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+	except OSError as exc:
+		raise ValueError(f"{flag} {path}: {exc}") from exc
+	try:
+		info = os.fstat(fd)
+		if not stat.S_ISREG(info.st_mode):
+			raise ValueError(f"{flag} {path}: not a regular file")
+		if info.st_nlink != 1:
+			raise ValueError(f"{flag} {path}: has {info.st_nlink} hard links; only a file with one link is read")
+		with os.fdopen(fd, encoding="utf-8") as handle:
+			fd = -1
+			return handle.read()
+	except (OSError, UnicodeDecodeError) as exc:
+		raise ValueError(f"{flag} {path}: {exc}") from exc
+	finally:
+		if fd >= 0:
+			os.close(fd)
 
 
 def load_replacements(path: str) -> list[tuple[str, str]]:
 	"""Read and validate the replacement pairs; raise ValueError when malformed."""
+	text = read_input_file("--replacements", path)
 	try:
-		data = json.loads(Path(path).read_text(encoding="utf-8"))
-	except (OSError, ValueError) as exc:
+		data = json.loads(text)
+	except ValueError as exc:
 		raise ValueError(f"--replacements {path}: {exc}") from exc
 	if not isinstance(data, list) or not data:
 		raise ValueError("--replacements must be a non-empty JSON list")
@@ -150,10 +226,7 @@ def main(argv: list[str] | None = None) -> int:
 		pairs = load_replacements(args.replacements) if args.replacements else None
 		new_body = None
 		if args.body_file:
-			try:
-				new_body = Path(args.body_file).read_text(encoding="utf-8")
-			except OSError as exc:
-				raise ValueError(f"--body-file {args.body_file}: {exc}") from exc
+			new_body = read_input_file("--body-file", args.body_file)
 		result = edit_comment(args.repo, args.comment_id, pairs, new_body, args.dry_run)
 	except ValueError as exc:
 		print(json.dumps({"updated": False, "error": str(exc)}))
