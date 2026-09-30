@@ -1180,10 +1180,20 @@ gh_issue_timeline_with_cross_refs()
 #   internal-review.yml (this repo):  "Internal: AI Review & Autofix [pr:<N>]"
 #   ai-review.yml (consumer repos):   "AI Review [pr:<N>]"
 # A workflow_dispatch run's name comes from the dispatched ref's workflow
-# file, never from PR text, so an exact name match identifies the PR. This
-# is the same match as _pr_named_review_dispatch_runs in
-# scripts/orchestrate_poll_process.sh, which review_autofix.yml does not
-# source; this one uses REST like its two callers below.
+# file, never from PR text, but any branch writer can dispatch an altered
+# wrapper from a branch and name its run for another PR (security, issue
+# #5522). A listed run therefore counts only when all hold:
+#   - event is workflow_dispatch;
+#   - head_branch is the default branch
+#     (_autofix_pr_named_review_default_branch), the only ref whose
+#     workflow files are reviewed (provenance);
+#   - its path (an "@<ref>" suffix ignored) is the wrapper that sets that
+#     name: .github/workflows/internal-review.yml for the internal name,
+#     .github/workflows/ai-review.yml for the consumer name (identity).
+# This is the same predicate as _pr_named_review_dispatch_runs in
+# scripts/orchestrate_poll_process.sh (issue #5094), which
+# review_autofix.yml does not source; this one uses REST like its two
+# callers below.
 #
 # Input:
 #   $1 pr_number — must match ^[1-9][0-9]*$
@@ -1193,11 +1203,14 @@ gh_issue_timeline_with_cross_refs()
 #   (newest first): [{id, status, conclusion, created_at, path}]
 #
 # Return: 0 on success (possibly []); 1 on an invalid PR number (no call),
-#   an API error, an empty response, or unparseable JSON. Each caller
-#   decides whether a failure fails open or closed.
+#   an unresolved default branch (no listing call), an API error, an empty
+#   response, or unparseable JSON. Each caller decides whether a failure
+#   fails open or closed.
 #
 # API calls: exactly 1 `gh api GET /repos/{repo}/actions/runs
 #   ?event=workflow_dispatch&per_page=100` (plus `status=` when given),
+#   plus the first-use default-branch read of
+#   _autofix_pr_named_review_default_branch (at most once per priming shell),
 #   wrapped in gh_retry. It has no workflow filter, so one call covers both
 #   wrapper names. The page holds the newest 100 matching dispatch runs of
 #   every workflow; review runs finish well inside that window, and a run
@@ -1211,6 +1224,15 @@ _autofix_pr_named_review_runs()
 	local status_filter="${2:-}"
 
 	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		return 1
+	fi
+
+	# Provenance (issue #5522): no default branch, no PR-named match. The
+	# callers run this function in `$(...)`, so they prime the cache in their
+	# own shell first; this call then only reads it.
+	_autofix_pr_named_review_default_branch
+	local default_branch="${_AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE}"
+	if [ -z "${default_branch}" ]; then
 		return 1
 	fi
 
@@ -1236,17 +1258,66 @@ _autofix_pr_named_review_runs()
 		return 1
 	fi
 
-	printf '%s' "${response}" | jq -c --arg pr "${pr_number}" '
+	printf '%s' "${response}" | jq -c --arg pr "${pr_number}" --arg default_branch "${default_branch}" '
 		[
 			.workflow_runs[]?
 			| select(type == "object")
 			| select((.event // "") == "workflow_dispatch")
-			| select((.path // "") | test("(^|/)(internal-review|ai-review)\\.ya?ml$"))
-			| select((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-				or (.display_title // "") == ("AI Review [pr:" + $pr + "]"))
+			| select((.head_branch // "") == $default_branch)
+			| ((.path // "") | sub("@.*$"; "")) as $wrapper_path
+			| select(((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+					and $wrapper_path == ".github/workflows/internal-review.yml")
+				or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+					and $wrapper_path == ".github/workflows/ai-review.yml"))
 			| {id, status, conclusion, created_at, path}
 		]
 	' 2>/dev/null
+}
+
+# ---------------------------------------------------------------
+# _autofix_pr_named_review_default_branch — resolve the repository's
+# default branch once per shell for _autofix_pr_named_review_runs.
+#
+# Motivation (security, issue #5522): a PR-named review run counts only
+# when it ran from the default branch. DEFAULT_BRANCH-style fallbacks to
+# "main" are never used: a guessed branch must not vouch for a run.
+#
+# Input: none (reads GITHUB_REPOSITORY).
+# Output: sets _AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE (the branch, or
+#   "" when unresolved) and _AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_READY.
+#   Prints nothing on stdout; an unresolved branch logs one
+#   AUTOFIX_PR_NAMED_PROVENANCE line on stderr. Always returns 0. Call it in
+#   the current shell, never in `$(...)`, or the cache is lost: the two
+#   callers of _autofix_pr_named_review_runs prime it before their `$(...)`.
+#
+# API calls: at most 1 `gh api GET /repos/{repo}` (wrapped in gh_retry)
+#   per shell that primes it, only on the first call; later calls read the
+#   cache, and an unresolved result is cached too, so a failing read is
+#   never retried in a loop. CLAUDE.md §15 audit: review_autofix.yml's
+#   retrigger steps, the only callers, make no other call that returns the
+#   default branch.
+# ---------------------------------------------------------------
+_AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE="${_AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE:-}"
+_AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_READY="${_AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_READY:-false}"
+_autofix_pr_named_review_default_branch()
+{
+	if [ "${_AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_READY:-false}" = "true" ]; then
+		return 0
+	fi
+	_AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE=""
+	if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+		_AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE="$(gh_retry gh api \
+			-X GET \
+			-H "Accept: application/vnd.github+json" \
+			"/repos/${GITHUB_REPOSITORY}" \
+			--jq '.default_branch // ""' \
+			2>/dev/null || true)"
+	fi
+	_AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_READY="true"
+	if [ -z "${_AUTOFIX_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE}" ]; then
+		echo "AUTOFIX_PR_NAMED_PROVENANCE repo=${GITHUB_REPOSITORY:-unknown} outcome=default_branch_unresolved pr_named_matching=disabled" >&2
+	fi
+	return 0
 }
 
 # ---------------------------------------------------------------
@@ -1293,7 +1364,8 @@ _autofix_pr_named_review_runs()
 #   head_branch, so the branch lookup cannot see them. When it finds no
 #   peer and $1 is a valid PR number, the helper also counts queued or
 #   running workflow_dispatch runs named for the PR
-#   (_autofix_pr_named_review_runs), excluding the current run. The
+#   (_autofix_pr_named_review_runs: default-branch runs of the naming
+#   wrapper only, issue #5522), excluding the current run. The
 #   AUTOFIX_PEER_CHECK line keeps its exact field set (a pinned log
 #   contract); a PR-named peer shows up in peer_run / peer_path.
 #
@@ -1376,6 +1448,8 @@ autofix_retrigger_has_inflight_peer()
 		# Default-branch dispatch runs are invisible to the branch lookup
 		# above (issue #4898); look for one named for this PR. Fail open.
 		local pr_named_runs pr_named_info
+		# Prime the default-branch cache in this shell (issue #5522).
+		_autofix_pr_named_review_default_branch
 		if pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}") \
 			&& pr_named_info=$(printf '%s' "${pr_named_runs}" | jq -r --arg current "${current_run_id}" '
 				[
@@ -1446,7 +1520,8 @@ autofix_retrigger_has_inflight_peer()
 #   the default branch's and the branch lookup never counts it. When the
 #   branch lookup counts nothing, the helper also counts completed,
 #   non-cancelled workflow_dispatch runs named for the PR
-#   (_autofix_pr_named_review_runs), excluding the current run, that were
+#   (_autofix_pr_named_review_runs: default-branch runs of the naming
+#   wrapper only, issue #5522), excluding the current run, that were
 #   created at or after the head's push-time bound: the earlier of
 #   head_commit_epoch and the created_at of the first branch run on this
 #   head (the push's pull_request run, cancelled twins included). The
@@ -1580,6 +1655,8 @@ autofix_changes_lost_head_retry_consumed()
 			return 0
 		fi
 		local pr_named_runs
+		# Prime the default-branch cache in this shell (issue #5522).
+		_autofix_pr_named_review_default_branch
 		if ! pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}"); then
 			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=pr_named_api_error" >&2
 			return 0

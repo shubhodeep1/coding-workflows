@@ -132,9 +132,15 @@ gh() {
 		echo "gh: Not Found (HTTP 404)" >&2
 		return 1
 	fi
+	# The default-branch read of _autofix_pr_named_review_default_branch
+	# (issue #5522) is the only call that passes --jq.
+	case " $* " in
+		*" --jq "*) printf 'main\n'; return 0 ;;
+	esac
 	cat "${RUNS_FIXTURE}"
 }
 
+eval "$(extract_fn _autofix_pr_named_review_default_branch)"
 eval "$(extract_fn _autofix_pr_named_review_runs)"
 eval "$(extract_fn __FN__)"
 __FN__ "$@"
