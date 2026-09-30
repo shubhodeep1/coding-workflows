@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5376-verify-stall-redispatch-run-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5376 (https://github.com/shubhodeep1/coding-workflows/issues/5376)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4985-skip-marker-review-stall
-- Project branch: claude/implement-plan-issue-5376-verify-stall-redispatch-run   Final PR: #5387 draft (into claude/implement-plan-issue-4985-skip-marker-review-stall)
+- Project branch: claude/implement-plan-issue-5376-verify-stall-redispatch-run   Final PR: #5387 ready — review rounds: 1 (into claude/implement-plan-issue-4985-skip-marker-review-stall)
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round
 - Activation: n/a (base claude/implement-plan-issue-4985-skip-marker-review-stall)
-- Waiting on: the completion PR from claude/implement-plan-issue-5376-verify-stall-redispatch-run-complete
+- Waiting on: PR #5387
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01Nr1eDxdAgRNU9mhy74VqNH   safety net and hand-back: see the completion stage report
+- Check-in: checker session_01Nr1eDxdAgRNU9mhy74VqNH   safety net and hand-back: see the final-merge review-round stage report
 - Last updated: 2026-09-30
-- Last note: completion stage (session_01XHXrJt1PB3KymEh8jqaWu2): validation cycle 1 passed (run 36688108776, 10/10 tests, on project head `7d1f95a`); plan moved to docs/completed/. Conformance run 1 CONFORMANT; security skipped (plan header). Next: final-merge 1/1 marks #5387 ready and closes #5376 with `ai:merged` once it merges.
+- Last note: final-merge review round 1 (session_015k9vqwWkPsxwJ3BhZYonJJ): the one consensus finding on `f6dbe3f` restates the plan's recorded residual risk (check runs from another branch can make a head's arrival read early, so a stall holds and asks); rejected under AD-8. No verdict bot is configured, so no verdict was posted; this push syncs the issue-4985 base (`3e05196`, clean) and the log, which starts round 2 on the new head.
 
 ## Phases
 1. [x] Phase 1 — verified-run re-dispatch rule — PR #5408 merged 2026-09-30 into the project branch as `7d1f95a` (human merge per issue #5376 blocker Q1: A, bound to head `b4945b0`); twin sync `e18fa4a`; review rounds: 2 (round 2 on `b4945b0`: 1 consensus finding rejected again, blocked for lack of a verdict bot, resumed by /reclarify 2026-09-30); interventions: 0; protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/fix-claude-pr.md` (edited through their `workflow-templates/.claude/` twins)
@@ -32,8 +32,8 @@
 - Cycle 1 — run 36688108776 2026-09-30 (target_ref: claude/implement-plan-issue-5376-verify-stall-redispatch-run, pinned head `7d1f95a`): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 288s); no fix issues
 
 ## Completion
-- Completion PR from claude/implement-plan-issue-5376-verify-stall-redispatch-run-complete (open) — doc moved to docs/completed/issue-5376-verify-stall-redispatch-run-plan.md
-- Final PR #5387 draft
+- PR #5570 merged 2026-09-30 — doc moved to docs/completed/issue-5376-verify-stall-redispatch-run-plan.md
+- Final PR #5387 ready — review rounds: 1
 
 ## Activation
 - n/a: the base is claude/implement-plan-issue-4985-skip-marker-review-stall (#5031), not the default branch; this change goes live with that project.
@@ -46,6 +46,7 @@
 - AD-5 [plan, 2026-09-30] Should the active-run count see consumer dispatched runs? — Picked: A — yes, through the same listing helper. Alternatives: B — `internal-review.yml` only. Why: a running consumer re-dispatch would otherwise be re-dispatched again. Applied in: phase 1. Status: pending review
 - AD-6 [plan, 2026-09-30] Which copy do the hand-back tests load? — Picked: A — the twin. Alternatives: B — `.claude/`, red until sync. Why: the twin-first rule. Applied in: phase 1. Status: pending review
 - AD-7 [plan, 2026-09-30] Change the `CLAUDE.md` §26.H wording? — Picked: A — no, it stays true. Alternatives: B — spell out the run rule there. Why: §5. Applied in: no code change. Status: pending review
+- AD-8 [final-merge — review round, 2026-09-30] The final review's consensus finding (4 of 6 reviewers) is the plan's recorded residual risk: `_head_arrival_time` takes the earliest check-run start for the head SHA, which can predate the push to the PR when the commit was on another branch first, so a review dispatched for the previous head can count and the stall holds and asks. Fix it in this project? — Picked: A — no; keep the recorded residual risk and reject the finding with that reason. Alternatives: B — take the arrival from the earliest Actions run for the SHA on the PR's head branch (one more REST call per stall check, a `.claude/` edit that re-blocks the project on a twin sync); C — use the latest check-run start (the plan's rejected option: CI re-runs push arrival past every re-dispatch and retries loop). Why: the error only turns a retry into a hold that asks a human, never a skipped review (§1 holds), and the plan's Risks section already weighed it; §5. Applied in: no code change. Status: pending review
 
 ## Lessons
 
@@ -57,3 +58,4 @@
 - 2026-09-30, `/reclarify` resume (session_01DYKF4onPHPSJafUNdeYYH5): the operator answered A on #5376. `[claude-twin-sync]` `e18fa4a` copies both twins; `.claude/` and twin sha256 match the blocker (`66e9b051…3aaf`, `736d160b…dc81`). The project branch took 4 base commits in a clean merge (`162ccb8`), and #5408 still merges cleanly on it. On that merge: 972 passed, 1 skipped across the 19 suites that reference the changed files, and 857 passed, 1 skipped in the 13 twin-parity suites. ruff (`--select E,F --ignore E501`) and yamllint are clean.
 - 2026-09-30 phase 1/1 review round 1 (PR #5408, head `83be7a0`, run 36667727788), session session_01W8L9mx6L8Xiunj2hwLmY9n: ledger of 7 entries, 3 consensus findings from `google_gemini-3_1-flash-lite` (one shared with `deepseek_deepseek-v4-pro`); the other 4 reviewers reported nothing. Rejected all three: (1) "`_dispatched_review_runs()` falls through to the consumer workflow on any non-404 error" misreads `check_in_status.py:365-371`, which `continue`s only on `HTTP 404` and re-raises every other `ReadError` (checked: an `HTTP 502` read raises after 1 call); (2) "`_head_arrival_time()` passes a `None` `started_at` to `_parse_time`" is handled: `_parse_time` (`:301-304`, unchanged by this PR) raises `ValueError` for a non-string, which the loop catches (checked: runs with `started_at: None`, no `started_at`, and a non-dict entry are skipped); (3) `ignore_claim_by` stays on `_review_stall_verdict` because removing a parameter is a §6 breaking change, as its docstring and both reviewers say. No failing check on the head. No verdict bot is configured, so no verdict was posted; the round's push merges the project branch (5 commits: the issue-4985 base sync `162ccb8`, clean) into the PR head as `[claude-merge-resolve]`, plus this log update.
 - Use `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` (never empty) for this project's checker calls.
+- 2026-09-30 final-merge review round 1 (PR #5387, head `f6dbe3f`, run 36691242715, ledger `99c864ce…b4d3`), session session_015k9vqwWkPsxwJ3BhZYonJJ: 5 reviewer ledger entries, 1 consensus finding (`check_in_status.py:713-735`, `_head_arrival_time`), flagged by deepseek, gpt-6-luna, qwen, and glm (gpt-6-luna rated it major, the others low; qwen noted it is the plan's residual risk). Rejected under AD-8. No failing check on the head. No verdict bot is configured, so no verdict was posted. The base sync `9d03ee3` (issue-4985 `3e05196`: nested-fence skip-marker project) merged cleanly; `.claude/` and twin `check_in_status.py` match (sha256 `d787e91a…5caf`).
