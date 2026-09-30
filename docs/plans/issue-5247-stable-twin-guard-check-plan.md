@@ -41,7 +41,7 @@ The CI step "Claude twin sync state (CLAUDE.md §28.C)" in `.github/workflows/ci
 
 - §6: new identifiers `guard_provenance_ref` (parameter, CLI flag `--guard-provenance-ref`, JSON key) were checked against `scripts/claude_twin_sync.py`, which has no `provenance` identifier. New shell variables in the step are prefixed `twin_` and are unique in the step.
 - §15: the step makes at most one REST call per run, and only on a `push` to `stable`. No other `gh` call exists in the step to extend. The call is documented in the step.
-- §23.E: the call authenticates with `github.token` passed as `GH_TOKEN` in the step `env`.
+- §23.E: the call authenticates with `github.token` passed as `GH_TOKEN` in the step `env`, set only on `push` events, so the PR-controlled checkout of a `pull_request` run never gets it from this step.
 
 ## Approach
 
@@ -76,7 +76,7 @@ Phase 1:
    - `main`: `check` gets `--guard-provenance-ref` (default empty). A non-empty value is resolved with `resolve_commit` and passed on.
    - Update the module docstring's `check` line and the function docstring.
 2. **`.github/workflows/ci.yml`**, step "Claude twin sync state (CLAUDE.md §28.C)" (name, `env` keys, and `main` branches unchanged):
-   - add `GH_TOKEN: ${{ github.token }}` to the step `env`;
+   - add `GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}` to the step `env`;
    - add the `pull_request` / `stable` and `push` / `stable` branches (G1, G3);
    - fetch `main` at depth 1 and build the `--guard-provenance-ref` argument for the `stable` branches (G2);
    - keep the skip message for every other event, reworded to name `stable`'s rule;

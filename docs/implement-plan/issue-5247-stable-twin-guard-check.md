@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5247-stable-twin-guard-check-plan.md
 - Source issue: shubhodeep1/coding-workflows#5247
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4785-twin-first-claude-sync
-- Project branch: claude/implement-plan-issue-5247-stable-twin-guard-check   Final PR: (opened after this commit) draft
+- Project branch: claude/implement-plan-issue-5247-stable-twin-guard-check   Final PR: #5262 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5270
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
-- Last updated: 2026-09-29
-- Last note: project branch opened from the #4785 project branch (8639f38); phase 1 starting.
+- Check-in: checker session_01DntaymvRrhdQCxacVD9Xe2   safety net / hand-back: re-armed by the review-round 2 stage (session_01E5EfMAm2GSUbvkKzndLaS6), ids in its report
+- Last updated: 2026-09-30
+- Last note: review round 2 on PR #5270: the step no longer re-fetches `main`'s tip when a push creates `stable`; rejected the comment-style findings (no such CLAUDE.md rule) and the agents.md paragraph-boundary gap (the base line already joined the sentences).
 
 ## Phases
-1. [ ] Phase 1 — `stable` twin check with guard provenance (`scripts/claude_twin_sync.py`, `.github/workflows/ci.yml`, tests, `agents.md`, changelog fragment; protected paths: none)
+1. [ ] Phase 1 — `stable` twin check with guard provenance (`scripts/claude_twin_sync.py`, `.github/workflows/ci.yml`, tests, `agents.md`, changelog fragment; protected paths: none)   — PR #5270 open (waiting); review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -32,8 +32,13 @@
 - AD-2 [plan, 2026-09-29] What counts as "verified sync provenance" for a guard change into `stable`? — Picked: A — the guard `.claude/` file at the head must equal the same path on `main`'s tip (blob and mode, or absent on both). Alternatives: B — refuse every guard change into `stable`; C — accept any version the path ever had on `main` (full-history fetch in CI). Why: blocks guard content that never passed `main`'s owner-reviewed sync, allows a backport, needs one depth-1 fetch (§1, §5). Applied in: phase 1. Status: pending review
 - AD-3 [plan, 2026-09-29] Does the provenance rule also apply to PRs into `main`? — Picked: A — no, only to `stable` events. Alternatives: B — apply it to `main` too. Why: on `main` the owner-reviewed sync PR is the provenance; the finding is about `stable` (§5). Applied in: phase 1. Status: pending review
 - AD-4 [plan, 2026-09-29] Should a PR into `stable` whose head is already on `main` skip like a promotion push? — Picked: A — no, every PR into `stable` is checked. Alternatives: B — skip it after the same compare call. Why: promotions are pushes by `promote-main-to-stable.yml`, and the finding asks that PRs into `stable` fail closed (§1). Applied in: phase 1. Status: pending review
+- AD-5 [phase 1/1 — review round 1, 2026-09-30] How is a push that creates `stable` (no previous tip, `before` all zeros) and is not a promotion checked? — Picked: A — check it against `main`'s tip (`--base <main tip> --guard-provenance-ref <main tip>`). Alternatives: B — keep skipping it ("No base commit"); C — fail the step outright. Why: B is the fail-open path the reviewers flagged; C blocks a legitimate re-creation from a clean commit; A holds every `.claude/` difference from `main` to the twin and guard rules (§1, §5). Applied in: PR #5270. Status: pending review
 
 ## Lessons
+- [source:intervention] A branch-gated CI check that skips when `github.event.before` is all zeros fails open on a push that creates the branch; give the creating push a fixed base (for `stable`, `main`'s tip) instead of skipping. (files: .github/workflows/ci.yml)
+- [source:intervention] `GET /repos/{repo}/compare/{sha}...main` returns `ahead` (not `behind`) when `sha` is an ancestor of `main`; verify compare semantics against the live API before acting on a reviewer's reading. (files: .github/workflows/ci.yml)
+- [source:intervention] Reviewer models repeatedly cite a "CLAUDE.md §9 no comments" rule; §9 covers indentation and braces only, so judge comment findings against the actual CLAUDE.md text, not the reviewer's quote. (files: CLAUDE.md)
+- [source:plan-deviation] A CI step that reads a token should scope it to the events that need it (`${{ github.event_name == 'push' && github.token || '' }}`): on `pull_request` the step runs PR-controlled scripts. (files: .github/workflows/ci.yml)
 
 ## Notes
 - Security pass: skip (`security_pass_skip.py` → `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`).
@@ -41,3 +46,5 @@
 - Issue progress comment id 5899549666. `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` = `shubhodeep1`; no verdict bot configured.
 - Base is not the default branch: the project ends after the final merge (`Activation: n/a`), and the final-merge stage closes #5247 with `ai:merged`.
 - Base-move check (2026-09-29): #4804 (head = the base branch) is open, not merged.
+- Base-move check (2026-09-30, review round 2): no closed PR has the base branch as its head; base unchanged.
+- Plan deviation (phase 1): `GH_TOKEN` in the CI step is set on push events only (plan text updated in the phase PR).
