@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T14:44:56Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A parser that reads markers only outside quoted untrusted blocks needs every untrusted field its writer places outside those blocks guarded too, including derived fields such as a command shape that keeps literal command words.",
+  "phase": "implement_plan",
+  "pr_number": 5649,
+  "record_id": "lesson-implement-plan-c7d97f5d431d7d3d3872b6ae",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}
