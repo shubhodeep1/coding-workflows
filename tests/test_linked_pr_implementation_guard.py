@@ -438,6 +438,7 @@ def _target_pr(
 	head: str,
 	head_repo: str = _TEST_REPO,
 	default_branch: str = "main",
+	base_repo: str = _TEST_REPO,
 ) -> str:
 	return json.dumps({
 		"number": 9001,
@@ -445,7 +446,7 @@ def _target_pr(
 		"merged_at": "2026-09-30T10:00:00Z",
 		"body": f"Fixes #{issue}",
 		"head": {"ref": head, "sha": "0" * 40, "repo": {"full_name": head_repo}},
-		"base": {"ref": base, "repo": {"full_name": _TEST_REPO, "default_branch": default_branch}},
+		"base": {"ref": base, "repo": {"full_name": base_repo, "default_branch": default_branch}},
 	})
 
 
@@ -530,6 +531,16 @@ def test_target_unknowns_fail_closed():
 	assert _target_rc("5618", no_base, "")[0] == 1
 	assert _target_rc("5618", "{}", _PROJECT_BRANCH)[0] == 1
 	assert _target_rc("not-a-number", on_project, _PROJECT_BRANCH)[0] == 1
+
+
+def test_target_foreign_base_repository_is_rejected():
+	"""A merge into another repository's same-named branch never counts (PR #5646 review round 1)."""
+	on_default = _target_pr(5618, base="main", head="ai/issue-5618", base_repo="attacker/other-repo")
+	assert _target_rc("5618", on_default, _PROJECT_BRANCH) == (1, "foreign_base_repo")
+	on_project = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5618", base_repo="attacker/other-repo")
+	assert _target_rc("5618", on_project, _PROJECT_BRANCH) == (1, "foreign_base_repo")
+	no_base_repo = _target_pr(5618, base="main", head="ai/issue-5618", base_repo="")
+	assert _target_rc("5618", no_base_repo, _PROJECT_BRANCH) == (1, "foreign_base_repo")
 
 
 def test_target_missing_identity_helper_fails_closed():
@@ -671,6 +682,132 @@ def test_reconcile_fetch_failures_fail_closed():
 
 
 # ---------------------------------------------------------------------------
+# refresh_validation_dispatch_wave_gate — runtime, through the real
+# check-wave-status. Its linked PR comes from the GraphQL batch, which
+# carries cross-repository closing PRs too: a PR in another repository that
+# says `Fixes <this repo>#<n>` and merged into that repository's default
+# branch must not mark the child merged here (review round 1 on PR #5646).
+# _fetch_candidate_issue_details_graphql, gh_retry, _safe_gh_jq and
+# _integration_branch_ahead_of_default are stubbed.
+# ---------------------------------------------------------------------------
+
+
+def _wave_gate_linked_pr(
+	*,
+	base_ref: str,
+	head_ref: str,
+	base_repo: str | None = _TEST_REPO,
+	head_repo: str | None = _TEST_REPO,
+	default_branch: str | None = "main",
+) -> dict:
+	return {
+		"number": 9001,
+		"state": "MERGED",
+		"merged": True,
+		"merged_at": "2026-09-30T10:00:00Z",
+		"head_ref": head_ref,
+		"base_ref": base_ref,
+		"head_repo": head_repo,
+		"base_repo": base_repo,
+		"default_branch": default_branch,
+	}
+
+
+def _wave_gate_run(linked_pr: dict, integration_branch: str = "") -> tuple[str, str]:
+	"""Run refresh_validation_dispatch_wave_gate for a one-issue wave (#5618).
+
+	Returns (WAVE_COMPLETE, stderr)."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap_target_helpers(
+			tmp,
+			[
+				"_jq_field",
+				"_pr_json_merged_into_issue_target",
+				"refresh_validation_dispatch_wave_gate",
+			],
+			["pr_head_ref_is_issue_automation_branch"],
+		)
+		state = {
+			"current_wave": 1,
+			"integration_branch": integration_branch,
+			"waves": [{"wave": 1, "issues": [{"id": "issue-1", "github_issue": 5618, "status": "pending"}]}],
+		}
+		(tmp / "state.json").write_text(json.dumps(state), encoding="utf-8")
+		details = {"5618": {"state": "open", "labels": [], "linked_pr": linked_pr}}
+		(tmp / "details.json").write_text(json.dumps(details), encoding="utf-8")
+		script = textwrap.dedent(f"""
+		set -uo pipefail
+		export GITHUB_REPOSITORY='{_TEST_REPO}'
+		STATE_FILE='{tmp / "state.json"}'
+		_fetch_candidate_issue_details_graphql() {{ cat '{tmp / "details.json"}'; }}
+		gh_retry() {{ "$@"; }}
+		_safe_gh_jq() {{ echo main; }}
+		_integration_branch_ahead_of_default() {{ echo 0; }}
+		source '{tmp / "helpers.sh"}'
+		WAVE_COMPLETE=unset
+		refresh_validation_dispatch_wave_gate || echo "GATE_RC=$?"
+		printf 'WAVE_COMPLETE=%s\\n' "${{WAVE_COMPLETE}}"
+		""")
+		# check-wave-status is invoked as scripts/orchestrate_lib.py, relative
+		# to the repository root.
+		r = _run_bash(script, cwd=REPO_ROOT)
+		assert r.returncode == 0, f"wave gate harness exited {r.returncode}: {r.stderr}"
+		assert "GATE_RC=" not in r.stdout, f"wave gate failed: {r.stdout}\n{r.stderr}"
+		wave_complete = ""
+		for line in r.stdout.splitlines():
+			if line.startswith("WAVE_COMPLETE="):
+				wave_complete = line[len("WAVE_COMPLETE="):]
+		return wave_complete, r.stderr
+
+
+def test_wave_gate_same_repo_default_branch_merge_completes_wave():
+	wave_complete, err = _wave_gate_run(_wave_gate_linked_pr(base_ref="main", head_ref="claude/any-branch"))
+	assert wave_complete == "true", err
+	assert "LINKED_PR_CROSS_REF_REJECTED" not in err
+
+
+def test_wave_gate_project_branch_automation_merge_completes_wave():
+	pr = _wave_gate_linked_pr(base_ref=_PROJECT_BRANCH, head_ref="ai/issue-5618")
+	wave_complete, err = _wave_gate_run(pr, integration_branch=_PROJECT_BRANCH)
+	assert wave_complete == "true", err
+
+
+def test_wave_gate_rejects_cross_repository_default_branch_merge():
+	"""The review finding: a foreign PR merged into its own `main` never counts here."""
+	foreign = _wave_gate_linked_pr(
+		base_ref="main",
+		head_ref="ai/issue-5618",
+		base_repo="attacker/other-repo",
+		head_repo="attacker/other-repo",
+	)
+	wave_complete, err = _wave_gate_run(foreign)
+	assert wave_complete == "false", err
+	assert "LINKED_PR_CROSS_REF_REJECTED issue=5618 pr=9001 base=main" in err
+	assert "base_repo=attacker/other-repo" in err
+	assert "reason=foreign_base_repo" in err
+	assert "path=validation_dispatch_gate" in err
+
+
+def test_wave_gate_rejects_cross_repository_project_branch_merge():
+	"""Same branch name as the project branch, but in another repository."""
+	foreign = _wave_gate_linked_pr(
+		base_ref=_PROJECT_BRANCH,
+		head_ref="ai/issue-5618",
+		base_repo="attacker/other-repo",
+	)
+	wave_complete, err = _wave_gate_run(foreign, integration_branch=_PROJECT_BRANCH)
+	assert wave_complete == "false", err
+	assert "reason=foreign_base_repo" in err
+
+
+def test_wave_gate_missing_base_repository_fails_closed():
+	wave_complete, err = _wave_gate_run(_wave_gate_linked_pr(base_ref="main", head_ref="ai/issue-5618", base_repo=None))
+	assert wave_complete == "false", err
+	assert "reason=foreign_base_repo" in err
+
+
+# ---------------------------------------------------------------------------
 # Call-site wiring: the reconcile loop, the validation-dispatch wave gate, and
 # the backward-scan promotion must consult the predicate before recording
 # merged state (issue #5618).
@@ -711,8 +848,9 @@ def test_validation_dispatch_gate_rechecks_merged_links():
 def test_candidate_details_linked_pr_carries_target_fields():
 	body = _function_body(_poller_text(), "_fetch_candidate_issue_details_graphql")
 	assert "headRepository { nameWithOwner }" in body
-	assert "baseRepository { defaultBranchRef { name } }" in body
+	assert "baseRepository { nameWithOwner defaultBranchRef { name } }" in body
 	assert "head_repo: (.headRepository.nameWithOwner // null)" in body
+	assert "base_repo: (.baseRepository.nameWithOwner // null)" in body
 	assert "default_branch: (.baseRepository.defaultBranchRef.name // null)" in body
 
 

@@ -2738,8 +2738,10 @@ refresh_validation_dispatch_wave_gate() {
   # only when _pr_json_merged_into_issue_target accepts it (default branch,
   # or this project's integration branch from a same-repository automation
   # head for the issue); otherwise its entry falls back to "no linked PR"
-  # and the issue's labels decide. No API call: the batch above already
-  # carries base_ref, head_ref, head_repo, and default_branch.
+  # and the issue's labels decide. The link can come from another
+  # repository, so base_repo must be this one (reason=foreign_base_repo).
+  # No API call: the batch above already carries base_ref, base_repo,
+  # head_ref, head_repo, and default_branch.
   local _vdg_inum _vdg_pr_json
   for _vdg_inum in $(printf '%s' "${candidate_details_json}" | jq -r 'to_entries[] | select((.value.linked_pr.merged // false) == true) | .key' 2>/dev/null || true); do
     [[ "${_vdg_inum}" =~ ^[0-9]+$ ]] || continue
@@ -2747,12 +2749,12 @@ refresh_validation_dispatch_wave_gate() {
       .[$key].linked_pr
       | {
           number: .number,
-          base: {ref: (.base_ref // ""), repo: {default_branch: (.default_branch // "")}},
+          base: {ref: (.base_ref // ""), repo: {full_name: (.base_repo // ""), default_branch: (.default_branch // "")}},
           head: {ref: (.head_ref // ""), repo: {full_name: (.head_repo // "")}}
         }
     ' 2>/dev/null || echo '{}')"
     if ! _pr_json_merged_into_issue_target "${_vdg_inum}" "${_vdg_pr_json}" "${integration_branch}"; then
-      echo "LINKED_PR_CROSS_REF_REJECTED issue=${_vdg_inum} pr=$(_jq_field "${_vdg_pr_json}" '.number') base=$(_jq_field "${_vdg_pr_json}" '.base.ref') head=$(_jq_field "${_vdg_pr_json}" '.head.ref') head_repo=$(_jq_field "${_vdg_pr_json}" '.head.repo.full_name') project_base=${integration_branch:-none} reason=${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base} path=validation_dispatch_gate" >&2
+      echo "LINKED_PR_CROSS_REF_REJECTED issue=${_vdg_inum} pr=$(_jq_field "${_vdg_pr_json}" '.number') base=$(_jq_field "${_vdg_pr_json}" '.base.ref') base_repo=$(_jq_field "${_vdg_pr_json}" '.base.repo.full_name') head=$(_jq_field "${_vdg_pr_json}" '.head.ref') head_repo=$(_jq_field "${_vdg_pr_json}" '.head.repo.full_name') project_base=${integration_branch:-none} reason=${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base} path=validation_dispatch_gate" >&2
       # Fail closed: if the downgrade cannot be written, drop every linked-PR
       # signal rather than keep the rejected merge.
       pr_states_json="$(printf '%s' "${pr_states_json}" | jq -c --arg key "${_vdg_inum}" '. + {($key): {state: "unknown", merged: false}}' 2>/dev/null || echo '{}')"
@@ -14781,14 +14783,17 @@ _fetch_standalone_marker_issues_graphql() {
 #                           "merged_at":"ISO8601"|null,"merge_commit_sha":"<oid>"|null,
 #                           "head_ref":"branch"|null,"head_sha":"<oid>"|null,
 #                           "base_ref":"branch"|null,"head_repo":"owner/repo"|null,
-#                           "default_branch":"branch"|null,
+#                           "base_repo":"owner/repo"|null,"default_branch":"branch"|null,
 #                           "mergeable":"<enum>"|null,"merge_state_status":"<enum>"|null,
 #                           "headPushedAt":"ISO8601"|null} | null },
 #     ... }
-# `head_repo` and `default_branch` (the head repository and the base
-# repository's default branch) let refresh_validation_dispatch_wave_gate
-# apply _pr_json_merged_into_issue_target to a merged link without a REST
-# read per issue (issue #5618, §15).
+# `head_repo`, `base_repo`, and `default_branch` (the head repository, the
+# base repository, and the base repository's default branch) let
+# refresh_validation_dispatch_wave_gate apply
+# _pr_json_merged_into_issue_target to a merged link without a REST read
+# per issue (issue #5618, §15). The link can be a cross-repository closing
+# PR, so `base_repo` is what tells a merge into this repository apart from
+# a merge into another repository's same-named branch.
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null, e.g. for squashed commits).
 # `mergeable` and `merge_state_status` mirror GitHub's GraphQL enum strings.
@@ -14867,7 +14872,7 @@ _fetch_candidate_issue_details_graphql() {
 	                    baseRefName
 	                    headRefOid
                     headRepository { nameWithOwner }
-                    baseRepository { defaultBranchRef { name } }
+                    baseRepository { nameWithOwner defaultBranchRef { name } }
                     mergeable
                     mergeStateStatus
                     mergeCommit { oid }
@@ -14930,6 +14935,7 @@ _fetch_candidate_issue_details_graphql() {
 	                      base_ref: (.baseRefName // null),
 	                      head_sha: (.headRefOid // null),
                       head_repo: (.headRepository.nameWithOwner // null),
+                      base_repo: (.baseRepository.nameWithOwner // null),
                       default_branch: (.baseRepository.defaultBranchRef.name // null),
                       mergeable: (.mergeable // null),
                       merge_state_status: (.mergeStateStatus // null),
@@ -15213,7 +15219,14 @@ _pr_json_is_issue_implementation_pr() {
 # a closing keyword, whatever its base. An unrelated PR saying `Fixes #<n>`
 # merged into the wrong branch therefore marked child <n> merged and could
 # advance its wave, although close_merged_issues_sweep rejects exactly that
-# merge. This is the sweep's rule (issues #4813, #5226), shared:
+# merge. This is the sweep's rule (issues #4813, #5226), shared, behind one
+# repository check:
+#   - .base.repo.full_name must be this repository (GITHUB_REPOSITORY);
+#     empty or different returns 1 with reason `foreign_base_repo`. The
+#     REST paths read `repos/${GITHUB_REPOSITORY}/pulls/<n>`, so they always
+#     pass it; the GraphQL batch behind refresh_validation_dispatch_wave_gate
+#     also carries cross-repository closing PRs, whose base and default
+#     branch belong to another repository (review round 1 on PR #5646);
 #   - base.ref equals .base.repo.default_branch of the same JSON (empty
 #     fails closed): the closing keyword is identity enough there, since
 #     GitHub closes the issue on that merge anyway;
@@ -15224,10 +15237,11 @@ _pr_json_is_issue_implementation_pr() {
 #     (pr_head_ref_is_issue_automation_branch in scripts/gh_helpers.sh).
 # Anything else returns 1 with ISSUE_TARGET_MERGE_REJECT_REASON set to
 # `unverified_identity` (the base was a target branch) or `non_target_base`.
-# A missing helper, head repository, or base fails closed.
+# A missing helper, head repository, base repository, or base fails closed.
 #
-# Input: the REST `pulls/<n>` shape (.base.ref, .base.repo.default_branch,
-# .head.ref, .head.repo.full_name). Issues no API call.
+# Input: the REST `pulls/<n>` shape (.base.ref, .base.repo.full_name,
+# .base.repo.default_branch, .head.ref, .head.repo.full_name). Issues no
+# API call.
 declare -g ISSUE_TARGET_MERGE_REJECT_REASON=''
 _pr_json_merged_into_issue_target() {
   local issue_num="$1"
@@ -15238,10 +15252,15 @@ _pr_json_merged_into_issue_target() {
   if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
     return 1
   fi
-  local _itm_base _itm_default _itm_head _itm_head_repo _itm_target _itm_base_is_target=false
+  local _itm_base _itm_base_repo _itm_default _itm_head _itm_head_repo _itm_target _itm_base_is_target=false
   _itm_base="$(printf '%s' "${pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+  _itm_base_repo="$(printf '%s' "${pr_json}" | jq -r '.base.repo.full_name // ""' 2>/dev/null || echo "")"
   _itm_default="$(printf '%s' "${pr_json}" | jq -r '.base.repo.default_branch // ""' 2>/dev/null || echo "")"
   [ -n "${_itm_base}" ] || return 1
+  if [ -z "${_itm_base_repo}" ] || [ "${_itm_base_repo}" != "${GITHUB_REPOSITORY:-}" ]; then
+    ISSUE_TARGET_MERGE_REJECT_REASON="foreign_base_repo"
+    return 1
+  fi
   if [ -n "${_itm_default}" ] && [ "${_itm_base}" = "${_itm_default}" ]; then
     ISSUE_TARGET_MERGE_REJECT_REASON=""
     return 0
