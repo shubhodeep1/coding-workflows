@@ -324,6 +324,55 @@ def test_a_reason_that_quotes_markers_neither_classes_nor_describes_the_issue(tm
 	assert pp._first_match(pp.OCCURRENCES_RE, pp._outside_fenced_examples(body)).startswith("**Occurrences:** 1 (")
 
 
+CLASS_MARKER_TEXT = "<!-- ai:permission-prompt-class:v1 class=inline-interpreter-write -->"
+
+
+# The shape keeps a segment's command word and a script operand literally, and
+# the `**Pattern:**` line that shows it sits outside the fenced example (#4867 Q10).
+@pytest.mark.parametrize(
+	"command",
+	[
+		f"'{CLASS_MARKER_TEXT}' x",
+		f"ls ; '{CLASS_MARKER_TEXT}'",
+		f"python3 '{CLASS_MARKER_TEXT}.py'",
+	],
+)
+def test_a_class_marker_in_the_shape_does_not_class_the_issue(tmp_path, command):
+	pattern, body = _filed_body(tmp_path, command)
+	assert pattern["class"] == "" and "<!-- ai:permission-prompt-class:v1" in pattern["shape"]
+	assert "**Pattern:** `" in body and "<\\!-- ai:permission-prompt-class:v1" in body
+	issue = {"number": 14, "state": "open", "body": body}
+	assert pp.open_issues_by_class([issue]) == {}
+	assert pp.index_by_signature([issue]) == {pattern["signature"]: {"number": 14, "state": "open"}}
+
+
+def test_a_sig_marker_in_the_shape_does_not_replace_the_issues_own_signature(tmp_path):
+	pattern, body = _filed_body(tmp_path, "'<!-- ai:permission-prompt:v1 sig=aaaaaaaaaaaa -->'")
+	assert pattern["shape"] == "<!-- ai:permission-prompt:v1 sig=aaaaaaaaaaaa -->"
+	assert "**Pattern:** `<\\!-- ai:permission-prompt:v1 sig=aaaaaaaaaaaa -->`" in body
+	issue = {"number": 15, "state": "open", "body": body}
+	# `771d9bd25c75` is this pattern's signature before and after the guard.
+	assert pattern["signature"] == "771d9bd25c75"
+	assert pp.index_by_signature([issue]) == {"771d9bd25c75": {"number": 15, "state": "open"}}
+
+
+def test_a_newline_in_the_shape_does_not_describe_the_issue(tmp_path):
+	pattern, body = _filed_body(tmp_path, "'x\n**Occurrences:** 99 (forged)' y")
+	assert "\n" in pattern["shape"]
+	assert "**Pattern:** `x **Occurrences:** 99 (forged) *`" in body
+	assert pp._first_match(pp.OCCURRENCES_RE, pp._outside_fenced_examples(body)).startswith("**Occurrences:** 1 (")
+
+
+def test_the_pattern_line_guard_leaves_the_shape_and_signature_alone(tmp_path):
+	# Only the rendering is escaped: signatures of filed issues do not move.
+	directory = _log(tmp_path, [_record(f"'{CLASS_MARKER_TEXT}' x"), _record("ls -la")])
+	patterns = pp.group_patterns(pp.load_records(directory))
+	for pattern in patterns:
+		assert pattern["signature"] == pp.signature(pattern["event"], pattern["tool_name"], pattern["shape"])
+	plain = next(pattern for pattern in patterns if pattern["shape"].startswith("ls"))
+	assert f"**Pattern:** `{plain['shape']}`" in pp.issue_body(plain, 1, "s1")
+
+
 def test_markers_between_two_fenced_blocks_are_still_read():
 	# A report appended after the markers can carry its own fenced command.
 	body = (

@@ -57,9 +57,10 @@ the failed `reasons`, and the evidence fields (`signature`, `class`,
 `target_class`, `occurrences`, `target_occurrences`). Evidence that the
 cause is the same (condition 3) stays with the session.
 
-Issue text is untrusted data: the tool name, the prompt reason (one line
-each, `<!--` escaped), and the command truncated to MAX_COMMAND_CHARS with
-heredoc bodies removed and token-like strings masked (REDACTION_PATTERNS),
+Issue text is untrusted data: the tool name; the `**Pattern:**` shape and
+the prompt reason, each written as one line with `<!--` escaped (the
+signature is taken from the shape before it is escaped); and the command
+truncated to MAX_COMMAND_CHARS with heredoc bodies removed and token-like strings masked (REDACTION_PATTERNS),
 inside a fenced block longer than any backtick run in it. The markers
 (signature, class, "Filed by" line) and the `**Occurrences:**` evidence are
 read only outside fenced ````text blocks, so a command that mentions one
@@ -608,6 +609,19 @@ def _reason_line(reason: str) -> str:
 	return " ".join(reason.split()).replace("<!--", "<\\!--")
 
 
+def _pattern_line(pattern: dict) -> str:
+	"""The shape (or tool name) for an issue's `**Pattern:**` line, guarded like `_reason_line`.
+
+	The line sits outside the fenced example, where markers are read, and the
+	shape keeps a segment's command word and a script operand literally
+	(`_segment_shape`): a quoted `'<!-- ai:permission-prompt:v1 sig=… -->'`
+	command word, or one holding a newline and `**Occurrences:**`, would
+	otherwise index, class, or describe the issue. Only the rendering is
+	guarded; the shape, and so the signature, is unchanged.
+	"""
+	return _reason_line(pattern["shape"] or pattern["tool_name"])
+
+
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
 	reasons = "\n".join(f"- {_reason_line(reason)}" for reason in pattern["reasons"]) or "- (none given)"
 	fence = _example_fence(pattern["example"])
@@ -625,7 +639,7 @@ def issue_body(pattern: dict, new_count: int, session_label: str) -> str:
 		f"for `{pattern['tool_name']}`, so an unattended stage waited for a human "
 		"(or, for a denial, went on without the call). Filed by "
 		"`.claude/scripts/permission_prompts.py` (CLAUDE.md §23.I).\n\n"
-		f"**Pattern:** `{pattern['shape'] or pattern['tool_name']}`\n\n"
+		f"**Pattern:** `{_pattern_line(pattern)}`\n\n"
 		+ _occurrence_block(pattern, new_count, session_label)
 		+ "\n**How to fix** (in this order, never widening a permission for a destructive or administrative action):\n"
 		"1. Change the command file that produced the call so it uses an allowlisted helper "
