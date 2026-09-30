@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T06:01:01Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A PR that adds a new log key must register it in agents.md \"Stable log prefixes (contractual)\" in both the bullet list and the `LOG_PREFIX.name=` block, with a test that pins it.",
+  "phase": "implement_plan",
+  "pr_number": 5382,
+  "record_id": "lesson-implement-plan-03ea218558c6bd710b5012da",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5316-gate-auto-merge-on-hold-claims",
+    "file:agents.md"
+  ]
+}
