@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T04:10:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Inside a numbered sub-procedure, a bare \"step N\" reads as that list's own step; name the outer list (\"Procedure step 2\") when a cross-reference means the command's top-level step.",
+  "phase": "implement_plan",
+  "pr_number": 5281,
+  "record_id": "lesson-implement-plan-c4b5382cf306deadfa41be3b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5258-asset-sync-outside-conflict-fail-closed",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
