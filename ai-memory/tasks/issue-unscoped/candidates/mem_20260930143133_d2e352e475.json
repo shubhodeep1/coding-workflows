@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:lines 386-399 | severity=critical | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: In the `clean:success` case, the `continue` skips duplicate-block detection when there are no failed slots, allowing repeated reviewer blocks to be accepted as a clean ledger.\n  WHY: qwen_qwen3_7-plus says the `continue` bypasses repeat detection and cites lines 386-399; z-ai_glm-5_2 disputes this, stating duplicate detection exists at line 370-373.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:lines 386-399 | severity=critical | confidence=[4]\n  PROBLEM: The `continue` statement in the no-failed-slot branch of `clean:success` skips the remainder of the loop body, including any repeat-detection logic that may exist after the `case` statement.\n  WHY: When a summariser writes a ledger with a repeated reviewer block (e.g., two blocks for the same slug), the loop processes both blocks, increments `claude_fixer_clean_reviewers` twice for the same slot, and the roster check still passes (because pattern matching only verifies that each slot has at least one block). The ledger is then accepted as clean, violating the stated requirement \"no block may repeat\" from the PR description.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0b75b6037ee22d9cdcbcf384ddb63db1eb1bf1331a63399e8881643d65c17a85",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5606,
+    "run_id": "36717396667",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36717396667",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930143133_d2e352e475",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5606,
+    "run_id": "36717396667"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T14:31:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
