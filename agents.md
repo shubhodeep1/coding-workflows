@@ -1247,7 +1247,9 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   one `GET /repos/{repo}/compare/{sha}...main` read with `github.token`
   (status `ahead` or `identical`) skips it, because its range spans many
   PRs already checked into `main`. Any other status, or a failed read,
-  checks the range (fail closed). Every PR into `stable` is checked. Tests load the twin and call
+  checks the range (fail closed). A push that creates `stable` (no previous
+  tip) and is not a promotion is checked against `main`'s tip. Every PR into
+  `stable` is checked. Tests load the twin and call
   `tests/claude_twin_state.py::assert_claude_not_ahead`, which skips a
   differing pair in a shallow clone.
 - **Credentials:** `GITHUB_TOKEN` (`contents`, `pull-requests`, `checks`,

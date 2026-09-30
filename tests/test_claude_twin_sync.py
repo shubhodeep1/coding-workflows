@@ -1054,6 +1054,22 @@ def test_ci_step_allows_a_clean_push_to_stable(repo, ci):
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_ci_step_checks_a_push_that_creates_stable_against_main(repo, ci):
+	_stable_push(repo, {claude("hooks/h.py"): "h v2\n", twin("hooks/h.py"): "h v2\n"})
+	proc = ci("push", ref_name="stable", before=sync.ZERO_SHA, gh_status="diverged")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "push creates stable: no previous tip" in proc.stdout
+	assert "not on the default branch" in proc.stdout
+
+
+def test_ci_step_allows_a_clean_push_that_creates_stable(repo, ci):
+	_stable_push(repo, {"CHANGELOG.md": "release notes\n"})
+	proc = ci("push", ref_name="stable", before="", gh_status="diverged")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "push creates stable: no previous tip" in proc.stdout
+	assert '"ok": true' in proc.stdout
+
+
 def test_ci_step_skips_other_events(repo, ci):
 	proc = ci("pull_request", base_ref="release/x", ref_name="42/merge")
 	assert proc.returncode == 0, proc.stdout + proc.stderr
