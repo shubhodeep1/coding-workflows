@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T15:28:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A heal issue for a source-repo review/autofix failure must target `main`, not the failing PR's head: `review_autofix.yml` loads its support scripts from protected `main`, so a fix on the PR head cannot unblock that PR.",
+  "phase": "implement_plan",
+  "pr_number": 5648,
+  "record_id": "lesson-implement-plan-7c9b5653736ecdd3a8dc4288",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5627-resolver-private-model-index",
+    "file:scripts/workflow_failure_heal_intake.sh",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

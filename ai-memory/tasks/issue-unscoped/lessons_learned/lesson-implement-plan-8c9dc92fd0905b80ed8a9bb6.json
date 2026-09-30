@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T15:28:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A shell helper that resolves the index with `git rev-parse --git-path index` and then deletes or overwrites a file must refuse when that path is the file it deletes: an inherited `GIT_INDEX_FILE` redirects `--git-path index`.",
+  "phase": "implement_plan",
+  "pr_number": 5648,
+  "record_id": "lesson-implement-plan-8c9dc92fd0905b80ed8a9bb6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5627-resolver-private-model-index",
+    "file:scripts/review_conflict_resolve.sh"
+  ]
+}
