@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch
 - Project branch: claude/implement-plan-issue-5520-e2e-dispatch-default-branch   Final PR: #5550 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (opened after this commit; its number is in the stage report and the checker instructions)
+- Waiting on: PR #5561 (phase 1/1 into the project branch)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01EVEey2yTAZ3pCnCPG8asZ4   safety net and hand-back re-armed by each stage (ids in its report)
 - Last updated: 2026-09-30
-- Last note: phase 1 implemented and verified locally (22 new tests, 548 tests over every module that references test-and-mark-stable.yml, actionlint, yamllint, shellcheck without new warnings); phase PR opened
+- Last note: review round 1 on PR #5561 (head ee4800026c95): 2 of 7 findings fixed (empty job log and mktemp failure now leave the reviewed head unresolved, with their own warnings), 5 rejected with reasons on the PR
 
 ## Phases
-1. [ ] Phase 1 — default-branch E2E review dispatches with reviewed-head correlation   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — default-branch E2E review dispatches with reviewed-head correlation   — PR #5561 open (waiting); review rounds: 1; interventions: 0
    - [x] Phase 3c and Phase 4b `gh workflow run "${REVIEW_WORKFLOW_FILE}"` calls carry no `--ref`
    - [x] Phase 4 matches default-branch dispatch runs (workflow-scoped listing, provenance, exact PR run name) and accepts a completed one only when its trusted reviewed head equals `PIN_SHA`
    - [x] Phase 4b adopts or registers matched dispatch runs and requires a reviewed head on a dispatched retry
@@ -43,6 +43,7 @@
 ## Lessons
 - [source:plan-deviation] When a shell step passes a GitHub run listing to jq, feed it on stdin, never through `--argjson`: a 100-run page can be several hundred KB, above Linux's 128 KB limit for one argument, and the step then fails with E2BIG. (files: .github/workflows/test-and-mark-stable.yml)
 - [source:plan-deviation] A workflow step that adds a second source of candidate runs must also gate the loop's early-accept shortcuts (failed steps, log markers) on the new source, or a run whose correlation is only checked at completion can be accepted while it is still in flight. (files: .github/workflows/test-and-mark-stable.yml)
+- [source:intervention] A helper that caches a negative result read from a GitHub job log must not cache an empty log body: GitHub can serve one while a just-finished job's log is still being stored, and a cached "not found" then rejects the run for good. Treat it as a failed read the next poll retries. (files: .github/workflows/test-and-mark-stable.yml)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #5520; start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.

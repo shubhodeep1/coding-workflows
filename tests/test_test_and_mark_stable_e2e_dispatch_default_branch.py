@@ -366,6 +366,31 @@ def test_reviewed_head_api_failure_caches_nothing() -> None:
 	assert calls[-1] == "repos/owner/repo/actions/jobs/501/logs"
 
 
+def test_reviewed_head_empty_log_is_unresolved_not_none() -> None:
+	"""An empty log body can be a log GitHub has not stored yet: caching
+	"none" would reject the run for good (Phase 4b: retry_workflow_failed),
+	so it is a failed read the next poll retries, with its own warning."""
+	proc, calls = _run_bash(
+		'if e2e_review_dispatch_resolve_head 10; then echo ok; else echo failed; fi\necho "cached=${E2E_REVIEW_DISPATCH_HEADS[10]+x}"\n',
+		{"jobs_10.json": json.dumps(_codex_jobs(501)), "log_501.txt": ""},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.splitlines() == ["failed", "cached="]
+	assert "review run #10's codex-agent job log came back empty" in proc.stderr
+	assert calls[-1] == "repos/owner/repo/actions/jobs/501/logs"
+
+
+def test_reviewed_head_temp_file_failure_is_unresolved_with_its_own_warning() -> None:
+	proc, calls = _run_bash(
+		'mktemp() { return 1; }\nif e2e_review_dispatch_resolve_head 10; then echo ok; else echo failed; fi\necho "cached=${E2E_REVIEW_DISPATCH_HEADS[10]+x}"\n',
+		{"jobs_10.json": json.dumps(_codex_jobs(501)), "log_501.txt": _reviewed_log(PIN)},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.splitlines() == ["failed", "cached="]
+	assert "could not create a temp file for review run #10's codex-agent job log" in proc.stderr
+	assert calls == ["repos/owner/repo/actions/runs/10/jobs?per_page=100"]
+
+
 # ── Phase 4 selection, executed ───────────────────────────────────────
 
 

@@ -1548,9 +1548,12 @@ jobs:
           }
           # Caches run $1's reviewed head in E2E_REVIEW_DISPATCH_HEADS: the
           # 40-hex SHA, or "none" when the run has no codex-agent job or
-          # the job never logged the line. Two calls (jobs, job log), once
-          # per run; returns 1 on an API failure and caches nothing, so the
-          # next poll retries. Call it only for a completed run.
+          # its non-empty log carries no such line. Two calls (jobs, job
+          # log), once per run; returns 1 and caches nothing on an API
+          # failure, an empty log body (GitHub can serve one while a job's
+          # log is still being stored), or a temp-file failure (the last
+          # two with their own stderr warning), so the next poll retries.
+          # Call it only for a completed run.
           e2e_review_dispatch_resolve_head() {
             local head_run_id="$1"
             local head_jobs_json=""
@@ -1565,9 +1568,17 @@ jobs:
               return 0
             fi
             [[ "${head_job_id}" =~ ^[0-9]+$ ]] || return 1
-            head_log_file="$(mktemp)"
+            if ! head_log_file="$(mktemp)"; then
+              echo "  ⚠ could not create a temp file for review run #${head_run_id}'s codex-agent job log; its reviewed head stays unresolved" >&2
+              return 1
+            fi
             if ! "${E2E_REVIEW_DISPATCH_API}" "repos/${TEST_REPO}/actions/jobs/${head_job_id}/logs" > "${head_log_file}"; then
               rm -f "${head_log_file}"
+              return 1
+            fi
+            if [ ! -s "${head_log_file}" ]; then
+              rm -f "${head_log_file}"
+              echo "  ⚠ review run #${head_run_id}'s codex-agent job log came back empty; its reviewed head stays unresolved" >&2
               return 1
             fi
             head_line=$(grep -a -m1 -oE 'Captured INITIAL_HEAD_SHA=[0-9a-f]{40} for stale-base detection\.' "${head_log_file}" || true)
@@ -2439,9 +2450,12 @@ jobs:
           }
           # Caches run $1's reviewed head in E2E_REVIEW_DISPATCH_HEADS: the
           # 40-hex SHA, or "none" when the run has no codex-agent job or
-          # the job never logged the line. Two calls (jobs, job log), once
-          # per run; returns 1 on an API failure and caches nothing, so the
-          # next poll retries. Call it only for a completed run.
+          # its non-empty log carries no such line. Two calls (jobs, job
+          # log), once per run; returns 1 and caches nothing on an API
+          # failure, an empty log body (GitHub can serve one while a job's
+          # log is still being stored), or a temp-file failure (the last
+          # two with their own stderr warning), so the next poll retries.
+          # Call it only for a completed run.
           e2e_review_dispatch_resolve_head() {
             local head_run_id="$1"
             local head_jobs_json=""
@@ -2456,9 +2470,17 @@ jobs:
               return 0
             fi
             [[ "${head_job_id}" =~ ^[0-9]+$ ]] || return 1
-            head_log_file="$(mktemp)"
+            if ! head_log_file="$(mktemp)"; then
+              echo "  ⚠ could not create a temp file for review run #${head_run_id}'s codex-agent job log; its reviewed head stays unresolved" >&2
+              return 1
+            fi
             if ! "${E2E_REVIEW_DISPATCH_API}" "repos/${TEST_REPO}/actions/jobs/${head_job_id}/logs" > "${head_log_file}"; then
               rm -f "${head_log_file}"
+              return 1
+            fi
+            if [ ! -s "${head_log_file}" ]; then
+              rm -f "${head_log_file}"
+              echo "  ⚠ review run #${head_run_id}'s codex-agent job log came back empty; its reviewed head stays unresolved" >&2
               return 1
             fi
             head_line=$(grep -a -m1 -oE 'Captured INITIAL_HEAD_SHA=[0-9a-f]{40} for stale-base detection\.' "${head_log_file}" || true)
