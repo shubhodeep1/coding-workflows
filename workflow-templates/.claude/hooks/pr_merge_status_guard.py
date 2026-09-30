@@ -606,6 +606,10 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 			destination = source
 		if not source:
 			continue
+		# `<src>:` with an empty destination is not a valid push refspec: git
+		# exits with `fatal: invalid refspec` and writes nothing. Its empty
+		# destination falls through to the checked-out branch below, which is
+		# judged as for a push without a refspec.
 		if destination.startswith("refs/heads/"):
 			destination = destination[len("refs/heads/") :]
 		elif destination.startswith("refs/"):
@@ -721,15 +725,16 @@ def _git_invocation_targets(
 			reason = f"the git directory is {path_reason}"
 	reaches_remote = subcommand == "push"
 	if repo_dir is None:
-		# A bulk push still asks when its directory is unknown.
+		# A bulk push still asks when its directory is unknown. A push that
+		# writes no branch (a deletion, tags only) lands no commits whatever
+		# the directory, so it yields no target here either.
 		fallback_bulk_reason = ""
 		if reaches_remote:
+			parsed_push_targets = _push_refspec_targets(args[index:], session_cwd, session_cwd)
+			if not parsed_push_targets:
+				return []
 			fallback_bulk_reason = next(
-				(
-					target.bulk_reason
-					for target in _push_refspec_targets(args[index:], session_cwd, session_cwd)
-					if target.bulk_reason
-				),
+				(target.bulk_reason for target in parsed_push_targets if target.bulk_reason),
 				"",
 			)
 		return [GuardTarget(subcommand, session_cwd, "", "HEAD", reaches_remote, reason, fallback_bulk_reason)]
@@ -1502,9 +1507,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if code == 2:
 			blocks.append(message)
 			continue
-		if kind == "ask":
-			asks.append((reason, prompt_reason))
-		elif kind == "warn":
+		if kind == "warn":
 			notices.append(f"merged-PR guard skipped: {reason}")
 		if target.bulk_reason:
 			# The checked-out branch passed; the other branches the push
@@ -1516,7 +1519,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				"branch, so it cannot check the others. Confirm that none of them belongs to a "
 				"merged pull request with no open one."
 			)
-			asks.append((bulk_ask_reason, bulk_ask_reason))
+			if kind == "ask":
+				# One confirmation reason per push: fold the bulk reason into
+				# the judge's ask instead of adding a second entry.
+				asks.append((f"{reason} {bulk_ask_reason}", f"{prompt_reason or reason} {bulk_ask_reason}"))
+			else:
+				asks.append((bulk_ask_reason, bulk_ask_reason))
+		elif kind == "ask":
+			asks.append((reason, prompt_reason))
 
 	if blocks:
 		# Keep every notice (fallback and skip warnings) beside the block, so a
@@ -1524,13 +1534,13 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		return 2, "\n\n".join(blocks + notices)
 	if asks:
 		hook_output = _confirmation_payload(asks[0][0], asks[0][1])
-		extra_reasons = [reason for reason, _prompt in asks[1:]]
-		if extra_reasons:
+		extra_asks = asks[1:]
+		if extra_asks:
 			hook_output["systemMessage"] += "\n" + "\n".join(
-				f"merged-PR guard needs confirmation: {reason}" for reason in extra_reasons
+				f"merged-PR guard needs confirmation: {extra_ask_reason}" for extra_ask_reason, _prompt in extra_asks
 			)
 			hook_output["hookSpecificOutput"]["permissionDecisionReason"] += " " + " ".join(
-				prompt_reason or reason for reason, prompt_reason in asks[1:]
+				extra_prompt_reason or extra_ask_reason for extra_ask_reason, extra_prompt_reason in extra_asks
 			)
 		if notices:
 			hook_output["systemMessage"] += "\n" + "\n".join(notices)
@@ -1555,7 +1565,7 @@ def _judge_guard_target(
 	call, with whether it came from a live call, so a command that judges the
 	same pair twice issues one API call.
 	A fresh cache entry costs no call; a cache-derived block is re-verified
-	with one live call, whose result replaces the memo entry.
+	with one live call, whose result (or failure) replaces the memo entry.
 	"""
 	cwd = target.cwd
 	branch = target.branch or current_branch(cwd)
@@ -1599,8 +1609,12 @@ def _judge_guard_target(
 		try:
 			pull_requests = query_pull_requests(slug, branch, cwd)
 		except LookupUnavailable as exc:
+			# Remember the failed live call, so a later target for the same
+			# pair does not call GitHub again (§21.D budget).
+			reverify_failure = LookupUnavailable(f"could not re-verify: {exc}")
+			pull_request_memo[memo_key] = (reverify_failure, True)
 			return _unreachable_decision(
-				f"could not re-verify: {exc}", target.tip, branch, base, cwd, target.reaches_remote
+				str(reverify_failure), target.tip, branch, base, cwd, target.reaches_remote
 			)
 		_write_cache(slug, branch, pull_requests)
 		pull_request_memo[memo_key] = (pull_requests, True)

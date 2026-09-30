@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5173: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_012bXVKFrhBSuPGD6croSjLV   safety net none   hand-back none   (deleted 2026-09-30 by the review-round 4 stage; the chain waits on twin sync)
+- Check-in: checker session_012bXVKFrhBSuPGD6croSjLV   safety net none   hand-back none   (deleted 2026-09-30 by the review-round 5 stage; the chain waits on twin sync)
 - Last updated: 2026-09-30
-- Last note: review round 4 (workflow round 1 on head 420ccd0b770b, run 36709311504): both code findings fixed in the twin (a `cd` after `&&` behind a command that may fail no longer carries past the end of its `&&` chain, nor a `cd` inside a list sent to the background with `&`; tag pattern refspecs such as `refs/tags/*` are not judged); the `workflow-templates/CLAUDE.md` task gap was rejected (it is a symlink to `CLAUDE.md`); new hold claim and twin-sync blocker posted; waiting on the `[claude-twin-sync]` copy and `/reclarify` on #5144.
+- Last note: review round 5 (workflow round 1 on head f1c6650e5be6, run 36725288304, ledger `728535fe…d1f2`): the twin sync `f1c6650` had landed (both copies `76c3aa18…3a33`), so the root-copy findings were rejected; fixed in the twin: an unresolvable directory no longer adds a fallback target for a tag-only push or a deletion, a failed live re-check of a cached block is memoised (§21.D budget), and a bulk push whose judge already asks gets one confirmation entry; the `<src>:` empty-destination finding was rejected (git refuses it with `fatal: invalid refspec`) and documented with a test; new hold claim and twin-sync blocker posted; waiting on the `[claude-twin-sync]` copy and `/reclarify` on #5144.
 
 ## Phases
-1. [ ] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 open (twin sync pending); review rounds: 4; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
+1. [ ] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 open (twin sync pending); review rounds: 5; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
    - Command walker: effective directory across `cd`, `git -C`, `GIT_DIR=`, `--git-dir`; unresolvable constructs fall back with a warning
    - Push refspec parser: `<src>:<dst>` judged on `<dst>` with `<src>` as tip; deletions and tags skipped; no refspec judges the current branch
    - Per-target judge with one cached REST call per `(slug, branch)`; one merged hook result
@@ -52,6 +52,7 @@
 - [source:intervention] `git push` always reads its first positional as the repository, even when `--repo` is given (the option is only the default), so a push-argument parser must not shift the refspec list when it sees `--repo`. (files: .claude/hooks/pr_merge_status_guard.py)
 - [source:intervention] `git push --tags <remote>` with no refspec pushes only tags, while `--all`, `--branches`, `--mirror` (and any unambiguous prefix git accepts, such as `--al`) and the `:` refspec write many branches; a guard that judges one branch per push must not map either to the checked-out branch alone. (files: .claude/hooks/pr_merge_status_guard.py)
 - [source:intervention] In a shell `&&` chain, a `cd` behind a command that may fail is skipped with that command, and whatever follows `;`, a newline or `||` then runs in the original directory; a `cd` inside a list sent to the background with `&` never reaches the commands after it. A command walker must drop the tracked directory at those points. (files: .claude/hooks/pr_merge_status_guard.py)
+- [source:intervention] A per-command memo that saves API calls must also remember a failed call, or a second target on the same key repeats the request the budget allows once. (files: .claude/hooks/pr_merge_status_guard.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the scheduled routine `dispatch shubhodeep1/coding-workflows#5144: deliver` in session session_01YLLYPSWJ9Xqr8pCYFPTRQE; permission mode auto.
@@ -65,3 +66,4 @@
 - /reclarify resume 2026-09-30 by session_0125JU5gc8ttYcB4X2Br61mc: twin sync e0a7d2b landed (sha256 b68e7190…cf96), hold lifted; project branch synced with main at 409df1a (clean, 315 tests passed); ai:claude-blocked removed; checker session_012bXVKFrhBSuPGD6croSjLV reused, safety net trig_018gRvYmHShnyXLqoP2RwHpg, hand-back trig_012s3YkgjLM3qrigvNyHaddK; Status back to IN_PROGRESS. That wait ended with the workflow's review round 1 hand-off on head e0a7d2ba4f03 (PR #5173 comment 5907537135).
 - Review round 3 (session_01W7iJBQB6NhFrgqyuGtwa3p, 2026-09-30): the log on the phase branch had one `## Auto-decisions` section with AD-1…AD-9 and no duplicates, so nothing was removed. New twin sha256 `2eadc36a0bc7e1df519637aa8f3c73471c567adf4728396ce88b27231d624cf3` (the `.claude/` copy is still `b68e7190…cf96`); new blocker posted on #5144.
 - Review round 4 (session_0146fXPsUDiKGDB3rQ1gtfAp, 2026-09-30): workflow round 1 on head 420ccd0b770b (ledger `2707b9ef…afc1`); both code findings fixed, the task gap rejected. New twin sha256 `76c3aa18f065f262e13f678c19af351054e59f5e144f93605f8f0d533f4a3a33` (the `.claude/` copy is still `2eadc36a…4cf3`); new blocker posted on #5144.
+- Review round 5 (session_01EENJBCUqspaRDh83wPseSh, 2026-09-30): three reviewer runs on head f1c6650e5be6 after twin sync `f1c6650` (the `.claude/` copy and the twin were both `76c3aa18…3a33`); answered the latest hand-off (run 36725288304, ledger `728535fe…d1f2`). Project branch synced with main at 1b0c74e (clean). New twin sha256 `46091219ee440267a0df1b48782846f8a8543609b9f04e66c95b01bc27bcf878` (the `.claude/` copy is still `76c3aa18…3a33`); new blocker posted on #5144.

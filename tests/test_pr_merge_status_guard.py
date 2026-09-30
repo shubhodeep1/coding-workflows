@@ -1892,3 +1892,90 @@ def test_block_keeps_skip_warnings_for_other_targets(monkeypatch, tmp_path: Path
 	assert code == 2
 	assert message.startswith("blocked: feature/merged")
 	assert "merged-PR guard skipped: could not reach GitHub for feature/other" in message
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"cd $WORKTREE && git push --tags origin",
+		"cd $WORKTREE && git push origin 'refs/tags/*:refs/tags/*'",
+		"cd $WORKTREE && git push origin refs/tags/v1.0",
+		"cd $WORKTREE && git push --delete origin feature/x",
+		"cd $WORKTREE && git push origin :feature/x",
+		"git -C $WORKTREE push origin --tags",
+	],
+)
+def test_unresolvable_directory_skips_pushes_that_write_no_branch(tmp_path: Path, command: str) -> None:
+	"""PR #5173 review: a tag-only push or a deletion lands no commits on a
+	branch whatever the directory, so an unknown directory adds no fallback
+	target on the session checkout."""
+	assert twin_guard.guard_targets(command, str(tmp_path)) == []
+
+
+def test_unresolvable_directory_still_falls_back_for_a_branch_push(tmp_path: Path) -> None:
+	targets = twin_guard.guard_targets("cd $WORKTREE && git push --tags origin HEAD:feature/y", str(tmp_path))
+	assert len(targets) == 1
+	assert (targets[0].cwd, targets[0].branch, targets[0].tip) == (str(tmp_path), "", "HEAD")
+	assert targets[0].fallback_reason
+
+
+@pytest.mark.parametrize("command", ["git push origin feature/merged:", "git push origin +feature/merged:"])
+def test_empty_destination_refspec_judges_the_checked_out_branch(tmp_path: Path, command: str) -> None:
+	"""PR #5173 review: git rejects `<src>:` for a push (`fatal: invalid
+	refspec`), so it writes nothing; the guard judges the checked-out branch,
+	as for a push without a refspec, rather than skipping the call."""
+	assert _targets(command, tmp_path) == [("push", str(tmp_path), "", "feature/merged", True, False)]
+
+
+def test_failed_reverification_is_not_repeated_for_the_same_pair(monkeypatch, tmp_path: Path, capsys) -> None:
+	"""PR #5173 review, §21.D: a cache-derived block whose live re-check fails
+	is remembered, so a second target on the same (slug, branch) pair does not
+	call GitHub again."""
+	live_calls: list[tuple[str, str]] = []
+
+	def _unavailable(slug, branch, cwd):
+		live_calls.append((slug, branch))
+		raise twin_guard.LookupUnavailable("HTTP 403")
+
+	for name, value in {
+		"current_branch": lambda cwd: "feature/x",
+		"default_branch": lambda cwd: "main",
+		"repo_slug": lambda cwd: "o/r",
+		"_read_cache": lambda slug, branch: [{"number": 41}],
+		"_write_cache": lambda slug, branch, prs: None,
+		"blocking_pull_request": lambda prs, cwd, base, tip="HEAD": {"number": 41},
+		"query_pull_requests": _unavailable,
+		"git_history_verdict": lambda tip, branch, base, cwd: (twin_guard.VERDICT_INCONCLUSIVE, "no remote ref"),
+	}.items():
+		monkeypatch.setattr(twin_guard, name, value)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+	code, message = twin_guard.evaluate(
+		{"tool_name": "Bash", "tool_input": {"command": "git commit -m x && git push"}, "cwd": str(tmp_path)}
+	)
+	assert (code, message) == (0, "")
+	assert live_calls == [("o/r", "feature/x")]
+	hook_output = json.loads(capsys.readouterr().out)
+	assert hook_output["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not re-verify: HTTP 403" in hook_output["systemMessage"]
+
+
+def test_bulk_push_with_an_inconclusive_judge_asks_once(monkeypatch, tmp_path: Path, capsys) -> None:
+	"""PR #5173 review: when the judge already asks for a bulk push, the bulk
+	reason joins that ask instead of adding a second confirmation entry."""
+	monkeypatch.setattr(
+		twin_guard,
+		"_judge_guard_target",
+		lambda target, session_cwd, memo: (0, "", "ask", "history is inconclusive", "short: inconclusive"),
+	)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+	code, message = twin_guard.evaluate(
+		{"tool_name": "Bash", "tool_input": {"command": "git push --all origin"}, "cwd": str(tmp_path)}
+	)
+	assert (code, message) == (0, "")
+	hook_output = json.loads(capsys.readouterr().out)
+	assert hook_output["systemMessage"].count("merged-PR guard needs confirmation:") == 1
+	assert "history is inconclusive" in hook_output["systemMessage"]
+	assert "judges only the checked-out branch" in hook_output["systemMessage"]
+	decision_reason = hook_output["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "short: inconclusive" in decision_reason
+	assert "judges only the checked-out branch" in decision_reason

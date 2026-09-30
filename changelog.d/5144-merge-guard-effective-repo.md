@@ -7,7 +7,7 @@ On 2026-09-29 a twin-sync push from a detached worktree onto an open PR's branch
 | --- | --- |
 | Directory sources followed | earlier `cd <path>` in the same command, `git -C <path>`, `GIT_DIR=<path>`, `--git-dir` |
 | Push refspecs judged on the target | `<src>:<dst>`, `HEAD:<dst>`, `+<src>:refs/heads/<dst>`, `<branch>` |
-| Not judged | `--delete`, `:<dst>`, `refs/tags/…` (patterns such as `refs/tags/*` included), `--tags` with no refspec |
+| Not judged | `--delete`, `:<dst>`, `refs/tags/…` (patterns such as `refs/tags/*` included), `--tags` with no refspec, also in a directory the guard cannot resolve |
 | Judged on the current branch, then a confirmation prompt | `--all`, `--branches`, `--mirror` (and prefixes such as `--al`), the `:` matching refspec, `*` pattern refspecs |
 | Judged on the session checkout, with a warning | refspecs containing `$`, a backtick, `*`, `?`, `[`, `{` or `~`; `heads/` / `tags/` / `remotes/` shorthands; a `-`-prefixed source |
 | GitHub API calls | at most 1 per `(slug, branch)` pair judged, 0 when the 300-second cache holds it |

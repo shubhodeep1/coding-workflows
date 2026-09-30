@@ -915,8 +915,8 @@ worktree pushing to an open PR's branch is therefore allowed, and a worktree
 pushing merged history to a merged branch with no open PR is blocked,
 whatever the main checkout is on. Deletions, tag refspecs (patterns such as
 `refs/tags/*` included), and `--tags` with no refspec land no commits on a
-branch and are not judged; a push without a
-refspec judges the current branch. A bulk push (`--all`, `--branches`,
+branch and are not judged, even when the directory cannot be resolved; a push
+without a refspec judges the current branch. A bulk push (`--all`, `--branches`,
 `--mirror`, or a prefix git expands to one, the `:` matching refspec, or a `*`
 pattern refspec) judges the current branch as usual and, when that does not
 block, also asks for confirmation, since the other branches it writes are not
