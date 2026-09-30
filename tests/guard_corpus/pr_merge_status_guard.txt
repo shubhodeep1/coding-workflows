@@ -7,7 +7,9 @@
 #
 # Every shape here must block, deny, or ask on the session checkout, or fall
 # back with a warning. A hook change that allows one silently fails the check
-# unless the PR body lists it under `Intended loosening:`.
+# unless the base branch's .github/guard_differential/intended_loosening.json
+# approves it for the PR's head commit; a PR-body `Intended loosening:` listing
+# never does (#5326).
 
 # Plain commit and push on the stranded checkout.
 git commit -m 'next'

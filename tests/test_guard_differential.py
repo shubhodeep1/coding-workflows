@@ -700,6 +700,16 @@ def test_every_shipped_corpus_parses() -> None:
 		assert len({s.text for s in shapes}) == len(shapes), f"duplicate shape in {hook}"
 
 
+def test_corpus_headers_name_the_base_policy_not_the_pr_body() -> None:
+	"""Issue #5326: a corpus header tells a hook author how a loosening is
+	approved, so it must name the base-branch policy, not the PR body."""
+	for corpus in sorted(CORPUS_DIR.glob("*.txt")):
+		lines = corpus.read_text(encoding="utf-8").splitlines()
+		header = " ".join(line.lstrip("# ").strip() for line in lines if line.startswith("#"))
+		assert "PR body lists it" not in header, corpus
+		assert gd.LOOSENING_POLICY_PATH in header, corpus
+
+
 def test_every_guard_hook_has_a_corpus() -> None:
 	corpora = set(gd.load_corpora(CORPUS_DIR))
 	for hooks_dir in (HOOKS_DIR, TEMPLATE_HOOKS_DIR):

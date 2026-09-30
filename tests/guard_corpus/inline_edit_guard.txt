@@ -5,8 +5,10 @@
 # line; `json:` lines are whole PreToolUse payloads (heredocs need them).
 #
 # File edits through an inline interpreter must keep being denied. A hook
-# change that lets one through silently fails the check unless the PR body
-# lists it under `Intended loosening:`.
+# change that lets one through silently fails the check unless the base
+# branch's .github/guard_differential/intended_loosening.json approves it for
+# the PR's head commit; a PR-body `Intended loosening:` listing never does
+# (#5326).
 
 # Python programs from -c.
 python3 -c "open('f.txt', 'w').write('x')"
