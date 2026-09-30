@@ -30,7 +30,8 @@ several.
 API calls (CLAUDE.md §15), all REST:
   - one read of the repository when `--ref` is omitted;
   - one read of the workflow's recent `workflow_dispatch` runs before the
-    dispatch, to know which runs already existed (used by the fallback);
+    dispatch, to know which runs already existed (used only by the fallback,
+    so a failed read does not stop the dispatch);
   - one POST to `actions/workflows/<file>/dispatches`;
   - with a run id in the response: one best-effort read of that run for
     `status` and `created_at` (both `null` when the read fails);
@@ -44,8 +45,9 @@ means GitHub named the run; `new_run` means the fallback saw exactly one new
 run, which may still be another session's, so the caller confirms its target
 ref before trusting it. Exit 1 when the workflow is not allowlisted or an
 argument is invalid. Exit 2 when a call failed, no new run appeared before
-the timeout, or the fallback saw more than one new run (`ambiguous: true`
-with `candidate_run_ids`, newest first). On exit 2, `dispatched` says whether
+the timeout, the fallback saw more than one new run (`ambiguous: true`
+with `candidate_run_ids`, newest first), or GitHub returned no run id after
+the pre-dispatch run list could not be read. On exit 2, `dispatched` says whether
 the POST may have reached GitHub: once it is `true`, a failed or timed-out
 poll never means "dispatch again", because the run already exists or may
 exist. A POST that timed out, got a 5xx, or failed without an HTTP status
@@ -210,7 +212,15 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 		ref = check_in_status.gh_api(f"repos/{repo}").get("default_branch") or ""
 		if not ref:
 			raise check_in_status.ReadError(f"could not read the default branch of {repo}")
-	known_ids = recent_run_ids(repo, workflow)
+	# The list must be read before the POST (read after it, the new run could
+	# already be in it), but only the polling fallback uses it, so a failed read
+	# never cancels a dispatch GitHub can name exactly.
+	known_ids: set[int] | None = None
+	pre_dispatch_read_error = ""
+	try:
+		known_ids = recent_run_ids(repo, workflow)
+	except (check_in_status.ReadError, KeyError, TypeError) as exc:
+		pre_dispatch_read_error = str(exc)
 	try:
 		response = _post_dispatch(repo, workflow, ref, inputs)
 	except DispatchUnconfirmed as exc:
@@ -234,6 +244,15 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 			"status": run.get("status"),
 			"created_at": run.get("created_at"),
 			"matched_by": "dispatch_response",
+		}
+	if known_ids is None:
+		# Without the pre-dispatch list every recent run looks new, so polling
+		# could only guess.
+		return 2, {
+			"dispatched": True,
+			"workflow": workflow,
+			"ref": ref,
+			"error": f"dispatched, but GitHub returned no run id and the {workflow} run list could not be read before the dispatch ({pre_dispatch_read_error}), so the new run cannot be told apart; confirm its target ref in `gh run list --workflow={workflow}` and never dispatch again",
 		}
 	attempts = max(1, timeout_seconds // POLL_INTERVAL_SECONDS)
 	for attempt in range(attempts):

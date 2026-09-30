@@ -35,8 +35,9 @@ dw = _load()
 class FakeGitHub:
 	"""Stands in for `gh api`: serves run lists in sequence and records the dispatch."""
 
-	def __init__(self, run_lists, default_branch="main", response=None, run_reads=None):
+	def __init__(self, run_lists, default_branch="main", response=None, run_reads=None, run_list_error=None):
 		self.run_lists = list(run_lists)
+		self.run_list_error = run_list_error
 		self.default_branch = default_branch
 		self.response = response
 		self.run_reads = run_reads or {}
@@ -46,6 +47,8 @@ class FakeGitHub:
 	def gh_api(self, path):
 		self.reads.append(path)
 		if "/actions/workflows/" in path:
+			if self.run_list_error is not None:
+				raise self.run_list_error
 			runs = self.run_lists.pop(0) if len(self.run_lists) > 1 else self.run_lists[0]
 			return {"workflow_runs": runs}
 		if "/actions/runs/" in path:
@@ -182,15 +185,45 @@ def test_poll_failure_after_the_post_reports_dispatched_true(fake, monkeypatch):
 
 
 def test_read_failure_before_the_post_reports_dispatched_false(monkeypatch, capsys):
+	# Without --ref the default branch must be read first: a failed read means
+	# nothing was sent, so the caller may dispatch again.
 	def boom(path):
 		raise dw.check_in_status.ReadError("proxy 403")
 
 	posted = []
 	monkeypatch.setattr(dw.check_in_status, "gh_api", boom)
 	monkeypatch.setattr(dw, "_post_dispatch", lambda *args: posted.append(args))
-	assert dw.main(["--repo", "o/r", "--workflow", "security-audit.yml", "--ref", "main"]) == 2
+	assert dw.main(["--repo", "o/r", "--workflow", "security-audit.yml"]) == 2
 	assert json.loads(capsys.readouterr().out)["dispatched"] is False
 	assert posted == []
+
+
+def test_run_list_read_failure_does_not_cancel_a_dispatch_github_names(fake):
+	# PR #5059 review round 1: the pre-dispatch run list only serves the
+	# polling fallback, so its failure must not stop a dispatch whose run id
+	# GitHub returns.
+	sleeps: list[int] = []
+	github = fake([[]], response=_response(31), run_reads={31: _run(31)}, run_list_error=dw.check_in_status.ReadError("proxy 502"))
+	code, result = dw.dispatch("o/r", "security-audit.yml", "main", {"ref": "claude/a"}, 90, sleep=sleeps.append)
+	assert code == 0
+	assert result["run_id"] == 31 and result["matched_by"] == "dispatch_response"
+	assert result["status"] == "queued"
+	assert len(github.dispatches) == 1 and sleeps == []
+
+
+def test_run_list_read_failure_without_a_response_id_never_guesses(fake, monkeypatch, capsys):
+	# No run id and no pre-dispatch list: every recent run looks new, so the
+	# helper reports the dispatch as sent and polls nothing.
+	sleeps: list[int] = []
+	monkeypatch.setattr(dw.time, "sleep", sleeps.append)
+	github = fake([[_run(40)]], response=None, run_list_error=dw.check_in_status.ReadError("proxy 502"))
+	assert dw.main(["--repo", "o/r", "--workflow", "internal-validate.yml", "--ref", "main"]) == 2
+	result = json.loads(capsys.readouterr().out)
+	assert result["dispatched"] is True
+	assert "run_id" not in result and "matched_by" not in result
+	assert "proxy 502" in result["error"] and "never dispatch again" in result["error"]
+	assert len(github.dispatches) == 1 and sleeps == []
+	assert github.reads == ["repos/o/r/actions/workflows/internal-validate.yml/runs?event=workflow_dispatch&per_page=20"]
 
 
 def test_main_keeps_dispatched_true_on_a_failed_poll(fake, monkeypatch, capsys):

@@ -1088,6 +1088,9 @@ reviews, comments, and conflicts stay a direct §12 request.
     target ref), several are exit 2 with `ambiguous: true` and
     `candidate_run_ids`, never a guess (issue #5016: two sessions
     dispatching the same workflow seconds apart each took the newest run).
+    A failed pre-dispatch run-list read no longer cancels the dispatch: with
+    a returned id the result is exact, and without one it is exit 2 with
+    `dispatched: true` and no polling, since every recent run would look new.
     Replaces `gh workflow run` + `gh run list -L 1`, which could return the
     previous run. Exit 0 with `run_id`, 1 on a refused workflow or bad
     argument, 2 on a failed call, timeout, or ambiguous match. On exit 2, `dispatched` is `false` only when GitHub refused the
