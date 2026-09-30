@@ -1,17 +1,17 @@
 # Implement-Plan Log — Keep automation text from resuming a blocked issue through a later-line /reclarify
 
-- Plan: docs/plans/issue-5309-reclarify-fail-closed-plan.md
+- Plan: docs/completed/issue-5309-reclarify-fail-closed-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5309
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5309-reclarify-fail-closed   Final PR: #5324 draft
-- Status: IN_PROGRESS
-- Stage: conformance 1/3
-- Activation: not started
-- Waiting on: conformance-fix PR (this PR, run 1)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-5243-reclarify-any-line)
+- Waiting on: completion PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_013xGq4H3mHhMuXa8UkuLynY   safety net / hand-back: named in the stage report and the next `— resume.` block
+- Check-in: checker session_013xGq4H3mHhMuXa8UkuLynY (project checker)   safety net / hand-back: named in the stage report and the next `— resume.` block
 - Last updated: 2026-09-30
-- Last note: conformance run 1 CONFORMANT (Correctness: CONCERNS); one EVIDENCE-BASED concern fixed in this PR: the `clarify.yml` blocked comment that adds `ai:blocked` now ends with `<!-- ai:clarify-blocked:v1 -->`.
+- Last note: validation cycle 1 passed (10/10 tests, run 36697949682 on project head ebf24d1); completion PR moves the plan to docs/completed/; final PR #5324 is marked ready once it merges. Activation n/a: the base is project #5243's branch, so the final-merge stage closes #5309 and labels it `ai:merged`.
 
 ## Phases
 1. [x] Phase 1 — fail-closed later-line `/reclarify` gate   — PR #5439 merged 2026-09-30 (merge commit 2e8e39e); review rounds: 0; interventions: 0
@@ -24,15 +24,22 @@
    - Done: four predicates match; route-step cases pass; markers present; named suites green.
 
 ## Conformance
-- Run 1 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — fix PR: conformance-fix 1 (this PR; `claude/implement-plan-issue-5309-reclarify-fail-closed-conformance-fix-1`) (pre-security). Finding: [CONCERN] `.github/workflows/clarify.yml` "Handle blocked clarification output" adds `ai:blocked` and posted no `<!-- ai:…:v1 -->` marker, against the plan's goal that every comment adding `ai:blocked` carries one and the README / changelog statement that the clarify comment does. Not exploitable today (its reason is one line after `Reason: `), so defence in depth.
+- Run 1 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — fix PR #5485 (`claude/implement-plan-issue-5309-reclarify-fail-closed-conformance-fix-1`, merged as ebf24d1 2026-09-30) (pre-security). Review round 1 on #5485: 1 finding rejected; blocked on the missing verdict bot 2026-09-30, answered Q1: A (operator merged #5485 as ebf24d1, `/reclarify` 09:09Z). Finding: [CONCERN] `.github/workflows/clarify.yml` "Handle blocked clarification output" adds `ai:blocked` and posted no `<!-- ai:…:v1 -->` marker, against the plan's goal that every comment adding `ai:blocked` carries one and the README / changelog statement that the clarify comment does. Not exploitable today (its reason is one line after `Reason: `), so defence in depth.
+- Run 2 — 2026-09-30: CONFORMANT (Correctness: PASS) — no fixes (pre-validation; re-audit of the merged fix #5485).
 
 ## Security pass
+- Skipped (plan header `Security pass: skip`: ai:security automation-produced issue, verified by `security_pass_skip.py`).
 
 ## Validation
+- Cycle 1 — run 36697949682 2026-09-30 (target_ref: claude/implement-plan-issue-5309-reclarify-fail-closed, head ebf24d1): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 297s).
 
 ## Completion
+- Completion PR (this log update) — doc moved to docs/completed/issue-5309-reclarify-fail-closed-plan.md
+- Merged PRs: phase 1 #5439, conformance fix #5485
+- Final PR #5324 draft into claude/implement-plan-issue-5243-reclarify-any-line (marked ready in the final-merge stage)
 
 ## Activation
+- n/a (base claude/implement-plan-issue-5243-reclarify-any-line): the change goes live with project #5243's final PR #5266 into main.
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-30] How should the reported path (an orchestrator escalation adds `ai:blocked`, then posts unmarked model text) be closed? — Picked: A — markers on every comment that adds `ai:blocked`, plus a later-line form that never applies on `ai:orchestrator-managed` / `ai:orchestrator-tracking` issues. Alternatives: B — escalation markers only; C — revert the later-line form. Why: B leaves unmarked poller and judge comments on orchestrator issues open; C undoes #5243. Applied in: phase 1. Status: pending review
