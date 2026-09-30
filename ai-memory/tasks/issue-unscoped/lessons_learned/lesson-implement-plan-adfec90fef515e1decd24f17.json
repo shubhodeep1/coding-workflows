@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T08:13:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A `Bash(<cmd> *)` allow rule cannot pin a flag value such as `gh workflow run --ref`; pre-approve the dispatch only through a helper that reads and enforces the ref itself.",
+  "phase": "implement_plan",
+  "pr_number": 5477,
+  "record_id": "lesson-implement-plan-adfec90fef515e1decd24f17",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-5375-pin-internal-review-dispatch-ref",
+    "file:.claude/settings.json",
+    "file:.claude/scripts/dispatch_workflow.py"
+  ]
+}
