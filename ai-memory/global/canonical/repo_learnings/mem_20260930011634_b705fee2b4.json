@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Validation changes commonly include explicit trust-boundary and process-isolation safeguards.",
   "timestamps": {
     "created_at": "2026-09-30T01:16:34Z",
