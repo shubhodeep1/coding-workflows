@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T11:08:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A check that executes untrusted code (the PR's hooks) next to trusted code (the base hooks) must finish every trusted run before the first untrusted one: the untrusted code runs as the same user and can rewrite the trusted copies it can reach.",
+  "phase": "implement_plan",
+  "pr_number": 5616,
+  "record_id": "lesson-implement-plan-b48f8d89da31f65a390102c8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:scripts/guard_differential.py"
+  ]
+}
