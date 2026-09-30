@@ -1319,13 +1319,17 @@ def _cmd_authorize_target(args: argparse.Namespace) -> int:
 
 
 def _cmd_final_merge_resume(args: argparse.Namespace) -> int:
-	"""Print the ``final_merge_resume`` verdict; exit 2 on unreadable input."""
+	"""Print the ``final_merge_resume`` verdict; exit 2 on unreadable input or a bad ID."""
 	try:
 		issue = _read_json(args.issue_json)
 		comments = _read_json(args.comments_json)
-		reclarify_comment_id = _cli_reclarify_comment_id(args.reclarify_comment_id)
 	except (OSError, ValueError) as exc:
 		print(f"unreadable input: {exc}", file=sys.stderr)
+		return 2
+	try:
+		reclarify_comment_id = _cli_reclarify_comment_id(args.reclarify_comment_id)
+	except ValueError as exc:
+		print(str(exc), file=sys.stderr)
 		return 2
 	if not isinstance(comments, list):
 		print("comments JSON is not an array", file=sys.stderr)

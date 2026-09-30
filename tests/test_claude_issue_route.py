@@ -2108,7 +2108,10 @@ def test_cli_final_merge_resume(tmp_path):
 		assert out.returncode == 0, out.stderr
 		assert json.loads(out.stdout)["reason"] == "no_reclarify_comment"
 	for bad in ("abc", "-5", "0", "5.0", "٣"):
-		assert _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments), "--reclarify-comment-id", bad).returncode == 2
+		out = _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments), "--reclarify-comment-id", bad)
+		assert out.returncode == 2
+		# A bad ID is reported as such, not as unreadable input files.
+		assert out.stderr.strip() == f"invalid --reclarify-comment-id: {bad!r}"
 	issue.write_text(json.dumps(_target(state="closed")))
 	out = _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments))
 	assert out.returncode == 0
@@ -2116,7 +2119,9 @@ def test_cli_final_merge_resume(tmp_path):
 	comments.write_text(json.dumps({"not": "a list"}))
 	assert _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments)).returncode == 2
 	comments.write_text("not json")
-	assert _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments)).returncode == 2
+	out = _cli("final-merge-resume", "--issue-json", str(issue), "--comments-json", str(comments))
+	assert out.returncode == 2
+	assert out.stderr.startswith("unreadable input: ")
 
 
 def test_intake_queues_a_closed_final_merge_resume(stubs):
