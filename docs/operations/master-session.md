@@ -127,8 +127,8 @@ Each duty below is done by hand today and moves into the automation through the 
 | Master duty today | Automated by |
 |---|---|
 | Held merges with every finding rejected (Q46) | #4648 (GPT judge) |
-| Twin syncs of commands and scripts (Q40) | #4785 (Actions sync PR); #4948 in the meantime |
-| Hook and `settings.json` syncs (approval windows) | #4785 under Q3: A; guard-loosening changes stay with the operator |
+| Twin syncs of commands (Q40) | #4785 (Actions sync PR); #4948 in the meantime |
+| Hook, script, and `settings.json` syncs (approval windows) | #4785 under Q3: A (scripts since #5609); guard-loosening changes stay with the operator |
 | Closing duplicate prompt reports (Q58) | #4867 |
 | Numbered titles and archiving finished sessions (Q60/Q61) | #4886, #4887 |
 | Restarting dead checkers (Q63) | #4910 |
