@@ -767,6 +767,66 @@ def test_cli_a_deleted_settings_file_with_only_env_fails(settings_repo: Path) ->
 	assert 'reason=env shape="settings:.claude/settings.json:env"' in line, line
 
 
+def _commit_unparseable_base(repo: Path, text: str) -> None:
+	_write_settings(repo, text, paths=(".claude/settings.json",))
+	_git(repo, "commit", "-q", "-am", "unparseable base")
+
+
+@pytest.mark.parametrize(
+	"base_text",
+	["{not json", "[]", json.dumps(_settings(timeout=float("nan")))],
+	ids=["not-json", "non-object", "nan"],
+)
+@pytest.mark.parametrize(
+	"head",
+	[_without_guard(_settings()), _settings()],
+	ids=["guard-dropped", "guard-kept"],
+)
+def test_cli_an_unparseable_base_fails_closed(settings_repo: Path, base_text: str, head) -> None:
+	"""A committed base that does not parse has no wiring to compare, so a
+	head that repairs it cannot be verified to keep any guard running."""
+	_commit_unparseable_base(settings_repo, base_text)
+	_write_settings(settings_repo, head, paths=(".claude/settings.json",))
+	proc = _cli(settings_repo, "--base-ref", "HEAD")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert (
+		"settings=.claude/settings.json event=- matcher=null hook=- reason=base-unparseable "
+		'shape="settings:.claude/settings.json:base-unparseable"'
+	) in line, line
+
+
+def test_cli_an_unparseable_base_fails_between_committed_refs(settings_repo: Path) -> None:
+	_commit_unparseable_base(settings_repo, "{not json")
+	_write_settings(settings_repo, _without_guard(_settings()), paths=(".claude/settings.json",))
+	_git(settings_repo, "commit", "-q", "-am", "repair without the guard")
+	proc = _cli(settings_repo, "--base-ref", "HEAD~1", "--head-ref", "HEAD")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert "reason=base-unparseable " in line, line
+
+
+def test_cli_an_unparseable_head_is_reported_before_an_unparseable_base(settings_repo: Path) -> None:
+	_commit_unparseable_base(settings_repo, "{not json")
+	_write_settings(settings_repo, "[]", paths=(".claude/settings.json",))
+	proc = _cli(settings_repo, "--base-ref", "HEAD")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert 'reason=unparseable shape="settings:.claude/settings.json:unparseable"' in line, line
+
+
+def test_cli_the_pr_body_can_list_an_unparseable_base_repair(settings_repo: Path, tmp_path: Path) -> None:
+	_commit_unparseable_base(settings_repo, "{not json")
+	_write_settings(settings_repo, _settings(), paths=(".claude/settings.json",))
+	body = tmp_path / "body.md"
+	body.write_text("## Intended loosening:\n- `settings:.claude/settings.json:base-unparseable`\n", encoding="utf-8")
+	proc = _cli(settings_repo, "--base-ref", "HEAD", "--pr-body-file", str(body))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "GUARD_DIFFERENTIAL intended_wiring_change settings=.claude/settings.json" in proc.stdout
+	assert "reason=base-unparseable" in proc.stdout
+	assert not _wiring_lines(proc)
+
+
 def _permissions_only(settings: dict) -> dict:
 	settings["permissions"]["allow"].append("Bash(git log)")
 	return settings

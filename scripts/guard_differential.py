@@ -776,13 +776,19 @@ def compare_settings_wiring(
 ) -> list[WiringResult]:
 	"""Fail closed on every base guard wiring that the head no longer verifiably keeps."""
 	results: list[WiringResult] = []
-	base_settings = parse_settings(read_settings_text(repo_root, base_ref, settings_path))
+	base_text = read_settings_text(repo_root, base_ref, settings_path)
+	base_settings = parse_settings(base_text)
 	head_text = read_settings_text(repo_root, head_ref, settings_path)
 	head_settings = parse_settings(head_text)
 	if head_text is not None and head_settings is None:
 		# Claude Code drops every hook in a settings file it cannot load.
 		identity = f"settings:{settings_path}:unparseable"
 		return [_wiring_result(settings_path, "", None, "", "unparseable", identity, listed)]
+	if base_text is not None and base_settings is None:
+		# A committed base that does not parse leaves no wiring to compare
+		# against, so the head cannot be verified to keep any guard running.
+		identity = f"settings:{settings_path}:base-unparseable"
+		return [_wiring_result(settings_path, "", None, "", "base-unparseable", identity, listed)]
 	if (head_settings or {}).get("disableAllHooks") and not (base_settings or {}).get("disableAllHooks"):
 		identity = f"settings:{settings_path}:disableAllHooks"
 		results.append(_wiring_result(settings_path, "", None, "", "disableAllHooks", identity, listed))

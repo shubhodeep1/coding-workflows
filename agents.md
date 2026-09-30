@@ -1237,10 +1237,13 @@ side so that class cannot land unnoticed.
   shadowing `PATH`), and a deleted, unparseable, or non-object settings file
   (parsed as strict JSON like Claude Code does: `NaN` or `Infinity`, or
   content that is not UTF-8, is unparseable; a working-tree read error exits
-  2 with `status=error`). The identity of a wiring failure is
-  `settings:<file>:<event>:<matcher>:<hook>`
+  2 with `status=error`). A committed base settings file that is
+  unparseable or non-object fails too (`reason=base-unparseable`): with no
+  base wiring to compare, the head cannot be verified to keep any guard, so
+  the PR that repairs it lists the identity. The identity of a wiring
+  failure is `settings:<file>:<event>:<matcher>:<hook>`
   (`settings:<file>:disableAllHooks`, `settings:<file>:env`,
-  `settings:<file>:unparseable`). New
+  `settings:<file>:unparseable`, `settings:<file>:base-unparseable`). New
   non-guard hooks and `permissions.*` rules are not checked here.
 - **`Intended loosening:`** A PR that means to loosen lists each shape
   verbatim (the corpus line, placeholders included) under a heading or bold
@@ -1269,7 +1272,7 @@ side so that class cannot land unnoticed.
   head=… shape=…` per failing shape (as `::error::`), `GUARD_DIFFERENTIAL
   intended_loosening …` per listed shape, `GUARD_DIFFERENTIAL missing_corpus
   path=…`, `GUARD_DIFFERENTIAL wiring_regression settings=… event=…
-  matcher=… hook=… reason=<removed|command|matcher|timeout|keys|disableAllHooks|env|unparseable>
+  matcher=… hook=… reason=<removed|command|matcher|timeout|keys|disableAllHooks|env|unparseable|base-unparseable>
   shape=…` per wiring failure (as `::error::`; `reason` joins several with
   commas), `GUARD_DIFFERENTIAL intended_wiring_change …` per listed one, and a
   `GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> …` summary ending in
