@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T09:09:48Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a plan says \"every comment that adds label X gets a marker\", grep every `--add-label` / `labels[]=` writer of X across `.github/workflows/` and `scripts/` rather than trusting the plan's Context list; the Context list for #5309 missed `clarify.yml`'s own blocked comment.",
+  "phase": "implement_plan",
+  "pr_number": 5485,
+  "record_id": "lesson-implement-plan-2fc2bdbd456444a214d35b4f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5309-reclarify-fail-closed",
+    "file:.github/workflows/clarify.yml"
+  ]
+}
