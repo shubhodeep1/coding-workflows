@@ -109,7 +109,7 @@ def test_fixer_reports_archive_truthfully(section_d):
 def test_implement_plan_claude_checks_before_archiving_the_checker(prefix):
 	text = _flat(_command(prefix, "implement-plan-claude.md"))
 	check = _section(text, "### Archiving the project checker", "## Helpers")
-	assert "Call `get_session` on the checker id and archive it only when its title is exactly `implement-plan <slug> — checker`" in check
+	assert "Call `get_session` on the checker id and archive it only when its title contains `implement-plan <slug> — checker` (with or without a numbers prefix; [Session titles](#session-titles))" in check
 	assert OWN_ID in check
 	assert f'Say "archived" {ARCHIVED_ON_SUCCESS}' in check
 	# Every place that archives the project checker points at the check.
