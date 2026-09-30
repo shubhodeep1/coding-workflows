@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T01:57:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A resumable page scan that re-reads its cursor page needs at least two reads per run, or a full cursor page consumes the whole budget and the scan never advances.",
+  "phase": "implement_plan",
+  "pr_number": 5177,
+  "record_id": "lesson-implement-plan-73f7b7c7c67e8782695e0ee3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5136-env-requeue-comment-checkpoint",
+    "file:scripts/claude_issue_route.py"
+  ]
+}

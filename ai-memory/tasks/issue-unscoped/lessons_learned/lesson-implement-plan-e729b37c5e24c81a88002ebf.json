@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T01:57:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A resumable scan that steps back to find its cursor must save each step back in the checkpoint, or a deletion larger than one run's budget makes every run repeat the same reads and the scan never finishes.",
+  "phase": "implement_plan",
+  "pr_number": 5177,
+  "record_id": "lesson-implement-plan-e729b37c5e24c81a88002ebf",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5136-env-requeue-comment-checkpoint",
+    "file:scripts/claude_issue_route.py"
+  ]
+}
