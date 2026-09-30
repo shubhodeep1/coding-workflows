@@ -7,14 +7,14 @@
 - Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: phase 1 PR: twin sync
+- Waiting on: PR #5477: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
 - Last note: phase 1 implemented twin-first and verified; phase PR held for the `[claude-twin-sync]` copy of five `.claude/` files (twin-sync blocker on #5375).
 
 ## Phases
-1. [ ] Phase 1 — pin the internal-review.yml dispatch to the default branch   — PR open (held: twin sync); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — pin the internal-review.yml dispatch to the default branch   — PR #5477 open (held: twin sync); review rounds: 0; interventions: 0
    - protected paths: .claude/settings.json, .claude/scripts/dispatch_workflow.py, .claude/hooks/gh_api_write_guard.py, .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md
    - [x] twin allow list drops `Bash(gh workflow run internal-review.yml *)` (workflow-templates/.claude/settings.json; tests/test_dispatch_workflow.py::test_allowlist_matches_the_gh_workflow_run_allow_rules)
    - [x] twin helper pins internal-review.yml to the REST default branch, refuses another `--ref`, accepts only a numeric `pr_number` (workflow-templates/.claude/scripts/dispatch_workflow.py:88, :174, :198; tests/test_dispatch_workflow.py:291-363)
