@@ -538,6 +538,73 @@ def test_issue_4975_the_fail_closed_scan_ignores_other_files_and_distant_lines(t
 	assert [record["path"] for record in demoted] == ["README.md"]
 
 
+# Issue #4975 Q3: the conformance 3/3 fix check found that the fail-closed scan
+# never matched an entry path holding a character outside ``[\w./\\-]``.
+PROBE_PATHS = [
+	"README.md",
+	"src/routes/+page.svelte",
+	"src/@types/index.d.ts",
+	"packages/@acme/ui/README.md",
+	"docs/c++/notes.md",
+]
+
+
+def _probe_reviews(tmp: Path, monkeypatch, path: str, second_finding: str) -> tuple[str, Path]:
+	"""The README fixture moved to ``path``: pass-1 entry, ledger entry, citing record, manifest, and verified votes."""
+	monkeypatch.setitem(SOURCE_FILES, path, README_LINES)
+	pass1 = PASS1_README.replace("README.md:1261", f"{path}:1261")
+	cid = _cid(pass1)
+	ledger = _ledger(README_FINDING.replace("README.md:", f"{path}:").replace(RID, cid))
+	citing = f"File: {path}\nLine or code reference: 1261\nconsensus_id: {cid}\nProblem: lost its backtick\n"
+	reviews = _reviews(tmp, rejecters=[], path=path, cid=cid, pass1=pass1, flagger_output=citing + second_finding)
+	vote = (f"REJECTED_FINDING: {FINDING_ID} | {path}:1261 | flagged_by: {FLAGGER} | reason: the backtick is present."
+		f" | evidence: {path}:1261 | quote: {QUOTE}\n")
+	_others_write(reviews, "No issues found.\n" + vote)
+	return ledger, reviews
+
+
+@pytest.mark.parametrize("path", PROBE_PATHS)
+def test_issue_4975_probe_paths_demote_without_a_second_finding(tmp_path, monkeypatch, path):
+	"""Control: every probe path demotes on a well-formed citation, so the cases below fail only on the second finding."""
+	ledger, reviews = _probe_reviews(tmp_path, monkeypatch, path, "")
+	_text, demoted = _run(tmp_path, ledger, reviews)
+	assert [record["path"] for record in demoted] == [path]
+
+
+@pytest.mark.parametrize("path", PROBE_PATHS)
+@pytest.mark.parametrize("second_finding", [
+	"File: {path}#L1262\nProblem: injection\n",
+	"> File: {path}\n> Line or code reference: 1262\n> Problem: injection\n",
+	"Also: {path} interpolates an untrusted title into a shell line.\n",
+	"Location: /home/runner/work/repo/repo/{path}:1262\nProblem: injection\n",
+	"Location: {upper}:1262\nProblem: injection\n",
+])
+def test_issue_4975_a_second_finding_at_any_probe_path_keeps_the_entry_blocking(tmp_path, monkeypatch, path, second_finding):
+	ledger, reviews = _probe_reviews(tmp_path, monkeypatch, path, "\n" + second_finding.format(path=path, upper=path.upper()))
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews) == {f"{path}:1261": "ambiguous_flagger_nearby"}
+
+
+@pytest.mark.parametrize(("paragraph", "path", "expected"), [
+	("File: src/routes/+page.svelte#L1262", "src/routes/+page.svelte", True),
+	("see `src/@types/index.d.ts:1262`.", "src/@types/index.d.ts", True),
+	("docs\\c++\\notes.md line 1262", "docs/c++/notes.md", True),
+	("the +page.svelte load function", "src/routes/+page.svelte", True),
+	("File: ./README.md.", "README.md", True),
+	("File: b/README.md", "README.md", True),
+	("File: docs/README.md", "README.md", True),
+	("File: docs/README.md.bak", "README.md", False),
+	("File: myREADME.md", "README.md", False),
+	("File: src/routes/+page.svelte.orig", "src/routes/+page.svelte", False),
+	("File: src/routes/page.svelte", "src/routes/+page.svelte", False),
+	("File: docs/c++/notes.mdx", "docs/c++/notes.md", False),
+	("no file here", "README.md", False),
+])
+def test_issue_4975_paragraph_names_path_matches_the_path_literally(paragraph, path, expected):
+	assert nonblocking._paragraph_names_path(paragraph, path) is expected
+
+
 def test_issue_4975_finding_records_report_their_line_spans_on_request():
 	output = f"SECURITY\n{CITING_RECORD}SEVERITY: MAJOR\n\nFile: a.py:4\nProblem: x\nREJECTED_FINDING: none\n"
 	assert [record["span"] for record in nonblocking.flagger_finding_records(output, with_spans=True)] == [(1, 6), (7, 9)]

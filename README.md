@@ -1519,7 +1519,8 @@ included for `README.md`, and
 flagging reviewer's raw output names that file anywhere outside the cited
 finding with a line number within 3 lines or with no line number at all
 (any spelling, such as `README.md#L1262`, a quoted, fenced, or table-row
-finding, or prose), or its `consensus_id` is duplicated, so a rejection of one finding can never demote
+finding, or prose, and any path, `src/routes/+page.svelte` and `@scope`
+directories included), or its `consensus_id` is duplicated, so a rejection of one finding can never demote
 a distinct one next to it. A round left with only non-blocking
 entries still posts the ledger and then takes the zero-findings auto-merge
 path (fresh ready checks still required); a mixed round hands off the rest,
