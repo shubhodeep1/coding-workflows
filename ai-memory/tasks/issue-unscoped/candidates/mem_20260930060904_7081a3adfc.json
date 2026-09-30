@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_phase_skip_gate_telemetry_contract.py:test_escalation_comments_end_with_automation_markers, first _assert_before call for clarify_blocked_block | severity=critical | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The assertion `_assert_before(clarify_blocked_block, \"--add-label 'ai:blocked'\", '\"<!-- ai:clarify-blocked:v1 -->\"')` expects the `--add-label 'ai:blocked'` string before the marker, but the marker is written before the `gh_retry gh api` call containing that label.\n  WHY: The test assertion would fail because the string ordering in the extracted step block is: marker (inside the write block), then file redirect, then `gh_retry gh api` call with `--add-label`. The PR description states the test passes, which suggests either the test was not actually run, or there is a `--add-label` occurrence inside the write block that is not visible in the provided diff context.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_phase_skip_gate_telemetry_contract.py:test_escalation_comments_end_with_automation_markers, first _assert_before call for clarify_blocked_block | severity=BLOCKER | confidence=3\n  PROBLEM: The assertion `_assert_before(clarify_blocked_block, \"--add-label 'ai:blocked'\", '\"<!-- ai:clarify-blocked:v1 -->\"')` checks that the string `--add-label 'ai:blocked'` appears before the marker string in the step block. However, based on the clarify.yml diff, the marker is added inside the block that writes to `${BLOCKED_COMMENT_FILE}` (before the `} > \"${BLOCKED_COMMENT_FILE}\"` redirect), while the `gh_retry gh api` call containing `--add-label 'ai:blocked'` is after that block closes. This means the marker appears before the `--add-label` in the step, not after.\n  WHY: The test assertion would fail because the string ordering in the extracted step block is: marker (inside the write block), then file redirect, then `gh_retry gh api` call with `--add-label`. The test expects the opposite order. The PR description states the test passes, which suggests either the test was not actually run, or there is a `--add-label` occurrence inside the write block that is not visible in the provided diff context.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d678e5da3e32ff00104c3a16fd3f758cd8bd341b5f19421a6bd163b522fee79c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5485,
+    "run_id": "36674064325",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36674064325",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930060904_7081a3adfc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5485,
+    "run_id": "36674064325"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T06:09:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
