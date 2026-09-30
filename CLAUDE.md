@@ -1364,7 +1364,7 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   | Helper | Does | API calls |
   |---|---|---|
   | `.claude/scripts/dispatch_workflow.py` | dispatches one of the six workflows allowed as `gh workflow run <file> *` and prints the id of the run it started (never the previous run) | 1 read, 1 POST, 1 read per 5 s poll (90 s max) |
-  | `.claude/scripts/edit_comment.py` | edits one issue or PR comment in place from a JSON list of exact-once `old`/`new` pairs, or replaces its body; reads either file only from the session scratchpad and rejects any other path before the read (#5452) | 1 read, 1 PATCH |
+  | `.claude/scripts/edit_comment.py` | edits one issue or PR comment in place from a JSON list of exact-once `old`/`new` pairs, or replaces its body; reads either file only from the calling session's own scratchpad (bound to `CLAUDE_CODE_SESSION_ID` and the caller's uid) and rejects any other path, or every path when that identity cannot be verified, before the read (#5452, #5700) | 1 read, 1 PATCH |
   | `.claude/scripts/permission_prompts.py` | reports and files the prompts below | 1 read per 100 labelled issues, 1 POST per new pattern |
 
 - **Prompt reports.** `.claude/hooks/permission_prompt_logger.py`, wired on
