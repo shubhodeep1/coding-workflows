@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T05:29:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A new script under scripts/ needs its docs/INVENTORY.md entry in the same PR; tests/inventory_parity.py runs only in ci.yml, which stacked project PRs never trigger, so run it locally.",
+  "phase": "implement_plan",
+  "pr_number": 5478,
+  "record_id": "lesson-implement-plan-915e5094918f754ef8152a78",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5325-fail-warned-guard-loosening",
+    "file:docs/INVENTORY.md",
+    "file:scripts/guard_differential.py"
+  ]
+}
