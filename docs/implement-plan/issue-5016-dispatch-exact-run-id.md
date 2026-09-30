@@ -4,14 +4,14 @@
 - Source issue: shubhodeep1/coding-workflows#5016
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5016-dispatch-exact-run-id   Final PR: #5051 draft
-- Status: BLOCKED
-- Stage: conformance 1/3 — review round
+- Status: IN_PROGRESS
+- Stage: conformance 2/3
 - Activation: not started
-- Waiting on: PR #5625: twin sync
+- Waiting on: conformance fix PR 2 (branch `claude/implement-plan-issue-5016-dispatch-exact-run-id-conformance-fix-2`)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01RnAvxLYqkEtpVTb2kSW6eL (kept for reuse)   safety net none   hand-back none (not armed while the twin sync holds the PR)
+- Check-in: checker session_01RnAvxLYqkEtpVTb2kSW6eL (reused)   safety net and hand-back: armed by the conformance 2/3 stage (session_01G1zjyXohhCAhunA3Jwmjoj), ids in its report
 - Last updated: 2026-09-30
-- Last note: conformance 1/3 — review round 2 on head 3bd212a (session_01B1uq5ppzcpYDRRkAoizNiS): the step 9 read-result text asked the stage to match a candidate still in progress, whose log is not served yet, so a run still going could be treated as a mismatch and re-dispatched; fixed twin-first (an in-progress candidate re-arms the wait, re-dispatch only once every recorded run completed without a match). The checker-side finding is rejected per AD-7. Held for the `[claude-twin-sync]` copy.
+- Last note: conformance 2/3 (session_01G1zjyXohhCAhunA3Jwmjoj): PR #5625 merged 2026-09-30T16:23:17Z after the twin sync; re-audit CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED concern: the changelog fragment's API-call row omitted the default-branch read); fixed in conformance fix PR 2, no `.claude/` path touched.
 
 ## Phases
 1. [x] Phase 1 — exact run id from the dispatch response, no guessing on fallback, target-ref check in steps 9–10   — PR #5059 merged 2026-09-30 (`dcb72a9`, by the operator under Q46: A); review rounds: 2; interventions: 0
@@ -26,7 +26,8 @@
    - Done: `tests/test_dispatch_workflow.py`, `tests/test_permission_prompts.py`, `tests/test_update_workflows_guardrails.py` pass; `ruff check` clean on changed Python.
 
 ## Conformance
-- Run 1 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 2 EVIDENCE-BASED concerns, no blocker) — fix PR #5625 (pre-security); fix PR review rounds: 2
+- Run 1 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 2 EVIDENCE-BASED concerns, no blocker) — fix PR #5625 (pre-security); fix PR review rounds: 2; merged 2026-09-30 after the `[claude-twin-sync]` copy
+- Run 2 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED concern, no blocker) — fix PR conformance-fix-2 (pre-security)
 
 ## Security pass
 
@@ -52,6 +53,7 @@
 - [source:intervention] An instruction that identifies an object from data served only after it completes (a run's log) must say what to do with the objects still in progress, or the "none matched" path fires early (files: .claude/commands/implement-plan-claude.md)
 
 ## Notes
+- Conformance 2/3 (2026-09-30, session_01G1zjyXohhCAhunA3Jwmjoj): project branch already up to date with `main` (`36aab34`); zombie checkers archived: 0. Twins of `dispatch_workflow.py` and `implement-plan-claude.md` are byte-identical on the project branch. Checks: 239 passed / 1 skipped across `test_dispatch_workflow.py`, `test_permission_prompts.py`, `test_update_workflows_guardrails.py`, `test_implement_plan_claude_command.py`, `test_implement_issue_claude_command.py`, `test_check_in_session_targeting.py`, `test_ingest_implement_plan_lessons.py`, `test_changelog_fragment_contract.py`, `test_claude_md_section_numbers.py`; `ruff check` clean. `AUDIT_TARGET_REF_INPUT` (`security-audit.yml:138`) and `VALIDATE_TARGET_REF` (`validate.yml:180`) exist as the command's steps 9–10 name them. Finding fixed: `changelog.d/5016-dispatch-exact-run-id.md:10` omitted the default-branch read (`dispatch_workflow.py:212`), the sibling of the CLAUDE.md row fixed in #5625. Noted, not a defect: a dispatch with no PR in flight carries its unverified candidates to the read-result stage only through the `— resume.` block's `Waiting on was:` line (the log lags, and step 2 makes the block win), so the dispatching stage must write the full `run <id> (unverified; candidates …)` text there.
 - Conformance fix PR #5625 review round 1 (2026-09-30, head c979e85, ledger e82a94ff…98bc): finding `CLAUDE.md:1361` (call count omits the default-branch read and the pre-dispatch run-list read) fixed; finding `.claude/commands/implement-plan-claude.md:71` (checker waits only on the first ambiguous candidate) rejected per AD-7. The fix touches no `.claude/` path, so no twin sync is needed.
 - Conformance fix PR #5625 review round 2 (2026-09-30, head 3bd212a, ledger 0f4fa7e1…d64b): finding `implement-plan-claude.md:71` (read-result stage cannot match an in-progress candidate, may re-dispatch while this project's run is still going; 3 reviewers) fixed twin-first in `workflow-templates/.claude/commands/implement-plan-claude.md` (sha256 `2c1707a0db2dc5ec69a51411473eac622d6546555debf6030a379cad50b6a053`); finding `check_in_status.py:664-670, 772-778` (checker should pivot to other candidates) rejected: the checker never reads a target ref, the read-result stage does, and with the fix it re-arms on each remaining candidate (AD-7). Project branch synced with `main` first (clean merge `a698fd4`, 381 passed / 1 skipped). Scratch copy with the twin in `.claude/` → 138 passed / 1 skipped (command, helper, guardrail, permission suites) and 235 passed (the other suites that read the command).
 - Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29): answered Q1: A by the master session on issue #5016 (comment 5884723402).
