@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T14:45:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A support-checkout fallback in a poller-side script must be checked against the workflow's staging step: `orchestrate_poll.yml` deletes `.codex-workflow-src-main` before the poller runs, so only `.codex-workflow-src` (or a staged copy) is reachable at runtime.",
+  "phase": "implement_plan",
+  "pr_number": 5589,
+  "record_id": "lesson-implement-plan-2e194b5d16ae354cd452e08b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5564-hold-gate-ready-labels-and-poller-merge",
+    "file:scripts/orchestrate_poll_process.sh",
+    "file:.github/workflows/orchestrate_poll.yml"
+  ]
+}

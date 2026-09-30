@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-30T14:45:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A gate on merge enablement must also guard every path that sets merge-authorization labels without merging (auto-merge disabled, e2e opt-outs), because the orchestrator poller merges the PR of any ai:ready-to-merge issue.",
+  "phase": "implement_plan",
+  "pr_number": 5589,
+  "record_id": "lesson-implement-plan-2b61ca35d55b171624c64e37",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5564-hold-gate-ready-labels-and-poller-merge",
+    "file:scripts/review_enable_auto_merge.sh",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}
