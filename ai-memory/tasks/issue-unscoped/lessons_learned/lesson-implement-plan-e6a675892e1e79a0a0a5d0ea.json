@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T02:58:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Guidance that tells an unattended session to do something \"in a separate call\" must name the exact allowlisted command to run alone (for example `git status -sb`), or reviewers flag it and the session may pick a piped form no allow rule matches.",
+  "phase": "implement_plan",
+  "pr_number": 5312,
+  "record_id": "lesson-implement-plan-e6a675892e1e79a0a0a5d0ea",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5293-run-git-sync-unchained",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md",
+    "file:workflow-templates/.claude/commands/fix-claude-pr.md"
+  ]
+}
