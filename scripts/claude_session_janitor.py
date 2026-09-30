@@ -35,9 +35,11 @@ missing or not the expected JSON shape.
 Only these titles are eligible, each with or without the #4886 prefix
 `#<issue> · `, `#<issue> · PR #<pr> — ` or `PR #<pr> — `:
 
-  * fixer / hold  `PR [<owner>/<repo>]#<n> — <fix|fixed|on hold|merged|closed|no fix|nothing to fix>…`
+  * fixer / hold  `PR [<owner>/<repo>]#<n> — <fix|fixed|on hold|merged|closed|no fix|nothing to fix>…`,
+                  `PR#<n> · fix-claude-pr…`
   * issue-start   `Issue #<n> — implement`, `issue <owner>/<repo>#<n> — implement`,
-                  `implement-issue-claude — #<n>…`
+                  `implement-issue-claude — #<n>…`, `#<n> · [PR #<pr> — ]implement-issue-claude…`
+                  (the last form takes the issue number from its `#<n> · ` prefix)
   * report        `PR #<n> <merged|closed> — <no action needed|action needed|decision needed>…`
 
 Every other title (checkers, stage sessions, the pickup, `/deploy-activate`,
@@ -91,9 +93,14 @@ REPORT_TITLE_PATTERN = re.compile(
 FIXER_TITLE_PATTERN = re.compile(
 	rf"^PR (?:(?P<repo>{_REPO}))?#(?P<pr>\d+) — (?:fix|fixed|on hold|merged|closed|no fix|nothing to fix)(?![\w-])"
 )
+# The pickup has been seen naming the sessions it starts after the command
+# rather than with the documented titles: `PR#<n> · fix-claude-pr` and
+# `#<n> · implement-issue-claude`, where the prefix carries the only number.
+COMPACT_FIXER_TITLE_PATTERN = re.compile(r"^PR#(?P<pr>\d+) · fix-claude-pr(?![\w-])")
 ISSUE_START_TITLE_PATTERNS = (
 	re.compile(rf"^[Ii]ssue (?:(?P<repo>{_REPO}))?#(?P<issue>\d+) — implement(?![\w-])"),
 	re.compile(r"^implement-issue-claude — #(?P<issue>\d+)(?![\w-])"),
+	re.compile(r"^#(?P<issue>\d+) · (?:PR #\d+ — )?implement-issue-claude(?![\w-])"),
 )
 STAGE_TITLE_PATTERN = re.compile(r"^implement-plan issue-(?P<issue>\d+)-\S* — (?P<stage>.+)$")
 NON_SUPERSEDING_STAGE_PATTERN = re.compile(r"^(?:checker|waiting:|deploy-activate)")
@@ -148,6 +155,9 @@ def classify_title(title: str) -> tuple[str | None, dict]:
 		match = FIXER_TITLE_PATTERN.match(candidate)
 		if match:
 			return "fixer", {"repo": match.group("repo"), "pr": int(match.group("pr"))}
+		match = COMPACT_FIXER_TITLE_PATTERN.match(candidate)
+		if match:
+			return "fixer", {"repo": None, "pr": int(match.group("pr"))}
 		for pattern in ISSUE_START_TITLE_PATTERNS:
 			match = pattern.match(candidate)
 			if match:
