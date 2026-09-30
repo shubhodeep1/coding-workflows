@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T09:10:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A parser that reads machine markers from a body which also quotes untrusted text (a fenced command example) must strip the quoted blocks first, or text that merely mentions a marker is taken as the marker.",
+  "phase": "implement_plan",
+  "pr_number": 5403,
+  "record_id": "lesson-implement-plan-e360d288881de0fa85c55eba",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}

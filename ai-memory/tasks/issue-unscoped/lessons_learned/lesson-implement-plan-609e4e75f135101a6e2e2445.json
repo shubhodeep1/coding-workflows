@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T09:10:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Everything the filer writes outside the fenced example must be kept from carrying marker text, not only the example: a free-text field such as the prompt reason needs its own guard (one line, `<!--` escaped), and a fence must be longer than any backtick run it wraps.",
+  "phase": "implement_plan",
+  "pr_number": 5403,
+  "record_id": "lesson-implement-plan-609e4e75f135101a6e2e2445",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4867-close-permission-prompt-duplicates",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}
