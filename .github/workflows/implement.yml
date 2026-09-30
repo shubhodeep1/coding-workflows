@@ -5343,12 +5343,16 @@ jobs:
               echo "::error::Failed to apply the ai:blocked latch to issue ${ISSUE_NUMBER}; refusing to report terminalization."
               exit 1
             fi
-            BLOCKED_COMMENT="$(printf '%s\n\n%s\n\n%s\n%s\n\n%s' \
+            # The last line is an automation marker, outside the model's
+            # blocked reason (issue #5309): clarify never treats a
+            # /reclarify line here as a command.
+            BLOCKED_COMMENT="$(printf '%s\n\n%s\n\n%s\n%s\n\n%s\n\n%s' \
               "Implementation blocked: human input required." \
               "Reason: ${BLOCKED_REASON}" \
               "The implementer returned a deliberate BLOCKED verdict, so autonomous stall recovery and re-issuance are paused for this issue (they would only re-run the same blocked implementation)." \
               "To resume once the blocker is cleared: comment /answer to re-plan, or remove ai:blocked, add ai:awaiting-approval and comment /approved to re-run the approved plan." \
-              "Run: ${RUN_URL}")"
+              "Run: ${RUN_URL}" \
+              "<!-- ai:implement-blocked:v1 -->")"
             gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
               -f body="${BLOCKED_COMMENT}"
             echo "IMPLEMENT_BLOCKED_TERMINALIZED issue=${ISSUE_NUMBER} label=ai:blocked"

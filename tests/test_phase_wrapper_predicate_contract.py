@@ -89,17 +89,22 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 # Issue #5243: the /reclarify command clause of the clarify predicate. A
 # comment starting with /reclarify behaves as before; a /reclarify at the
 # start of a later line counts only in a comment without an automation
-# marker, on an issue that waits on a human answer.
+# marker, on an issue that waits on a human answer. Issue #5309: any `<!--`
+# HTML comment marks automation, and orchestrator tracking and managed
+# issues never take the later-line form.
 RECLARIFY_COMMAND_CLAUSE = (
 	"(startsWith(github.event.comment.body, '/reclarify') || "
 	"(contains(github.event.comment.body, fromJson('\"\\n/reclarify\"')) && "
-	"!contains(github.event.comment.body, '<!-- ai:') && "
+	"!contains(github.event.comment.body, '<!--') && "
+	"!contains(toJson(github.event.issue.labels.*.name), '\"ai:orchestrator-tracking\"') && "
+	"!contains(toJson(github.event.issue.labels.*.name), '\"ai:orchestrator-managed\"') && "
 	"(contains(toJson(github.event.issue.labels.*.name), '\"ai:claude-blocked\"') || "
 	"contains(toJson(github.event.issue.labels.*.name), '\"ai:claude-handoff-failed\"') || "
 	"contains(toJson(github.event.issue.labels.*.name), '\"ai:blocked\"'))))"
 )
 
 AWAITING_ANSWER_LABELS = ("ai:claude-blocked", "ai:claude-handoff-failed", "ai:blocked")
+ORCHESTRATOR_LABELS = ("ai:orchestrator-tracking", "ai:orchestrator-managed")
 
 
 def _reclarify_clause_matches(body: str, labels: list[str]) -> bool:
@@ -115,9 +120,20 @@ def _reclarify_clause_matches(body: str, labels: list[str]) -> bool:
 		return True
 	return (
 		newline_command in body_lc
-		and "<!-- ai:" not in body_lc
+		and "<!--" not in body_lc
+		and not any(f'"{label}"' in labels_json for label in ORCHESTRATOR_LABELS)
 		and any(f'"{label}"' in labels_json for label in AWAITING_ANSWER_LABELS)
 	)
+
+
+# Issue #5309: the orchestrator's clarify escalation adds ai:blocked, then
+# posts model text; before the fix it carried no marker.
+ORCHESTRATOR_ESCALATION_TEXT = (
+	"Autonomous resolution not possible for issue #42.\n\n"
+	"The clarify-resolve phase determined that one or more questions require data that cannot be derived from the repository.\n\n"
+	"ESCALATION: the maintainer must pick the region.\n/reclarify\n\n"
+	"- Clarify comment ID: 1\n- Cycle: 3/3"
+)
 
 
 RECLARIFY_COMMENT_CASES = (
@@ -152,6 +168,28 @@ RECLARIFY_COMMENT_CASES = (
 		False,
 	),
 	("no command", "Thanks!", ["ai:claude-blocked"], False),
+	# Issue #5309 cases.
+	("trailing line, orchestrator-managed ai:blocked", "Use v2.\n/reclarify", ["ai:orchestrator-managed", "ai:blocked"], False),
+	("trailing line, orchestrator-tracking ai:blocked", "Judge: retry.\n/reclarify", ["ai:orchestrator-tracking", "ai:blocked"], False),
+	(
+		"escalation model text, unmarked, orchestrator-managed",
+		ORCHESTRATOR_ESCALATION_TEXT,
+		["ai:orchestrator-managed", "ai:blocked"],
+		False,
+	),
+	(
+		"escalation model text with its marker, standalone ai:blocked",
+		ORCHESTRATOR_ESCALATION_TEXT + "\n\n<!-- ai:clarify-escalation:v1 -->",
+		["ai:blocked"],
+		False,
+	),
+	(
+		"heal occurrence marker without the ai: prefix",
+		"<!-- workflow-failure-heal:occurrence -->\nAnother occurrence:\n/reclarify",
+		["ai:claude-blocked"],
+		False,
+	),
+	("any HTML comment", "Answer A\n/reclarify\n<!-- note -->", ["ai:claude-blocked"], False),
 )
 
 
