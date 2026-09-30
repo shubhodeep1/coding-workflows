@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T15:25:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In a fail-closed workflow step, give every git read its own `if ! \u2026; then echo \"::error::\u2026\"; exit 1; fi` even under `set -e`, so the job log names the read that failed instead of ending on a bare git exit code.",
+  "phase": "implement_plan",
+  "pr_number": 5656,
+  "record_id": "lesson-implement-plan-9cb837d2335bb6eaafdbf1d2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5608-run-twin-guard-from-base",
+    "file:.github/workflows/ci.yml"
+  ]
+}
