@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5174-guard-differential-check
 - Project branch: claude/implement-plan-issue-5327-pin-guard-differential-verifier   Final PR: #5364 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (the PR carrying this commit)
+- Waiting on: PR #5368
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01QvzxwDiVmtxwS9giV5Ro4Q   safety net and hand-back: see the latest stage report
 - Last updated: 2026-09-30
-- Last note: phase 1 implemented and verified (tests/test_guard_differential.py 77 passed; the two step-execution tests fail against the old unpinned step); phase PR opened.
+- Last note: review round 1 on PR #5368: the one consensus finding (the `status=skipped` summary omitted `verifier_changes=<n>`) fixed; the agents.md Output line no longer claims `status=error` carries the count; tests/test_guard_differential.py 77 passed.
 
 ## Phases
-1. [ ] Phase 1 — pin the verifier to the base branch and report verifier changes (ci.yml step, scripts/guard_differential.py, tests, agents.md, changelog) — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — pin the verifier to the base branch and report verifier changes (ci.yml step, scripts/guard_differential.py, tests, agents.md, changelog) — PR #5368 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -34,6 +34,7 @@
 - AD-4 [plan, 2026-09-30] Which `ci.yml` changes count as verifier changes? — Picked: A — only steps whose name starts with `Guard differential`, compared as text. Alternatives: B — any change to `ci.yml`. Why: unrelated `ci.yml` edits are frequent and would drown the warning. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] A field added to a script's `status=` summary line belongs on every status line the script prints, early-return paths included, and its docs must not claim it on lines printed before the value exists (for example `status=error`). (files: scripts/guard_differential.py, agents.md)
 
 ## Notes
 - Issue mode: single-phase plan; security pass skipped per the plan header.

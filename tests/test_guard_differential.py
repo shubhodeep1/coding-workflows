@@ -305,7 +305,7 @@ def test_cli_skips_when_no_hook_changed(hook_repo: Path) -> None:
 	(hook_repo / "README.md").write_text("changed\n", encoding="utf-8")
 	proc = _cli(hook_repo)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
-	assert "status=skipped reason=no-hook-change" in proc.stdout
+	assert "status=skipped reason=no-hook-change verifier_changes=0" in proc.stdout
 
 
 def test_cli_fails_on_a_silent_loosening_in_the_working_tree(hook_repo: Path) -> None:
@@ -529,7 +529,7 @@ def test_cli_reports_a_verifier_script_change_without_failing(verifier_repo: Pat
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "::warning::GUARD_DIFFERENTIAL verifier_change path=scripts/guard_differential.py:" in proc.stdout
 	assert "path=.github/workflows/ci.yml" not in proc.stdout
-	assert "status=skipped reason=no-hook-change" in proc.stdout
+	assert "status=skipped reason=no-hook-change verifier_changes=1" in proc.stdout
 
 
 @pytest.mark.parametrize(
@@ -558,7 +558,8 @@ def test_cli_ignores_other_workflow_edits(verifier_repo: Path) -> None:
 	)
 	proc = _cli(verifier_repo)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
-	assert "verifier_change" not in proc.stdout
+	assert "verifier_change path=" not in proc.stdout
+	assert "status=skipped reason=no-hook-change verifier_changes=0" in proc.stdout
 
 
 def test_cli_verifier_change_keeps_the_regression_exit_code(verifier_repo: Path) -> None:

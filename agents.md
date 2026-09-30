@@ -1260,9 +1260,10 @@ side so that class cannot land unnoticed.
   path=…`, `GUARD_DIFFERENTIAL verifier_change path=<scripts/guard_differential.py
   | .github/workflows/ci.yml>: …` (as `::warning::`, printed even when no
   hook changed, never failing), and a `GUARD_DIFFERENTIAL
-  status=<pass|fail|skipped|error> … verifier_changes=<n>` summary. Exit 0
-  when clean or when no hook changed, 1 on a failure, 2 on a bad ref,
-  unreadable corpus, or unreadable PR body.
+  status=<pass|fail|skipped> … verifier_changes=<n>` summary (a
+  `status=error` line, printed when the check could not run, carries no
+  count). Exit 0 when clean or when no hook changed, 1 on a failure, 2 on
+  a bad ref, unreadable corpus, or unreadable PR body.
 
 ---
 

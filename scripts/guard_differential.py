@@ -732,7 +732,7 @@ def print_report(report: Report, as_json: bool) -> None:
 			"only once it has merged. Review it as a change to a security boundary."
 		)
 	if not report.trees:
-		print(f"{LOG_KEY} status=skipped reason=no-hook-change")
+		print(f"{LOG_KEY} status=skipped reason=no-hook-change verifier_changes={len(report.verifier_changes)}")
 		return
 	for path in report.missing_corpus:
 		print(
