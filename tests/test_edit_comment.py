@@ -184,6 +184,48 @@ def test_directory_fifo_and_missing_file_are_rejected(github, reads, scratchpad,
 	_rejected(capsys, ["--repo", "o/r", "--comment-id", "5", "--body-file", str(scratchpad / "missing.md")], github, reads)
 
 
+@pytest.mark.parametrize("flag", ["--body-file", "--replacements"])
+def test_shallow_scratchpad_lookalike_is_rejected(github, reads, scratchpad, capsys, flag):
+	root = scratchpad.parents[3]
+	fake = root / "claude-EVIL" / "scratchpad"
+	fake.mkdir(parents=True)
+	body_file = fake / "body.md"
+	body_file.write_text(SECRET, encoding="utf-8")
+	assert "session scratchpad" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", flag, str(body_file)], github, reads)
+
+
+@pytest.mark.parametrize("flag", ["--body-file", "--replacements"])
+def test_file_over_the_size_limit_is_rejected_before_reading(monkeypatch, github, reads, scratchpad, capsys, flag):
+	monkeypatch.setattr(ec, "MAX_INPUT_FILE_BYTES", 64)
+	big = scratchpad / "big.md"
+	big.write_text(SECRET + "x" * 64, encoding="utf-8")
+	assert "not read" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", flag, str(big)], github, reads)
+
+
+def test_file_that_grew_after_fstat_is_not_read_in_full(monkeypatch, github, reads, scratchpad, capsys):
+	monkeypatch.setattr(ec, "MAX_INPUT_FILE_BYTES", 64)
+	big = scratchpad / "big.md"
+	big.write_text(SECRET + "x" * 64, encoding="utf-8")
+	real_fstat = os.fstat
+
+	def small_fstat(fd):
+		info = real_fstat(fd)
+		fields = list(info)
+		fields[6] = 1  # st_size, as if the file were written to after the check
+		return os.stat_result(fields)
+
+	monkeypatch.setattr(ec.os, "fstat", small_fstat)
+	assert "larger than 64 bytes" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", "--body-file", str(big)], github, reads)
+
+
+def test_file_at_the_size_limit_is_read(monkeypatch, github, reads, scratchpad):
+	monkeypatch.setattr(ec, "MAX_INPUT_FILE_BYTES", 64)
+	body_file = scratchpad / "body.md"
+	body_file.write_text("y" * 64, encoding="utf-8")
+	assert ec.main(["--repo", "o/r", "--comment-id", "5", "--body-file", str(body_file)]) == 0
+	assert github["patches"][-1][2] == "y" * 64
+
+
 def test_scratchpad_body_file_reads_the_comment_once(github, reads, scratchpad):
 	body_file = scratchpad / "nested" / "body.md"
 	body_file.parent.mkdir()
@@ -203,6 +245,11 @@ def test_scratchpad_body_file_reads_the_comment_once(github, reads, scratchpad):
 		("mcp-config-cse_x.json", False),
 		("other/claude-0/p/s/scratchpad/body.md", False),
 		("claude-0/-home-user-repo/session/notes/body.md", False),
+		# Shallower or deeper than <root>/claude-*/<project>/<session>/scratchpad/ (PR #5465 review round 1).
+		("claude-EVIL/scratchpad/body.md", False),
+		("claude-0/scratchpad/sub/body.md", False),
+		("claude-0/-home-user-repo/scratchpad/body.md", False),
+		("claude-0/-home-user-repo/session/extra/scratchpad/body.md", False),
 	],
 )
 def test_is_scratchpad_path(relative, expected):

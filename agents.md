@@ -1145,11 +1145,13 @@ reviews, comments, and conflicts stay a direct §12 request.
     FILE | --body-file FILE) [--dry-run]`: one read and one PATCH; each
     `old` must occur exactly once or nothing is written. Both files are
     read only when the path resolves, after symlinks, to a regular file
-    with one hard link under a session scratchpad
-    (`<temp dir>/claude-*/…/scratchpad/`, temp dir = `tempfile.gettempdir()`
-    or `/tmp`); any other path exits 1 before the comment read and never
-    prints the file (#5452: the helper is allowlisted, so an unchecked path
-    could publish a credential file with no prompt).
+    with one hard link and at most 1,048,576 bytes (`MAX_INPUT_FILE_BYTES`)
+    under a session scratchpad
+    (`<temp dir>/claude-*/<project>/<session>/scratchpad/`, temp dir =
+    `tempfile.gettempdir()` or `/tmp`); any other path exits 1 before the
+    comment read and never prints the file (#5452: the helper is
+    allowlisted, so an unchecked path could publish a credential file with
+    no prompt).
   - `.claude/scripts/permission_prompts.py report | file`: see below.
 - `.claude/hooks/permission_prompt_logger.py` on `PermissionRequest` and
   `PermissionDenied`: appends one JSON line per event to
