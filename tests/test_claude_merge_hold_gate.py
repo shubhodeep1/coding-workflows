@@ -586,9 +586,34 @@ def test_poller_gate_refuses_a_twin_parity_break(tmp_path):
 	assert out.rstrip().endswith("rc=1"), out
 
 
-def test_poller_gate_falls_back_to_the_main_support_snapshot(tmp_path):
+def test_poller_gate_does_not_probe_the_deleted_main_support_snapshot(tmp_path):
 	out = _run_poller_gate(tmp_path, _fixture(), support_dir=".codex-workflow-src-main")
-	assert "action=allow" in out, out
+	assert f"ORCH_MERGE_HOLD_GATE pr=42 head_sha={HEAD} action=refuse reason=gate_unavailable" in out, out
+	assert out.rstrip().endswith("rc=1"), out
+	assert _calls(tmp_path) == []
+	assert ".codex-workflow-src-main" not in _poller_function("_orch_claude_merge_hold_gate_allows").split("\n{\n", 1)[1]
+
+
+def test_poller_gate_checkout_is_the_one_the_poller_is_staged_from():
+	# The helper reads the gate only from .codex-workflow-src: the staging
+	# step stages orchestrate_poll_process.sh from there first and deletes
+	# .codex-workflow-src-main before the poll step, and nothing removes
+	# .codex-workflow-src before it (issue #5564 review round 1).
+	jobs = yaml.safe_load(ORCH_POLL_WORKFLOW.read_text(encoding="utf-8"))["jobs"].values()
+	steps = next(job["steps"] for job in jobs
+		if any(step.get("run") == "bash scripts/orchestrate_poll_process.sh" for step in job.get("steps", [])))
+	names = [step.get("name") for step in steps]
+	poll_at = next(i for i, step in enumerate(steps) if step.get("run") == "bash scripts/orchestrate_poll_process.sh")
+	stage = steps[names.index("Stage workflow support files")]
+	assert names.index("Stage workflow support files") < poll_at
+	run = stage["run"]
+	loop = run[run.index("for f in gh_helpers.sh"):]
+	assert "orchestrate_poll_process.sh" in loop[:loop.index("\n")]
+	assert loop.index('src=".codex-workflow-src/scripts/${f}"') < loop.index('src=".codex-workflow-src-main/scripts/${f}"')
+	assert run.rstrip().endswith("rm -rf .codex-workflow-src-main")
+	for step in steps[:poll_at]:
+		body = step.get("run") or ""
+		assert "rm -rf .codex-workflow-src\n" not in body + "\n" and "rm -rf .codex-workflow-src " not in body, step.get("name")
 
 
 def test_poller_gate_fails_closed_without_the_gate_script(tmp_path):

@@ -1044,8 +1044,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   ready-to-merge merges (current wave, prior-wave backward scan) for
   `claude/*` heads, with the PR object it already fetched as `--pr-json`,
   and then merges with `--match-head-commit` on that head; the gate comes
-  from `CLAUDE_MERGE_HOLD_GATE_SCRIPT`, else `.codex-workflow-src/scripts/`,
-  else `.codex-workflow-src-main/scripts/` (missing refuses), and
+  from `CLAUDE_MERGE_HOLD_GATE_SCRIPT`, else `.codex-workflow-src/scripts/`
+  (missing refuses; `.codex-workflow-src-main` is no fallback, since the
+  staging step deletes it before the poller runs), and
   `orchestrate_poll.yml` passes `vars.CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`. Its
   log key is `ORCH_MERGE_HOLD_GATE pr=<n> head_sha=<sha> action=allow|refuse
   reason=<skip_reason>`. The poller's judge, stall, and noop force-merges are

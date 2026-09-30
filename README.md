@@ -1498,8 +1498,9 @@ prior-wave backward scan), and merges a `claude/*` PR only with
 `--match-head-commit` on the head the gate allowed. A refusal logs
 `ORCH_MERGE_HOLD_GATE pr=<n> head_sha=<sha> action=refuse reason=<…>` and
 leaves the PR for the next poll. The poller reads the gate from its support
-checkout (`.codex-workflow-src`, then `.codex-workflow-src-main`) and refuses
-when it is missing.
+checkout (`.codex-workflow-src`, the same checkout it is staged from) and
+refuses when it is missing; `.codex-workflow-src-main` is not a fallback,
+because `orchestrate_poll.yml` deletes it before the poller runs.
 
 Setup: the catch-all needs the Claude issue pickup session to be running
 (`/claude-issue-pickup start`, see [Claude issue implementer](#claude-issue-implementer)),

@@ -1523,8 +1523,11 @@ _jq_field()
 # head; 1 on a refusal, a gate that could not decide (exit 2), or a missing
 # gate (fail closed). Callers then merge with --match-head-commit <head_sha>.
 # Gate location: CLAUDE_MERGE_HOLD_GATE_SCRIPT, else the support checkout
-# (.codex-workflow-src, then .codex-workflow-src-main); the gate imports
-# .claude/scripts/check_in_status.py from that same checkout.
+# .codex-workflow-src (as in review_autofix.yml); the gate imports
+# .claude/scripts/check_in_status.py from that same checkout. There is no
+# .codex-workflow-src-main fallback: orchestrate_poll.yml deletes that
+# snapshot before this script runs, and this script is itself staged from
+# .codex-workflow-src, so the gate ships in the same checkout.
 # API calls (CLAUDE.md §15), inside the gate: one per 100 PR comments, one
 # compare read, and two tree reads only when the PR touches a twin.
 # Log key: ORCH_MERGE_HOLD_GATE pr=<n> head_sha=<sha> action=allow|refuse
@@ -1535,9 +1538,6 @@ _orch_claude_merge_hold_gate_allows()
 	local gate_script="${CLAUDE_MERGE_HOLD_GATE_SCRIPT:-}" gate_rc=0 gate_json="" gate_pr_file="" gate_skip_reason="" gate_reason=""
 	if [ -z "${gate_script}" ]; then
 		gate_script=".codex-workflow-src/scripts/claude_merge_hold_gate.py"
-		if [ ! -f "${gate_script}" ] && [ -f ".codex-workflow-src-main/scripts/claude_merge_hold_gate.py" ]; then
-			gate_script=".codex-workflow-src-main/scripts/claude_merge_hold_gate.py"
-		fi
 	fi
 	if [ ! -f "${gate_script}" ]; then
 		gate_rc=2
