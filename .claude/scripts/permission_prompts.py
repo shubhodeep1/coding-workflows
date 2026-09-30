@@ -82,10 +82,14 @@ session marker for a session and prints the sanitized command and the issue
 or PR link. It checks every search hit, all pages. When the search read fails
 (Claude Code Web's agent proxy refuses `search/issues`, and the poller runs
 there), it checks every `ai:permission-prompt` issue instead, newest-updated
-first, which is where `report-now` reports in FILING_REPO. It prints
-`found: false` only after every candidate was checked, never because a
-fixed-size window ran out (issue #5126); a search that answers
-`incomplete_results: true` without the report is a failed read (exit 2).
+first, which is where `report-now` reports in FILING_REPO. It returns the
+newest report by creation time, not the first one found: it stops only at
+a candidate last updated before the newest report so far, since nothing in
+it can be newer. It prints `found: false` only after every candidate was
+checked, never because a fixed-size window ran out (issue #5126). A search
+that answers `incomplete_results: true` on any page is a failed read
+(exit 2), even when its partial hits hold a report, because a newer one may
+be among the missing hits.
 `session-meta` records the session title for `report-now`,
 keyed by session id in `session-meta.json` under `filing.lock`.
 
@@ -107,8 +111,8 @@ API calls (CLAUDE.md §15), REST only, none when nothing is new:
   - `lookup`: one search read per 100 hits (when it fails, one read of the
     `ai:permission-prompt` issues per 100 issues instead), then one comments
     read per 100 comments for each hit it checks whose `comments` count is
-    not 0. It stops at the first hit holding the report; a not-found answer
-    has checked every hit.
+    not 0. It stops at the first hit last updated before the newest report
+    found so far; a not-found answer has checked every hit.
   - `report`, `session-meta`: none.
 
 `report` and `file` print one JSON line. Exit 0 (including a partial run,
@@ -1001,9 +1005,9 @@ def _lookup_candidates(session_label: str, slug: str) -> list:
 	fails, the repository-scoped list of pattern issues, which `report-now`
 	comments on or opens in FILING_REPO, still answers: 1 read per 100
 	labelled issues, the same read as `existing_issues`. Raises ReadError when
-	both reads fail, and when the search answers `incomplete_results: true`,
-	because a partial hit list can hide the report and "not found" would be a
-	guess.
+	both reads fail, and when the search answers `incomplete_results: true`
+	on any page, because a partial hit list can hide the report (or a newer
+	one) and "not found" would be a guess.
 	"""
 	query = urllib.parse.quote(f'repo:{slug} "{session_label}"', safe="")
 	try:
@@ -1016,26 +1020,58 @@ def _lookup_candidates(session_label: str, slug: str) -> list:
 
 
 def lookup(session_label: str, slug: str) -> dict:
-	"""Find the newest immediate report for a session; see the module docstring. Raises ReadError on a failed read."""
+	"""Find the newest immediate report for a session; see the module docstring. Raises ReadError on a failed read.
+
+	The candidates come newest-updated first, but an issue updated after the
+	report it holds (another session's comment) can sit above a newer report,
+	so the first match is not always the newest. The newest match by
+	`created_at` (the issue's for a report in its body, the comment's
+	otherwise) wins, and the scan stops at the first candidate last updated
+	before that match, since nothing in it can be newer. A candidate or
+	match without a parseable timestamp never stops the scan, and a match
+	without one is kept only while no timed match exists.
+	"""
+
+	def report_time(value: object) -> datetime | None:
+		try:
+			parsed_time = check_in_status._parse_time(value)
+		except ValueError:
+			return None
+		# A time without a zone cannot be compared with GitHub's UTC times.
+		return parsed_time if parsed_time.tzinfo is not None else None
+
+	newest_match: dict | None = None
+	newest_time: datetime | None = None
 	for item in _lookup_candidates(session_label, slug):
 		if not isinstance(item, dict) or not isinstance(item.get("number"), int):
 			continue
+		updated_at = report_time(item.get("updated_at"))
+		if newest_time is not None and updated_at is not None and updated_at < newest_time:
+			break
 		issue_url = str(item.get("html_url") or "")
-		if item.get("author_association") in _TRUSTED_ASSOCIATIONS:
+		# A comment is always newer than the issue body, so an issue's newest
+		# trusted comment report is its match, and its body only without one.
+		match: dict | None = None
+		match_time: datetime | None = None
+		# The list and search objects carry the comment count; skip the read only when it is known to be 0.
+		if not (type(item.get("comments")) is int and item["comments"] == 0):
+			comments = check_in_status.gh_api_list(f"repos/{slug}/issues/{item['number']}/comments")
+			for comment in reversed(comments):
+				if comment.get("author_association") not in _TRUSTED_ASSOCIATIONS:
+					continue
+				parsed = parse_immediate_block(str(comment.get("body") or ""), session_label)
+				if parsed:
+					match = {"found": True, "session": session_label, "issue_url": issue_url, "comment_url": str(comment.get("html_url") or ""), **parsed}
+					match_time = report_time(comment.get("created_at"))
+					break
+		if match is None and item.get("author_association") in _TRUSTED_ASSOCIATIONS:
 			parsed = parse_immediate_block(str(item.get("body") or ""), session_label)
 			if parsed:
-				return {"found": True, "session": session_label, "issue_url": issue_url, "comment_url": "", **parsed}
-		# The list and search objects carry the comment count; skip the read only when it is known to be 0.
-		if type(item.get("comments")) is int and item["comments"] == 0:
-			continue
-		comments = check_in_status.gh_api_list(f"repos/{slug}/issues/{item['number']}/comments")
-		for comment in reversed(comments):
-			if comment.get("author_association") not in _TRUSTED_ASSOCIATIONS:
-				continue
-			parsed = parse_immediate_block(str(comment.get("body") or ""), session_label)
-			if parsed:
-				return {"found": True, "session": session_label, "issue_url": issue_url, "comment_url": str(comment.get("html_url") or ""), **parsed}
-	return {"found": False, "session": session_label}
+				match = {"found": True, "session": session_label, "issue_url": issue_url, "comment_url": "", **parsed}
+				match_time = report_time(item.get("created_at"))
+		if match is not None and (newest_match is None or (match_time is not None and (newest_time is None or match_time > newest_time))):
+			newest_match, newest_time = match, match_time
+	return newest_match or {"found": False, "session": session_label}
 
 
 def build_parser() -> argparse.ArgumentParser:
