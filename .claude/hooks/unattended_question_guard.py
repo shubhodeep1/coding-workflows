@@ -13,8 +13,8 @@ moved again (issue #4911). Prose cannot prevent that; this hook does:
 
 - `Stop`: when the final assistant message asks a §2-format question (a
   `Q<n>:` line with lettered choices, or `Q<n>: A/B`) or asks for
-  permissions, and no tool call in the current turn posted an
-  `ai:claude-blocked:v1` comment, the stop is blocked with a reason that
+  permissions, and the current turn did not post a verified blocker on the
+  marker's issue, the stop is blocked with a reason that
   restates §28. At most STOP_BLOCK_CAP blocks per session; after that the
   stop is allowed with a `systemMessage` starting CAP_MESSAGE_PREFIX and one
   JSON line in `~/.claude/unattended-issue-mode/stop-guard.jsonl`.
@@ -28,6 +28,22 @@ session is marked when `CLAUDE_CODE_REMOTE_SESSION_ID` is set and a marker
 for exactly that id exists. Interactive and local sessions have no marker (a
 local session has no `CLAUDE_CODE_REMOTE_SESSION_ID` at all), so the hook
 prints nothing for them and allows everything.
+
+A verified blocker (issue #5082) is, in the current turn, both of:
+- a comment on the marker's exact `repo` (owner/repo, case-insensitive) and
+  `issue`, whose body starts with `<!-- ai:claude-blocked:v1 -->`, posted by
+  `mcp__*__add_issue_comment` or by a plain `gh api` POST to
+  `repos/<owner>/<repo>/issues/<N>/comments`, with a non-error result that
+  carries that issue's comment URL (`html_url` or `issue_url`);
+- a non-error write adding the `ai:claude-blocked` label to that same issue
+  (`mcp__*__issue_write` with `method: "update"` and `labels`, or a plain
+  `gh api` POST to `repos/<owner>/<repo>/issues/<N>/labels` with
+  `labels[]=ai:claude-blocked`).
+A `Bash` call counts only when it is `gh api` calls alone, joined by `&&` at
+most, after an optional leading `cd <path>;` (no other program, `;`, pipe,
+redirect, or substitution). An `echo` of
+the marker, a comment on another issue or repository, or a failed or
+unverifiable call never counts.
 
 The hook makes no GitHub API calls (§15): the blocked-comment check reads the
 local session transcript (`transcript_path`). It fails open with a
@@ -46,6 +62,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +80,12 @@ STOP_BLOCK_CAP = 2
 BLOCKED_COMMENT_MARKER = "<!-- ai:claude-blocked:v1 -->"
 CAP_LOG_NAME = "stop-guard.jsonl"
 CAP_MESSAGE_PREFIX = "unattended-question-guard: cap reached"
+BLOCKED_LABEL = "ai:claude-blocked"
+MCP_COMMENT_TOOL_SUFFIX = "__add_issue_comment"
+MCP_LABEL_TOOL_SUFFIX = "__issue_write"
+# `issue_write` also takes `method: "create"`, which ignores `issue_number` and
+# opens a new issue, so only an update can put the label on the marker's issue.
+MCP_LABEL_WRITE_METHOD = "update"
 
 _SESSION_FILE_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -244,6 +267,12 @@ def final_assistant_text(entries: list[dict]) -> str:
 
 
 def _contains_marker(value: object) -> bool:
+	"""True when the marker text appears anywhere in `value`.
+
+	Unused since issue #5082 and kept only under CLAUDE.md §6. This is the old
+	marker-anywhere check that an `echo` of the marker could satisfy: never use
+	it as evidence of a blocker. `blocked_comment_posted` is the check.
+	"""
 	if isinstance(value, str):
 		return BLOCKED_COMMENT_MARKER in value
 	if isinstance(value, dict):
@@ -253,10 +282,260 @@ def _contains_marker(value: object) -> bool:
 	return False
 
 
-def blocked_comment_posted(turn: list[dict]) -> bool:
-	"""True when a tool call in `turn` carried the blocked-comment marker and succeeded."""
-	candidates: set[str] = set()
-	succeeded: set[str] = set()
+def _issue_target(repo: object, issue: object) -> tuple[str, int] | None:
+	"""Normalise an `owner/repo` + issue number pair, None when malformed."""
+	if not isinstance(repo, str) or not _REPO_RE.match(repo):
+		return None
+	if isinstance(issue, bool):
+		return None
+	if isinstance(issue, int):
+		number = issue
+	elif isinstance(issue, str) and issue.isdigit():
+		number = int(issue)
+	else:
+		return None
+	if number <= 0:
+		return None
+	return repo.lower(), number
+
+
+def _mcp_issue_target(tool_input: dict) -> tuple[str, int] | None:
+	owner = tool_input.get("owner")
+	repo = tool_input.get("repo")
+	if not isinstance(owner, str) or not isinstance(repo, str):
+		return None
+	return _issue_target(f"{owner}/{repo}", tool_input.get("issue_number"))
+
+
+def _starts_with_marker(body: object) -> bool:
+	return isinstance(body, str) and body.lstrip().startswith(BLOCKED_COMMENT_MARKER)
+
+
+def _and_chain_segments(command: str) -> list[str] | None:
+	"""Split `command` on unquoted `&&`; None when it holds any other shell syntax.
+
+	Single-quoted text is data. Outside quotes, `; & | < > ( )` and newlines
+	join or redirect commands; outside single quotes, a backtick or `$(` runs
+	one. Any of those means a call cannot be tied to what was posted. `&&` is
+	kept because it stops at the first failure, so a non-error result means
+	every segment succeeded.
+	"""
+	segments: list[str] = []
+	state = None
+	start = 0
+	index = 0
+	while index < len(command):
+		char = command[index]
+		if state == "'":
+			if char == "'":
+				state = None
+		elif char == "\\":
+			index += 1
+		elif char == "`" or command.startswith("$(", index):
+			return None
+		elif state == '"':
+			if char == '"':
+				state = None
+		elif char in "'\"":
+			state = char
+		elif command.startswith("&&", index):
+			segments.append(command[start:index])
+			index += 2
+			start = index
+			continue
+		elif char in ";&|<>()\n":
+			return None
+		index += 1
+	if state is not None:
+		return None
+	segments.append(command[start:])
+	return segments
+
+
+_GH_VALUE_FLAGS = {
+	"-X": "method",
+	"--method": "method",
+	"-f": "raw_field",
+	"--raw-field": "raw_field",
+	"-F": "field",
+	"--field": "field",
+	"-H": "header",
+	"--header": "header",
+	"-q": "jq",
+	"--jq": "jq",
+	"-t": "template",
+	"--template": "template",
+	"-p": "preview",
+	"--preview": "preview",
+	"--hostname": "hostname",
+	"--cache": "cache",
+	"--input": "input",
+}
+_GH_ISSUE_ENDPOINT_RE = re.compile(r"^/?repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)/(comments|labels)$")
+
+
+_CD_PREFIX_RE = re.compile(r"^\s*cd\s+[A-Za-z0-9_./~+-]+\s*(?:;|&&)\s*")
+
+
+def _gh_api_calls(command: object) -> list[dict] | None:
+	"""Parse a `Bash` command made only of `gh api` calls joined by `&&`.
+
+	One leading `cd <plain path>` followed by `;` or `&&` is allowed, the way
+	sessions start most commands; it can neither post nor print anything.
+	Returns one `_gh_api_call` result per segment, or None when the command
+	holds anything else (another program, other shell syntax, or a `gh api`
+	call this parser does not accept).
+	"""
+	if not isinstance(command, str):
+		return None
+	segments = _and_chain_segments(_CD_PREFIX_RE.sub("", command, count=1))
+	if segments is None:
+		return None
+	calls: list[dict] = []
+	for segment in segments:
+		call = _gh_api_call(segment)
+		if call is None:
+			return None
+		calls.append(call)
+	return calls
+
+
+def _gh_api_call(segment: str) -> dict | None:
+	"""Parse one plain `gh api` command, None when it is anything else.
+
+	Returns `{"method", "target", "kind", "fields"}`: `kind` is `comments` or
+	`labels`, `fields` maps each field key to its values. A command with
+	`--input`, a non-github.com `--hostname`, a `-F key=@file` value (the
+	posted text is not in the transcript), or an endpoint other than
+	`repos/<owner>/<repo>/issues/<N>/(comments|labels)` is not a match.
+	"""
+	try:
+		tokens = shlex.split(segment)
+	except ValueError:
+		return None
+	if tokens[:2] != ["gh", "api"]:
+		return None
+	endpoint = None
+	method = None
+	fields: dict[str, list[str]] = {}
+	index = 2
+	while index < len(tokens):
+		token = tokens[index]
+		if token.startswith("--"):
+			flag, has_inline, inline = token.partition("=")
+		elif len(token) > 2 and token[:2] in _GH_VALUE_FLAGS:
+			flag, has_inline, inline = token[:2], "attached", token[2:]
+		else:
+			flag, has_inline, inline = token, "", ""
+		if flag in _GH_VALUE_FLAGS:
+			if has_inline:
+				value = inline
+			elif index + 1 < len(tokens):
+				index += 1
+				value = tokens[index]
+			else:
+				return None
+			role = _GH_VALUE_FLAGS[flag]
+			if role == "input":
+				return None
+			if role == "hostname" and value.lower() != "github.com":
+				return None
+			if role == "method":
+				method = value.upper()
+			elif role in ("raw_field", "field"):
+				key, sep, field_value = value.partition("=")
+				if not sep:
+					return None
+				if role == "field" and field_value.startswith("@"):
+					return None
+				fields.setdefault(key, []).append(field_value)
+		elif token.startswith("-"):
+			pass
+		elif endpoint is None:
+			endpoint = token
+		else:
+			return None
+		index += 1
+	match = _GH_ISSUE_ENDPOINT_RE.match(endpoint or "")
+	if match is None:
+		return None
+	target = _issue_target(match.group(1), match.group(2))
+	if target is None:
+		return None
+	if method is None:
+		method = "POST" if fields else "GET"
+	return {"method": method, "target": target, "kind": match.group(3), "fields": fields}
+
+
+def _blocked_comment_targets(name: object, tool_input: object) -> set[tuple[str, int]]:
+	"""Every `(owner/repo, issue)` a tool call posts a blocked comment to."""
+	targets: set[tuple[str, int]] = set()
+	if not isinstance(name, str) or not isinstance(tool_input, dict):
+		return targets
+	if name.startswith("mcp__") and name.endswith(MCP_COMMENT_TOOL_SUFFIX):
+		target = _mcp_issue_target(tool_input) if _starts_with_marker(tool_input.get("body")) else None
+		if target is not None:
+			targets.add(target)
+	elif name == "Bash":
+		for call in _gh_api_calls(tool_input.get("command")) or []:
+			bodies = call["fields"].get("body", [])
+			if call["method"] == "POST" and call["kind"] == "comments" and len(bodies) == 1 and _starts_with_marker(bodies[0]):
+				targets.add(call["target"])
+	return targets
+
+
+def _blocked_label_targets(name: object, tool_input: object) -> set[tuple[str, int]]:
+	"""Every `(owner/repo, issue)` a tool call adds the blocked label to."""
+	targets: set[tuple[str, int]] = set()
+	if not isinstance(name, str) or not isinstance(tool_input, dict):
+		return targets
+	if name.startswith("mcp__") and name.endswith(MCP_LABEL_TOOL_SUFFIX):
+		labels = tool_input.get("labels")
+		adds_label = tool_input.get("method") == MCP_LABEL_WRITE_METHOD and isinstance(labels, list) and BLOCKED_LABEL in labels
+		target = _mcp_issue_target(tool_input) if adds_label else None
+		if target is not None:
+			targets.add(target)
+	elif name == "Bash":
+		for call in _gh_api_calls(tool_input.get("command")) or []:
+			if call["method"] == "POST" and call["kind"] == "labels" and BLOCKED_LABEL in call["fields"].get("labels[]", []):
+				targets.add(call["target"])
+	return targets
+
+
+def _result_text(item: dict) -> str:
+	"""The text of a `tool_result` item's content (a string or text parts)."""
+	content = item.get("content")
+	if isinstance(content, str):
+		return content
+	if isinstance(content, list):
+		parts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
+		return "\n".join(part for part in parts if isinstance(part, str))
+	return ""
+
+
+def _result_names_comment(text: str, target: tuple[str, int]) -> bool:
+	"""True when a result carries a comment URL on exactly `target`'s issue."""
+	repo, number = target
+	pattern = re.compile(
+		rf"(?:github\.com/{re.escape(repo)}/issues/{number}#issuecomment-\d|/repos/{re.escape(repo)}/issues/{number}(?![0-9/]))",
+		re.IGNORECASE,
+	)
+	return pattern.search(text) is not None
+
+
+def blocked_comment_posted(turn: list[dict], marker: dict) -> bool:
+	"""True when `turn` posted a verified blocker on the marker's issue.
+
+	Both must hold in the turn: a successful blocked comment on the marker's
+	`repo#issue` whose result names that issue's comment URL, and a successful
+	write adding the `ai:claude-blocked` label to the same issue.
+	"""
+	wanted = _issue_target(marker.get("repo"), marker.get("issue"))
+	if wanted is None:
+		return False
+	comments: set[str] = set()
+	labels: set[str] = set()
+	results: dict[str, str] = {}
 	for entry in turn:
 		content = _content(entry)
 		if not isinstance(content, list):
@@ -264,11 +543,19 @@ def blocked_comment_posted(turn: list[dict]) -> bool:
 		for item in content:
 			if not isinstance(item, dict):
 				continue
-			if item.get("type") == "tool_use" and _contains_marker(item.get("input")):
-				candidates.add(str(item.get("id")))
+			if item.get("type") == "tool_use":
+				tool_id = str(item.get("id"))
+				name = item.get("name")
+				tool_input = item.get("input")
+				if wanted in _blocked_comment_targets(name, tool_input):
+					comments.add(tool_id)
+				if wanted in _blocked_label_targets(name, tool_input):
+					labels.add(tool_id)
 			elif item.get("type") == "tool_result" and not item.get("is_error"):
-				succeeded.add(str(item.get("tool_use_id")))
-	return bool(candidates & succeeded)
+				results[str(item.get("tool_use_id"))] = _result_text(item)
+	comment_verified = any(tool_id in results and _result_names_comment(results[tool_id], wanted) for tool_id in comments)
+	label_written = any(tool_id in results for tool_id in labels)
+	return comment_verified and label_written
 
 
 def _issue_ref(marker: dict) -> str:
@@ -277,14 +564,23 @@ def _issue_ref(marker: dict) -> str:
 
 def _instructions(marker: dict) -> str:
 	issue = marker.get("issue", "<N>")
+	repo = marker.get("repo", "<owner>/<repo>")
 	return (
 		"- An intent or design question (scope, behaviour, an edge case, an interface, an ambiguous plan step): "
 		"take its RECOMMENDED option, record it as an `AD-<n>` entry in the progress log's `## Auto-decisions` "
 		"(CLAUDE.md §28.B, §28.D), and continue the work.\n"
 		"- A §28.C item (a failure escalation or cap, an ask-first operation under §22.B / §23.C / §24.D, a "
 		"protected-path edit, a question with no option that satisfies §28.B): post ONE comment on issue "
-		f"#{issue} starting `{BLOCKED_COMMENT_MARKER}` that names the blocker, the options, and the recommended "
-		"one; add the `ai:claude-blocked` label; send one PushNotification; then end the turn.\n"
+		f"{repo}#{issue} starting `{BLOCKED_COMMENT_MARKER}` that names the blocker, the options, and the recommended "
+		f"one; add the `{BLOCKED_LABEL}` label to that same issue; send one PushNotification; then end the turn.\n"
+		f"- The stop is allowed only after this turn did both on {repo}#{issue}: the comment through "
+		f"`mcp__github__add_issue_comment`, or a plain `gh api repos/{repo}/issues/{issue}/comments -f body='…'` "
+		"command whose output shows the comment URL (no `--silent` and no `--jq` that drops `html_url`); and the "
+		f"label through `mcp__github__issue_write` (`method: \"{MCP_LABEL_WRITE_METHOD}\"`, `labels` including `{BLOCKED_LABEL}`) or "
+		f"`gh api repos/{repo}/issues/{issue}/labels -f 'labels[]={BLOCKED_LABEL}'`. A `Bash` call counts only "
+		"when it holds `gh api` calls alone, joined by `&&` at most, after an optional leading `cd <path>;` (no "
+		"other program, `;`, pipe, redirect, or `$(...)`). An `echo` of the marker or a comment on another issue "
+		"does not count.\n"
 		"- GitHub writes are not blocked for you and need no permission: issue and PR comments and labels are "
 		"§23.B routine writes (`mcp__github__add_issue_comment`, `mcp__github__update_issue_comment`, "
 		"`mcp__github__issue_write`), and the chain's workflow dispatches are command-approved "
@@ -360,7 +656,7 @@ def evaluate(payload: dict, env: dict, directory: Path, now: datetime) -> dict |
 	kind = question_kind(text)
 	if kind is None:
 		return None
-	if blocked_comment_posted(current_turn(entries)):
+	if blocked_comment_posted(current_turn(entries), marker):
 		return None
 	try:
 		blocks = read_blocks(session, directory)
