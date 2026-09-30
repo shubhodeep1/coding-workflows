@@ -7,11 +7,11 @@
 - Status: BLOCKED
 - Stage: conformance 1/3
 - Activation: not started
-- Waiting on: conformance fix PR (see ## Conformance): twin sync
+- Waiting on: PR #5547: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none while BLOCKED on the twin sync; project checker session_01KFpX9wDF5pwN8i2yd4ctth stays idle for reuse
 - Last updated: 2026-09-30
-- Last note: conformance 1/3 (session_01P2nGEZgpsbgzxY2xhHZrso): CONFORMANT with CONCERNS; 4 EVIDENCE-BASED concerns fixed in the conformance fix PR, twin-first (workflow-templates/.claude/scripts/permission_prompts.py and check_in_status.py); held for the operator's [claude-twin-sync], then /reclarify on #5126 arms the wait on that PR (next stage conformance 2/3).
+- Last note: conformance 1/3 (session_01P2nGEZgpsbgzxY2xhHZrso): CONFORMANT with CONCERNS; 4 EVIDENCE-BASED concerns fixed in PR #5547, twin-first (workflow-templates/.claude/scripts/permission_prompts.py and check_in_status.py); held for the operator's [claude-twin-sync], then /reclarify on #5126 arms the wait on PR #5547 (next stage conformance 2/3).
 
 ## Phases
 1. [x] Phase 1 — lookup checks every candidate   — protected paths: .claude/scripts/permission_prompts.py (twin: workflow-templates/.claude/scripts/permission_prompts.py)
@@ -25,7 +25,7 @@
    - Twin sync: recovery PR #5433 (Q1: A, issue comment 5903809630) merged 2026-09-30 as 867a9b5 (Q2: A, issue comment 5905191883); review rounds: 1 (1 confidence-1 NIT rejected; no verdict bot, #4648)
 
 ## Conformance
-- Run 1 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — fix PR (conformance-fix-1, held for twin sync) (pre-security)
+- Run 1 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — fix PR #5547 (held for twin sync) (pre-security)
 
 ## Security pass
 
@@ -41,8 +41,8 @@
 - AD-3 [plan, 2026-09-29] What happens to `LOOKUP_MAX_HITS`, which no longer caps anything? — Picked: A — keep it defined with a comment that `lookup` no longer uses it. Alternatives: B — delete it; C — reuse it as the page size. Why: §6 forbids removing or repurposing an identifier. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-09-29] How do the tests cover a change made only in the `workflow-templates/.claude/` twin? — Picked: A — the lookup tests load the twin and share the main module's `check_in_status`. Alternatives: B — test the `.claude/` copy and leave the tests red until the sync. Why: the interim twin-first rule (CLAUDE.md §28.C) says tests read the twin. Applied in: phase 1 PR. Status: pending review
 
-- AD-5 [conformance 1/3, 2026-09-30] How should `lookup` stop missing `incomplete_results: true` on a search page after the first? — Picked: A — keep the flag from any page in the shared `check_in_status._gh_api_paginated_object`. Alternatives: B — page the search inside `_lookup_candidates`; C — leave it, since one session id rarely has over 100 hits. Why: one guarded line that keeps the plan's §15 rule to reuse the shared paginated helper; check-run pages carry no such key, so the checker is unchanged; C keeps a G3 false negative in an A09 fix. Applied in: conformance fix PR. Status: pending review
-- AD-6 [conformance 1/3, 2026-09-30] Which report should `lookup` return when several issues hold one for the session? — Picked: A — the newest by creation time, stopping at the first candidate last updated before it. Alternatives: B — scan every candidate and keep the newest; C — keep the first match (pre-existing since #4755) and document it. Why: the module docstring promises the newest marker and the poller needs the current prompt; A adds no issue reads in the common case, B always costs about one read per labelled issue, C leaves a stale command in the alert. Applied in: conformance fix PR. Status: pending review
+- AD-5 [conformance 1/3, 2026-09-30] How should `lookup` stop missing `incomplete_results: true` on a search page after the first? — Picked: A — keep the flag from any page in the shared `check_in_status._gh_api_paginated_object`. Alternatives: B — page the search inside `_lookup_candidates`; C — leave it, since one session id rarely has over 100 hits. Why: one guarded line that keeps the plan's §15 rule to reuse the shared paginated helper; check-run pages carry no such key, so the checker is unchanged; C keeps a G3 false negative in an A09 fix. Applied in: PR #5547. Status: pending review
+- AD-6 [conformance 1/3, 2026-09-30] Which report should `lookup` return when several issues hold one for the session? — Picked: A — the newest by creation time, stopping at the first candidate last updated before it. Alternatives: B — scan every candidate and keep the newest; C — keep the first match (pre-existing since #4755) and document it. Why: the module docstring promises the newest marker and the poller needs the current prompt; A adds no issue reads in the common case, B always costs about one read per labelled issue, C leaves a stale command in the alert. Applied in: PR #5547. Status: pending review
 
 ## Lessons
 - [source:conformance] A paginated read that merges pages must carry per-page status flags (such as `incomplete_results`) from every page, not only the first. (files: .claude/scripts/check_in_status.py)
