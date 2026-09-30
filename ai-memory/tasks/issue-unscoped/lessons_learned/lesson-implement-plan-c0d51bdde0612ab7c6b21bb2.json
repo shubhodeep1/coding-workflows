@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T03:14:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change reverses a rule, grep the whole module docstring, its summary line included, for wording tied to the old rule, not only the paragraph the plan names.",
+  "phase": "implement_plan",
+  "pr_number": 5366,
+  "record_id": "lesson-implement-plan-c0d51bdde0612ab7c6b21bb2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5325-fail-warned-guard-loosening",
+    "file:scripts/guard_differential.py"
+  ]
+}
