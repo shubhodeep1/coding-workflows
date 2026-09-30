@@ -654,19 +654,38 @@ def test_implement_treats_an_unreadable_page_as_unknown_until_the_inactivity_lim
 	assert "Implement runs finished: a runs page could not be read — treating as unknown, waiting" in log, log
 	assert "no PR was created" not in log, log
 	assert "::error::Implement phase stalled — no activity for 1 minutes" in log, log
+	# PR #5712 review: the second terminal check, 100 s after the unreadable
+	# walk, is inside IMPL_SCOPED_RETRY_SECONDS and does not walk again.
+	assert "a runs page could not be read 100s ago — walking again after 120s, waiting" in log, log
+	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 1, _run_pages_requested(calls)
+
+
+def test_implement_walks_again_after_an_unreadable_page_once_the_retry_interval_passed() -> None:
+	# PHASE_TIMEOUT=5 gives four terminal checks 100 s apart: walk (unreadable),
+	# throttled, walk again at 200 s, throttled; then the inactivity limit.
+	pages = [_other_issue_completed_impl_page(), _our_impl_run_page(conclusion="failure", status="completed")]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, fail_page=2, phase_timeout="5", fake_clock=True)
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "no PR was created" not in log, log
+	assert log.count("a runs page could not be read — treating as unknown, waiting") == 2, log
+	assert log.count("walking again after 120s, waiting") == 2, log
 	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 2, _run_pages_requested(calls)
 
 
 def test_implement_treats_a_capped_walk_as_unknown_and_reads_at_most_ten_pages() -> None:
 	pages = [_other_issue_completed_impl_page()] + [_noise_page(3000 + 100 * i) for i in range(11)]
-	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, phase_timeout="1", fake_clock=True)
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, phase_timeout="5", fake_clock=True)
 	assert rc == 1, log
 	assert outputs.get("status") == "timeout", outputs
 	assert "every page up to 10 was full — treating as unknown, waiting" in log, log
 	assert "no PR was created" not in log, log
+	# PR #5712 review: the window only grows, so the cap is kept and later
+	# terminal checks never walk again.
+	assert "an earlier walk found every page up to 10 full — treating as unknown, waiting" in log, log
 	paged = [path for path in _run_pages_requested(calls) if "&page=" in path]
-	# Two terminal checks, 10 pages each; never page 11.
-	assert len(paged) == 20, len(paged)
+	# One walk of 10 pages across every terminal check; never page 11.
+	assert len(paged) == 10, len(paged)
 	assert not any("&page=11&" in path for path in paged), paged
 
 

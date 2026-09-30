@@ -1280,6 +1280,14 @@ jobs:
           # active, later terminal checks re-read that one run by ID instead
           # of walking the window again.
           IMPL_SCOPED_ACTIVE_RUN_ID=""
+          # An unknown walk is not repeated on every poll (PR #5712 review):
+          # the created=> window only grows, so once every page up to the cap
+          # was full no later walk can complete, and the cap is kept for the
+          # rest of the phase. An unreadable page may be transient, so that
+          # walk is retried, but not before IMPL_SCOPED_RETRY_SECONDS.
+          IMPL_SCOPED_CAPPED=0
+          IMPL_SCOPED_UNREADABLE_AT=""
+          IMPL_SCOPED_RETRY_SECONDS=120
 
           while true; do
             NOW=$(date +%s)
@@ -1370,8 +1378,13 @@ jobs:
               if [ -n "$IMPL_SCOPED_CACHED_STATUS" ] && [ "$IMPL_SCOPED_CACHED_STATUS" != "completed" ] \
                 && [[ "$IMPL_SCOPED_CACHED_STATUS" =~ ^[a-z_]+$ ]]; then
                 echo "  ⏳ Implement run ${IMPL_SCOPED_ACTIVE_RUN_ID} for issue #${ISSUE_NUMBER} is still ${IMPL_SCOPED_CACHED_STATUS} — the ${IMPL_RUN_TOTAL} completed run(s) on page 1 are not all ours; waiting"
+              elif [ "$IMPL_SCOPED_CAPPED" -eq 1 ]; then
+                echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: an earlier walk found every page up to ${SCOPED_RUN_LOOKUP_MAX_PAGES} full — treating as unknown, waiting"
+              elif [ -n "$IMPL_SCOPED_UNREADABLE_AT" ] && [ $((NOW - IMPL_SCOPED_UNREADABLE_AT)) -lt "$IMPL_SCOPED_RETRY_SECONDS" ]; then
+                echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: a runs page could not be read $((NOW - IMPL_SCOPED_UNREADABLE_AT))s ago — walking again after ${IMPL_SCOPED_RETRY_SECONDS}s, waiting"
               else
                 IMPL_SCOPED_ACTIVE_RUN_ID=""
+                IMPL_SCOPED_UNREADABLE_AT=""
                 IMPL_SCOPED_RC=0
                 IMPL_SCOPED_SUMMARY=$(summarize_scoped_impl_runs) || IMPL_SCOPED_RC=$?
                 IMPL_SCOPED_TOTAL=""; IMPL_SCOPED_ACTIVE=""; IMPL_SCOPED_NEWEST_ID=""; IMPL_SCOPED_NEWEST_CONCLUSION=""; IMPL_SCOPED_ACTIVE_ID=""
@@ -1388,8 +1401,10 @@ jobs:
                   IMPL_SCOPED_ACTIVE_RUN_ID="$IMPL_SCOPED_ACTIVE_ID"
                   echo "  ⏳ Implement run ${IMPL_SCOPED_ACTIVE_ID} for issue #${ISSUE_NUMBER} is still active — the ${IMPL_RUN_TOTAL} completed run(s) on page 1 are not all ours; waiting"
                 elif [ "$IMPL_SCOPED_RC" -eq 2 ]; then
+                  IMPL_SCOPED_CAPPED=1
                   echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: every page up to ${SCOPED_RUN_LOOKUP_MAX_PAGES} was full — treating as unknown, waiting"
                 else
+                  IMPL_SCOPED_UNREADABLE_AT="$NOW"
                   echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: a runs page could not be read — treating as unknown, waiting"
                 fi
               fi
