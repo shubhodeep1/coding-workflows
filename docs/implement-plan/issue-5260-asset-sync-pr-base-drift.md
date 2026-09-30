@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5260
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5260-asset-sync-pr-base-drift   Final PR: #5280 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1
+- Status: BLOCKED
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5282
+- Waiting on: PR #5282: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01FHuvL5vgkLnpx5nqkmQZUP   safety net trig_01RacPGYq3hGQndui2CU7Dgf   hand-back trig_018Yj1bTwDKMZgo2mPyGHcK6
-- Last updated: 2026-09-29
-- Last note: `/reclarify` resume (session_01K9w3zKrwmgqbudkbBxma2o): twin sync fd78ed4 verified (sha256 match, 223 passed / 1 skipped), project branch synced with its base (dee3c0e), review wait armed on PR #5282.
+- Check-in: checker session_01FHuvL5vgkLnpx5nqkmQZUP (idle, reused on resume)   safety net none   hand-back none
+- Last updated: 2026-09-30
+- Last note: review round 1 (session_01Mn7Xczx2xDnXnDF7GUQQym): 6 of 7 consensus findings plus the task gap fixed in the command twins, 1 rejected; `.claude/commands/` copies need the `[claude-twin-sync]` copy before the wait is re-armed.
 
 ## Phases
-1. [ ] Phase 1 — base-aware drift check in the Claude-asset sync — PR #5282 open (waiting on review); review rounds: 0; interventions: 0 — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`
+1. [ ] Phase 1 — base-aware drift check in the Claude-asset sync — PR #5282 open (twin sync pending after review round 1); review rounds: 1; interventions: 0 — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`
    - Edit the `workflow-templates/.claude/**` twins only (interim twin-first default); the `.claude/` copies follow via `[claude-twin-sync]`.
    - `implement-plan-claude.md` `### Claude-asset sync` steps 1–4: fetch the PR base, default and base drift checks, project-base verification, base merge for other bases.
    - `fix-claude-pr.md` step 5: the stop also covers a failed project-base verification.
@@ -40,6 +40,7 @@
 - AD-5 [plan, 2026-09-29] How is the changelog updated? — Picked: A — a new `changelog.d/5260-asset-sync-pr-base-drift.md`, #4952's fragment unchanged. Alternatives: B — edit `changelog.d/4952-claude-asset-sync.md`. Why: §20.B one fragment per PR; both fragments release together with #4995. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:intervention] When a shared procedure has its own numbered steps, name the caller's steps as "the procedure's step N" rather than a bare "step N", and spell out every multi-branch sequence (checkout, merge, push, return) it asks for. (files: workflow-templates/.claude/commands/implement-plan-claude.md)
 
 ## Notes
 - Started by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#5260: start`) into session `session_01HMaxnWJosFZFkojR4Z83GA` (permission mode `auto`).
@@ -50,3 +51,5 @@
 - Twin sync needed (sha256 of the twins at 10929bc): `workflow-templates/.claude/commands/implement-plan-claude.md` → `.claude/commands/implement-plan-claude.md` `c0a46399aed90a3e4a757053642ff7635084912fb52a8204691d4e159e689b1d`; `workflow-templates/.claude/commands/fix-claude-pr.md` → `.claude/commands/fix-claude-pr.md` `0b5400ff0c82f3836a3987f05d538b76632704157f04cba6b11f55f237bfff8a`. No `.claude/` path without a twin changed.
 - Twin sync landed 2026-09-29 as fd78ed4 (`[claude-twin-sync]`, operator answer A on #5260); both `.claude/commands/` copies match the twin sha256 above, and the six blocker test files pass on the PR head (223 passed, 1 skipped). `ai:claude-blocked` removed from #5260.
 - Project branch synced with its base on 2026-09-29: dee3c0e, clean merge of 4200c38 (the base's merge of main ccd2ebc); `tests/test_ci_job_split_contract.py`, `tests/test_claude_asset_sync_command.py`, `tests/test_implement_plan_claude_command.py` pass (66 passed, 1 skipped). The base has not moved (no merged PR has it as head; draft final PR #4995 still open).
+- Review round 1 (2026-09-30, head 35443554e936, ledger 16f33ddd…): fixed — both-drift record on another base, the fixer's conflict notice names `<source>` (task gap), the project-branch sync spells out the procedure's step 2 sequence, step 2 routes to step 3, the failed-fetch stop, "Up to two checks"; rejected — `<base>` vs `<base ref>` (each command defines its placeholder where it uses it). Asset sync on the PR head: default and base drift checks both exit 0, nothing merged. Tests: `tests/test_claude_asset_sync_command.py` gains the new wording and a both-drift scenario; with the twins copied in a scratch worktree, the six blocker suites pass (225 passed, 1 skipped) and every test file that reads these commands passes (412 passed, 1 skipped).
+- Twin sync needed after review round 1 (sha256 of the twins): `workflow-templates/.claude/commands/implement-plan-claude.md` → `.claude/commands/implement-plan-claude.md` `feea0681fba5c932b2205346862f218edd6b61a5bef8a739897461f5379b6ba9`; `workflow-templates/.claude/commands/fix-claude-pr.md` → `.claude/commands/fix-claude-pr.md` `a965597f626b5a6655bf8a0019461aface075f0a2f5f23b7ae4cd543f07e0153`. No `.claude/` path without a twin changed.

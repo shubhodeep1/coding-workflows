@@ -1180,7 +1180,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   (`git diff --quiet origin/<project branch>...origin/<default> -- .claude/hooks .claude/settings.json`;
   a failure stops like a `.claude/` conflict), then merges the project
   branch. A PR head on any other base merges its own base when the base is
-  ahead on guards; default-only drift there is recorded as
+  ahead on guards; default drift there that the base merge does not
+  clear (the default check is re-run after it) is recorded as
   `claude_assets=stale (base <base>)`. A conflict under
   `.claude/` aborts the merge and stops with the `ai:claude-blocked:v1`
   blocker (a `hold` claim in `/fix-claude-pr`). A merged `settings.json`

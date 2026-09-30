@@ -62,7 +62,10 @@ def test_sync_only_merges_into_branches_that_land_in_the_default_branch(commands
 	section = _section(commands["implement-plan-claude.md"], "### Claude-asset sync", "### Permission prompt report")
 	assert "skip the merge" in section
 	assert "claude_assets=stale (base <base>)" in section
-	assert "sync the project branch first exactly as step 2 does, then merge `origin/<project branch>` into the PR head" in section
+	# PR #5282 review round 1: the project-branch sync names the procedure's step 2 and its sequence.
+	assert "sync the project branch first, as the procedure's step 2 (**Sync the project branch**) does" in section
+	assert "check the PR head branch out again (`git checkout <PR head branch>`). Then merge `origin/<project branch>` into the PR head" in section
+	assert "exactly as step 2 does" not in section
 
 
 def test_project_base_is_verified_and_other_bases_merge_their_own_base(commands):
@@ -76,6 +79,11 @@ def test_project_base_is_verified_and_other_bases_merge_their_own_base(commands)
 	assert "With base drift, merge `origin/<base>` into the PR head" in section
 	assert "With default drift only, skip the merge" in section
 	assert "`<source>` is the default branch, the project branch, or the PR's base, per step 3" in section
+	# PR #5282 review round 1: routing, both-drift, and failed-fetch cases.
+	assert "any non-zero exit → step 3" in section
+	assert "Up to two checks" in section
+	assert "When the default check failed too, run it again after step 4's merge" in section
+	assert "When `git fetch origin <project branch>` itself fails, it is the same stop" in section
 
 
 def test_claude_conflict_aborts_and_blocks(commands):
@@ -121,6 +129,9 @@ def test_resume_and_fixer_run_the_sync(commands):
 	assert "PushNotification" in fixer
 	assert "When its project-base check fails" in fixer
 	assert "on the default branch or on the PR's own base" in fixer
+	# PR #5282 review round 1: the conflict notice names the branch the sync merged.
+	assert ".claude/ conflict with <source> — decision needed" in fixer
+	assert "conflict with <default>" not in fixer
 
 
 def _git_env(home: Path) -> dict[str, str]:
@@ -263,3 +274,40 @@ def test_project_base_check_fails_until_the_project_branch_holds_the_default_gua
 	_git(clone, env, "push", "-q", "origin", "project")
 	_git(clone, env, "fetch", "-q", "origin", "project")
 	assert _exit_code(clone, env, verify) == 0
+
+
+@pytest.mark.parametrize("directory", DIRS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_default_drift_left_after_a_base_merge_is_still_detected(directory: Path, tmp_path: Path):
+	"""PR #5282 review round 1: a PR on another base lacks guard changes from both main and its base.
+
+	The documented base merge clears the base drift, and the default check, run again after the merge,
+	still exits non-zero because the base itself lacks main's change, so the stale record is due.
+	"""
+	section = _section(_flat(directory / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	default_check = _documented(section, r"`(git diff --quiet HEAD\.\.\.origin/<default> -- [^`]*)`", default="main")
+	base_check = _documented(section, r"`(git diff --quiet HEAD\.\.\.origin/<base> -- [^`]*)`", base="stable")
+	merge = _documented(section, r"`(git merge [^`]*origin/<source>)`", source="stable")
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/hooks/guard.py", "v1\n", "guard v1")
+	_commit(origin, env, ".claude/settings.json", "{}\n", "settings")
+	_git(origin, env, "branch", "stable")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "checkout", "-q", "-b", "work", "origin/stable")
+	_commit(clone, env, "work.md", "x\n", "pr work")
+	_commit(origin, env, ".claude/settings.json", '{"hooks": {}}\n', "main wiring")
+	_git(origin, env, "checkout", "-q", "stable")
+	_commit(origin, env, ".claude/hooks/guard.py", "v2\n", "stable guard fix")
+	_git(clone, env, "fetch", "-q", "origin", "main", "stable")
+	assert _exit_code(clone, env, default_check) == 1
+	assert _exit_code(clone, env, base_check) == 1
+	subprocess.run(["bash", "-c", merge], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert _git(clone, env, "log", "-1", "--format=%s") == "[claude-asset-sync] merge stable for .claude/ guard updates"
+	assert (clone / ".claude/hooks/guard.py").read_text(encoding="utf-8") == "v2\n"
+	assert _exit_code(clone, env, base_check) == 0
+	assert _exit_code(clone, env, default_check) == 1
