@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5328-settings-guard-wiring-check-plan.md
 - Source issue: shubhodeep1/coding-workflows#5328   Progress comment: 5902373778
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5174-guard-differential-check
-- Project branch: claude/implement-plan-issue-5328-settings-guard-wiring-check   Final PR: (opening)
+- Project branch: claude/implement-plan-issue-5328-settings-guard-wiring-check   Final PR: #5356 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (claude/implement-plan-issue-5328-settings-guard-wiring-check-phase-1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; phase 1 starting.
+- Last note: phase 1 implemented and verified (tests/test_guard_differential.py 110 passed; the finding's exploit exits 0 before the fix and 1 after, in both settings files); phase PR opened.
 
 ## Phases
-1. [ ] Phase 1 — settings guard-wiring check (`scripts/guard_differential.py`, tests, `ci.yml` step comment, `agents.md`, changelog)
+1. [ ] Phase 1 — settings guard-wiring check (`scripts/guard_differential.py`, tests, `ci.yml` step comment, `agents.md`, changelog)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -33,8 +33,10 @@
 - AD-3 [plan, 2026-09-30] How does an intended wiring change pass? — Picked: A — list its printed identity (`settings:<file>:<event>:<matcher>:<hook>`) under the existing `Intended loosening:` section, where it counts as loosening. Alternatives: B — no escape hatch. Why: reuses the #5174 mechanism, and the operator still sees it. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-09-30] Added non-guard hooks that could auto-allow and `permissions.*` rule changes? — Picked: A — out of scope, recorded under Notes. Alternatives: B — fail every added hook entry in this PR. Why: §5; the finding names changed guard matchers and commands, and retire-master phase 3 classifies rule diffs. Applied in: no code change. Status: pending review
 - AD-5 [plan, 2026-09-30] An unparseable head settings file? — Picked: A — a wiring regression (exit 1); an unparseable base contributes no wiring. Alternatives: B — a setup error (exit 2). Why: fail closed on the loosening side while keeping exit 2 for bad refs. Applied in: phase 1 PR. Status: pending review
+- AD-6 [phase 1/1, 2026-09-30] A settings `env` change reaches every hook process (`CLAUDE_PR_MERGE_GUARD=off`, a `PATH` that shadows `python3`) while the guard command stays canonical. Cover it? — Picked: A — fail closed on any change to the top-level `env` object (identity `settings:<file>:env`). Alternatives: B — a denylist of sensitive keys; C — leave it out of scope. Why: §1; it is the same settings-only guard disablement class, neither settings file has ever had an `env` key, so the rule costs nothing, and a denylist is porous. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:security] A coverage gate that triggers on changed code files must also trigger on the config that wires that code: a settings-only change can disable a hook while every file-based check stays skipped, and a substring wiring test accepts a command that merely names the hook. (files: scripts/guard_differential.py, .claude/settings.json)
 
 ## Notes
 - 2026-09-30: started by the Claude issue dispatcher (`/implement-issue-claude`), session session_01JGsmyk8gEMSXFh6ocygH4q. The issue base is the #5174 project branch, so the final PR targets it and activation is n/a.
