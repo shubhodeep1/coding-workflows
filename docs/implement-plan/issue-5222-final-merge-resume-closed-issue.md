@@ -10,11 +10,11 @@
 - Waiting on: PR #5271
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01KfkvbMJgMjDKZBQ8DTiARb   safety net and hand-back: see the review-round-1 stage report
-- Last updated: 2026-09-29
-- Last note: review round 1 on head 63ee422: both consensus findings fixed in one [claude-autofix] commit (clarify.yml fallback retry + warning; telemetry contract assertion); waiting on review round 2
+- Last updated: 2026-09-30
+- Last note: review round 2 on head 3e879fc: clarify.yml fallback now logs every failed attempt (fixed); the `.claude/commands/` task gap rejected (the edits are the approved [claude-twin-sync] 63ee422) and the stale PR-body twin-first section corrected; waiting on review round 3
 
 ## Phases
-1. [ ] Phase 1 — final-merge resume on a closed issue   — PR #5271 open (waiting); review rounds: 1; interventions: 0; protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md (twin-first)
+1. [ ] Phase 1 — final-merge resume on a closed issue   — PR #5271 open (waiting); review rounds: 2; interventions: 0; protected paths: .claude/commands/implement-issue-claude.md, .claude/commands/implement-plan-claude.md (twin-first)
 
 ## Conformance
 
@@ -37,9 +37,11 @@
 ## Lessons
 - [source:plan-deviation] A full local `pytest tests` run does not finish within 40 minutes on a cloud session runner; verify a phase by running each test file that references the changed paths separately with a per-file timeout, and leave the full suite to CI. (files: tests/test_orchestrate_poll_process.py)
 - [source:intervention] A new stable `AI_PHASE_GATE_V1` telemetry line must also be pinned in tests/test_phase_skip_gate_telemetry_contract.py, and a workflow step's inline fallback for a gh_helpers.sh function should keep bounded retries and warn when it is used. (files: .github/workflows/clarify.yml, tests/test_phase_skip_gate_telemetry_contract.py)
+- [source:intervention] Once a `[claude-twin-sync]` copy lands on a twin-first phase PR, update the PR body's twin-first section in the same stage; a body that still says the sync is pending makes reviewers flag the synced `.claude/` diff as a task gap. (files: .claude/commands/implement-plan-claude.md)
 
 ## Notes
 - 2026-09-29 twin-sync resume stage (session_01QCEtm4U1UmHqXfWHjCRj5Q): owner answered Q1: A; [claude-twin-sync] 63ee422 verified (both .claude/commands sha256 match the twins); ai:claude-blocked removed from #5222; project branch synced with main (a06a40e, clean merge); wait armed on PR #5271.
 - 2026-09-29 review round 1 (session_019WoLVxBYnoYozUC6qZQHLn): finding clarify.yml:426-428 (no-retry gh_retry_to_file fallback) fixed with bounded retries and a degraded-mode warning; task gap in tests/test_phase_skip_gate_telemetry_contract.py fixed with a final_merge_resume assertion.
+- 2026-09-30 review round 2 (session_01N33hrjC3qxNQNw3GyAuXEV): finding clarify.yml:425-428 (fallback logged no per-retry warning) fixed with a warning per failed attempt and a final one after the last; task gap "`.claude/commands/` edited in a twin-first PR" rejected: the `.claude/` edits are the owner-approved `[claude-twin-sync]` 63ee422 (Q1: A), and both copies match their twins byte for byte; the PR body's twin-first section, which still said the sync was pending, was corrected.
 - Issue progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5222#issuecomment-5898432937
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-29)

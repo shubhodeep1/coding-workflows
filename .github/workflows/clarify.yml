@@ -426,10 +426,27 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           # Degraded fallback for the final-merge resume comments read: a few
           # plain attempts with backoff (no rate-limit handling), announced so
-          # the run log tells a degraded read from an ineligible issue.
+          # the run log tells a degraded read from an ineligible issue. Each
+          # failed attempt logs a warning, as the real helper does, so a read
+          # that recovers on a retry is visible too.
           if ! type gh_retry_to_file >/dev/null 2>&1; then
             echo "::warning::scripts/gh_helpers.sh did not load; gh_retry_to_file falls back to ${GH_RETRY_MAX_ATTEMPTS:-3} plain attempts without rate-limit handling"
-            gh_retry_to_file() { local out="$1"; shift; local attempt=1; while :; do "$@" > "${out}" && return 0; [ "${attempt}" -lt "${GH_RETRY_MAX_ATTEMPTS:-3}" ] || return 1; sleep "$((attempt * 2))"; attempt=$((attempt + 1)); done; }
+            gh_retry_to_file()
+            {
+              local out="$1"; shift
+              local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-3}"
+              local attempt=1
+              while :; do
+                "$@" > "${out}" && return 0
+                if [ "${attempt}" -ge "${max_attempts}" ]; then
+                  echo "::warning::gh_retry_to_file fallback: gh command failed after ${max_attempts} attempts"
+                  return 1
+                fi
+                echo "::warning::gh_retry_to_file fallback: gh command failed (attempt ${attempt}/${max_attempts}), retrying in $((attempt * 2))s"
+                sleep "$((attempt * 2))"
+                attempt=$((attempt + 1))
+              done
+            }
           fi
           LABELS_CSV="$(jq -r '[(.labels // [])[]?.name] | join(",")' "${ISSUE_META_FILE}")"
 

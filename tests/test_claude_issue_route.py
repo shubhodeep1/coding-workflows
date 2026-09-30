@@ -2111,6 +2111,10 @@ def test_clarify_fallback_retries_and_warns_without_gh_helpers(stubs):
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "scripts/gh_helpers.sh did not load; gh_retry_to_file falls back to 2 plain attempts" in result.stdout
 	assert stubs["log"].read_text().count("api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100") == 2
+	# Every failed attempt is logged, so a degraded read is visible per retry.
+	assert "::warning::gh_retry_to_file fallback: gh command failed (attempt 1/2), retrying in 2s" in result.stdout
+	assert "::warning::gh_retry_to_file fallback: gh command failed after 2 attempts" in result.stdout
+	assert "(attempt 2/2)" not in result.stdout
 	assert "final_merge_resume check failed for closed issue #9" in result.stdout
 	assert outputs["final_merge_resume"] == "false"
 
@@ -2124,6 +2128,8 @@ def test_clarify_fallback_still_routes_a_final_merge_resume(stubs):
 	)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "gh_retry_to_file falls back to" in result.stdout
+	# A first-attempt success logs no retry warning.
+	assert "gh_retry_to_file fallback: gh command failed" not in result.stdout
 	assert "reason=final_merge_resume outcome=handoff issue=9" in result.stdout
 	assert outputs["final_merge_resume"] == "true"
 	assert outputs["issue_implementer"] == "claude"
