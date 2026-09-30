@@ -1,17 +1,17 @@
 # Implement-Plan Log — Never report a permission-prompt lookup as not found because a fixed window ran out
 
-- Plan: docs/plans/issue-5126-lookup-full-label-scan-plan.md
+- Plan: docs/completed/issue-5126-lookup-full-label-scan-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5126 (https://github.com/shubhodeep1/coding-workflows/issues/5126)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4755-report-blocking-permission-prompts
 - Project branch: claude/implement-plan-issue-5126-lookup-full-label-scan   Final PR: #5160 (draft)
-- Status: IN_PROGRESS
-- Stage: conformance 1/3 — review round
-- Activation: not started
-- Waiting on: PR #5547
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4755-report-blocking-permission-prompts; steps 12–13 run only if the base moves onto main before the final merge)
+- Waiting on: completion PR (branch claude/implement-plan-issue-5126-lookup-full-label-scan-complete)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01KFpX9wDF5pwN8i2yd4ctth   safety net trig_01H28YAFoLwTLDMQiQ2xQz89   hand-back trig_015KzS2hPv8LGQHW1rukhBoB
+- Check-in: checker session_01KFpX9wDF5pwN8i2yd4ctth   safety net and hand-back: armed by the completion stage (ids in its report)
 - Last updated: 2026-09-30
-- Last note: conformance 1/3 review round 1 on PR #5547 (session_01XaYsncubwiatBaMhdjKKvN): twin sync 3ddd20f landed (Q3: A, issue comment 5907867671); fixed 2 valid findings (a lookup test that reached live GitHub for comments; the lookup comments-read budget in CLAUDE.md §23.I and agents.md), rejected 3; wait re-armed on PR #5547 (next stage conformance 2/3).
+- Last note: validation 1/3 read (session_017b2eMACteTFC8DW8XZkMAJ): run 36714631843 status=pass on 3068280 (the conformance-audited head); completion PR opened (plan doc moved to docs/completed/); next stage final-merge 1/1.
 
 ## Phases
 1. [x] Phase 1 — lookup checks every candidate   — protected paths: .claude/scripts/permission_prompts.py (twin: workflow-templates/.claude/scripts/permission_prompts.py)
@@ -26,14 +26,20 @@
 
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — fix PR #5547 (pre-security); twin sync 3ddd20f (Q3: A, issue comment 5907867671); review rounds: 1 (2 fixed, 3 rejected)
+- Run 2 — 2026-09-30: CONFORMANT (Correctness: PASS) — no fixes (pre-security; audited 3068280)
 
 ## Security pass
+- Skipped (plan header: `Security pass: skip`, ai:security automation-produced issue; `security_pass_skip.py` verified)
 
 ## Validation
+- Cycle 1 — run 36714631843 2026-09-30 (target_ref: claude/implement-plan-issue-5126-lookup-full-label-scan, head 3068280): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 298s)
 
 ## Completion
+- Completion PR (branch claude/implement-plan-issue-5126-lookup-full-label-scan-complete) open 2026-09-30 — doc moved to docs/completed/issue-5126-lookup-full-label-scan-plan.md
+- Final PR #5160 draft (into claude/implement-plan-issue-4755-report-blocking-permission-prompts)
 
 ## Activation
+- n/a — non-default base (issue mode); the final-merge stage closes #5126 and labels it `ai:merged` once #5160 merges
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-29] How should `lookup` stop missing reports outside its window? — Picked: A — check every paginated candidate (search hits, or every labelled issue in the fallback), skipping comment reads for issues with `comments: 0`. Alternatives: B — a repository-scoped session-to-report index kept by `report-now`; C — keep the window and exit 2 when it is exhausted. Why: smallest change (§5) that removes the false negative using existing paginated helpers (§15). Applied in: phase 1 PR. Status: pending review
