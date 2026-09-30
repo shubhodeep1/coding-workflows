@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:9 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: The session title is interpolated into a shell double-quoted argument, so shell metacharacters such as `$(...)` or backticks could be expanded, and a double quote could break the argument.\n  WHY: Current titles are deterministic and do not contain these characters, but a title containing them could cause command substitution or argument truncation.\n- .claude/commands/implement-issue-claude.md:9 | severity=low | confidence=[2]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The session title is interpolated into a shell double-quoted argument, so shell metacharacters such as `$(...)` or backticks could be expanded.\n  WHY: Current titles are deterministic and do not contain these characters, but a title containing them could cause command substitution or argument truncation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/implement-plan-claude.md, line 9 | The instruction says to run `permission_prompts.py session-meta --title \"<title from get_session>\"` where the title is substituted into a shell double-quoted string. If a session title ever contained a double-quote character, the shell command would break (title truncated at the quote). Chain and dispatcher titles currently use only ASCII text and em dashes, so this is not exploitable today, but it is a latent injection surface.\n  WHY: Chain and dispatcher titles currently use only ASCII text and em dashes, so this is not exploitable today, but it is a latent injection surface.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/commands/implement-plan-claude.md (line 9), .claude/commands/implement-issue-claude.md (line 9) | severity=low | confidence=2\n  PROBLEM: The session title from `get_session` is interpolated into a shell double-quoted argument; if it contains `$(...)` or backticks, the shell would execute the substitution.\n  WHY: A session title containing shell metacharacters (`$(`, backticks, `\"`) would be expanded or break the argument when Claude Code constructs and executes the shell command. In the current unattended pipeline, titles are deterministic strings like \"implement-plan <slug> \u2014 <stage>\" that never contain these characters, so the risk is theoretical but real if a title source ever changes.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "347bcdc17a32421f852726fe5bb20189994d4182c4ce630bcc8caa36c0f32846",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36660767359",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36660767359",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930024920_35a0d9fa3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36660767359"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T02:49:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
