@@ -1317,6 +1317,8 @@ def test_a_subshell_only_affects_later_commands(tmp_path: Path) -> None:
 		"git push origin :feature/x",
 		"git push origin refs/tags/v1.0",
 		"git push origin v1.0:refs/tags/v1.0",
+		"git push --tags origin",
+		"git push origin --tags",
 		"git status",
 		"git log -1",
 	],
@@ -1330,9 +1332,10 @@ def test_deletions_tags_and_unguarded_calls_yield_no_target(tmp_path: Path, comm
 	[
 		("git push", "", "HEAD"),
 		("git push -u origin", "", "HEAD"),
-		("git push --tags origin", "", "HEAD"),
+		("git push --tags origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push --follow-tags origin", "", "HEAD"),
+		("git push --tag origin", "", "HEAD"),
 		("git push origin HEAD", "", "HEAD"),
-		("git push origin :", "", "HEAD"),
 		("git push origin feature/y", "feature/y", "feature/y"),
 		("git push origin +HEAD:refs/heads/feature/y", "feature/y", "HEAD"),
 		("git push -o ci.skip --repo origin origin HEAD:feature/y", "feature/y", "HEAD"),
@@ -1342,6 +1345,66 @@ def test_deletions_tags_and_unguarded_calls_yield_no_target(tmp_path: Path, comm
 )
 def test_push_refspecs_name_the_judged_branch_and_tip(tmp_path: Path, command: str, branch: str, tip: str) -> None:
 	assert _targets(command, tmp_path) == [("push", str(tmp_path), branch, tip, True, False)]
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git push --all origin",
+		"git push origin --all",
+		"git push --branches origin",
+		"git push --mirror origin",
+		"git push --al origin",
+		"git push --mir origin",
+		"git push -u --all origin",
+		"git push origin :",
+		"git push origin +:",
+	],
+)
+def test_bulk_pushes_judge_the_checked_out_branch_and_carry_a_bulk_reason(tmp_path: Path, command: str) -> None:
+	"""PR #5173 review: `--all`, `--branches`, `--mirror` (and the prefixes git
+	expands to them) and the `:` matching refspec write every branch, so the
+	target also carries a `bulk_reason` that makes the hook ask."""
+	targets = twin_guard.guard_targets(command, str(tmp_path))
+	assert len(targets) == 1, command
+	target = targets[0]
+	assert (target.cwd, target.branch, target.tip, target.reaches_remote) == (str(tmp_path), "", "HEAD", True)
+	assert not target.fallback_reason, command
+	assert target.bulk_reason, command
+
+
+def test_bulk_push_in_an_unresolvable_directory_keeps_the_fallback_and_the_bulk_reason(tmp_path: Path) -> None:
+	targets = twin_guard.guard_targets("cd $WORKTREE && git push --all origin", str(tmp_path))
+	assert len(targets) == 1
+	assert (targets[0].cwd, targets[0].branch, targets[0].tip) == (str(tmp_path), "", "HEAD")
+	assert targets[0].fallback_reason and targets[0].bulk_reason
+
+
+@pytest.mark.parametrize(
+	("command", "bulk"),
+	[
+		("git push origin 'refs/heads/*:refs/heads/*'", True),
+		("git push origin '+refs/heads/merged*:refs/heads/merged*'", True),
+		("git push origin 'feature/*'", True),
+		("git push origin 'refs/tags/*:refs/tags/*'", False),
+		("git push origin HEAD:$B", False),
+		("git push origin HEAD:feature/[x]", False),
+	],
+)
+def test_pattern_refspecs_keep_the_fallback_and_ask(tmp_path: Path, command: str, bulk: bool) -> None:
+	"""A `*` pattern keeps the AD-9 fallback (session checkout, warning) and,
+	when it can write branches, also carries a `bulk_reason`."""
+	targets = twin_guard.guard_targets(command, str(tmp_path))
+	assert len(targets) == 1, command
+	assert targets[0].fallback_reason, command
+	assert bool(targets[0].bulk_reason) is bulk, command
+
+
+def test_push_options_that_are_not_bulk_flags_are_not_mistaken_for_them() -> None:
+	for token in ("--atomic", "--a", "--m", "--no-verify", "--force", "-a", "--tags", "--allow"):
+		assert not twin_guard._is_push_bulk_flag(token), token
+	for token in ("--all", "--al", "--branches", "--br", "--mirror", "--mirr"):
+		assert twin_guard._is_push_bulk_flag(token), token
 
 
 def test_every_guarded_call_in_a_command_is_a_target(tmp_path: Path) -> None:
@@ -1541,6 +1604,77 @@ def test_e2e_several_asks_merge_into_one_hook_result(worktree_repo) -> None:
 	decision = _ask_decision(proc)
 	assert decision is not None
 	assert "feature/a" in decision["systemMessage"] and "feature/b" in decision["systemMessage"]
+
+
+@pytest.mark.parametrize("command", ["git push --all origin", "git push origin :", "git push --mirror origin"])
+def test_e2e_bulk_push_from_the_default_branch_asks(worktree_repo, command: str) -> None:
+	"""PR #5173 review: the checked-out branch is the default branch, so it is
+	skipped, but the push writes the other branches too: ask, with no API call."""
+	repo, _, stub_bin, _, calls_log = worktree_repo
+	_git(repo, "checkout", "-q", "main")
+	proc = _run_twin_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	decision = _ask_decision(proc)
+	assert decision is not None, proc.stdout
+	assert "judges only the checked-out branch" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+	assert not calls_log.exists() or not calls_log.read_text(encoding="utf-8").strip()
+
+
+def test_e2e_bulk_push_from_a_stranded_checkout_still_blocks(worktree_repo) -> None:
+	repo, _, stub_bin, _, _ = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, "git push --all origin")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+	assert _ask_decision(proc) is None
+
+
+def test_e2e_bulk_push_from_an_open_pr_branch_asks(worktree_repo) -> None:
+	repo, _, stub_bin, _, _ = worktree_repo
+	_git(repo, "checkout", "-q", "-b", "feature/open", "main")
+	proc = _run_twin_hook(repo, stub_bin, "git push --all origin")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None
+
+
+def test_e2e_bulk_push_is_not_judged_when_the_guard_is_off(worktree_repo, monkeypatch) -> None:
+	repo, _, stub_bin, _, _ = worktree_repo
+	_git(repo, "checkout", "-q", "main")
+	env = _git_env()
+	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '')}"
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["CLAUDE_PR_MERGE_GUARD"] = "off"
+	proc = subprocess.run(
+		[sys.executable, str(TEMPLATE_GUARD_PATH)],
+		input=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push --all origin"}, "cwd": str(repo)}),
+		capture_output=True,
+		text=True,
+		env=env,
+		timeout=120,
+	)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert proc.stdout.strip() == ""
+
+
+def test_e2e_tag_only_push_from_a_stranded_checkout_is_allowed(worktree_repo) -> None:
+	"""PR #5173 review: `git push --tags origin` writes no branch, so the
+	stranded checkout's branch is not judged."""
+	repo, _, stub_bin, _, calls_log = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, "git push --tags origin")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None
+	assert not calls_log.exists() or not calls_log.read_text(encoding="utf-8").strip()
+
+
+def test_e2e_bulk_ask_merges_with_other_notices_into_one_result(worktree_repo) -> None:
+	repo, _, stub_bin, _, _ = worktree_repo
+	_git(repo, "checkout", "-q", "main")
+	proc = _run_twin_hook(repo, stub_bin, "git push origin 'refs/heads/*:refs/heads/*'")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	lines = [line for line in proc.stdout.splitlines() if line.strip()]
+	assert len(lines) == 1, proc.stdout
+	decision = _ask_decision(proc)
+	assert decision is not None
+	assert "could not resolve where `git push` runs" in decision["systemMessage"]
 
 
 def test_single_directory_commands_keep_their_output_shape(monkeypatch, tmp_path: Path, capsys) -> None:

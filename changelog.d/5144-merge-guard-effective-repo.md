@@ -7,11 +7,12 @@ On 2026-09-29 a twin-sync push from a detached worktree onto an open PR's branch
 | --- | --- |
 | Directory sources followed | earlier `cd <path>` in the same command, `git -C <path>`, `GIT_DIR=<path>`, `--git-dir` |
 | Push refspecs judged on the target | `<src>:<dst>`, `HEAD:<dst>`, `+<src>:refs/heads/<dst>`, `<branch>` |
-| Not judged | `--delete`, `:<dst>`, `refs/tags/…` |
+| Not judged | `--delete`, `:<dst>`, `refs/tags/…`, `--tags` with no refspec |
+| Judged on the current branch, then a confirmation prompt | `--all`, `--branches`, `--mirror` (and prefixes such as `--al`), the `:` matching refspec, `*` pattern refspecs |
 | Judged on the session checkout, with a warning | refspecs containing `$`, a backtick, `*`, `?`, `[`, `{` or `~`; `heads/` / `tags/` / `remotes/` shorthands; a `-`-prefixed source |
 | GitHub API calls | at most 1 per `(slug, branch)` pair judged, 0 when the 300-second cache holds it |
 
-What this means for operators and supervising sessions: twin syncs, held-merge conflict resolutions, and fixer pushes can run from scratch worktrees (`git push origin HEAD:<phase branch>`) without detaching the main checkout first. A push that would strand work on a merged branch is blocked wherever it runs from.
+What this means for operators and supervising sessions: twin syncs, held-merge conflict resolutions, and fixer pushes can run from scratch worktrees (`git push origin HEAD:<phase branch>`) without detaching the main checkout first. A push that would strand work on a merged branch is blocked wherever it runs from. A bulk push such as `git push --all origin` now asks for confirmation, because the guard cannot check every branch it writes, and `git push --tags origin` is no longer judged against the checked-out branch.
 
 ### For contributors
 

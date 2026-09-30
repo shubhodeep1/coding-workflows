@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5144-merge-guard-effective-repo   Final PR: #5163 draft
 - Status: BLOCKED
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #5173: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_012bXVKFrhBSuPGD6croSjLV   safety net none   hand-back none   (both deleted 2026-09-30 by the review-round stage; the chain waits on twin sync)
+- Check-in: checker session_012bXVKFrhBSuPGD6croSjLV   safety net none   hand-back none   (both deleted 2026-09-30 by the review-round 3 stage; the chain waits on twin sync)
 - Last updated: 2026-09-30
-- Last note: review round 2 (workflow round 1 on head 56631e639350, run 36668782207): the `--repo` refspec finding rejected (git reads the first positional as the repository even with `--repo`, pinned by a test); the blocks-path notice filter fixed in the twin; project branch merged in; new hold claim and twin-sync blocker posted; waiting on the `[claude-twin-sync]` copy and `/reclarify` on #5144.
+- Last note: review round 3 (workflow round 1 on head e0a7d2ba4f03, run 36685529890): both findings fixed in the twin (a bulk push — `--all`, `--branches`, `--mirror`, `:`, a `*` pattern — judges the checked-out branch and then asks; `--tags` with no refspec is not judged); new hold claim and twin-sync blocker posted; waiting on the `[claude-twin-sync]` copy and `/reclarify` on #5144.
 
 ## Phases
-1. [ ] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 open (twin sync pending); review rounds: 2; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
+1. [ ] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 open (twin sync pending); review rounds: 3; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
    - Command walker: effective directory across `cd`, `git -C`, `GIT_DIR=`, `--git-dir`; unresolvable constructs fall back with a warning
    - Push refspec parser: `<src>:<dst>` judged on `<dst>` with `<src>` as tip; deletions and tags skipped; no refspec judges the current branch
    - Per-target judge with one cached REST call per `(slug, branch)`; one merged hook result
@@ -41,6 +41,8 @@
 - AD-7 [plan, 2026-09-29] How are several guarded git invocations in one command combined? — Picked: A — judge each distinct target, block if any blocks, otherwise one JSON result. Alternatives: B — judge only the last invocation. Why: §21 invariant; the hook protocol takes one JSON object. Applied in: phase 1 PR. Status: pending review
 - AD-8 [phase 1/1 — review round 1, 2026-09-29] The review suggests falling back for any non-`refs/` destination containing `/` (such as `heads/x`); how wide should that rule be? — Picked: A — only the `heads/`, `tags/` and `remotes/` shorthands git expands against the remote. Alternatives: B — every destination containing `/`. Why: B would send every `claude/…` branch push back to the session checkout and undo the issue's fix; the reviewer's example is a shorthand. Applied in: PR #5173 review round 1. Status: pending review
 - AD-9 [phase 1/1 — review round 1, 2026-09-29] Where does an unresolvable refspec fall back to, the session checkout or the effective repository's checked-out branch? — Picked: A — the session checkout, the old behaviour, the same as an unresolvable directory. Alternatives: B — the effective repository's checked-out branch. Why: the review asks for the old target; a detached worktree under B would allow with only a warning. Applied in: PR #5173 review round 1. Status: pending review
+- AD-10 [phase 1/1 — review round 3, 2026-09-30] How should the guard judge a bulk push (`--all`, `--branches`, `--mirror` and the prefixes git expands to them, the `:` matching refspec), which writes branches it cannot list one by one? — Picked: A — judge the checked-out branch as before (a block still blocks) and otherwise ask for confirmation, with no API call and also on the default branch. Alternatives: B — list every local branch and judge each (one REST call per branch); C — treat it as unresolvable and judge the session checkout with a warning (the AD-9 path). Why: A closes the silent allow without growing the §21.D budget, and never allows what the old check blocked; B scales API calls with the branch count, C still lets unlisted branches through. Applied in: PR #5173 review round 3. Status: pending review
+- AD-11 [phase 1/1 — review round 3, 2026-09-30] A `*` pattern refspec (`refs/heads/*:refs/heads/*`) is also a bulk push; should it leave the AD-9 fallback? — Picked: A — keep the AD-9 fallback (session checkout, warning) and add the same confirmation prompt when the pattern can write branches (not a tag pattern or a deletion). Alternatives: B — judge it like `--all` on the effective repository; C — leave it as the fallback only. Why: A keeps the earlier review's pinned fallback and closes the same gap; C leaves it open. Applied in: PR #5173 review round 3. Status: pending review
 
 ## Lessons
 - [source:intervention] When a guard starts judging a user-supplied ref instead of local state, treat every shell word it reads (variables, globs, shorthands git expands, `-`-prefixed values) as unresolvable unless it is a plain literal, and fall back to the old check with a warning. (files: .claude/hooks/pr_merge_status_guard.py)
@@ -48,6 +50,7 @@
 - [source:plan-deviation] A hook module loaded by tests through `importlib.util.spec_from_file_location` without registering it in `sys.modules` cannot use `@dataclass` under `from __future__ import annotations`; use a `NamedTuple` for small immutable records there. (files: .claude/hooks/pr_merge_status_guard.py, tests/test_pr_merge_status_guard.py)
 
 - [source:intervention] `git push` always reads its first positional as the repository, even when `--repo` is given (the option is only the default), so a push-argument parser must not shift the refspec list when it sees `--repo`. (files: .claude/hooks/pr_merge_status_guard.py)
+- [source:intervention] `git push --tags <remote>` with no refspec pushes only tags, while `--all`, `--branches`, `--mirror` (and any unambiguous prefix git accepts, such as `--al`) and the `:` refspec write many branches; a guard that judges one branch per push must not map either to the checked-out branch alone. (files: .claude/hooks/pr_merge_status_guard.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the scheduled routine `dispatch shubhodeep1/coding-workflows#5144: deliver` in session session_01YLLYPSWJ9Xqr8pCYFPTRQE; permission mode auto.
@@ -58,3 +61,5 @@
 - Master twin-sync review (PR #5173 comment 5891249253) declined the first twin; review round 1 fixed it. New twin sha256 `d1644620e449abe4a02fc50eb772bedf8878a8e7986e73a36440e15afe0577d2`; new blocker posted on #5144. The REST-call cap the review floated was not added: §21.D allows one call per `(slug, branch)`, and the cache and memo already bound it.
 - /reclarify resume on 2026-09-30: stage session_01JicWiDdBc6wpUAoU4trx2e synced the project branch with main (fb1142a) and armed checker session_012bXVKFrhBSuPGD6croSjLV, safety net trig_01SqbKiGNT6dnRFYK1qXS6Vs and hand-back trig_012mdcTGEpsTFMU1AGMzQw2S; that wait ended with the workflow's review round 1 hand-off on head 56631e639350 (PR #5173 comment 5904182364).
 - Review round 2 (session_01NBozj8UjGHoeHvyMSvFYXe, 2026-09-30): the project branch was merged into the phase branch (clean); new twin sha256 `b68e719062b0f22b6b8efcbcf4b04f22a678b2cdd3dd667d753c25399a03cf96` (the `.claude/` copy is still `d1644620…`); new blocker posted on #5144.
+- /reclarify resume 2026-09-30 by session_0125JU5gc8ttYcB4X2Br61mc: twin sync e0a7d2b landed (sha256 b68e7190…cf96), hold lifted; project branch synced with main at 409df1a (clean, 315 tests passed); ai:claude-blocked removed; checker session_012bXVKFrhBSuPGD6croSjLV reused, safety net trig_018gRvYmHShnyXLqoP2RwHpg, hand-back trig_012s3YkgjLM3qrigvNyHaddK; Status back to IN_PROGRESS. That wait ended with the workflow's review round 1 hand-off on head e0a7d2ba4f03 (PR #5173 comment 5907537135).
+- Review round 3 (session_01W7iJBQB6NhFrgqyuGtwa3p, 2026-09-30): the log on the phase branch had one `## Auto-decisions` section with AD-1…AD-9 and no duplicates, so nothing was removed. New twin sha256 `2eadc36a0bc7e1df519637aa8f3c73471c567adf4728396ce88b27231d624cf3` (the `.claude/` copy is still `b68e7190…cf96`); new blocker posted on #5144.

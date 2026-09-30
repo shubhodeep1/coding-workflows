@@ -913,9 +913,13 @@ refspec is judged on the branch it writes to: for
 for `<dst>`, with `<src>` taking the role of `HEAD`. A detached scratch
 worktree pushing to an open PR's branch is therefore allowed, and a worktree
 pushing merged history to a merged branch with no open PR is blocked,
-whatever the main checkout is on. Deletions and tag refspecs land no commits
-on a branch and are not judged; a push without a refspec judges the current
-branch. When the directory cannot be resolved (a variable or command
+whatever the main checkout is on. Deletions, tag refspecs, and `--tags` with
+no refspec land no commits on a branch and are not judged; a push without a
+refspec judges the current branch. A bulk push (`--all`, `--branches`,
+`--mirror`, or a prefix git expands to one, the `:` matching refspec, or a `*`
+pattern refspec) judges the current branch as usual and, when that does not
+block, also asks for confirmation, since the other branches it writes are not
+listed; the ask issues no API call and applies on the default branch too. When the directory cannot be resolved (a variable or command
 substitution, a subshell, `pushd`/`popd`, a `cd` joined by `||`, `&` or `|`,
 `export GIT_DIR`, a path that does not exist yet), or a refspec cannot be
 turned into one branch (a variable, a glob or brace pattern, a `heads/` /
