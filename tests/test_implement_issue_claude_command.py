@@ -368,8 +368,18 @@ def test_pickup_skips_a_denied_cleanup_call(pickup_cmd):
 	# session unarchived defers its first queue read to its first hourly wake.
 	assert "For that one wake both pickups can read the queue." not in keep_one
 	start = keep_one[keep_one.index("**`start`**"):keep_one.index("**`— wake.`**")]
-	assert "unless this step left another pickup's session unarchived: then do not read the queue in this turn" in start
-	assert "Report `claude-issue-pickup: restarted; first queue read at the next hourly wake`" in start
+	# PR #5097 review round on head f0ca697: the three create_trigger outcomes
+	# are separate branches, so the deferred read is tied to the success path
+	# and the failure path reads no queue either.
+	failed = start.index("- **It failed twice** →")
+	deferred = start.index("- **It succeeded, and this step left another pickup's session unarchived** →")
+	drained = start.index("- **It succeeded, and no other pickup's session is left unarchived** →")
+	assert failed < deferred < drained
+	assert "report the error and end the turn without reading the queue" in start[failed:deferred]
+	assert "do not read the queue in this turn. Report `claude-issue-pickup: restarted; first queue read at the next hourly wake`" in start[deferred:drained]
+	assert "continue with step 2 now, so the queue is drained immediately." in start[drained:]
+	assert "restarted; first queue read at the next hourly wake" not in start[failed:deferred]
+	assert "unless this step left another pickup's session unarchived" not in start
 	assert "So a `start — restart` that leaves any other pickup's session unarchived creates its trigger but reads no queue in that turn." in keep_one
 	assert "the two pickups never read the queue at the same time" in keep_one
 	assert "A `/fix-claude-pr` claim is a read and then a separate comment, not an atomic lock" in keep_one
