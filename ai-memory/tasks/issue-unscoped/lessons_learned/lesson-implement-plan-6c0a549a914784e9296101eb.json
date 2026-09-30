@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T12:28:35Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Reading several status-filtered run listings one after another can miss a run that changes status between the reads; read them in lifecycle order (pending, queued, in_progress) so a forward transition lands in a later read.",
+  "phase": "implement_plan",
+  "pr_number": 5657,
+  "record_id": "lesson-implement-plan-6c0a549a914784e9296101eb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5442-page-checker-review-dispatch-runs",
+    "file:.claude/scripts/check_in_status.py"
+  ]
+}
