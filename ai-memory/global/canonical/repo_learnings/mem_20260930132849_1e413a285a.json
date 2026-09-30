@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Treat validation and autofix subprocesses as untrusted boundaries, and preserve explicit isolation and target-ref checks.",
   "timestamps": {
     "created_at": "2026-09-30T13:28:49Z",
