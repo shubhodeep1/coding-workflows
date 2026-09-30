@@ -234,7 +234,7 @@ fi
   if [ "${claude_fixer_ledger_state}" = "ok" ]; then
     echo "Reviewer ledger entries: ${claude_fixer_finding_count} (posted above)."
     if [ "${claude_fixer_nonblocking_count}" -gt 0 ]; then
-      echo "Non-blocking entries: ${claude_fixer_nonblocking_count} (the ledger's NON-BLOCKING FINDINGS block: each was raised by one reviewer and rejected by a majority of the others; no fix or verdict is needed for them)."
+      echo "Non-blocking entries: ${claude_fixer_nonblocking_count} (the ledger's NON-BLOCKING FINDINGS block: each was raised by one reviewer, rejected by a majority of the others, and proved false by an independent automated check; no fix or verdict is needed for them)."
     fi
   else
     echo "The consensus ledger was not produced; the per-reviewer outputs are in the run's \`reviewer-logs-*\` artifact."
