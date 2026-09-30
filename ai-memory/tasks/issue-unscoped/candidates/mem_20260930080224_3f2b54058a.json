@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:1249-1252; changelog.d/5327-pinned-guard-verifier.md:12 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: Both passages say the verifier change applies only once it has merged without qualifying the bootstrap case in which the base lacks the verifier and CI runs the PR\u2019s copy before merge.\n  WHY: The bootstrap fallback is documented earlier, which one reviewer considered sufficient; others judged the unqualified wording ambiguous, particularly in the changelog\u2019s standalone takeaway.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Fix the misleading documentation that said a verifier change \"applies to PRs opened after it merges\" (the original conformance finding).\n  expected_change_site: agents.md:1249-1252 and changelog.d/5327-pinned-guard-verifier.md:12\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: Both documents now say the change \"applies only once it has merged, and then to every run that starts afterwards, including new runs on PRs that were already open\" (agents.md) and \"takes effect once it has merged, on every CI run that starts afterwards (including new runs on pull requests that were already open)\" (changelog). The fix correctly addresses the original finding.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md; changelog.d/5327-pinned-guard-verifier.md | severity=low | confidence=4\n  PROBLEM: Both passages say the verifier change applies \u201conly once\u201d it has merged, without qualifying the bootstrap case.\n  WHY: When the base lacks the verifier, the CI step copies and runs the PR\u2019s version before merge (ci.yml:517-523). The passages therefore misstate which verifier runs during bootstrap, despite describing that fallback elsewhere.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: Fix the misleading documentation that said a verifier change \"applies to PRs opened after it merges\" (the original conformance finding).\n  Expected change site: agents.md:1249-1252 and changelog.d/5327-pinned-guard-verifier.md:12\n  Evidence of absence: Both documents now say the change \"applies only once it has merged, and then to every run that starts afterwards, including new runs on PRs that were already open\" (agents.md) and \"takes effect once it has merged, on every CI run that starts afterwards (including new runs on pull requests that were already open)\" (changelog). The fix correctly addresses the original finding.\n  severity=low | confidence=5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- changelog.d/5327-pinned-guard-verifier.md\n  Line or code reference: line 12 \u2014 \"What this means for contributors: a change to scripts/guard_differential.py takes effect once it has merged, on every CI run that starts afterwards...\"\n  Problem: The audience-closing takeaway says changes take effect \"once it has merged\" without qualifying the bootstrap case. Line 4 of the same fragment describes the bootstrap fallback (\"A base branch that does not carry the verifier yet runs the PR's copy\"), but a contributor reading only the takeaway paragraph \u2014 which \u00a720.D of CLAUDE.md defines as the standalone operational summary \u2014 would not know that during bootstrap (base lacks the verifier) the PR's copy runs before merge, so the change is in effect immediately.\n  Why it fails at runtime: No runtime failure. This is a documentation accuracy gap on a security-sensitive mechanism. An operator deciding whether a verifier fix protects an already-open PR during the bootstrap window could draw the wrong conclusion from the takeaway alone.\n  severity=low | confidence=3\n- agents.md\n  Line or code reference: lines 1249-1252 \u2014 \"The base is fetched when the step runs, so a change to the verifier applies only once it has merged, and then to every run that starts afterwards, including new runs on PRs that were already open.\"\n  Problem: The \"so\" connector scopes this to the non-bootstrap case (base has the verifier), and the bootstrap case is described in the immediately preceding sentence (1245-1248). The wording is accurate in context, but a reader who skims past the preceding bootstrap sentence could misread \"applies only once it has merged\" as universal. In bootstrap, the PR's copy runs before merge (ci.yml:522), so the change is in effect immediately.\n  Why it fails at runtime: No runtime failure. The preceding context mitigates the concern \u2014 the bootstrap fallback is explicitly documented two sentences earlier. This is a minor clarity gap, not a misleading statement when the paragraph is read in order.\n  severity=low | confidence=2\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3de5c200f9fee31ffd1414e2aae976f41bdc8f524378a95cede52bcfd0df8f16",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5539,
+    "run_id": "36684303815",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36684303815",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930080224_3f2b54058a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5539,
+    "run_id": "36684303815"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T08:02:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
