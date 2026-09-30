@@ -20,6 +20,7 @@ Let several claude.ai accounts share the Claude automation's work. Each account 
   - The statusline JSON carries `rate_limits.five_hour` / `seven_day` `.used_percentage` and `.resets_at` for Pro/Max plans. Whether the statusline runs in cloud sessions is unverified (code.claude.com/docs/en/statusline).
   - The `StopFailure` hook carries `error_type: rate_limit`. Whether it fires on 5-hour and weekly limits in cloud sessions is unverified (code.claude.com/docs/en/hooks).
   - `get_session` / `list_sessions` expose `post_turn_summary.status_detail`, which carried the `You've hit your weekly limit` text during the outage. This is a signal that is available today.
+  - `get_session` also returns `external_metadata.rate_limit_info` (`status` `allowed` / `allowed_warning` / `rejected`, `rateLimitType` such as `seven_day`, `resetsAt` epoch seconds, `isUsingOverage`). It also returns per-session `external_metadata.usage` (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost_usd`). Both were observed in this cloud session on 2026-09-30. They give no percentage, and the threshold behind `allowed_warning` is not documented.
 - **A push to `claude/**` starts a review.** A push to a `claude/**` branch with no PR starts a full reviewer panel (`internal-review.yml`, `push: branches: claude/**`). So mid-stage checkpoints must not use `claude/**` branches.
 - **Model prices.** `claude-sonnet-5-5` and `claude-sonnet-5` are both $2 / $10 per MTok, with the same tokenizer. `claude-sonnet-4-6` is $3 / $15. Haiku 4.5 cannot run in Auto mode, so it cannot be an unattended checker (agents.md "Interactive slash-command model selection").
 
@@ -109,10 +110,11 @@ Operator requirements: checks and monitoring run on the cheapest Sonnet at low e
 **Reading usage** (`claude_pool.py usage`), sources in order:
 
 1. `~/.claude/pool/usage.json`, written by a new statusline command `.claude/hooks/pool_usage_snapshot.py` from `rate_limits`. It counts only when fresh (≤ 15 min).
-2. `exhausted_until`, taken from:
+2. The pickup's own `get_session` (no id): `rate_limit_info.status == "rejected"` sets `exhausted_until = resetsAt`. `allowed_warning` is recorded in the health ref but does not gate, because its threshold is not known to be 90%.
+3. `exhausted_until`, taken from:
    - the account's health ref, written by the new `StopFailure` hook when it fires with `error_type: rate_limit`, parsing `resets …` from the message; or
    - the pickup's own `list_sessions` (`mine: true`, first page) scan for `status_detail` containing `hit your` and `limit`.
-3. Unknown, which counts as under 90% (Q11).
+4. Unknown, which counts as under 90% (Q11).
 
 **The gate** (`claude_pool.py gate`) returns `slots`:
 - `0` when `used_5h ≥ 90` or `used_7d ≥ 90` (`CLAUDE_POOL_GATE_PERCENT`, default 90) or `now < exhausted_until`.
@@ -177,8 +179,8 @@ Every phase is its own PR into the project branch and is safe to merge in any or
 - **Account check.** With `CLAUDE_POOL_ACCOUNT` unset, every session-side step is skipped (Q20).
 
 1. **Measurements and signals.**
-   - **Scope:** a statusline usage snapshot, a `StopFailure` logger, a session token-usage reporter, a live test that custom refs can be written, and the Sonnet comparison.
-   - **Files:** `.claude/hooks/pool_usage_snapshot.py` [new], `.claude/hooks/pool_stop_failure.py` [new], `.claude/scripts/session_token_usage.py` [new], their twins, `settings.json` (`statusLine`, `StopFailure` hook, allow rules), `docs/operations/claude-pool-measurements.md` [new], tests.
+   - **Scope:** a statusline usage snapshot, a `StopFailure` logger, a live test that custom refs can be written, and the Sonnet comparison (read from `get_session` usage).
+   - **Files:** `.claude/hooks/pool_usage_snapshot.py` [new], `.claude/hooks/pool_stop_failure.py` [new], their twins, `settings.json` (`statusLine`, `StopFailure` hook, allow rules), `docs/operations/claude-pool-measurements.md` [new], tests.
    - **Done:** the hooks write only under `~/.claude/pool/` and never block (tests). The measurement stage has recorded, in `claude-pool-measurements.md`:
      - whether `rate_limits` appeared in a cloud session;
      - whether a push to `refs/pool/wip/test-<ts>` and a `git/refs` create under `refs/pool/` succeed through the session proxy (then deleted);
@@ -232,24 +234,20 @@ Every phase is its own PR into the project branch and is safe to merge in any or
    - Parses `resets <time>` into `exhausted_until`.
    - When `.claude/scripts/claude_pool.py` exists and `CLAUDE_POOL_ACCOUNT` is set, runs `claude_pool.py on-limit --until <t>` (phase 2/3/5 behaviour) with a 20 s timeout.
    - Exits 0 always.
-3. `.claude/scripts/session_token_usage.py` [new] (and twin).
-   - Sums `usage.input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` and `output_tokens` from the session transcript (`~/.claude/projects/*/<session>.jsonl`, located from `CLAUDE_CODE_REMOTE_SESSION_ID`), and prints one JSON line.
-   - Docstring states it makes no API calls.
+3. The Sonnet comparison uses `get_session`'s per-session `external_metadata.usage`, so no transcript reader is needed.
 4. `workflow-templates/.claude/settings.json` twin gets:
    - `statusLine` = `{"type":"command","command":"python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pool_usage_snapshot.py"}`;
    - the `StopFailure` hook;
-   - allow rules for `session_token_usage.py` (plain and `PYTHONDONTWRITEBYTECODE=1` forms).
    This is operator-gated (§28.C, master-session Q62/Q64).
 5. The measurement run, performed by the phase's stage session with claude-code-remote tools. No script is left behind (§18.A).
    - Create two throwaway sessions, `claude-sonnet-5` and `claude-sonnet-5-5`, each with the two-step `/effort low` start.
-   - Send each the same instructions three times, one minute apart: run `check_in_status.py --repo shubhodeep1/coding-workflows --pr <this phase PR> --hand-back`, then `session_token_usage.py`, and report both lines.
+   - Send each the same instructions three times, one minute apart: run `check_in_status.py --repo shubhodeep1/coding-workflows --pr <this phase PR> --hand-back`, and report its line.
    - Also ask each to report whether `~/.claude/pool/usage.json` exists, and to try `git push origin HEAD:refs/pool/wip/probe-<ts>` and then delete it (`git push origin :refs/pool/wip/probe-<ts>`).
-   - Archive both sessions. Record the per-wake token totals (mean of wakes 2–3, so the first-wake cache fill does not count) and the probe results in `docs/operations/claude-pool-measurements.md`.
+   - After each wake, read that session's `external_metadata.usage` with `get_session` and take the difference from the previous reading. Archive both sessions. Record the per-wake `cost_usd` and token deltas (mean of wakes 2–3, so the first-wake cache fill does not count) and the probe results in `docs/operations/claude-pool-measurements.md`.
    - A comparison counts only when both models complete three wakes. Otherwise record `inconclusive`.
 6. Tests:
    - `tests/test_pool_usage_snapshot.py` [new]: present/absent `rate_limits`, malformed stdin, atomic write.
    - `tests/test_pool_stop_failure.py` [new]: reset parsing for "resets 3:45pm", "resets Mon 12:00am" and an ISO time; library missing → no subprocess.
-   - `tests/test_session_token_usage.py` [new]: fixture transcripts.
    - Each hook's test also asserts its `settings.json` wiring in both copies, the per-hook pattern of `tests/test_pr_watch_guard.py`.
    - A ci.yml step running them.
 7. `changelog.d/<pr>-pool-usage-signals.md` [new].
@@ -274,11 +272,12 @@ Every phase is its own PR into the project branch and is safe to merge in any or
 1. `claude_pool.py usage`:
    - merges the sources in Approach order;
    - `--status-details-file <f>` takes the pickup's saved `list_sessions` output (only `status_detail` and `updated_at` are read), and it parses `You've hit your (session|weekly) limit · resets <t>`;
+   - `--self-session-file <f>` takes the pickup's saved `get_session` output (only `external_metadata.rate_limit_info` is read);
    - reads `refs/pool/accounts/<name>` in coding-workflows (2 REST reads).
 2. `claude_pool.py gate --wake-started <n>` → `{"slots":k,"reason":"…","used_5h":…,"used_7d":…}`. Live leases come from `refs/pool/summary` (2 REST reads); a missing summary counts 0.
 3. `claude_pool.py health` → compare-and-swap-upserts `refs/pool/accounts/<name>` with the usage result and `heartbeat_at`.
 4. Pickup step 2b (new, after step 2's queue read):
-   - `list_sessions` (`mine: true`, `limit: 20`), saved to the scratchpad, then `gate`;
+   - `get_session` (no id) and `list_sessions` (`mine: true`, `limit: 20`), both saved to the scratchpad, then `gate`;
    - `slots = 0` → start nothing (step 3 skipped, `pool=gated (<reason>)`);
    - otherwise cap step 3 at `slots` entries.
    - Step 4 adds `health` once per wake.
@@ -345,7 +344,6 @@ Every phase is its own PR into the project branch and is safe to merge in any or
 
 - `.claude/hooks/pool_usage_snapshot.py` [new], `workflow-templates/.claude/hooks/pool_usage_snapshot.py` [new]
 - `.claude/hooks/pool_stop_failure.py` [new], `workflow-templates/.claude/hooks/pool_stop_failure.py` [new]
-- `.claude/scripts/session_token_usage.py` [new], twin [new]
 - `.claude/scripts/claude_pool.py` [new], twin [new]
 - `.claude/scripts/claude_fix_claim.py`, twin
 - `.claude/scripts/check_in_status.py`, twin
@@ -359,7 +357,7 @@ Every phase is its own PR into the project branch and is safe to merge in any or
 - `CLAUDE.md` (§26.B model line only, phase 6)
 - `README.md`, `agents.md`, `docs/operations/master-session.md`
 - `docs/operations/claude-pool-measurements.md` [new]
-- `tests/test_pool_usage_snapshot.py` [new], `tests/test_pool_stop_failure.py` [new], `tests/test_session_token_usage.py` [new], `tests/test_claude_pool.py` [new], `tests/test_claude_pool_sweep.py` [new]
+- `tests/test_pool_usage_snapshot.py` [new], `tests/test_pool_stop_failure.py` [new], `tests/test_claude_pool.py` [new], `tests/test_claude_pool_sweep.py` [new]
 - `tests/test_claude_issue_route.py`, `tests/test_check_in_status_hand_back.py`, `tests/test_claude_pr_sweep.py`, `tests/test_implement_plan_claude_command.py`
 - `changelog.d/<pr>-*.md` [new], one per phase
 
@@ -380,7 +378,7 @@ None. No MongoDB collection is touched (§10 N/A). The only new persistent state
 ## Risks & Mitigations
 
 - **Terms of service.** Rotating personal Pro/Max accounts around plan limits may conflict with Anthropic's Consumer Terms ("bypassing any of our systems or protective measures") and the "ordinary, individual usage" note, and could lead to suspension. ACCEPTED — operator decision Q1: C, 2026-09-30.
-- **Statusline in cloud sessions.** `rate_limits` may never reach a cloud session. ACCEPTED — pending phase 1 probe. Fallback: reactive limit detection (Q11) and the per-account cap.
+- **Statusline in cloud sessions.** `rate_limits` may never reach a cloud session. ACCEPTED — pending phase 1 probe. Fallback: `get_session`'s `rate_limit_info` (`rejected` gates until `resetsAt`), reactive limit detection (Q11), and the per-account cap. Without the statusline there is no percentage, so the 90% cut-off would act only at `rejected`.
 - **`StopFailure` coverage.** It may not fire on session or weekly limits in cloud sessions. ACCEPTED — pending phase 1. Fallback: the 3-hour lease expiry.
 - **Git proxy and custom refs.** The proxy may refuse `refs/pool/*` pushes, or GitHub may refuse the namespace. ACCEPTED — pending phase 1 probe. Fallback: no WIP checkpoints (Q13 B), and `CLAUDE_POOL_REF_PREFIX` can move leases to `refs/heads/pool-lease/`. No workflow triggers on those branches (only `internal-review.yml` has a `push` trigger, limited to `claude/**`).
 - **Sonnet comparison.** It may be inconclusive. ACCEPTED — pending phase 1; `claude-sonnet-5` stays.
