@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh: lines 1208-1250 (_autofix_pr_named_review_runs) | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The PR-named review run matcher trusts `display_title` without verifying that the run came from the default branch or the exact wrapper file.\n  WHY: A forged run name on another branch can suppress peer deduplication or consume the changes-lost retry budget; the reviewer rates the practical risk as denial of service, not execution escalation.\n- .claude/scripts/check_in_status.py: lines 146-148 (comment) | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The comment on `PR_NAMED_REVIEW_RUNS_PATH` says it covers \"the same listing and newest-100 window the poller's _pr_named_review_dispatch_runs reads (issue #4701)\", but that description is stale.\n  WHY: Since issue #4927, the poller paginates per-wrapper listings with a time-bounded window, so a future maintainer could incorrectly assume the checker listing is equivalent.\n- scripts/smoke_review_dispatch.sh: line 179 (the `grep -aE` regex) and lines 178-186 (the parse) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `grep` regex requires a trailing period, coupling the helper to a punctuation detail in the log format.\n  WHY: If the log format changes, every genuine run can return rc=2, causing Phase 4 to reject the Bug B run and Phase 4b to end with `status=retry_run_unverified`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh: lines 1208-1250 (_autofix_pr_named_review_runs) | severity=high | confidence=3\n  PROBLEM: The PR-named review run matcher in the review_autofix workflow's own probes trusts a run's display_title without verifying the run came from the default branch or from the exact wrapper file that sets that name.\n  WHY: A forged run name on another branch can suppress the peer-dedup or falsely consume the changes-lost retry budget; the practical risk is denial of service from a malicious writer, not execution escalation.\n- .claude/scripts/check_in_status.py: lines 146-148 (comment) | severity=low | confidence=4\n  PROBLEM: The comment on PR_NAMED_REVIEW_RUNS_PATH states it covers \"the same listing and newest-100 window the poller's _pr_named_review_dispatch_runs reads (issue #4701)\", but that description is stale.\n  WHY: Since #4927, the poller paginates per-wrapper listings with a time-bounded window, so a future maintainer could incorrectly believe the checker's listing is equivalent.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/smoke_review_dispatch.sh: Line 179 (the `grep -aE` regex) and lines 178-186 (the parse) | severity=low | confidence=3\n  PROBLEM: The grep regex is `^[^[:space:]]+ Captured INITIAL_HEAD_SHA=[0-9a-f]{40} for stale-base detection\\.$`; the trailing `\\.` couples the helper to a single log format.\n  WHY: If review_autofix.yml changes its trailing punctuation or adds trailing whitespace, every genuine run can return rc=2, causing Phase 4 to reject the Bug B run and Phase 4b to end with `status=retry_run_unverified`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7efcc7a3e41c8645644deccc0ea390860de0e6d3557ee0de2d0f6ff2b72c4c11",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36725254572",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36725254572",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930142852_ab49f56cac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36725254572"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T14:28:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
