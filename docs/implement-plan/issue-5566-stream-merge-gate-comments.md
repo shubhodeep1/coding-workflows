@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5566-stream-merge-gate-comments-plan.md
 - Source issue: shubhodeep1/coding-workflows#5566
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5566-stream-merge-gate-comments   Final PR: pending
+- Project branch: claude/implement-plan-issue-5566-stream-merge-gate-comments   Final PR: #5571 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (this PR)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims
+- Last note: phase 1 implemented and verified (44/44 gate tests, 173/173 in the ci.yml hand-back/sweep/gate step, ruff clean); phase PR opened against the project branch
 
 ## Phases
-1. [ ] Phase 1 — stream the gate's comment read (scripts/claude_merge_hold_gate.py, tests/test_claude_merge_hold_gate.py, README.md, agents.md, changelog.d/5566-merge-gate-comment-flood.md)
+1. [ ] Phase 1 — stream the gate's comment read (scripts/claude_merge_hold_gate.py, tests/test_claude_merge_hold_gate.py, README.md, agents.md, changelog.d/5566-merge-gate-comment-flood.md) — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -36,6 +36,7 @@
 - AD-6 [plan, 2026-09-30] Replace page-number pagination to avoid a skip when a comment is deleted mid-read? — Picked: A — keep page numbers; record the limitation. Alternatives: B — a second full pass to confirm; C — GraphQL cursors. Why: pre-existing and shared with `check_in_status.py`; B doubles calls on a flooded PR, C changes transport. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A test fake `gh` that returns the whole list for page 1 and `[]` for later pages cannot exercise pagination limits; slice list payloads by `per_page`/`page` so flood cases reach page 11+. (files: tests/test_claude_merge_hold_gate.py)
 
 ## Notes
 - Base branch: claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims (open final PR #5323 into main).
