@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5082 (https://github.com/shubhodeep1/coding-workflows/issues/5082)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5082-verify-blocked-comment-evidence   Final PR: #5088 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1
+- Status: BLOCKED
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #5099
+- Waiting on: conformance fix PR (opened by this stage): twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: project checker (ids in the stage report and the checker's `— resume.` block)
-- Last updated: 2026-09-29
-- Last note: the master synced the twin (`ea56517`, #5082 Q2: A); phase 1 PR #5099 is in review.
+- Check-in: checker session_01BYCtt6gNuME2V7HqCYVGKJ (reused; idle, no pending check-in while BLOCKED)   safety net none   hand-back none
+- Last updated: 2026-09-30
+- Last note: conformance 1/3 CONFORMANT with one doc CONCERN fixed twin-first in the conformance fix PR; BLOCKED on its Q40 twin sync.
 
 ## Phases
-1. [ ] Phase 1 — verified blocked-comment evidence (MCP / `gh api` comment on the marker's repo#issue, body starts with the marker, result carries the comment URL, plus the `ai:claude-blocked` label write)   — PR #5099 open (waiting); review rounds: 0; interventions: 0 — protected paths: `.claude/hooks/unattended_question_guard.py` (via its `workflow-templates/.claude/` twin)
+1. [x] Phase 1 — verified blocked-comment evidence (MCP / `gh api` comment on the marker's repo#issue, body starts with the marker, result carries the comment URL, plus the `ai:claude-blocked` label write)   — PR #5099 merged 2026-09-30 (by hand on the operator's approval, #5082 Q1: B; merge `13ffce6`); review rounds: 2; interventions: 0 — protected paths: `.claude/hooks/unattended_question_guard.py` (via its `workflow-templates/.claude/` twin)
    - [x] `workflow-templates/.claude/hooks/unattended_question_guard.py`: `_blocked_comment_targets`, `_blocked_label_targets`, `_gh_api_calls`, `_and_chain_segments`, `_result_text`, `_result_names_comment`, `blocked_comment_posted(turn, marker)`, `_instructions()` text
    - [x] `tests/test_unattended_question_guard.py`: updated positives, new negatives (echo, other issue/repo, marker not first, no label, no URL, compound command, `-F body=@file`, `--input`), `&&` chains and the `cd` prefix
    - [x] `.claude/hooks/unattended_question_guard.py`: Q40 twin sync (the operator's approval window, Q62/Q64) — `ea56517` by the master session, sha256 `6f539653…` matches the twin
@@ -22,6 +22,7 @@
    - Done: every plan Goal has a passing test with the twin synced; related hook suites still pass
 
 ## Conformance
+- Run 1 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED doc CONCERN) — conformance fix PR (branch `claude/implement-plan-issue-5082-verify-blocked-comment-evidence-conformance-fix-1`) (pre-security)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue)
@@ -42,6 +43,7 @@
 - AD-7 [phase 1/1, 2026-09-29] AD-6 rejected the shape real sessions use (`cd <repo>; gh api …comments … && gh api …labels …`, including this project's own blocker). Which chains count? — Picked: A — `gh api` calls joined only by `&&`, after at most one leading `cd <plain path>` followed by `;` or `&&`. Alternatives: B — keep AD-6 as is; C — any `;`/`&&` chain of `gh api` or `cd` segments. Why: `&&` stops at the first failure and a plain `cd` can neither post nor print; B blocks every real blocker once, C lets a failed comment hide behind a later success. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:conformance] When a change tightens what a hook or guard accepts, grep every command and doc that paraphrases the old rule (including `.claude/commands/*` twins), not only the section the plan names. (files: .claude/commands/implement-plan-claude.md)
 - [source:plan-deviation] A hook that inspects `Bash` commands in the transcript must accept the shapes sessions really use (`cd <repo>; …`, `&&` chains); test it against a real session transcript, not only hand-built commands. (files: .claude/hooks/unattended_question_guard.py, tests/test_unattended_question_guard.py)
 
 ## Notes
@@ -56,3 +58,7 @@
 - Operator instructions for later stages (master session, 2026-09-29): runtime validation is skipped under Q17, because the final PR #5088 targets another project's branch (`claude/implement-plan-issue-4911-unattended-question-guard`). Record `Validation: skipped (covered by #4964's project validation)`, and do not stop to ask. Pass `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` in every `check_in_status.py` call and checker prompt (#5057).
 - Plan deviations: `test_hook_makes_no_network_calls` no longer forbids the literal `gh api` (the hook parses it as data) and forbids `os.system` / `popen` / `os.exec` instead; the target helpers return sets (`_blocked_comment_targets` / `_blocked_label_targets`) so one `&&` chain can carry the comment and the label (AD-7).
 - Verification (2026-09-29, scratch copy with the twin synced into `.claude/`): `tests/test_unattended_question_guard.py` plus `test_gh_api_write_guard.py`, `test_pr_watch_guard.py`, `test_pr_check_in_reminder.py`, `test_update_workflows_guardrails.py`: 509 passed; `ruff check` clean. In the unsynced checkout only `test_template_parity[hooks/unattended_question_guard.py]` fails, as expected until the twin sync. Against this session's real transcript the new check accepts the #5082 blocker and rejects the same calls for #5083 and for another repo.
+- 2026-09-30 01:36Z: `/implement-issue-claude` re-dispatched after the operator's `/reclarify` (#5082 comment 5902128184, trigger `trig_012yxtgxCj9FK8yk6AByj3zF`) in session `session_01YZcAyddSPDM3UhMwDyxn78` (auto mode). No live wait existed: checker `session_01BYCtt6gNuME2V7HqCYVGKJ` was idle with no pending check-in, and the review-round session `session_019U1SMHyGjpqsyCb4Tw65vC` was left waiting on a permission prompt (not archived: it waits on a user). The base PR #4964 is still open into `main`, so the base has not moved; the project branch was already up to date with it.
+- Conformance 1/3 (2026-09-30): every plan Goal maps to code and tests (G1 `blocked_comment_posted` + `_result_names_comment`; G2 `_blocked_label_targets`; G3 `_and_chain_segments` / `_gh_api_call` negatives; G4 `_instructions`; G5 no network primitives, `run_hook` fail-open, twins byte-identical). Adversarial probes (double-quoted `$(...)`, env prefix, `-X GET`, `{owner}` placeholders, a second `cd`, `-X=POST`) all fail closed. One CONCERN: the Issue Mode guard bullet of `.claude/commands/implement-plan-claude.md:106` still described the old comment-only evidence; fixed twin-first in the conformance fix PR, with `test_plan_command_marks_issue_mode_sessions` pinning the new text.
+- Protected-path: the conformance fix changes `.claude/commands/implement-plan-claude.md`, so it runs under the recorded `Protected-path approval: phase 1 — twin-first per Q40` (later-stage rule of `/implement-plan-claude` step 4): only the `workflow-templates/.claude/` twin is edited, a `hold` claim goes on the fix PR head, and the stage stops BLOCKED with a twin-sync request on #5082.
+- Verification (2026-09-30): real checkout, 5 hook suites plus 6 command-doc suites: 791 passed, and only the 5 twin-parity checks for `implement-plan-claude.md` fail (expected until the sync). Scratch copy with the twin synced into `.claude/`: 795 passed with 1 failure; that failure (`test_section_28_scope_covers_issue_mode`) is a copy artifact (the `workflow-templates/CLAUDE.md` symlink became a file) and passes in the real checkout. `ruff check` clean.
