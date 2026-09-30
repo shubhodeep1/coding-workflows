@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T05:42:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A wrapper's option loop that stops at a bare \"-\" must know which wrappers take \"-\" as an option: \"env -\" is \"env -i\", so the command after it is hidden. Test the bare-dash form of every wrapper.",
+  "phase": "implement_plan",
+  "pr_number": 5481,
+  "record_id": "lesson-implement-plan-1a1b413dd652714cc18e9b19",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4858-inline-edit-guard",
+    "file:.claude/hooks/inline_edit_guard.py",
+    "file:tests/test_inline_edit_guard.py"
+  ]
+}
