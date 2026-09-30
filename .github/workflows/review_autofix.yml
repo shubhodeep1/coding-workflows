@@ -551,6 +551,10 @@ jobs:
             _am_cancel_result="failed"
             _am_cancel_err=""
             for _am_cancel_attempt in 1 2 3; do
+              # Order matters: `2>&1` first points stderr at the command
+              # substitution, then `>/dev/null` drops only stdout, so
+              # _am_cancel_err keeps gh's error text for the warning below.
+              # `>/dev/null 2>&1` would silently discard it.
               if _am_cancel_err="$(gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto 2>&1 >/dev/null)"; then
                 _am_cancel_result="disabled"
                 break
