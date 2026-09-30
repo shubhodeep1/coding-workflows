@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue-start sessions are archived only when their issue is closed, and the janitor module summary and operator-facing summary describe that rule rather than the removed \u201csupersede\u201d behavior.\n  expected_change_site: `scripts/claude_session_janitor.py` module summary and `CLAUDE.md` \u00a726.I summary paragraph\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: `scripts/claude_session_janitor.py:4-7` still says \u201cafter the `/implement-plan-claude` chain has moved past them,\u201d conflicting with the detailed rule at lines 57-62; `CLAUDE.md:2164-2167` still describes the old supersede behavior.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"CLAUDE.md \u00a726.I, `README.md` (Claude issue implementer item 5), `agents.md` (Check-in Loop paragraph, Stale session sweep), and the unreleased `changelog.d/4887-archive-finished-sessions.md` row now describe the new rule\" \u2014 every operator-facing description of the old \"superseded by a later stage\" rule should be updated to match the new behavior: an issue-start session is archived only when its issue is closed; a later stage session does not count (#5664).\n  Expected change site: `scripts/claude_session_janitor.py` module docstring summary at lines 4-7, and `CLAUDE.md` \u00a726.I summary paragraph at lines 2164-2167.\n  Evidence of absence: `scripts/claude_session_janitor.py:4-7` still opens with \"Three kinds of automation session are never archived by the flows that start them: `/fix-claude-pr` fixer and hold sessions after their pull request is terminal, issue-start sessions after the `/implement-plan-claude` chain has moved past them, and CLAUDE.md \u00a726.D report sessions (issue #4887).\" The phrase \"after the `/implement-plan-claude` chain has moved past them\" describes the OLD supersede rule that the PR just removed from `classify()`; the detailed rule at lines 57-62 of the same file now says \"its issue is closed. A later stage session on the page does not count (issue #5664)\". The PR updated the detailed rule and the rule-details bullet in CLAUDE.md \u00a726.I (line 2190+) but left both summary paragraphs stale. An operator who reads only the summary will believe issue-start sessions are archived when the chain has moved past them, while an operator who reads the rule details will believe they are archived only on a closed issue. The same drift appears in `CLAUDE.md:2164-2167` (the \u00a726.I summary, distinct from the updated rule at line 2190) and `scripts/claude_session_janitor.py:4-7` (the script's module docstring, which `python -m pydoc scripts/claude_session_janitor.py` prints and is the canonical self-description of what the sweep does). The progress log records that this PR fixed the same kind of drift at `docs/operations/master-session.md:30` (Q61) after the previous round, so these two remaining summary paragraphs are the same defect class that Q61 covered.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: Issue-start sessions are archived only when their issue is closed, and the janitor docstring describes that rule.\n  Expected change site: scripts/claude_session_janitor.py module summary.\n  Evidence of absence: Lines 6-7 still say issue-start sessions are archived after the `/implement-plan-claude` chain \u201chas moved past them,\u201d which conflicts with the closed-issue-only rule documented at lines 57-62 and implemented in `classify()`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The janitor module docstring must describe the new rule: \"An issue-start session is archived only when its issue is closed.\"\n  Expected change site: `scripts/claude_session_janitor.py`, module summary at lines 6-7.\n  Evidence of absence: The detailed rule at lines 57-62 correctly says \"its issue is closed. A later stage session on the page does not count (issue #5664)\". But the module summary at lines 6-7 still reads \"issue-start sessions after the `/implement-plan-claude` chain has moved past them\" \u2014 this is the supersede behavior that was removed from `classify()`. The summary contradicts the detailed rules below it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The PR description states the janitor docstring is updated (\"`scripts/claude_session_janitor.py`: drop the supersede rule (`classify()`), docstring\") and the new rule is \"an issue-start session is archived only when its issue is closed.\" The module summary at the top of the docstring must describe the same rule.\n  Expected change site: `scripts/claude_session_janitor.py`, lines 4-7 (module summary).\n  Evidence of absence: Lines 6-7 still read \"issue-start sessions after the `/implement-plan-claude` chain has moved past them\" \u2014 the supersede concept this PR removed from `classify()`. The PR updated rule 2 (lines 57-62), the stage paragraph (lines 45-49), and the API budget text (lines 69-75), but the opening summary was not updated to match. The detailed rule says \"its issue is closed\" while the summary says \"moved past them,\" so the docstring is internally inconsistent.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ed85891467608207807febd22edfc392bbe4164719e5a58ae9db203daf6061e4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5694,
+    "run_id": "36742748667",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36742748667",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930162946_c946f4b688",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5694,
+    "run_id": "36742748667"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T16:29:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
