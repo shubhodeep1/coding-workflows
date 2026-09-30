@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow and validation behavior is guarded by focused contract tests, so extend those tests when changing execution or security boundaries.",
   "timestamps": {
     "created_at": "2026-09-30T01:14:26Z",
