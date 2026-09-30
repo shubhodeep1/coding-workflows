@@ -713,7 +713,7 @@ a new value, add it to the appropriate overrides file with a
 | implement-repair, implement-repair-syntax | `openai/gpt-6-sol` | `high` | `low` |
 | implement-diagnose | `openai/gpt-6-sol` | `high` | `low` |
 | review autofix editor | `openai/gpt-6-sol` | `high` (smoke: `medium`) | `low` |
-| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`, `qwen/qwen3.7-plus`, `x-ai/grok-4.20`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
+| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`, `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` |
 | review consolidator | `openai/gpt-6-sol` | `high` | `low` |
 | conflict resolver | `openai/gpt-6-sol` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` |
@@ -751,9 +751,10 @@ the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
 writes into `config.toml`, and the `"default_verbosity": "low"` for
 `openai/gpt-6-sol` in `scripts/codex_model_catalog.json`. Third-party
 reviewer models (`minimax/minimax-m3`, `z-ai/glm-5.2`,
-`deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`,
-`qwen/qwen3.7-plus`, `x-ai/grok-4.20`)
-carry `support_verbosity = false` in the catalog — codex CLI logs
+`deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`,
+`qwen/qwen3.7-plus`) carry `support_verbosity = false` in the catalog
+(the `openai/gpt-6-luna` reviewer slot supports it, with catalog default
+`low`) — codex CLI logs
 `model_verbosity is set but ignored as the model does not support verbosity`
 and continues; the value is operationally moot for those rows. The
 historical `high` value across every layer was a workaround for the
@@ -767,8 +768,8 @@ implement callsites, since those are the original 11151 reproducers).
 
 Every editor / consolidator / resolver phase now defaults to `openai/gpt-6-sol`.
 Reviewer fan-out remains driven by the `REVIEWER_MODELS` roster in
-`.github/workflows/review_autofix.yml` (currently the third-party models
-listed in the table above). The previous legacy editor split (patch-heavy
+`.github/workflows/review_autofix.yml` (currently the models listed in the
+table above). The previous legacy editor split (patch-heavy
 phases on a separate older slug) was retired after the announce-without-emit
 regression (openai/codex#11151) drove repeat no-edit failures. The
 2026-05-07 ablation suite then identified the underlying root cause as
@@ -776,10 +777,10 @@ regression (openai/codex#11151) drove repeat no-edit failures. The
 the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` is now
 `function`).
 
-The reviewer-only multi-model run (claude-branch-review) uses third-party
-models (`minimax/minimax-m3`, `z-ai/glm-5.2`,
-`deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`,
-`qwen/qwen3.7-plus`, `x-ai/grok-4.20`) plus
+The reviewer-only multi-model run (claude-branch-review) uses the same
+reviewer models (`minimax/minimax-m3`, `z-ai/glm-5.2`,
+`deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`,
+`qwen/qwen3.7-plus`, `openai/gpt-6-luna`) plus
 `unattended_system_instructions.md` as system context.
 
 ---
@@ -2095,7 +2096,8 @@ depend on it.
 - When `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED=true`, `scripts/review_consolidate.sh` feeds that helper JSON into the consolidator prompt as advisory untrusted context. This is the Lens 7 companion to the separate advisory comment path controlled by `AGENTS_MD_MATERIALITY_ENABLED`. Lens 7 (`NAMING / BACKWARD COMPATIBILITY`) may then emit a default-`high` `AGENTS.md materiality` finding when operator-visible structural changes leave root `agents.md` unchanged, but downgrades or omits it when equivalent touched docs already cover the behavior.
 - The deterministic review skip requires a complete paginated `/pulls/{n}/files` list for both small-diff and doc-only candidates, matched against the existing PR-details `changed_files` count. Missing/malformed/empty/partial responses and GitHub's 3,000-file ceiling route to review. Both names of a rename are checked; nested or case-variant agent instructions and automation paths (`.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`) plus root build/dependency/lint config suppress skip independently of `AGENTS_MD_MATERIALITY_ENABLED`. Benign docs and small code changes still qualify when evidence is complete; the head-bound merge check remains in place.
 - `REVIEW_LEDGER_REREVIEW_ENABLED` gates consolidator-side suppression of repeated `accepted-residual` / `won't-fix` findings from the existing review ledger and the review-blocked judge's ledger-fed prior-round decision input. `scripts/review_rb_judge.sh` renders that `=== BEGIN PRIOR ROUND DECISIONS ===` block via `render_review_rb_prior_round_decisions_file`, and `prompts/mode-judge-review-blocked.txt` treats it as advisory history rather than fresh reviewer evidence.
-- `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. The live-roster mapping file covers `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2`, `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview`, `minimax/minimax-m3 -> minimax/minimax-m2.5`, `qwen/qwen3.7-plus -> qwen/qwen3.6-plus`, `x-ai/grok-4.20 -> x-ai/grok-4.3`, and `z-ai/glm-5.2 -> z-ai/glm-5.3-flashx`; the three new failback targets for Gemini, Grok, and GLM keep 1M+ token windows because reviewer prompts regularly exceed 250K tokens. It also retains retired-roster / operator-override mappings `moonshotai/kimi-k3 -> moonshotai/kimi-k2.7-code`, `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus`, and `x-ai/grok-4.6 -> x-ai/grok-4.20` (the former `x-ai/grok-4.20 -> x-ai/grok-4.1-fast` entry was dropped because OpenRouter no longer serves that slug). Every live reviewer is mapped; `REVIEWER_FAILBACK_UNMAPPED` still governs any operator-supplied slug without a chain entry.
+- `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. The live-roster mapping file covers `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2`, `google/gemini-3.8-flash -> google/gemini-3.1-flash-lite`, `minimax/minimax-m3 -> minimax/minimax-m2.5`, `openai/gpt-6-luna -> openai/gpt-5.6-luna`, `qwen/qwen3.7-plus -> qwen/qwen3.6-plus`, and `z-ai/glm-5.2 -> z-ai/glm-5.3-flashx`; the Gemini, GPT, Qwen, and GLM failback targets keep 1M+ token windows because reviewer prompts regularly exceed 250K tokens, while the DeepSeek (`deepseek/deepseek-v3.2`, 128K) and MiniMax (`minimax/minimax-m2.5`, 200K) targets have smaller windows than the largest reviewer prompts. It also retains retired-roster / operator-override mappings `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview`, `moonshotai/kimi-k3 -> moonshotai/kimi-k2.7-code`, `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus`, `x-ai/grok-4.20 -> x-ai/grok-4.3`, and `x-ai/grok-4.6 -> x-ai/grok-4.20` (the former `x-ai/grok-4.20 -> x-ai/grok-4.1-fast` entry was dropped because OpenRouter no longer serves that slug). Every live reviewer is mapped; `REVIEWER_FAILBACK_UNMAPPED` still governs any operator-supplied slug without a chain entry.
+- Reviewer loop guards (`scripts/review_run_reviewers.sh` watchdog, review panel only; the judge, consolidator, consensus summariser, and smoke reviewer-role callers are not capped). Every 10 s poll reads the attempt's OpenCode `--format json` event stream. `REVIEWER_MAX_STEPS` (default `120`): once an attempt starts more than that many turns (`step_start` events), the watchdog kills it (`wd_reason=max_steps`, log line `killed by watchdog ... (turn limit N ...); not retried.`) and the slot fails as a non-retryable failure with no cheaper-reasoning retry and no failback; a fast loop may overshoot by the turns that start within one poll. `REVIEWER_TOOL_REPEAT_LIMIT` (default `10`, minimum `2`): once the last N completed tool calls are identical (same tool and same JSON input, so paged `read` calls with different offsets never match), the watchdog kills the attempt (`wd_reason=tool_repeat`) and it follows the normal retryable path (class `tool_repeat`: cheaper reasoning, then failback). Invalid values fall back to the defaults with a `::warning::`. OpenCode's own agent `steps` setting is not used: in 1.18.23 it only injects a "maximum steps reached" instruction and keeps offering tools, so a looping model continues. Background: `x-ai/grok-4.20` reviewer passes looped on one repeated tool call for 2,205 / 1,468 / 234 turns (runs 35949371968, 36483245451, 36522631293) while real passes peaked at 101 turns; it left the default roster on 2026-09-29.
 - `scripts/cost_audit.py` now parses additive review telemetry fields `cache_hit_rate`, `wall_clock_p50_ms`, `wall_clock_p99_ms`, `break_glass_count`, and `context_budget_warn_count`. `CONTEXT_BUDGET_WARN` is emitted pre-flight from review / consolidator / judge paths when a prompt exceeds the configured per-model context threshold.
 - `scripts/codex_heartbeat.sh` wraps long-running `codex exec` calls in reviewer, consolidator, review-blocked judge, conflict-resolver, and validate/self-heal paths, emitting `CODEX_HEARTBEAT: phase=<phase> elapsed_secs=<n>` during silent periods.
 - `REVIEW_APPROVAL_RUBRIC_ENABLED` lets the review-blocked judge emit logical `review_state` values (`APPROVE`, `APPROVE_WITH_COMMENTS`, `COMMENT`, `REQUEST_CHANGES`) that `scripts/post_review_comment.sh --review-state` maps to outbound PR reviews. With `REVIEW_BREAK_GLASS_ENABLED`, a human comment anchored as `@codex break-glass` downgrades only the outbound `REQUEST_CHANGES` event to comment-only and logs `BREAK_GLASS`, while preserving the judge's written review body.
@@ -2142,7 +2144,9 @@ depend on it.
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for `lite` review-tier resolution. `lite` also requires the existing doc-only path set. |
 | `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.7-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
 | `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for `standard` review-tier resolution. `standard` also requires changes confined to one allowed top-level directory. |
-| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
+| `REVIEWER_MAX_STEPS` | `120` | Hard turn cap per review-panel reviewer attempt, enforced by the `scripts/review_run_reviewers.sh` watchdog from OpenCode `step_start` events. An attempt that starts more turns is killed and the slot fails without a retry or failback. Invalid values fall back to `120` with a warning. |
+| `REVIEWER_TOOL_REPEAT_LIMIT` | `10` | Consecutive identical tool calls (same tool and same input) that end a review-panel reviewer attempt as a retryable `tool_repeat` failure (cheaper reasoning, then failback). Minimum `2`; invalid values fall back to `10` with a warning. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
 | `REVIEWER_RISK_TIER_TRIVIAL_LOC` | `10` | Trivial-tier LOC threshold. |
 | `REVIEWER_RISK_TIER_TRIVIAL_FILES` | `20` | Trivial-tier changed-file threshold. |
