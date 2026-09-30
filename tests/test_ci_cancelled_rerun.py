@@ -258,6 +258,10 @@ def test_enumerate_step_writes_snapshot_with_head_sha_before_zero_candidate_exit
 	step = next(s for s in _sweep_job()["steps"] if s.get("name") == "Enumerate open PRs and dispatch internal-review.yml")
 	script = step["run"]
 	assert "head_sha: (.head.sha // \"\")," in script
+	# The dispatch loop stopped reading `head_repo` in #4634 (issue #4618);
+	# the re-run's same-repository filter still needs it, or every PR is
+	# skipped as `fork_head`.
+	assert "head_repo: (.head.repo.full_name // \"\")," in script
 	write = script.find('> "${RUNNER_TEMP}/review-autofix-sweep-prs.json"')
 	guard = script.find('if [ "${total}" -eq 0 ]; then')
 	assert 0 < write < guard

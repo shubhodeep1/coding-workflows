@@ -135,6 +135,9 @@ jobs:
           # Hand the same snapshot to the cancelled-CI re-run step below
           # (issue #4713), so it needs no second PR listing (§15). A failed
           # write only skips that step; it never stops review dispatches.
+          # `head_repo` and `head_sha` are read only by that step
+          # (scripts/ci_cancelled_rerun.py): without `head_repo` it treats
+          # every PR as a fork head and never re-runs anything.
           printf '%s' "${prs_json}" > "${RUNNER_TEMP}/review-autofix-sweep-prs.json" \
             || echo "::warning::AUTOFIX_SWEEP_PR_SNAPSHOT_WRITE_FAILED path=${RUNNER_TEMP}/review-autofix-sweep-prs.json"
 
