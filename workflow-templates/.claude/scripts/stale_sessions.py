@@ -102,6 +102,12 @@ is appended to `<stall-log-dir>/stalled-sessions.jsonl` as a
 `PermissionRequest` record that `permission_prompts.py file` groups and files
 (tool `StalledSession(<tool>)`; the command itself is not visible from
 outside the session, so the title and `task_summary` are the evidence).
+`new` only decides the push notification and the record; whether a record
+was filed is tracked by `permission_prompts.py` itself (`filed-state.json`
+in the same directory, advanced only after a successful POST). The pickup
+therefore runs `permission_prompts.py file --log-dir` on every wake, so a
+record whose filing failed is filed on a later wake even when no stall is
+`new` (that run makes no API call when nothing is left to file).
 
 API budget (CLAUDE.md §15): REST only, never GraphQL. One `gh api
 repos/<owner>/<repo>/pulls/<N>` or `…/issues/<N>` read per distinct PR or
@@ -419,7 +425,11 @@ def stalled_on_prompt(sessions: list[dict], stall_minutes: float, now: dt.dateti
 
 
 def record_stalls(stalls: list[dict], log_dir: Path, now: dt.datetime) -> None:
-	"""Mark each stall `new` or not, and append the new ones as `permission_prompts.py` records."""
+	"""Mark each stall `new` or not, and append the new ones as `permission_prompts.py` records.
+
+	Marking a stall seen here does not mark it filed: `permission_prompts.py file` keeps its own filed
+	counts next to these records, so a filing that fails is retried by the next `file` run on this directory.
+	"""
 	state_path = log_dir / STALL_STATE_FILE
 	try:
 		seen = json.loads(state_path.read_text(encoding="utf-8"))

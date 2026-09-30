@@ -1286,8 +1286,10 @@ mode).
    `/deploy-activate`). The janitor also finds sessions waiting on a
    permission prompt for more than 20 minutes. For each one the pickup sends
    one push notification and files it as an `ai:permission-prompt` issue
-   through `.claude/scripts/permission_prompts.py`, once per stall. The
-   pickup's one-line report ends with `archived <a>; stalls <s>`.
+   through `.claude/scripts/permission_prompts.py`, once per stall. A filing
+   that fails is retried on the next wake, and the janitor runs even when
+   that wake's queue read failed. The pickup's one-line report ends with
+   `archived <a>; stalls <s>`.
 
 **No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
 poller's standalone stall recovery skip issues that carry `ai:claude` without

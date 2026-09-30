@@ -547,6 +547,44 @@ def test_stall_records_are_grouped_by_permission_prompts(monkeypatch, tmp_path, 
 	assert "task_summary" in patterns[0]["example"]
 
 
+def test_a_failed_stall_filing_is_retried_on_a_later_wake_with_no_new_stall(monkeypatch, tmp_path, capsys):
+	# Seen state only stops a second notification; `permission_prompts.py` keeps its own filed counts,
+	# so the pickup's every-wake `file --log-dir` run files a record whose earlier filing failed.
+	_stub(monkeypatch, {})
+	spec = importlib.util.spec_from_file_location(
+		"permission_prompts_for_stall_retry", ROOT / "workflow-templates" / ".claude" / "scripts" / "permission_prompts.py"
+	)
+	prompts = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(prompts)
+	monkeypatch.setattr(prompts, "existing_issues", lambda slug: {})
+	posts = []
+
+	def failing_post(path, body):
+		posts.append(path)
+		raise prompts.check_in_status.ReadError(f"POST {path} failed: HTTP 502")
+
+	stall = _blocked("session_s", minutes_ago=45)
+	_, first = _run(tmp_path, capsys, [stall])
+	assert first["stalled_on_prompt"][0]["new"] is True
+	log_dir = Path(first["stall_log_dir"])
+	monkeypatch.setattr(prompts, "_post", failing_post)
+	code, summary = prompts.file_patterns(log_dir, "pickup", dry_run=False, slug=prompts.FILING_REPO)
+	assert code == 0 and summary["filed"] == [] and len(summary["errors"]) == 1
+
+	_, second = _run(tmp_path, capsys, [stall])
+	assert second["stalled_on_prompt"][0]["new"] is False  # no second notification
+	monkeypatch.setattr(prompts, "_post", lambda path, body: posts.append(path) or {"number": 77})
+	code, summary = prompts.file_patterns(log_dir, "pickup", dry_run=False, slug=prompts.FILING_REPO)
+	assert code == 0 and summary["errors"] == []
+	assert [entry["issue"] for entry in summary["filed"]] == [77]
+	assert posts == [f"repos/{prompts.FILING_REPO}/issues"] * 2
+
+	# Once filed, the next wake's run files nothing and makes no API call.
+	monkeypatch.setattr(prompts, "existing_issues", lambda slug: pytest.fail("no read when nothing is left to file"))
+	code, summary = prompts.file_patterns(log_dir, "pickup", dry_run=False, slug=prompts.FILING_REPO)
+	assert code == 0 and summary["filed"] == [] and summary["commented"] == []
+
+
 # --- wiring ---
 
 
@@ -576,6 +614,18 @@ def test_pickup_runs_the_janitor_only_on_wake():
 	assert "with `new: true`, send one `PushNotification`" in text
 	assert "permission_prompts.py file --log-dir <stall_log_dir from the output>" in text
 	assert "archived <a>" in text
+
+
+def test_pickup_files_stalls_on_every_wake_and_runs_the_janitor_after_a_failed_queue_read():
+	text = PICKUP_PATH.read_text(encoding="utf-8")
+	stall_step = text.split("   4. For each `stalled_on_prompt` entry", 1)[1].split("\n", 1)[0]
+	assert "whether or not any entry was new" in stall_step
+	assert "a filing that failed on an earlier wake is retried here even when no stall is new" in stall_step
+	assert "when any entry was new, run" not in stall_step
+	queue_step = text.split("2. **Read the queue.**", 1)[1].split("3. **Start one session per pending entry.**", 1)[0]
+	assert "A failed read (exit 3) → keep its error for the report, skip step 3, and go to step 3a" in queue_step
+	assert "report it and end the turn" not in queue_step
+	assert "`queue read failed (<error>)` replaces the `started`, `ignored`, and `remaining` parts" in text
 
 
 @pytest.mark.parametrize("path", FIX_CLAUDE_PR_PATHS)

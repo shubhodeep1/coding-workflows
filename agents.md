@@ -1161,8 +1161,13 @@ reviews, comments, and conflicts stay a direct §12 request.
   each new stall is appended to `stalled-sessions.jsonl` there as a
   `PermissionRequest` record with tool `StalledSession(<tool>)`; the pickup
   sends one `PushNotification` per new stall and runs `permission_prompts.py
-  file --log-dir <stall_log_dir>`, which files or comments on the
-  `ai:permission-prompt` issue with the session title and `task_summary`.
+  file --log-dir <stall_log_dir>` on every wake, new stall or not, which
+  files or comments on the `ai:permission-prompt` issue with the session
+  title and `task_summary`. Filing progress is `permission_prompts.py`'s own
+  `filed-state.json` in that directory, advanced only after a successful
+  POST, so a failed filing is retried on the next wake (no API call when
+  nothing is left to file). A failed queue read (exit 3) still runs the
+  janitor.
   `/fix-claude-pr` runs `permission_prompts.py file` before every report.
   A byte-identical copy lives under `workflow-templates/.claude/scripts/`;
   `tests/test_stale_sessions.py` has its own `ci.yml` step.
