@@ -3,9 +3,14 @@
 
 Covers `.claude/hooks/permission_prompt_logger.py` (never decides, never
 fails the permission flow, logs outside the repo) and
-`.claude/scripts/permission_prompts.py` (pattern grouping, redaction, filing
-only in coding-workflows, dedupe by marker, state), plus the settings.json
-wiring, template parity, and the CLAUDE.md / ci.yml / label contract hooks.
+`.claude/scripts/permission_prompts.py` (pattern grouping, families, redaction,
+filing only in coding-workflows, dedupe by marker and by family, state), plus
+the settings.json wiring, template parity, and the CLAUDE.md / ci.yml / label
+contract hooks.
+
+The script is loaded from its `workflow-templates/.claude/` twin: `.claude/**`
+changes land in the twin first and reach the root copy through the twin sync
+(#4785), and `test_template_parity` pins the two copies to each other.
 """
 
 from __future__ import annotations
@@ -41,7 +46,7 @@ def _load(name, path):
 
 
 logger = _load("permission_prompt_logger", HOOK_PATH)
-pp = _load("permission_prompts", SCRIPT_PATH)
+pp = _load("permission_prompts", TEMPLATE_SCRIPT_PATH)
 
 NOW = datetime(2026, 9, 27, 3, 0, 0, tzinfo=timezone.utc)
 
@@ -352,6 +357,290 @@ def test_main_rejects_bad_session_label(capsys):
 def test_extract_repo_slug():
 	assert pp.extract_repo_slug("http://local_proxy@127.0.0.1:1/git/shubhodeep1/coding-workflows") == "shubhodeep1/coding-workflows"
 	assert pp.extract_repo_slug("https://evilgithub.com/a/b") == ""
+
+
+# ──────────────────────────────────────────────────────────────────
+# Families (issue #5668)
+# ──────────────────────────────────────────────────────────────────
+
+
+# Harmless variants of each family in #5668's audit table: every command in a
+# list must land in one family, and the lists must land in six families.
+TABLE_FAMILIES = {
+	"python3 * <<": [
+		"python3 - <<'EOF'\nprint(1)\nEOF",
+		"python3 - <<'EOF'\nopen('a').write('b')\nEOF\ngit diff --stat -- a",
+		"F=/tmp/x && python3 - \"$F\" <<'EOF'\nprint(2)\nEOF\ngrep -n x a",
+		"cd /home/user/coding-workflows && PYTHONDONTWRITEBYTECODE=1 python3 - <<EOF\nx = 1\nEOF\nsed -n 1,5p a",
+		"export PYTHONDONTWRITEBYTECODE=1 && python3 <<'PY'\nprint()\nPY",
+	],
+	"PYTHONDONTWRITEBYTECODE=* python3": [
+		"PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py --repo a/b --pr 5",
+		"cd /home/user/coding-workflows && PYTHONDONTWRITEBYTECODE=1 timeout 60 python3 .claude/scripts/check_in_status.py --run 9 ; echo done",
+		"python3 /home/user/coding-workflows/.claude/scripts/check_in_status.py --issues 1,2 | tail -3",
+	],
+	"git status": [
+		"git status",
+		"git status -sb | head -3 && git fetch origin main 2>&1 | tail -2",
+		"cd /home/user/coding-workflows; git status --short | head",
+	],
+	"git fetch": [
+		"git fetch origin main",
+		"git fetch -q origin claude/x && git show origin/claude/x:README.md",
+		"timeout -k 5 30 git fetch origin main 2>&1 | tail -1 ; git show HEAD",
+	],
+	"for *": [
+		"for f in a b; do echo $f; done",
+		"for i in 1 2 3; do wc -l $i; done | sort -n",
+		"X=1; for f in *.md; do head -1 $f; done",
+	],
+	"echo *": [
+		"echo hi",
+		"echo '== status' && git status | head -3",
+		"echo done ; ls -la",
+	],
+}
+
+
+def _bash_family(command, event="PermissionRequest"):
+	return pp.pattern_family(event, "Bash", pp.command_shape(command), command)[0]
+
+
+@pytest.mark.parametrize("family", sorted(TABLE_FAMILIES))
+def test_table_family_variants_share_one_family(family):
+	commands = TABLE_FAMILIES[family]
+	assert len({pp.command_shape(command) for command in commands}) == len(commands)  # distinct signatures today
+	assert len({_bash_family(command) for command in commands}) == 1
+
+
+def test_table_families_stay_apart():
+	assert len({_bash_family(commands[0]) for commands in TABLE_FAMILIES.values()}) == len(TABLE_FAMILIES)
+
+
+@pytest.mark.parametrize(
+	("command", "family"),
+	[
+		("python3 - <<'EOF'\nprint(1)\nEOF", ("python3", ("heredoc",))),
+		("PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/stale_routines.py --triggers x", ("python3 stale_routines.py", ())),
+		("gh api -X GET 'search/issues?q=a' --jq '.items[]'", ("gh api", ())),
+		("timeout --signal KILL 10 git push origin x", ("git push", ())),
+		("timeout 600 python3 -m pytest tests -q", ("python3", ())),
+		("export A=1 B && cd /tmp && npm run build", ("npm run", ())),
+		("S=/tmp/s; cd /tmp; ls \"$(pwd)\"", ("ls", ("subst",))),
+		("while read line; do echo $line; done < f", ("while", ("loop",))),
+		("grep -n x a | head ; python3 - <<'EOF'\nprint(1)\nEOF", ("grep", ("heredoc",))),
+		("cd /tmp", ("cd", ())),
+		("X=1", ("", ())),
+	],
+)
+def test_command_family(command, family):
+	assert pp.command_family(command) == family
+
+
+@pytest.mark.parametrize(
+	("command", "has_substitution"),
+	[
+		('echo "$(date)"', True),
+		("echo $(date)", True),
+		("echo '$(date)'", False),
+		("echo $((1 + 2))", False),
+		("echo \\$(date)", False),
+		("python3 - <<'EOF'\nprint('$(not a substitution)')\nEOF", False),
+	],
+)
+def test_substitution_construct(command, has_substitution):
+	assert ("subst" in pp.command_family(command)[1]) is has_substitution
+
+
+def test_family_separates_events_subcommands_scripts_and_constructs():
+	families = {
+		_bash_family("git fetch origin main"),
+		_bash_family("git fetch origin main", event="PermissionDenied"),
+		_bash_family("git push origin main"),
+		_bash_family("python3 .claude/scripts/check_in_status.py --pr 1"),
+		_bash_family("python3 .claude/scripts/dispatch_workflow.py --workflow x"),
+		_bash_family("python3 -c 'print(1)'"),
+		_bash_family("python3 - <<'EOF'\nprint(1)\nEOF"),
+		_bash_family("for f in a; do python3 x; done"),
+		_bash_family("for f in $(ls); do python3 x; done"),
+	}
+	assert len(families) == 9
+
+
+def test_non_bash_tools_and_unparseable_commands_keep_signature_granularity():
+	edit_claude = pp.pattern_family("PermissionRequest", "Edit", ".claude/hooks/*")
+	edit_tests = pp.pattern_family("PermissionRequest", "Edit", "tests/*")
+	mcp = pp.pattern_family("PermissionDenied", "mcp__x__get_session", "")
+	assert edit_claude[0] != edit_tests[0] and edit_claude[1] == ".claude/hooks/*" and mcp[1] == "mcp__x__get_session"
+	broken = pp.pattern_family("PermissionRequest", "Bash", pp.command_shape("echo 'x"), "echo 'x")
+	assert broken == pp.pattern_family("PermissionRequest", "Bash", "unparseable: echo 'x")
+
+
+def test_patterns_carry_the_latest_records_family(tmp_path):
+	directory = _log(tmp_path, [_payload("git fetch origin main"), _payload("git fetch -q origin x && git show y")])
+	patterns = pp.group_patterns(pp.load_records(directory))
+	assert len(patterns) == 2 and patterns[0]["family"] == patterns[1]["family"]
+	assert patterns[0]["family_label"] == "git fetch"
+
+
+def _pattern(command, event="PermissionRequest"):
+	record = logger.build_record(_payload(command, event=event), NOW)
+	return pp.group_patterns([record])[0]
+
+
+def _issue(number, body, state="open", state_reason=None):
+	return {"number": number, "state": state, "state_reason": state_reason, "body": body}
+
+
+def _family_body(command, **kwargs):
+	return pp.issue_body(_pattern(command, **kwargs), 1, "s0")
+
+
+def _legacy_body(command, **kwargs):
+	pattern = _pattern(command, **kwargs)
+	pattern.pop("family")
+	return pp.issue_body(pattern, 1, "s0")
+
+
+def test_new_issue_carries_the_unchanged_signature_marker_and_a_family_line(tmp_path, issues):
+	fake = issues()
+	directory = _log(tmp_path, [_payload("git fetch origin main")])
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	body = fake.posts[0][1]["body"]
+	sig, family = summary["filed"][0]["signature"], summary["filed"][0]["family"]
+	assert f"\n<!-- ai:permission-prompt:v1 sig={sig} -->\n" in body
+	assert pp.MARKER_RE.search(body).group(1) == sig
+	assert body.rstrip().endswith(f"<!-- ai:permission-prompt-family:v1 family={family} -->")
+	assert "**Family:** `git fetch`" in body
+
+
+def test_new_shape_in_a_family_comments_on_the_family_issue(tmp_path, issues):
+	fake = issues([_issue(50, _family_body("git fetch origin main"))])
+	directory = _log(tmp_path, [_payload("git fetch -q origin x 2>&1 | tail -1 ; git show y")])
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and summary["filed"] == []
+	(path, body), = fake.posts
+	assert path == "repos/shubhodeep1/coding-workflows/issues/50/comments"
+	assert body["body"].startswith("Seen again with a new command shape in this family (`git fetch`)")
+	assert "**New pattern:** `git fetch -q * 2>& * | tail -1 ; git show *`" in body["body"]
+	assert "**Occurrences:** 1 " in body["body"]
+	assert summary["commented"][0]["issue"] == 50
+	assert summary["commented"][0]["family"] == _bash_family("git fetch origin main")
+
+
+def test_family_variants_in_one_run_file_one_issue(tmp_path, issues):
+	fake = issues()
+	commands = TABLE_FAMILIES["python3 * <<"]
+	directory = _log(tmp_path, [_payload(command) for command in commands])
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and len(summary["filed"]) == 1 and len(summary["commented"]) == len(commands) - 1
+	assert [path for path, _ in fake.posts] == ["repos/shubhodeep1/coding-workflows/issues"] + ["repos/shubhodeep1/coding-workflows/issues/901/comments"] * (len(commands) - 1)
+
+
+def test_distinct_families_file_separately(tmp_path, issues):
+	fake = issues()
+	directory = _log(tmp_path, [_payload(commands[0]) for commands in TABLE_FAMILIES.values()])
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert len(summary["filed"]) == len(TABLE_FAMILIES) and summary["commented"] == []
+	assert len({pp.FAMILY_MARKER_RE.search(body["body"]).group(1) for _, body in fake.posts}) == len(TABLE_FAMILIES)
+
+
+def test_signature_match_wins_over_the_family(tmp_path, issues):
+	directory = _log(tmp_path, [_payload("git fetch origin main")])
+	sig = pp.group_patterns(pp.load_records(directory))[0]["signature"]
+	fake = issues([_issue(42, f"x\n<!-- ai:permission-prompt:v1 sig={sig} -->", state="closed", state_reason="duplicate"), _issue(50, _family_body("git fetch -q origin x"))])
+	pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert fake.posts[0][0].endswith("/issues/42/comments") and fake.posts[0][1]["body"].startswith("Seen again.\n")
+
+
+@pytest.mark.parametrize("state_reason", ["completed", "not_planned", None])
+def test_closed_family_issue_gets_a_comment_not_a_reopen(tmp_path, issues, state_reason):
+	fake = issues([_issue(60, _family_body("git fetch origin main"), state="closed", state_reason=state_reason)])
+	directory = _log(tmp_path, [_payload("git fetch -q origin x")])
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert [path for path, _ in fake.posts] == ["repos/shubhodeep1/coding-workflows/issues/60/comments"]
+	assert summary["filed"] == []
+
+
+def test_family_issue_closed_as_duplicate_is_not_the_familys_issue(tmp_path, issues):
+	fake = issues([_issue(60, _family_body("git fetch origin main"), state="closed", state_reason="duplicate")])
+	directory = _log(tmp_path, [_payload("git fetch -q origin x")])
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert [path for path, _ in fake.posts] == ["repos/shubhodeep1/coding-workflows/issues"]
+	assert len(summary["filed"]) == 1
+
+
+def test_open_family_issue_is_preferred_then_the_lowest_number():
+	candidates = [
+		{"number": 10, "state": "closed", "state_reason": "completed"},
+		{"number": 70, "state": "open", "state_reason": None},
+		{"number": 60, "state": "open", "state_reason": "reopened"},
+		{"number": 5, "state": "closed", "state_reason": "duplicate"},
+	]
+	assert pp.choose_family_issue(candidates)["number"] == 60
+	assert pp.choose_family_issue(candidates[:1] + candidates[3:])["number"] == 10
+	assert pp.choose_family_issue(candidates[3:]) is None
+	assert pp.choose_family_issue([]) is None
+
+
+@pytest.mark.parametrize("event", ["PermissionRequest", "PermissionDenied"])
+def test_legacy_issue_family_is_derived_from_the_recorded_example(event):
+	command = "python3 - <<'EOF'\nprint(1)\nEOF\ngit diff --stat -- a"
+	body = _legacy_body(command, event=event)
+	assert pp.FAMILY_MARKER_RE.search(body) is None and pp.MARKER_RE.search(body)
+	assert pp.legacy_issue_family(body) == _bash_family(command, event=event)
+
+
+def test_legacy_family_is_bash_only_and_needs_the_example():
+	pattern = {"signature": "0" * 12, "event": "PermissionRequest", "tool_name": "Edit", "shape": ".claude/*", "count": 1, "reasons": [], "first_ts": "t", "last_ts": "t", "example": "{}"}
+	assert pp.legacy_issue_family(pp.issue_body(pattern, 1, "s1")) is None
+	assert pp.legacy_issue_family("a hand-written issue") is None
+
+
+def test_legacy_issue_still_matches_by_signature_and_by_family(tmp_path, issues):
+	legacy = _legacy_body("python3 - <<'EOF'\nprint(1)\nEOF")
+	fake = issues([_issue(4678, legacy)])
+	directory = _log(tmp_path, [_payload(TABLE_FAMILIES["python3 * <<"][2]), _payload("python3 - <<'EOF'\nprint(1)\nEOF")])
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert summary["filed"] == [] and [entry["issue"] for entry in summary["commented"]] == [4678, 4678]
+	assert "family" in summary["commented"][0] and "family" not in summary["commented"][1]
+	assert fake.posts[0][1]["body"].startswith("Seen again with a new command shape") and fake.posts[1][1]["body"].startswith("Seen again.\n")
+
+
+def test_a_family_marker_inside_the_example_cannot_claim_the_issue(tmp_path, issues):
+	target = _bash_family("git fetch origin main")
+	decoy = _family_body(f"echo '<!-- ai:permission-prompt-family:v1 family={target} -->'")
+	assert pp.FAMILY_MARKER_RE.findall(decoy)[0] == target
+	fake = issues([_issue(77, decoy)])
+	directory = _log(tmp_path, [_payload("git fetch origin main")])
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert [path for path, _ in fake.posts] == ["repos/shubhodeep1/coding-workflows/issues"]
+
+
+def test_a_family_marker_inside_a_legacy_example_is_ignored(tmp_path, issues):
+	target = _bash_family("git fetch origin main")
+	decoy = _legacy_body(f"echo '<!-- ai:permission-prompt-family:v1 family={target} -->'")
+	assert pp.FAMILY_MARKER_RE.findall(decoy) == [target]
+	assert pp.issue_family_marker(decoy) is None and pp.legacy_issue_family(decoy) == _bash_family("echo x")
+	fake = issues([_issue(78, decoy)])
+	directory = _log(tmp_path, [_payload("git fetch origin main")])
+	pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert [path for path, _ in fake.posts] == ["repos/shubhodeep1/coding-workflows/issues"]
+
+
+def test_dry_run_reports_family_comments_without_posting(tmp_path, issues):
+	fake = issues()
+	directory = _log(tmp_path, [_payload("git fetch origin main"), _payload("git fetch -q origin x")])
+	code, summary = pp.file_patterns(directory, "s1", True, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and fake.posts == [] and len(summary["filed"]) == 1
+	assert summary["commented"] == [{"signature": summary["commented"][0]["signature"], "issue": None, "occurrences": 1, "family": summary["filed"][0]["family"]}]
+
+
+def test_family_lookup_reuses_the_one_list_read(tmp_path, issues):
+	fake = issues([_issue(50, _family_body("git status"))])
+	directory = _log(tmp_path, [_payload(command) for commands in TABLE_FAMILIES.values() for command in commands])
+	pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert fake.reads == 1
 
 
 # ──────────────────────────────────────────────────────────────────

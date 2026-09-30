@@ -1076,7 +1076,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > `~/.claude/permission-prompts/`; at the end of each stage
 > `permission_prompts.py file` lists them in the report and, in
 > coding-workflows only, files each new pattern as an `ai:permission-prompt`
-> issue routed to the Claude issue implementer. `/implement-plan-claude` now
+> issue routed to the Claude issue implementer. A new command shape whose
+> family (the same command and subcommand or script, heredoc, loop, or
+> `$(…)`) already has an issue becomes a comment on it instead. `/implement-plan-claude` now
 > requires Auto mode, and stops before any phase that must edit `.claude/**`
 > to ask how to run it.
 

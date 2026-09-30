@@ -20,6 +20,19 @@ replaced by `*`; for file tools, the tool and the parent directory; for other
 tools, the tool name. Its signature is the first 12 hex digits of a SHA-1 of
 those three parts.
 
+A pattern also has a **family** (issue #5668): shapes that differ only in
+harmless details. For Bash it is the event, the tool, the first command word
+and the constructs present (`heredoc`, `loop` for `for`/`while`/`until`,
+`subst` for a `$(…)` outside single quotes). The command word is taken after
+skipping leading segments that are only variable assignments, `export` of
+variables, or `cd …` followed by `&&` or `;`, and after dropping leading
+`NAME=value` words and a `timeout [options] <duration>` prefix. It keeps the
+subcommand or script the shape keeps (`git fetch`, `gh api`, `python3 x.py`,
+script by basename). For other tools, and for a command that does not parse,
+the family is the event, the tool, and the shape (as wide as the signature).
+Its id is the first 12 hex digits of a SHA-1 of those parts, and the latest
+record of the pattern decides it.
+
 `file` files only when the local checkout is FILING_REPO: fixes to
 `.claude/` land in coding-workflows, because consumer copies are overwritten
 on every `@stable` sync. Anywhere else it prints the report and files
@@ -27,8 +40,18 @@ nothing. For each pattern with occurrences not filed yet:
   - an `ai:permission-prompt` issue carrying the pattern's marker
     `<!-- ai:permission-prompt:v1 sig=<sig> -->` exists (open or closed) →
     one comment with the new occurrences (a closed issue is not reopened);
+  - otherwise, an issue of the pattern's family exists → one comment naming
+    the new shape and its occurrences, not a new issue. The family's issue is
+    the lowest-numbered open one, else the lowest-numbered closed as
+    `completed` or `not_planned` (or with no reason; not reopened). An issue
+    closed as `duplicate` is never a family's issue. An issue's family is its
+    last `<!-- ai:permission-prompt-family:v1 family=<id> -->` marker outside
+    the example block; a legacy issue without one gets it from its recorded
+    tool, event, and example command (Bash only);
   - otherwise → one new issue labelled `ai:permission-prompt` and `ai:claude`,
-    so clarify routes it to the Claude issue implementer.
+    so clarify routes it to the Claude issue implementer. It carries the
+    signature marker, unchanged, and the family marker on its own line. Later
+    patterns of its family in the same run are commented on it.
 Filed counts are kept in `filed-state.json` next to the logs, so a later run
 in the same session files only what is new.
 
@@ -38,7 +61,7 @@ token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
 
 API calls (CLAUDE.md §15), REST only, none when nothing is new: one read of
 the `ai:permission-prompt` issues per 100 issues, then one POST per pattern
-filed or commented.
+filed or commented. The family lookup reuses that one list read.
 
 Prints one JSON line. Exit 0 (including a partial run, whose failures are
 listed under `errors`), 1 on an invalid argument, 2 when the issue list could
@@ -68,6 +91,9 @@ LABEL = "ai:permission-prompt"
 ROUTE_LABEL = "ai:claude"
 MARKER_TEMPLATE = "<!-- ai:permission-prompt:v1 sig={sig} -->"
 MARKER_RE = re.compile(r"<!-- ai:permission-prompt:v1 sig=([0-9a-f]{12}) -->")
+# The family id rides on its own line so the v1 signature marker stays byte-identical for every reader (issue #5668).
+FAMILY_MARKER_TEMPLATE = "<!-- ai:permission-prompt-family:v1 family={family} -->"
+FAMILY_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-family:v1 family=([0-9a-f]{12}) -->")
 STATE_FILE = "filed-state.json"
 DEFAULT_LOG_DIR = Path.home() / ".claude" / "permission-prompts"
 MAX_COMMAND_CHARS = 2000
@@ -100,6 +126,14 @@ _SUBCOMMAND_TOOLS = frozenset(
 _SCRIPT_RE = re.compile(r"\.(py|sh|js|mjs|ts)$")
 _FILE_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
 _BULKY_INPUT_KEYS = frozenset({"content", "new_string", "old_string", "new_source", "edits"})
+_LOOP_KEYWORDS = frozenset({"for", "while", "until"})
+# `timeout` options that take the next word as their value.
+_TIMEOUT_VALUE_FLAGS = frozenset({"-k", "-s", "--kill-after", "--signal"})
+_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Closed issues that can still be a family's issue; one closed as `duplicate` points elsewhere.
+_FAMILY_CLOSED_REASONS = frozenset({"completed", "not_planned", ""})
+_ISSUE_EVENT_RE = re.compile(r"hit a \*\*(permission prompt|Auto-mode denial)\*\* for `([^`\n]+)`")
+_ISSUE_EXAMPLE_RE = re.compile(r"\*\*Latest example\*\*[^\n]*\n\n(`{4,})text\n(.*?)\n\1(?:\n|$)", re.S)
 
 
 def strip_heredocs(command: str, placeholder: str = "", keep_delimiter: bool = True) -> str:
@@ -180,15 +214,20 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 	return shape
 
 
-def command_shape(command: str) -> str:
-	"""Return the Bash command's shape: structure kept, literal values replaced by `*`."""
-	stripped = strip_heredocs(command, keep_delimiter=False)
+def _shell_tokens(stripped: str) -> list[str]:
+	"""Words and shell operators of a heredoc-stripped command; raises ValueError on an unbalanced quote."""
 	lexer = shlex.shlex(stripped.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
+	return list(lexer)
+
+
+def command_shape(command: str) -> str:
+	"""Return the Bash command's shape: structure kept, literal values replaced by `*`."""
+	stripped = strip_heredocs(command, keep_delimiter=False)
 	try:
-		tokens = list(lexer)
+		tokens = _shell_tokens(stripped)
 	except ValueError:
 		return "unparseable: " + re.sub(r"[0-9]+", "N", stripped.split("\n", 1)[0])[:60]
 	parts: list[str] = []
@@ -235,6 +274,156 @@ def record_shape(record: dict) -> str:
 
 def signature(event: str, tool: str, shape: str) -> str:
 	return hashlib.sha1(f"{event}\n{tool}\n{shape}".encode("utf-8")).hexdigest()[:12]
+
+
+def _family_segments(tokens: list[str]) -> list[tuple[list[str], bool, str]]:
+	"""Split tokens into simple commands: (words, has a heredoc, the operator after it). Redirects and their targets are dropped."""
+	segments: list[tuple[list[str], bool, str]] = []
+	words: list[str] = []
+	heredoc = False
+	redirect_target = False
+	for token in tokens:
+		is_punctuation = bool(token) and set(token) <= set(_SHELL_PUNCTUATION_CHARS)
+		if redirect_target and not is_punctuation:
+			redirect_target = False
+			continue
+		redirect_target = False
+		if is_punctuation and set(token) <= set("<>&") and set(token) & set("<>"):
+			heredoc = heredoc or token == "<<"
+			if words and words[-1].isdigit():
+				words.pop()
+			redirect_target = True
+			continue
+		if is_punctuation:
+			segments.append((words, heredoc, token))
+			words, heredoc = [], False
+			continue
+		words.append(token)
+	segments.append((words, heredoc, ""))
+	return [segment for segment in segments if segment[0] or segment[1]]
+
+
+def _family_core(words: list[str]) -> list[str]:
+	"""A simple command's words after leading `NAME=value` words and a `timeout [options] <duration>` prefix."""
+	index = 0
+	while index < len(words) and _ASSIGNMENT_RE.match(words[index]):
+		index += 1
+	if index < len(words) and words[index] == "timeout":
+		index += 1
+		while index < len(words) and words[index].startswith("-") and len(words[index]) > 1:
+			flag = words[index]
+			index += 1
+			if flag in _TIMEOUT_VALUE_FLAGS:
+				index += 1
+		index += 1
+	return words[index:]
+
+
+def _is_family_prefix(core: list[str], operator: str) -> bool:
+	"""A leading simple command that only sets up the next one: assignments, `export` of variables, or `cd`."""
+	if not operator or operator.strip("\n") not in ("", "&&", ";"):
+		return False
+	if not core:
+		return True
+	if core[0] == "export":
+		return len(core) > 1 and all(_ASSIGNMENT_RE.match(word) or _NAME_RE.match(word) for word in core[1:])
+	return core[0] == "cd"
+
+
+def _has_command_substitution(text: str) -> bool:
+	"""True when `$(` appears outside single quotes and is not arithmetic `$((`."""
+	single_quoted = double_quoted = False
+	index = 0
+	while index < len(text):
+		char = text[index]
+		if char == "\\" and not single_quoted:
+			index += 2
+			continue
+		if char == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif char == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		elif char == "$" and not single_quoted and text[index + 1 : index + 2] == "(" and text[index + 2 : index + 3] != "(":
+			return True
+		index += 1
+	return False
+
+
+def _family_word(core: list[str]) -> str:
+	"""The command, plus the subcommand or script its shape keeps (a script by its basename)."""
+	shape = _segment_shape(core)
+	if not shape:
+		return ""
+	for word in shape[1:]:
+		if word != "*" and not word.startswith("-"):
+			return f"{shape[0]} {word.rsplit('/', 1)[-1] if _SCRIPT_RE.search(word) else word}"
+	return shape[0]
+
+
+def command_family(command: str) -> tuple[str, tuple[str, ...]] | None:
+	"""A Bash command's family key: (command word, constructs present), or None when it does not parse."""
+	stripped = strip_heredocs(command, keep_delimiter=False)
+	try:
+		segments = _family_segments(_shell_tokens(stripped))
+	except ValueError:
+		return None
+	constructs: set[str] = set()
+	word = ""
+	found_word = False
+	for words, heredoc, operator in segments:
+		core = _family_core(words)
+		if heredoc:
+			constructs.add("heredoc")
+		if core and core[0] in _LOOP_KEYWORDS:
+			constructs.add("loop")
+		if not found_word and not _is_family_prefix(core, operator):
+			word = _family_word(core)
+			found_word = True
+	if _has_command_substitution(stripped):
+		constructs.add("subst")
+	return word, tuple(sorted(constructs))
+
+
+def _family_id(event: str, tool: str, key: str) -> str:
+	return hashlib.sha1(f"{event}\n{tool}\n{key}".encode("utf-8")).hexdigest()[:12]
+
+
+def pattern_family(event: str, tool: str, shape: str, command: str | None = None) -> tuple[str, str]:
+	"""(family id, readable label) for a pattern; see the module docstring."""
+	parsed = command_family(command) if tool == "Bash" and command is not None else None
+	if parsed is None:
+		return _family_id(event, tool, "shape:" + shape), shape or tool
+	word, constructs = parsed
+	label = (word or "(no command)") + "".join(f" + {construct}" for construct in constructs)
+	return _family_id(event, tool, f"command:{word}|{','.join(constructs)}"), label
+
+
+def record_family(record: dict) -> tuple[str, str]:
+	tool = str(record.get("tool_name") or "")
+	tool_input = record.get("tool_input") if isinstance(record.get("tool_input"), dict) else {}
+	command = str(tool_input.get("command") or "") if tool == "Bash" else None
+	return pattern_family(str(record.get("event")), tool, record_shape(record), command)
+
+
+def issue_family_marker(body: str) -> str | None:
+	"""The issue's family marker: the last one outside its recorded example (the generated marker follows it)."""
+	example_match = _ISSUE_EXAMPLE_RE.search(body)
+	outside = body[: example_match.start(2)] + body[example_match.end(2) :] if example_match else body
+	markers = FAMILY_MARKER_RE.findall(outside)
+	return markers[-1] if markers else None
+
+
+def legacy_issue_family(body: str) -> str | None:
+	"""The family of an issue filed before family markers, from its recorded tool, event, and example (Bash only)."""
+	event_match = _ISSUE_EVENT_RE.search(body)
+	example_match = _ISSUE_EXAMPLE_RE.search(body)
+	if not event_match or not example_match or event_match.group(2) != "Bash":
+		return None
+	parsed = command_family(example_match.group(2))
+	if parsed is None:
+		return None
+	event = "PermissionRequest" if event_match.group(1) == "permission prompt" else "PermissionDenied"
+	return pattern_family(event, "Bash", "", example_match.group(2))[0]
 
 
 def record_example(record: dict) -> str:
@@ -297,6 +486,7 @@ def group_patterns(records: list[dict]) -> list[dict]:
 		pattern["count"] += 1
 		pattern["last_ts"] = record.get("ts")
 		pattern["example"] = record_example(record)
+		pattern["family"], pattern["family_label"] = record_family(record)
 		reason = str(record.get("reason") or "")
 		if reason and reason not in pattern["reasons"] and len(pattern["reasons"]) < 3:
 			pattern["reasons"].append(redact(reason)[:300])
@@ -339,6 +529,7 @@ def issue_body(pattern: dict, new_count: int, session_label: str) -> str:
 		"(or, for a denial, went on without the call). Filed by "
 		"`.claude/scripts/permission_prompts.py` (CLAUDE.md §23.I).\n\n"
 		f"**Pattern:** `{pattern['shape'] or pattern['tool_name']}`\n\n"
+		+ (f"**Family:** `{pattern['family_label']}` (later shapes of this family are added here as comments)\n\n" if pattern.get("family") else "")
 		+ _occurrence_block(pattern, new_count, session_label)
 		+ "\n**How to fix** (in this order, never widening a permission for a destructive or administrative action):\n"
 		"1. Change the command file that produced the call so it uses an allowlisted helper "
@@ -355,11 +546,22 @@ def issue_body(pattern: dict, new_count: int, session_label: str) -> str:
 		"and answer it on this issue.\n\n"
 		+ MARKER_TEMPLATE.format(sig=pattern["signature"])
 		+ "\n"
+		+ (FAMILY_MARKER_TEMPLATE.format(family=pattern["family"]) + "\n" if pattern.get("family") else "")
 	)
 
 
 def comment_body(pattern: dict, new_count: int, session_label: str) -> str:
 	return f"Seen again.\n\n{_occurrence_block(pattern, new_count, session_label)}"
+
+
+def family_comment_body(pattern: dict, new_count: int, session_label: str) -> str:
+	return (
+		f"Seen again with a new command shape in this family (`{pattern['family_label']}`), "
+		"so it is added here instead of as a new issue.\n\n"
+		f"**New pattern:** `{pattern['shape'] or pattern['tool_name']}` "
+		f"({_event_label(pattern['event'])}, signature `{pattern['signature']}`)\n\n"
+		+ _occurrence_block(pattern, new_count, session_label)
+	)
 
 
 def extract_repo_slug(url: str) -> str:
@@ -431,16 +633,51 @@ def _save_state(log_dir: Path, state: dict[str, int]) -> None:
 	(log_dir / STATE_FILE).write_text(json.dumps(state, indent=1, sort_keys=True), encoding="utf-8")
 
 
-def existing_issues(slug: str) -> dict[str, dict]:
-	"""Map signature → {number, state} for every `ai:permission-prompt` issue (1 REST read per 100)."""
-	found: dict[str, dict] = {}
+def index_issues(slug: str) -> tuple[dict[str, dict], dict[str, list[dict]]]:
+	"""Index every `ai:permission-prompt` issue from one list read (1 REST read per 100 issues).
+
+	Returns (signature → {number, state}, family → [{number, state, state_reason}, …]). An issue's
+	family is `issue_family_marker` (outside the example block, so a command example cannot supply
+	it), else, for an issue carrying the signature marker, the family `legacy_issue_family` derives
+	from its body. Raises check_in_status.ReadError when the list read fails.
+	"""
+	by_signature: dict[str, dict] = {}
+	by_family: dict[str, list[dict]] = {}
 	for issue in check_in_status.gh_api_list(f"repos/{slug}/issues?labels={LABEL.replace(':', '%3A')}&state=all"):
 		if issue.get("pull_request"):
 			continue
-		match = MARKER_RE.search(issue.get("body") or "")
-		if match and match.group(1) not in found:
-			found[match.group(1)] = {"number": issue.get("number"), "state": issue.get("state")}
-	return found
+		body = issue.get("body") or ""
+		match = MARKER_RE.search(body)
+		if match and match.group(1) not in by_signature:
+			by_signature[match.group(1)] = {"number": issue.get("number"), "state": issue.get("state")}
+		family = issue_family_marker(body) or (legacy_issue_family(body) if match else None)
+		if family:
+			by_family.setdefault(family, []).append(
+				{"number": issue.get("number"), "state": issue.get("state"), "state_reason": issue.get("state_reason")}
+			)
+	return by_signature, by_family
+
+
+def existing_issues(slug: str) -> dict[str, dict]:
+	"""Map signature → {number, state} for every `ai:permission-prompt` issue (1 REST read per 100)."""
+	return index_issues(slug)[0]
+
+
+def choose_family_issue(candidates: list[dict]) -> dict | None:
+	"""The issue a family's new shapes are added to: the lowest-numbered open one, else the
+	lowest-numbered one closed as completed or not_planned (or with no reason). Never one closed as duplicate."""
+
+	def number_key(issue: dict) -> tuple[bool, int]:
+		number = issue.get("number")
+		return (not isinstance(number, int), number if isinstance(number, int) else 0)
+
+	open_issues = [issue for issue in candidates if issue.get("state") == "open"]
+	if open_issues:
+		return min(open_issues, key=number_key)
+	closed_issues = [
+		issue for issue in candidates if issue.get("state") == "closed" and (issue.get("state_reason") or "") in _FAMILY_CLOSED_REASONS
+	]
+	return min(closed_issues, key=number_key) if closed_issues else None
 
 
 def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | None = None) -> tuple[int, dict]:
@@ -458,26 +695,36 @@ def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | 
 	if not pending:
 		return 0, summary
 	try:
-		existing = existing_issues(slug)
+		existing, families = index_issues(slug)
 	except check_in_status.ReadError as exc:
 		summary["errors"].append(str(exc))
 		return 2, summary
 	for pattern, new_count in pending:
 		sig = pattern["signature"]
+		family = pattern["family"]
+		family_home = None if sig in existing else choose_family_issue(families.get(family, []))
 		try:
 			if sig in existing:
 				number = existing[sig]["number"]
 				if not dry_run:
 					_post(f"repos/{slug}/issues/{number}/comments", {"body": comment_body(pattern, new_count, session_label)})
 				summary["commented"].append({"signature": sig, "issue": number, "occurrences": new_count})
+			elif family_home is not None:
+				number = family_home["number"]
+				if not dry_run:
+					_post(f"repos/{slug}/issues/{number}/comments", {"body": family_comment_body(pattern, new_count, session_label)})
+				summary["commented"].append({"signature": sig, "issue": number, "occurrences": new_count, "family": family})
 			else:
 				created = {} if dry_run else _post(
 					f"repos/{slug}/issues",
 					{"title": issue_title(pattern), "body": issue_body(pattern, new_count, session_label), "labels": [LABEL, ROUTE_LABEL]},
 				)
-				summary["filed"].append({"signature": sig, "issue": created.get("number"), "title": issue_title(pattern)})
+				summary["filed"].append({"signature": sig, "issue": created.get("number"), "title": issue_title(pattern), "family": family})
 				if created.get("number"):
 					existing[sig] = {"number": created.get("number"), "state": "open"}
+				if created.get("number") or dry_run:
+					# Later patterns of this family in the same run go to this issue (in a dry run, to the one it would open).
+					families.setdefault(family, []).append({"number": created.get("number"), "state": "open", "state_reason": None})
 		except check_in_status.ReadError as exc:
 			summary["errors"].append(str(exc))
 			continue
