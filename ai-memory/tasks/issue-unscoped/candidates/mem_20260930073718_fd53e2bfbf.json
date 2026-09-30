@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:514-528, 570-612; workflow-templates/.claude/scripts/permission_prompts.py:521-528 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Legacy migration can mark a new real denial as already filed when its timestamp ties an older classifier-outage record and filename order puts the denial first.\n  WHY: The logger records timestamps at whole-second precision, so stable timestamp sorting can preserve filename order and use the legacy count on the real denial instead of the outage.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py:522 | severity=high | confidence=4\n  PROBLEM: `_migrate_legacy_counts` sorts only by timestamp, so tied records retain filename order and a real denial can consume a legacy count belonging to an outage.\n  WHY: The denial is then marked filed while the outage is skipped, causing `file_patterns` to omit the genuine denial.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py: _migrate_legacy_counts (521-528); file_patterns (585-588) | severity=high | confidence=4\n  PROBLEM: When records share a timestamp, migration preserves filename order, allowing a newer real denial to tie with an older outage record.\n  WHY: If the denial's filename sorts first and the legacy count is 1, migration marks it filed and excludes the outage, leaving no pending real record for `file_patterns`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/scripts/permission_prompts.py: _migrate_legacy_counts (lines 514-525), file_patterns (lines 570-612) | severity=high | confidence=3\n  PROBLEM: Legacy migration can mark a new real denial as filed when its timestamp ties an older classifier-outage record and its filename sorts first.\n  WHY: The real denial consumes the legacy count, the outage is excluded from real records, and `file_patterns` returns without filing the denial.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/permission_prompts.py: _migrate_legacy_counts, lines 521-528 (the sorted() call at line 522 and the filed.setdefault at line 528); also present in the workflow-templates/.claude/scripts/permission_prompts.py twin at the same lines | severity=high | confidence=3\n  PROBLEM: Legacy migration can mark a real denial as already filed when its timestamp ties an older classifier-outage record, hiding the real denial.\n  WHY: Second-level timestamps can tie, and stable sorting then preserves filename order, allowing the real denial to consume the legacy count while the outage is skipped.\n=== END FINDINGS FROM z-ai_glm-5_2===",
+  "fingerprint": "aad2d44dfc09184a9010cf5c9272fcab776ff4585a8a38e2ce919be29a15029a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5028,
+    "run_id": "36678923398",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36678923398",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930073718_fd53e2bfbf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5028,
+    "run_id": "36678923398"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T07:37:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
