@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T01:21:10Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A workflow gate that releases a secret-bearing run must not authorize from a label or a branch name alone: both are writable by any collaborator. Bind it to provenance the automation leaves (who applied the label and when, a marker line) and to the requesting PR's author.",
+  "phase": "implement_plan",
+  "pr_number": 5345,
+  "record_id": "lesson-implement-plan-6de4a04be398fb3beed3a1c9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-4734-validate-stacked-stable-targets",
+    "file:.github/workflows/validate.yml"
+  ]
+}
