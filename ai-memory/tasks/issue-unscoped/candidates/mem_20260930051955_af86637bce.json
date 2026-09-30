@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_twin_sync.py:around line 248 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `tree_of` references `tree` in its f-string although `tree` is not defined in its scope, causing a `NameError` when called.\n  WHY: The review reports no callers in the diff, so this dead-code bug cannot fire in production as written.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_twin_sync.py, function `tree_of` (around line 248) | severity=NIT | confidence=4\n  PROBLEM: The function body is `return run_git(repo, [\"rev-parse\", f\"{commit}^{{tree}}\"]).strip()`. In an f-string, `{tree}` is a Python expression that interpolates the local variable `tree`, but the only parameter is `commit`. `tree` is not defined in this function's scope, so calling `tree_of` would raise `NameError: name 'tree' is not defined`. The intended code was likely `f\"{commit}^{{tree}}\"` (no second set of braces) so the git rev-parse syntax `commit^{tree}` is passed through.\n  WHY: A name error on the first call. The intended git syntax (`<commit>^{tree}`) is not produced. However, `grep` confirms no caller exists in the diff (`CALLERS (0): (none found)`), so the function is dead code and the bug cannot fire in production as written.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e8d801dde067c4869bd2512b08bd439c8915e78891dab27440f99ce3a2c7c1bf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36670650039",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36670650039",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930051955_af86637bce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36670650039"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T05:19:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
