@@ -1212,12 +1212,37 @@ side so that class cannot land unnoticed.
   shape (comments and blank lines only), fails too, so a new guard ships
   with its corpus. A local run without `--head-ref` counts untracked hook
   files as changed.
+- **Settings wiring (issue #5328).** A guard only runs when a settings file
+  wires it, so the check also runs when `.claude/settings.json` or
+  `workflow-templates/.claude/settings.json` changes. It extracts every hook
+  entry, under any event, whose command names
+  `.claude/hooks/<name>_guard.py`. Each base entry needs a head entry with
+  the same event and hook that verifiably still runs the guard. That means
+  the command is unchanged, or is exactly
+  `python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/<hook>.py` with that hook
+  present in the same side's hooks tree. The matcher must cover the base
+  matcher: identical, match-all (absent, empty, or `*`), or a superset when
+  both are plain `A|B` tool-name lists; any other regex change fails. The
+  timeout must be no lower (absent = 60 s), and every other key of the entry
+  and its matcher group (`type`, `async`, …) must be equal. Anything else
+  fails closed: for example `python3 -c 'pass' <hook path>`, `… || true`, a
+  removed or moved entry, a narrowed matcher, a lower timeout,
+  `disableAllHooks` turning on, any change to the top-level `env` object
+  (it reaches every hook's process: `CLAUDE_PR_MERGE_GUARD=off` or a
+  shadowing `PATH`), and a deleted, unparseable, or non-object settings file. The identity of a wiring failure is
+  `settings:<file>:<event>:<matcher>:<hook>`
+  (`settings:<file>:disableAllHooks`, `settings:<file>:env`,
+  `settings:<file>:unparseable`). New
+  non-guard hooks and `permissions.*` rules are not checked here.
 - **`Intended loosening:`** A PR that means to loosen lists each shape
   verbatim (the corpus line, placeholders included) under a heading or bold
   line `Intended loosening:` in its body, one list item per shape,
   optionally prefixed with the hook and a colon, with the shape in
   backticks (``- pr_merge_status_guard: `git push` ``). The
-  section ends at the next markdown heading. A listed shape counts as a
+  section ends at the next markdown heading. A wiring change is listed the
+  same way, with its printed identity as the shape
+  (``- pr_merge_status_guard: `settings:.claude/settings.json:PreToolUse:Bash:pr_merge_status_guard` ``).
+  A listed shape counts as a
   loosening under the retire-master Q3: A rule, so a sync that carries it
   waits for the operator. CI reads the body from the event payload of the
   push, so a body edited later needs another push to count.
@@ -1235,9 +1260,14 @@ side so that class cannot land unnoticed.
 - **Output.** `GUARD_DIFFERENTIAL regression tree=… hook=… line=… base=…
   head=… shape=…` per failing shape (as `::error::`), `GUARD_DIFFERENTIAL
   intended_loosening …` per listed shape, `GUARD_DIFFERENTIAL missing_corpus
-  path=…`, and a `GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> …`
-  summary. Exit 0 when clean or when no hook changed, 1 on a failure, 2 on a
-  bad ref, unreadable corpus, or unreadable PR body.
+  path=…`, `GUARD_DIFFERENTIAL wiring_regression settings=… event=…
+  matcher=… hook=… reason=<removed|command|matcher|timeout|keys|disableAllHooks|env|unparseable>
+  shape=…` per wiring failure (as `::error::`; `reason` joins several with
+  commas), `GUARD_DIFFERENTIAL intended_wiring_change …` per listed one, and a
+  `GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> …` summary ending in
+  `settings=… wiring_regressions=<n>`. Exit 0 when clean or when no hook or
+  settings file changed, 1 on a failure, 2 on a bad ref, unreadable corpus,
+  or unreadable PR body.
 
 ---
 
