@@ -441,14 +441,15 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            filtered run listing). Normally 3 calls, one page per status.
 #            REST only (CLAUDE.md §15).
 # Incomplete: a page that failed after gh_retry, a malformed page, a short
-#            page before total_count was reached (the listing shifted while it
+#            page before total_count was reached or a later page whose
+#            total_count differs from page 1's (the listing shifted while it
 #            was read), more runs than 10 pages hold, or a failed key filter.
 #            Each is logged once on stderr (CLAUDE.md §8):
 #            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|filter_failed> status=<s> page=<p> read=<n> total=<n>
 _mt_inflight_review_branches()
 {
 	local __mt_runs_max_pages=10 __mt_runs_status="" __mt_runs_page=0 __mt_runs_reason=""
-	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0
+	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_first_total=0 __mt_runs_read=0
 	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys=""
 	for __mt_runs_status in pending queued in_progress; do
 		__mt_runs_page=1
@@ -481,6 +482,17 @@ _mt_inflight_review_branches()
 				|| ! __mt_runs_read="$(printf '%s' "${__mt_runs_status_runs}" | jq -r 'length' 2>/dev/null)" \
 				|| ! [[ "${__mt_runs_total}" =~ ^[0-9]+$ && "${__mt_runs_page_len}" =~ ^[0-9]+$ && "${__mt_runs_read}" =~ ^[0-9]+$ ]]; then
 				__mt_runs_reason="malformed_page"
+				break 2
+			fi
+			# The listing is filtered by status, so a run that changes status
+			# between two page reads leaves it and shifts unread runs onto a page
+			# already read. A later page then reports a smaller total_count that
+			# the runs read can reach while a still-active run was skipped, so any
+			# change in total_count after page 1 is a shifted listing.
+			if [ "${__mt_runs_page}" -eq 1 ]; then
+				__mt_runs_first_total="${__mt_runs_total}"
+			elif [ "${__mt_runs_total}" -ne "${__mt_runs_first_total}" ]; then
+				__mt_runs_reason="listing_shifted"
 				break 2
 			fi
 			if [ "${__mt_runs_read}" -ge "${__mt_runs_total}" ]; then

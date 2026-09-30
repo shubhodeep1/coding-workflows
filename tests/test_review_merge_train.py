@@ -76,6 +76,11 @@ if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
   else
     runs_source='{"workflow_runs":[]}'
     [ -f "${FAKE_GH_DIR}/actions_runs.json" ] && runs_source="$(cat "${FAKE_GH_DIR}/actions_runs.json")"
+    # actions_runs_after_page1.json, when present, serves every later page:
+    # runs changed status between two page reads.
+    if [ "${run_page}" -gt 1 ] && [ -f "${FAKE_GH_DIR}/actions_runs_after_page1.json" ]; then
+      runs_source="$(cat "${FAKE_GH_DIR}/actions_runs_after_page1.json")"
+    fi
     page_json="$(printf '%s' "${runs_source}" | jq -c --arg st "${run_status}" --argjson pg "${run_page}" --argjson pp "${run_per_page}" '
       ((.workflow_runs // []) | map(select($st == "" or .status == $st))) as $r
       | {total_count: ((.total_count_override // {})[$st] // ($r | length)),
@@ -590,11 +595,13 @@ def _queued_pr_4077(fixtures: Path) -> None:
 	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
 
 
-def _write_runs(fixtures: Path, runs: list[dict], total_count_override: dict | None = None) -> None:
+def _write_runs(fixtures: Path, runs: list[dict], total_count_override: dict | None = None, runs_after_page1: list[dict] | None = None) -> None:
 	payload: dict = {"workflow_runs": runs}
 	if total_count_override is not None:
 		payload["total_count_override"] = total_count_override
 	(fixtures / "actions_runs.json").write_text(json.dumps(payload), encoding="utf-8")
+	if runs_after_page1 is not None:
+		(fixtures / "actions_runs_after_page1.json").write_text(json.dumps({"workflow_runs": runs_after_page1}), encoding="utf-8")
 
 
 def test_release_matches_ref_suffixed_run_path(tmp_path: Path) -> None:
@@ -734,6 +741,53 @@ def test_release_leaves_pr_queued_when_listing_shifts(tmp_path: Path) -> None:
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
 	assert "reason=listing_shifted status=queued page=1 read=1 total=3" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def _in_progress_runs_with_review_at(count: int, review_index: int) -> list[dict]:
+	runs = [
+		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
+		 "path": ".github/workflows/ci.yml"}
+		for i in range(count)
+	]
+	runs[review_index] = {"id": 5000, "status": "in_progress", "head_branch": "ai/issue-4064",
+		"event": "pull_request", "path": ".github/workflows/ai-review.yml"}
+	return runs
+
+
+def test_release_leaves_pr_queued_when_listing_shrinks_between_pages(tmp_path: Path) -> None:
+	"""Runs that finish after page 1 shift unread runs onto it; page 2's smaller total must not look complete.
+
+	150 runs, the review run at position 105. After page 1, ten page-1 runs finish:
+	page 2 (offset 100 of 140) starts at the old position 110, so the review run is
+	never read, and read (140) reaches page 2's total_count (140).
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = _in_progress_runs_with_review_at(150, 105)
+	_write_runs(fixtures, runs, runs_after_page1=runs[10:])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=listing_shifted status=in_progress page=2" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_listing_grows_between_pages(tmp_path: Path) -> None:
+	"""A total_count that changes between pages means the listing moved while it was read."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = _in_progress_runs_with_review_at(150, 120)
+	newer = [
+		{"id": 9000 + i, "status": "in_progress", "head_branch": f"hotfix/{i}", "event": "push",
+		 "path": ".github/workflows/ci.yml"}
+		for i in range(5)
+	]
+	_write_runs(fixtures, runs, runs_after_page1=newer + runs)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=listing_shifted status=in_progress page=2" in result.stderr
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 
