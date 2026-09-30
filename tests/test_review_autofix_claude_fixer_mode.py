@@ -301,6 +301,10 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 === END FINDINGS FROM minimax ===
 """
 
+# The runner status files behind LEDGER_EMPTY: a ledger with no failed block
+# is reconciled with the runner roster too (issue #5579).
+LEDGER_EMPTY_STATUSES = {"minimax": "success"}
+
 
 def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, statuses: dict[str, str] | None = None, outputs: dict[str, str] | None = None, min_clean: str | None = None, extra_env: dict[str, str] | None = None):
 	support = tmp / "support"
@@ -399,7 +403,7 @@ def test_handoff_posts_findings_ledger_then_marker():
 
 def test_handoff_zero_findings_exports_auto_merge_flag_without_comments():
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY)
+		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, statuses=LEDGER_EMPTY_STATUSES)
 	assert proc.returncode == 0, proc.stderr
 	assert calls == [] and posts == ""
 	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
@@ -408,7 +412,7 @@ def test_handoff_zero_findings_exports_auto_merge_flag_without_comments():
 def test_handoff_does_not_merge_without_fresh_ready_checks():
 	for status in ("timeout", "disabled", "api_error"):
 		with tempfile.TemporaryDirectory() as td:
-			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_status=status)
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_status=status, statuses=LEDGER_EMPTY_STATUSES)
 		assert proc.returncode == 0, proc.stderr
 		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 		assert len(calls) == 1
@@ -436,7 +440,7 @@ def test_verification_with_remaining_findings_blocks_instead_of_merging():
 def test_handoff_failed_checks_alone_are_handed_off():
 	context = "failed[0].name: ci / lint\nfailed[0].status: completed\n"
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, check_context=context)
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, check_context=context, statuses=LEDGER_EMPTY_STATUSES)
 	assert proc.returncode == 0, proc.stderr
 	assert "Failing check runs on this head: `ci / lint`" in calls[0]["payload"]["body"]
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
@@ -870,9 +874,10 @@ def test_repeated_failed_block_is_not_a_missing_vote():
 
 
 def test_all_clean_ledger_without_failed_slots_keeps_todays_rule():
-	# No failed slot: no minimum and no status files needed (AD-1).
+	# No failed slot: still no minimum (AD-1), but the block needs its runner
+	# status file since issue #5579 (see the #5579 tests below).
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, min_clean="5")
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, min_clean="5", statuses=LEDGER_EMPTY_STATUSES)
 	assert proc.returncode == 0, proc.stderr
 	assert calls == []
 	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
@@ -1228,7 +1233,9 @@ def test_lens_headings_match_the_reviewer_checklist_prompt():
 
 def test_ledger_without_failed_slots_does_not_read_runner_outputs():
 	# AD-1: only the failed-slot path verifies clean votes against the runner
-	# output; a ledger with no failed slot keeps the every-block-clean rule.
+	# output; a ledger with no failed slot needs every block clean over a
+	# `success` status and full roster coverage (issue #5579 AD-1), not the
+	# strict output format.
 	blocks, statuses = _panel()
 	outputs = {_slug(model): "No changes are needed." for model in PANEL}
 	with tempfile.TemporaryDirectory() as td:
@@ -1370,6 +1377,126 @@ def test_roster_check_behaves_the_same_under_mawk_and_gawk():
 				assert calls == [], awk_name
 				assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env, awk_name
 				assert "clean_reviewers=4 min=4" in proc.stdout, awk_name
+
+
+# ---- every zero-finding ledger is reconciled with the runner (issue #5579) ----
+
+MINIMAX = "minimax_minimax-m3"
+
+
+def _all_clean_panel_with_failed_minimax():
+	"""Six clean ledger blocks over a runner that recorded minimax as failed."""
+	blocks, statuses = _panel()
+	statuses[MINIMAX] = "failed"
+	return blocks, statuses, _runner_outputs(("minimax/minimax-m3",))
+
+
+def test_ledger_without_failed_slots_omitting_a_failed_reviewer_is_not_clean():
+	# The issue's exploit: the ledger drops the failed reviewer's block and
+	# every block it keeps reads clean, so no failed-slot check ever ran.
+	blocks, statuses, outputs = _all_clean_panel_with_failed_minimax()
+	blocks = [(slug, body) for slug, body in blocks if slug != MINIMAX]
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=outputs)
+	_assert_roster_gap_hands_off(proc, calls, github_env, f"Claude-fixer ledger omits reviewer '{MINIMAX}' that the reviewer runner ran; the ledger is not clean.")
+	assert "Reviewer slots that failed" not in calls[0]["payload"]["body"]
+	assert "Reviewer ledger entries: 0 (posted above)." in calls[0]["payload"]["body"]
+
+
+def test_ledger_without_failed_slots_omitting_a_reviewer_with_a_finding_is_not_clean():
+	blocks, statuses = _panel()
+	blocks = [(slug, body) for slug, body in blocks if slug != GROK]
+	outputs = _runner_outputs(())
+	outputs[GROK] = _checklist_output({"CORRECTNESS & LOGIC": LABELLED_FINDING})
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=outputs)
+	_assert_roster_gap_hands_off(proc, calls, github_env, f"Claude-fixer ledger omits reviewer '{GROK}' that the reviewer runner ran; the ledger is not clean.")
+
+
+def test_ledger_showing_a_failed_reviewer_as_clean_is_not_clean():
+	blocks, statuses, outputs = _all_clean_panel_with_failed_minimax()
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=outputs)
+	_assert_roster_gap_hands_off(proc, calls, github_env, f"Claude-fixer ledger block '{MINIMAX}' reads clean but its reviewer status is 'failed'; the ledger is not clean.")
+
+
+def test_ledger_showing_a_skipped_or_closed_slot_as_clean_is_not_clean():
+	for status in ("skipped_open", "skipped_budget", "skipped_unmapped", "pr_closed", ""):
+		blocks, statuses = _panel()
+		statuses[GROK] = status
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(()))
+		_assert_roster_gap_hands_off(proc, calls, github_env, f"Claude-fixer ledger block '{GROK}' reads clean but its reviewer status is '{status or 'missing'}'; the ledger is not clean.")
+
+
+def test_ledger_without_failed_slots_needs_a_status_file_for_every_block():
+	blocks, statuses = _panel()
+	del statuses[GROK]
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses)
+	_assert_roster_gap_hands_off(proc, calls, github_env, f"Claude-fixer ledger block '{GROK}' reads clean but its reviewer status is 'missing'; the ledger is not clean.")
+
+
+def test_ledger_without_failed_slots_needs_a_readable_roster():
+	blocks, _statuses = _panel()
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks))
+	_assert_roster_gap_hands_off(proc, calls, github_env, "Claude-fixer reviewer roster cannot be read (PREVIOUS_REVIEWS_DIR is unset or not a directory); the ledger is not clean.")
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), outputs={})
+	_assert_roster_gap_hands_off(proc, calls, github_env, "Claude-fixer reviewer roster is empty (no status_review_<slug>.txt or review_<slug>.txt in PREVIOUS_REVIEWS_DIR); the ledger is not clean.")
+
+
+def test_ledger_without_failed_slots_repeating_a_block_is_not_clean():
+	blocks, statuses = _panel()
+	blocks.append((GROK, CLEAN_BODY))
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=_runner_outputs(()))
+	_assert_roster_gap_hands_off(proc, calls, github_env, "Claude-fixer ledger repeats a reviewer block; the ledger is not clean.")
+
+
+def test_ledger_without_failed_slots_covering_the_roster_is_clean_below_the_minimum():
+	# Three reviewers, all clean and all `success`: no minimum applies (AD-2),
+	# and no failed-slot log line is written.
+	blocks, statuses = _panel()
+	keep = {_slug(model) for model in PANEL[:3]}
+	blocks = [(slug, body) for slug, body in blocks if slug in keep]
+	statuses = {slug: status for slug, status in statuses.items() if slug in keep}
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, min_clean="5")
+	assert proc.returncode == 0, proc.stderr
+	assert calls == [] and posts == ""
+	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
+	assert "CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS" not in proc.stdout
+	assert "::warning::" not in proc.stdout
+	assert "action=auto_merge" in proc.stdout
+
+
+def test_ledger_without_failed_slots_reconciliation_behaves_the_same_under_mawk_and_gawk():
+	omitted_blocks, omitted_statuses, omitted_outputs = _all_clean_panel_with_failed_minimax()
+	omitted_blocks = [(slug, body) for slug, body in omitted_blocks if slug != MINIMAX]
+	full_blocks, full_statuses = _panel()
+	full_outputs = _runner_outputs(())
+	for awk_name in ("mawk", "gawk"):
+		awk_path = shutil.which(awk_name)
+		if awk_path is None:
+			pytest.skip(f"{awk_name} not installed")
+		for blocks, statuses, outputs, omitted in (
+			(omitted_blocks, omitted_statuses, omitted_outputs, True),
+			(full_blocks, full_statuses, full_outputs, False),
+		):
+			with tempfile.TemporaryDirectory() as td:
+				shim = Path(td) / "awk_shim"
+				shim.mkdir()
+				(shim / "awk").symlink_to(awk_path)
+				path = os.pathsep.join((str(shim), str(Path(td) / "bin"), os.environ.get("PATH", "")))
+				proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=outputs, extra_env={"PATH": path})
+			if omitted:
+				_assert_roster_gap_hands_off(proc, calls, github_env, f"Claude-fixer ledger omits reviewer '{MINIMAX}' that the reviewer runner ran; the ledger is not clean.")
+			else:
+				assert proc.returncode == 0, (awk_name, proc.stderr)
+				assert calls == [], awk_name
+				assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env, awk_name
 
 
 def test_workflow_wires_the_minimum_clean_reviewers_variable():

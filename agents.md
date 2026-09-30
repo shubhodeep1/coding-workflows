@@ -129,7 +129,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
    Fewer clean reviewers, any other text, or a status or output file that
    does not match hands the round off with a `::warning::` naming the block
    and the reason, and the hand-off names the verified failed slots. A ledger with
-   no failed slot keeps the every-block-clean rule, with no minimum. At the
+   no failed slot has no minimum and its runner outputs are not
+   format-checked, but it is reconciled with the runner too (issue #5579:
+   the ledger can leave a failed reviewer out, or show it as clean, and read
+   all-clean): every block reads `(No findings reported.)` over a
+   `status_review_<slug>.txt` that reads `success`, no block repeats, and
+   the roster check above covers every slot, with the same `::warning::`
+   lines and hand-off on any gap. At the
    cap the PR itself
    is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
