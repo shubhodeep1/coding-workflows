@@ -24,7 +24,8 @@
 #          reached, killed, timed out) is a missing vote, not a finding: the
 #          ledger is still clean when at least CLAUDE_FIXER_MIN_CLEAN_REVIEWERS
 #          (default 5) reviewers completed clean, each proven by its own
-#          runner output (NONE, no finding or task gap; issue #5114), and
+#          runner output in the strict verdict format (NONE verdicts, no
+#          finding, location or severity text; issues #5114, #5298), and
 #          the ledger has a block for every reviewer slot the runner ran
 #          (issue #5297), logged as CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS (see
 #          the clean-ledger check).
@@ -153,17 +154,30 @@ fi
 # proves a failure or a clean vote; the status and output files are written
 # by the runner only.
 #
-# A runner output is an unambiguous no-findings result when it is readable
-# and not empty, at least one line is exactly NONE (the reviewer contract's
-# "found nothing", prompts/_nag_reminders.txt), no line is a finding or
-# task-gap field (File:, Line or code reference:, Problem:, Why it fails at
-# runtime:, Requirement:, Expected change site:, Evidence of absence:,
-# SEVERITY:, ISSUE_CONFIDENCE:, markdown list and emphasis markers ignored),
-# and, when any lens heading of prompts/review-reviewer-checklist.txt appears
-# (the same markdown markers and list numbering ignored, so a numbered or
-# bulleted heading still needs its NONE), all nine appear and the next
-# non-blank line after each is exactly NONE. Prose around those verdicts is
-# allowed.
+# A runner output is an unambiguous no-findings result when it is readable,
+# not empty, and matches a strict verdict format (issue #5298: a NONE next to
+# unlabelled finding text must not count). Lines are trimmed; blank lines
+# are ignored.
+#   1. No line is a finding or task-gap field (File:, Line or code reference:,
+#      Problem:, Why it fails at runtime:, Requirement:, Expected change
+#      site:, Evidence of absence:, SEVERITY:, ISSUE_CONFIDENCE:, markdown
+#      list and emphasis markers ignored).
+#   2. At least one line is exactly NONE (the reviewer contract's "found
+#      nothing", prompts/_nag_reminders.txt).
+#   3. The verdict. When any lens heading of
+#      prompts/review-reviewer-checklist.txt appears (the same markdown
+#      markers and list numbering ignored), it is the block that starts at
+#      the first heading: a contiguous run of heading-then-NONE pairs in
+#      which each of the nine headings appears exactly once, in any order. A
+#      heading past the end of that run means text sits between the
+#      verdicts. With no lens heading, the verdict is one NONE line.
+#   4. Every other line is free text (narration before the verdict, a
+#      summary after it). HARDENING_SUGGESTIONS: directly followed by NONE is
+#      allowed; any other free-text line must not be NONE, cite a code
+#      location (a letter, digit or _ directly followed by : and a digit,
+#      #L and a digit, or "line"/"lines" and a digit), or carry a severity or
+#      confidence marker (severity, issue_confidence, task_gap, risk_score,
+#      or the words blocker, major, critical, nit; any case).
 # tests/test_review_autofix_claude_fixer_mode.py pins this list to the prompt.
 claude_fixer_checklist_lens_headings="SECURITY & INPUT VALIDATION|CORRECTNESS & LOGIC|CONCURRENCY / RACES / IDEMPOTENCY|ERROR PATHS & EDGE CASES|PERFORMANCE & RESOURCE USE|INDEX-CONTRACT / DB RULES|NAMING / BACKWARD COMPATIBILITY|IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS|TASK COMPLETENESS / INTENT GAPS"
 
@@ -201,10 +215,8 @@ claude_fixer_runner_output_state()
     {
       line = trim($0)
       if (line == "") next
-      if (expect_none) {
-        if (line != "NONE") lens_without_none = 1
-        expect_none = 0
-      }
+      n++
+      text[n] = line
       if (line == "NONE") none_seen = 1
       field = tolower(line)
       sub(/^[-*>#_` \t]+/, "", field)
@@ -216,19 +228,69 @@ claude_fixer_runner_output_state()
       sub(/^[0-9]+[.)][ \t]*/, "", heading)
       sub(/^[-*>#_` \t]+/, "", heading)
       sub(/[*_`: \t]+$/, "", heading)
+      lens[n] = ""
       if (heading in is_heading) {
-        if (!(heading in heading_seen)) {
-          heading_seen[heading] = 1
-          distinct_headings++
-        }
-        expect_none = 1
+        lens[n] = heading
+        if (!first_heading) first_heading = n
       }
+      label = toupper(line)
+      sub(/^[-*>#_` \t]+/, "", label)
+      sub(/[*_` \t]+$/, "", label)
+      hardening[n] = (label == "HARDENING_SUGGESTIONS:")
+      lower = tolower(line)
+      cites[n] = 0
+      if (line ~ /[A-Za-z0-9_]:[0-9]/ || line ~ /#L[0-9]/ || lower ~ /(^|[^a-z0-9_])lines? [0-9]/) cites[n] = 1
+      if (lower ~ /severity|issue_confidence|task_gap|risk_score/ || lower ~ /(^|[^a-z0-9_])(blocker|major|critical|nit)([^a-z0-9_]|$)/) cites[n] = 1
     }
     END {
-      if (expect_none) lens_without_none = 1
+      # Rule 3: find the verdict. block_start..block_end is the checklist
+      # block; bare_verdict is the line of a bare NONE verdict.
+      block_start = 0
+      block_end = -1
+      bare_verdict = 0
+      if (first_heading) {
+        i = first_heading
+        while (i <= n && lens[i] != "") {
+          if (lens[i] in lens_seen) {
+            lens_broken = 1
+            break
+          }
+          lens_seen[lens[i]] = 1
+          distinct_headings++
+          if (i + 1 > n || text[i + 1] != "NONE") {
+            lens_broken = 1
+            break
+          }
+          i += 2
+        }
+        block_start = first_heading
+        block_end = i - 1
+        for (j = i; j <= n && !lens_broken; j++) {
+          if (lens[j] != "") text_between = 1
+        }
+      } else {
+        for (j = 1; j <= n && !bare_verdict; j++) {
+          if (text[j] == "NONE" && !(j > 1 && hardening[j - 1])) bare_verdict = j
+        }
+      }
+      # Rule 4: judge the free text.
+      for (j = 1; j <= n; j++) {
+        if ((j >= block_start && j <= block_end) || j == bare_verdict) continue
+        if (hardening[j] && j < n && text[j + 1] == "NONE") {
+          j++
+          continue
+        }
+        if (text[j] == "NONE") stray_none = 1
+        if (cites[j]) free_text_cites = 1
+      }
       if (finding) print "reports a finding or task gap"
       else if (!none_seen) print "has no NONE verdict"
-      else if (distinct_headings > 0 && (distinct_headings < heading_count || lens_without_none)) print "leaves a checklist lens without a NONE verdict"
+      else if (lens_broken) print "leaves a checklist lens without a NONE verdict"
+      else if (text_between) print "has text between its checklist verdicts"
+      else if (first_heading && distinct_headings < heading_count) print "leaves a checklist lens without a NONE verdict"
+      else if (!first_heading && !bare_verdict) print "has no NONE verdict"
+      else if (stray_none) print "has a stray NONE verdict"
+      else if (free_text_cites) print "cites a code location or severity outside its verdicts"
       else print "clean"
     }
   ' <<< "${claude_fixer_output_text}"

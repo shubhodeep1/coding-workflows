@@ -1045,6 +1045,136 @@ def test_clean_votes_accept_the_reviewer_contract_shapes():
 		_assert_clean_with_one_failed_slot(proc, calls, github_env)
 
 
+# Issue #5298's exploit: an unlabelled finding next to a NONE verdict.
+UNLABELLED_FINDING = "- scripts/auth.sh:42 | severity=critical"
+CITES_REASON = "cites a code location or severity outside its verdicts"
+BETWEEN_REASON = "has text between its checklist verdicts"
+STRAY_NONE_REASON = "has a stray NONE verdict"
+
+
+def _with_line_after_first_verdict(line: str) -> str:
+	"""CLEAN_RUNNER_OUTPUT with one line between the first and second lens verdicts."""
+	first = f"{CHECKLIST_LENSES[0]}\nNONE"
+	return CLEAN_RUNNER_OUTPUT.replace(first, f"{first}\n{line}", 1)
+
+
+def test_unlabelled_finding_next_to_a_none_verdict_is_not_a_clean_vote():
+	for content in (
+		"NONE\n" + UNLABELLED_FINDING,
+		UNLABELLED_FINDING + "\nNONE",
+		CLEAN_RUNNER_OUTPUT + "\n\n" + UNLABELLED_FINDING,
+		UNLABELLED_FINDING + "\n\n" + CLEAN_RUNNER_OUTPUT,
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+		_assert_clean_vote_rejected(proc, calls, github_env, CITES_REASON)
+	# Between two lens verdicts the contract allows only NONE or a labelled
+	# finding, so any text there fails, with or without a location.
+	for line in (UNLABELLED_FINDING, "The auth check is missing."):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, _with_line_after_first_verdict(line))
+		_assert_clean_vote_rejected(proc, calls, github_env, BETWEEN_REASON)
+
+
+def test_every_location_and_severity_marker_fails_free_text():
+	for line in (
+		"The check at scripts/a.sh:42 is fine.",
+		"`permission_prompts.py:363-385` tracks brackets.",
+		"Makefile:3 is unchanged.",
+		"See review_autofix.yml#L207.",
+		"The assignment at line 749 converges.",
+		"Lines 10-12 quote the path.",
+		"Rated severity low.",
+		"severity=critical",
+		"issue_confidence 4",
+		"No TASK_GAP left.",
+		"HARDENING_RISK_SCORE: 3",
+		"This is a BLOCKER.",
+		"(gemini, blocker/major): rejected by design.",
+		"Critical path unaffected.",
+		"One nit in the docs.",
+	):
+		for content in (CLEAN_RUNNER_OUTPUT + "\n\n" + line, line + "\n" + CLEAN_RUNNER_OUTPUT, "NONE\n" + line):
+			with tempfile.TemporaryDirectory() as td:
+				proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+			_assert_clean_vote_rejected(proc, calls, github_env, CITES_REASON)
+
+
+def test_free_text_without_locations_or_severities_still_counts():
+	summary = "\n".join((
+		"The diff implements all four findings correctly.",
+		"Unit tests pass and the majority of callers are unchanged.",
+		"Checked issue #5125, PR #4847, and `permission_prompts.py` for parity.",
+		"- `_open_call_writes()` tracks bracket depth; minor wording only.",
+		"A lineup of 3 checks, at 2 sites.",
+	))
+	for content in (
+		"Reading the key files to verify the diff.\n" + CLEAN_RUNNER_OUTPUT + "\n\n" + summary,
+		"Reading the core script.\nNONE\n" + summary,
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+		_assert_clean_with_one_failed_slot(proc, calls, github_env)
+
+
+def test_stray_none_outside_the_verdict_is_not_a_clean_vote():
+	for content in (
+		CLEAN_RUNNER_OUTPUT + "\n\nNONE",
+		"Summary\nNONE\n\n" + CLEAN_RUNNER_OUTPUT,
+		"NONE\n\nNONE",
+		"NONE\nHARDENING_SUGGESTIONS: none\nNONE",
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+		_assert_clean_vote_rejected(proc, calls, github_env, STRAY_NONE_REASON)
+
+
+def test_lens_headings_must_form_one_complete_block():
+	# A second verdict block after the summary: text sits between verdicts.
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_one_failed_slot(td, CLEAN_RUNNER_OUTPUT + "\n\nSummary.\n\nSECURITY & INPUT VALIDATION\nNONE")
+	_assert_clean_vote_rejected(proc, calls, github_env, BETWEEN_REASON)
+	# A misspelled heading splits the block.
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_one_failed_slot(td, CLEAN_RUNNER_OUTPUT.replace("INDEX-CONTRACT / DB RULES", "INDEX/DB RULES"))
+	_assert_clean_vote_rejected(proc, calls, github_env, BETWEEN_REASON)
+	# A lens repeated right after the block, or inside it.
+	repeated_inside = CLEAN_RUNNER_OUTPUT.replace(f"{CHECKLIST_LENSES[1]}\n", f"{CHECKLIST_LENSES[0]}\n", 1)
+	for content in (CLEAN_RUNNER_OUTPUT + "\n\nSECURITY & INPUT VALIDATION\nNONE", repeated_inside):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+		_assert_clean_vote_rejected(proc, calls, github_env, "leaves a checklist lens without a NONE verdict")
+
+
+def test_reordered_complete_lens_block_is_a_clean_vote():
+	# AD-3: order adds no protection; a real clean reviewer reordered the lenses.
+	reordered = "\n".join(f"{lens}\nNONE" for lens in reversed(CHECKLIST_LENSES))
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_one_failed_slot(td, reordered)
+	_assert_clean_with_one_failed_slot(proc, calls, github_env)
+
+
+def test_empty_hardening_suggestions_section_is_allowed():
+	# AD-2: the runner prompt's advisory section, answered with NONE.
+	for content in (
+		CLEAN_RUNNER_OUTPUT + "\n\nHARDENING_SUGGESTIONS:\nNONE",
+		CLEAN_RUNNER_OUTPUT + "\n\n**HARDENING_SUGGESTIONS:**\n\nNONE\n\nNo changes are needed.",
+		"NONE\n\nHARDENING_SUGGESTIONS:\nNONE",
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+		_assert_clean_with_one_failed_slot(proc, calls, github_env)
+	# Any content in the section is judged as free text.
+	for content, reason in (
+		(CLEAN_RUNNER_OUTPUT + "\n\nHARDENING_SUGGESTIONS:\n- file: scripts/a.sh", "reports a finding or task gap"),
+		(CLEAN_RUNNER_OUTPUT + "\n\nHARDENING_SUGGESTIONS:\n- scripts/a.sh:3 add a guard", CITES_REASON),
+		("HARDENING_SUGGESTIONS:\nNONE", "has no NONE verdict"),
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_one_failed_slot(td, content)
+		_assert_clean_vote_rejected(proc, calls, github_env, reason)
+
+
 def test_clean_runner_output_check_behaves_the_same_under_mawk_and_gawk():
 	cases = {
 		CLEAN_RUNNER_OUTPUT: None,
@@ -1053,6 +1183,13 @@ def test_clean_runner_output_check_behaves_the_same_under_mawk_and_gawk():
 		_list_heading_outputs(prose_lens=True)[1]: "leaves a checklist lens without a NONE verdict",
 		_list_heading_outputs(prose_lens=False)[1]: None,
 		"No changes are needed.": "has no NONE verdict",
+		"NONE\n" + UNLABELLED_FINDING: CITES_REASON,
+		CLEAN_RUNNER_OUTPUT + "\n\nThe check at line 749 converges.": CITES_REASON,
+		CLEAN_RUNNER_OUTPUT + "\n\nUnit tests pass; the majority of callers are unchanged.": None,
+		_with_line_after_first_verdict("The auth check is missing."): BETWEEN_REASON,
+		CLEAN_RUNNER_OUTPUT + "\n\nNONE": STRAY_NONE_REASON,
+		CLEAN_RUNNER_OUTPUT + "\n\nHARDENING_SUGGESTIONS:\nNONE": None,
+		"\n".join(f"{lens}\nNONE" for lens in reversed(CHECKLIST_LENSES)): None,
 	}
 	for awk_name in ("mawk", "gawk"):
 		awk_path = shutil.which(awk_name)
