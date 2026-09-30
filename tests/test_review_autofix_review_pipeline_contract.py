@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import http.client
 import importlib.util
 import io
@@ -1214,6 +1215,7 @@ def _run_review_tier_harness(
 	current_changed_paths: list[str] | None = None,
 	raw_changed_paths: list[str] | None = None,
 	extra_env: dict[str, str] | None = None,
+	unset_env: tuple[str, ...] = (),
 ) -> dict[str, str | list[str]]:
 	helper_block = _reviewer_risk_tier_helper_block()
 	with tempfile.TemporaryDirectory(prefix="review-tier-") as td:
@@ -1258,6 +1260,8 @@ def _run_review_tier_harness(
 		})
 		if extra_env:
 			env.update(extra_env)
+		for name in unset_env:
+			env.pop(name, None)
 
 		result = subprocess.run(
 			[
@@ -2692,11 +2696,11 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}",
 		"REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}",
 		"FORCE_FULL_REVIEW_TIER: ${{ needs.gate.outputs.force_full_review_tier || 'false' }}",
-		"REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'false' }}",
+		"REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'true' }}",
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
-		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}",
+		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -2753,11 +2757,11 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 	assert "cost_audit.py" in required_bootstrap_line, required_bootstrap_line
 
 	for expected in (
-		"REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'false' }}",
+		"REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'true' }}",
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
-		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}",
+		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -4159,6 +4163,35 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 		"""
 	)
 
+	unprotected_code_diff = _numbered_code_diff({"src/app.py": 12})
+	protected_doc_diff = textwrap.dedent(
+		"""\
+		diff --git a/CLAUDE.md b/CLAUDE.md
+		index 1111111..2222222 100644
+		--- a/CLAUDE.md
+		+++ b/CLAUDE.md
+		@@ -1 +1,2 @@
+		-old rule
+		+new rule
+		+another rule
+		"""
+	)
+	rename_from_protected_diff = textwrap.dedent(
+		"""\
+		diff --git a/scripts/helper.sh b/src/helper.py
+		similarity index 90%
+		rename from scripts/helper.sh
+		rename to src/helper.py
+		index 1111111..2222222 100644
+		--- a/scripts/helper.sh
+		+++ b/src/helper.py
+		@@ -1 +1,2 @@
+		-echo old
+		+print("new")
+		+print("newer")
+		"""
+	)
+
 	lite_result = _run_review_tier_harness(diff_text=lite_diff)
 	assert lite_result["REVIEW_TIER"] == "lite"
 	assert lite_result["REVIEW_TIER_REASON"] == "doc_only_<=50_loc"
@@ -4167,10 +4200,18 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert lite_result["REVIEW_TIER_FORCED_FULL"] == "false"
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" in lite_result["github_env"]
 	assert "REVIEW_TIER: tier=lite" in lite_result["stdout"]
+	assert "protected=false" in lite_result["stdout"]
 
+	# Small code outside protected paths now takes the one-reviewer lite tier.
+	code_lite_result = _run_review_tier_harness(diff_text=unprotected_code_diff)
+	assert code_lite_result["REVIEW_TIER"] == "lite"
+	assert code_lite_result["REVIEW_TIER_REASON"] == "code_<=50_loc_unprotected"
+	assert code_lite_result["active_models"] == ["qwen/qwen3.7-plus"]
+
+	# A small diff under a protected path never drops below three reviewers.
 	standard_result = _run_review_tier_harness(diff_text=standard_diff)
 	assert standard_result["REVIEW_TIER"] == "standard"
-	assert standard_result["REVIEW_TIER_REASON"] == "code_<=200_loc_single_dir"
+	assert standard_result["REVIEW_TIER_REASON"] == "protected_path_<=50_loc"
 	assert standard_result["REVIEW_TIER_SCOPE"] == "scripts/"
 	assert standard_result["review_tier_file"] == "standard"
 	assert standard_result["active_models"] == [
@@ -4179,12 +4220,37 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 		"openai/gpt-6-luna",
 	]
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" not in standard_result["github_env"]
+	assert "protected=true protected_path=scripts/review_helper.sh" in standard_result["stdout"]
 
 	workflow_result = _run_review_tier_harness(diff_text=workflow_diff)
 	assert workflow_result["REVIEW_TIER"] == "standard"
 	assert workflow_result["REVIEW_TIER_SCOPE"] == ".github/workflows/"
 
-	full_result = _run_review_tier_harness(diff_text=full_diff)
+	# Protected instruction files are Markdown but still get three reviewers.
+	protected_doc_result = _run_review_tier_harness(diff_text=protected_doc_diff)
+	assert protected_doc_result["REVIEW_TIER"] == "standard"
+	assert protected_doc_result["REVIEW_TIER_REASON"] == "protected_path_<=50_loc"
+
+	# A rename away from a protected path counts as protected even though the
+	# changed-files list only names the destination.
+	rename_result = _run_review_tier_harness(
+		diff_text=rename_from_protected_diff,
+		raw_changed_paths=["src/helper.py"],
+	)
+	assert rename_result["REVIEW_TIER"] == "standard"
+	assert "protected_path=scripts/helper.sh" in rename_result["stdout"]
+
+	# Any folder qualifies for the standard tier now (was: one of four dirs).
+	multi_dir_result = _run_review_tier_harness(diff_text=_numbered_code_diff({"src/app.py": 40, "lib/util.py": 40}))
+	assert multi_dir_result["REVIEW_TIER"] == "standard"
+	assert multi_dir_result["REVIEW_TIER_REASON"] == "code_<=200_loc"
+	assert multi_dir_result["REVIEW_TIER_SCOPE"] == ""
+
+	mixed_protected_result = _run_review_tier_harness(diff_text=full_diff)
+	assert mixed_protected_result["REVIEW_TIER"] == "standard"
+	assert mixed_protected_result["REVIEW_TIER_REASON"] == "protected_path_<=50_loc"
+
+	full_result = _run_review_tier_harness(diff_text=_numbered_code_diff({"src/app.py": 150, "lib/util.py": 60}))
 	assert full_result["REVIEW_TIER"] == "full"
 	assert full_result["REVIEW_TIER_REASON"] == "default"
 	assert full_result["review_tier_file"] == "full"
@@ -4214,6 +4280,102 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert invalid_standard_result["REVIEW_TIER"] == "full"
 	assert invalid_standard_result["REVIEW_TIER_REASON"] == "invalid_standard_reviewer_slugs"
 	assert invalid_standard_result["active_models"] == reviewer_models
+
+
+def _numbered_code_diff(files: dict[str, int]) -> str:
+	"""Build a diff that adds ``count`` lines to each path in ``files``."""
+	chunks: list[str] = []
+	for path, count in files.items():
+		chunks.append(f"diff --git a/{path} b/{path}\n")
+		chunks.append("index 1111111..2222222 100644\n")
+		chunks.append(f"--- a/{path}\n")
+		chunks.append(f"+++ b/{path}\n")
+		chunks.append(f"@@ -0,0 +1,{count} @@\n")
+		chunks.extend(f"+line {idx}\n" for idx in range(count))
+	return "".join(chunks)
+
+
+def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables() -> None:
+	reviewer_models = _workflow_reviewer_models()
+	lite_diff = _numbered_code_diff({"src/app.py": 5})
+	standard_diff = _numbered_code_diff({"src/app.py": 120})
+	unpinned = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ""}
+
+	def pick(diff_text: str, pr_number: str) -> dict[str, str | list[str]]:
+		return _run_review_tier_harness(diff_text=diff_text, extra_env={**unpinned, "PR_NUMBER": pr_number})
+
+	def expected(pr_number: str, count: int) -> list[str]:
+		ranked = sorted(
+			reviewer_models,
+			key=lambda model: hashlib.sha256(f"{pr_number}:{model}".encode("utf-8")).hexdigest(),
+		)
+		chosen = set(ranked[:count])
+		return [model for model in reviewer_models if model in chosen]
+
+	lite_picks: set[tuple[str, ...]] = set()
+	standard_picks: set[tuple[str, ...]] = set()
+	for pr_number in ("101", "202", "303", "404", "505", "606", "707", "808"):
+		lite_result = pick(lite_diff, pr_number)
+		assert lite_result["REVIEW_TIER"] == "lite"
+		assert lite_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_lite"
+		assert lite_result["active_models"] == expected(pr_number, 1)
+		lite_picks.add(tuple(lite_result["active_models"]))
+
+		standard_result = pick(standard_diff, pr_number)
+		assert standard_result["REVIEW_TIER"] == "standard"
+		assert standard_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_standard"
+		assert standard_result["active_models"] == expected(pr_number, 3)
+		assert len(set(standard_result["active_models"])) == 3
+		assert set(standard_result["active_models"]) <= set(reviewer_models)
+		standard_picks.add(tuple(standard_result["active_models"]))
+
+	# Different PRs spread across the panel instead of always hitting one set.
+	assert len(lite_picks) > 1
+	assert len(standard_picks) > 1
+
+	# Same PR, same reviewers on every round and rerun.
+	assert pick(standard_diff, "4242")["active_models"] == pick(standard_diff, "4242")["active_models"]
+
+	# Unset variables behave like empty ones.
+	unset_env_result = _run_review_tier_harness(
+		diff_text=standard_diff,
+		extra_env={"PR_NUMBER": "4242"},
+		unset_env=("REVIEW_TIER_LITE_REVIEWER_SLUG", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS"),
+	)
+	assert unset_env_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_standard"
+	assert unset_env_result["active_models"] == expected("4242", 3)
+
+	# A repo that sets the variables keeps exactly those reviewers.
+	pinned_result = _run_review_tier_harness(
+		diff_text=standard_diff,
+		extra_env={"PR_NUMBER": "4242", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "z-ai/glm-5.2"},
+	)
+	assert pinned_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
+	assert pinned_result["active_models"] == ["z-ai/glm-5.2"]
+
+
+def test_review_tier_protected_paths_match_deterministic_skip_gate() -> None:
+	"""The tier resolver's protected-path lists must equal the skip gate's."""
+	gate_block = _step_block("Evaluate review gate")
+	gate_patterns = re.findall(
+		r"^\s*([^\n]+)\)\n\s*PROTECTED_SKIP_SUPPRESSED=\"true\" ;;",
+		gate_block,
+		flags=re.MULTILINE,
+	)
+	assert len(gate_patterns) == 4, gate_patterns
+	reviewers = _reviewers_text()
+	for constant, gate_pattern in zip(
+		(
+			"PROTECTED_BASENAMES",
+			"PROTECTED_PATH_GLOBS",
+			"PROTECTED_BASENAME_GLOBS",
+			"PROTECTED_ROOT_BASENAME_GLOBS",
+		),
+		gate_patterns,
+	):
+		match = re.search(rf'^{constant} = \(\n\t"([^"]+)"\n\)\.split\("\|"\)', reviewers, flags=re.MULTILINE)
+		assert match, f"{constant} not found in scripts/review_run_reviewers.sh"
+		assert match.group(1) == gate_pattern.strip(), constant
 
 
 def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
