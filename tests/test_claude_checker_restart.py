@@ -472,6 +472,13 @@ def test_re_queue_guards(no_api, kwargs, reason):
 	assert _reasons(result)[CHECKER] == reason
 
 
+def test_an_incomplete_trigger_page_re_queues_nothing(no_api):
+	"""A project trigger on the next page (a stage start, a hand-back) cannot be ruled out (§1, AD-8)."""
+	result = _decide(_requeue_state(has_more=True), {CHECKER: "not_found"})
+	assert result["requeue"] == []
+	assert _reasons(result)[CHECKER] == "triggers_page_incomplete"
+
+
 def test_re_queue_comment_read_failure_keeps_the_issue(monkeypatch):
 	_stub(monkeypatch, {"repos/o/r/issues/7/comments": restart.ReadError("gh api failed: HTTP 502")})
 	result = _decide(_requeue_state(), {CHECKER: "not_found"})
