@@ -102,14 +102,22 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `(No findings reported.)` from slots whose status file reads `success`
    and whose own `review_<slug>.txt` is an unambiguous no-findings result
    (issue #5114: the ledger is model output and can read clean over a
-   reviewer's finding). That output needs at least one `NONE` line, no
-   finding or task-gap field (`File:`, `Line or code reference:`, `Problem:`,
-   `Why it fails at runtime:`, `Requirement:`, `Expected change site:`,
-   `Evidence of absence:`, `SEVERITY:`, `ISSUE_CONFIDENCE:`, markdown markers
-   ignored), and, when any lens heading of
-   `prompts/review-reviewer-checklist.txt` appears (markdown markers and list
-   numbering ignored), all nine lenses each followed by `NONE`; prose around
-   the verdicts is allowed. It
+   reviewer's finding). That output must match a strict verdict format
+   (issue #5298: a `NONE` next to an unlabelled finding must not count). It
+   has no finding or task-gap field (`File:`, `Line or code reference:`,
+   `Problem:`, `Why it fails at runtime:`, `Requirement:`, `Expected change
+   site:`, `Evidence of absence:`, `SEVERITY:`, `ISSUE_CONFIDENCE:`, markdown
+   markers ignored). Its verdict is either one contiguous block in which each
+   lens heading of `prompts/review-reviewer-checklist.txt` (markdown markers
+   and list numbering ignored) appears exactly once, in any order, directly
+   followed by `NONE`, or, with no lens heading, one bare `NONE`. Every other
+   line is free text: narration and summaries are allowed, and so is
+   `HARDENING_SUGGESTIONS:` directly followed by `NONE`, but a free-text line
+   must not be `NONE`, cite a code location (a letter, digit or `_` directly
+   followed by `:` and a digit, `#L` and a digit, or `line`/`lines` and a
+   digit), or carry a severity or confidence marker (`severity`,
+   `issue_confidence`, `task_gap`, `risk_score`, or the words `blocker`,
+   `major`, `critical`, `nit`). It
    then takes the same clean path and logs
    `CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS pr=… head=… round=… failed_slots=… clean_reviewers=… min=…`.
    Fewer clean reviewers, any other text, or a status or output file that
