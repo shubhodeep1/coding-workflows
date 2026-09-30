@@ -765,6 +765,27 @@ def test_classified_tracking_issue_keeps_lineage_when_rest_fallback_works() -> N
 	assert lineage["finalized"] == [(5, "merged")], lineage
 
 
+def test_non_automation_head_merge_is_not_finalized() -> None:
+	"""The #5226 head check is a target-branch gate rejection too: a merge into
+	the issue's own integration branch from a head that is not the issue's
+	automation branch (or from a fork) leaves the issue's lineage alone."""
+	for head_ref, head_repo in (("feature/unrelated", REPOSITORY), ("ai/issue-10", "attacker/widgets")):
+		gate = _run_step(
+			issues={10: {"body": "- Integration branch: `claude/implement-plan-parent`\n", "labels": ["ai:security"]}},
+			pr_base_ref="claude/implement-plan-parent",
+			pr_body="Fixes #10\n",
+			closing_refs=[10],
+			pr_head_ref=head_ref,
+			pr_head_repo=head_repo,
+		)
+		assert gate["labels"] == [], (head_ref, head_repo, gate)
+		assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [10], (head_ref, head_repo, gate["env"])
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], (head_ref, head_repo, gate["env"])
+		lineage = _run_lineage_step(gate["env"])
+		assert lineage["finalized"] == [], (head_ref, head_repo, lineage)
+		assert '"reason":"no_accepted_issues"' in lineage["stdout"], lineage["stdout"]
+
+
 # CI runs this file as a script (ci.yml "Phase label transition and fallback
 # contract tests"), not under pytest, so every test must be called here. Keep
 # this block last: a test defined after it never runs in CI.
@@ -794,4 +815,5 @@ if __name__ == "__main__":
 	test_unclassified_issue_on_non_default_merge_is_not_finalized()
 	test_unclassified_issue_keeps_default_merge_and_unmerged_lineage()
 	test_classified_tracking_issue_keeps_lineage_when_rest_fallback_works()
+	test_non_automation_head_merge_is_not_finalized()
 	print("PASS")
