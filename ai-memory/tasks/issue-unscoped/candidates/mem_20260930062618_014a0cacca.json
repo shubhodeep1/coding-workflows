@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/dispatch_workflow.py:213 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: The master and twin copies of `dispatch_workflow.py` are reported as not byte-identical.\n  WHY: The reviewers disagree about whether the on-disk mismatch is real: Gemini reports that parity checks fail, while DeepSeek says it may be a review-environment artifact.\n- .claude/scripts/dispatch_workflow.py:126-130 | severity=medium | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The temporary payload file created for the `gh api` request is reported as not deleted.\n  WHY: Gemini reports that the file persists after the script finishes; DeepSeek counters that `.claude/scripts/dispatch_workflow.py:171` has `Path(payload_path).unlink(missing_ok=True)` in the `finally` block, so the reported leak is disputed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The master copy of `.claude/scripts/dispatch_workflow.py` must be synchronized with the twin in `workflow-templates/` after all review rounds.\n  expected_change_site: .claude/scripts/dispatch_workflow.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The review finding \"test_template_parity fails because .claude/scripts/dispatch_workflow.py and workflow-templates/.claude/scripts/dispatch_workflow.py are not byte-identical\" persists in the reviewer findings, indicating that the synchronization commit (791b57269c) failed to achieve byte-parity or that the files diverged again.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/dispatch_workflow.py:213 | severity=BLOCKER | confidence=4\n  PROBLEM: The master copy on disk at line 213 reads `known_ids = recent_run_ids(repo, workflow)` without the AD-5 try/except. The twin copy at workflow-templates/.claude/scripts/dispatch_workflow.py lines 215-223 has the AD-5 fix (try/except around `recent_run_ids`, `known_ids: set[int] | None = None`, `pre_dispatch_read_error`, and the `if known_ids is None` guard at line 248). The `[claude-twin-sync]` commit `791b572` claims to copy the twin into master but the files on disk are not byte-identical: master has 306 lines, twin has 325 lines. The pr_diff.patch shows both files with the same changes, but the on-disk state contradicts it.\n  WHY: A transient ReadError on the pre-dispatch run-list read raises before `_post_dispatch` runs, cancelling the dispatch. The `test_template_parity` test in tests/test_dispatch_workflow.py asserts the two files are byte-identical and will fail in CI. However, check-runs report zero failures on the current head SHA 791b572, suggesting CI actually passed \u2014 the on-disk discrepancy may be a review-environment artifact. If the files are actually identical (as the PR diff and green CI suggest), this issue does not exist.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/dispatch_workflow.py:126-130 | severity=MAJOR | confidence=4\n  PROBLEM: The temporary payload file created for the `gh api` request is not deleted.\n  WHY: The temporary file (`NamedTemporaryFile(..., delete=False)`) persists on disk after the script finishes, causing potential resource leaks and storage exhaustion in high-volume environments.\n\n- .claude/scripts/dispatch_workflow.py (and twin):N/A | severity=BLOCKER | confidence=5\n  PROBLEM: The master and twin copies of `dispatch_workflow.py` are not byte-identical.\n  WHY: CI/tests fail on parity checks, and the repository state is inconsistent; the fix for issue #5016 must be consistently applied to both files as per the twin-first contract.\n\nRequirement: The master copy of `.claude/scripts/dispatch_workflow.py` must be synchronized with the twin in `workflow-templates/` after all review rounds.\nExpected change site: .claude/scripts/dispatch_workflow.py\nEvidence of absence: The review finding \"test_template_parity fails because .claude/scripts/dispatch_workflow.py and workflow-templates/.claude/scripts/dispatch_workflow.py are not byte-identical\" persists in the reviewer findings, indicating that the synchronization commit (791b57269c) failed to achieve byte-parity or that the files diverged again.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d61c66d12096fb190b2661360f4dc31db05cf0883b652c5ee5351a28497ef9dd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5059,
+    "run_id": "36670081879",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36670081879",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930062618_014a0cacca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5059,
+    "run_id": "36670081879"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T06:26:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
