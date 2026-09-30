@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T13:05:43Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A permission guard that reads a shell command with `shlex` must treat every construct Bash rewrites or parses differently as unknown: expansion and globs inside a checked word, ANSI-C `$'...'` (where `\\'` is not a quote end), a word-initial `#` comment, and brace expansion with quoted spaces can each hide a flag or a whole command, so check the raw quoting, not only the tokens.",
+  "phase": "implement_plan",
+  "pr_number": 4641,
+  "record_id": "lesson-implement-plan-4b66ba21c9808ddcf52903d3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4619-gh-api-guard-file-backed-fields",
+    "file:.claude/hooks/gh_api_write_guard.py",
+    "file:tests/test_gh_api_write_guard.py"
+  ]
+}
