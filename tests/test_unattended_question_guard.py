@@ -961,6 +961,9 @@ def test_plan_command_marks_issue_mode_sessions():
 	assert "unattended_question_guard.py mark --repo <owner>/<repo> --issue <N>" in step1
 	issue_mode = text[text.index("## Issue Mode") : text.index("## Stage Sessions")]
 	assert "**Unattended question guard** (CLAUDE.md §28.G)" in issue_mode
+	guard_bullet = issue_mode[issue_mode.index("**Unattended question guard**") : issue_mode.index("- **Stops are reported on the issue**")]
+	assert "`<!-- ai:claude-blocked:v1 -->` comment, whose result carries its URL" in guard_bullet
+	assert f"the `{guard.BLOCKED_LABEL}` label on that same issue" in guard_bullet
 
 
 def test_seed_repo_command_ships_the_hook():
