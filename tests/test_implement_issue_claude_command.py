@@ -125,13 +125,14 @@ def test_allowlisted_calls_run_standalone(commands_dir):
 	assert "the checker prompt's `check_in_status.py` call sets `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` and `CLAUDE_FIXER_VERDICT_BOT_LOGIN` before `python3`, which neither `check_in_status.py` rule in `.claude/settings.json` covers" in plan_text
 
 
-def test_git_commands_run_unchained():
+@pytest.mark.parametrize("commands_dir", (COMMANDS, TEMPLATE_COMMANDS), ids=("live", "template"))
+def test_git_commands_run_unchained(commands_dir):
 	# Issue #5293: an allowlisted `git fetch` and `git merge --no-edit` chained
 	# with `2>&1 | tail` and `git status` / `git log` reads matched no allow rule,
-	# and the Auto-mode classifier denied the whole command. The live copies
-	# match these twins through the template-parity tests.
-	plan_text = _flat(TEMPLATE_COMMANDS / "implement-plan-claude.md")
-	fix_text = _flat(TEMPLATE_COMMANDS / "fix-claude-pr.md")
+	# and the Auto-mode classifier denied the whole command. Both the live copies
+	# unattended sessions read and the twins synced to consumers are pinned.
+	plan_text = _flat(commands_dir / "implement-plan-claude.md")
+	fix_text = _flat(commands_dir / "fix-claude-pr.md")
 	assert "Run the git commands this command names (`git fetch`, `git checkout -B`, `git merge --no-edit`, `git push`) exactly as written too, with no `2>&1`, no pipe into `tail` or `head`, and no `;` or `&&` chain of `git status` or `git log` reads" in plan_text
 	assert "read their output from the tool result, and check the branch state with `git status -sb` run as its own Bash call, with nothing piped or chained to it." in plan_text
 	assert "which denied a fetch-and-merge of the project branch as `[Modify Shared Resources]` (issue #5293)." in plan_text
