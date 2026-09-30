@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cAccept exceptions only from a trusted, machine-verifiable policy scoped to the hook, shape, head revision, and author provenance.\u201d\n  expected_change_site: `scripts/guard_differential.py`, `parse_loosening_policy()` entry validation and `approval_for()` policy-approval matching\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: minimax_minimax-m3: `parse_loosening_policy()` validates the `approved_by` field only as a non-empty string; no membership, identity, or allowlist check is performed. `approval_for()` matches only on `approval.hook == shape.hook and approval.shape == shape.text` after `head_sha` filtering; the entry's `approved_by` value is never compared to anything. The plan's AD-1 and Non-goals explicitly defer this with: \"Verifying who approved an entry beyond the base-branch merge: approved_by and reason are required audit fields, not checked against GitHub (no API calls, \u00a715).\" The new tests `test_parse_loosening_policy_accepts_valid_entries` and the head-revision CLI tests pin this contract (any non-empty `approved_by` string is accepted).; openai_gpt-6-luna: `parse_loosening_policy()` only requires `approved_by` to be a non-empty string (`scripts/guard_differential.py:310-319`); `approval_for()` matches the hook and shape (`scripts/guard_differential.py:336-340`), while head SHA is filtered separately. No code verifies the named approver or ties that field to the policy entry\u2019s actual author provenance. The completed plan records this as a non-goal, but the linked issue explicitly requires author provenance.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Accept exceptions only from a trusted, machine-verifiable policy scoped to the hook, shape, head revision, and author provenance.\" (issue #5326, Recommendation)\n  Expected change site: scripts/guard_differential.py, parse_loosening_policy() entry validation (the `for key in (\"hook\", \"shape\", \"head_sha\", \"approved_by\", \"reason\")` block) and the policy-approval match in approval_for()\n  Evidence of absence: parse_loosening_policy() validates the `approved_by` field only as a non-empty string via `not isinstance(value, str) or not value.strip()`; no membership, identity, or allowlist check is performed. approval_for() matches only on `approval.hook == shape.hook and approval.shape == shape.text` after `head_sha` filtering; the entry's `approved_by` value is never compared to anything. The plan's AD-1 and Non-goals explicitly defer this with: \"Verifying who approved an entry beyond the base-branch merge: approved_by and reason are required audit fields, not checked against GitHub (no API calls, \u00a715).\" Three of the four scope dimensions named in the issue's recommendation (hook, shape, head_sha) are machine-verified end-to-end; the fourth, author provenance, is a human-audit-only string the script carries through `--json` and the `intended_loosening` log line without ever validating it. The new tests `test_parse_loosening_policy_accepts_valid_entries` and the head-revision CLI tests pin this contract (any non-empty `approved_by` string is accepted), so the gap is locked in by the suite, not the implementation. The cross-pollination reviewers (`openai_gpt-6-luna`, `google_gemini-3_8-flash`) both flagged this with confidence 5 in the prior round and the Claude session rejected it under the plan's non-goals \u2014 so the gap is a documented design choice, not an oversight, but it is the one piece of the issue's \"author provenance\" recommendation that the PR does not implement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cAccept exceptions only from a trusted, machine-verifiable policy scoped to the hook, shape, head revision, and author provenance.\u201d\n  Expected change site: `scripts/guard_differential.py`, policy validation and approval matching.\n  Evidence of absence: `parse_loosening_policy()` only requires `approved_by` to be a non-empty string (`scripts/guard_differential.py:310-319`); `approval_for()` matches the hook and shape (`scripts/guard_differential.py:336-340`), while head SHA is filtered separately. No code verifies the named approver or ties that field to the policy entry\u2019s actual author provenance. The completed plan records this as a non-goal, but the linked issue explicitly requires author provenance.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5b53ad309324789c815a1814b4bea5d17adde5fbd1c0cc6feae83abecb566634",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5360,
+    "run_id": "36716426770",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36716426770",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930131822_87b9efa0d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5360,
+    "run_id": "36716426770"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T13:18:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
