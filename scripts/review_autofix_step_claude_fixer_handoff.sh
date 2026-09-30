@@ -25,8 +25,10 @@
 #          ledger is still clean when at least CLAUDE_FIXER_MIN_CLEAN_REVIEWERS
 #          (default 5) reviewers completed clean, each proven by its own
 #          runner output in the strict verdict format (NONE verdicts, no
-#          finding, location or severity text; issues #5114, #5298), logged
-#          as CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS (see the clean-ledger check).
+#          finding, location or severity text; issues #5114, #5298), and
+#          the ledger has a block for every reviewer slot the runner ran
+#          (issue #5297), logged as CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS (see
+#          the clean-ledger check).
 #
 # The hand-off marker is
 #   <!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->
@@ -42,7 +44,8 @@
 # PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR, GITHUB_RUN_ID,
 # GITHUB_SERVER_URL, RUNTIME_DIR, PREVIOUS_REVIEWS_DIR (the reviewer
 # runner's status_review_<slug>.txt and review_<slug>.txt files, read for
-# both failed and clean blocks when a slot failed),
+# both failed and clean blocks when a slot failed, and listed as the reviewer
+# roster the ledger must cover),
 # CLAUDE_FIXER_MIN_CLEAN_REVIEWERS (default 5).
 # API calls: on a clean candidate, the existing check-run collector refreshes
 # its paginated check-runs GET; on findings, the ledger chunks from
@@ -142,8 +145,11 @@ fi
 # non-retryable error, whose output line differs; issue #4885), every clean
 # block's review_<slug>.txt is an unambiguous no-findings result (below;
 # "success" only means the reviewer finished, and the ledger can mislabel a
-# reviewer that reported a finding; issue #5114), no slug repeats, and at
-# least CLAUDE_FIXER_MIN_CLEAN_REVIEWERS (default 5) clean reviewers remain.
+# reviewer that reported a finding; issue #5114), no slug repeats, every
+# slot the runner wrote a status_review_<slug>.txt or review_<slug>.txt for
+# has its own block (the ledger can leave a reviewer out entirely; issue
+# #5297), and at least CLAUDE_FIXER_MIN_CLEAN_REVIEWERS (default 5) clean
+# reviewers remain.
 # The ledger is model output over reviewer output, so its text alone never
 # proves a failure or a clean vote; the status and output files are written
 # by the runner only.
@@ -414,6 +420,43 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
           ;;
       esac
     done <<< "${claude_fixer_ledger_blocks}"
+    # Roster check (issue #5297). The ledger is model output and can leave a
+    # reviewer out entirely, and the loop above only sees the blocks it
+    # contains. Every slot the runner wrote a status_review_<slug>.txt or
+    # review_<slug>.txt for (the files the summariser reads) must have its own
+    # block, or the ledger is not clean. Pattern matches, not `printf | grep -q`,
+    # for the pipefail reason above.
+    claude_fixer_roster_ledger_slugs="$(printf '%s\n' "${claude_fixer_ledger_blocks}" | awk '$1 == "failed" { print $2; next } { sub(/^[a-z]* /, ""); print }')"
+    claude_fixer_roster_slugs=""
+    claude_fixer_roster_size=0
+    if [ -n "${PREVIOUS_REVIEWS_DIR:-}" ] && [ -d "${PREVIOUS_REVIEWS_DIR}" ]; then
+      for claude_fixer_roster_file in "${PREVIOUS_REVIEWS_DIR}"/status_review_*.txt "${PREVIOUS_REVIEWS_DIR}"/review_*.txt; do
+        [ -f "${claude_fixer_roster_file}" ] || continue
+        claude_fixer_roster_slug="${claude_fixer_roster_file##*/}"
+        claude_fixer_roster_slug="${claude_fixer_roster_slug#status_}"
+        claude_fixer_roster_slug="${claude_fixer_roster_slug#review_}"
+        claude_fixer_roster_slug="${claude_fixer_roster_slug%.txt}"
+        if ! [[ "${claude_fixer_roster_slug}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+          echo "::warning::Claude-fixer reviewer roster holds a file with an unexpected slot name (${claude_fixer_roster_file##*/}); the ledger is not clean."
+          claude_fixer_failed_slots_verified="false"
+          continue
+        fi
+        [[ $'\n'"${claude_fixer_roster_slugs}" == *$'\n'"${claude_fixer_roster_slug}"$'\n'* ]] && continue
+        claude_fixer_roster_slugs="${claude_fixer_roster_slugs}${claude_fixer_roster_slug}"$'\n'
+        claude_fixer_roster_size="$((claude_fixer_roster_size + 1))"
+        if [[ $'\n'"${claude_fixer_roster_ledger_slugs}"$'\n' != *$'\n'"${claude_fixer_roster_slug}"$'\n'* ]]; then
+          echo "::warning::Claude-fixer ledger omits reviewer '${claude_fixer_roster_slug}' that the reviewer runner ran; the ledger is not clean."
+          claude_fixer_failed_slots_verified="false"
+        fi
+      done
+    fi
+    if [ -z "${PREVIOUS_REVIEWS_DIR:-}" ] || [ ! -d "${PREVIOUS_REVIEWS_DIR}" ]; then
+      echo "::warning::Claude-fixer reviewer roster cannot be read (PREVIOUS_REVIEWS_DIR is unset or not a directory); the ledger is not clean."
+      claude_fixer_failed_slots_verified="false"
+    elif [ "${claude_fixer_roster_size}" -eq 0 ]; then
+      echo "::warning::Claude-fixer reviewer roster is empty (no status_review_<slug>.txt or review_<slug>.txt in PREVIOUS_REVIEWS_DIR); the ledger is not clean."
+      claude_fixer_failed_slots_verified="false"
+    fi
     if [ "${claude_fixer_failed_slots_verified}" = "true" ] \
       && [ "${claude_fixer_clean_reviewers}" -ge "${claude_fixer_min_clean_reviewers}" ]; then
       claude_fixer_clean_ledger="true"
