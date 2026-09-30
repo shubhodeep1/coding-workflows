@@ -941,6 +941,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_summarize_reviewer_consensus_sandbox_pin.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_summarize_reviewer_consensus_prompt.py
 
       - name: Clarify loop guard unit tests
         run: |

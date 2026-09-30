@@ -1597,6 +1597,16 @@ through `clarify → plan → implement → review`.
   handling is unchanged: the same no-output comment, `AUTOFIX_EDITOR_EMPTY_NOOP=true`,
   no immediate `ai:review-blocked`. On PR #4323 every reviewer slot and the
   summariser exited 226 and the run was reported as an empty editor.
+- **The summariser works from its prompt only:** `scripts/summarize_reviewer_consensus.sh`
+  inlines every reviewer output and tells the model not to call tools or open
+  reviewer files on disk. The prompt used to point at
+  `${PREVIOUS_REVIEWS_DIR}/<prefix>_<slug>.txt` under `/tmp`. The model then
+  tried to `Read` those files, OpenCode's reviewer config rejected each read
+  as outside the checkout, and the session ended with no text. Six no-PR
+  `claude-branch-review` runs failed this way on 2026-09-29 and 2026-09-30,
+  each after 10 empty attempts (about 43 minutes). In that no-PR mode the
+  `Telegram failure` alert now shows `Branch: <head ref> (no PR)` instead of
+  a PR link with no number.
 - **Cap reports link the failed runs:** the `fingerprint-cap-block` job's own
   run has no failed job, so its heal report used to reach the intake with
   "no failed run could be linked". The job now passes the PR comments it
