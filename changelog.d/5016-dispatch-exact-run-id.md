@@ -7,7 +7,7 @@ On 2026-09-29 two stage sessions dispatched `security-audit.yml` 3 seconds apart
 | --- | --- |
 | New output fields | `matched_by` (`dispatch_response` or `new_run`), `ambiguous`, `candidate_run_ids` |
 | Existing output fields | unchanged (`dispatched`, `workflow`, `ref`, `run_id`, `html_url`, `status`, `created_at`, `error`) |
-| GitHub API calls on the normal path | 1 list read, 1 POST, 1 run read (previously 1 list read, 1 POST, 1 or more polls) |
+| GitHub API calls on the normal path | 1 read of the default branch (only when `--ref` is omitted), 1 list read, 1 POST, 1 run read (previously the same first three, then 1 or more polls) |
 | Workflow or consumer-wrapper changes | none |
 
 What this means for operators: parallel `/implement-plan-claude` projects in the same repo can run their security audits and validations at the same time without cross-reading verdicts. Consumer repos pick the fix up with the next `.claude/` sync.
