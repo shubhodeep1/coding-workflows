@@ -239,7 +239,7 @@
     },
     "ai:claude-sync-approval": {
       "color": "b60205",
-      "description": "Claude twin sync PR with hook/settings changes or a conflict; only the repo owner merges it"
+      "description": "Claude twin sync PR with hook/script/settings changes or a conflict; only the repo owner merges it"
     }
   },
   "phase_groups": [
