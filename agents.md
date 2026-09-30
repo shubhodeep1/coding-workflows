@@ -1029,9 +1029,13 @@ reviews, comments, and conflicts stay a direct §12 request.
   `_fix_claim_trusted_logins` by path (the `claude_pr_sweep.py` pattern)
   and refuses on a `held` claim, or when a changed
   `workflow-templates/.claude/<p>` twin was in blob parity with
-  `.claude/<p>` at the merge base and is not at the head. Exit 0 allows,
-  1 refuses, 2 (read error, truncated tree, head moved, missing gate)
-  refuses too. The log key is
+  `.claude/<p>` at the merge base and is not at the head. It streams
+  every comment page with no page cap (issue #5566: the 10-page
+  `gh_api_list` cap let a 1,000-comment flood refuse every merge), keeps
+  only trusted claim-marker lines, and retries a failing page up to 3
+  attempts (1 s, 2 s back-off); a malformed page is not retried. Exit 0
+  allows, 1 refuses, 2 (read error after the retries, malformed page,
+  truncated tree, head moved, missing gate) refuses too. The log key is
   `AUTOFIX_AUTO_MERGE_SKIPPED reason=hold_claim|twin_parity|gate_unavailable`.
   Any new merge path for `claude/*` PRs, such as the pending-checks merge
   of #4900, must call the gate before `gh pr merge`. The `claude-pr-catch-all` job of

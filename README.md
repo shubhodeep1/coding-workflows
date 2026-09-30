@@ -1478,8 +1478,11 @@ the merge when the latest trusted claim on that head is a `hold`. It also
 refuses when the PR changed a `workflow-templates/.claude/` twin whose pair
 matched `.claude/` at the merge base but no longer does at the head (a
 twin-first stage that died before posting its hold). Pairs that already
-differed, such as the consumer-only command twins, never block. A read it
-cannot complete refuses too (fail closed). A refusal logs
+differed, such as the consumer-only command twins, never block. It reads
+every comment page, with no page cap, so a comment flood cannot push a PR
+past the reader and block its merge (issue #5566). It keeps only trusted
+claim-marker lines in memory and retries a failing page read twice (1 s,
+then 2 s). A read it cannot complete refuses too (fail closed). A refusal logs
 `AUTOFIX_AUTO_MERGE_SKIPPED pr=<n> head_sha=<sha> reason=<hold_claim|twin_parity|gate_unavailable>`,
 and a pass logs `AUTOFIX_MERGE_HOLD_GATE … action=allow`. The next push
 (the `[claude-twin-sync]` copy, or the fixer resuming) starts a new review
