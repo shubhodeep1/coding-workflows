@@ -345,8 +345,12 @@ def test_claude_md_26_flows_point_to_26i():
 	claude_md = _flat(CLAUDE_MD)
 	check_in = _section(claude_md, "### C) What each check-in does", "### D) What the pushing session does")
 	assert "Every `delete_trigger` and `set_session_title` in this step is a cleanup call (§26.I)" in check_in
+	# Review round 1 on PR #5097: every delete of a trigger named by id reads it first.
+	assert "only when `get_trigger` (the read at the start of this step serves) shows its `name` is `PR #<n> hand-back` and its `persistent_session_id` is that fixer's session (§26.I;" in check_in
 	pushing = _section(claude_md, "### D) What the pushing session does", "### E) Enforcement")
 	assert "The rename, the archive, and the delete are cleanup calls (§26.I)" in pushing
+	assert "after `get_trigger` shows it is this session's own: its `name` is `PR #<n> hand-back` and its `persistent_session_id` is this session (§26.I)." in pushing
+	assert "Not found means it is already gone, so skip the delete; any other owner means it is not this session's" in pushing
 	assert "a denied archive therefore skips the delete, which keeps the order safe" in pushing
 	assert "The sweep's deletes and the rename are cleanup calls (§26.I)" in pushing
 	sweep = _section(claude_md, "### G) Stale Routine sweep", "### H) Claude-fixer mode")
@@ -379,11 +383,16 @@ def test_other_cleanup_sites_skip_a_denied_call(twin_text):
 	assert "a cleanup call, CLAUDE.md §26.I, so a denied archive is noted and never retried" in start
 	hand_back = _section(twin_text, "### Hand-back", "### Fallbacks")
 	assert "This delete and the rename in step 2 are cleanup calls (CLAUDE.md §26.I)" in hand_back
+	assert "first `get_trigger` the id it recorded when it armed the wait" in hand_back
+	assert "`delete_trigger` it only when its `name` starts with `implement-plan <slug>:` and its `persistent_session_id` is this session" in hand_back
+	assert "Not found means it is already gone, so skip the delete" in hand_back
+	assert "Say what the check found in the text before the call." in hand_back
 	assert "That archive is a cleanup call (CLAUDE.md §26.I): if it is denied, note `cleanup skipped` in the report and stop anyway." in twin_text
 	assert "Both archives are cleanup calls (CLAUDE.md §26.I): a denied one is noted in the report, never retried." in twin_text
 	checker = _section(twin_text, "### Checker prompt", "### Hand-back")
 	assert "Cleanup calls (delete_trigger, archive_session, set_session_title) are never retried" in checker
 	assert "write `cleanup skipped: <tool> denied (<reason>)` in your reply" in checker
+	assert "call delete_trigger on it (ignore not-found) only when your last get_trigger showed a name starting with `implement-plan <slug>:` and persistent_session_id <stage session id>" in checker
 
 
 def test_rules_and_report_carry_the_denied_cleanup_rule(twin_text):

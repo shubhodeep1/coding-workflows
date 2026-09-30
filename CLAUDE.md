@@ -1950,9 +1950,13 @@ hand-back trigger id, a session id, and a role. There is at most one
        resume step 2. The sweep starts the fixer from the pickup.
      - **Terminal, fixer gone** → **fall back**: write the §26.D report in
        this session from the fallback next steps in the prompt, delete the
-       fixer's hand-back Routine (`delete_trigger`, ignoring not-found),
-       rename this session (your own id from Bash, as above) with the
-       §26.D title plus
+       fixer's hand-back Routine (`delete_trigger`, ignoring not-found)
+       only when `get_trigger` (the read at the start of this step serves)
+       shows its `name` is `PR #<n> hand-back` and its
+       `persistent_session_id` is that fixer's session (§26.I; not found →
+       already gone, any other owner → leave it and note `cleanup skipped:
+       <trigger id> not this PR's`), rename this session (your own id
+       from Bash, as above) with the §26.D title plus
        ` (pushing session unreachable)`, and send the §26.D
        `PushNotification`. A gone `notify` subscriber needs nothing.
    - Every `delete_trigger` and `set_session_title` in this step is a
@@ -1982,7 +1986,12 @@ verdict; a woken `notify` subscriber does the same). Then, by `action`
   checker (its id is in this session's arming report) to
   `PR #<n> <state> — handed to <this session's id>` and archives it
   (`archive_session`), and only then deletes the fired Routine
-  (`delete_trigger`, ignoring not-found). **Check the target first:**
+  (`delete_trigger`, ignoring not-found) after `get_trigger` shows it is
+  this session's own: its `name` is `PR #<n> hand-back` and its
+  `persistent_session_id` is this session (§26.I). Not found means it is
+  already gone, so skip the delete; any other owner means it is not this
+  session's, so leave it and note `cleanup skipped: <trigger id> not this
+  PR's`. **Check the target first:**
   call `get_session` on the checker id and rename or archive it only
   when its title is exactly `PR #<n> status check-in` or already starts
   `PR #<n> merged — handed to ` or `PR #<n> closed — handed to `, it is
