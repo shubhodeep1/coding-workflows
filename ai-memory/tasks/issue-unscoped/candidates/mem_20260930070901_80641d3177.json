@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_guard_differential.py:749 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test does not assert that the corpus header includes the negative clause that a PR-body `Intended loosening:` listing never approves a loosening.\n  WHY: A future header could drop that warning and still pass, weakening the documentation the test is intended to pin.\n- tests/test_guard_differential.py:750 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The assertion references `gd.LOOSENING_POLICY_PATH` without corpus-specific failure context if that constant is renamed or removed.\n  WHY: The resulting `AttributeError` would make the test failure less clear about the affected corpus or intended contract.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\nReviewer google/gemini-3.8-flash failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_guard_differential.py:749 | severity=low | confidence=[3]\n  PROBLEM: The test asserts `\"PR body lists it\" not in header` and `gd.LOOSENING_POLICY_PATH in header`. It does not enforce that the negative clause (\"a PR-body `Intended loosening:` listing never does\") is present in the header. A future corpus header that drops the negative statement and only keeps the positive approval wording would still pass this test, silently weakening the documentation a hook author reads.\n  WHY: A hook author reading the corpus header would no longer see an explicit \"PR body listing never approves\" warning, which is the rule #5326 added in the same commit. The test that claims to pin both rules lets one of them regress.\n- tests/test_guard_differential.py:750 | severity=low | confidence=[2]\n  PROBLEM: The second assert references `gd.LOOSENING_POLICY_PATH` directly. If the constant is renamed or removed in `scripts/guard_differential.py`, the test fails with `AttributeError: module 'gd' has no attribute 'LOOSENING_POLICY_PATH'`, not with a useful assertion message naming the affected corpus. The first assert on line 749 carries the corpus path as its second arg, but the second assert does not benefit from the same debugging context for the rename path.\n  WHY: A future refactor that renames the constant (e.g. to `INTENDED_LOOSENING_POLICY_PATH`) breaks the pinning test with no clear pointer to which corpus was the intent or what was renamed. The failure mode is opaque and surfaces far from the actual contract change.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "57a52f10d0986c0643a3630b9955759d8730a002fcd8beaf8f3fb1e0e9f7fc97",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5494,
+    "run_id": "36679326267",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36679326267",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930070901_80641d3177",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5494,
+    "run_id": "36679326267"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T07:09:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
