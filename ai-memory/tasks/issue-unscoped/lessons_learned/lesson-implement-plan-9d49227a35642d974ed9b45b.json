@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T06:01:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a new check gates a push, name it in every step that pushes the same merge: a step that says \"push\" and only cross-references the section holding the check is a sibling path a literal reader skips.",
+  "phase": "implement_plan",
+  "pr_number": 5425,
+  "record_id": "lesson-implement-plan-9d49227a35642d974ed9b45b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5259-restart-after-settings-sync",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
