@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:load_loosening_policy | flagged_by: [minimax_minimax-m3]\n  PROBLEM: A `CalledProcessError` from `cat-file -p` propagates out of `load_loosening_policy()` and crashes the script instead of producing the configured `status=error` / exit-2 result.\n  WHY: `ls-tree` returning non-empty stdout implies the blob is reachable, but `cat-file` can still fail, for example if the object is corrupted or a signal interrupts the read.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cAccept exceptions only from a trusted, machine-verifiable policy scoped to the hook, shape, head revision, and author provenance.\u201d\n  expected_change_site: scripts/guard_differential.py, `parse_loosening_policy()` and policy approval matching\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `scripts/guard_differential.py:310-314` validates approved_by only as a non-empty string; the completed plan explicitly treats approved_by as audit-only and says it is \u201cnot checked against GitHub.\u201d\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Accept exceptions only from a trusted, machine-verifiable policy scoped to the hook, shape, head revision, and author provenance.\" (issue #5326)\n  Expected change site: scripts/guard_differential.py, parse_loosening_policy() entry validation (specifically the approved_by handling around lines 310-313 per consensus review) and the policy-approval match in approval_for().\n  Evidence of absence: parse_loosening_policy() only validates that approved_by is a non-empty string. There is no check that the approved_by login matches an authorized approver (e.g., a configured allowlist, an OWNER/MEMBER/COLLABORATOR association on the policy commit, or any other provenance verification). The completed plan's Non-goals section explicitly states: \"Verifying who approved an entry beyond the base-branch merge: approved_by and reason are required audit fields, not checked against GitHub (no API calls, \u00a715).\" The implementation therefore satisfies three of the four scope dimensions named in the issue's recommendation (hook, shape, head_sha) but leaves author provenance as a human-audit-only field.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- scripts/guard_differential.py\n  Location: load_loosening_policy(repo_root, base_ref) \u2014 the cat-file call after the ls-tree non-empty check.\n  Issue: load_loosening_policy() does not handle a CalledProcessError from the cat-file -p invocation. ls-tree returning non-empty stdout implies the blob is reachable, but if cat-file fails anyway (e.g., corrupted object, signal during read), the uncaught subprocess error propagates through run_check() and the script crashes with a non-zero exit rather than producing the configured status=error / exit-2 path. The peer set_corpora path in the same script uses _repo_git(..., check=False) for analogous fallback semantics.\n  Suggested minimal fix: Wrap the cat-file call (or the whole function) in try/except for subprocess.CalledProcessError and raise SetupError(f\"{base_ref}:{LOOSENING_POLICY_PATH}: could not read blob ({exc})\") so the CLI exits 2 with the same status=error message shape used elsewhere in the script.\n  Estimated lines changed: ~4 lines.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cAccept exceptions only from a trusted, machine-verifiable policy scoped to the hook, shape, head revision, and author provenance.\u201d\n  Expected change site: scripts/guard_differential.py, parse_loosening_policy() and policy approval matching.\n  Evidence of absence: scripts/guard_differential.py:310-314 validates approved_by only as a non-empty string. No code verifies that identity or ties it to an authorized approver or policy-change provenance; the completed plan explicitly treats approved_by as audit-only. The policy is read from the base ref and matches hook, shape, and head SHA, but author provenance is not machine-verified.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "abe13f3d997d63ad0314db479f06fc0313675b2c53fa30ced0575cd68cd34e4c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5360,
+    "run_id": "36708138324",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36708138324",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930114836_4faa8b83e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5360,
+    "run_id": "36708138324"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T11:48:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
