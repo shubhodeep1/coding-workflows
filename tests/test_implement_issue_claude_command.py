@@ -3,6 +3,7 @@ issue mode of /implement-plan-claude, and the CLAUDE.md §28 issue-mode scope.""
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -123,6 +124,25 @@ def test_allowlisted_calls_run_standalone(commands_dir):
 	# The checker's env-prefixed `check_in_status.py` call matches no allow rule
 	# even when run alone, so the guidance must not claim it is allowlisted.
 	assert "the checker prompt's `check_in_status.py` call sets `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` and `CLAUDE_FIXER_VERDICT_BOT_LOGIN` before `python3`, which neither `check_in_status.py` rule in `.claude/settings.json` covers" in plan_text
+
+
+@pytest.mark.parametrize("commands_dir", (COMMANDS, TEMPLATE_COMMANDS), ids=("live", "template"))
+def test_git_commands_run_unchained(commands_dir):
+	# Issue #5293: an allowlisted `git fetch` and `git merge --no-edit` chained
+	# with `2>&1 | tail` and `git status` / `git log` reads matched no allow rule,
+	# and the Auto-mode classifier denied the whole command. Both the live copies
+	# unattended sessions read and the twins synced to consumers are pinned, and
+	# no git command the files name is chained to another one.
+	plan_text = _flat(commands_dir / "implement-plan-claude.md")
+	fix_text = _flat(commands_dir / "fix-claude-pr.md")
+	assert "Run the git commands this command names (`git fetch`, `git checkout -B`, `git merge --no-edit`, `git push`) exactly as written too, each as its own Bash call, with no `2>&1`, no pipe into `tail` or `head`, and no `;` or `&&` chain, neither to another git command (a fetch and the checkout or merge after it are two Bash calls) nor to `git status` or `git log` reads" in plan_text
+	assert "read their output from the tool result, and check the branch state with `git status -sb` run as its own Bash call, with nothing piped or chained to it." in plan_text
+	assert "which denied a fetch-and-merge of the project branch as `[Modify Shared Resources]` (issue #5293)." in plan_text
+	assert "Run these git commands, and the `git merge` below, exactly as written, each as its own Bash call, with no `2>&1`, no pipe into `tail` or `head`, and no `;` or `&&` chain, neither to each other (the fetch, the checkout, and the merge are separate Bash calls) nor to `git status` or `git log` reads" in fix_text
+	assert "check the branch state with `git status -sb`, and `HEAD` with `git rev-parse HEAD`, each run as its own Bash call with nothing piped or chained to it." in fix_text
+	assert "goes to the Auto-mode classifier, which has denied it (issue #5293)." in fix_text
+	for text in (plan_text, fix_text):
+		assert not re.search(r"`git [^`]*(?:&&|;)\s*git ", text)
 
 
 def test_issue_command_resumes_before_writing(issue_cmd):
