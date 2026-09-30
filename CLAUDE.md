@@ -2291,6 +2291,29 @@ This is an explicit carve-out from §0 and §2 (including §2's
   keep the question. **Sunset:** the PR that makes #4785's Actions sync live
   (`scripts/claude_twin_sync.py`) removes this bullet and the matching
   paragraph in `/implement-plan-claude` step 4.
+- **Interim automatic skip of a stacked project's own runtime validation
+  (until #4734).** This is the operator's standing Q17 decision, applied by
+  the stage session instead of stopping. It covers exactly one case: the
+  validation stage cannot dispatch the validate workflow **only** because
+  the project's final PR targets another `claude/implement-plan-<slug>`
+  project branch (`validate.yml`'s *Authorize explicit validation target*
+  step accepts a `target_ref` only when its open PR targets the default
+  branch). In that case the session does not stop. It records
+  `Validation: skipped (covered by #<parent>'s project validation)`, where
+  `#<parent>` is the issue of the project that owns the base branch. It also
+  records one auto-decision (§28.D): `Picked: A — skip, interim Q17 until
+  #4734`. Then it continues with the completion PR. The parent project runs
+  its own security audit and runtime validation, on a branch that contains
+  this change, before anything reaches the default branch. The failure
+  escalation above still stops and asks in every other case:
+  - a final PR into the default branch, `stable`, or any base that is not a
+    `claude/implement-plan-<slug>` project branch;
+  - a validation run that was dispatched and did not conclude `success`, or
+    returned a terminal class;
+  - a consumer wrapper that predates `target_ref`.
+
+  **Sunset:** the PR that puts #4734's `validate.yml` change (validating
+  stacked and `stable` targets) on the default branch removes this bullet.
 
 ### D) Recording
 
