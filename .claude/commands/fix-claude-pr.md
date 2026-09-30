@@ -20,7 +20,7 @@ $ARGUMENTS
    `<login>` is the account that posts the review workflow's hand-offs: the value the hand-back or checker prompt names, else `gh api user --jq .login` (in this setup the workflow's `GH_PAT` and the session act as the same owner account). A wrong login only hides review hand-offs from the script (it fails closed); the sweep then finds them. The script decides; the model does not re-interpret the PR.
 
 2. **Route on `action`** (the script maps `state` to it; CLAUDE.md §26.C step 1). `state` only names the detail for your report.
-   - `hand_back_all` (`merged` / `closed`) → nothing to fix. Report, and, if you are the pushing session, continue with CLAUDE.md §26.D instead, including its `get_session` title check before you rename or archive the checker.
+   - `hand_back_all` (`merged` / `closed`) → nothing to fix. If you are the pushing session (you pushed the PR's original work and are following this file for a handed-back fix), continue with CLAUDE.md §26.D instead, including its `get_session` title check before you rename or archive the checker. Otherwise this is a fixer session and its work is over (issue #4887). If a §26 checker handed the PR back to you, first do the terminal bookkeeping of CLAUDE.md §26.D, including its `get_session` title check: rename the checker to `PR #<N> <state> — handed to <your session id>` and archive it, then delete the fired hand-back Routine (`delete_trigger`, ignoring not-found), in that order. Write no §26.D report and send no notification. Reply with one line, `PR <owner>/<repo>#<N> <merged | closed> — fixer done`, and call `archive_session` on this session as the last action. If the Claude issue pickup's session sweep finds one of these sessions left open, it archives it 2 hours after the PR merged or closed (CLAUDE.md §26.I).
    - `wait` → nothing for you to fix now; by `state`:
      - `held` → a human decision is pending (see step 3). Report the hold and end the turn.
      - `claimed` → another fixer owns this head (your own claim and your sweep reservation were ignored in step 1). Report and end the turn; never fix alongside it.
@@ -59,7 +59,7 @@ $ARGUMENTS
    - **You are a fresh session** → you are now the PR's fixer: register with the existing checker (§26.B step 1b) or, when there is none, arm one (§26.B).
    - **`claude/implement-plan-*` head** → skip this step; the project checker covers the PR.
 
-8. **Report** in chat: the PR, the kind, the head you claimed, what you changed with `file:line` and test evidence (or the hold and its question), the pushed commit, and the check-in ids. Rename this session (`set_session_title` with your session id from step 0, never another session's) to `PR <owner>/<repo>#<N> — <fixed <kind> | on hold: <kind>>`. Send a `PushNotification` only for a hold. Never archive yourself: the report is what the user opens.
+8. **Report** in chat: the PR, the kind, the head you claimed, what you changed with `file:line` and test evidence (or the hold and its question), the pushed commit, and the check-in ids. Rename this session (`set_session_title` with your session id from step 0, never another session's) to `PR <owner>/<repo>#<N> — <fixed <kind> | on hold: <kind>>`. Send a `PushNotification` only for a hold. Do not archive yourself here: the PR is still open, the report is what the user opens, and the checker hands a later due fix back to you. Once the PR merges or closes, step 2 archives this session.
 
 ## Rules
 

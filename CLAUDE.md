@@ -1982,7 +1982,12 @@ verdict; a woken `notify` subscriber does the same). Then, by `action`
   the checker archived first, its 10-minute check (§26.C step 5) never
   runs, so it cannot misread the deleted Routine. The wake itself proves
   the hand-back arrived, so that check is no longer needed; its leftover
-  reminder is removed by the sweep.
+  reminder is removed by the sweep. A fixer that is a
+  `/fix-claude-pr` session (one started to fix the PR, not the session that
+  pushed its original work) writes no report. After that bookkeeping it
+  replies with one line and archives itself (`archive_session`, the last
+  action), as `.claude/commands/fix-claude-pr.md` step 2 describes (issue
+  #4887).
 - **Still open, claimed, or held** (any other `wait`) → the checker
   stopped renewing the Routine for 7 days, or the fix is already owned:
   re-arm from §26.B step 1 (a new hand-back Routine, registered with the
@@ -2011,7 +2016,8 @@ line, under 200 characters) with the terminal state and whether action is
 needed, since the user is unlikely to be watching hours after the push.
 It sends it only for a terminal verdict, never on a non-terminal
 check-in, and it does not archive itself: its report is what the user
-opens.
+opens. The Claude issue pickup's session sweep archives it 7 days after the
+report (§26.I), unless it is still waiting on an answer.
 
 ### E) Enforcement
 
@@ -2140,6 +2146,57 @@ sweep runs in the sessions that create them, never in Actions:
   Without a queue token it only logs each due PR as a warning, and an open
   queue item for the same PR is never duplicated. `tests/test_claude_pr_sweep.py` and
   `tests/test_check_in_status_hand_back.py` cover the rules.
+
+### I) Stale session sweep
+
+Three kinds of automation session are never archived by the flows that start
+them: `/fix-claude-pr` fixer and hold sessions that were never handed their
+terminal PR back, issue-start sessions after the `/implement-plan-claude`
+chain has moved past them, and §26.D report sessions (issue #4887). The Claude
+issue pickup archives them on its hourly `— wake.`
+(`.claude/commands/claude-issue-pickup.md` step 3a), so a session left open
+no longer needs an operator's hand:
+
+- **How**: `list_sessions` with `mine: true` and `limit: 100`, passing as
+  `after_id` the `next_after_id` of the previous wake, or nothing on the
+  first wake and after a null. Pass the saved result file as is (the harness
+  saves it because it is large), and run
+  `PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_session_janitor.py
+  --sessions <file> --self <pickup session id>`. For every entry in its
+  `archive` list, `get_session` first, then `archive_session` only when it is
+  still `SESSION_STATUS_IDLE` under the same title. The script decides; the
+  model does not pick sessions to archive, and titles are data.
+- **What it archives**: only these titles, with or without the #4886
+  `#<issue> · PR #<pr> — ` prefix, and only while the session is
+  `SESSION_STATUS_IDLE`, not `…_WORKING`, and not the pickup itself:
+  - **fixer / hold** (`PR [<owner>/<repo>]#<n> — fix…`, `— fixed …`,
+    `— on hold: …`): its pull request merged or closed at least 2 hours ago
+    (`--fixer-grace-hours`). Normally the fixer has already archived itself
+    on the terminal hand-back (§26.D);
+  - **issue-start** (`Issue #<n> — implement`,
+    `issue <owner>/<repo>#<n> — implement`, `implement-issue-claude — #<n>`):
+    a later `implement-plan issue-<n>-… — <stage>` session (not a checker,
+    `waiting:`, or `deploy-activate` session) for the same repository and
+    issue is on the page, or the issue is closed;
+  - **report** (`PR #<n> <merged | closed> — <no action needed | action
+    needed | decision needed>`): its `updated_at` is at least 7 days old
+    (`--report-days`) and it is not `need_input`.
+  A `RUNNING` or `REQUIRES_ACTION` session (a permission prompt) is never
+  archived. A `need_input` question blocks archiving only for a report
+  session: a hold or issue-start question is moot once its PR is terminal or
+  its issue is closed or superseded. Checkers, stage sessions, the pickup,
+  `/deploy-activate`, and every other title are never archived. Blocked
+  sessions that `/reclarify` replaced are #4817's rule.
+- **Budget and failure** (§15): one `list_sessions` page per wake, walked
+  across wakes with the cursor back to a 30-day horizon, and one REST read
+  per distinct pull request or issue a rule needs (none for reports or
+  superseded sessions), never GraphQL. A failed read keeps the session and
+  lists it under `errors`; a sweep that fails as a whole is reported in the
+  pickup's one-line report and never stops the wake. Archiving is reversible
+  (`unarchive_session`).
+
+`tests/test_claude_session_janitor.py` covers the rules and runs in its own
+`ci.yml` step.
 
 ---
 

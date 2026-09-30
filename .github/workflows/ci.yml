@@ -435,6 +435,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stale_routines.py
 
+      - name: Stale session sweep tests (CLAUDE.md §26.I)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_session_janitor.py
+
       - name: Unattended helper and permission prompt report tests (CLAUDE.md §23.I)
         run: |
           set -euo pipefail

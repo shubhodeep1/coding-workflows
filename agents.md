@@ -1060,6 +1060,36 @@ reviews, comments, and conflicts stay a direct §12 request.
   so it cannot run from Actions. A byte-identical copy lives under
   `workflow-templates/.claude/scripts/`; `tests/test_stale_routines.py` has
   its own `ci.yml` step.
+- Stale session sweep (CLAUDE.md §26.I, #4887): `scripts/claude_session_janitor.py`
+  (coding-workflows only, no template copy) reads one saved `list_sessions`
+  page and prints the sessions the Claude issue pickup archives on its
+  hourly `— wake.` (step 3a). The pickup calls `get_session`, then
+  `archive_session` only if the session is still `SESSION_STATUS_IDLE` under
+  the same title.
+  - Eligible titles, with or without the #4886 prefix: fixer / hold
+    (`PR [<repo>]#<n> — fix|fixed|on hold…`), issue-start
+    (`Issue #<n> — implement`, `issue <repo>#<n> — implement`,
+    `implement-issue-claude — #<n>`), and report
+    (`PR #<n> merged|closed — …needed`).
+  - Rules:
+    - a fixer is archived 2 h after its PR merged or closed
+      (`--fixer-grace-hours`); normally it archived itself on the terminal
+      hand-back (`fix-claude-pr.md` step 2);
+    - an issue-start session is archived once a later
+      `implement-plan issue-<n>-… — <stage>` session (not a checker,
+      `waiting:`, or `deploy-activate`) is on the page, or once the issue is
+      closed;
+    - a report is archived after 7 idle days by `updated_at`
+      (`--report-days`), unless it is `need_input`.
+  - Never archived: `RUNNING`, `REQUIRES_ACTION`, `…_WORKING`, the pickup
+    (`--self`), and every other title.
+  - Budget: one REST read per distinct PR or issue, and a failed read keeps
+    the session.
+  - `next_after_id` is the next page's `after_id`, or null at the last page
+    or the 30-day horizon (`--horizon-days`), so one page per wake still
+    reaches week-old sessions.
+  - Exit 2 on unreadable input.
+  - `tests/test_claude_session_janitor.py` has its own `ci.yml` step.
 - Permissions: `.claude/settings.json` `permissions.allow` pre-approves the
   tools the check-in and `/implement-plan-claude` call (file edits,
   `claude/*` pushes, `gh` REST and run reads, the security-audit / validate
