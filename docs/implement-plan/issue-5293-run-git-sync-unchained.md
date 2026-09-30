@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5293-run-git-sync-unchained-plan.md
 - Source issue: shubhodeep1/coding-workflows#5293 (https://github.com/shubhodeep1/coding-workflows/issues/5293)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5293-run-git-sync-unchained   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5293-run-git-sync-unchained   Final PR: #5304 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5312: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
-- Last updated: 2026-09-29
-- Last note: project branch opened from main; phase 1 starting (twin-first).
+- Last updated: 2026-09-30
+- Last note: phase 1 PR #5312 opened twin-first; hold claim posted; waiting on the [claude-twin-sync] copy of the two command twins into .claude/commands/ (blocker on #5293).
 
 ## Phases
-1. [ ] Phase 1 — unchained git guidance in `implement-plan-claude.md` and `fix-claude-pr.md`   — protected paths: .claude/commands/implement-plan-claude.md, .claude/commands/fix-claude-pr.md
+1. [ ] Phase 1 — unchained git guidance in `implement-plan-claude.md` and `fix-claude-pr.md`   — protected paths: .claude/commands/implement-plan-claude.md, .claude/commands/fix-claude-pr.md   — PR #5312 open (on hold: twin sync); review rounds: 0; interventions: 0
    - Twin edits: `workflow-templates/.claude/commands/implement-plan-claude.md` (Helpers intro), `workflow-templates/.claude/commands/fix-claude-pr.md` (step 5).
    - Test: `test_git_commands_run_unchained` in `tests/test_implement_issue_claude_command.py`.
    - Changelog: `changelog.d/5293-unchained-git-sync-calls.md`.
@@ -41,4 +41,5 @@
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-29)
 - Permission mode at start: auto.
+- Twin sha256 at PR #5312: implement-plan-claude.md 3d1a9b36922f12777d995bc6616a43f920de3b62b43240b31194aaa2431f7fbc; fix-claude-pr.md 56c76318aa2eb0204a81c56604d67e302d6a6ef43494827a2fb6cd95ef524288.
 - `security_pass_skip.py` returned `{"skip": false, "label": null, "reason": "no skip label"}`: Security pass: run.
