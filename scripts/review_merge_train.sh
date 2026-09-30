@@ -50,8 +50,9 @@
 #            call, up to one marker PATCH, and one label DELETE.
 #   release: 1 list call (open PRs, all bases, 100 per page) + the active-run
 #            listing that prevents dispatch beside an active review (one
-#            `actions/runs?status=<s>` call per 100-run page for each of
-#            pending, queued, in_progress — normally 3 calls — read once,
+#            `actions/runs?status=<s>` call per 100 runs for each of
+#            pending, queued, in_progress, follow-ups bounded by created_at,
+#            at most 10 each — normally 3 calls — read once,
 #            only when a queued PR passes the base filter; see
 #            _mt_inflight_review_branches) + files calls
 #            as above, cached per PR for the run; each unblocked queued PR adds
@@ -432,37 +433,56 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # Returns:   0 = the listing is complete: a PR with no key has no active run.
 #            1 = the listing is incomplete. Stdout carries nothing; the caller
 #            must not release on it, and the next invocation retries.
-# API calls: one `GET actions/runs?status=<s>&per_page=100&page=<p>` per page
-#            for each of pending, queued, in_progress, read in that
-#            (lifecycle) order so a run that moves forward between two
-#            queries is seen in at least one of them. Pages continue until
-#            the distinct runs read reach the listing's total_count, at most
-#            10 pages per status (GitHub serves at most 1,000 results for a
-#            filtered run listing). Normally 3 calls, one page per status.
-#            REST only (CLAUDE.md §15).
-# Incomplete: a page that failed after gh_retry, a malformed page, a short
-#            page before total_count was reached (the listing shifted while it
-#            was read), more runs than 10 pages hold, or a failed key filter.
-#            Each is logged once on stderr (CLAUDE.md §8):
+# API calls: one `GET actions/runs?status=<s>&per_page=100&page=1` for each
+#            of pending, queued, in_progress, read in that (lifecycle) order
+#            so a run that moves forward between two queries is seen in at
+#            least one of them. A status is complete when one response holds
+#            every run its query matched (workflow_runs reaches total_count).
+#            Otherwise the next query adds `&created=<=<oldest created_at
+#            read>` and asks again, at most 10 queries ("pages") per status.
+#            Normally 3 calls, one per status. REST only (CLAUDE.md §15).
+# Keyset:    the listing is filtered by status and sorted by created_at,
+#            newest first (checked live on 2026-09-30), so offset pages
+#            (`page=2`, …) skip a run whenever runs above it leave the status
+#            and others enter below it between two reads, even when
+#            total_count stays the same. Each follow-up query instead starts
+#            at the oldest created_at already read (inclusive, so runs
+#            created in the same second are read again and deduplicated by
+#            id): every run that stays in the status while the listing is
+#            read is returned by some query, wherever other runs come and go.
+#            A run created after the first query was issued is outside the
+#            listing, as it is for any single snapshot.
+# Incomplete: a page that failed after gh_retry, a malformed page (including
+#            a missing or malformed created_at on a page that needs a next
+#            query), a short page before its total_count (the listing
+#            shifted while it was read), more runs than 10 queries read or a
+#            query that adds no new run (more than 100 runs created in one
+#            second), or a failed key filter. Each is logged once on stderr
+#            (CLAUDE.md §8):
 #            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|filter_failed> status=<s> page=<p> read=<n> total=<n>
 _mt_inflight_review_branches()
 {
 	local __mt_runs_max_pages=10 __mt_runs_status="" __mt_runs_page=0 __mt_runs_reason=""
-	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0
+	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0 __mt_runs_read_before=0
+	local __mt_runs_query="" __mt_runs_created_bound=""
 	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys=""
 	for __mt_runs_status in pending queued in_progress; do
 		__mt_runs_page=1
 		__mt_runs_total=0
 		__mt_runs_read=0
+		__mt_runs_created_bound=""
 		__mt_runs_status_runs='[]'
 		while :; do
 			if [ "${__mt_runs_page}" -gt "${__mt_runs_max_pages}" ]; then
 				__mt_runs_reason="truncated"
 				break 2
 			fi
-			if ! __mt_runs_page_json="$(gh_retry gh api -X GET \
-				"repos/${MT_REPO}/actions/runs?status=${__mt_runs_status}&per_page=100&page=${__mt_runs_page}" \
-				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {id: .id, status: .status, event: .event, head_branch: .head_branch, display_title: .display_title, path: .path}]}' \
+			__mt_runs_query="repos/${MT_REPO}/actions/runs?status=${__mt_runs_status}&per_page=100&page=1"
+			if [ -n "${__mt_runs_created_bound}" ]; then
+				__mt_runs_query="${__mt_runs_query}&created=%3C%3D${__mt_runs_created_bound}"
+			fi
+			if ! __mt_runs_page_json="$(gh_retry gh api -X GET "${__mt_runs_query}" \
+				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {id: .id, status: .status, event: .event, head_branch: .head_branch, display_title: .display_title, path: .path, created_at: .created_at}]}' \
 				2>/dev/null)"; then
 				__mt_runs_reason="page_failed"
 				break 2
@@ -472,6 +492,7 @@ _mt_inflight_review_branches()
 				__mt_runs_reason="malformed_page"
 				break 2
 			fi
+			__mt_runs_read_before="${__mt_runs_read}"
 			# Accumulate through stdin, never --argjson: 1,000 runs can exceed
 			# the kernel's single-argument limit (MAX_ARG_STRLEN, 128 KiB).
 			if ! __mt_runs_total="$(printf '%s' "${__mt_runs_page_json}" | jq -r '.total_count | floor' 2>/dev/null)" \
@@ -483,11 +504,27 @@ _mt_inflight_review_branches()
 				__mt_runs_reason="malformed_page"
 				break 2
 			fi
-			if [ "${__mt_runs_read}" -ge "${__mt_runs_total}" ]; then
+			# One response is a consistent snapshot of its own query, so the
+			# status is complete once a response holds everything it matched.
+			# total_count belongs to this query alone (each follow-up query has
+			# its own created bound), so it is never compared with the runs
+			# accumulated across queries.
+			if [ "${__mt_runs_page_len}" -ge "${__mt_runs_total}" ]; then
 				break
 			fi
 			if [ "${__mt_runs_page_len}" -lt 100 ]; then
 				__mt_runs_reason="listing_shifted"
+				break 2
+			fi
+			if [ "${__mt_runs_read}" -le "${__mt_runs_read_before}" ]; then
+				# The bound is inclusive, so more than 100 runs created in one
+				# second return the same page forever.
+				__mt_runs_reason="truncated"
+				break 2
+			fi
+			if ! __mt_runs_created_bound="$(printf '%s' "${__mt_runs_page_json}" | jq -r '[.workflow_runs[].created_at] | min' 2>/dev/null)" \
+				|| ! [[ "${__mt_runs_created_bound}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+				__mt_runs_reason="malformed_page"
 				break 2
 			fi
 			__mt_runs_page=$((__mt_runs_page + 1))
