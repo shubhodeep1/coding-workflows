@@ -1256,8 +1256,17 @@ mode).
    (`claude_issue_route.py queue-pending`) and, following
    `.claude/commands/claude-issue-dispatch.md` step 2, starts an Opus session
    in the target repo running `/implement-issue-claude <url>` for each item,
-   then closes the queue issue. An issue therefore waits up to about an hour
-   before its session starts. A claude.ai routine cannot do this step: a
+   then closes the queue issue. It starts at most 20 items per wake
+   (`QUEUE_PICKUP_LIMIT`; set `CLAUDE_ISSUE_PICKUP_LIMIT` in the pickup
+   session's environment to change it, clamped to 1..30), and `/reclarify`
+   resumes (projects already in flight) start before new issues. A wake that
+   leaves items queued schedules **one** catch-up wake 30 minutes later, a
+   `send_later` named `Claude issue pickup: catch-up` bound to the pickup
+   session itself; a catch-up wake never schedules another (#4990). An issue
+   therefore waits up to about an hour before its session starts, and about
+   half an hour more when a backlog exceeds the limit. The pickup's one-line
+   report carries `oldest_waiting=<minutes>`, the age of the oldest queue item
+   still waiting at that read. A claude.ai routine cannot do this step: a
    routine run gets no claude-code-remote tools (`create_session`,
    `send_later`), so it can start neither the implementation session nor any
    later stage (issue #4525). The pickup starts only items whose binding
@@ -1391,9 +1400,10 @@ that queued it:
   read plus one artifact download per completed producer run, with per-run
   fallbacks
   (`fetch_queue_bindings` in `scripts/claude_issue_route.py`). It reads the
-  runs of the first 30 targets (three times the 10 it starts per wake), so
-  up to 20 stuck items that stay open cannot hold back a bound item queued
-  after them.
+  runs of the first 60 targets (three times the 20 it starts per wake by
+  default, #4990), so up to 40 stuck items that stay open cannot hold back a
+  bound item queued after them. Resumes come first in that order, so their
+  runs are always read.
 
 Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE` (adds
 `bound` and `warn binding_skipped`), `CLAUDE_ISSUE_QUEUE_WATCHDOG`.
@@ -1921,7 +1931,7 @@ through `clarify → plan → implement → review`.
 | `REVIEW_LEDGER_REREVIEW_ENABLED` | `false` | Enable consolidator-side suppression of repeated `accepted-residual` / `won't-fix` findings from the existing review ledger and the review-blocked judge's ledger-fed prior-round decision input. |
 | `REVIEW_APPROVAL_RUBRIC_ENABLED` | `false` | Enable logical `review_state` output from the review-blocked judge and outbound PR-review posting via `post_review_comment.sh --review-state`. |
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; it downgrades only the outbound `REQUEST_CHANGES` review event to a comment-only review. |
-| `CI_POLL_TEST_SHARDS` | `4` | Parallel shards for `tests/test_orchestrate_poll_process.py` in the `CI / lint` job and in the `validate-scripts` job of `mark-stable.yml` / `test-and-mark-stable.yml`. Most of that module's tests spawn the real poller as a bash subprocess in its own tempdir sandbox, so they shard cleanly. Set `1` for sequential; a non-positive or non-numeric value warns and falls back to `1`. |
+| `CI_POLL_TEST_SHARDS` | `4` | Parallel local shards for `tests/test_orchestrate_poll_process.py` in each group of CI's `orchestrate-poll` matrix job (4 groups, so 16 workers in total by default) and in the `validate-scripts` job of `mark-stable.yml` / `test-and-mark-stable.yml`. Most of that module's tests spawn the real poller as a bash subprocess in its own tempdir sandbox, so they shard cleanly. Set `1` for sequential; a non-positive or non-numeric value warns and falls back to `1`. |
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Mark a PR review thread resolved once the editor's validated `PR comment audit:` section gives its comment a disposition. `applied` waits for a productive commit and the editor safety checks; for `ignored` the editor's reason is posted as a thread reply first, so a reviewer can reopen. Resolution is keyed on the audited comment id, never on a path/line pair. Set `false` to keep threads untouched. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Cap on review threads resolved in a single autofix run. Threads above the cap are named in a `::warning::` and left open for the next iteration rather than dropped silently. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | How long a `queued` review run keeps suppressing a duplicate dispatch from `review_autofix_sweep.yml`. Past this age the run is treated as wedged, logged as `AUTOFIX_SWEEP_STALE_QUEUED`, and no longer blocks the sweep. `in_progress` runs are never discounted. Set `0` to restore the previous no-cutoff behaviour. |
