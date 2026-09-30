@@ -226,6 +226,11 @@ jobs:
           # into a non-target branch never writes that issue's AI-memory
           # lineage as `merged`. A positive list fails closed.
           LINEAGE_FINALIZE_ISSUE_NUMBERS=""
+          # Issues put in TRACKING_ISSUES only because their classification
+          # lookup failed. The gate never read their body, so their lineage
+          # is finalized only when no target branch is needed: an unmerged
+          # close or a default-branch merge (fail closed, #5227).
+          LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS=""
           if ! type issue_body_integration_branch >/dev/null 2>&1; then
             # Older gh_helpers.sh: no parser, so only default-branch
             # merges count (fail closed).
@@ -499,6 +504,7 @@ jobs:
                   echo "::warning::Orchestrator fallback lookup failed for issue #${_orch_num}; conservatively treating as tracking (skip)."
                   ORCHESTRATOR_CLASSIFICATION_COMPLETE="false"
                   TRACKING_ISSUES+="${_orch_num}"$'\n'
+                  LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS+="${_orch_num}"$'\n'
                   continue
                 fi
                 _orch_meta_branch="$(issue_body_integration_branch "$(printf '%s' "${_orch_meta}" | jq -r '.body // ""' 2>/dev/null || echo "")")"
@@ -526,7 +532,13 @@ jobs:
 
             if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
               echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label and close are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
-              LINEAGE_FINALIZE_ISSUE_NUMBERS+="${issue_number}"$'\n'
+              if [ -n "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" ] \
+                && printf '%s\n' "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" | grep -qxF "${issue_number}" \
+                && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${DEFAULT_BRANCH_NAME}" ]; then
+                echo "Issue #${issue_number} could not be classified and PR merged into ${PR_BASE_REF}, not the default branch ${DEFAULT_BRANCH_NAME}; skipping its lineage finalization."
+              else
+                LINEAGE_FINALIZE_ISSUE_NUMBERS+="${issue_number}"$'\n'
+              fi
               continue
             fi
 

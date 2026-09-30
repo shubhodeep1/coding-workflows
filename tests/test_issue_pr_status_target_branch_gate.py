@@ -103,6 +103,9 @@ if len(args) >= 2 and args[0] == "api" and args[1].startswith("repos/") and "/is
 	# caller's own --jq filter with jq, as gh does, so the test exercises the
 	# workflow's label transform instead of a pre-flattened payload.
 	import subprocess
+	if state.get("orch_rest_fail"):
+		print("rest unavailable", file=sys.stderr)
+		sys.exit(1)
 	num = args[1].rsplit("/", 1)[1]
 	issue = state["issues"][num]
 	rest_issue = {
@@ -145,6 +148,7 @@ def _run_step(
 	default_branch: str = "main",
 	pr_head_ref: str = "claude/some-feature",
 	orch_graphql_fail: bool = False,
+	orch_rest_fail: bool = False,
 ) -> dict:
 	tmp = Path(tempfile.mkdtemp(prefix="issue-pr-status-gate-"))
 	try:
@@ -165,6 +169,7 @@ def _run_step(
 			"closing_refs": list(closing_refs or []),
 			"closed": [],
 			"orch_graphql_fail": orch_graphql_fail,
+			"orch_rest_fail": orch_rest_fail,
 		}), encoding="utf-8")
 		label_calls = tmp / "label_calls.txt"
 		label_calls.write_text("", encoding="utf-8")
@@ -642,3 +647,59 @@ def test_no_linked_issue_exports_an_empty_lineage_list() -> None:
 	lineage = _run_lineage_step(gate["env"])
 	assert lineage["finalized"] == [], lineage
 	assert "No linked issues found; skipping lineage finalization." in lineage["stdout"], lineage["stdout"]
+
+
+def test_unclassified_issue_on_non_default_merge_is_not_finalized() -> None:
+	"""Conformance fix: when both classification reads fail, the gate treats
+	the issue as tracking (skip) without reading its body. On a merge into a
+	non-default branch its target branch is unknown, so its lineage is not
+	finalized (fail closed)."""
+	gate = _run_step(
+		issues={10: {"body": "Standalone issue.", "labels": ["ai:claude"]}},
+		pr_base_ref="feature/unrelated",
+		pr_body="Fixes #10\n",
+		orch_graphql_fail=True,
+		orch_rest_fail=True,
+	)
+	assert gate["labels"] == [] and gate["closed"] == [], gate
+	assert gate["env"]["ORCHESTRATOR_CLASSIFICATION_COMPLETE"] == "false", gate["env"]
+	assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [10], gate["env"]
+	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], gate["env"]
+	assert "Issue #10 could not be classified" in gate["stdout"], gate["stdout"]
+	lineage = _run_lineage_step(gate["env"])
+	assert lineage["finalized"] == [], lineage
+	assert '"reason":"no_accepted_issues"' in lineage["stdout"], lineage["stdout"]
+
+
+def test_unclassified_issue_keeps_default_merge_and_unmerged_lineage() -> None:
+	"""An unclassified issue still finalizes where no target branch is needed:
+	a default-branch merge (`merged`) and an unmerged close (`closed`)."""
+	cases = [("main", True, "merged"), ("feature/unrelated", False, "closed")]
+	for base, merged, final_state in cases:
+		gate = _run_step(
+			issues={10: {"body": "Standalone issue.", "labels": ["ai:claude"]}},
+			pr_base_ref=base,
+			pr_body="Fixes #10\n",
+			pr_merged=merged,
+			orch_graphql_fail=True,
+			orch_rest_fail=True,
+		)
+		assert gate["labels"] == [] and gate["closed"] == [], (base, gate)
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [10], (base, gate["env"])
+		lineage = _run_lineage_step(gate["env"], pr_merged=merged)
+		assert lineage["finalized"] == [(10, final_state)], (base, lineage)
+
+
+def test_classified_tracking_issue_keeps_lineage_when_rest_fallback_works() -> None:
+	"""AD-1 still holds on the REST fallback path: a tracking issue the
+	fallback did classify is finalized on a non-default merge as before."""
+	gate = _run_step(
+		issues={5: {"body": "Project tracker.", "labels": ["ai:orchestrator-tracking"]}},
+		pr_base_ref="orchestrator/project-5",
+		pr_body="Fixes #5\n",
+		orch_graphql_fail=True,
+	)
+	assert gate["labels"] == [] and gate["closed"] == [], gate
+	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [5], gate["env"]
+	lineage = _run_lineage_step(gate["env"])
+	assert lineage["finalized"] == [(5, "merged")], lineage
