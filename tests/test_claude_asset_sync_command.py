@@ -58,7 +58,6 @@ def test_sync_only_merges_into_branches_that_land_in_the_default_branch(commands
 	section = _section(commands["implement-plan-claude.md"], "### Claude-asset sync", "### Permission prompt report")
 	assert "skip the merge" in section
 	assert "claude_assets=stale (base <base>)" in section
-	assert "sync the project branch first exactly as step 2 does, then merge `origin/<project branch>` into the PR head" in section
 
 
 def test_claude_conflict_aborts_and_blocks(commands):
@@ -86,7 +85,6 @@ def test_every_checkout_runs_the_sync(commands):
 	assert "It takes the place of that section's step 4 and keeps the command and subject above" in step2
 	assert "the `[claude-asset-sync]` subject marks only the sync merge into a PR head" in step2
 	section = _section(plan, "### Claude-asset sync", "### Permission prompt report")
-	assert "on the project branch itself, step 2's merge is the sync merge and keeps step 2's command and subject" in section
 	step7 = _section(plan, "- **Blocked**", "7a. **Review round")
 	assert "run the [Claude-asset sync](#claude-asset-sync) on it" in step7
 	step7a = _section(plan, "7a. **Review round", "- **`kind=conflict`**")
@@ -183,7 +181,9 @@ def test_outside_claude_conflict_never_continues_on_the_unsynced_head():
 	assert "The source is always the PR's base (step 3)" in section
 	assert "Git has already written the cleanly merged `.claude/` files into the working tree" in section
 	assert "`git commit --no-edit`, which keeps the step 4 subject" in section
-	assert "On the project branch, step 2 resolves it as before." in section
+	assert "is never aborted so that the work can go on" not in section
+	assert "is resolved, never aborted to continue on the unsynced head" in section
+	assert "On the project branch, Procedure step 2 resolves it as before." in section
 	assert "run `git merge --abort` and stop the way the caller stops on a conflict it cannot resolve" in section
 	assert "Never continue the fix on the unsynced head." in section
 	fixer = _section(_flat(TWIN_DIR / "fix-claude-pr.md"), "5. **Fix it.**", "- **`claude/implement-plan-*` head**")
@@ -192,6 +192,17 @@ def test_outside_claude_conflict_never_continues_on_the_unsynced_head():
 	assert "`git commit --no-edit` (the sync's subject stays)" in fixer
 	assert "For `conflict` that merge is the conflict fix" in fixer
 	assert "run `git merge --abort`, post a hold claim, ask in the §2 format which side wins, send one `PushNotification`, and end the turn" in fixer
+
+
+def test_sync_names_procedure_step_2_not_its_own_step_2():
+	"""Inside the Claude-asset sync list a bare "step 2" is its own `Stale?`
+	step, so references to the project-branch sync say "Procedure step 2"
+	(PR #5281 review round 1)."""
+	section = _section(_flat(TWIN_DIR / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	assert "sync the project branch first exactly as Procedure step 2 does, then merge `origin/<project branch>` into the PR head" in section
+	assert "on the project branch itself, Procedure step 2's merge is the sync merge and keeps that step's command and subject" in section
+	assert "exactly as step 2 does" not in section
+	assert "step 2's command" not in section
 
 
 def test_outside_conflict_resolution_runs_under_the_merged_guards(tmp_path: Path):
