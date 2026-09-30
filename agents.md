@@ -1205,7 +1205,9 @@ side so that class cannot land unnoticed.
   `workflow-templates/.claude/hooks/` twin) in which any `.py` file changed.
   Decisions are ranked block = deny > ask > none (no decision) > allow =
   error (a crashed hook does not block). A shape fails when the head is less
-  strict than the base and the head emitted no `systemMessage` warning. A
+  strict than the base, whether or not the head emitted a `systemMessage`
+  warning: any hook can print one, so a warning is reported (`+warning`,
+  `"warned"`) but never excuses a loosening (issue #5325). A
   hook missing on one side counts as `none`, so deleting a guard fails, and
   a new hook fails only where it answers `allow`. A changed `*_guard.py`
   (new, edited, or deleted) with no corpus, or with a corpus that holds no

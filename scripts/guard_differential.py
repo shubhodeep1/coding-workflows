@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Guard differential check: run every adversarial corpus shape through the
-base-branch hook and the PR's hook, and fail on a silent loosening.
+base-branch hook and the PR's hook, and fail on every loosening the base
+branch's policy does not approve, whether or not the new hook printed a warning.
 
 Issue #5174. The `.claude/hooks/*_guard.py` hooks are the security boundary of
 unattended sessions (CLAUDE.md §21, §23.H, §25, and the inline-edit guard of
@@ -25,10 +26,12 @@ the base and the head:
   3. Records each decision (`block`, `deny`, `ask`, `none`, `allow`, `error`)
      and whether the hook emitted a warning (`systemMessage`).
   4. Fails on every shape whose head decision is less strict than its base
-     decision (block = deny > ask > none > allow = error) while the head
-     emitted no warning, unless the loosening policy at the BASE ref
-     (`LOOSENING_POLICY_PATH`) approves that hook, that exact shape, and the
-     PR's head commit. An approved shape counts as a loosening under the
+     decision (block = deny > ask > none > allow = error), unless the
+     loosening policy at the BASE ref (`LOOSENING_POLICY_PATH`) approves that
+     hook, that exact shape, and the PR's head commit. A head warning does not
+     excuse the loosening (issue #5325: any hook can print a `systemMessage`);
+     it is only reported, as `+warning` on the regression line and `"warned"`
+     in `--json`. An approved shape counts as a loosening under the
      retire-master Q3: A rule, so a sync carrying it waits for the operator.
 
 The PR body is data, never authorization (issue #5326): its author writes it.
@@ -676,7 +679,9 @@ def compare_hook_dirs(
 				stdin = build_stdin(shape, scenario.cwd, scenario.substitutions)
 				outcomes.append(run_hook(hook_file, stdin, scenario.cwd, env))
 			base, head = outcomes
-			loosened = STRICTNESS[head.decision] < STRICTNESS[base.decision] and not head.warned
+			# A warning is a diagnostic, never an excuse: a changed guard can
+			# print any `systemMessage` (issue #5325).
+			loosened = STRICTNESS[head.decision] < STRICTNESS[base.decision]
 			approval = approval_for(shape, approvals or []) if loosened else None
 			results.append(
 				ShapeResult(
@@ -834,8 +839,9 @@ def print_report(report: Report, as_json: bool) -> None:
 		head = report.head_sha or "<head commit sha>"
 		print(
 			f"{LOG_KEY}: a shape the base hook blocked, denied, or asked (or left to the normal "
-			"permission flow) is now allowed without a warning. Make the new hook fall back with "
-			"a warning. A loosening that is intended needs an approval merged into the BASE branch "
+			"permission flow) is now treated less strictly; a warning from the new hook does not "
+			"excuse it. Keep the base hook's decision for the shape. A loosening that is intended "
+			"needs an approval merged into the BASE branch "
 			f"first: one entry per shape in {LOOSENING_POLICY_PATH}, e.g. "
 			f'{{"hook": "<hook>", "shape": "<corpus line, verbatim>", "head_sha": "{head}", '
 			'"approved_by": "<login>", "reason": "<why>"}. The PR body cannot approve its own '

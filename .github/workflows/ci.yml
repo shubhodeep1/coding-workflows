@@ -489,11 +489,12 @@ jobs:
         # Runs every tests/guard_corpus/<hook>.txt shape through the base
         # branch's hook and this PR's hook (scripts/guard_differential.py) and
         # fails on a shape the PR's hook now treats less strictly (for example
-        # the base blocked it and the PR allows it) without a warning, unless
-        # the BASE branch's .github/guard_differential/intended_loosening.json
-        # approves that hook, shape, and PR head commit. The PR body is only
-        # reported (`pr_body_listed=true`): its author writes it, so it can
-        # never approve a loosening (issue #5326). Skips when no
+        # the base blocked it and the PR allows it), with or without a
+        # warning (issue #5325), unless the BASE branch's
+        # .github/guard_differential/intended_loosening.json approves that
+        # hook, shape, and PR head commit. The PR body is only reported
+        # (`pr_body_listed=true`): its author writes it, so it can never
+        # approve a loosening (issue #5326). Skips when no
         # .claude/hooks/*.py file (or its workflow-templates twin) changed.
         # The base branch's corpus runs too. #5173's review found three such
         # shapes that the reviewer panel missed. No GitHub API calls: the base

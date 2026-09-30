@@ -5,20 +5,20 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5174-guard-differential-check
 - Project branch: claude/implement-plan-issue-5326-guard-differential-trusted-loosening   Final PR: #5360 draft
 - Status: IN_PROGRESS
-- Stage: conformance 2/3
+- Stage: conformance 2/3 — review round
 - Activation: not started
-- Waiting on: conformance 2/3 fix PR (see ## Conformance)
+- Waiting on: PR #5494 (conformance 2/3 fix PR, review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: project checker session_01KsqE28FAB72xsTiHLCUEvX (per-wait safety-net and hand-back ids are in the stage report)
 - Last updated: 2026-09-30
-- Last note: conformance 2/3: CONFORMANT (G1-G6 still map to merged code after #5449, 106 guard differential tests pass); one stale-comment concern fixed in the conformance fix-2 PR (the four `tests/guard_corpus/*.txt` headers still named the PR-body exemption).
+- Last note: conformance 2/3 review round 1: the panel reported no finding on b08f927, but the project branch had to absorb sibling project #5325 (a warning no longer excuses a loosening; PR #5363 into the issue base), so PR #5494 conflicted; merged the project branch into it, combining both rules in the four corpus headers (112 guard differential tests pass).
 
 ## Phases
 1. [x] Phase 1 — base-branch loosening policy (script, policy file, tests, ci.yml step, docs)   — PR #5389 merged 2026-09-30 (250b29f); review rounds: 1; interventions: 0
 
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT — fix PR #5449 merged 2026-09-30 (stale `--head-sha` exit-code wording in agents.md and plan G5, plus a pinning test) (pre-security)
-- Run 2 — 2026-09-30: CONFORMANT — fix PR (the four `tests/guard_corpus/*.txt` headers still said a PR-body `Intended loosening:` listing passes a shape; now name the base-branch policy, plus a pinning test) (pre-security)
+- Run 2 — 2026-09-30: CONFORMANT — fix PR (the four `tests/guard_corpus/*.txt` headers still said a PR-body `Intended loosening:` listing passes a shape; now name the base-branch policy, plus a pinning test) (pre-security) — PR #5494; review rounds: 1 (no finding; head moved by a `[claude-merge-resolve]` merge of the synced project branch)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue), per the plan header.
@@ -44,6 +44,7 @@
 - [source:conformance] A new `scripts/*.py` needs its `docs/INVENTORY.md` entry in the same PR, or `tests/inventory_parity.py` (`CI / Inventory parity`) fails on the next PR into `main`. (files: docs/INVENTORY.md, tests/inventory_parity.py)
 
 - [source:conformance] When a rule moves, grep every file that restates it, including data-file header comments such as `tests/guard_corpus/*.txt`, not only the docs the plan lists; pin the new wording with a test. (files: tests/guard_corpus/pr_merge_status_guard.txt, tests/test_guard_differential.py)
+- [source:intervention] Sibling projects that change the same rule on one shared base (#5325 and #5326 both rewrote the guard differential pass condition) conflict in every file that restates it; resolve by composing the rules, then re-grep the restatements and add one test for the combined case. (files: scripts/guard_differential.py, tests/guard_corpus/pr_merge_status_guard.txt, tests/test_guard_differential.py)
 
 ## Notes
 - Conformance 1/3 (2026-09-30), outside this project's scope and not fixed here: (1) `tests/inventory_parity.py` fails on the project branch (and on its base) because `docs/INVENTORY.md` lacks `scripts/guard_differential.py`, a #5174 gap that #5185's CI will report; fixing it in each of #5174's four child projects would conflict. (2) `ci.yml` runs the PR's own copy of `scripts/guard_differential.py`, so a PR can edit the checker itself (visible in the diff, unlike the body); #5327's project (final PR #5364) pins the verifier to the base branch.
@@ -52,3 +53,4 @@
 - Issue mode (CLAUDE.md §28.A): single-phase plan written by /implement-issue-claude from issue #5326 (security-audit finding on #5174's project branch).
 - Base branch is not the default branch: the issue closes by an explicit close + `ai:merged` at final merge, and steps 12–13 do not run (`Activation: n/a`).
 - `ci.yml` runs only on PRs into `main` / `stable`, so neither this project's PRs nor its final PR (into #5174's branch) run the guard differential step; verification is local, and the step gates #5185 into `main`.
+- Sync 2026-09-30 (conformance 2/3 review round): the issue base gained sibling project #5325 (PR #5363, "a warning no longer excuses a loosened guard"). Merged it into the project branch (6601c6a) with the two rules combined: a loosening fails with or without a warning, unless the BASE branch's `intended_loosening.json` approves that hook, shape, and head commit; conflicts in `scripts/guard_differential.py`, `ci.yml`, `changelog.d/5174-guard-differential-check.md`, and `tests/test_guard_differential.py`, plus `test_policy_approval_excuses_a_warned_loosening` for the combination. #5325 left "with no warning" in #5174's plan (lines 9 and 49); plan text is historical and was not changed.
