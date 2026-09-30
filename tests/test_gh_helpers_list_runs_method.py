@@ -164,7 +164,9 @@ def _runs(*entries: dict) -> str:
 def test_budget_probe_reaches_the_api_and_reports_budget_available() -> None:
 	# A head SHA no prior run has reviewed: the budget is available, so
 	# the caller may dispatch exactly one automated retry. This is the
-	# real #3763 shape — head 789e2f8a appears on no other run.
+	# real #3763 shape — head 789e2f8a appears on no other completed run;
+	# its push left only the cancelled pull_request twin, whose created_at
+	# is the push-time bound (issue #5523).
 	proc = _run_probe(
 		"autofix_changes_lost_head_retry_consumed",
 		_runs(
@@ -174,13 +176,23 @@ def test_budget_probe_reaches_the_api_and_reports_budget_available() -> None:
 				"conclusion": "success",
 				"head_sha": "549d94dd0f80955e0cf28e55be2152378e5e2937",
 				"path": ".github/workflows/ai-review.yml",
-			}
+				"created_at": "2026-09-20T11:00:00Z",
+			},
+			{
+				"id": 32720851045,
+				"status": "completed",
+				"conclusion": "cancelled",
+				"head_sha": HEAD,
+				"path": ".github/workflows/ai-review.yml",
+				"created_at": "2026-09-20T12:00:00Z",
+			},
 		),
 		"3764",
 		BRANCH,
 		CURRENT_RUN,
 		HEAD,
-		# Head commit time, which the step passes since issue #4898.
+		# Head commit time, which the step passes since issue #4898 and the
+		# helper ignores since issue #5523.
 		"1790000000",
 	)
 	assert "reason=api_error" not in proc.stderr, proc.stderr
