@@ -7,9 +7,14 @@ from the claude-pr-catch-all sweep (scripts/claude_pr_sweep.py), how
 .claude/scripts/check_in_status.py routes a pending-checks head (unchanged:
 `wait`, then `ci-failed` once a check fails), and the PR #4869 sequence end
 to end: the hand-off step's comment, then the sweep with CI still running,
-green, or failed. Issue #5148: no merge while a newer review of the PR may
-still be running, or when the latest newer one did not succeed. Every GitHub
-call goes to a stub `gh` on PATH.
+green, or failed. Every GitHub call goes to a stub `gh` on PATH.
+
+Issue #5147: the marker is bound to the reviewed base (the v2 line's
+`base_sha` and `base_ref_sha256`), so a PR retargeted after a clean review
+is never merged on it.
+
+Issue #5148: no merge while a newer review of the PR may still be running,
+or when the latest newer one did not succeed.
 """
 
 from __future__ import annotations
@@ -49,6 +54,15 @@ AUTHOR = "workflow-bot"
 RUN_ID = 99
 RUN_URL = f"https://github.com/{REPO}/actions/runs/{RUN_ID}"
 DIGEST = "a" * 64
+BASE_REF = "claude/implement-plan-demo"
+BASE_SHA = "e" * 40
+OTHER_BASE_SHA = "f" * 40
+
+
+def _ref_digest(ref: str) -> str:
+	return hashlib.sha256(ref.encode("utf-8")).hexdigest()
+
+
 NOW = dt.datetime(2026, 9, 29, 3, 0, tzinfo=dt.timezone.utc)
 
 LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
@@ -65,12 +79,24 @@ LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
 """
 
 
-def _pending_body(head: str = HEAD, round_number: int = 1, run_url: str = RUN_URL, ledger: str = DIGEST) -> str:
+def _binding_line(head: str = HEAD, round_number: int = 1, ledger: str = DIGEST, base_ref: str = BASE_REF,
+	base_sha: str = BASE_SHA) -> str:
+	return (f"<!-- ai:claude-fixer-pending-checks:v2 head={head} round={round_number} ledger={ledger} "
+		f"base_sha={base_sha} base_ref_sha256={_ref_digest(base_ref)} -->")
+
+
+def _pending_body(head: str = HEAD, round_number: int = 1, run_url: str = RUN_URL, ledger: str = DIGEST,
+	base_ref: str = BASE_REF, base_sha: str = BASE_SHA, binding: str | None = "default") -> str:
+	"""A pending-checks comment as the hand-off step writes it; `binding=None` omits the v2 line (a v1-only marker)."""
+	if binding == "default":
+		binding = _binding_line(head, round_number, ledger, base_ref, base_sha)
 	return (
 		f"## Review round {round_number}: clean review, waiting for check runs\n\n"
 		f"Reviewed head: `{head}` ([workflow run]({run_url})).\n"
+		f"Reviewed base: `{base_ref}` at `{base_sha}`.\n"
 		"Reviewer ledger entries: 0. Check runs still running on this head: `ci / lint`.\n\n"
 		f"<!-- ai:claude-fixer-pending-checks:v1 head={head} round={round_number} ledger={ledger} -->"
+		+ (f"\n{binding}" if binding else "")
 	)
 
 
@@ -91,6 +117,7 @@ def _comment(comment_id: int, body: str, login: str = AUTHOR) -> dict:
 def _pr(ref: str = REF, **overrides) -> dict:
 	pr = {"number": PR, "state": "open", "merged": False, "draft": False, "labels": [], "mergeable_state": "clean",
 		"auto_merge": None, "updated_at": "2026-09-29T00:51:30Z", "head": {"sha": HEAD, "ref": ref, "repo": {"full_name": REPO}},
+		"base": {"ref": BASE_REF, "sha": BASE_SHA, "repo": {"full_name": REPO, "default_branch": "main"}},
 		"user": {"login": "pr-author", "type": "User"}, "title": "t", "body": "Refs #4900"}
 	pr.update(overrides)
 	return pr
@@ -239,7 +266,28 @@ FAILED = [_check_run("ci / lint", conclusion="failure"), _check_run("ci / test")
 
 def test_marker_is_found_for_the_current_head_from_the_workflow_account():
 	marker = pending_checks.find_pending_marker([_comment(5, _pending_body())], REPO, HEAD, AUTHOR)
-	assert marker == {"comment_id": 5, "round": 1, "ledger": DIGEST, "run_id": RUN_ID, "run_url": RUN_URL, "created_at": "2026-09-29T00:51:30Z"}
+	assert marker == {"comment_id": 5, "round": 1, "ledger": DIGEST, "run_id": RUN_ID, "run_url": RUN_URL, "created_at": "2026-09-29T00:51:30Z",
+		"base_sha": BASE_SHA, "base_ref_sha256": _ref_digest(BASE_REF)}
+
+
+def test_base_binding_needs_one_v2_line_matching_the_v1_line():
+	"""Issue #5147: without exactly one v2 line for the same head, round, and ledger the marker is unbound."""
+	assert pending_checks.base_ref_digest(BASE_REF) == _ref_digest(BASE_REF)
+	# A lone surrogate hashes instead of raising, and never collides with a replacement character.
+	assert pending_checks.base_ref_digest(BASE_REF + "\ud800") != pending_checks.base_ref_digest(BASE_REF + "\ufffd")
+	cases = {
+		"v1 only": _pending_body(binding=None),
+		"two v2 lines": _pending_body() + "\n" + _binding_line(base_sha=OTHER_BASE_SHA),
+		"v2 for another head": _pending_body(binding=_binding_line(head=OTHER_HEAD)),
+		"v2 for another round": _pending_body(binding=_binding_line(round_number=2)),
+		"v2 for another ledger": _pending_body(binding=_binding_line(ledger="b" * 64)),
+		"v2 with a short base sha": _pending_body(binding=_binding_line().replace(f"base_sha={BASE_SHA}", "base_sha=eeee")),
+		"quoted v2 line": _pending_body(binding="> " + _binding_line()),
+	}
+	for label, body in cases.items():
+		marker = pending_checks.find_pending_marker([_comment(5, body)], REPO, HEAD, AUTHOR)
+		assert marker is not None and marker["comment_id"] == 5, label
+		assert marker["base_sha"] is None and marker["base_ref_sha256"] is None, label
 
 
 def test_marker_trust_rules_fail_closed():
@@ -250,7 +298,7 @@ def test_marker_trust_rules_fail_closed():
 		"another head": [_comment(5, _pending_body(head=OTHER_HEAD))],
 		"no issued header": [_comment(5, body.split("\n", 1)[1])],
 		"quoted marker": [_comment(5, body.replace("<!-- ai:", "> <!-- ai:"))],
-		"two markers": [_comment(5, body + "\n" + body.splitlines()[-1])],
+		"two markers": [_comment(5, body + "\n" + next(line for line in body.splitlines() if ":v1 " in line))],
 		"round differs from header": [_comment(5, body.replace("round=1 ", "round=2 "))],
 		"round zero": [_comment(5, _pending_body(round_number=0))],
 		"run link to another repository": [_comment(5, _pending_body(run_url="https://github.com/x/y/actions/runs/99"))],
@@ -364,8 +412,8 @@ def _dispatched_review_run(**overrides) -> dict:
 
 
 def test_sweep_dispatched_review_run_verifies_by_title(fake_gh):
-	pr = _pr(base={"ref": "main", "repo": {"full_name": REPO, "default_branch": "main"}})
-	fake_gh.set(pr=pr, comments=[_comment(5, _pending_body())], check_runs=GREEN, review_run=_dispatched_review_run())
+	pr = _pr(base={"ref": "main", "sha": BASE_SHA, "repo": {"full_name": REPO, "default_branch": "main"}})
+	fake_gh.set(pr=pr, comments=[_comment(5, _pending_body(base_ref="main"))], check_runs=GREEN, review_run=_dispatched_review_run())
 	result = _evaluate()
 	assert result["state"] == "merge_enabled", result
 	assert fake_gh.merges() == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
@@ -378,8 +426,8 @@ def test_sweep_dispatched_review_run_verifies_by_title(fake_gh):
 	("dispatched from another branch", dict(head_branch="stable"), "main"),
 ])
 def test_default_branch_review_run_needs_the_full_dispatch_binding(fake_gh, label, run_overrides, pr_base):
-	base = {"ref": "main", "repo": {"full_name": REPO, "default_branch": pr_base}} if pr_base else {"ref": "main"}
-	fake_gh.set(pr=_pr(base=base), comments=[_comment(5, _pending_body())], check_runs=GREEN,
+	base = {"ref": "main", "sha": BASE_SHA, "repo": {"full_name": REPO, "default_branch": pr_base}} if pr_base else {"ref": "main", "sha": BASE_SHA}
+	fake_gh.set(pr=_pr(base=base), comments=[_comment(5, _pending_body(base_ref="main"))], check_runs=GREEN,
 		review_run=_dispatched_review_run(**run_overrides))
 	result = _evaluate()
 	assert result["state"] == "run_unverified", (label, result)
@@ -591,6 +639,58 @@ def test_unset_workflow_author_trusts_no_marker(fake_gh):
 	assert fake_gh.merges() == []
 
 
+def _reads_after_the_marker(fake_gh) -> list[list[str]]:
+	"""Calls past the PR and comments reads: check runs, the review run, the variable, the merge."""
+	return [call for call in fake_gh.calls()
+		if not any(arg.startswith((f"repos/{REPO}/pulls/{PR}", f"repos/{REPO}/issues/{PR}/comments")) for arg in call)]
+
+
+@pytest.mark.parametrize("label, pr_base, body, expected", [
+	# Issue #5147: clean review of the phase PR into its project branch, then
+	# the author retargets it to main without pushing. The head is unchanged.
+	("retargeted to main", {"ref": "main", "sha": OTHER_BASE_SHA}, _pending_body(), "base_changed"),
+	("retargeted, base sha unchanged", {"ref": "main", "sha": BASE_SHA}, _pending_body(), "base_changed"),
+	("same ref, base sha changed", {"ref": BASE_REF, "sha": OTHER_BASE_SHA}, _pending_body(), "base_changed"),
+	("PR base has no sha", {"ref": BASE_REF}, _pending_body(), "base_changed"),
+	("PR base has no ref", {"sha": BASE_SHA}, _pending_body(), "base_changed"),
+	# Review round 1 of PR #5186: a base ref JSON decodes to a lone surrogate must not crash the digest.
+	("PR base ref with a lone surrogate", {"ref": BASE_REF + "\ud800", "sha": BASE_SHA}, _pending_body(), "base_changed"),
+	("marker without a base binding", {"ref": BASE_REF, "sha": BASE_SHA}, _pending_body(binding=None), "base_unbound"),
+], ids=lambda value: value if isinstance(value, str) and "\n" not in value and not value.startswith("base_") else "")
+def test_a_base_other_than_the_reviewed_one_never_merges(fake_gh, label, pr_base, body, expected):
+	fake_gh.set(pr=_pr(base=pr_base), comments=[_comment(5, body)], check_runs=GREEN)
+	result = _evaluate()
+	assert result["state"] == expected, (label, result)
+	assert "review sweep reviews this head again" in result["reason"], label
+	assert result["head_sha"] == HEAD
+	# Decided from the PR read already made: no check-run, run, variable, or merge call.
+	assert _reads_after_the_marker(fake_gh) == [], label
+	assert fake_gh.merges() == [], label
+
+
+def test_a_fresh_review_of_the_new_base_merges_again(fake_gh):
+	"""After the retarget the next review sweep reviews the head against main; its marker binds main and wins."""
+	old = _comment(5, _pending_body())
+	fresh = _comment(9, _pending_body(round_number=1, base_ref="main", base_sha=OTHER_BASE_SHA))
+	pr = _pr(base={"ref": "main", "sha": OTHER_BASE_SHA})
+	fake_gh.set(pr=pr, comments=[old], check_runs=GREEN)
+	assert _evaluate()["state"] == "base_changed"
+	fake_gh.set(pr=pr, comments=[old, fresh], check_runs=GREEN)
+	assert _evaluate()["state"] == "merge_enabled"
+	assert fake_gh.merges() == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
+
+
+def test_a_retarget_back_to_an_earlier_reviewed_base_is_not_merged_on_the_older_marker(fake_gh):
+	"""The latest marker (bound to main) wins even when an older one matches the restored base; the gate follows the same comment, so the head is reviewed again."""
+	old = _comment(5, _pending_body())
+	fresh = _comment(9, _pending_body(round_number=1, base_ref="main", base_sha=OTHER_BASE_SHA))
+	fake_gh.set(pr=_pr(), comments=[old, fresh], check_runs=GREEN)
+	result = _evaluate()
+	assert result["state"] == "base_changed"
+	assert _reads_after_the_marker(fake_gh) == []
+	assert fake_gh.merges() == []
+
+
 def test_enable_auto_merge_variable_reads(fake_gh):
 	for stored, expected in ((None, "true"), ("true", "true"), ("false", "false"), ("forbidden", None)):
 		fake_gh.set(enable_auto_merge=stored)
@@ -754,10 +854,16 @@ def test_main_wires_the_pending_pass(monkeypatch):
 
 # ---- PR #4869 end to end: hand-off step, then the sweep ----
 
-def _run_handoff_step(tmp: Path, snapshot: str) -> str:
-	"""Run the real hand-off step on a clean ledger; return the one comment body it posts."""
+def _run_handoff_step(tmp: Path, snapshot: str, payload: dict | None = None) -> str:
+	"""Run the real hand-off step on a clean ledger; return the one comment body it posts.
+
+	`payload` is the review run's PR snapshot (PR_PAYLOAD_FILE); the default
+	is the phase PR into BASE_REF at BASE_SHA.
+	"""
 	tmp = tmp / "handoff"
 	tmp.mkdir()
+	payload_file = tmp / "pr_payload.json"
+	payload_file.write_text(json.dumps(_pr() if payload is None else payload), encoding="utf-8")
 	support = tmp / "support"
 	support.mkdir()
 	(support / "post_review_comment.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
@@ -773,7 +879,8 @@ def _run_handoff_step(tmp: Path, snapshot: str) -> str:
 	env = {**os.environ, "PR_NUMBER": str(PR), "GITHUB_REPOSITORY": REPO, "HEAD_SHA": HEAD, "HEAD_REF": REF,
 		"CLAUDE_FIXER_ROUND_INDEX": "0", "AUTOFIX_PRE_REVIEW_RESOLVE": "false", "REVIEWER_CONSENSUS_FILE": str(ledger),
 		"PR_CHECK_RUNS_CONTEXT_FILE": str(checks), "SUPPORT_SCRIPTS_DIR": str(support), "GITHUB_RUN_ID": str(RUN_ID),
-		"RUNTIME_DIR": str(tmp), "GITHUB_ENV": str(github_env), "REVIEWERS_SUCCESSFUL": "6", "GITHUB_SERVER_URL": "https://github.com"}
+		"RUNTIME_DIR": str(tmp), "GITHUB_ENV": str(github_env), "REVIEWERS_SUCCESSFUL": "6", "GITHUB_SERVER_URL": "https://github.com",
+		"PR_PAYLOAD_FILE": str(payload_file)}
 	calls_before = len(Path(os.environ["FAKE_GH_CALLS"]).read_text().splitlines())
 	# The step posts through `gh api -X POST ... --input <file>`; capture it.
 	capture = tmp / "posted.json"
@@ -797,7 +904,11 @@ PR_4869_SNAPSHOT = (f"PR_CHECK_RUNS_CONTEXT\nhead_sha: {HEAD}\ncollection_status
 def test_pr_4869_sequence_auto_merges_without_a_findings_hand_off(fake_gh, tmp_path):
 	body = _run_handoff_step(tmp_path, PR_4869_SNAPSHOT)
 	assert "ai:claude-fixer-handoff" not in body
-	assert f"ledger={hashlib.sha256(LEDGER_EMPTY.encode()).hexdigest()}" in body
+	ledger = hashlib.sha256(LEDGER_EMPTY.encode()).hexdigest()
+	assert f"ledger={ledger}" in body
+	assert f"Reviewed base: `{BASE_REF}` at `{BASE_SHA}`." in body.splitlines()
+	assert (f"<!-- ai:claude-fixer-pending-checks:v2 head={HEAD} round=1 ledger={ledger} "
+		f"base_sha={BASE_SHA} base_ref_sha256={_ref_digest(BASE_REF)} -->") in body.splitlines()
 	comments = [_comment(5, body)]
 	monkeypatch = pytest.MonkeyPatch()
 	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", AUTHOR)
@@ -856,3 +967,32 @@ def test_pr_4869_sequence_with_a_failed_check_hands_off_as_ci_failed(fake_gh, tm
 	assert summary["due"] == 1 and summary["pending_checks_merged"] == 0
 	assert queued == [(PR, HEAD, "ci")]
 	assert fake_gh.merges() == []
+
+
+def test_issue_5147_retarget_after_the_pending_comment_never_merges(fake_gh, tmp_path):
+	"""The finding's exploit end to end: the review of the phase PR into its project
+	branch posts a pending-checks comment, the author retargets the PR to main
+	without pushing, CI goes green, and the sweep still enables nothing."""
+	body = _run_handoff_step(tmp_path, PR_4869_SNAPSHOT)
+	monkeypatch = pytest.MonkeyPatch()
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", AUTHOR)
+	try:
+		fake_gh.set(pr=_pr(base={"ref": "main", "sha": OTHER_BASE_SHA}), comments=[_comment(5, body)], check_runs=GREEN)
+		summary = _sweep()
+	finally:
+		monkeypatch.undo()
+	assert summary["pending_checks_merged"] == 0 and summary["due"] == 0
+	assert fake_gh.merges() == []
+
+
+@pytest.mark.parametrize("label, payload", [
+	("no payload base", {**_pr(), "base": None}),
+	("payload base without a sha", {**_pr(), "base": {"ref": BASE_REF}}),
+	("payload base with a short sha", {**_pr(), "base": {"ref": BASE_REF, "sha": "eeee"}}),
+	("payload base without a ref", {**_pr(), "base": {"sha": BASE_SHA}}),
+])
+def test_handoff_without_a_reviewed_base_posts_no_pending_checks_comment(fake_gh, tmp_path, label, payload):
+	"""No base to bind: fail closed to the ordinary hand-off instead of an unbound pending marker."""
+	body = _run_handoff_step(tmp_path, PR_4869_SNAPSHOT, payload=payload)
+	assert "ai:claude-fixer-pending-checks" not in body, label
+	assert f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=1 -->" in body.splitlines(), label

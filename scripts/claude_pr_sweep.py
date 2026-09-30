@@ -54,8 +54,9 @@ The sweep also finishes clean Claude-fixer reviews that ended before CI did
 (issue #4900): for every `open` candidate it calls
 `scripts/claude_fixer_pending_checks.py`, which enables head-bound
 auto-merge once the head's check runs behind a trusted
-`ai:claude-fixer-pending-checks:v1` marker have all completed without a
-failure. `--dry-run` only logs what it would enable.
+`ai:claude-fixer-pending-checks:v1` marker, bound by its v2 line to the PR's
+current base (issue #5147), have all completed without a failure.
+`--dry-run` only logs what it would enable.
 
 Each queue issue it opens is also recorded (number, title, payload) in this
 run's binding file (`CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE`, default

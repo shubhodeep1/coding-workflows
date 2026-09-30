@@ -11,6 +11,7 @@ pending-checks comment instead of a findings hand-off:
   Reviewed head: `<sha>` ([workflow run](<run url>)).
   ...
   <!-- ai:claude-fixer-pending-checks:v1 head=<sha> round=<n> ledger=<sha256> -->
+  <!-- ai:claude-fixer-pending-checks:v2 head=<sha> round=<n> ledger=<sha256> base_sha=<sha> base_ref_sha256=<sha256> -->
 
 That comment is not a hand-off, so `.claude/scripts/check_in_status.py` keeps
 waiting and wakes no Claude session. This module is the readiness half: the
@@ -29,6 +30,14 @@ Fail closed. Auto-merge is enabled only when ALL of these hold:
     GH_PAT account; issued header; one marker; round matching the header;
     the workflow's own run link), and no later trusted hand-off for that
     head supersedes it;
+  * that comment's v2 line (same head, round, and ledger as its v1 line)
+    binds it to the base the review ran against, and the PR's current
+    `base.sha` and sha256 of its `base.ref` still equal that binding
+    (issue #5147: a PR retargeted after a clean review, with the head
+    unchanged, must not merge into a base nobody reviewed). A missing
+    binding is `base_unbound`, a different one `base_changed`; the review
+    gate then stops skipping dispatched re-runs on the head, so the
+    30-minute review sweep reviews the PR again against its new base;
   * a fresh snapshot of the head's check runs
     (`scripts/collect_pr_check_runs_context.py`, no wait, no log tails) is
     `collection_status: ready` for the same head, with at least one check
@@ -57,7 +66,8 @@ A check that finishes failed is not handled here: `check_in_status.py
 push starts a new review round.
 
 API budget (CLAUDE.md §15), per evaluated PR: 1 PR read and 1 read per 100
-comments. With a live marker, 1 paginated check-runs read (one call per 100
+comments. The base binding reuses the PR read (no call). With a live marker
+bound to the current base, 1 paginated check-runs read (one call per 100
 check runs, through the collector). Only when the snapshot is ready: 1 review
 run read (+1 compare read when that run was triggered by an older push), 1
 head-branch runs read and 4 workflow_dispatch runs reads (internal-review.yml,
@@ -72,6 +82,7 @@ GH_TOKEN; nothing is retried in a loop, and a failed read raises
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -99,6 +110,10 @@ CHECK_RUNS_COLLECTOR = SCRIPT_DIR / "collect_pr_check_runs_context.py"
 AUTO_MERGE_SCRIPT = SCRIPT_DIR / "review_enable_auto_merge.sh"
 PENDING_CHECKS_MARKER_RE = re.compile(
 	r"^<!-- ai:claude-fixer-pending-checks:v1 head=([0-9a-f]{40}) round=([1-9][0-9]*) ledger=([0-9a-f]{64}) -->$"
+)
+PENDING_CHECKS_V2_MARKER_RE = re.compile(
+	r"^<!-- ai:claude-fixer-pending-checks:v2 head=([0-9a-f]{40}) round=([1-9][0-9]*) ledger=([0-9a-f]{64})"
+	r" base_sha=([0-9a-f]{40}) base_ref_sha256=([0-9a-f]{64}) -->$"
 )
 PENDING_CHECKS_HEADER_RE = re.compile(r"## Review round ([1-9][0-9]*): clean review, waiting for check runs")
 # review_autofix.yml's defaults for the variables review_enable_auto_merge.sh
@@ -135,6 +150,18 @@ def _comment_id(comment: dict) -> int:
 	return value if type(value) is int else 0
 
 
+def base_ref_digest(ref: str) -> str:
+	"""sha256 (hex) of a base ref name, as the hand-off step writes it into the v2 marker.
+
+	`surrogatepass` keeps a ref that JSON decoding left with a lone surrogate
+	from raising `UnicodeEncodeError` mid-evaluation: its digest is simply
+	one no hand-off step can have written, so `evaluate` reports
+	`base_changed`. The encoding stays injective, so two different refs
+	never share a digest.
+	"""
+	return hashlib.sha256(ref.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 def find_pending_marker(comments: list, repo: str, head_sha: str, author_login: str) -> dict | None:
 	"""Return the live pending-checks marker for `head_sha`, or None.
 
@@ -146,7 +173,10 @@ def find_pending_marker(comments: list, repo: str, head_sha: str, author_login: 
 	is then a review round, not a pending merge). No API calls.
 
 	Output: {"comment_id", "round", "ledger", "run_id", "run_url",
-	"created_at"} or None.
+	"created_at", "base_sha", "base_ref_sha256"} or None. The base binding
+	comes from the comment's single v2 line whose head, round, and ledger
+	equal its v1 line's; without one (none, several, or a mismatch) both
+	binding fields are None, and `evaluate` never merges on it.
 	"""
 	if not author_login or not re.fullmatch(r"[0-9a-f]{40}", head_sha or ""):
 		return None
@@ -181,6 +211,10 @@ def find_pending_marker(comments: list, repo: str, head_sha: str, author_login: 
 		run_link = run_link_pattern.fullmatch(run_lines[0]) if len(run_lines) == 1 else None
 		if not run_link:
 			continue
+		bindings = [match for line in lines if (match := PENDING_CHECKS_V2_MARKER_RE.fullmatch(line))]
+		binding = bindings[0].groups() if len(bindings) == 1 else None
+		if binding is not None and binding[:3] != (marker_head, round_text, ledger):
+			binding = None
 		live = {
 			"comment_id": _comment_id(comment),
 			"round": int(round_text),
@@ -188,6 +222,8 @@ def find_pending_marker(comments: list, repo: str, head_sha: str, author_login: 
 			"run_id": int(run_link.group(2)),
 			"run_url": run_link.group(1),
 			"created_at": comment.get("created_at") if isinstance(comment.get("created_at"), str) else None,
+			"base_sha": binding[3] if binding else None,
+			"base_ref_sha256": binding[4] if binding else None,
 		}
 	return live
 
@@ -426,7 +462,9 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 
 	Output: {"state": ..., "reason": ...} plus `head_sha` once known. States:
 	`not_eligible` (closed, draft, not claude/*, blocked, conflicted,
-	auto-merge already on), `no_marker`, `waiting` (checks still running),
+	auto-merge already on), `no_marker`, `base_unbound` (the marker has no
+	v2 base binding), `base_changed` (the PR's base ref or base sha differs
+	from the binding; issue #5147), `waiting` (checks still running),
 	`checks_failed`, `snapshot_invalid`, `run_unverified`, `review_active`
 	(a newer review of the PR may still be running), `review_superseded`
 	(a newer review of the PR did not succeed, or the marker changed while
@@ -439,6 +477,9 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 	head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
 	head_sha = head.get("sha") if isinstance(head.get("sha"), str) else ""
 	head_ref = head.get("ref") if isinstance(head.get("ref"), str) else ""
+	base = pr.get("base") if isinstance(pr.get("base"), dict) else {}
+	base_ref = base.get("ref") if isinstance(base.get("ref"), str) else ""
+	base_sha = base.get("sha") if isinstance(base.get("sha"), str) else ""
 	blocking = [name for name in check_in_status._label_names(pr) if name in check_in_status.BLOCKING_LABELS]
 	ineligible = None
 	if pr.get("state") != "open" or pr.get("merged"):
@@ -459,6 +500,14 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 	if marker is None:
 		reason = "no trusted pending-checks marker for the current head" if author_login else "CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN is unset"
 		return {"state": "no_marker", "head_sha": head_sha, "reason": reason}
+	if marker["base_sha"] is None or marker["base_ref_sha256"] is None:
+		return {"state": "base_unbound", "head_sha": head_sha,
+			"reason": "the pending-checks marker is not bound to a reviewed base; the next review sweep reviews this head again"}
+	if (not base_ref or not re.fullmatch(r"[0-9a-f]{40}", base_sha)
+		or base_sha != marker["base_sha"] or base_ref_digest(base_ref) != marker["base_ref_sha256"]):
+		return {"state": "base_changed", "head_sha": head_sha,
+			"reason": f"the PR's base ({base_ref or 'unknown'} at {base_sha[:12] or 'unknown'}) is not the reviewed base "
+				f"({marker['base_sha'][:12]}); the next review sweep reviews this head again"}
 	snapshot = read_check_snapshot(repo, head_sha)
 	if snapshot["state"] == "incomplete":
 		return {"state": "waiting", "head_sha": head_sha, "reason": f"check runs still running: {snapshot['detail']}"}
