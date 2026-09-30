@@ -1092,7 +1092,15 @@ reviews, comments, and conflicts stay a direct §12 request.
   (CLAUDE.md §23.H, a `PreToolUse` hook on `Bash`) forces the prompt for
   every `gh api` write that is not a §23.B routine write to the local
   repository (routine includes dispatching the six workflows allowed as
-  `gh workflow run <file> *`, kept equal by a test), allows reads and
+  `gh workflow run <file> *`, kept equal by a test) and for every call with
+  a file-backed `-F`/`--field` value (`@<file>` or `@-`) or `--input` on any
+  method, endpoint, or repository, GraphQL included, because `gh` reads that
+  file and sends it (issue #4619; `-f` values are literal, so post bodies
+  through the GitHub MCP tools or an inline `-f body=...`). It also prompts
+  for an `-F` word the shell could rewrite into `@<file>` (`$`, a backtick,
+  `~`, or a glob character in it) and for any command that uses ANSI-C
+  quoting (`$'...'`), an unquoted `#` comment, or brace expansion, which
+  Bash parses unlike the guard. It allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
   to the allow list or the Auto-mode classifier beside anything else (loops,
@@ -2110,6 +2118,7 @@ depend on it.
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | Age past which a still-`queued` review run stops suppressing a sweep dispatch (wedged-run recovery). `in_progress` runs are never discounted; `0` disables the cutoff. |
+| `CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS` | `300` | `internal-review.yml` push route only: when a `claude/**` push finds no open PR, re-check every 60s for up to this many seconds and skip the no-PR reviewer run once a PR appears (its `pull_request` run reviews the same commit). `0` restores the single lookup; values outside 0-3600 fall back to `300` with a warning; a failed lookup counts as no PR and the review runs when the window ends. Logs `RESOLVE_CLAUDE_BRANCH_PR_WAIT` / `RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED` (the latter with gh's error text as `error="..."`: one line, at most 200 characters). |
 | `REVIEW_TIER_RESOLVER_ENABLED` | `true` | Size-based `lite \| standard \| full` review tiers (1, 3, or all reviewers). Set to `false` to always run the full panel. |
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the one-reviewer `lite` tier. Any file type qualifies unless the diff touches a protected path, which goes to `standard`. |
 | `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Empty draws one reviewer from `REVIEWER_MODELS`, seeded by the PR number; a set slug pins it. Unknown or unavailable slugs fail open to `full`. |
