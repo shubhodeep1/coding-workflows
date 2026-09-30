@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T00:17:01Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Size a reviewer-output rule against real `review_<slug>.txt` files from several review runs (the reviewer-logs artifact) before choosing it: real clean outputs carry agent narration, summaries, reordered lenses, and a HARDENING_SUGGESTIONS section, so a rule tested only on synthetic outputs over- or under-rejects.",
+  "phase": "implement_plan",
+  "pr_number": 5308,
+  "record_id": "lesson-implement-plan-8ae03274dfb5b4dea39a0c32",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5298-strict-clean-vote-format",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}
