@@ -1376,7 +1376,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			notices.append(f"merged-PR guard skipped: {reason}")
 
 	if blocks:
-		return 2, "\n\n".join(blocks + [notice for notice in notices if notice.startswith("merged-PR guard: ")])
+		# Keep every notice (fallback and skip warnings) beside the block, so a
+		# multi-target command still reports the targets it could not judge.
+		return 2, "\n\n".join(blocks + notices)
 	if asks:
 		hook_output = _confirmation_payload(asks[0][0], asks[0][1])
 		extra_reasons = [reason for reason, _prompt in asks[1:]]

@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5173: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
-- Last updated: 2026-09-29
-- Last note: review round 1 (master twin-sync review, PR #5173 comment 5891249253): refspec and `cd`-separator bypasses fixed in the twin; new hold claim and twin-sync blocker posted; waiting on the `[claude-twin-sync]` copy and `/reclarify` on #5144.
+- Check-in: checker session_012bXVKFrhBSuPGD6croSjLV   safety net none   hand-back none   (both deleted 2026-09-30 by the review-round stage; the chain waits on twin sync)
+- Last updated: 2026-09-30
+- Last note: review round 2 (workflow round 1 on head 56631e639350, run 36668782207): the `--repo` refspec finding rejected (git reads the first positional as the repository even with `--repo`, pinned by a test); the blocks-path notice filter fixed in the twin; project branch merged in; new hold claim and twin-sync blocker posted; waiting on the `[claude-twin-sync]` copy and `/reclarify` on #5144.
 
 ## Phases
-1. [ ] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 open (twin sync pending); review rounds: 1; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
+1. [ ] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 open (twin sync pending); review rounds: 2; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
    - Command walker: effective directory across `cd`, `git -C`, `GIT_DIR=`, `--git-dir`; unresolvable constructs fall back with a warning
    - Push refspec parser: `<src>:<dst>` judged on `<dst>` with `<src>` as tip; deletions and tags skipped; no refspec judges the current branch
    - Per-target judge with one cached REST call per `(slug, branch)`; one merged hook result
@@ -47,6 +47,8 @@
 - [source:intervention] A command walker that tracks `cd` must keep the shell operators: a `cd` joined by `||`, `&` or `|` may not run in the current shell. (files: .claude/hooks/pr_merge_status_guard.py)
 - [source:plan-deviation] A hook module loaded by tests through `importlib.util.spec_from_file_location` without registering it in `sys.modules` cannot use `@dataclass` under `from __future__ import annotations`; use a `NamedTuple` for small immutable records there. (files: .claude/hooks/pr_merge_status_guard.py, tests/test_pr_merge_status_guard.py)
 
+- [source:intervention] `git push` always reads its first positional as the repository, even when `--repo` is given (the option is only the default), so a push-argument parser must not shift the refspec list when it sees `--repo`. (files: .claude/hooks/pr_merge_status_guard.py)
+
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the scheduled routine `dispatch shubhodeep1/coding-workflows#5144: deliver` in session session_01YLLYPSWJ9Xqr8pCYFPTRQE; permission mode auto.
 - Progress comment: issue #5144 comment 5890591928.
@@ -54,3 +56,5 @@
 - The session had no `mcp__github__*` tools; GitHub writes go through `gh api` REST (routine §23.B writes) after running `.claude/hooks/session-start.sh` to install `gh` (the repo was attached mid-session, so the SessionStart hook had not run).
 - Twin sync needed: `workflow-templates/.claude/hooks/pr_merge_status_guard.py` → `.claude/hooks/pr_merge_status_guard.py` (twin sha256 `4f3b419ede0595ea0b332ec3e2a1b0dd2af0712852a19e1b577b7db16d40f4dc`); blocker posted on #5144.
 - Master twin-sync review (PR #5173 comment 5891249253) declined the first twin; review round 1 fixed it. New twin sha256 `d1644620e449abe4a02fc50eb772bedf8878a8e7986e73a36440e15afe0577d2`; new blocker posted on #5144. The REST-call cap the review floated was not added: §21.D allows one call per `(slug, branch)`, and the cache and memo already bound it.
+- /reclarify resume on 2026-09-30: stage session_01JicWiDdBc6wpUAoU4trx2e synced the project branch with main (fb1142a) and armed checker session_012bXVKFrhBSuPGD6croSjLV, safety net trig_01SqbKiGNT6dnRFYK1qXS6Vs and hand-back trig_012mdcTGEpsTFMU1AGMzQw2S; that wait ended with the workflow's review round 1 hand-off on head 56631e639350 (PR #5173 comment 5904182364).
+- Review round 2 (session_01NBozj8UjGHoeHvyMSvFYXe, 2026-09-30): the project branch was merged into the phase branch (clean); new twin sha256 `b68e719062b0f22b6b8efcbcf4b04f22a678b2cdd3dd667d753c25399a03cf96` (the `.claude/` copy is still `d1644620…`); new blocker posted on #5144.

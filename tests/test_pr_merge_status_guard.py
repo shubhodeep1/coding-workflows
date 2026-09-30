@@ -1683,3 +1683,40 @@ def test_claude_md_documents_the_effective_repository_rule() -> None:
 	assert "effective repository" in text
 	assert "`git push <remote> <src>:<dst>`" in text
 	assert "one API call per `(slug, branch)` pair" in text
+
+
+def test_push_repo_option_does_not_shift_the_repository_positional(tmp_path: Path) -> None:
+	"""PR #5173 review round 1 (rejected finding): git reads the first
+	positional as the repository even when `--repo` is given, so
+	`git push --repo origin HEAD:feature/x` names no refspec (git treats
+	`HEAD:feature/x` as the repository) and the checked-out branch is judged."""
+	for command in (
+		"git push --repo origin HEAD:feature/x",
+		"git push --repo=origin HEAD:feature/x",
+	):
+		assert _targets(command, tmp_path) == [("push", str(tmp_path), "", "HEAD", True, False)], command
+	assert _targets("git push --repo origin origin HEAD:feature/x", tmp_path) == [
+		("push", str(tmp_path), "feature/x", "HEAD", True, False)
+	]
+
+
+def test_block_keeps_skip_warnings_for_other_targets(monkeypatch, tmp_path: Path) -> None:
+	"""PR #5173 review round 1: when one target blocks, the skip warning of
+	another target in the same command stays in the block message."""
+	def _judge(target, session_cwd, memo):
+		if target.branch == "feature/merged":
+			return 2, "blocked: feature/merged sits on merged PR history", "", "", ""
+		return 0, "", "warn", "could not reach GitHub for feature/other", ""
+
+	monkeypatch.setattr(twin_guard, "_judge_guard_target", _judge)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+	code, message = twin_guard.evaluate(
+		{
+			"tool_name": "Bash",
+			"tool_input": {"command": "git push origin HEAD:feature/merged HEAD:feature/other"},
+			"cwd": str(tmp_path),
+		}
+	)
+	assert code == 2
+	assert message.startswith("blocked: feature/merged")
+	assert "merged-PR guard skipped: could not reach GitHub for feature/other" in message
