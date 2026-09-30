@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:748-760 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: When the head settings file is deleted and the base file contains a top-level `env` key, `compare_settings_wiring` emits a redundant `env` wiring regression alongside the per-entry `removed` regressions.\n  WHY: The extra regression adds informational noise and inflates the regression count without changing the exit code; deepseek_deepseek-v4-pro and z-ai_glm-5_2 disagree that the finding is reachable with current settings, noting that neither has an `env` key.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/guard_differential.py:compare_settings_wiring | severity=NIT | confidence=[4]\n  PROBLEM: Deleting a settings file produces a redundant 'env' regression alongside the individual \u201cremoved\u201d regressions for its guard entries.\n  WHY: The extra output is informational noise for operators and does not affect the exit code.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/guard_differential.py:lines 755-760, interacting with the file-deletion path (head_text=None) at lines 748-751 | severity=NIT | confidence=[3]\n  PROBLEM: When the head settings file is deleted AND the base file contains a top-level `env` key, `compare_settings_wiring` emits a redundant `reason=env` wiring_regression in addition to the per-entry `reason=removed` regressions for each guard.\n  WHY: The env regression carries no additional information beyond what the per-entry regressions already convey; the exit code is unchanged, and the finding is reachable only if a future commit introduces an `env` key.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2258626ed729c296ba49e81df018bbf282a96cf4cf845aeca2fd7f0f2b187f70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5369,
+    "run_id": "36662691554",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36662691554",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930032037_4918ac2261",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5369,
+    "run_id": "36662691554"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T03:20:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
