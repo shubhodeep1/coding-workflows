@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T03:48:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A `gh api .../actions/jobs/<id>/logs` read must pass `--allow-escape-sequences`: job logs carry ANSI colour codes and gh refuses such a body even into a file, so a helper without it fails on every real log; a test `gh` stub must refuse an escape-carrying body without the flag, or the suite passes on a helper that never works.",
+  "phase": "implement_plan",
+  "pr_number": 5409,
+  "record_id": "lesson-implement-plan-248554876f9ed7167515c785",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5093-smoke-review-dispatch-default-branch",
+    "file:scripts/smoke_review_dispatch.sh",
+    "file:tests/test_smoke_review_dispatch.py"
+  ]
+}
