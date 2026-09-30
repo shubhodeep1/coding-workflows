@@ -274,10 +274,46 @@ jobs:
           if [ "${base}" != "${twin_provenance:-}" ]; then
             git fetch --no-tags --depth=1 origin "${base}"
           fi
+          # The guard script itself comes from the protected base (issue
+          # #5608): on a pull_request run the checkout is PR content, so a PR
+          # could otherwise weaken scripts/claude_twin_sync.py in the same
+          # change as a guard-path edit. The base commit (the merge commit's
+          # first parent, or github.event.before) supplies it; on stable,
+          # main's tip is the fallback. A commit that cannot be read fails
+          # the step (fail closed). Only when every trusted commit resolves
+          # and none carries the script yet (main before #4804, stable before
+          # its next promotion) does the checkout's copy run, with a warning:
+          # such a base has no guard to bypass.
+          twin_guard_candidates=("${base}")
           if [ "${twin_on_stable}" = "true" ]; then
-            PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD --guard-provenance-ref "${twin_provenance}"
+            twin_guard_candidates+=("${twin_provenance}")
+          fi
+          twin_guard_script=""
+          for twin_guard_source in "${twin_guard_candidates[@]}"; do
+            if ! git rev-parse --verify --quiet "${twin_guard_source}^{commit}" >/dev/null; then
+              echo "::error::twin sync guard: trusted commit ${twin_guard_source} cannot be resolved; failing closed."
+              exit 1
+            fi
+            if ! twin_guard_listing="$(git ls-tree --name-only "${twin_guard_source}" -- scripts/claude_twin_sync.py)"; then
+              echo "::error::twin sync guard: the tree of ${twin_guard_source} cannot be read; failing closed."
+              exit 1
+            fi
+            if [ -n "${twin_guard_listing}" ]; then
+              twin_guard_dir="$(mktemp -d)"
+              twin_guard_script="${twin_guard_dir}/claude_twin_sync.py"
+              git show "${twin_guard_source}:scripts/claude_twin_sync.py" > "${twin_guard_script}"
+              echo "twin sync guard: running scripts/claude_twin_sync.py from ${twin_guard_source}, not the checkout."
+              break
+            fi
+          done
+          if [ -z "${twin_guard_script}" ]; then
+            echo "::warning::twin sync guard: no trusted commit (${twin_guard_candidates[*]}) carries scripts/claude_twin_sync.py yet; running the checkout's copy (bootstrap)."
+            twin_guard_script="scripts/claude_twin_sync.py"
+          fi
+          if [ "${twin_on_stable}" = "true" ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 "${twin_guard_script}" check --base "${base}" --head HEAD --guard-provenance-ref "${twin_provenance}"
           else
-            PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD "${event_args[@]}"
+            PYTHONDONTWRITEBYTECODE=1 python3 "${twin_guard_script}" check --base "${base}" --head HEAD "${event_args[@]}"
           fi
 
       - name: Setup Python
