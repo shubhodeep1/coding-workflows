@@ -17532,6 +17532,10 @@ _pr_named_review_dispatch_runs()
 				break 2
 			fi
 			_pnr_page_rc=0
+			# Not a pipe: gh applies --jq itself, so a failed call is this
+			# command's exit status. The printf | jq pipes below run under
+			# the script-wide `set -euo pipefail` (top of this file), which
+			# this function and its command substitutions inherit.
 			_pnr_page_json="$(gh_retry gh api -X GET \
 				"repos/${GITHUB_REPOSITORY}/actions/workflows/${_pnr_wrapper}/runs?event=workflow_dispatch&created=>=${_pnr_cutoff}&per_page=100&page=${_pnr_page}" \
 				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {databaseId: .id, event: .event, status: .status, conclusion: .conclusion, displayTitle: .display_title, createdAt: .created_at, startedAt: .run_started_at}]}' \
