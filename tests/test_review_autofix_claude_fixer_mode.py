@@ -525,21 +525,27 @@ CONSENSUS_ID_VOTING_REVIEWS = {
 }
 
 
-def test_handoff_rejected_singleton_auto_merges_and_stays_visible():
-	"""Issue #4586: the #4575 shape posts the ledger, no hand-off, and merges."""
+def test_handoff_rejected_singleton_is_handed_off_not_auto_merged():
+	"""Issue #4586's #4575 shape, since #5582: a verified majority of votes no longer demotes the
+	singleton, so the round is handed to the Claude session instead of auto-merging."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=REJECTING_REVIEWS, pass1_ledger=PASS1_LEDGER,
 			rejection_ids=REJECTION_IDS, nonblocking_filter="real", source_files={"README.md": README_SOURCE})
 		filtered = (tmp / "reviewer_consensus_claude_fixer.txt").read_text()
 	assert proc.returncode == 0, proc.stderr
-	assert calls == []
-	assert f"post_review_comment {tmp / 'reviewer_consensus_claude_fixer.txt'} 42" in posts
-	assert "=== NON-BLOCKING FINDINGS ===" in filtered and "rejected_by: [glm, minimax] (2 of 2 other reviewers)" in filtered
-	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
-	assert "CLAUDE_FIXER_NONBLOCKING demoted=1 successful_reviewers=3" in proc.stdout
+	assert filtered == LEDGER_REJECTED_SINGLETON and "=== NON-BLOCKING FINDINGS ===" not in filtered
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=3" in proc.stdout
 	assert "CLAUDE_FIXER_NONBLOCKING_EVIDENCE source=ok commit=" in proc.stdout and "verified=2 unverified=0" in proc.stdout
-	assert "action=auto_merge nonblocking=1" in proc.stdout
+	assert "CLAUDE_FIXER_NONBLOCKING_KEPT file=README.md:1261 flagged_by=gemini reason=no_automated_proof" in proc.stdout
+	assert "action=auto_merge" not in proc.stdout
+	assert "kind=findings findings=2 ledger=ok failed_checks=none nonblocking=0" in proc.stdout
+	assert "<!-- ai:claude-fixer-handoff:v1 kind=findings" in calls[0]["payload"]["body"]
+
+
+# The name this test had before #5582 inverted its outcome, kept as an alias (CLAUDE.md §6).
+test_handoff_rejected_singleton_auto_merges_and_stays_visible = test_handoff_rejected_singleton_is_handed_off_not_auto_merged
 
 
 @pytest.mark.parametrize(("reviews", "source_files", "evidence_line"), [
@@ -603,11 +609,12 @@ def test_handoff_mixed_round_hands_off_the_filtered_ledger():
 	assert proc.returncode == 0, proc.stderr
 	assert f"post_review_comment {filtered_path} 42" in posts
 	body = calls[0]["payload"]["body"]
-	assert "Reviewer ledger entries: 1 (posted above)." in body
-	assert "Non-blocking entries: 1" in body
+	# Since #5582 the rejected singleton stays blocking next to the multi-reviewer finding.
+	assert "Reviewer ledger entries: 3 (posted above)." in body
+	assert "Non-blocking entries" not in body
 	assert f"<!-- ai:claude-fixer-handoff:v2 head={reviewed_head} round=2 ledger={digest} -->" in body
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
-	assert "kind=findings findings=1 ledger=ok failed_checks=none nonblocking=1" in proc.stdout
+	assert "kind=findings findings=3 ledger=ok failed_checks=none nonblocking=0" in proc.stdout
 
 
 @pytest.mark.parametrize(("reviews", "rejection_ids"), [

@@ -5004,7 +5004,10 @@ run_reviewer_pass() {
 # EVIDENCE_LINE_WINDOW, EVIDENCE_MAX_LINES and EVIDENCE_MIN_QUOTE_CHARS in
 # that script, and tests keep them in sync). When the IDs cannot
 # be issued, reviewers get no rejection instructions, the manifest is
-# removed, and every finding stays blocking.
+# removed, and every finding stays blocking. Votes are diagnostics only
+# (issue #5582): they never demote a finding without an independent
+# automated disproof, which the hand-off step does not have, so the header
+# does not promise that a rejected finding skips the fixer.
 #
 # Each CONSENSUS FINDINGS entry is shown with a `consensus_id: p1-<12 hex>`
 # line (review_claude_fixer_nonblocking.py --annotate, issue #4687), which a
@@ -5071,7 +5074,7 @@ build_cross_pollination_summary() {
       echo "  consensus_id: <consensus_id>"
       echo "to that finding. Never add an entry's consensus_id to a different defect, even one on the same or a nearby line."
       echo "Put that line inside the finding's own File: / Line or code reference: block, with no blank line before it: a consensus_id anywhere else in your output does not count."
-      echo "A finding raised by one reviewer and rejected this way by a majority of the others is not handed to the fixer."
+      echo "A rejection is recorded in the run log; it does not stop the finding from reaching the fixer, which checks every finding against the code."
       echo "Rejectable single-reviewer findings (ID -> file:line | flagged_by | consensus_id):"
       printf '%s\n' "${rejection_ids_list}" | sed 's/^/  /'
       echo ""

@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5582-rejection-votes-need-automated-proof-plan.md
 - Source issue: shubhodeep1/coding-workflows#5582
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5582-rejection-votes-need-automated-proof   Final PR: pending
+- Project branch: claude/implement-plan-issue-5582-rejection-votes-need-automated-proof   Final PR: #5605 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5611 (phase 1/1)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01EbGhNnCvS36xDxb7uEq7sz   safety net (re-armed by the round-2 stage)   hand-back (re-armed by the round-2 stage)
 - Last updated: 2026-09-30
-- Last note: project branch opened from the #4586 project branch; implementing phase 1
+- Last note: review round 2 on PR #5611: fixed both reviewer findings (README vote-conditions paragraph now states the disproof requirement; the misnamed hand-off test got an accurate name with the old one kept as a §6 alias, AD-5); the stale task gap was already satisfied
 
 ## Phases
-1. [ ] Phase 1 — votes alone never demote a single-reviewer finding
+1. [ ] Phase 1 — votes alone never demote a single-reviewer finding   — PR #5611 open (waiting); review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -32,9 +32,14 @@
 - AD-2 [plan, 2026-09-30] Where does the new keep reason sit among the existing checks? — Picked: A — last, after `too_few_rejecters`, as `no_automated_proof`. Alternatives: B — first, for every single-reviewer entry. Why: the log keeps naming the first failing condition, which the #4586-#4976 diagnostics depend on (§8). Applied in: phase 1. Status: pending review
 - AD-3 [plan, 2026-09-30] What happens to the pass-2 rejection instructions? — Picked: A — keep issuing IDs and asking for `REJECTED_FINDING` lines, but reword the sentence that promises a rejected singleton is not handed to the fixer. Alternatives: B — stop issuing IDs and asking for votes; C — leave the text as it is. Why: B removes a mechanism and its log lines (§6) that a future disproof check would build on; C leaves a false statement in the reviewer prompt. Applied in: phase 1. Status: pending review
 - AD-4 [plan, 2026-09-30] Should other projects' changelog fragments and the `.claude/` command docs be edited? — Picked: A — no; the new `security` fragment states the change, and the `.claude/` text stays true of the (now never produced) `NON-BLOCKING FINDINGS` block. Alternatives: B — edit the #4586/#4976 fragments and the `.claude/` twins. Why: smallest change (§5), and no protected-path edit in an unattended session (§28.C). Applied in: phase 1. Status: pending review
+- AD-5 [phase 1/1 — review round 2, 2026-09-30] How should the misnamed test `test_handoff_rejected_singleton_auto_merges_and_stays_visible` (it now asserts no auto-merge) be fixed? — Picked: A — define it under the accurate name `test_handoff_rejected_singleton_is_handed_off_not_auto_merged` and keep the old name as an alias bound to it. Alternatives: B — rename in place; C — keep the name and reject the finding. Why: fixes the misleading name while honouring §6 (no in-place rename); the only cost is pytest running the same test twice. Applied in: PR #5611. Status: pending review
 
 ## Lessons
+- [source:security] A reviewer vote is model output from PR-influenced input: verifying its fields (IDs, quotes, ranges) proves the reviewer copied text, never that a finding is false, so an unattended gate must not let votes alone clear a finding. (files: scripts/review_claude_fixer_nonblocking.py)
+- [source:intervention] When a change alters behaviour a doc describes, grep every summary of it too (the Quickstart variables table row, not only the detailed section): a stale one-line summary contradicts the new rule. (files: README.md)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher in session session_01Btdcvy38twXdNjpDgPWDBg (permission mode auto). Base branch `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason` (the issue's `Integration branch:` line; its final PR #4593 is an open draft into `main`). The issue therefore closes by an explicit close plus `ai:merged` at the final-merge stage, not by a `Fixes` keyword.
 - Sibling security follow-up #4975 is in flight on `claude/implement-plan-issue-4975-bind-flagger-citation-to-finding` and edits the same function region, README.md, and agents.md paragraphs; expect a merge conflict on whichever project merges second.
+- Review round 1 (2026-09-30): the sibling #4975 project merged into the issue base first, as expected; the phase branch took it through a `[claude-merge-resolve]` merge. `no_automated_proof` still runs last, after #4975's `flagger_citation_mismatch` and `ambiguous_flagger_nearby` checks.
+- Review round 2 (2026-09-30): both consensus findings fixed (README vote-conditions paragraph; misnamed hand-off test, AD-5). The task gap was round 1's README `CLAUDE_FIXER_ENABLED` row, which its own evidence says is already updated. A dispatched review run for PR #5611 (36722924281) was still queued when this stage started; the round-2 push supersedes it.

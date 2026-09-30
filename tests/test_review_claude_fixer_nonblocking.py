@@ -10,7 +10,10 @@ Since #4687 that ID binds to the finding by the pass-1 consensus_id the
 manifest records for it, never by file and line proximity, and every
 ambiguous match stays blocking. Since #4976 a vote also counts only when its
 ``evidence: <file>:<range> | quote: <text>`` fields verify against the
-reviewed commit's source.
+reviewed commit's source. Since #5582 votes are necessary but never
+sufficient: an entry is demoted only when the caller's ``disproof_check``
+proves it false, and the CLI has none, so it never demotes. The mechanics
+tests below pass ``_proved`` to exercise the vote conditions on their own.
 """
 
 from __future__ import annotations
@@ -188,12 +191,18 @@ def _reviews(tmp: Path, *, rejecters: list[str], line: str = "1261", flagger: st
 	return reviews
 
 
+def _proved(_record: dict) -> bool:
+	"""A stand-in automated disproof that proves every finding false (issue #5582)."""
+	return True
+
+
 def _run(tmp: Path, ledger: str, reviews: Path) -> tuple[str, list[dict]]:
-	return nonblocking.demote(ledger, reviews, source_reader=_source)
+	return nonblocking.demote(ledger, reviews, source_reader=_source, disproof_check=_proved)
 
 
-def _kept(ledger: str, reviews: Path) -> dict[str, str]:
-	_text, _demoted, kept, _legacy = nonblocking.demote_with_diagnostics(ledger, reviews, source_reader=_source)
+def _kept(ledger: str, reviews: Path, disproof_check=_proved) -> dict[str, str]:
+	_text, _demoted, kept, _legacy = nonblocking.demote_with_diagnostics(ledger, reviews, source_reader=_source,
+		disproof_check=disproof_check)
 	return {f"{record['location'][0]}:{record['location'][1][0]}" if record["location"] else "unparsed": record["reason"]
 		for record in kept}
 
@@ -852,13 +861,15 @@ def test_cli_writes_output_and_log_lines(tmp_path):
 		"--source-root", str(root), "--source-commit", sha], capture_output=True, text=True, env=ENV)
 	assert proc.returncode == 0, proc.stderr
 	lines = proc.stdout.splitlines()
-	assert lines[0] == "CLAUDE_FIXER_NONBLOCKING demoted=1 successful_reviewers=6"
+	# Five verified votes, and still nothing is demoted: the CLI has no automated disproof (issue #5582).
+	assert lines[0] == "CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=6"
 	assert lines[1] == "CLAUDE_FIXER_NONBLOCKING_VOTES manifest=present ids=1 votes=5"
 	assert lines[2] == f"CLAUDE_FIXER_NONBLOCKING_EVIDENCE source=ok commit={sha} verified=5 unverified=0"
-	assert f"CLAUDE_FIXER_NONBLOCKING_ENTRY file=README.md:1261 flagged_by={FLAGGER}" in proc.stdout
+	assert "CLAUDE_FIXER_NONBLOCKING_ENTRY" not in proc.stdout
+	assert f"CLAUDE_FIXER_NONBLOCKING_KEPT file=README.md:1261 flagged_by={FLAGGER} reason=no_automated_proof" in lines
 	assert f"CLAUDE_FIXER_NONBLOCKING_KEPT file=README.md:1400 flagged_by={FLAGGER} reason=no_consensus_id" in lines
 	assert "CLAUDE_FIXER_NONBLOCKING_LEGACY_REJECTIONS count=1" in lines
-	assert "=== NON-BLOCKING FINDINGS ===" in out.read_text()
+	assert out.read_text() == ledger_path.read_text()
 
 
 def test_each_reviewer_output_is_read_once_and_statuses_scanned_once(tmp_path, monkeypatch, capsys):
@@ -890,7 +901,7 @@ def test_each_reviewer_output_is_read_once_and_statuses_scanned_once(tmp_path, m
 	assert sorted(output_reads) == sorted(f"review_{slug}.txt" for slug in [FLAGGER, *OTHERS])
 	assert sum(name.startswith("status_review_") for name in reads) == 6
 	assert reads.count(nonblocking.MANIFEST_NAME) == 1
-	assert capsys.readouterr().out.splitlines()[0] == "CLAUDE_FIXER_NONBLOCKING demoted=1 successful_reviewers=6"
+	assert capsys.readouterr().out.splitlines()[0] == "CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=6"
 
 
 def test_cli_fails_on_a_missing_reviews_dir(tmp_path):
@@ -1029,7 +1040,7 @@ def test_an_explicit_manifest_path_is_used(tmp_path):
 	elsewhere = tmp_path / "elsewhere"
 	elsewhere.mkdir()
 	manifest = _write_manifest(elsewhere, [_manifest_entry()])
-	_text, demoted = nonblocking.demote(_ledger(README_FINDING), reviews, manifest, source_reader=_source)
+	_text, demoted = nonblocking.demote(_ledger(README_FINDING), reviews, manifest, source_reader=_source, disproof_check=_proved)
 	assert len(demoted) == 1
 
 
@@ -1319,9 +1330,10 @@ def test_runner_and_summariser_prompts_describe_the_id_shape():
 # ── Issue #4976: votes need source-grounded evidence ──
 
 
-def _diagnostics(ledger: str, reviews: Path, source_reader=_source) -> tuple[str, list[dict], dict]:
+def _diagnostics(ledger: str, reviews: Path, source_reader=_source, disproof_check=_proved) -> tuple[str, list[dict], dict]:
 	stats: dict = {}
-	text, demoted, _kept_records, _legacy = nonblocking.demote_with_diagnostics(ledger, reviews, source_reader=source_reader, stats=stats)
+	text, demoted, _kept_records, _legacy = nonblocking.demote_with_diagnostics(ledger, reviews, source_reader=source_reader, stats=stats,
+		disproof_check=disproof_check)
 	return text, demoted, stats
 
 
@@ -1468,15 +1480,18 @@ def _cli(tmp_path: Path, reviews: Path, *extra: str) -> subprocess.CompletedProc
 
 
 def test_issue_4976_cli_demotes_with_verified_evidence_end_to_end(tmp_path):
+	"""Every vote's evidence verifies end to end; since #5582 the CLI still demotes nothing."""
 	reviews = _reviews(tmp_path, rejecters=OTHERS)
 	root, sha = _git_repo(tmp_path)
 	proc = _cli(tmp_path, reviews, "--source-root", str(root), "--source-commit", sha)
 	assert proc.returncode == 0, proc.stderr
-	assert proc.stdout.splitlines()[:3] == [
-		"CLAUDE_FIXER_NONBLOCKING demoted=1 successful_reviewers=6",
+	assert proc.stdout.splitlines() == [
+		"CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=6",
 		"CLAUDE_FIXER_NONBLOCKING_VOTES manifest=present ids=1 votes=5",
 		f"CLAUDE_FIXER_NONBLOCKING_EVIDENCE source=ok commit={sha} verified=5 unverified=0",
+		f"CLAUDE_FIXER_NONBLOCKING_KEPT file=README.md:1261 flagged_by={FLAGGER} reason=no_automated_proof",
 	]
+	assert (tmp_path / "out.txt").read_text() == _ledger(README_FINDING)
 
 
 def test_issue_4976_cli_reports_every_unverified_vote(tmp_path):
@@ -1526,3 +1541,83 @@ def test_issue_4976_prompt_states_the_evidence_limits_the_gate_enforces():
 def test_issue_4976_handoff_step_passes_the_reviewed_commit():
 	step = (REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_handoff.sh").read_text(encoding="utf-8")
 	assert '--source-root "${GITHUB_WORKSPACE:-${PWD}}" --source-commit "${HEAD_SHA:-}"' in step
+
+
+# ── Issue #5582: votes are necessary but never sufficient ──
+
+# The finding is real: line 1261 of the reviewed README lost its backtick. The
+# rejecters quote that very line, so their evidence verifies while showing the defect.
+DEFECT_LINE = "Start it with /implement-issue-claude <issue>` from a cloud session."
+DEFECT_QUOTE = "/implement-issue-claude <issue>` from a cloud session."
+
+
+def _defect_source(path: str) -> list[str] | None:
+	if path != "README.md":
+		return None
+	lines = list(README_LINES)
+	lines[1260] = DEFECT_LINE
+	return lines
+
+
+def test_issue_5582_majority_votes_quoting_the_defect_never_demote(tmp_path):
+	"""The exploit: a verified majority whose quote demonstrates the defect."""
+	reviews = _reviews(tmp_path, rejecters=[])
+	_others_write(reviews, _vote(reason="false positive", evidence=f" | evidence: README.md:1261 | quote: {DEFECT_QUOTE}"))
+	ledger = _ledger(README_FINDING, {FLAGGER: README_BULLET})
+	stats: dict = {}
+	text, demoted, kept, _legacy = nonblocking.demote_with_diagnostics(ledger, reviews, source_reader=_defect_source, stats=stats)
+	assert stats["votes"] == len(OTHERS) and stats["unverified"] == []
+	assert demoted == [] and text == ledger
+	assert "=== NON-BLOCKING FINDINGS ===" not in text
+	assert [(record["location"][0], record["reason"]) for record in kept] == [("README.md", "no_automated_proof")]
+	assert nonblocking.demote(ledger, reviews, source_reader=_defect_source) == (ledger, [])
+
+
+@pytest.mark.parametrize("verdict", [False, None, 1, "true", [True]])
+def test_issue_5582_only_an_exact_true_disproof_demotes(tmp_path, verdict):
+	reviews = _reviews(tmp_path, rejecters=OTHERS)
+	ledger = _ledger(README_FINDING)
+	text, demoted, _stats = _diagnostics(ledger, reviews, disproof_check=lambda _record: verdict)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews, disproof_check=lambda _record: verdict) == {"README.md:1261": "no_automated_proof"}
+
+
+def test_issue_5582_the_disproof_check_sees_a_copy_of_the_candidate(tmp_path):
+	reviews = _reviews(tmp_path, rejecters=OTHERS)
+	ledger = _ledger(README_FINDING)
+	seen: list[dict] = []
+
+	def meddling_check(candidate: dict) -> bool:
+		seen.append({key: candidate[key] for key in ("path", "lines", "flagger", "consensus_id", "others")}
+			| {"rejecters": list(candidate["rejecters"])})
+		candidate["entry"].append("  injected: true")
+		candidate["rejecters"].append("nobody")
+		return False
+
+	text, demoted, _stats = _diagnostics(ledger, reviews, disproof_check=meddling_check)
+	assert demoted == [] and text == ledger
+	assert seen == [{"path": "README.md", "lines": (1261, 1261), "flagger": FLAGGER, "consensus_id": RID,
+		"rejecters": sorted(OTHERS), "others": len(OTHERS)}]
+
+
+def test_issue_5582_a_proved_disproof_demotes_with_the_same_record(tmp_path):
+	reviews = _reviews(tmp_path, rejecters=OTHERS)
+	text, demoted = _run(tmp_path, _ledger(README_FINDING), reviews)
+	assert [sorted(record) for record in demoted] == [
+		sorted(["entry", "path", "lines", "flagger", "consensus_id", "rejecters", "others", "moved"])]
+	assert "proved false by an independent automated check" in _block(text, nonblocking.NONBLOCKING_BLOCK)
+
+
+def test_issue_5582_the_disproof_check_runs_only_after_every_vote_condition(tmp_path):
+	reviews = _reviews(tmp_path, rejecters=OTHERS[:1])
+	calls: list[dict] = []
+	ledger = _ledger(README_FINDING)
+	assert _kept(ledger, reviews, disproof_check=lambda candidate: calls.append(candidate) or True) == {
+		"README.md:1261": "too_few_rejecters"}
+	assert calls == []
+
+
+def test_issue_5582_the_pass2_header_no_longer_promises_the_fixer_is_skipped():
+	function = _cross_pollination_function()
+	assert "is not handed to the fixer" not in function
+	assert "it does not stop the finding from reaching the fixer" in function
