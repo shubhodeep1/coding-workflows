@@ -633,7 +633,10 @@ def read_settings_text(repo_root: Path, ref: str | None, path: str) -> str | Non
 	"""The settings file at `ref` (or in the working tree), or None when absent.
 
 	Content that is not UTF-8 comes back as "" so it reports `unparseable`; a
-	working-tree read failure is a SetupError (exit 2), not a settings verdict.
+	read failure is a SetupError (exit 2), not a settings verdict. At a ref,
+	absence is decided from the tree listing alone, so a blob that is listed
+	but cannot be read (missing from a partial clone, corrupt) never reads as
+	an absent file that has no guard wiring to compare.
 	"""
 	if ref is None:
 		source = repo_root / path
@@ -645,11 +648,14 @@ def read_settings_text(repo_root: Path, ref: str | None, path: str) -> str | Non
 			return ""
 		except OSError as exc:
 			raise SetupError(f"cannot read settings {path}: {exc}") from exc
+	listing = _repo_git(repo_root, "ls-tree", "-z", "--full-tree", ref, "--", path)
+	if not any(entry.partition("\t")[2] == path for entry in listing.stdout.split("\0")):
+		return None
 	try:
-		blob = _repo_git(repo_root, "cat-file", "-p", f"{ref}:{path}", check=False)
+		blob = _repo_git(repo_root, "cat-file", "-p", f"{ref}:{path}")
 	except UnicodeDecodeError:
 		return ""
-	return blob.stdout if blob.returncode == 0 else None
+	return blob.stdout
 
 
 def _reject_json_constant(name: str) -> object:

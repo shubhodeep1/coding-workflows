@@ -827,6 +827,33 @@ def test_cli_the_pr_body_can_list_an_unparseable_base_repair(settings_repo: Path
 	assert not _wiring_lines(proc)
 
 
+def _delete_object(repo: Path, rev: str) -> None:
+	"""Drop the loose object `rev` names, as a missing or corrupt blob would be."""
+	oid = _git(repo, "rev-parse", rev)
+	(repo / ".git" / "objects" / oid[:2] / oid[2:]).unlink()
+
+
+def test_read_settings_text_at_a_ref_tells_absent_from_present(settings_repo: Path) -> None:
+	assert gd.read_settings_text(settings_repo, "main", ".claude/settings.json") == json.dumps(_settings(), indent=2)
+	assert gd.read_settings_text(settings_repo, "main", ".claude/missing.json") is None
+	assert gd.read_settings_text(settings_repo, "main", "no-such-dir/settings.json") is None
+
+
+def test_cli_an_unreadable_base_settings_blob_exits_2(settings_repo: Path) -> None:
+	"""A base settings file that exists but cannot be read is not an absent
+	one: read as absent, it left no base wiring, so dropping the guard passed.
+	(Against the working tree, `git diff` already fails on the missing blob.)"""
+	_git(settings_repo, "checkout", "-q", "-b", "pr")
+	_write_settings(settings_repo, _without_guard(_settings()))
+	_git(settings_repo, "commit", "-q", "-am", "drop the guard")
+	_delete_object(settings_repo, "main:.claude/settings.json")
+	proc = _cli(settings_repo, "--head-ref", "pr")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "status=error" in proc.stdout
+	assert "cat-file -p main:.claude/settings.json failed" in proc.stdout, proc.stdout
+	assert not _wiring_lines(proc)
+
+
 def _permissions_only(settings: dict) -> dict:
 	settings["permissions"]["allow"].append("Bash(git log)")
 	return settings

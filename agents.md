@@ -1236,8 +1236,10 @@ side so that class cannot land unnoticed.
   (it reaches every hook's process: `CLAUDE_PR_MERGE_GUARD=off` or a
   shadowing `PATH`), and a deleted, unparseable, or non-object settings file
   (parsed as strict JSON like Claude Code does: `NaN` or `Infinity`, or
-  content that is not UTF-8, is unparseable; a working-tree read error exits
-  2 with `status=error`). A committed base settings file that is
+  content that is not UTF-8, is unparseable; a read error exits 2 with
+  `status=error`, in the working tree or at a ref, where a settings blob the
+  tree lists but git cannot read, missing from a partial clone or corrupt,
+  never counts as an absent file). A committed base settings file that is
   unparseable or non-object fails too (`reason=base-unparseable`): with no
   base wiring to compare, the head cannot be verified to keep any guard, so
   the PR that repairs it lists the identity. The identity of a wiring
@@ -1280,7 +1282,7 @@ side so that class cannot land unnoticed.
   reason=no-hook-change checked=hooks,settings` when no hook `*.py` file and
   no settings file changed. Exit 0 when clean or when no hook or
   settings file changed, 1 on a failure, 2 on a bad ref, unreadable corpus,
-  or unreadable PR body.
+  unreadable settings file, or unreadable PR body.
 
 ---
 
