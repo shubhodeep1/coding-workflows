@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T00:33:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a gate fills a positive allow-list, every bucket that bypasses the gate (such as a conservative \"treat as tracking\" fallback on a failed lookup) must be checked too, or the allow-list stops failing closed.",
+  "phase": "implement_plan",
+  "pr_number": 5313,
+  "record_id": "lesson-implement-plan-205d76bd372d86bdd8dee421",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5227-lineage-only-target-branch-merges",
+    "file:.github/workflows/issue_pr_status.yml"
+  ]
+}
