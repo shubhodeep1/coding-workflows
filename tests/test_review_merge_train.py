@@ -53,6 +53,37 @@ for ((i=0; i<${#args[@]}; i++)); do
   if [ "${args[$i]}" = "--jq" ]; then jqf="${args[$((i+1))]}"; fi
 done
 path="${endpoint%%\?*}"
+# actions/runs is served like the REST listing: filtered by the status query
+# parameter, paged by page/per_page, with total_count (issue #5443). A
+# fixture may set total_count_override: {"<status>": <n>} to report more runs
+# than it holds. fail_runs_get fails the call; malformed_runs returns an
+# object with no total_count.
+if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
+  if [ -f "${FAKE_GH_DIR}/fail_runs_get" ] || [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
+  query=""
+  [[ "${endpoint}" == *\?* ]] && query="${endpoint#*\?}"
+  run_status=""; run_page=1; run_per_page=30
+  IFS='&' read -ra query_parts <<< "${query}"
+  for part in "${query_parts[@]}"; do
+    case "${part}" in
+      status=*) run_status="${part#status=}" ;;
+      page=*) run_page="${part#page=}" ;;
+      per_page=*) run_per_page="${part#per_page=}" ;;
+    esac
+  done
+  if [ -f "${FAKE_GH_DIR}/malformed_runs" ]; then
+    page_json='{"workflow_runs":[]}'
+  else
+    runs_source='{"workflow_runs":[]}'
+    [ -f "${FAKE_GH_DIR}/actions_runs.json" ] && runs_source="$(cat "${FAKE_GH_DIR}/actions_runs.json")"
+    page_json="$(printf '%s' "${runs_source}" | jq -c --arg st "${run_status}" --argjson pg "${run_page}" --argjson pp "${run_per_page}" '
+      ((.workflow_runs // []) | map(select($st == "" or .status == $st))) as $r
+      | {total_count: ((.total_count_override // {})[$st] // ($r | length)),
+         workflow_runs: $r[(($pg - 1) * $pp):($pg * $pp)]}')"
+  fi
+  if [ -n "${jqf}" ]; then printf '%s' "${page_json}" | jq -r "${jqf}"; else printf '%s\n' "${page_json}"; fi
+  exit 0
+fi
 case "${method}" in
   GET)
     if [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
@@ -61,17 +92,13 @@ case "${method}" in
       repos/*/pulls/*/files) n="${path#*/pulls/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/files_${n}.json" ;;
       repos/*/issues/*/comments) n="${path#*/issues/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/comments_${n}.json" ;;
       repos/*/issues/comments/*) fixture="${FAKE_GH_DIR}/comment_body.json" ;;
-      repos/*/actions/runs) fixture="${FAKE_GH_DIR}/actions_runs.json" ;;
       *) echo "unexpected GET ${path}" >&2; exit 1 ;;
     esac
     if [[ "${path}" == repos/*/issues/*/comments ]] && [[ "${jqf}" == *"merge-train:released"* ]] && [ -f "${FAKE_GH_DIR}/fail_released_comment_lookup" ]; then
       exit 1
     fi
     if [ ! -f "${fixture}" ]; then
-      case "${path}" in
-        repos/*/actions/runs) echo '{"workflow_runs":[]}' ;;
-        *) echo '[]' ;;
-      esac
+      echo '[]'
       exit 0
     fi
     if [ -n "${jqf}" ]; then jq -r "${jqf}" "${fixture}"; else cat "${fixture}"; fi
@@ -447,6 +474,7 @@ def test_release_leaves_active_review_queued_without_dispatch(tmp_path: Path) ->
 		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
 	]), encoding="utf-8")
 	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [{
+		"id": 9001,
 		"status": "in_progress",
 		"head_branch": "ai/issue-4064",
 		"path": ".github/workflows/ai-review.yml",
@@ -466,6 +494,7 @@ def test_release_leaves_pr_named_dispatch_run_queued_without_dispatch(tmp_path: 
 		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
 	]), encoding="utf-8")
 	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [{
+		"id": 9002,
 		"status": "queued",
 		"head_branch": "main",
 		"event": "workflow_dispatch",
@@ -487,6 +516,7 @@ def test_release_ignores_pr_named_runs_of_other_prs_and_other_events(tmp_path: P
 	]), encoding="utf-8")
 	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
 		{
+			"id": 9003,
 			"status": "in_progress",
 			"head_branch": "main",
 			"event": "workflow_dispatch",
@@ -494,6 +524,7 @@ def test_release_ignores_pr_named_runs_of_other_prs_and_other_events(tmp_path: P
 			"path": ".github/workflows/internal-review.yml",
 		},
 		{
+			"id": 9004,
 			"status": "in_progress",
 			"head_branch": "ai/issue-9999",
 			"event": "pull_request",
@@ -516,6 +547,7 @@ def test_release_empty_head_does_not_match_blank_run_branch(tmp_path: Path) -> N
 	]), encoding="utf-8")
 	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
 		{
+			"id": 9005,
 			"status": "in_progress",
 			"head_branch": "",
 			"event": "pull_request",
@@ -523,6 +555,7 @@ def test_release_empty_head_does_not_match_blank_run_branch(tmp_path: Path) -> N
 			"path": ".github/workflows/ai-review.yml",
 		},
 		{
+			"id": 9006,
 			"status": "in_progress",
 			"head_branch": "ai/issue-9999",
 			"event": "pull_request",
@@ -548,6 +581,192 @@ def test_release_dispatch_claim_prevents_concurrent_release(tmp_path: Path) -> N
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RELEASE_CLAIM_SKIPPED pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
+
+
+def _queued_pr_4077(fixtures: Path) -> None:
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+
+
+def _write_runs(fixtures: Path, runs: list[dict], total_count_override: dict | None = None) -> None:
+	payload: dict = {"workflow_runs": runs}
+	if total_count_override is not None:
+		payload["total_count_override"] = total_count_override
+	(fixtures / "actions_runs.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_release_matches_ref_suffixed_run_path(tmp_path: Path) -> None:
+	"""Issue #5443: a path ending in "@<ref>" still identifies a review run."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{
+		"id": 1,
+		"status": "in_progress",
+		"head_branch": "ai/issue-4064",
+		"event": "pull_request",
+		"path": ".github/workflows/ai-review.yml@refs/heads/main",
+	}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def test_release_matches_owner_prefixed_ref_suffixed_dispatch_run(tmp_path: Path) -> None:
+	"""A PR-named dispatch run reported under "<owner>/<repo>/…yml@<ref>" holds its PR."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{
+		"id": 1,
+		"status": "pending",
+		"head_branch": "main",
+		"event": "workflow_dispatch",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]",
+		"path": "acme/consumer/.github/workflows/internal-review.yml@refs/heads/main",
+	}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_ignores_ref_suffixed_runs_of_other_workflows(tmp_path: Path) -> None:
+	"""Stripping "@<ref>" does not widen the match beyond the review workflows."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 1, "status": "in_progress", "head_branch": "ai/issue-4064", "event": "pull_request",
+		 "path": ".github/workflows/ci.yml@refs/heads/main"},
+		{"id": 2, "status": "in_progress", "head_branch": "ai/issue-4064", "event": "pull_request",
+		 "path": ".github/workflows/not-ai-review.yml@refs/heads/ai-review.yml"},
+	])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_queries_each_active_status_in_lifecycle_order(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	runs_calls = [line for line in log_text.splitlines() if "actions/runs" in line]
+	assert len(runs_calls) == 3, runs_calls
+	for call, status in zip(runs_calls, ("pending", "queued", "in_progress")):
+		assert f"actions/runs?status={status}&per_page=100&page=1" in call
+		assert "-X GET" in call
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_reads_every_page_before_deciding(tmp_path: Path) -> None:
+	"""A review run on page 2 of a status still holds its PR."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = [
+		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
+		 "path": ".github/workflows/ci.yml"}
+		for i in range(150)
+	]
+	runs.append({"id": 5000, "status": "in_progress", "head_branch": "ai/issue-4064",
+		"event": "pull_request", "path": ".github/workflows/ai-review.yml"})
+	_write_runs(fixtures, runs)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "actions/runs?status=in_progress&per_page=100&page=2" in log_text
+	assert "page=3" not in log_text
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_run_listing_fails(tmp_path: Path) -> None:
+	"""Issue #5443: a failed listing never releases blind; it is read once per run."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4085, ["twap_router.py"])
+	(fixtures / "comments_4077.json").write_text(json.dumps([{
+		"id": 97,
+		"body": "<!-- merge-train:queued -->\nReview queued",
+	}]), encoding="utf-8")
+	(fixtures / "fail_runs_get").touch()
+	# One attempt per call, so the log counts listing attempts, not gh_retry retries.
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, GH_RETRY_MAX_ATTEMPTS="1")
+	assert result.returncode == 0, result.stderr
+	assert "could not list every active review run" in result.stdout
+	assert result.stdout.count("::warning::") == 1
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077 head=ai/issue-4064 action=leave_queued" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4085 head=ai/issue-4069 action=leave_queued" in result.stdout
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=page_failed status=pending page=1" in result.stderr
+	assert log_text.count("actions/runs") == 1, "the listing is read once per release invocation"
+	assert "gh workflow run" not in log_text
+	assert "DELETE" not in log_text
+	assert "PATCH" not in log_text, "the queue marker must not be retired on an incomplete listing"
+	assert "pulls/4077/files" not in log_text
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=0" in result.stdout
+
+
+def test_release_leaves_pr_queued_on_malformed_run_listing(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "malformed_runs").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=pending page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_listing_shifts(tmp_path: Path) -> None:
+	"""A short page before total_count is reached means runs moved while it was read."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
+		 "path": ".github/workflows/ci.yml"},
+	], total_count_override={"queued": 3})
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=listing_shifted status=queued page=1 read=1 total=3" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_listing_exceeds_ten_pages(tmp_path: Path) -> None:
+	"""GitHub serves at most 1,000 filtered results; more active runs cannot be proven absent."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 10000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
+		 "path": ".github/workflows/ci.yml"}
+		for i in range(1001)
+	])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=truncated status=in_progress page=11 read=1000 total=1001" in result.stderr
+	assert "actions/runs?status=in_progress&per_page=100&page=10" in log_text
+	assert "page=11" not in log_text
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_skips_run_listing_when_nothing_queued(tmp_path: Path) -> None:
+	"""§15: the listing is read lazily, only for a queued PR that passes the base filter."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064"),
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "actions/runs" not in log_text
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=0 released=0 base_filter=main" in result.stdout
 
 
 def test_cancel_on_close_releases_train_for_unmerged_prs() -> None:
