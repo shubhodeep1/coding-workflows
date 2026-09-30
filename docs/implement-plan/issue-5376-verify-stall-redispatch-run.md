@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5376-verify-stall-redispatch-run-plan.md
 - Source issue: shubhodeep1/coding-workflows#5376 (https://github.com/shubhodeep1/coding-workflows/issues/5376)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4985-skip-marker-review-stall
-- Project branch: claude/implement-plan-issue-5376-verify-stall-redispatch-run   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5376-verify-stall-redispatch-run   Final PR: #5387 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5408: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; phase 1 starting.
+- Last note: phase 1 PR #5408 opened (twin-first); hold claim posted; blocked for the `[claude-twin-sync]` copy of `check_in_status.py` and `fix-claude-pr.md` into `.claude/` (blocker comment on #5376). The stage that `/reclarify` resumes arms the wait on #5408.
 
 ## Phases
-1. [ ] Phase 1 — verified-run re-dispatch rule; protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/fix-claude-pr.md` (edited through their `workflow-templates/.claude/` twins)
+1. [ ] Phase 1 — verified-run re-dispatch rule — PR #5408 open (blocked: twin sync); review rounds: 0; interventions: 0; protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/fix-claude-pr.md` (edited through their `workflow-templates/.claude/` twins)
    - checker twin: `_dispatched_review_runs`, `_head_arrival_time`, `_verified_review_redispatch`; `stall_redispatched` from a verified run; `_active_run_count` shares the listing
    - consumer wrapper: `workflow-templates/ai-review.yml` dispatch-only `run-name`
    - fixer twin: `fix-claude-pr.md` step 3 wording
@@ -48,3 +48,4 @@
 - Issue progress comment: 5903022362.
 - Invoking session: session_01GokLJ6bAqCLubeWsfg7Zch (permission mode auto).
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
+- 2026-09-30, phase 1 (session_01GokLJ6bAqCLubeWsfg7Zch): the new hand-back tests (loading the twin) pass: 131 passed, with only the 2 twin-parity checks failing. Related suites (71 files): 2502 passed, 1 skipped. The 5 failures are 4 twin-parity checks and 1 missing `gawk`; the validation-template renderer suites need `jsonschema` and `jinja2`, which are not installed here. With the twins copied into `.claude/` (simulated sync), the 8 affected suites pass (427). ruff and yamllint are clean.

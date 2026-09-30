@@ -194,6 +194,15 @@ Phase 1:
   count. The result is one extra re-dispatch (a safe retry).
 - The 100-run listing window: a qualifying run older than the last 100
   dispatches is missed. The result is one extra re-dispatch.
+- A commit first pushed to another branch carries that branch's earlier
+  check runs, so its arrival can read earlier than the push to the PR. An
+  author with write access could dispatch a real review for an older head in
+  that gap, and the next stall would then hold and ask a human. It could not
+  skip a review. The latest check-run start would close this gap, but any
+  later CI re-run or `pull_request` event would then push the arrival past
+  every re-dispatch, and the retries would loop. Recorded as a residual risk.
+- Timestamps with no timezone are skipped rather than compared, so they
+  never turn a verdict into an exit-2 retry.
 
 ## Auto-decisions
 
