@@ -199,9 +199,12 @@ def _gh_api_paginated_object(path: str, list_key: str) -> dict:
 	"""Fetch every 100-item REST page and merge `list_key` into one object.
 
 	Input is an unpaginated REST path plus its top-level array key; output
-	preserves the first page's object fields with that array concatenated.
-	This issues one API call per page and raises `ReadError` on any read or
-	shape failure so `main` emits the structured exit-2 verdict and re-arms.
+	preserves the first page's object fields with that array concatenated,
+	except that `incomplete_results: true` on any page (a search that timed
+	out on that page) is kept, so a caller never mistakes a partial result
+	for a complete one (issue #5126). This issues one API call per page and
+	raises `ReadError` on any read or shape failure so `main` emits the
+	structured exit-2 verdict and re-arms.
 	"""
 	paginated_result: dict = {}
 	page_number = 1
@@ -217,6 +220,8 @@ def _gh_api_paginated_object(path: str, list_key: str) -> dict:
 			paginated_result = dict(page_payload)
 			paginated_result[list_key] = []
 		paginated_result[list_key].extend(page_items)
+		if page_payload.get("incomplete_results") is True:
+			paginated_result["incomplete_results"] = True
 		total_count = page_payload.get("total_count")
 		if len(page_items) < 100 or (isinstance(total_count, int) and len(paginated_result[list_key]) >= total_count):
 			return paginated_result

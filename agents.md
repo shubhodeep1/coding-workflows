@@ -1181,12 +1181,22 @@ reviews, comments, and conflicts stay a direct §12 request.
   `/implement-plan-claude` and
   `/implement-issue-claude`.
 - `permission_prompts.py lookup --session <id> [--repo <slug>]` is
-  read-only, for the operator's poller: one search read plus one comments
-  read per hit (at most 3). Claude Code Web's agent proxy refuses the
-  search (HTTP 403), and the poller runs there, so when the search read
-  fails it checks the 3 most recently updated `ai:permission-prompt` issues
-  instead (1 read per 100 labelled issues), where `report-now` reports in
-  coding-workflows. Only bodies and comments by an OWNER, MEMBER, or
+  read-only, for the operator's poller: one search read per 100 hits plus
+  one comments read per 100 comments of each hit whose comment count is
+  not 0. Claude Code Web's
+  agent proxy refuses the search (HTTP 403), and the poller runs there, so
+  when the search read fails it checks every `ai:permission-prompt` issue
+  instead, newest-updated first (1 read per 100 labelled issues), where
+  `report-now` reports in coding-workflows. It returns the newest report
+  by creation time, not the first one found (an issue that another
+  session's comment bumped can hold an older report), and stops at the
+  first hit last updated before the newest report so far. It answers
+  `found: false` only after checking every hit, never because a fixed
+  window ran out (issue #5126). A search that answers
+  `incomplete_results: true` on any page exits 2, even when its partial
+  hits hold a report, since a newer one may be missing. A
+  not-found answer in the fallback costs about one read per labelled issue
+  (40 reads for 38 issues on 2026-09-29). Only bodies and comments by an OWNER, MEMBER, or
   COLLABORATOR count. It prints `found`, `issue_url`, `comment_url`,
   `signature`, `event`, `tool_name`, `command`, and `title`, and exits 2 on
   a failed read. It reads only the report that ends the body or comment,
