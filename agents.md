@@ -1132,12 +1132,22 @@ reviews, comments, and conflicts stay a direct §12 request.
   ([Helpers](.claude/commands/implement-plan-claude.md#helpers)):
   - `.claude/scripts/dispatch_workflow.py --repo --workflow [--ref] [--input
     K=V …]`: dispatches one of `DISPATCHABLE_WORKFLOWS` (kept equal to the
-    `gh workflow run <file> *` allow rules by a test), records the recent
-    `workflow_dispatch` run ids first, and polls every 5 s (90 s max) for a
-    run that was not there before. Replaces `gh workflow run` +
-    `gh run list -L 1`, which could return the previous run. Exit 0 with
-    `run_id`, 1 on a refused workflow or bad argument, 2 on a failed call or
-    timeout. On exit 2, `dispatched` is `false` only when GitHub refused the
+    `gh workflow run <file> *` allow rules by a test), sends
+    `return_run_details: true` and takes the `workflow_run_id` GitHub returns
+    for the dispatch (`matched_by: dispatch_response`; one best-effort run
+    read fills `status` / `created_at`). Only without a returned id does it
+    fall back to the recent `workflow_dispatch` run ids recorded before the
+    POST and poll every 5 s (90 s max) for a run that was not there before:
+    one new run is `matched_by: new_run` (unverified: the caller confirms its
+    target ref), several are exit 2 with `ambiguous: true` and
+    `candidate_run_ids`, never a guess (issue #5016: two sessions
+    dispatching the same workflow seconds apart each took the newest run).
+    A failed pre-dispatch run-list read no longer cancels the dispatch: with
+    a returned id the result is exact, and without one it is exit 2 with
+    `dispatched: true` and no polling, since every recent run would look new.
+    Replaces `gh workflow run` + `gh run list -L 1`, which could return the
+    previous run. Exit 0 with `run_id`, 1 on a refused workflow or bad
+    argument, 2 on a failed call, timeout, or ambiguous match. On exit 2, `dispatched` is `false` only when GitHub refused the
     POST with a 4xx or `gh` could not start; a POST that timed out, got a
     5xx, or failed without an HTTP status reports `true`, like a failed or
     timed-out poll, so the caller checks `gh run list` instead of

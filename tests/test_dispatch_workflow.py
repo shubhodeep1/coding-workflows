@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Contract for `.claude/scripts/dispatch_workflow.py` (CLAUDE.md §23.I helpers).
 
-Covers the allowlist, the dispatch body, finding the run the dispatch started
-(never an older one), the timeout, argument validation, template parity, and
-the allow rules in settings.json.
+Covers the allowlist, the dispatch body, taking the run id GitHub returns for
+the dispatch (issue #5016: never another session's run), the polling fallback
+(never an older run, never a guess between several), the timeout, argument
+validation, template parity, and the allow rules in settings.json.
 """
 
 from __future__ import annotations
@@ -34,21 +35,34 @@ dw = _load()
 class FakeGitHub:
 	"""Stands in for `gh api`: serves run lists in sequence and records the dispatch."""
 
-	def __init__(self, run_lists, default_branch="main"):
+	def __init__(self, run_lists, default_branch="main", response=None, run_reads=None, run_list_error=None):
 		self.run_lists = list(run_lists)
+		self.run_list_error = run_list_error
 		self.default_branch = default_branch
+		self.response = response
+		self.run_reads = run_reads or {}
 		self.reads: list[str] = []
 		self.dispatches: list[tuple[str, str, str, dict]] = []
 
 	def gh_api(self, path):
 		self.reads.append(path)
 		if "/actions/workflows/" in path:
+			if self.run_list_error is not None:
+				raise self.run_list_error
 			runs = self.run_lists.pop(0) if len(self.run_lists) > 1 else self.run_lists[0]
 			return {"workflow_runs": runs}
+		if "/actions/runs/" in path:
+			run = self.run_reads.get(int(path.rsplit("/", 1)[1]))
+			if isinstance(run, Exception):
+				raise run
+			if run is None:
+				raise dw.check_in_status.ReadError("HTTP 404")
+			return run
 		return {"default_branch": self.default_branch}
 
 	def post_dispatch(self, repo, workflow, ref, inputs):
 		self.dispatches.append((repo, workflow, ref, inputs))
+		return self.response
 
 
 @pytest.fixture
@@ -71,8 +85,67 @@ def test_returns_the_new_run_not_the_previous_one(fake):
 	code, result = dw.dispatch("o/r", "security-audit.yml", None, {"ref": "claude/x"}, 90, sleep=lambda _s: None)
 	assert code == 0
 	assert result["run_id"] == 101
+	assert result["matched_by"] == "new_run"
 	assert result["ref"] == "main"
 	assert github.dispatches == [("o/r", "security-audit.yml", "main", {"ref": "claude/x"})]
+
+
+def _response(run_id):
+	return {
+		"workflow_run_id": run_id,
+		"run_url": f"https://api.github.com/repos/o/r/actions/runs/{run_id}",
+		"html_url": f"https://github.com/o/r/actions/runs/{run_id}",
+	}
+
+
+def test_uses_the_run_id_github_returned_even_when_a_newer_run_raced_in(fake):
+	# Issue #5016: two sessions dispatched the same workflow 3 s apart and both
+	# took the newest new run. The response id names this dispatch's run.
+	sleeps: list[int] = []
+	github = fake(
+		[[_run(100, "completed")], [_run(202), _run(201), _run(100, "completed")]],
+		response=_response(201),
+		run_reads={201: _run(201, "queued")},
+	)
+	code, result = dw.dispatch("o/r", "security-audit.yml", "main", {"ref": "claude/a"}, 90, sleep=sleeps.append)
+	assert code == 0
+	assert result["run_id"] == 201
+	assert result["matched_by"] == "dispatch_response"
+	assert result["html_url"] == "https://github.com/o/r/actions/runs/201"
+	assert result["status"] == "queued" and result["created_at"] == "2026-09-27T03:00:00Z"
+	assert "ambiguous" not in result
+	assert sleeps == []
+	assert github.reads == ["repos/o/r/actions/workflows/security-audit.yml/runs?event=workflow_dispatch&per_page=20", "repos/o/r/actions/runs/201"]
+
+
+def test_response_id_stands_when_the_run_read_fails(fake):
+	fake([[]], response=_response(7), run_reads={7: dw.check_in_status.ReadError("proxy 502")})
+	code, result = dw.dispatch("o/r", "internal-validate.yml", "main", {}, 90, sleep=lambda _s: None)
+	assert code == 0
+	assert result["run_id"] == 7 and result["matched_by"] == "dispatch_response"
+	assert result["html_url"] == "https://github.com/o/r/actions/runs/7"
+	assert result["status"] is None and result["created_at"] is None
+
+
+@pytest.mark.parametrize("response", [None, {}, {"workflow_run_id": "7"}, {"workflow_run_id": 0}, {"workflow_run_id": True}])
+def test_response_without_a_usable_run_id_falls_back_to_polling(fake, response):
+	github = fake([[], [_run(9)]], response=response)
+	code, result = dw.dispatch("o/r", "ai-validate.yml", "main", {}, 90, sleep=lambda _s: None)
+	assert code == 0
+	assert result["run_id"] == 9 and result["matched_by"] == "new_run"
+	assert not any("/actions/runs/" in path for path in github.reads)
+
+
+def test_fallback_never_guesses_between_several_new_runs(fake):
+	github = fake([[_run(100, "completed")], [_run(202), _run(201), _run(100, "completed")]])
+	code, result = dw.dispatch("o/r", "security-audit.yml", "main", {"ref": "claude/a"}, 90, sleep=lambda _s: None)
+	assert code == 2
+	assert result["dispatched"] is True
+	assert result["ambiguous"] is True
+	assert result["candidate_run_ids"] == [202, 201]
+	assert "run_id" not in result
+	assert "never dispatch again" in result["error"]
+	assert len(github.dispatches) == 1
 
 
 def test_explicit_ref_skips_the_repository_read(fake):
@@ -103,7 +176,7 @@ def test_poll_failure_after_the_post_reports_dispatched_true(fake, monkeypatch):
 		calls["n"] += 1
 		raise dw.check_in_status.ReadError("proxy 502")
 
-	monkeypatch.setattr(dw, "find_new_run", flaky_find)
+	monkeypatch.setattr(dw, "new_runs", flaky_find)
 	code, result = dw.dispatch("o/r", "security-audit.yml", "main", {}, 90, sleep=lambda _s: None)
 	assert code == 2
 	assert result["dispatched"] is True
@@ -112,15 +185,45 @@ def test_poll_failure_after_the_post_reports_dispatched_true(fake, monkeypatch):
 
 
 def test_read_failure_before_the_post_reports_dispatched_false(monkeypatch, capsys):
+	# Without --ref the default branch must be read first: a failed read means
+	# nothing was sent, so the caller may dispatch again.
 	def boom(path):
 		raise dw.check_in_status.ReadError("proxy 403")
 
 	posted = []
 	monkeypatch.setattr(dw.check_in_status, "gh_api", boom)
 	monkeypatch.setattr(dw, "_post_dispatch", lambda *args: posted.append(args))
-	assert dw.main(["--repo", "o/r", "--workflow", "security-audit.yml", "--ref", "main"]) == 2
+	assert dw.main(["--repo", "o/r", "--workflow", "security-audit.yml"]) == 2
 	assert json.loads(capsys.readouterr().out)["dispatched"] is False
 	assert posted == []
+
+
+def test_run_list_read_failure_does_not_cancel_a_dispatch_github_names(fake):
+	# PR #5059 review round 1: the pre-dispatch run list only serves the
+	# polling fallback, so its failure must not stop a dispatch whose run id
+	# GitHub returns.
+	sleeps: list[int] = []
+	github = fake([[]], response=_response(31), run_reads={31: _run(31)}, run_list_error=dw.check_in_status.ReadError("proxy 502"))
+	code, result = dw.dispatch("o/r", "security-audit.yml", "main", {"ref": "claude/a"}, 90, sleep=sleeps.append)
+	assert code == 0
+	assert result["run_id"] == 31 and result["matched_by"] == "dispatch_response"
+	assert result["status"] == "queued"
+	assert len(github.dispatches) == 1 and sleeps == []
+
+
+def test_run_list_read_failure_without_a_response_id_never_guesses(fake, monkeypatch, capsys):
+	# No run id and no pre-dispatch list: every recent run looks new, so the
+	# helper reports the dispatch as sent and polls nothing.
+	sleeps: list[int] = []
+	monkeypatch.setattr(dw.time, "sleep", sleeps.append)
+	github = fake([[_run(40)]], response=None, run_list_error=dw.check_in_status.ReadError("proxy 502"))
+	assert dw.main(["--repo", "o/r", "--workflow", "internal-validate.yml", "--ref", "main"]) == 2
+	result = json.loads(capsys.readouterr().out)
+	assert result["dispatched"] is True
+	assert "run_id" not in result and "matched_by" not in result
+	assert "proxy 502" in result["error"] and "never dispatch again" in result["error"]
+	assert len(github.dispatches) == 1 and sleeps == []
+	assert github.reads == ["repos/o/r/actions/workflows/internal-validate.yml/runs?event=workflow_dispatch&per_page=20"]
 
 
 def test_main_keeps_dispatched_true_on_a_failed_poll(fake, monkeypatch, capsys):
@@ -129,7 +232,7 @@ def test_main_keeps_dispatched_true_on_a_failed_poll(fake, monkeypatch, capsys):
 	def flaky_find(repo, workflow, known_ids):
 		raise dw.check_in_status.ReadError("proxy 502")
 
-	monkeypatch.setattr(dw, "find_new_run", flaky_find)
+	monkeypatch.setattr(dw, "new_runs", flaky_find)
 	monkeypatch.setattr(dw.time, "sleep", lambda _s: None)
 	assert dw.main(["--repo", "o/r", "--workflow", "security-audit.yml", "--ref", "main"]) == 2
 	assert json.loads(capsys.readouterr().out)["dispatched"] is True
@@ -241,9 +344,34 @@ def test_post_dispatch_sends_ref_and_inputs_as_json(monkeypatch):
 		return Proc()
 
 	monkeypatch.setattr(dw.subprocess, "run", fake_run)
-	dw._post_dispatch("o/r", "security-audit.yml", "main", {"ref": "claude/x"})
+	assert dw._post_dispatch("o/r", "security-audit.yml", "main", {"ref": "claude/x"}) is None
 	assert captured["argv"][:5] == ["gh", "api", "-X", "POST", "repos/o/r/actions/workflows/security-audit.yml/dispatches"]
-	assert captured["body"] == {"ref": "main", "inputs": {"ref": "claude/x"}}
+	assert captured["body"] == {"ref": "main", "return_run_details": True, "inputs": {"ref": "claude/x"}}
+
+
+@pytest.mark.parametrize(
+	("stdout", "expected"),
+	[
+		('{"workflow_run_id": 5, "html_url": "u"}', {"workflow_run_id": 5, "html_url": "u"}),
+		("", None),
+		("not json", None),
+		("[1, 2]", None),
+	],
+)
+def test_post_dispatch_returns_the_response_object_or_none(monkeypatch, stdout, expected):
+	class Proc:
+		returncode = 0
+		stderr = ""
+
+	Proc.stdout = stdout
+	monkeypatch.setattr(dw.subprocess, "run", lambda argv, **kwargs: Proc())
+	assert dw._post_dispatch("o/r", "security-audit.yml", "main", {}) == expected
+
+
+def test_find_new_run_still_returns_the_newest_new_run(fake):
+	fake([[_run(3), _run(5), _run(4)]])
+	assert dw.find_new_run("o/r", "security-audit.yml", {3})["id"] == 5
+	assert dw.find_new_run("o/r", "security-audit.yml", {3, 4, 5}) is None
 
 
 def test_main_reports_invalid_workflow_with_exit_1(capsys):

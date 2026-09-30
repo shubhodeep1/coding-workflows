@@ -19,24 +19,40 @@ FILE must be one of DISPATCHABLE_WORKFLOWS, the same six files
 (CLAUDE.md §23.C command-invoked carve-out); any other file is refused
 without an API call. `--ref` defaults to the repository's default branch.
 
+The POST sends `return_run_details: true`, so GitHub answers with the id
+of the run this dispatch started (`workflow_run_id`). That id is exact even
+when another session dispatches the same workflow seconds apart (issue
+#5016: taking the newest new run returned the other session's run). Only
+when the response carries no run id does the helper fall back to polling for
+runs that did not exist before the POST, and then it never guesses between
+several.
+
 API calls (CLAUDE.md §15), all REST:
   - one read of the repository when `--ref` is omitted;
   - one read of the workflow's recent `workflow_dispatch` runs before the
-    dispatch, to know which runs already existed;
+    dispatch, to know which runs already existed (used only by the fallback,
+    so a failed read does not stop the dispatch);
   - one POST to `actions/workflows/<file>/dispatches`;
-  - one read of the recent runs every POLL_INTERVAL_SECONDS until a run that
-    did not exist before appears, at most `--timeout-seconds` (default 90)
-    worth of polls.
+  - with a run id in the response: one best-effort read of that run for
+    `status` and `created_at` (both `null` when the read fails);
+  - without one: one read of the recent runs every POLL_INTERVAL_SECONDS
+    until a run that did not exist before appears, at most
+    `--timeout-seconds` (default 90) worth of polls.
 
 Prints one JSON line. Exit 0 with `run_id`, `html_url`, `status`,
-`created_at` when the new run was found; exit 1 when the workflow is not
-allowlisted or an argument is invalid; exit 2 when a call failed or no new
-run appeared before the timeout. On exit 2, `dispatched` says whether the
-POST may have reached GitHub: once it is `true`, a failed or timed-out poll
-never means "dispatch again", because the run already exists or may exist.
-A POST that timed out, got a 5xx, or failed without an HTTP status counts as
-`true`, since GitHub can accept it before the failure; only a POST GitHub
-refused with a 4xx, or one `gh` could not start, reports `false`.
+`created_at`, and `matched_by` when the run was found: `dispatch_response`
+means GitHub named the run; `new_run` means the fallback saw exactly one new
+run, which may still be another session's, so the caller confirms its target
+ref before trusting it. Exit 1 when the workflow is not allowlisted or an
+argument is invalid. Exit 2 when a call failed, no new run appeared before
+the timeout, the fallback saw more than one new run (`ambiguous: true`
+with `candidate_run_ids`, newest first), or GitHub returned no run id after
+the pre-dispatch run list could not be read. On exit 2, `dispatched` says whether
+the POST may have reached GitHub: once it is `true`, a failed or timed-out
+poll never means "dispatch again", because the run already exists or may
+exist. A POST that timed out, got a 5xx, or failed without an HTTP status
+counts as `true`, since GitHub can accept it before the failure; only a POST
+GitHub refused with a 4xx, or one `gh` could not start, reports `false`.
 """
 
 from __future__ import annotations
@@ -85,17 +101,40 @@ def recent_run_ids(repo: str, workflow: str) -> set[int]:
 	return {run["id"] for run in payload.get("workflow_runs", []) if isinstance(run, dict) and isinstance(run.get("id"), int)}
 
 
-def find_new_run(repo: str, workflow: str, known_ids: set[int]) -> dict | None:
-	"""Return the newest run that is not in `known_ids`, or None (one REST read)."""
+def new_runs(repo: str, workflow: str, known_ids: set[int]) -> list[dict]:
+	"""Return every run that is not in `known_ids`, newest first (one REST read)."""
 	payload = check_in_status.gh_api(_runs_path(repo, workflow))
-	new_runs = [
+	fresh = [
 		run
 		for run in payload.get("workflow_runs", [])
 		if isinstance(run, dict) and isinstance(run.get("id"), int) and run["id"] not in known_ids
 	]
-	if not new_runs:
+	return sorted(fresh, key=lambda run: run["id"], reverse=True)
+
+
+def find_new_run(repo: str, workflow: str, known_ids: set[int]) -> dict | None:
+	"""Return the newest run that is not in `known_ids`, or None (one REST read)."""
+	fresh = new_runs(repo, workflow, known_ids)
+	return fresh[0] if fresh else None
+
+
+def _response_run_id(response: dict | None) -> int | None:
+	"""The run id GitHub returned for the dispatch, or None when it sent none."""
+	if not isinstance(response, dict):
 		return None
-	return max(new_runs, key=lambda run: run["id"])
+	run_id = response.get("workflow_run_id")
+	if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+		return None
+	return run_id
+
+
+def _read_run(repo: str, run_id: int) -> dict:
+	"""Best-effort read of one run; an empty dict when the read fails."""
+	try:
+		run = check_in_status.gh_api(f"repos/{repo}/actions/runs/{run_id}")
+	except (check_in_status.ReadError, KeyError, TypeError):
+		return {}
+	return run if isinstance(run, dict) else {}
 
 
 class DispatchUnconfirmed(check_in_status.ReadError):
@@ -107,9 +146,12 @@ class DispatchUnconfirmed(check_in_status.ReadError):
 _HTTP_CLIENT_ERROR_RE = re.compile(r"\(HTTP 4\d\d\)")
 
 
-def _post_dispatch(repo: str, workflow: str, ref: str, inputs: dict[str, str]) -> None:
-	"""POST the dispatch; raise ReadError when refused, DispatchUnconfirmed when it may have landed."""
-	body: dict[str, object] = {"ref": ref}
+def _post_dispatch(repo: str, workflow: str, ref: str, inputs: dict[str, str]) -> dict | None:
+	"""POST the dispatch and return GitHub's response object, or None when it sent no JSON object.
+
+	Raise ReadError when GitHub refused it, DispatchUnconfirmed when it may have landed.
+	"""
+	body: dict[str, object] = {"ref": ref, "return_run_details": True}
 	if inputs:
 		body["inputs"] = inputs
 	payload_file = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
@@ -136,6 +178,13 @@ def _post_dispatch(repo: str, workflow: str, ref: str, inputs: dict[str, str]) -
 		if _HTTP_CLIENT_ERROR_RE.search(output):
 			raise check_in_status.ReadError(message)
 		raise DispatchUnconfirmed(message)
+	# A 204 (no `return_run_details` support) prints nothing; anything that is
+	# not a JSON object is treated the same way, so the caller falls back.
+	try:
+		response = json.loads(proc.stdout or "")
+	except (TypeError, ValueError):
+		return None
+	return response if isinstance(response, dict) else None
 
 
 def parse_inputs(pairs: list[str]) -> dict[str, str]:
@@ -163,9 +212,17 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 		ref = check_in_status.gh_api(f"repos/{repo}").get("default_branch") or ""
 		if not ref:
 			raise check_in_status.ReadError(f"could not read the default branch of {repo}")
-	known_ids = recent_run_ids(repo, workflow)
+	# The list must be read before the POST (read after it, the new run could
+	# already be in it), but only the polling fallback uses it, so a failed read
+	# never cancels a dispatch GitHub can name exactly.
+	known_ids: set[int] | None = None
+	pre_dispatch_read_error = ""
 	try:
-		_post_dispatch(repo, workflow, ref, inputs)
+		known_ids = recent_run_ids(repo, workflow)
+	except (check_in_status.ReadError, KeyError, TypeError) as exc:
+		pre_dispatch_read_error = str(exc)
+	try:
+		response = _post_dispatch(repo, workflow, ref, inputs)
 	except DispatchUnconfirmed as exc:
 		return 2, {
 			"dispatched": True,
@@ -175,11 +232,33 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 		}
 	# From here on the run exists (or will), so every failure reports
 	# `dispatched: true`: a caller must look for the run, never dispatch again.
+	response_run_id = _response_run_id(response)
+	if response_run_id is not None:
+		run = _read_run(repo, response_run_id)
+		return 0, {
+			"dispatched": True,
+			"workflow": workflow,
+			"ref": ref,
+			"run_id": response_run_id,
+			"html_url": response.get("html_url") or run.get("html_url"),
+			"status": run.get("status"),
+			"created_at": run.get("created_at"),
+			"matched_by": "dispatch_response",
+		}
+	if known_ids is None:
+		# Without the pre-dispatch list every recent run looks new, so polling
+		# could only guess.
+		return 2, {
+			"dispatched": True,
+			"workflow": workflow,
+			"ref": ref,
+			"error": f"dispatched, but GitHub returned no run id and the {workflow} run list could not be read before the dispatch ({pre_dispatch_read_error}), so the new run cannot be told apart; confirm its target ref in `gh run list --workflow={workflow}` and never dispatch again",
+		}
 	attempts = max(1, timeout_seconds // POLL_INTERVAL_SECONDS)
 	for attempt in range(attempts):
 		sleep(POLL_INTERVAL_SECONDS)
 		try:
-			run = find_new_run(repo, workflow, known_ids)
+			fresh = new_runs(repo, workflow, known_ids)
 		except (check_in_status.ReadError, KeyError, TypeError) as exc:
 			return 2, {
 				"dispatched": True,
@@ -187,7 +266,19 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 				"ref": ref,
 				"error": f"dispatched, but reading the new {workflow} run failed ({exc}); check `gh run list --workflow={workflow}` before dispatching again",
 			}
-		if run is not None:
+		if len(fresh) > 1:
+			# Another dispatch of the same workflow landed in the same window
+			# and nothing tells the runs apart: report them, never pick one.
+			return 2, {
+				"dispatched": True,
+				"workflow": workflow,
+				"ref": ref,
+				"ambiguous": True,
+				"candidate_run_ids": [run["id"] for run in fresh],
+				"error": f"dispatched, but {len(fresh)} new {workflow} runs appeared and GitHub returned no run id; confirm which candidate ran this dispatch's inputs before recording one, and never dispatch again",
+			}
+		if fresh:
+			run = fresh[0]
 			return 0, {
 				"dispatched": True,
 				"workflow": workflow,
@@ -196,6 +287,7 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 				"html_url": run.get("html_url"),
 				"status": run.get("status"),
 				"created_at": run.get("created_at"),
+				"matched_by": "new_run",
 			}
 	return 2, {
 		"dispatched": True,
