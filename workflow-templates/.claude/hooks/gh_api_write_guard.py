@@ -172,7 +172,11 @@ _ROUTINE_ENDPOINTS = (
 # carve-out for `/implement-plan-claude`). Dispatching the same file through
 # `gh api .../actions/workflows/<file>/dispatches` is routine; any other
 # workflow is not. `tests/test_gh_api_write_guard.py` keeps this set equal to
-# the allow rules.
+# the allow rules. `internal-review.yml` is deliberately absent (issue #5375):
+# a raw dispatch could name any pushable branch as `ref`, and this hook cannot
+# verify the default branch without an API call, so it asks.
+# `.claude/scripts/dispatch_workflow.py` is that workflow's only pre-approved
+# path, and it pins the dispatch to the default branch.
 DISPATCHABLE_WORKFLOWS = frozenset(
 	{
 		"security-audit.yml",
@@ -181,7 +185,6 @@ DISPATCHABLE_WORKFLOWS = frozenset(
 		"ai-validate.yml",
 		"review_autofix.yml",
 		"ai-review.yml",
-		"internal-review.yml",
 	}
 )
 _ROUTINE_ENDPOINTS += (

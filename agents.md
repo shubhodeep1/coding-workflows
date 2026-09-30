@@ -1060,8 +1060,12 @@ reviews, comments, and conflicts stay a direct §12 request.
   `review` claim on the head came from a claimant the caller does not
   ignore. `/fix-claude-pr` answers `review-stalled` by claiming the head
   (`review`) and dispatching `internal-review.yml` (`ai-review.yml` in
-  consumer repos) with `pr_number` through `dispatch_workflow.py`, which
-  now allows `internal-review.yml`. A head already re-dispatched is held
+  consumer repos) with `pr_number` through `dispatch_workflow.py`. That
+  helper is the only pre-approved path for `internal-review.yml` (it has no
+  `gh workflow run` allow rule, and the `gh api` guard asks on a raw
+  dispatch of it): it dispatches only from the default branch the API
+  reports, refuses any other `--ref`, and accepts only a numeric
+  `pr_number` (issue #5375). A head already re-dispatched is held
   and asked about. The project checker's plain `--pr` mode is unchanged;
   the catch-all covers `/implement-plan-claude` PRs.
 
@@ -1115,8 +1119,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   are no `gh api` ask rules any more: `.claude/hooks/gh_api_write_guard.py`
   (CLAUDE.md §23.H, a `PreToolUse` hook on `Bash`) forces the prompt for
   every `gh api` write that is not a §23.B routine write to the local
-  repository (routine includes dispatching the seven workflows allowed as
-  `gh workflow run <file> *`, kept equal by a test), allows reads and
+  repository (routine includes dispatching the six workflows allowed as
+  `gh workflow run <file> *`, kept equal by a test; a raw
+  `internal-review.yml` dispatch asks, issue #5375), allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
   to the allow list or the Auto-mode classifier beside anything else (loops,
@@ -1153,7 +1158,12 @@ reviews, comments, and conflicts stay a direct §12 request.
   ([Helpers](.claude/commands/implement-plan-claude.md#helpers)):
   - `.claude/scripts/dispatch_workflow.py --repo --workflow [--ref] [--input
     K=V …]`: dispatches one of `DISPATCHABLE_WORKFLOWS` (kept equal to the
-    `gh workflow run <file> *` allow rules by a test), records the recent
+    `gh workflow run <file> *` allow rules plus
+    `DEFAULT_BRANCH_ONLY_WORKFLOWS` by a test). A workflow in
+    `DEFAULT_BRANCH_ONLY_WORKFLOWS` (`internal-review.yml`, which has no
+    allow rule) is always dispatched on the default branch it reads from the
+    API; another `--ref`, a missing or non-numeric `pr_number`, or any other
+    input exits 1 before the POST (issue #5375). It records the recent
     `workflow_dispatch` run ids first, and polls every 5 s (90 s max) for a
     run that was not there before. Replaces `gh workflow run` +
     `gh run list -L 1`, which could return the previous run. Exit 0 with
