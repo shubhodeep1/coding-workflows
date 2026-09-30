@@ -1182,7 +1182,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   When that resolution is not evident, the session aborts and stops as it
   does on any conflict it cannot resolve, and never continues the fix on
   the unsynced head (issue #5258). A merged `settings.json`
-  change applies from the next session. Local git only, no GitHub API
+  change is confirmed by the settings check below before anything is
+  pushed. Local git only, no GitHub API
   calls. The SessionStart hook logs the drift as
   `[session-start] claude_assets=stale …`, or `claude_assets=diverged …`
   when shallow history has no merge base (stable log prefixes). Tests:
