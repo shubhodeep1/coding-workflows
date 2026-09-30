@@ -292,8 +292,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     or logs that are not on the page. `decide` then prints `restart` and
     `requeue` entries. A restart needs all five conditions: no enabled
     trigger bound to the checker or to a sibling checker of the same slug;
-    the issue open and not `ai:claude-blocked`; the checker idle and not
-    `need_input`; no active project session (membership by
+    the issue open and not `ai:claude-blocked`; the checker idle, not
+    `need_input`, and not itself created or updated within 90 minutes
+    (`checker_active_recently`: it may have re-armed or started a stage after
+    the trigger and session pages were read); no active project session (membership by
     `parent_session_id`, `current_branches`, or title; active means
     `RUNNING`, `REQUIRES_ACTION`, `need_input`, or created or updated within
     90 minutes); and no `ai-checker-restart:<YYYYMMDDTHHMMZ>` tag younger

@@ -56,7 +56,10 @@ Restart (Q63, all must hold; the first that fails is the `skipped` reason):
      one (`sibling_checker_alive`);
   3. the checker is `SESSION_STATUS_IDLE`, its bucket is not `BLOCKED`, and
      its `status_category` is not `need_input`;
-  4. no other non-archived session of the project is `RUNNING`,
+  4. the checker itself was not created or updated in the last
+     `ACTIVE_WINDOW_MINUTES` (a checker that re-armed or started a stage after
+     the trigger and session pages were read looks idle with nothing pending),
+     and no other non-archived session of the project is `RUNNING`,
      `REQUIRES_ACTION`, or `need_input`, or was created or updated in the last
      `ACTIVE_WINDOW_MINUTES` (90). A session belongs to the project when its
      `parent_session_id` is the checker, its current branch is
@@ -645,6 +648,13 @@ def decide(state: dict, lookups: dict[str, Any], now: dt.datetime) -> dict:
 			continue
 		if view["category"] == CATEGORY_NEED_INPUT:
 			skip(checker, slug, "checker_needs_input")
+			continue
+		if _is_active(view, now):
+			# The trigger page (pickup step 1) and the session page are read before the
+			# lookups. A checker that re-armed, or started its next stage, after they
+			# were read looks idle with nothing pending; its own last turn is the only
+			# fresh signal, so a checker that ran in the window is not dead.
+			skip(checker, slug, f"checker_active_recently: {view['updated_at'] or view['created_at']}")
 			continue
 		active = active_project_session(sessions, checker, slug, {checker, state["self"]}, now)
 		if active:

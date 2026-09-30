@@ -5,7 +5,7 @@ A project checker keeps its chain alive by re-arming itself every hour. When a r
 
 | The numbers that matter | Value |
 | --- | --- |
-| Quiet window before a restart | 90 minutes with no project session created, updated, running, or waiting |
+| Quiet window before a restart | 90 minutes with no project session, the checker included, created or updated, and none running or waiting |
 | Restart cooldown per checker | 3 hours (session tag) |
 | Re-queue cooldown per issue | 24 hours (any trusted `/reclarify`) |
 | `get_session` lookups per wake | at most 8, rotated hourly |
@@ -15,4 +15,4 @@ What this means for operators: a checker that dies no longer needs the Master po
 
 ### For contributors
 
-The page read is the newest `list_sessions` page, because condition 4 needs every session created in the last 90 minutes. Older checkers are found from pending `implement-plan <slug>: safety net` prompts and from progress logs, which are read over git (`git ls-remote` plus one shallow `git fetch`). A trigger page with `has_more` restarts nothing. Tests live in `tests/test_claude_checker_restart.py`, with their own `ci.yml` step.
+The page read is the newest `list_sessions` page, because condition 4 needs every session created in the last 90 minutes. Older checkers are found from pending `implement-plan <slug>: safety net` prompts and from progress logs, which are read over git (`git ls-remote` plus one shallow `git fetch`). A trigger page with `has_more` restarts nothing and re-queues nothing. A checker that itself ran in the last 90 minutes is kept, because it may have re-armed or started its next stage after the trigger and session pages were read. Tests live in `tests/test_claude_checker_restart.py`, with their own `ci.yml` step.

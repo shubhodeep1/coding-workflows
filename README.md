@@ -1290,9 +1290,13 @@ all five conditions hold:
 1. no enabled trigger is bound to it;
 2. for an `issue-<N>-…` project, the issue is open and not `ai:claude-blocked`;
 3. it is idle, and neither `need_input` nor waiting on a permission prompt;
-4. no other session of the project is running, waiting, or was created or
-   updated in the last 90 minutes. A session belongs to the project by
-   lineage, branch, or title;
+4. neither the checker itself nor any other session of the project was
+   created or updated in the last 90 minutes, and no other session of the
+   project is running or waiting. A session belongs to the project by
+   lineage, branch, or title. The checker's own last turn counts because
+   the trigger and session lists are read before the lookups, so a checker
+   that re-armed or started its next stage after they were read looks idle
+   with nothing pending;
 5. it was not restarted in the last 3 hours.
 
 A restart is one trigger, `implement-plan <slug>: check-in`, two minutes out.

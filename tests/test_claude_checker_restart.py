@@ -288,8 +288,28 @@ def test_condition_4_the_pickup_itself_never_counts(no_api):
 	assert len(_decide(_state([pickup, _checker()]))["restart"]) == 1
 
 
-def test_condition_4_the_checker_own_recent_activity_does_not_count(no_api):
-	assert len(_decide(_state([_checker(updated=MINUTES_AGO)]))["restart"]) == 1
+@pytest.mark.parametrize("kwargs", [{"updated": MINUTES_AGO}, {"created": MINUTES_AGO, "updated": MINUTES_AGO}])
+def test_condition_4_the_checker_own_recent_activity_keeps_it(no_api, kwargs):
+	"""A checker that re-armed after step 1's trigger page was read looks idle with no trigger."""
+	result = _decide(_state([_checker(**kwargs)]))
+	assert result["restart"] == []
+	assert _reasons(result)[CHECKER] == f"checker_active_recently: {MINUTES_AGO}"
+
+
+def test_condition_4_the_checker_own_activity_older_than_the_window_does_not_count(no_api):
+	assert len(_decide(_state([_checker(updated=_ago(minutes=91))]))["restart"]) == 1
+
+
+def test_condition_4_a_looked_up_checker_that_handed_off_after_the_page_is_kept(no_api):
+	"""Live case (2026-09-30, #4723): the checker started its next stage after the session page
+	was read, then went idle. The new stage is not on the page and no trigger is bound to the
+	checker, so only the checker's own `updated_at` shows it is alive."""
+	stage = _session("session_stage", f"implement-plan {SLUG} — final-merge 1/1", updated=HOURS_AGO)
+	state = _state([stage], [_safety_net("session_stage")])
+	assert restart.lookups_needed(state, NOW) == [CHECKER]
+	result = _decide(state, {CHECKER: {"ccr": _checker(updated=_ago(minutes=2))}})
+	assert result["restart"] == []
+	assert _reasons(result)[CHECKER] == f"checker_active_recently: {_ago(minutes=2)}"
 
 
 def test_condition_5_a_recent_restart_tag_keeps_the_checker(no_api):
