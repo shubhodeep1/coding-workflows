@@ -109,6 +109,82 @@ PY
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 
+# Print $1 when it is an integer >= $3, else warn and print the default $2.
+reviewer_positive_int_or_default() {
+  local raw_value="${1:-}"
+  local default_value="$2"
+  local minimum_value="$3"
+  local setting_name="$4"
+
+  if [ -z "${raw_value}" ]; then
+    printf '%s\n' "${default_value}"
+    return 0
+  fi
+  if [[ "${raw_value}" =~ ^[0-9]{1,6}$ ]] && [ "${raw_value}" -ge "${minimum_value}" ]; then
+    printf '%s\n' "$((10#${raw_value}))"
+    return 0
+  fi
+  echo "::warning::${setting_name}='${raw_value}' is not an integer >= ${minimum_value}; using ${default_value}." >&2
+  printf '%s\n' "${default_value}"
+}
+
+# Reviewer loop guards, enforced by the per-attempt watchdog.
+# REVIEWER_MAX_STEPS hard-stops an attempt once it starts more than that many
+# OpenCode turns and fails the slot without a retry. REVIEWER_TOOL_REPEAT_LIMIT
+# ends an attempt once that many consecutive tool calls are identical (same
+# tool, same input) as a retryable failure. Real reviewer passes peaked at 101
+# turns; x-ai/grok-4.20 looped for 2,205 turns on one repeated grep (run
+# 35949371968). OpenCode's own agent `steps` setting only asks the model to
+# stop and keeps offering tools, so it is not used.
+REVIEWER_MAX_STEPS_EFFECTIVE="$(reviewer_positive_int_or_default "${REVIEWER_MAX_STEPS:-}" 120 1 REVIEWER_MAX_STEPS)"
+REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE="$(reviewer_positive_int_or_default "${REVIEWER_TOOL_REPEAT_LIMIT:-}" 10 2 REVIEWER_TOOL_REPEAT_LIMIT)"
+
+# Print how many turns (OpenCode `step_start` events) the JSON event stream $1
+# has started; 0 when the file is missing or empty. The match tolerates
+# whitespace around the colon so a serializer change cannot zero the count.
+reviewer_turn_count() {
+  local structured_file="$1"
+  local turn_count=""
+
+  [ -s "${structured_file}" ] || { printf '0\n'; return 0; }
+  turn_count="$(grep -cE '"type"[[:space:]]*:[[:space:]]*"step_start"' "${structured_file}" 2>/dev/null || true)"
+  printf '%s\n' "${turn_count:-0}"
+}
+
+# Succeeds (and prints the tool name) when the last $2 completed tool calls in
+# the OpenCode JSON event stream $1 are identical: same tool, same input. The
+# input comparison mirrors OpenCode's own doom-loop check, which only looks
+# inside a single model response and so missed one-call-per-turn loops.
+# Unreadable or partial event lines are skipped: they never count toward a
+# repeat and never hide the valid calls around them. The tail reads twice the
+# limit so a few skipped lines still leave a full window of valid calls.
+reviewer_tool_repeat_detected() {
+  local structured_file="$1"
+  local repeat_limit="$2"
+
+  [ -s "${structured_file}" ] || return 1
+  grep -E '"type"[[:space:]]*:[[:space:]]*"tool_use"' "${structured_file}" 2>/dev/null \
+    | tail -n "$((repeat_limit * 2))" \
+    | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json
+import sys
+
+limit = int(sys.argv[1])
+keys = []
+for raw_line in sys.stdin:
+	try:
+		event = json.loads(raw_line)
+		part = event["part"]
+		keys.append((part["tool"], json.dumps(part["state"].get("input"), sort_keys=True)))
+	except (ValueError, KeyError, TypeError, AttributeError):
+		continue
+window = keys[-limit:]
+if len(window) < limit or len(set(window)) != 1:
+	sys.exit(1)
+print(window[0][0])
+' "${repeat_limit}"
+}
+
 emit_run_budget_gate_note() {
   local budget_scope="$1"
   local minimum_required_secs="${2:-1}"
@@ -1447,7 +1523,7 @@ resolve_review_tier_active_models() {
       selected_raw="${REVIEW_TIER_LITE_REVIEWER_SLUG:-qwen/qwen3.7-plus}"
       ;;
     standard)
-      selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20}"
+      selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna}"
       ;;
     *)
       reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
@@ -1966,17 +2042,20 @@ if [ ! -f "${SUMMARISER_SCRIPT}" ]; then
   exit 1
 fi
 
+# Reviewers run with the reviewer-role OpenCode config, which rejects reads
+# outside the checkout. PREVIOUS_REVIEWS_DIR and RUNTIME_CONTEXT_DIR live under
+# /tmp, so a reviewer told to read them has the read rejected and can end its
+# turn with no output (runs 36656409877, 36666750539, 36678296691).
 PROMPT_ARTIFACT_PATH_HINT="$(printf '%s\n' \
   'WORKING DIRECTORY + ARTIFACT PATH (MANDATORY)' \
   'The workflow runs from the repository root.' \
-  "All transient reviewer artifacts are under ${PREVIOUS_REVIEWS_DIR}." \
+  'Other reviewers'"'"' outputs are not files you can read: they sit outside the checkout, where reads are rejected.' \
   'Do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow.' \
-  "Example file to read: ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt")"
+  'Review from this prompt and the repository files.')"
 PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
-  'RUNTIME CONTEXT FILES (READ-ONLY)' \
-  "Runtime context is stored under ${RUNTIME_CONTEXT_DIR}." \
-  'Useful files include git_status.txt, git_diff_stat.txt, shallow_tree.txt, environment_sorted.txt, recent_commits.txt, branches.txt, workflow_snapshot.yml, and run_logs_best_effort.txt.' \
-  "Example file to read: ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
+  'RUNTIME CONTEXT FILES (NOT READABLE)' \
+  'The workflow keeps runtime context files outside the checkout, where reads are rejected.' \
+  'Do not try to open them; use the context inlined in this prompt and the repository files.')"
 
 # Detect whether this is the first review iteration (no prior AI autofix run).
 # Two conditions cover all first-run states:
@@ -2523,18 +2602,10 @@ Identify issues that would only appear during runtime execution rather than stat
 Verify proposed issues against end-to-end system behavior, not only static text patterns.
 Confirm whether each issue can realistically reproduce in CI runtime with current script flow and guards.
 
-USING RUNTIME CONTEXT FILES
-Runtime diagnostics are available under ${RUNTIME_CONTEXT_DIR}.
-Use these files when needed to validate runtime assumptions:
-- git_status.txt
-- git_diff_stat.txt
-- shallow_tree.txt
-- environment_sorted.txt
-- recent_commits.txt
-- branches.txt
-- workflow_snapshot.yml
-- run_logs_best_effort.txt
-Example file to read: ${RUNTIME_CONTEXT_DIR}/git_status.txt
+USING RUNTIME CONTEXT
+Runtime diagnostics files are kept outside the checkout, where reads are rejected.
+Do not try to open them. Validate runtime assumptions against the inlined
+context in this prompt and the repository files.
 
 Avoid reviewing unrelated areas of the repository.
 Do not suggest repository-wide refactors.
@@ -2602,9 +2673,8 @@ unless the original task explicitly requires them.
 Web search is strictly forbidden.
 Do not access the internet.
 All required context is already provided.
-reviewer artifacts are stored under ${PREVIOUS_REVIEWS_DIR}
+reviewer artifacts are kept outside the checkout, where reads are rejected; do not try to open them
 do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
-use the read tool for files such as ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt
 use read, grep, and glob tools only for repository inspection
 do not modify repository files
 do not create new files except your assigned reviewer output/log files managed by the workflow
@@ -3588,6 +3658,11 @@ reviewer_classify_retryable_failure() {
   local stderr_file="$3"
   local stall_state="${4:-}"
 
+  # The reviewer turn cap is a final stop: never retried or failed back.
+  if [ "${wd_reason}" = "max_steps" ]; then
+    return 1
+  fi
+
   if [ "${stall_state}" = "killed" ]; then
     printf 'stall_guard\n'
     return 0
@@ -3596,6 +3671,10 @@ reviewer_classify_retryable_failure() {
   case "${wd_reason}" in
     idle_timeout|max_wall)
       printf 'timeout\n'
+      return 0
+      ;;
+    tool_repeat)
+      printf 'tool_repeat\n'
       return 0
       ;;
   esac
@@ -3904,6 +3983,23 @@ execute_reviewer_attempt() {
         rm -f "${hb_file}"
         exit 143
       fi
+      turns_started="$(reviewer_turn_count "${tmp_structured_output}")"
+      if [ "${turns_started}" -gt "${REVIEWER_MAX_STEPS_EFFECTIVE}" ] 2>/dev/null; then
+        echo "Reviewer ${effective_model} killed — started turn ${turns_started}, over the turn limit of ${REVIEWER_MAX_STEPS_EFFECTIVE}." | tee -a "${log_file}" >&2
+        printf 'max_steps' > "${wd_reason_file}"
+        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        _reviewer_kill_pid "${cpid}"
+        rm -f "${hb_file}"
+        exit 146
+      fi
+      if repeat_tool="$(reviewer_tool_repeat_detected "${tmp_structured_output}" "${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}")"; then
+        echo "Reviewer ${effective_model} killed — ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE} consecutive identical '${repeat_tool}' tool calls (repeat limit: ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE})." | tee -a "${log_file}" >&2
+        printf 'tool_repeat' > "${wd_reason_file}"
+        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        _reviewer_kill_pid "${cpid}"
+        rm -f "${hb_file}"
+        exit 145
+      fi
 
       wd_iter=$((wd_iter + 1))
       if [ $((wd_iter % 9)) -eq 0 ]; then
@@ -4014,6 +4110,13 @@ execute_reviewer_attempt() {
     wd_reason="$(cat "${wd_reason_file}" 2>/dev/null || true)"
   fi
   rm -f "${wd_reason_file}"
+  # A loop-guard kill must never be read as a clean exit, even if OpenCode
+  # handled SIGTERM and left partial text behind.
+  case "${wd_reason}" in
+    max_steps|tool_repeat)
+      [ "${cmd_rc}" -ne 0 ] || cmd_rc=143
+      ;;
+  esac
   if stall_state="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
     :
   elif [ -s "${stall_status_file}" ]; then
@@ -4104,6 +4207,12 @@ execute_reviewer_attempt() {
         max_wall)
           echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (max wall ${reviewer_max_wall}s, exit=${cmd_rc})." | tee -a "${log_file}"
           ;;
+        tool_repeat)
+          echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (tool repeat limit ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}, exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+        max_steps)
+          echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (turn limit ${REVIEWER_MAX_STEPS_EFFECTIVE}, exit=${cmd_rc}); not retried." | tee -a "${log_file}"
+          ;;
         *)
           echo "Reviewer slot ${slot_model} (${effective_model}) execution failed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
           ;;
@@ -4126,10 +4235,10 @@ execute_reviewer_attempt() {
   REVIEWER_ATTEMPT_WD_REASON="${wd_reason}"
   REVIEWER_ATTEMPT_CMD_RC="${cmd_rc}"
   case "${stall_state}:${wd_reason}:${cmd_rc}" in
-    killed:*:*|*:idle_timeout:*|*:*:137)
+    killed:*:*|*:idle_timeout:*|*:tool_repeat:*|*:*:137)
       emit_reviewer_substate "Stalled" "${attempt_number}" "${tmp_stderr}"
       ;;
-    *:max_wall:*|*:*:124|*:*:143)
+    *:max_wall:*|*:max_steps:*|*:*:124|*:*:143)
       emit_reviewer_substate "TimedOut" "${attempt_number}" "${tmp_stderr}"
       ;;
     *)
@@ -4890,9 +4999,9 @@ build_cross_pollination_summary() {
     echo ""
     echo "The consolidated ledger below was produced by ${XPOLL_SUMMARISER_MODEL:-openai/gpt-6-luna}"
     echo "from all pass-1 reviewer outputs (CONSENSUS FINDINGS + CONSENSUS TASK GAPS blocks + per-reviewer sections)."
-    echo "The raw per-reviewer outputs remain on disk at:"
-    echo "  ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt"
-    echo "Read a raw file only if a ledger entry is ambiguous or lacks detail."
+    echo "This ledger is the only pass-1 input you get. Do not try to open the raw"
+    echo "pass-1 outputs: they sit outside the checkout, where reads are rejected."
+    echo "If a ledger entry is ambiguous, verify it against the code instead."
     echo ""
     if [ -s "${ledger_file}" ]; then
       cat "${ledger_file}"
@@ -4969,8 +5078,8 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   # "primary review target" — most recent AI-generated changes).
   #
   # Both PASS2_REASONING_SMALL and PASS2_REASONING_LARGE fall back to
-  # xhigh here (reviewer slots are non-GPT models, outside the gpt-6-sol
-  # `high` default), so the size gate is a no-op at script-default settings. The gate structure is retained so
+  # xhigh here (reviewer slots, including openai/gpt-6-luna, sit outside the
+  # gpt-6-sol editor `high` default), so the size gate is a no-op at script-default settings. The gate structure is retained so
   # operators can override REVIEWER_PASS2_REASONING_SMALL and/or
   # REVIEWER_PASS2_REASONING_LARGE per-repo to differentiate small vs
   # large diffs (e.g. drop small-diff effort to medium for cost).
