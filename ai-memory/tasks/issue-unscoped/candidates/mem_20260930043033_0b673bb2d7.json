@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_nonblocking.py:247-251, 788-806 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_paragraph_names_path()` rejects valid path spellings when a path is followed by `/` or `-`, because `MENTION_PATH_AFTER` does not allow those characters after the match.\n  WHY: The cited boundary check blocks the stated sub-name and suffix cases, and the reviewer notes that no new probe cases exercise them.\n- README.md:1522-1524 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The inserted wording has a dangling closing parenthesis.\n  WHY: The reviewer reports that the extra `)` makes the rendered sentence read awkwardly; the corresponding wording in `agents.md:124-128` does not have this issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The pass-2 cross-pollination header in `scripts/review_run_reviewers.sh` now tells reviewers to put the `consensus_id:` line inside the finding's own block.\" (PR description, plan Phase 1 step 5)\n  expected_change_site: `scripts/review_run_reviewers.sh` (`build_cross_pollination_summary` echo)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `scripts/review_run_reviewers.sh` is not in `pr_changed_files.txt` and no hunk in `original_pr_diff.patch` touches it; `docs/implement-plan/issue-4975-bind-flagger-citation-to-finding.md:17` records Phase 1 as PR #5032 merged 2026-09-29, and 4 of 6 consensus reviewers confirm the header change already landed in #5032, so the reviewer says this is not a new requirement for this fix.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_claude_fixer_nonblocking.py:788-806; scripts/review_claude_fixer_nonblocking.py:247-251 | confidence=3\n  PROBLEM: `MENTION_PATH_AFTER` blocks intended positive cases when a path is followed by `/` or `-`, such as `File: src/routes/+page.svelte/sub#Foo:42` and `File: src/routes/+page.svelte-suffix`.\n  WHY: The reviewer says the boundary rejects these path continuations, while the plan-stated over-match intent says a `/` before the match still counts for fail-closed consistency; no new probe cases exercise this.\n- README.md:1522-1524 | severity=NIT | confidence=4\n  PROBLEM: The inserted clause leaves a dangling closing parenthesis.\n  WHY: The rendered sentence has an extra `)` before `or its consensus_id`; the reviewer notes the corresponding wording in `agents.md:124-128` is integrated without it.\n- TASK_GAP\n  Requirement: \"The pass-2 cross-pollination header in `scripts/review_run_reviewers.sh` now tells reviewers to put the `consensus_id:` line inside the finding's own block.\" (PR description, plan Phase 1 step 5)\n  Expected change site: scripts/review_run_reviewers.sh (the `build_cross_pollination_summary` echo)\n  Evidence of absence: scripts/review_run_reviewers.sh is not in `pr_changed_files.txt` and no hunk in `original_pr_diff.patch` touches it. The progress log (docs/implement-plan/issue-4975-bind-flagger-citation-to-finding.md:17) records Phase 1 as PR #5032 merged 2026-09-29, and 4 of 6 consensus reviewers (deepseek, minimax, qwen, z-ai) confirm the header change already landed in #5032. The plan-header paragraph still describes the post-Phase-1 state as a current behavior, not a new requirement for this fix. Skipping with explicit deferral \u2014 Phase 1 PR #5032 shipped it.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a9488487d00f70b3224762aaaa82522f98e79110b56e2c428d16ac50c8bd6c6c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5428,
+    "run_id": "36666923122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36666923122",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930043033_0b673bb2d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5428,
+    "run_id": "36666923122"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T04:30:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
