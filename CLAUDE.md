@@ -2163,8 +2163,8 @@ sweep runs in the sessions that create them, never in Actions:
 
 Three kinds of automation session are never archived by the flows that start
 them: `/fix-claude-pr` fixer and hold sessions that were never handed their
-terminal PR back, issue-start sessions after the `/implement-plan-claude`
-chain has moved past them, and §26.D report sessions (issue #4887). The Claude
+terminal PR back, issue-start sessions after their issue is closed, and
+§26.D report sessions (issue #4887). The Claude
 issue pickup archives them on its hourly `— wake.`
 (`.claude/commands/claude-issue-pickup.md` step 3a), so a session left open
 no longer needs an operator's hand:

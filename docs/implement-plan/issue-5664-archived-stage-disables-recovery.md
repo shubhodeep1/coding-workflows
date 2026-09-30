@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: phase 1/1 review round 1 (session_01T5DbH6macowKZTrr6tHxa3): 1 valid finding (5 reviewers, same task gap) fixed: docs/operations/master-session.md Q61 now states the closed-issue-only rule.
+- Last note: phase 1/1 review round 2 (session_01PZfGvYYzZmAeAHF3J2nzKh): 1 valid consensus task gap (5 reviewers) fixed: the summary paragraphs of scripts/claude_session_janitor.py and CLAUDE.md §26.I (and the changelog lead) no longer say issue-start sessions are handled after the chain moved past them.
 
 ## Phases
 1. [ ] Phase 1 — issue-start sessions archive only on a closed issue
@@ -19,7 +19,7 @@
    - `tests/test_claude_session_janitor.py`: failed-start and live-stage keep tests; pickup-titles test
    - CLAUDE.md §26.I, `README.md`, `agents.md`, `changelog.d/4887-archive-finished-sessions.md`
    - `docs/plans/issue-4887-archive-finished-sessions-plan.md`: one Notes line
-   - PR #5694 open; review rounds: 1; interventions: 0
+   - PR #5694 open; review rounds: 2; interventions: 0
    - Done: janitor suite, changelog fragment contract, and section-number tests pass; ruff clean
 
 ## Conformance
@@ -41,6 +41,7 @@
 
 ## Lessons
 - [source:intervention] When a rule changes, grep every operator-facing doc for its old wording, including docs/operations/master-session.md standing decisions, not only the files the plan lists. (files: docs/operations/master-session.md)
+- [source:intervention] When a rule narrows, update the summary paragraph at the top of each description (module docstring, section intro, changelog lead) as well as the detailed rule below it; reviewers read the two against each other. (files: scripts/claude_session_janitor.py, CLAUDE.md)
 
 ## Notes
 - Security pass skip reason: `security_pass_skip.py` → `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`.

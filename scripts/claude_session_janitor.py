@@ -3,8 +3,8 @@
 
 Three kinds of automation session are never archived by the flows that start
 them: `/fix-claude-pr` fixer and hold sessions after their pull request is
-terminal, issue-start sessions after the `/implement-plan-claude` chain has
-moved past them, and CLAUDE.md §26.D report sessions (issue #4887). This script
+terminal, issue-start sessions after their issue is closed, and CLAUDE.md
+§26.D report sessions (issue #4887). This script
 decides which of them to archive; the Claude issue pickup lists one page of
 sessions, runs this script, re-checks each printed session with `get_session`,
 and calls `archive_session` on it. The script never archives anything itself.
