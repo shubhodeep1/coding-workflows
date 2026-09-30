@@ -396,6 +396,39 @@ def test_checked_out_sha_return_codes() -> None:
 			stub.cleanup()
 
 
+def test_checked_out_sha_treats_an_empty_or_whitespace_only_log_as_retryable() -> None:
+	# GitHub can serve an empty log body for a job that has only just
+	# finished, while its log is still being stored (issue #5689). That is
+	# not evidence the run never checked out the PR, so it is rc=1 (the
+	# callers poll again), never rc=2 (rejected for the rest of the step).
+	cases = [
+		("empty body", "", 1, ""),
+		("whitespace-only body", " \t\n\n  \n", 1, ""),
+		("CRLF-only body", "\r\n\r\n", 1, ""),
+		("non-empty body with no line", _log("2026-09-29T10:00:01Z nothing here"), 2, ""),
+		(
+			"genuine line",
+			_log(
+				"",
+				f"2026-09-29T10:00:02.1234567Z Captured INITIAL_HEAD_SHA={BAIT} for stale-base detection.",
+				f"2026-09-29T10:09:00.0000000Z Captured INITIAL_HEAD_SHA={OTHER} for stale-base detection.",
+			),
+			0,
+			BAIT,
+		),
+	]
+	for label, log, expected_rc, expected_out in cases:
+		stub = GhStub()
+		try:
+			stub.serve(JOBS_PATH, JOBS)
+			stub.serve(LOG_PATH, log)
+			assert _call_helper(stub, "smoke_review_checked_out_sha", REPO, "100") == (expected_rc, expected_out), label
+			paths = [next(a for a in call if a.startswith("repos/")) for call in stub.calls()]
+			assert paths == [JOBS_PATH, LOG_PATH], (label, paths)
+		finally:
+			stub.cleanup()
+
+
 def test_checked_out_sha_rejects_bad_input_without_calling_gh() -> None:
 	stub = GhStub()
 	try:

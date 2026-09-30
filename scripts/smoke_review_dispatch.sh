@@ -114,8 +114,10 @@ smoke_review_pr_named_runs()
 #   Calls:   1 REST read of the run's jobs (per_page=100), then at most 1 read
 #            of the codex-agent job's log (the same job-name match Phase 4's
 #            live-log probe uses).
-#   Returns: 0 found; 1 API failure or malformed jobs payload (retryable);
-#            2 the log was read but has no such line; 3 the run has no
+#   Returns: 0 found; 1 API failure, malformed jobs payload, or a log body
+#            that is empty or whitespace-only (retryable: the job's log may
+#            still be being stored); 2 the log was read, is not empty, and
+#            has no such line; 3 the run has no
 #            codex-agent job; 4 invalid input.
 smoke_review_checked_out_sha()
 {
@@ -162,6 +164,14 @@ smoke_review_checked_out_sha()
 	# even when stdout is a file, and every genuine run read as rc=1 (the
 	# same fix as scripts/workflow_failure_heal_intake.sh).
 	if ! gh api --allow-escape-sequences "repos/${repo}/actions/jobs/${job_id}/logs" > "${log_file}" 2>/dev/null; then
+		rm -f "${log_file}"
+		return 1
+	fi
+	# GitHub can serve an empty body for a job whose log is still being
+	# stored (issue #5689): that proves nothing about the checkout, so it is
+	# retryable, not rc=2. grep reads the file itself, with no pipe, so a
+	# caller's pipefail cannot turn a non-empty log into a false "empty".
+	if ! grep -aq '[^[:space:]]' "${log_file}"; then
 		rm -f "${log_file}"
 		return 1
 	fi

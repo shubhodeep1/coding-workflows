@@ -3,22 +3,22 @@
 - Plan: docs/plans/issue-5689-smoke-empty-job-log-retryable-plan.md
 - Source issue: shubhodeep1/coding-workflows#5689
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch
-- Project branch: claude/implement-plan-issue-5689-smoke-empty-job-log-retryable   Final PR: pending
+- Project branch: claude/implement-plan-issue-5689-smoke-empty-job-log-retryable   Final PR: #5702 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (number in the stage report and the checker's resume block)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; implementing phase 1.
+- Last note: phase 1 implemented and verified (26/26 checks in tests/test_smoke_review_dispatch.py); phase PR opened against the project branch.
 
 ## Phases
 1. [ ] Phase 1 — empty job-log body is retryable (`scripts/smoke_review_dispatch.sh`, `tests/test_smoke_review_dispatch.py`, `changelog.d/5689-smoke-empty-job-log-retryable.md`)
-   - [ ] helper returns 1 for an empty and a whitespace-only log body, 2 for a non-empty body with no line, 0 with the SHA for a genuine line
-   - [ ] helper doc comment names the new rc=1 case
-   - [ ] tests cover the four cases; `tests/test_smoke_review_dispatch.py` passes in full
-   - [ ] `changelog.d/` fragment (fixed)
+   - [x] helper returns 1 for an empty and a whitespace-only log body, 2 for a non-empty body with no line, 0 with the SHA for a genuine line
+   - [x] helper doc comment names the new rc=1 case
+   - [x] tests cover the four cases; `tests/test_smoke_review_dispatch.py` passes in full
+   - [x] `changelog.d/` fragment (fixed)
 
 ## Conformance
 
