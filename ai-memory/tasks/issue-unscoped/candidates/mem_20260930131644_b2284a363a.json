@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/implement-plan/issue-5619-tracking-lineage-completion-pr-only.md:14, 42 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The progress log says 8 findings were rejected, but the Notes section enumerates 7 rejected items.\n  WHY: This documentation inaccuracy does not affect executable behavior, but it can mislead readers auditing review dispositions.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/implement-plan/issue-5619-tracking-lineage-completion-pr-only.md:line 14\n  PROBLEM: The last-note line says \"8 rejected with reasons on the PR\" but line 42 (the Notes section) enumerates 7 rejected items (helper scope, += on a newline-terminated list, alias names kept per AD-5, ORCH_INTEGRATION_BRANCH_PATTERN, defensive -n guard, env defaults, body-URL-only test gap). The count does not match.\n  WHY: The count is inaccurate; change \"8 rejected\" to \"7 rejected\" on line 14.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/implement-plan/issue-5619-tracking-lineage-completion-pr-only.md: line 14 (last note) vs line 42 (Notes section) | severity=NIT | confidence=4\n  PROBLEM: The last note at line 14 says \"8 rejected\" but the Notes section at line 42 enumerates only 7 rejected items (helper scope, `+=` on a newline-terminated list, alias names kept per AD-5, `ORCH_INTEGRATION_BRANCH_PATTERN`, defensive `-n` guard, env defaults, body-URL-only test gap) plus 1 fixed (README wording) = 8 total findings. The \"8 rejected\" wording is inaccurate; the correct count is 1 fixed, 7 rejected.\n  WHY: No executable behavior fails; this is a documentation accuracy issue in the progress log. A human reading the log could be misled about how many findings were rejected vs fixed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/implement-plan/issue-5619-tracking-lineage-completion-pr-only.md: Lines 14 and 42 | severity=NIT | confidence=4\n  PROBLEM: The progress log says 8 findings were rejected, but its review-round note enumerates 7 rejected findings.\n  WHY: A resumed stage reading the progress log gets an inaccurate review-disposition count. This does not affect executable workflow behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/implement-plan/issue-5619-tracking-lineage-completion-pr-only.md: lines 14 and 42 | severity=NIT | confidence=4\n  PROBLEM: The progress log states \"8 rejected with reasons on the PR\" but the Claude session's review comment enumerates exactly 7 rejected findings.\n  WHY: No runtime failure. The progress log is a human-readable audit trail, but the inaccurate count could mislead a future reader auditing the review disposition.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/implement-plan/issue-5619-tracking-lineage-completion-pr-only.md: line 14 \u2014 \"8 rejected with reasons on the PR\" | severity=NIT | confidence=4\n  PROBLEM: The progress log's \"Last note\" says 8 findings were rejected in review round 1, but the notes section (line 42) enumerates 7 rejected items, and the PR comment listing the rejections (entry[6] in pr_all_comments_context) also enumerates exactly 7 bullet points under \"Rejected\". The count is off by 1.\n  WHY: No runtime behavior fails; this is a factual inaccuracy in an internal progress log. A human reviewer reviewing the auto-decisions and review-round history would see a count that does not match the enumerated items.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9c6e7553e8e2cb6278a3467cb4a8be3e8081acb39c37e469e23611c44fc91a70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5643,
+    "run_id": "36716638083",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36716638083",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930131644_b2284a363a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5643,
+    "run_id": "36716638083"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T13:16:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
