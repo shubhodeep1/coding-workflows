@@ -1,17 +1,17 @@
 # Implement-Plan Log — Require a captured Plan run ID before the release smoke test reports Plan success
 
-- Plan: docs/plans/issue-4723-require-plan-run-id-plan.md
+- Plan: docs/completed/issue-4723-require-plan-run-id-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4723   Base branch: stable
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4723-require-plan-run-id   Final PR: #4729 draft
-- Status: IN_PROGRESS
-- Stage: conformance 2/3
-- Activation: not started
-- Waiting on: conformance fix PR from `claude/implement-plan-issue-4723-require-plan-run-id-conformance-fix-2` (the PR carrying this log update)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base stable) — the project ends after the final PR merges into `stable`; the final-merge stage closes #4723 and labels it `ai:merged`
+- Waiting on: completion PR from `claude/implement-plan-issue-4723-require-plan-run-id-complete` (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01SN9XdEWdK9hLtuWFjcG31M (hand-back and safety net re-armed each stage)
-- Last updated: 2026-09-29
-- Last note: conformance 2/3, review round 2 on #5035 (head 41fc6fb): 1 of 2 findings fixed (changelog contributor note now lists the empty-title test), 1 rejected (a whitespace-only `ISSUE_TITLE` cannot occur: `create-issue` builds the title as a fixed non-blank literal, and the guard already rejects an empty output)
+- Last updated: 2026-09-30
+- Last note: validation 1/3: run 36669254567 (`target_ref` = the project branch, head f56843b) passed, 10/10 tests; no validation fix, so no conformance re-run; completion PR moves the plan to docs/completed/
 
 ## Phases
 1. [x] Phase 1 — paginate the scoped Plan run lookup and require the ID before success (`.github/workflows/test-and-mark-stable.yml` `wait-plan` step, `tests/test_test_and_mark_stable_plan_polling_guard.py`, `changelog.d/4723-require-plan-run-id.md`)
@@ -20,16 +20,21 @@
 
 ## Conformance
 - Run 1 — 2026-09-28: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR #4875 (pre-security): a failed or malformed runs page made `latest_scoped_run_field` end the walk as a short page (exit 0) instead of returning 1; no behaviour change for its callers, which retry on both. Review round 1 (2026-09-29): 2 NITs rejected with evidence, 0 fixed; the round could not converge without a verdict bot (`CLAUDE_FIXER_VERDICT_BOT_LOGIN` unset), so the project stopped at `Status: BLOCKED` (issue comment 5882150855). The maintainer answered Q1: A and merged #4875 into the project branch as `6d682f6` on 2026-09-29.
-- Run 2 — 2026-09-29: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR from `claude/implement-plan-issue-4723-require-plan-run-id-conformance-fix-2` (pre-security): `wait-clarify` and `wait-implement` captured run IDs from one 100-run page with no issue-title filter and wrote `status=success` without an ID; run 36504041362's Implement run sat at index 137 of the window (`Implement: run ID not found`), and the alt-model job's newer runs were in the same window. Fixed per AD-8. Review round 1 (2026-09-29, head e286b24): 1 of 5 findings fixed (empty-title guard, AD-9), 4 rejected (AD-10 for the refactor). Review round 2 (2026-09-29, head 41fc6fb): 1 of 2 findings fixed (changelog test list), 1 rejected (whitespace-only title is unreachable).
+- Run 2 — 2026-09-29: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR from `claude/implement-plan-issue-4723-require-plan-run-id-conformance-fix-2` (pre-security): `wait-clarify` and `wait-implement` captured run IDs from one 100-run page with no issue-title filter and wrote `status=success` without an ID; run 36504041362's Implement run sat at index 137 of the window (`Implement: run ID not found`), and the alt-model job's newer runs were in the same window. Fixed per AD-8. Review round 1 (2026-09-29, head e286b24): 1 of 5 findings fixed (empty-title guard, AD-9), 4 rejected (AD-10 for the refactor). Review round 2 (2026-09-29, head 41fc6fb): 1 of 2 findings fixed (changelog test list), 1 rejected (whitespace-only title is unreachable). Review round 3 (head f5b5e42): both findings rejected as repeats of round 2; the round could not converge without a verdict bot, so the project stopped at `Status: BLOCKED`. After Q1: A the maintainer merged #5035 into the project branch as `f56843b` on 2026-09-29.
+- Run 3 — 2026-09-29: CONFORMANT (Implemented COMPLETE, Correctness PASS) — no fixes (pre-security). 82 related tests pass; shellcheck clean on the three wait steps.
 
 ## Security pass
 - Skipped (ai:workflow-heal: automation-produced issue, verified by `.claude/scripts/security_pass_skip.py`)
 
 ## Validation
+- Cycle 1 — run 36669254567 2026-09-30 (target_ref: claude/implement-plan-issue-4723-require-plan-run-id, head f56843b): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 274s).
 
 ## Completion
+- Completion PR from `claude/implement-plan-issue-4723-require-plan-run-id-complete` — doc moved to docs/completed/issue-4723-require-plan-run-id-plan.md
+- Final PR #4729 draft (into `stable`)
 
 ## Activation
+- n/a: base `stable` (issue mode, non-default base); the change goes live with `stable`'s own lifecycle.
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-28] Scope: fix only `wait-plan`, or also Clarify/Implement run-ID capture? — Picked: A — Plan only, as the issue specifies. Alternatives: B — also harden `wait-clarify` and `wait-implement`. Why: §5 minimal change; the evidence implicates only Plan. Applied in: phase 1 PR. Status: pending review
@@ -57,4 +62,5 @@
 - 2026-09-29: the project stopped at `Status: BLOCKED` in conformance 1/3, review round 1 on #4875 (no verdict bot configured). Resumed by session_01KWw6TgxasoCBTJ7xDtAJcy after the maintainer's Q1: A answer and `/reclarify`; project branch already current with `stable`.
 - Until `CLAUDE_FIXER_VERDICT_BOT_LOGIN` names a dedicated verdict bot, a review round that finds only invalid findings cannot converge and stops the project the same way.
 - Issue progress comment: 5864145856.
+- 2026-09-30: validation was held at `Status: BLOCKED` until `validate.yml` could authorize a heal-issue project whose final PR targets `stable`; the owner answered Q1: A, #4734 reached `main` in #4746, and session_01Bt3sAdrPuduJXGbKKhw4cf dispatched validation cycle 1.
 - Invoking session: session_01JsFVWAjMCmc5aojW1k4Am2 (started by the Claude issue dispatcher).
