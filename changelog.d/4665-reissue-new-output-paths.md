@@ -9,7 +9,7 @@ When the review-blocked judge closes a PR with `reissue_mode: spot-fix`, `script
 | Declared paths read per reissue | at most 10 |
 | New GitHub API calls | 0 |
 
-What this means for operators: a spot-fix reissue that has to add files no longer stops at `ai:scope-blocked`. The guard itself is unchanged. A declared path is dropped when it fails the path validator, is not printable ASCII or has a leading or trailing space, contains a glob character or trailing `/`, names `.git`, already exists at the closed PR head, or cannot be looked up there, so this cannot exempt an existing file or directory. The new `REISSUE_FILES_TOUCHED_NEW_OUTPUTS` log line shows how many paths the judge declared, added, and skipped, and each skip is logged with its reason. #4664 still has to be released through the existing human-gated procedure.
+What this means for operators: a spot-fix reissue that has to add files no longer stops at `ai:scope-blocked`. The guard itself is unchanged. A declared path is dropped when it fails the path validator, is not printable ASCII or has a leading or trailing space, contains a glob character or trailing `/`, names `.git`, already exists at the closed PR head, cannot be looked up there, or has no file extension in its last segment, so this cannot exempt an existing file or directory, or a new directory. The new `REISSUE_FILES_TOUCHED_NEW_OUTPUTS` log line shows how many paths the judge declared, added, and skipped, and each skip is logged with its reason. #4664 still has to be released through the existing human-gated procedure.
 
 ### For contributors
 

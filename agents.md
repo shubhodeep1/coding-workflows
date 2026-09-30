@@ -1334,8 +1334,11 @@ judge declares in `new_output_paths` (`REISSUE_FILES_TOUCHED_NEW_OUTPUTS`).
 A declared path is kept only when it passes the path validator, is
 printable ASCII with no leading or trailing space (the scope guard trims
 entries and splits lines on Unicode separators), carries no
-glob character or trailing `/`, is not `.git`, and does not exist at the
-closed head (a failed lookup there skips it too); at most 10 are read,
+glob character or trailing `/`, is not `.git`, does not exist at the
+closed head (a failed lookup there skips it too), and ends in a segment with
+a file extension (`no_extension` otherwise: the scope guard lets a bare entry
+cover everything beneath it, so a new directory-shaped path would exempt a
+new subtree); at most 10 are read,
 and a rejected one is skipped, never a fallback to `redo`. Incident: #4664's
 reissue needed a new changelog fragment and four new fixtures that neither
 source could list (heal #4665).

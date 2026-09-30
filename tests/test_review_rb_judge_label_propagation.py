@@ -629,7 +629,8 @@ def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:
 	for text in (prompt, template):
 		assert '"new_output_paths": ["<repo-relative path of a new file the spot-fix follow-up must create>"],' in text
 		assert "- new_output_paths: optional;" in text
-		assert "list its exact repo-relative path in\n  `new_output_paths`" in text
+		assert "so list in `new_output_paths` the exact repo-relative path of each file the new issue body requires it to CREATE" in text
+		assert "each with a file extension" in text
 
 
 def test_review_autofix_wires_reissue_preserve_baseline_flag_default_true() -> None:
@@ -1169,6 +1170,43 @@ def test_close_and_reissue_spot_fix_new_output_paths_never_exempt_existing_paths
 	)
 	stdout = state["_stdout"]
 	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=11 added=6 skipped=5 total=7" in stdout
+
+
+def test_close_and_reissue_spot_fix_new_output_paths_reject_directory_shaped_paths() -> None:
+	"""PR #4667 review round 1: files_touched_scope_guard.py lets a bare entry
+	cover everything beneath it, so a new directory-shaped declaration would
+	exempt a whole new subtree.  Only paths whose last segment carries a `.`
+	that is neither its first nor its last character are kept."""
+	state = _run_new_output_rejection_case(
+		[
+			"tests/fixtures/new_suite",
+			"tests/fixtures/.keep",
+			"tests/fixtures/trailing.",
+			".env.example",
+			"tests/fixtures/new_suite.json",
+		]
+	)
+	_assert_new_output_footer_and_skips(
+		state,
+		[".env.example", "tests/fixtures/new_suite.json"],
+		[
+			(1, "tests/fixtures/new_suite", "no_extension"),
+			(2, "tests/fixtures/.keep", "no_extension"),
+			(3, "tests/fixtures/trailing.", "no_extension"),
+		],
+	)
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=5 added=2 skipped=3 total=3" in state["_stdout"]
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	guard_spec = importlib.util.spec_from_file_location(
+		"files_touched_scope_guard_for_directory_shaped_outputs",
+		REPO_ROOT / "scripts" / "files_touched_scope_guard.py",
+	)
+	scope_guard = importlib.util.module_from_spec(guard_spec)
+	guard_spec.loader.exec_module(scope_guard)
+	status, _allow, oos = scope_guard.evaluate(body, ["tests/fixtures/new_suite/undeclared.json"])
+	assert status == scope_guard.STATUS_OUT_OF_SCOPE, oos
+	status, _allow, oos = scope_guard.evaluate(body, ["src/app.py", ".env.example", "tests/fixtures/new_suite.json"])
+	assert status == scope_guard.STATUS_IN_SCOPE, oos
 
 
 def test_close_and_reissue_spot_fix_new_output_path_lookup_failure_fails_closed() -> None:

@@ -2657,8 +2657,11 @@ print(m.group(1) if m else "")
       # declares them in `new_output_paths`.  An entry must pass the path
       # validator, must not name `.git`, must carry no glob metacharacter or
       # trailing `/` (files_touched_scope_guard.py reads those as globs and
-      # directory prefixes), and must not exist at the closed head, so no
-      # existing file or directory is ever exempted this way.  The existence
+      # directory prefixes), must not exist at the closed head, so no
+      # existing file or directory is ever exempted this way, and must end in
+      # a file-shaped segment with an extension (`no_extension` otherwise),
+      # because the guard also lets a bare entry cover everything beneath it,
+      # so a new directory-shaped path would exempt a new subtree.  The existence
       # check is a literal-pathspec `git ls-tree` of the closed head: empty
       # output with exit 0 is the only proof of absence, so a failed lookup
       # skips the entry (`lookup_failed`) instead of reading as "new".  Only
@@ -2726,6 +2729,21 @@ print(m.group(1) if m else "")
                 RB_NEW_OUTPUT_REASON="lookup_failed"
               elif [ -n "${RB_NEW_OUTPUT_AT_HEAD}" ]; then
                 RB_NEW_OUTPUT_REASON="exists_at_head"
+              else
+                # The scope guard reads a bare entry as covering its
+                # descendants too, so a directory-shaped declaration such as
+                # `tests/fixtures/new_suite` would exempt a whole new subtree.
+                # Keep only file-shaped paths: the last segment needs a `.`
+                # that is neither its first nor its last character (PR #4667
+                # review round 1).
+                RB_NEW_OUTPUT_BASENAME="${RB_NEW_OUTPUT_PATH##*/}"
+                case "${RB_NEW_OUTPUT_BASENAME#?}" in
+                  *.?*)
+                    ;;
+                  *)
+                    RB_NEW_OUTPUT_REASON="no_extension"
+                    ;;
+                esac
               fi
             fi
             if [ -n "${RB_NEW_OUTPUT_REASON}" ]; then
