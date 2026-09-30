@@ -3893,6 +3893,17 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 # merge into any other branch is logged as `rejected=non_target_base` and
 # falls through to the no_merged_pr_found policy per origin.
 #
+# Identity rule (issue #5226): a closing-keyword body is enough only on
+# the default branch, where GitHub closes the issue on the merge anyway.
+# A merge into the issue's integration branch or a managed child's project
+# branch counts only when the PR's head is an automation branch for the
+# issue (`ai/issue-<n>`, `ai/issue-<n>-…`, `fix/<n>-followup-<epoch>`;
+# pr_head_ref_is_issue_automation_branch in scripts/gh_helpers.sh) and
+# `.head.repo.full_name` is this repository. Otherwise the candidate is
+# logged as `rejected=unverified_identity` and the next one is tried; an
+# unrelated PR's `Fixes #<n>` and the editable `Integration branch:` line
+# can no longer close an issue together.
+#
 # Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
 #
 # API hygiene (CLAUDE.md §15): up to 2 `gh issue list` calls per sweep
@@ -3980,6 +3991,7 @@ close_merged_issues_sweep() {
   local _sweep_issue_body _sweep_issue_base _sweep_issue_managed
   local _sweep_issue_project_branch
   local _sweep_pr_base_ref _sweep_default_branch
+  local _sweep_pr_head_ref _sweep_pr_head_repo
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -4069,11 +4081,28 @@ close_merged_issues_sweep() {
         # default or project branch never matches (fail closed).
         _sweep_pr_base_ref="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
         _sweep_default_branch="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.base.repo.default_branch // ""' 2>/dev/null || echo "")"
-        if { [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_default_branch}" ]; } \
-          || { [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_issue_base}" ]; } \
-          || { [ "${_sweep_issue_managed}" = "true" ] && [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_issue_project_branch}" ]; }; then
+        if [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_default_branch}" ]; then
           merged_pr_num="${_sweep_candidate_pr}"
           break
+        fi
+        if { [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_issue_base}" ]; } \
+          || { [ "${_sweep_issue_managed}" = "true" ] && [ -n "${_sweep_pr_base_ref}" ] && [ "${_sweep_pr_base_ref}" = "${_sweep_issue_project_branch}" ]; }; then
+          # Identity rule (issue #5226): off the default branch, GitHub
+          # closes nothing, and the closing keyword and the issue's
+          # `Integration branch:` line are both author-controlled text.
+          # Count the merge only when the head is an automation branch
+          # for this issue (pr_head_ref_is_issue_automation_branch) in
+          # this repository. A missing helper or head repo fails closed.
+          _sweep_pr_head_ref="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+          _sweep_pr_head_repo="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
+          if [ -n "${_sweep_pr_head_repo}" ] && [ "${_sweep_pr_head_repo}" = "${GITHUB_REPOSITORY:-}" ] \
+            && type pr_head_ref_is_issue_automation_branch >/dev/null 2>&1 \
+            && pr_head_ref_is_issue_automation_branch "${issue_num}" "${_sweep_pr_head_ref}"; then
+            merged_pr_num="${_sweep_candidate_pr}"
+            break
+          fi
+          echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=unverified_identity base=${_sweep_pr_base_ref} head=${_sweep_pr_head_ref:-unknown} head_repo=${_sweep_pr_head_repo:-unknown}"
+          continue
         fi
         echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=non_target_base base=${_sweep_pr_base_ref:-unknown} default_branch=${_sweep_default_branch:-unknown} issue_base=${_sweep_issue_base:-none} project_base=${_sweep_issue_project_branch:-none}"
         continue

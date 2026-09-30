@@ -1816,3 +1816,36 @@ issue_body_orchestrator_project_branch()
 	[ "$(printf '%s\n' "${_tracking_numbers}" | wc -l | tr -d '[:space:]')" = "1" ] || return 0
 	printf 'orchestrator/project-%s\n' "${_tracking_numbers}"
 }
+
+# ---------------------------------------------------------------
+# pr_head_ref_is_issue_automation_branch <issue number> <head ref>
+#
+# Return 0 when <head ref> is a branch the automation creates for issue
+# <n>: the implement pipeline's `ai/issue-<n>` (also `ai/issue-<n>-…` and
+# `ai/issue-<n>/…`, the shape issue_pr_status.yml already maps to the
+# issue), or the orchestrator judge's follow-up branch
+# `fix/<n>-followup-<epoch>` (scripts/orchestrate_poll_process.sh).
+# Return 1 otherwise, including for a non-numeric issue number.
+#
+# Issue #5226: a PR's closing keyword (`Fixes #<n>`) is text its author
+# controls, and the `Integration branch:` line is text the issue author
+# controls. On a merge into a branch other than the default branch,
+# close_merged_issues_sweep and issue_pr_status.yml therefore count a PR
+# as the issue's own only when its head is such a branch AND lives in
+# this repository (the caller checks the head repository), so only an
+# account with write access could have created it. Issues no API call.
+# ---------------------------------------------------------------
+pr_head_ref_is_issue_automation_branch()
+{
+	local _issue="${1:-}"
+	local _head="${2:-}"
+	[[ "${_issue}" =~ ^[0-9]+$ ]] || return 1
+	[ -n "${_head}" ] || return 1
+	case "${_head}" in
+		"ai/issue-${_issue}"|"ai/issue-${_issue}-"*|"ai/issue-${_issue}/"*)
+			return 0
+			;;
+	esac
+	[[ "${_head}" =~ ^fix/${_issue}-followup-[0-9]+$ ]] && return 0
+	return 1
+}

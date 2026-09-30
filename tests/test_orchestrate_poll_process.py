@@ -2308,11 +2308,17 @@ if args[0] == 'api':
 				'body': pr.get('body', ''),
 				'base': {
 					'ref': pr.get('baseRefName', ''),
-					'repo': {'default_branch': store.get('default_branch', 'main')},
+					'repo': {
+						'default_branch': store.get('default_branch', 'main'),
+						'full_name': __import__('os').environ.get('GITHUB_REPOSITORY', ''),
+					},
 				},
 				'head': {
 					'sha': pr.get('headSha', f'mocksha{pr_num}'),
 					'ref': pr.get('headRefFromApi', pr.get('headRefName', '')),
+					# Issue #5226: the sweep's identity rule reads the head
+					# repository; a PR defaults to a same-repository head.
+					'repo': {'full_name': pr.get('headRepoFullName', __import__('os').environ.get('GITHUB_REPOSITORY', ''))},
 				},
 			}))
 		sys.exit(0)
@@ -14836,11 +14842,13 @@ def test_close_merged_issues_sweep_accepts_closing_body_reference_pr():
 	)
 
 
-def _sweep_standalone_closing_pr(pr_number: int, base_ref: str, head_ref: str) -> dict:
+def _sweep_standalone_closing_pr(pr_number: int, base_ref: str, head_ref: str, head_repo: str | None = None) -> dict:
 	"""A merged PR whose body carries a closing-keyword reference to #10,
 	so _pr_json_is_issue_implementation_pr accepts it and only the sweep's
-	target-branch rule (issue #4813) decides whether it closes the issue."""
-	return {
+	target-branch rule (issue #4813) and identity rule (issue #5226) decide
+	whether it closes the issue. `head_repo` overrides the mock's default
+	same-repository head (a fork PR)."""
+	pr = {
 		"number": pr_number,
 		"state": "closed",
 		"merged": True,
@@ -14852,6 +14860,9 @@ def _sweep_standalone_closing_pr(pr_number: int, base_ref: str, head_ref: str) -
 		"mergeable": True,
 		"mergeable_state": "clean",
 	}
+	if head_repo is not None:
+		pr["headRepoFullName"] = head_repo
+	return pr
 
 
 def test_close_merged_issues_sweep_leaves_issue_open_when_pr_merged_into_other_project_branch():
@@ -15033,6 +15044,101 @@ def test_close_merged_issues_sweep_closes_labelled_child_on_declared_integration
 		f"A labelled child must close on its integration branch; closed_issues={result.get('closed_issues')}"
 	)
 	assert "CLOSE_MERGED_SWEEP issue=10 pr=965 origin=merged_label status=closed" in result["stdout"]
+
+
+_SWEEP_SECURITY_FOLLOW_UP_BODY = "Security follow-up.\n\n- Integration branch: `claude/implement-plan-parent`\n"
+
+
+def test_close_merged_issues_sweep_rejects_non_automation_head_on_integration_branch():
+	"""Issue #5226: an unrelated merged PR whose body says `Fixes #10` and
+	whose base is the branch #10's editable `Integration branch:` line names
+	is not #10's assigned fix. Off the default branch the sweep requires an
+	automation head for the issue, so it logs rejected=unverified_identity
+	and falls through to the merged_label no_merged_pr_found policy."""
+	unrelated_pr = _sweep_standalone_closing_pr(967, "claude/implement-plan-parent", "feature/unrelated")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_bodies={10: _SWEEP_SECURITY_FOLLOW_UP_BODY},
+		issue_linked_prs={10: 967},
+		prs=[unrelated_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), (
+		f"A non-automation PR must not close the issue off the default branch; closed_issues={result.get('closed_issues')}"
+	)
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=967 rejected=unverified_identity "
+		"base=claude/implement-plan-parent head=feature/unrelated head_repo=owner/repo"
+	) in result["stdout"], "Missing unverified_identity rejection log line in poller stdout"
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label no_merged_pr_found" in (result["stdout"] + result["stderr"])
+
+
+def test_close_merged_issues_sweep_rejects_fork_automation_head_on_project_branch():
+	"""Issue #5226: a head named `ai/issue-10` only proves the automation
+	made it when it lives in this repository. A fork PR with that name,
+	merged into a labelled child's project branch, is rejected."""
+	fork_pr = _sweep_standalone_closing_pr(968, "orchestrator/project-192", "ai/issue-10", head_repo="attacker/repo")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged", "ai:orchestrator-managed"]},
+		issue_bodies={10: _SWEEP_MANAGED_CHILD_TRACKING_ONLY_BODY},
+		issue_linked_prs={10: 968},
+		prs=[fork_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), (
+		f"A fork head must not close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert (
+		"CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=968 rejected=unverified_identity "
+		"base=orchestrator/project-192 head=ai/issue-10 head_repo=attacker/repo"
+	) in result["stdout"], "Missing unverified_identity rejection log line in poller stdout"
+
+
+def test_close_merged_issues_sweep_accepts_judge_followup_head_on_integration_branch():
+	"""Issue #5226: the orchestrator judge's follow-up PR
+	(`fix/<n>-followup-<epoch>`, body `Closes #<n>`) merges into the
+	integration branch and is an automation head, so it still closes."""
+	followup_pr = _sweep_standalone_closing_pr(969, "claude/implement-plan-parent", "fix/10-followup-1790000000")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_bodies={10: _SWEEP_SECURITY_FOLLOW_UP_BODY},
+		issue_linked_prs={10: 969},
+		prs=[followup_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", []), (
+		f"The judge's follow-up PR must close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=969 origin=merged_label status=closed" in result["stdout"]
+
+
+def test_close_merged_issues_sweep_default_branch_merge_needs_no_automation_head():
+	"""Issue #5226: on the default branch GitHub closes the issue on the
+	merge anyway, so a closing-keyword PR from any head (even a fork) still
+	counts there."""
+	fork_default_pr = _sweep_standalone_closing_pr(970, "main", "patch-1", head_repo="contributor/repo")
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 970},
+		prs=[fork_default_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", []), (
+		f"A default-branch merge must still close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert "rejected=unverified_identity" not in result["stdout"]
 
 
 def test_close_merged_issues_sweep_closes_issues_with_large_bodies():
