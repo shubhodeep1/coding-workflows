@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/fix-claude-pr.md:46 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The active `.claude/` copy instructs fixers to abort the asset-sync merge and continue on the unsynced head for conflicts outside `.claude/`, contrary to the corrected twin rule.\n  WHY: A fixer following this instruction can push under the old hook guards; z-ai_glm-5_2 considered the mismatch documented interim state, not a defect.\n- .claude/commands/implement-plan-claude.md:186 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The active `.claude/` copy instructs callers to abort the asset-sync merge and continue on the unsynced head for conflicts outside `.claude/`, contrary to the corrected twin rule.\n  WHY: A stage following this instruction can continue on the unsynced head under the old guards; z-ai_glm-5_2 considered the mismatch documented interim state, not a defect.\n- changelog.d/4952-claude-asset-sync.md:12 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The fragment says settings changes take effect only from the next session, contradicting the settings restart mechanism added by issue #5259.\n  WHY: Both fragments will appear in the assembled changelog, leaving readers with contradictory descriptions of when the settings change takes effect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/fix-claude-pr.md:46 | severity=high | confidence=[5]\n  PROBLEM: The `.claude/` copy instructs fixers to abort the asset-sync merge and continue on the unsynced head for conflicts outside `.claude/`, unlike the twin's corrected rule.\n  WHY: A fixer following this instruction can push under the old hook guards.\n- .claude/commands/implement-plan-claude.md:186 | severity=high | confidence=[5]\n  PROBLEM: The `.claude/` copy instructs callers to abort the asset-sync merge and continue on the unsynced head for conflicts outside `.claude/`, unlike the twin's corrected rule.\n  WHY: A stage following this instruction can continue on the unsynced head under the old guards.\n- changelog.d/4952-claude-asset-sync.md:12 | severity=low | confidence=[4]\n  PROBLEM: The fragment says settings changes take effect only from the next session, contradicting the settings restart mechanism added by issue #5259.\n  WHY: Both fragments will appear in the assembled changelog, creating contradictory documentation.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a23ae8b01383a50ebd8f2f8cf0b383ac95334d25277f12faf0949c1d225379e4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36669526851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36669526851",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930044548_ec58e8f233",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36669526851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T04:45:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
