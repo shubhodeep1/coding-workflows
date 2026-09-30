@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:350-355 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: _read_review_run_listing() accepts an empty-string display_title, so a run can pass validation and then be silently skipped by the PR-binding filter.\n  WHY: An internal-review.yml dispatch with an empty title is treated as unbound and skipped, leaving the fail-closed intent incomplete.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_fixer_pending_checks.py | severity=NIT | confidence=3\n  PROBLEM: The validation check `not isinstance(run.get(\"display_title\"), str)` passes an empty-string title through validation. A run with `display_title=\"\"` then silently fails the `run.get(\"display_title\") == title` filter (line 403), so an internal-review.yml dispatch with an empty title is treated as unbound and skipped \u2014 the same fail-open path the round-2 fix was meant to close.\n  WHY: Empty-string titles are unlikely but possible (a run pre-dating the workflow `run-name` change, or a malformed API record). The validation docstring claims \"every run must also carry a string `display_title`\", but an empty string technically satisfies that contract while not actually binding to any PR, so the fail-closed intent does not fully hold for this corner case.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "79c78647daefc34500fa6cfcdee1ac0049434179272e1634a02465a5cb84c8ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5178,
+    "run_id": "36664904069",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36664904069",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930034728_9438b0e67e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5178,
+    "run_id": "36664904069"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T03:47:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
