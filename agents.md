@@ -1201,10 +1201,17 @@ reviews, comments, and conflicts stay a direct §12 request.
   `compact` keep the earlier record). It prints nothing, never blocks, and
   must stay the only `ConfigChange` hook. When a sync merge changed
   `settings.json`, the sync's step 6 runs the allowlisted
-  `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py`
+  `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py --before HEAD^1`
   (one JSON line; exit 0 current, 1 not current, 2 usage error; the session
   id defaults to `CLAUDE_CODE_SESSION_ID`; a missing record, or no readable
-  `settings.json` on disk, is not current).
+  `settings.json` on disk, is not current). Claude Code runs `ConfigChange`
+  with the hooks loaded before a change, so on a branch whose
+  `settings.json` predates the recorder the merged file's reload is never
+  recorded: `--before HEAD^1` then reports `"before_recorder_wired": false`
+  and a reason that says so. The verdict stays "not current" (fail closed),
+  so such a branch ends in the escalation below once, and a human confirms
+  the merged wiring and pushes the sync merge; after that the branch
+  carries the recorder.
   Still not current after one re-run → the session writes nothing more for
   that work and hands it to a fresh session: a `— settings restart` stage
   session carrying `Asset-sync restart: <id>`, or a fresh `/fix-claude-pr`

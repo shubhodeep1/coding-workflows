@@ -232,6 +232,96 @@ def test_check_fails_closed_without_a_settings_file_even_when_the_record_says_ab
 	assert verdict["reason"] == "no readable settings.json to verify"
 
 
+def _git(cwd: Path, *args: str) -> None:
+	subprocess.run(
+		["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", *args],
+		cwd=cwd, check=True, capture_output=True, text=True, timeout=30,
+	)
+
+
+def _merged_repo(root: Path, before_settings: dict) -> Path:
+	"""A repo whose HEAD merged a new settings.json over `before_settings` (HEAD^1)."""
+	(root / ".claude").mkdir(parents=True)
+	_git(root, "init", "-q", "-b", "work")
+	(root / ".claude" / "settings.json").write_text(json.dumps(before_settings) + "\n", encoding="utf-8")
+	_git(root, "add", ".")
+	_git(root, "commit", "-q", "-m", "branch")
+	_git(root, "checkout", "-q", "-b", "source")
+	merged = json.loads(json.dumps(before_settings))
+	merged.setdefault("hooks", {})["PreToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "guard"}]}]
+	(root / ".claude" / "settings.json").write_text(json.dumps(merged) + "\n", encoding="utf-8")
+	_git(root, "commit", "-q", "-am", "guard")
+	_git(root, "checkout", "-q", "work")
+	(root / "other.txt").write_text("x\n", encoding="utf-8")
+	_git(root, "add", ".")
+	_git(root, "commit", "-q", "-m", "work")
+	_git(root, "merge", "-q", "--no-ff", "-m", "[claude-asset-sync] merge source", "source")
+	return root
+
+
+RECORDER_WIRING = {"hooks": {"ConfigChange": [{"matcher": "project_settings", "hooks": [{"type": "command", "command": RECORDER_COMMAND}]}]}}
+
+
+def test_check_names_a_pre_recorder_branch_without_changing_the_verdict(claude_dir: Path, tmp_path: Path):
+	"""ConfigChange runs the hooks loaded before a change, so a branch without
+	the recorder cannot record the merged file's reload (issue #5259)."""
+	home = tmp_path / "home"
+	repo = _merged_repo(tmp_path / "repo", {"hooks": {}})
+	record = _record_file(home, "s-1")
+	record.parent.mkdir(parents=True)
+	# The session recorded the branch's file (the watcher's checkout reload), not the merge.
+	before_sha = hashlib.sha256(subprocess.run(["git", "show", "HEAD^1:.claude/settings.json"], cwd=repo, capture_output=True, check=True).stdout).hexdigest()
+	record.write_text(json.dumps({"sha256": before_sha, "event": "ConfigChange"}), encoding="utf-8")
+	result = _run_check(claude_dir, repo, home, "--before", "HEAD^1", session_env="s-1")
+	assert result.returncode == 1, result.stdout
+	verdict = json.loads(result.stdout)
+	assert verdict["current"] is False
+	assert verdict["before_recorder_wired"] is False
+	assert "wired no ConfigChange recorder" in verdict["reason"] and "(HEAD^1)" in verdict["reason"]
+	# Without --before the field is null and the reason is unchanged.
+	plain = json.loads(_run_check(claude_dir, repo, home, session_env="s-1").stdout)
+	assert plain["before_recorder_wired"] is None
+	assert plain["reason"] == "the session has not loaded this settings.json"
+
+
+def test_check_with_a_recorder_wired_before_keeps_the_plain_reason(claude_dir: Path, tmp_path: Path):
+	home = tmp_path / "home"
+	repo = _merged_repo(tmp_path / "repo", RECORDER_WIRING)
+	record = _record_file(home, "s-1")
+	record.parent.mkdir(parents=True)
+	record.write_text(json.dumps({"sha256": "0" * 64, "event": "SessionStart"}), encoding="utf-8")
+	verdict = json.loads(_run_check(claude_dir, repo, home, "--before", "HEAD^1", session_env="s-1").stdout)
+	assert verdict["current"] is False
+	assert verdict["before_recorder_wired"] is True
+	assert verdict["reason"] == "the session has not loaded this settings.json"
+	# A current record stays current whatever the branch had before.
+	record.write_text(json.dumps({"sha256": _sha(repo / ".claude" / "settings.json"), "event": "ConfigChange"}), encoding="utf-8")
+	current = _run_check(claude_dir, repo, home, "--before", "HEAD^1", session_env="s-1")
+	assert current.returncode == 0 and json.loads(current.stdout)["current"] is True
+
+
+def test_check_before_an_unreadable_revision_is_null(claude_dir: Path, project: Path, tmp_path: Path):
+	verdict = json.loads(_run_check(claude_dir, project, tmp_path / "home", "--before", "HEAD^1", session_env="s-1").stdout)
+	assert verdict["before_recorder_wired"] is None
+	assert verdict["reason"].startswith("no record for this session")
+
+
+@pytest.mark.parametrize(
+	("settings_data", "wired"),
+	(
+		(RECORDER_WIRING, True),
+		({"hooks": {"ConfigChange": [{"hooks": [{"command": RECORDER_COMMAND}]}]}}, True),
+		({"hooks": {"ConfigChange": [{"matcher": "project_settings|local_settings", "hooks": [{"command": RECORDER_COMMAND}]}]}}, True),
+		({"hooks": {"ConfigChange": [{"matcher": "user_settings", "hooks": [{"command": RECORDER_COMMAND}]}]}}, False),
+		({"hooks": {"SessionStart": [{"hooks": [{"command": RECORDER_COMMAND}]}]}}, False),
+		({"hooks": {"ConfigChange": "bad"}}, False),
+		([], False),
+	),
+)
+def test_recorder_wired_reads_the_config_change_matcher(claude_dir: Path, settings_data, wired: bool):
+	assert _load(claude_dir / CHECK).recorder_wired(settings_data) is wired
+
+
 def test_recorder_and_check_share_the_record_contract(claude_dir: Path):
 	recorder = _load(claude_dir / RECORDER)
 	check = _load(claude_dir / CHECK)

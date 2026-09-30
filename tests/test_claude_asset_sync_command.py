@@ -79,6 +79,11 @@ def test_settings_change_is_verified_before_any_further_work(commands):
 	assert "new hook wiring applies from the next session" not in section
 	assert "the watcher can miss a change" in section
 	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py" in section
+	# A branch that predates the recorder cannot record the merged file's reload
+	# (ConfigChange runs the hooks loaded before a change); the check says so.
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py --before HEAD^1" in section
+	assert "`\"before_recorder_wired\": false` means the branch predates the recorder" in section
+	assert "Claude Code runs `ConfigChange` with the hooks loaded before a change" in section
 	assert "as its own Bash call before any other tool call" in section
 	assert "including no record, which fails closed" in section
 	assert "run it once more" in section
