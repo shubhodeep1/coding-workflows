@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T17:44:19Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A freshness guard is only as fresh as the record it reads: when one input comes from an earlier listing and another from a later lookup, the decision must use the later one, and a subject known only from the listing must be kept rather than acted on.",
+  "phase": "implement_plan",
+  "pr_number": 5598,
+  "record_id": "lesson-implement-plan-040a4892ad2259ffdf3a37e9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py"
+  ]
+}

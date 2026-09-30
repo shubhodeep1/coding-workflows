@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T17:44:19Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Gate a paid read on the free checks that already decide the outcome: when a later free guard keeps the item whatever the read returns, run it before the read, but keep a free check that gives the more accurate reason ahead of it.",
+  "phase": "implement_plan",
+  "pr_number": 5598,
+  "record_id": "lesson-implement-plan-06870968d3828111328c638c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py"
+  ]
+}

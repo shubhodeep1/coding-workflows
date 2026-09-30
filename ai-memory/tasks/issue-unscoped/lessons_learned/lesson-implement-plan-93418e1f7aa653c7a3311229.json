@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T17:44:19Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A liveness decision built from listings read earlier in the same run must count the subject's own latest activity: anything it did after the read is invisible, so \"no other session is active\" alone lets a checker that just acted look dead.",
+  "phase": "implement_plan",
+  "pr_number": 5598,
+  "record_id": "lesson-implement-plan-93418e1f7aa653c7a3311229",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py"
+  ]
+}

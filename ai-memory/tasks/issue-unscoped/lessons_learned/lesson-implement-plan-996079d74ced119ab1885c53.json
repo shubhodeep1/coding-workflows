@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T17:44:19Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "The plan looked up only checkers missing from the session page; a page-listed checker that looks restartable is looked up too, within the same cap, so no restart is decided from a listing read before the lookups.",
+  "phase": "implement_plan",
+  "pr_number": 5598,
+  "record_id": "lesson-implement-plan-996079d74ced119ab1885c53",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py"
+  ]
+}
