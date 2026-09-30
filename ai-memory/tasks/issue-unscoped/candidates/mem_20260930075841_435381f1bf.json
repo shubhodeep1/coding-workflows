@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:434-436, 482-489 | severity=high | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: Closed-issue resume authorization is not bound to a triggering `/reclarify` comment or gated on that comment being posted after the issue closed.\n  WHY: `authorize_target` allows the closed-issue route regardless of `trigger`, and `final_merge_resume` does not compare the trusted comment's `created_at` with `closed_at`, allowing replay through manual or opened intake payloads.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: docs/plans/issue-5514-bind-closed-resume-to-reclarify-plan.md (added by the last commit) Phase 1 deliverables \u2014 \"Files: scripts/claude_issue_route.py, scripts/claude_issue_handoff.sh, scripts/claude_issue_intake.sh (header comment), .github/workflows/clarify.yml, tests/test_claude_issue_route.py, README.md, agents.md, changelog.d/5514-final-merge-resume-reclarify-binding.md\"; \"Done when: tests/test_claude_issue_route.py, tests/test_phase_skip_gate_telemetry_contract.py, and tests/test_implement_issue_claude_command.py pass; clarify.yml parses; bash -n passes on both scripts.\"\n  expected_change_site: scripts/claude_issue_route.py (`final_merge_resume` reclarify_comment_id binding + `authorize_target` trigger/ID gate), scripts/claude_issue_handoff.sh, .github/workflows/clarify.yml, tests/test_claude_issue_route.py, README.md, agents.md, changelog.d/5514-final-merge-resume-reclarify-binding.md\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The last commit (a0a6b40) added only docs/plans/issue-5514-...-plan.md and docs/implement-plan/issue-5514-...-md; no diff hunk in scripts/claude_issue_route.py, scripts/claude_issue_handoff.sh, scripts/claude_issue_intake.sh, .github/workflows/clarify.yml, tests/test_claude_issue_route.py, README.md, or agents.md implements the binding; no changelog.d/5514-...-reclarify-binding.md exists; docs/implement-plan/issue-5514-bind-closed-resume-to-reclarify.md records \"Status: IN_PROGRESS ... implementing phase 1\", i.e. the implementation is not on the PR head yet.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(Reviewer failed after non-retryable error on attempt 3 (extended retry minimax/minimax-m2.5).)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_issue_route.py:434-436, 482-489 | severity=MAJOR | confidence=5\n  PROBLEM: The new closed-issue resume route authorizes a Claude session for a closed issue without binding authorization to the `/reclarify` comment that triggered the resume or checking that the comment was posted after the issue closed.\n  WHY: `authorize_target` applies `final_merge_resume` for a closed candidate regardless of the payload's `trigger` (opened/manual/reclarify all reach the same branch at lines 483-488), and `final_merge_resume` only requires \"a trusted User commented /reclarify after that blocked comment\" (line 434) \u2014 it never compares the `/reclarify` comment's `created_at` against the issue's `closed_at`.\n- Requirement: docs/plans/issue-5514-bind-closed-resume-to-reclarify-plan.md (added by the last commit) Phase 1 deliverables \u2014 \"Files: scripts/claude_issue_route.py, scripts/claude_issue_handoff.sh, scripts/claude_issue_intake.sh (header comment), .github/workflows/clarify.yml, tests/test_claude_issue_route.py, README.md, agents.md, changelog.d/5514-final-merge-resume-reclarify-binding.md\"; \"Done when: tests/test_claude_issue_route.py, tests/test_phase_skip_gate_telemetry_contract.py, and tests/test_implement_issue_claude_command.py pass; clarify.yml parses; bash -n passes on both scripts.\"\n  Expected change site: scripts/claude_issue_route.py (final_merge_resume reclarify_comment_id binding + authorize_target trigger/ID gate), scripts/claude_issue_handoff.sh (CLAUDE_ISSUE_RECLARIFY_COMMENT_ID plumbing), .github/workflows/clarify.yml (RECLARIFY_COMMENT_ID env + build-dispatch flag), tests/test_claude_issue_route.py (new refusal cases), README.md/agents.md (resume paragraph update), changelog.d/5514-final-merge-resume-reclarify-binding.md (new security fragment).\n  Evidence of absence: The last commit (a0a6b40) added only docs/plans/issue-5514-...-plan.md and docs/implement-plan/issue-5514-...-md. No diff hunk in scripts/claude_issue_route.py, scripts/claude_issue_handoff.sh, scripts/claude_issue_intake.sh, .github/workflows/clarify.yml, tests/test_claude_issue_route.py, README.md, or agents.md implements the binding; no changelog.d/5514-...-reclarify-binding.md exists. docs/implement-plan/issue-5514-bind-closed-resume-to-reclarify.md records \"Status: IN_PROGRESS ... implementing phase 1\", i.e. the implementation is not on the PR head yet.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fc7ade387ff9eb0381cdd7a815df0fec2a5f16769e835a69dbcfb129cc2ea6a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36684585560",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36684585560",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930075841_435381f1bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36684585560"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T07:58:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
