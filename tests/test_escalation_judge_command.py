@@ -167,6 +167,19 @@ def test_log_template_has_escalations_section(plan):
 	assert "CLOSED (not planned, ES-<n>)" in template
 
 
+def test_stage_templates_carry_the_judge_stage_values(plan):
+	# Both Stage templates (the progress log's and the report's) name every
+	# stage the judge's choices start, so the log and report stay in step
+	# with the "Escalations" section.
+	log_template = plan[plan.index("**Log file format:**"):plan.index("### Lessons")]
+	log_stage = log_template[log_template.index("- Stage: "):log_template.index("- Activation: ")]
+	output_format = plan[plan.index("## Output Format"):plan.index("## Tool Access")]
+	report_stage = output_format[output_format.index("Stage: "):output_format.index("Project branch: ")]
+	for name, stage_line in (("progress log", log_stage), ("output format", report_stage)):
+		for value in ("escalation judge — <stop id>", "<stage> — budget ES-<n>", "| descope ES-<n>"):
+			assert value in stage_line, (name, value)
+
+
 def test_recap_and_issue_mode_point_to_the_judge(plan):
 	recap = plan[plan.index("## Auto-Decisions"):plan.index("## Escalations")]
 	assert "The failure escalations are answered by the [escalation judge](#escalations) (CLAUDE.md §28.G) instead of a human" in recap

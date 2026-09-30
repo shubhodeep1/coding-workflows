@@ -3,17 +3,17 @@
 - Plan: docs/plans/retire-master-session-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-retire-master-session   Final PR: #5132 draft
-- Status: BLOCKED
-- Stage: phase 1/4
+- Status: IN_PROGRESS
+- Stage: phase 1/4 — review round
 - Activation: not started
-- Waiting on: PR #5164: twin sync after review round 1 (the `[claude-twin-sync]` copy of two changed `workflow-templates/.claude/commands/` twins; no `settings.json` change this round)
+- Waiting on: PR #5164 (review of the round-2 fix; test-only, no twin sync needed)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01PxYwa7Rwnpb7RYbmsURfQ9 (idle, no pending check-in while the twin-sync hold stands; the stage `/reclarify` resumes arms it)
-- Last updated: 2026-09-29
-- Last note: Review round 1 on PR #5164: fixed the legacy-mode comment target of the judge and the missing `budget ES-<n>` Stage value (twins and CLAUDE.md), rejected the two `escalation_ledger.py` findings; stopped for the `[claude-twin-sync]` copy.
+- Check-in: checker session_01PxYwa7Rwnpb7RYbmsURfQ9 (safety-net and hand-back trigger ids are in the stage report and the next `— resume.` block)
+- Last updated: 2026-09-30
+- Last note: Review round 2 on PR #5164 (head ba70679, hand-off round=1 after the twin sync): fixed the one finding, a contract test now pins the judge's Stage values in both Stage templates; nothing under `.claude/` changed, so no twin sync.
 
 ## Phases
-1. [ ] Phase 1 — Escalation judge   — protected paths: `.claude/commands/escalation-judge.md` (new), `.claude/scripts/escalation_ledger.py` (new), `.claude/commands/implement-plan-claude.md`, `.claude/settings.json` (edited only in their `workflow-templates/.claude/` twins) — PR #5164 open (twins first synced in c315b2e), waiting on the round-1 twin sync; review rounds: 1; interventions: 0
+1. [ ] Phase 1 — Escalation judge   — protected paths: `.claude/commands/escalation-judge.md` (new), `.claude/scripts/escalation_ledger.py` (new), `.claude/commands/implement-plan-claude.md`, `.claude/settings.json` (edited only in their `workflow-templates/.claude/` twins) — PR #5164 open (twins synced in c315b2e and ba70679), waiting on review; review rounds: 2; interventions: 0
    - [x] `workflow-templates/.claude/scripts/escalation_ledger.py` (`fingerprint`, `allowed`, `record`; exit 1 bad arguments, exit 2 unreadable or malformed log), allowlisted in the `settings.json` twin in both forms — `tests/test_escalation_ledger.py` (48 tests)
    - [x] `workflow-templates/.claude/commands/escalation-judge.md` (inputs, steps 0–9, menu, never-list)
    - [x] `implement-plan-claude.md` twin: the ten stops name `escalation stop <id>` (lines 55, 66, 68, 69, 75, 76, 78, 81, 82, 89, 92, 273); new `## Escalations` section (line 292: stop-id table, human-only list, the 3-step stop procedure with the `kind=escalation stop=<id>` marker, `budget` / `descope` / `close` stages); checker step 0a (line 235) and Arming the wait step 3 for the `escalation` wait; `— resume.` template lines; `## Escalations` in the log template; Status `CLOSED`; recap, Issue Mode bullet, "Read first", Rules, Tool Access, Output Format updated
@@ -64,6 +64,7 @@
 
 ## Lessons
 - [source:intervention] A command step that posts "on the blocker's thread" or "next to the blocker" must say what happens in a mode where the blocker has no GitHub thread (legacy mode keeps it in the report only), or the step has no valid target. (files: .claude/commands/escalation-judge.md, CLAUDE.md)
+- [source:intervention] When a fix adds a value to a command's log or report template, extend the contract test that anchors that template in the same commit; otherwise the next review round flags the unpinned value. (files: tests/test_escalation_judge_command.py, .claude/commands/implement-plan-claude.md)
 
 ## Notes
 - Started by the master session (session_01Qt5nTTqhWxcYA4NciTC6DL) through trigger trig_013zGktPPtmZYGZbgKEos3qv, with start-up answers on the operator's behalf: Auto mode (step 0), plan `docs/plans/retire-master-session-plan.md` on `main` at f736cad (step 1), 4 phases (step 3). Operator decisions Q1–Q14 (2026-09-29) are recorded in the plan. There is no source issue: blockers go in the stage report and on the final PR.
@@ -77,3 +78,5 @@
 - Stage sessions make file edits with Edit/Write, not `python3` heredocs (#4858); a refused `delete_trigger` or `archive_session` call is skipped, not retried (#5068); a stage never ends its turn on an in-session question (#4911).
 - Review round 1 (2026-09-29, head c315b2e, ledger `389434df…`): fixed the judge's missing legacy-mode comment target (steps 1, 3, 6, 8, 9 of `escalation-judge.md`; `implement-plan-claude.md` "Escalations"; CLAUDE.md §28.G) and added `<stage> — budget ES-<n>` to both Stage templates of `implement-plan-claude.md`. Rejected: the whitespace-only evidence omission (intended normalisation, pinned by `test_fingerprint_ignores_empty_values`; a blank value carries no information, so it cannot separate two failures) and the `UnicodeDecodeError` exit 2 (the documented fail-closed contract: a ledger that cannot be read exactly must never offer a choice already used).
 - Twins to sync after review round 1 (`workflow-templates/.claude/<path>` → `.claude/<path>`), sha256 of the twin: `commands/escalation-judge.md` `46ebabe32c8018a92da627a50e29bd1cf7df5cbbb459000cb43308e0f65b9837`; `commands/implement-plan-claude.md` `a58554274c97502168b05acfd5c1fd33d997a6171e922dded67fa3289ffbd052`. No `settings.json` or no-twin `.claude/` path changes. Before this round both `.claude/` files equalled their twins at c315b2e, so the copy is exact.
+- Review round 2 (2026-09-30, head ba70679, hand-off 5903666231 `round=1` because the count restarted after the twin sync, ledger `e717fed2…`): one finding (consensus task gap from five reviewers), valid and fixed. `tests/test_escalation_judge_command.py::test_stage_templates_carry_the_judge_stage_values` pins `escalation judge — <stop id>`, `<stage> — budget ES-<n>` and `descope ES-<n>` in the Stage lines of both the Progress Log and the Output Format templates. Test-only change, so no `.claude/` path and no twin sync.
+- Tooling note (2026-09-30): `check_in_status.py --hand-back` reported `open` for a valid review hand-off because the 30-minute `review_autofix_sweep.yml` had a queued `internal-review.yml` dispatch for #5164 (run 36669856125, behind 21 others). With a hand-off pending, that dispatch only skips (`claude_fixer_awaiting_session`, `review_autofix.yml:815-821`), so this stage went ahead. While the dispatch queue is backed up, a checker can report `still waiting` on a hand-off that is really due.
