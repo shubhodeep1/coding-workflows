@@ -21,8 +21,9 @@ Output is one JSON line: `current` (bool), `loaded_sha256` (from the record,
 or null), `file_sha256` (the file now, or `absent`), `record` (the record
 path, or null), `recorded_event`, `recorded_at`, and `reason`. Exit 0 when
 current, 1 when not current, 2 on bad arguments. A missing session id, a
-missing or unreadable record, or a record for a different hash is "not
-current": the check fails closed, and the caller hands its work to a fresh
+missing or unreadable record, a record for a different hash, or no readable
+`settings.json` on disk (even when the record says `absent` too: there is no
+wiring to confirm) is "not current": the check fails closed, and the caller hands its work to a fresh
 session instead of pushing under wiring nobody confirmed. No API calls
 (§15); local file reads only.
 """
@@ -80,7 +81,9 @@ def check(session_id: str | None, settings: Path, directory: Path) -> dict:
 	result["loaded_sha256"] = record["sha256"]
 	result["recorded_event"] = record.get("event")
 	result["recorded_at"] = record.get("ts")
-	if record["sha256"] == result["file_sha256"]:
+	if result["file_sha256"] == ABSENT:
+		result["reason"] = "no readable settings.json to verify"
+	elif record["sha256"] == result["file_sha256"]:
 		result["current"] = True
 		result["reason"] = "the session loaded this settings.json"
 	else:
