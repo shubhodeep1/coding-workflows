@@ -338,8 +338,23 @@ def _bash(command):
 		("sudo sh -c 'mysql -pS3cretPass app'", "S3cretPass", "sudo sh -c 'mysql -p*** app'"),
 		("docker exec db bash -lc 'redis-cli -a S3cretPass ping'", "S3cretPass", "docker exec db bash -lc 'redis-cli -a *** ping'"),
 		("bash -c \"su pg -c 'mysql -pS3cretPass'\"", "S3cretPass", "bash -c \"su pg -c 'mysql -p***'\""),
+		# An attached `-c` command line (`su -c'…'`, one word after quote removal) and `c` inside a flag cluster (`bash -ce '…'`).
+		("sh -c'mysql -pS3cretPass app'", "S3cretPass", "sh -c'mysql -p*** app'"),
+		("su postgres -c'mysql -pS3cretPass app'", "S3cretPass", "su postgres -c'mysql -p*** app'"),
+		("sudo bash -lc'curl -udeploy:mycustompwd https://a.b'", "mycustompwd", "sudo bash -lc'curl -u*** https://a.b'"),
+		("bash -ce 'mysql -pS3cretPass app'", "S3cretPass", "bash -ce 'mysql -p*** app'"),
+		# A user name that names a shell before a cluster containing `c` still leaves the credential flag read.
+		("sudo -u bash mysql -pScretPw app", "ScretPw", "sudo -u bash mysql -p*** app"),
+		# Shells beyond the POSIX family, and PowerShell's `-Command`.
+		("fish -c 'mysql -pS3cretPass app'", "S3cretPass", "fish -c 'mysql -p*** app'"),
+		("csh -c 'mysql -pS3cretPass app'", "S3cretPass", "csh -c 'mysql -p*** app'"),
+		("tcsh -c 'mysql -pS3cretPass app'", "S3cretPass", "tcsh -c 'mysql -p*** app'"),
+		("pwsh -Command 'curl -udeploy:mycustompwd https://a.b'", "mycustompwd", "pwsh -Command 'curl -u*** https://a.b'"),
 		# An unencoded `@` in the password: userinfo runs to the last `@` before the path.
 		("git clone https://user:pa@ss1234@github.com/o/r.git", "ss1234", "git clone https://***@github.com/o/r.git"),
+		# A `?` in the password is still userinfo, and a query after the host stays.
+		("curl https://user:pa?ss1234@host/path", "ss1234", "curl https://***@host/path"),
+		("curl https://user:p@ss1234@host?x=1", "ss1234", "curl https://***@host?x=1"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -448,6 +463,11 @@ def test_credential_free_commands_are_unchanged(command):
 		("docker exec db mysql -pS3cretPass app", "docker exec * -p* *"),
 		# A `-c` command line is one value in the shape.
 		("su postgres -c 'mysql -pS3cretPass app'", "su * -c *"),
+		# An attached `-c` command line is cut like an attached credential value; a `c` flag cluster stays.
+		("sh -c'mysql -pS3cretPass app'", "sh -c*"),
+		("su postgres -c'mysql -pS3cretPass app'", "su * -c*"),
+		("sudo bash -lc'curl -udeploy:mycustompwd https://a.b'", "sudo * -lc*"),
+		("bash -ce 'mysql -pS3cretPass app'", "bash -ce *"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):
@@ -483,6 +503,24 @@ def test_redaction_masks_credentials_in_reasons_and_titles(text, secret):
 def test_redaction_keeps_ordinary_text():
 	text = "git push -u origin main; add basic support; gh api repos/o/r/issues/5"
 	assert pp_mask_twin.redact(text) == text
+
+
+@pytest.mark.parametrize(
+	"text",
+	[
+		# An `@` in a query after a URL with no path is not userinfo: the host and the query stay.
+		"curl https://example.com?email=test@example.com",
+		"curl 'https://example.com/?email=test@example.com&x=1'",
+		"open https://example.com#section=a@b",
+	],
+)
+def test_redaction_keeps_url_queries_with_at_signs(text):
+	assert pp_mask_twin.redact(text) == text
+	assert pp_mask_twin.record_example(_bash(text)) == text
+
+
+def test_shape_keeps_the_host_of_an_endpoint_whose_query_holds_an_at_sign():
+	assert pp_mask_twin.command_shape("gh api 'https://api.example.com?email=a@b.com'") == "gh api https://api.example.com?*"
 
 
 def test_the_reported_exploit_reaches_no_posted_text():

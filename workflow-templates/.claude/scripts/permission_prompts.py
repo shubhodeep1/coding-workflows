@@ -181,8 +181,10 @@ _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 REDACTION_PATTERNS = (
 	# URL userinfo first (issue #5124), so `https://x-access-token:<t>@host/…` keeps its host.
-	# Up to the last `@` before the path, so an unencoded `@` in the password is masked too.
-	(re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/'\"]+@"), r"\1***@"),
+	# Up to the last `@` before the path, so an unencoded `@` in the password is masked too. A `?` or `#`
+	# may be part of the password, but text after one that holds `=` or `&` is a query
+	# (`https://h?email=a@b.c`), so the host survives there.
+	(re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/?#'\"]*(?:[?#][^\s/?#'\"=&]*)*@"), r"\1***@"),
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
 	(re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "github_pat_***"),
 	(re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"), "sk-***"),
@@ -240,13 +242,18 @@ _HEADER_SHORT_FLAG_TOOLS = frozenset({"curl", "gh", "http", "https"})
 _CREDENTIAL_COMMANDS = frozenset(key.split(" ", 1)[0] for key in _CREDENTIAL_SHORT_FLAGS) | _HEADER_SHORT_FLAG_TOOLS
 # Commands whose `-c` (or `--command`) argument is a command line of its own (`su pg -c 'mysql -p…'`,
 # `sudo sh -c 'curl -u …'`): it is parsed like the command and its credentials are masked too.
-_SHELL_COMMAND_RUNNERS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "su", "runuser"})
-_SHELL_COMMAND_FLAG_RE = re.compile(r"^(-[A-Za-z]*c|--(session-)?command)$")
+_SHELL_COMMAND_RUNNERS = frozenset(
+	{"sh", "bash", "rbash", "dash", "zsh", "ksh", "mksh", "pdksh", "ash", "yash", "posh", "fish", "csh", "tcsh", "pwsh", "powershell", "su", "runuser"}
+)
+_SHELL_COMMAND_FLAG_RE = re.compile(r"^(-[A-Za-z]*c|--(session-)?command|-[Cc]ommand)$")
+# A short-flag cluster with `c` before its end: `su -c'mysql -p…'` (the rest is the attached command
+# line) or `bash -ce 'mysql -p…'` (the next word is it). Both are parsed when a runner precedes it.
+_SHELL_COMMAND_CLUSTER_RE = re.compile(r"^(-[A-Za-z]*?c)(.+)$", re.DOTALL)
 # Deeper nesting of `-c` command lines than this withholds the command (fail closed).
 MAX_NESTED_COMMAND_DEPTH = 3
 _HEADER_WORD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(\S.*?)\s*$", re.DOTALL)
 _CREDENTIAL_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)=(.*)$", re.DOTALL)
-_URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@")
+_URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]*(?:[?#][^/?#=&]*)*@")
 
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>()"
 _HEREDOC_RE = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
@@ -339,6 +346,11 @@ def _segment_flag_letters(words: list[str], start: int, position: int, header: b
 	return letters
 
 
+def _shell_runner_before(words: list[str], start: int, position: int) -> bool:
+	"""True when a word from the segment's command at `start` up to (not including) `position` names a _SHELL_COMMAND_RUNNERS command."""
+	return any(earlier.rsplit("/", 1)[-1] in _SHELL_COMMAND_RUNNERS for earlier in words[start:position])
+
+
 def _credential_flag_position(token: str, letters: str) -> int | None:
 	"""Index in `token` of a flag from `letters` in a `-abc` cluster: the first letter, or one preceded only by boolean flags; else None.
 
@@ -416,6 +428,10 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			# An attached credential or header value (`-udeploy:pwd`) never reaches the shape, behind a wrapper
 			# (`sudo mysql -pS3cret`) or a global option (`docker --config d login -pS3cret`) too.
 			cut = _cut_attached_value(token, _segment_flag_letters(tokens, command_position, index - 1, header=True))
+			attached_command = _SHELL_COMMAND_CLUSTER_RE.match(token) if cut is None and _shell_runner_before(tokens, command_position, index - 1) else None
+			if attached_command and not attached_command.group(2).isalpha():
+				# An attached `-c` command line (`su -c'mysql -p…'`) is one value; `-ce` stays a flag cluster.
+				cut = attached_command.group(1) + "*"
 			flag = cut if cut is not None else token.split("=", 1)[0] + ("=*" if "=" in token else "")
 			if flag in ("-X", "--method") and index < len(tokens):
 				flag = f"{flag} {tokens[index].upper()}"
@@ -531,9 +547,8 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 		following = words[index] if index < len(words) and not words[index].startswith("-") else None
 		values.update(_word_credentials(word))
 		flag_name, has_attached, attached = word.partition("=")
-		if index - 1 > start and _SHELL_COMMAND_FLAG_RE.match(flag_name if flag_name.startswith("--") else word) and any(
-			earlier.rsplit("/", 1)[-1] in _SHELL_COMMAND_RUNNERS for earlier in words[start : index - 1]
-		):
+		runner_before = index - 1 > start and _shell_runner_before(words, start, index - 1)
+		if runner_before and _SHELL_COMMAND_FLAG_RE.match(flag_name if flag_name.startswith("--") else word):
 			# `su pg -c 'mysql -p…'`, `sudo sh -c 'curl -u …'`: the argument is a command line of its own.
 			if has_attached and flag_name.startswith("--"):
 				values.update(_command_line_credentials(attached, depth + 1))
@@ -541,6 +556,14 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 				values.update(_command_line_credentials(words[index], depth + 1))
 				index += 1
 			continue
+		attached_command = _SHELL_COMMAND_CLUSTER_RE.match(word) if runner_before else None
+		if attached_command:
+			# `su -c'mysql -p…'` carries the command line in the word; `bash -ce 'mysql -p…'` in the next
+			# word, which is still read as a word of its own below. The word itself is read as a flag too,
+			# since a user name such as `bash` before it (`sudo -u bash mysql -pScret…`) can match.
+			values.update(_command_line_credentials(attached_command.group(2), depth + 1))
+			if attached_command.group(2).isalpha() and index < len(words):
+				values.update(_command_line_credentials(words[index], depth + 1))
 		if word.startswith("--"):
 			name, has_value, value = word.partition("=")
 			if _CREDENTIAL_LONG_FLAG_RE.match(name):
