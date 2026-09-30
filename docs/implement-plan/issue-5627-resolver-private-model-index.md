@@ -1,29 +1,33 @@
 # Implement-Plan Log — Give the conflict-resolver model a private Git index
 
-- Plan: docs/plans/issue-5627-resolver-private-model-index-plan.md
+- Plan: docs/completed/issue-5627-resolver-private-model-index-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5627
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5627-resolver-private-model-index   Final PR: #5637 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
-- Activation: not started
-- Waiting on: PR #5648 (review round 3 or merge)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (branch claude/implement-plan-issue-5627-resolver-private-model-index-complete) into the project branch
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01LX3ut8ixr4nKefuuzQVDA4 (reused; safety net and hand-back recorded in the stage report)
 - Last updated: 2026-09-30
-- Last note: review round 2 on PR #5648: fixed the one task gap (real-index contract comment on `stage_resolver_touched_path_or_fail`, pinned by `test_private_model_index_wiring`)
+- Last note: validation cycle 1 passed (run 36750018684, 10/10 tests, head 442b5cb); completion PR moves the plan to docs/completed/, then the final PR #5637 is marked ready
 
 ## Phases
-1. [ ] Phase 1 — private resolver model index (`GIT_INDEX_FILE` copy per attempt plus OpenCode snapshot opt-out, source repo only; regression tests; agents.md; changelog fragment)   — PR #5648 open (waiting); review rounds: 2; interventions: 0
+1. [x] Phase 1 — private resolver model index (`GIT_INDEX_FILE` copy per attempt plus OpenCode snapshot opt-out, source repo only; regression tests; agents.md; changelog fragment)   — PR #5648 merged 2026-09-30 (merge commit 442b5cb); review rounds: 2; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-30: CONFORMANT — no fixes (pre-security; 0 findings, 0 auto-decisions)
 
 ## Security pass
 - Skipped (ai:workflow-heal: automation-produced issue; plan header `Security pass: skip`)
 
 ## Validation
+- Cycle 1 — run 36750018684 2026-09-30 (target_ref: claude/implement-plan-issue-5627-resolver-private-model-index, checked out 442b5cb): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 295s); no fix PR
 
 ## Completion
+- Completion PR (branch claude/implement-plan-issue-5627-resolver-private-model-index-complete) open — doc moved to docs/completed/issue-5627-resolver-private-model-index-plan.md
+- Final PR #5637 draft — marked ready at the final-merge stage
 
 ## Activation
 
