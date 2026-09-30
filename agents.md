@@ -1145,7 +1145,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   `Cookie`, …), credential long flags (`--user`, `--password`, `--token`, …,
   also a separate value that starts with `-`), per-command credential short
   flags (`curl -u/-U/-b/-E`, `mysql -p`, `sshpass -p`, `redis-cli -a`,
-  `docker login -p`), URL userinfo, and credential query parameters become
+  `docker login -p`, also behind a wrapper such as `sudo`, `env`, or
+  `timeout`), URL userinfo, and credential query parameters become
   `***`. A command that cannot be parsed, or whose credential is shorter
   than 4 characters or does not occur verbatim, is withheld and only its
   shape is posted; the shape keeps no raw text

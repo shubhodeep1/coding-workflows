@@ -314,6 +314,15 @@ def _bash(command):
 		("tool --password --token s3cretvalue", "s3cretvalue", "tool --password *** ***"),
 		# A boolean credential flag has no value, so the next flag stays; the flag after it still masks its value.
 		("tool --password-stdin --token s3cretvalue", "s3cretvalue", "tool --password-stdin --token ***"),
+		# Behind a wrapper (`sudo`, `env`, `timeout`, `xargs`), the wrapped command's credential flags still apply.
+		("sudo mysql -pS3cretPass app", "S3cretPass", "sudo mysql -p*** app"),
+		("sudo -u root mysql -pS3cretPass", "S3cretPass", "sudo -u root mysql -p***"),
+		("timeout 30 mysql -pS3cretPass app", "S3cretPass", "timeout 30 mysql -p*** app"),
+		("env curl -udeploy:mycustompwd https://a.b", "mycustompwd", "env curl -u*** https://a.b"),
+		("xargs -n1 curl -sSu deploy:mycustompwd", "mycustompwd", "xargs -n1 curl -sSu ***"),
+		("sudo docker login -p S3cretPass registry.example.com", "S3cretPass", "sudo docker login -p *** registry.example.com"),
+		# An unencoded `@` in the password: userinfo runs to the last `@` before the path.
+		("git clone https://user:pa@ss1234@github.com/o/r.git", "ss1234", "git clone https://***@github.com/o/r.git"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -365,6 +374,11 @@ def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
 		"git log --author=bob -n 5",
 		# A boolean credential flag followed by another flag has no value.
 		"docker login --password-stdin -u me registry.example.com",
+		# A wrapper's own short flags (`sudo -u`, `env -u`) are not the wrapped command's credential flags.
+		"sudo apt-get install -y curl",
+		"sudo -u postgres psql -c 'select 1'",
+		"env -u HOME curl https://a.b",
+		"timeout 30 curl -XPUT -H 'Accept: application/json' https://a.b",
 	],
 )
 def test_credential_free_commands_are_unchanged(command):
@@ -392,6 +406,12 @@ def test_credential_free_commands_are_unchanged(command):
 		("curl -u -deploy:mycustompwd https://a.b", "curl -u *"),
 		("docker login --password-stdin -u me registry.example.com", "docker login --password-stdin -u *"),
 		("gh auth login --with-token -h github.com", "gh auth * --with-token -h *"),
+		# Behind a wrapper, an attached credential value is cut from the shape too.
+		("sudo mysql -pS3cretPass app", "sudo * -p* *"),
+		("sudo -u root mysql -pS3cretPass", "sudo -u * -p*"),
+		("env curl -udeploy:mycustompwd https://a.b", "env * -u* *"),
+		("timeout 30 curl --user -deploy:mycustompwd https://a.b", "timeout * --user *"),
+		("sudo gh api -H'Authorization: token abcdefgh' user", "sudo * -H* *"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):
@@ -412,6 +432,7 @@ def test_non_bash_input_masks_credential_keys():
 	("text", "secret"),
 	[
 		("see https://deploy:mycustompwd@example.com", "mycustompwd"),
+		("see https://deploy:my@custompwd@example.com/x", "custompwd"),
 		("Authorization: Basic ZGVwbG95Om15Y3VzdG9tcHdk", "ZGVwbG95Om15Y3VzdG9tcHdk"),
 		("Cookie: session=abcdef123; other=1", "abcdef123"),
 		("ran curl -u deploy:mycustompwd", "mycustompwd"),
