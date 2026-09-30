@@ -429,3 +429,47 @@ def test_outside_conflict_resolution_runs_under_the_merged_guards(tmp_path: Path
 	assert _git(clone, env, "log", "-1", "--format=%s") == "[claude-asset-sync] merge main for .claude/ guard updates"
 	assert len(_git(clone, env, "log", "-1", "--format=%P").split()) == 2
 	assert _git(clone, env, "show", "HEAD:.claude/hooks/guard.sh") == "new guard"
+
+
+def test_failed_fetch_stops_instead_of_checking_a_stale_ref():
+	"""PR #5280 review round 1: a failed fetch in the sync's step 1 is a stop,
+	never a drift check against the ref it did not refresh."""
+	section = _section(_flat(TWIN_DIR / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	step1 = _section(section, "1. `git fetch origin <default>`", "2. **Stale?**")
+	assert "Each fetch must succeed." in step1
+	assert "A failed fetch is therefore a stop with the caller's blocker as in step 5, naming the failed fetch and its error line" in step1
+	assert "never run step 2 against a ref this step did not refresh" in step1
+	fixer = _section(_flat(TWIN_DIR / "fix-claude-pr.md"), "5. **Fix it.**", "- **`claude/implement-plan-*` head**")
+	assert "When one of the sync's own fetches fails (its step 1: `git fetch origin <default>` or `git fetch origin <base ref>`), stop the same way" in fixer
+	assert ".claude/ asset sync could not fetch <ref> — decision needed" in fixer
+
+
+def test_failed_base_fetch_leaves_a_stale_ref_that_reports_no_drift(tmp_path: Path):
+	"""Why the stop is needed: after a failed `git fetch origin <base>` the
+	documented base-drift check still exits 0 against the stale ref, although
+	the live base holds a guard change the head lacks."""
+	section = _section(_flat(TWIN_DIR / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	fetch = _documented(section, r"`(git fetch origin <base>)`", base="project")
+	base_check = _documented(section, r"`(git diff --quiet HEAD\.\.\.origin/<base> -- [^`]*)`", base="project")
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/hooks/guard.py", "v1\n", "guard v1")
+	_git(origin, env, "checkout", "-q", "-b", "project")
+	_commit(origin, env, "docs/log.md", "log\n", "project start")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "checkout", "-q", "-b", "work", "origin/project")
+	_commit(clone, env, "work.md", "x\n", "phase work")
+	_commit(origin, env, ".claude/hooks/guard.py", "v2\n", "project guard fix")
+	# The remote becomes unreachable before the sync's fetch.
+	origin.rename(tmp_path / "origin-moved")
+	assert _exit_code(clone, env, fetch) != 0
+	assert _exit_code(clone, env, base_check) == 0
+	# Once the fetch succeeds, the same check finds the drift.
+	(tmp_path / "origin-moved").rename(origin)
+	assert _exit_code(clone, env, fetch) == 0
+	assert _exit_code(clone, env, base_check) == 1

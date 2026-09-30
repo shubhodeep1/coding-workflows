@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5260-asset-sync-pr-base-drift-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5260
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4952-sync-claude-assets-at-session-start
-- Project branch: claude/implement-plan-issue-5260-asset-sync-pr-base-drift   Final PR: #5280 draft (into claude/implement-plan-issue-4952-sync-claude-assets-at-session-start)
+- Project branch: claude/implement-plan-issue-5260-asset-sync-pr-base-drift   Final PR: #5280 ready — review rounds: 1 (into claude/implement-plan-issue-4952-sync-claude-assets-at-session-start)
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round
 - Activation: n/a (base claude/implement-plan-issue-4952-sync-claude-assets-at-session-start)
-- Waiting on: completion PR (branch claude/implement-plan-issue-5260-asset-sync-pr-base-drift-complete)
+- Waiting on: PR #5280: twin sync (final PR, review round 1 fix pushed)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01FHuvL5vgkLnpx5nqkmQZUP   safety net and hand-back: see the completion stage report
+- Check-in: checker session_01FHuvL5vgkLnpx5nqkmQZUP   safety net none   hand-back none (twin-sync hold; the stage that `/reclarify` resumes arms the wait)
 - Last updated: 2026-09-30
-- Last note: validation 1/3 read (session_01WQ6YWVJ33qMQSjjJeHgZ99): run 36719515003 `status=pass raw_status=pass` (10/10 tests) on project-branch head 3ffb8b9; project branch already up to date with the issue base; completion PR opened, plan moved to docs/completed/. Next: final-merge 1/1 (mark #5280 ready; on merge close #5260 with `ai:merged`, Activation n/a).
+- Last note: final-merge review round 1 (session_013DHndnKSQhvzUfzrG9iidk): the one consensus finding (a failed fetch in the Claude-asset sync's step 1 leaves a stale ref that the drift checks read as fresh) fixed in the twins; twin sync needed before the next review round (hold claim + blocker on #5260).
 
 ## Phases
 1. [x] Phase 1 — base-aware drift check in the Claude-asset sync — PR #5282 merged 2026-09-30 (3ffb8b9, head 8cc19d7; merged by the operator after review round 5, Q1: A on #5260); review rounds: 5; interventions: 0 — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`
@@ -32,8 +32,8 @@
 - Cycle 1 — run 36719515003 2026-09-30 (target_ref: claude/implement-plan-issue-5260-asset-sync-pr-base-drift, head 3ffb8b9): status=pass raw_status=pass — "Runtime validation passed (10/10 tests, 289s)." Dispatched after the operator's Q1: C on #5260 (comment 5911763970): #4734 (PR #4746, 44745a3) lets `validate.yml` authorize one level of stacking, and #5280 → #4952's project branch → `main` (#4995) is one level; standing decision Q17 is superseded.
 
 ## Completion
-- Completion PR (branch claude/implement-plan-issue-5260-asset-sync-pr-base-drift-complete) — doc moved to docs/completed/issue-5260-asset-sync-pr-base-drift-plan.md
-- Final PR #5280 draft (into claude/implement-plan-issue-4952-sync-claude-assets-at-session-start)
+- Completion PR #5717 merged 2026-09-30T14:23:05Z as a5103d5 — doc moved to docs/completed/issue-5260-asset-sync-pr-base-drift-plan.md
+- Final PR #5280 ready — review rounds: 1 (into claude/implement-plan-issue-4952-sync-claude-assets-at-session-start); body updated and marked ready 2026-09-30 by session_01UmedVCr75pxJuNy221L2ZU (project branch already up to date with the issue base; default guard drift check exit 0 at that stage)
 
 ## Activation
 - n/a: the base is the #4952 project branch, so this change goes live with project #4952.
@@ -53,6 +53,8 @@
 
 - [source:intervention] Syncing a project branch whose open phase PR edits the same files as the incoming base change leaves that PR conflicted: check the open phase PR with `git merge-tree --write-tree <PR head> origin/<project branch>` right after the sync and resolve it in the same stage, before the next review round. (files: workflow-templates/.claude/commands/implement-plan-claude.md)
 - [source:validation] Before stopping a stacked project on a workflow's authorization step, read that step and the standing decisions on `origin/<default>`, not the project branch's older copies: `main`'s `validate.yml` already accepted one level of stacking (#4734) and had superseded the standing skip decision, so the stale copies turned a runnable validation into a blocker. (files: .github/workflows/validate.yml, docs/operations/master-session.md)
+
+- [source:intervention] Every `git fetch` that a guard or drift check depends on needs an explicit failure rule: a failed fetch leaves the remote-tracking ref where it was, and a three-dot diff against it reports a stale branch as fresh. (files: workflow-templates/.claude/commands/implement-plan-claude.md, workflow-templates/.claude/commands/fix-claude-pr.md)
 
 ## Notes
 - Started by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#5260: start`) into session `session_01HMaxnWJosFZFkojR4Z83GA` (permission mode `auto`).
@@ -80,3 +82,5 @@
 - Review round 5 (2026-09-30, head 8cc19d7, twin sync dd185c5 plus the log commit): three findings, all rejected with reasons in the PR #5282 judgement comment 5907535216 — the three-dot drift checks compare against the merge base on purpose (a branch's own guard edits are not staleness; the one false positive, a head that cherry-picked the base's guard change, produces a clean merge with no content change in a scratch repo); the project-base verification passing after a project reverts a guard is the project's own reviewed change (a two-dot form would stop every sync of a project that edits a hook); the unconditional base fetch is plan step 1 (rejected in rounds 3 and 4). No `CLAUDE_FIXER_VERDICT_BOT_LOGIN` is configured, so no ledger-bound verdict could close the round: hold claim 5907537599 on 8cc19d7, blocker on #5260 (comment 5907540629). Operator answer Q1: A (comment 5907961672): #5282 merged into the project branch as 3ffb8b9. The same blocker can recur on final PR #5280.
 - Conformance 1/3 stopped before validation (#5260 comment 5911244506): `validate.yml` then looked like it would refuse `target_ref` because #5280 targets a project branch, not `main`. Operator answer Q1: C (comment 5911763970): #4734 already allowed one level of stacking, so validation was dispatched normally.
 - `claude_assets=stale (base claude/implement-plan-issue-4952-sync-claude-assets-at-session-start)` at conformance 1/3 and validation 1/3: `main` has `.claude/hooks/gh_api_write_guard.py` (#4920), which neither the project branch nor its base has yet; the base is not the default branch, so nothing was merged in.
+- Final-merge review round 1 (2026-09-30, hand-off `round=1` on head a5103d5a88be, run 36730686055, ledger a3cf599f…): one consensus finding (5 of 6 reviewers, in both command copies), valid — the sync's step 1 had no failure rule for `git fetch origin <default>` / `git fetch origin <base>`, so a failed fetch left a stale `origin/<base>` that the base-drift check reads as "no drift". Fixed in the twins: step 1 requires each fetch to succeed and makes a failed fetch a stop with the caller's blocker (naming the fetch and its error line); `/fix-claude-pr` step 5 stops the same way with its hold claim, blocker comment, and `PushNotification`; `agents.md` bullet and the changelog fragment say so. Tests: `tests/test_claude_asset_sync_command.py` pins the wording and runs a scratch-repo scenario (unreachable remote: the fetch fails and the base-drift check still exits 0 against the stale ref; after a good fetch it exits 1). With both twins copied in a scratch tree, every test file that reads these commands plus `tests/test_session_start_claude_assets_drift.py` and `tests/test_update_workflows_guardrails.py` pass (456 passed, 1 skipped); in the real tree only the twin-parity checks fail, as expected until the sync. Claim 5915300344 (review) on a5103d5. Asset sync on the project branch: default drift exits 1 (`main`'s `.claude/hooks/gh_api_write_guard.py`, #4920), the issue base is not the default branch, so nothing merged: `claude_assets=stale (base claude/implement-plan-issue-4952-sync-claude-assets-at-session-start)`.
+- Twin sync needed after final-merge review round 1 (sha256 of the twins): `workflow-templates/.claude/commands/implement-plan-claude.md` → `.claude/commands/implement-plan-claude.md` `c093aa3c311445a3fb11368502c600dce73c791b0cde6fd15c088c8a769c739f`; `workflow-templates/.claude/commands/fix-claude-pr.md` → `.claude/commands/fix-claude-pr.md` `44821c540b04f16d868c5b171027b62d084844510d86dc1b82515ed50b02c804`. No `.claude/` path without a twin changed.

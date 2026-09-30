@@ -9,7 +9,7 @@ Before this change, `/implement-plan-claude` review and blocked-PR stages and `/
 | GitHub API calls added | 0 (one more `git fetch` of the PR base, local `git diff`) |
 | Files changed | `implement-plan-claude.md` `### Claude-asset sync` steps 1–4, `fix-claude-pr.md` step 5 |
 
-What this means for operators: a guard fix that reached a project branch before reaching `main` now also reaches the PR heads built on that branch before a stage or fixer session works on them. The only new stop is a project branch that still lacks `main`'s guards after its sync, which names the check and the differing paths.
+What this means for operators: a guard fix that reached a project branch before reaching `main` now also reaches the PR heads built on that branch before a stage or fixer session works on them. The new stops are a project branch that still lacks `main`'s guards after its sync, which names the check and the differing paths, and a failed `git fetch` of the default branch or the PR's base, which names the fetch and its error line instead of comparing against a stale ref.
 
 ### For contributors
 
