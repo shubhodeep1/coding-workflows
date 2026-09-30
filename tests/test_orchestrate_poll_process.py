@@ -12190,6 +12190,10 @@ def test_standalone_stall_recovery_reconciles_merged_pr_with_stale_merge_train_l
 			"state": "closed",
 			"merged": True,
 			"merged_at": "2026-09-07T21:30:00Z",
+			# Issue #5618: the ai:merged tag needs a merge into the issue's
+			# target branch; a standalone issue with no Integration branch
+			# line targets the default branch.
+			"baseRefName": "main",
 			"headRefName": "ai/issue-501",
 			"labels": ["ai:merge-queued"],
 		}],
@@ -14614,7 +14618,11 @@ def test_backward_scan_promotes_ready_to_merge_with_merged_pr_to_merged():
 		"state": "closed",
 		"merged": True,
 		"merged_at": "2026-04-27T12:00:00Z",
-		"baseRefName": "orchestrator/project-192",
+		# Issue #5618: with no integration branch in the state, a prior-wave
+		# child's target is the default branch (a merge into
+		# orchestrator/project-192 is rejected; see
+		# test_backward_scan_does_not_promote_merged_pr_into_non_target_base).
+		"baseRefName": "main",
 		"headRefName": "ai/issue-35",
 		"headRefFromApi": "ai/issue-35",
 		"mergeable": True,
@@ -15216,6 +15224,9 @@ def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
 		"state": "closed",
 		"merged": True,
 		"merged_at": "2026-08-25T15:00:00Z",
+		# Issue #5618: _base_state has no integration branch, so the
+		# child's target is the default branch.
+		"baseRefName": "main",
 		"headRefName": "ai/issue-10",
 		"headRefFromApi": "ai/issue-10",
 	}
@@ -15237,6 +15248,139 @@ def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
 		prs=[genuine_pr, mention_only_pr],
 	)
 	assert "ai:merged" in result["issues"]["10"]["labels"]
+
+
+def test_reconciliation_rejects_merged_pr_into_non_target_base():
+	"""Issue #5618: an unrelated PR saying `Fixes #10` that merged into a
+	branch other than the default or the project's integration branch must
+	not force ai:merged on the wave child nor mark it merged."""
+	wrong_base_pr = {
+		"number": 953,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-09-30T10:00:00Z",
+		"baseRefName": "feature/unrelated",
+		"headRefName": "claude/unrelated-fix",
+		"headRefFromApi": "claude/unrelated-fix",
+		"body": "Fixes #10",
+	}
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:planning"]},
+		issue_linked_prs={10: [953]},
+		prs=[wrong_base_pr],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" not in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["status"] != "merged"
+	assert "LINKED_PR_CROSS_REF_REJECTED issue=10 pr=953 base=feature/unrelated" in combined, combined
+	assert "reason=non_target_base" in combined, combined
+
+
+def test_backward_scan_does_not_promote_merged_pr_into_non_target_base():
+	"""Issue #5618: the backward scan promotes a prior-wave ai:ready-to-merge
+	child only when its merged PR landed on the default branch or the
+	project's integration branch; here the state has no integration branch
+	and the PR merged into a project branch, so nothing is promoted."""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 2,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+					{"id": "fixup-1", "github_issue": 35, "status": "pending"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": 20, "status": "pending"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10, "fixup-1": 35, "issue-2": 20},
+		"pending_issue_defs": {},
+	}
+	merged_pr = {
+		"number": 935,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-04-27T12:00:00Z",
+		"baseRefName": "orchestrator/project-192",
+		"headRefName": "ai/issue-35",
+		"headRefFromApi": "ai/issue-35",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={
+			10: ["ai:merged"],
+			35: ["ai:ready-to-merge"],
+			20: ["ai:implementing"],
+		},
+		issue_linked_prs={35: 935},
+		prs=[merged_pr],
+	)
+	final_labels = result["issues"]["35"]["labels"]
+	assert "ai:merged" not in final_labels, final_labels
+	wave1_issues = {i["id"]: i["status"] for i in result["latest_state"]["waves"][0]["issues"]}
+	assert wave1_issues.get("fixup-1") != "merged", wave1_issues
+	assert "[backward-scan] #35 ai:ready-to-merge; linked PR #935 is merged but rejected=non_target_base" in result["stdout"], result["stdout"]
+
+
+def test_standalone_stall_recovery_does_not_tag_merged_pr_into_non_target_base():
+	"""Issue #5618: stall recovery still skips the command for a merged
+	linked PR, but tags ai:merged only for a merge into the issue's target
+	branch."""
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 2,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 419},
+		mock_gh_issue_list_label_filter=True,
+		prs=[{
+			"number": 419,
+			"body": "Closes #501",
+			"state": "closed",
+			"merged": True,
+			"merged_at": "2026-09-07T21:30:00Z",
+			"baseRefName": "feature/unrelated",
+			"headRefName": "claude/unrelated-fix",
+		}],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" not in result["issues"]["501"]["labels"], result["issues"]["501"]["labels"]
+	assert "STALL_MERGED_LABEL_REJECTED issue=501 pr=419" in combined, combined
+	assert "reason=non_target_base" in combined, combined
 
 
 def test_linkage_paths_distinguish_pr_fetch_failure_from_rejection():
@@ -16785,6 +16929,9 @@ def test_managed_stall_recovery_reconciles_merged_pr_with_stale_merge_train_labe
 			"state": "closed",
 			"merged": True,
 			"merged_at": "2026-09-07T21:30:00Z",
+			# Issue #5618: _base_state has no integration branch, so the
+			# child's target is the default branch.
+			"baseRefName": "main",
 			"headRefName": "ai/issue-10",
 			"labels": ["ai:merge-queued"],
 		}],

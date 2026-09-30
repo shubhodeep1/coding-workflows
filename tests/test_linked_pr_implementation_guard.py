@@ -394,6 +394,340 @@ def test_resolver_rejection_outweighs_mixed_fetch_failures_in_either_order():
 
 
 # ---------------------------------------------------------------------------
+# _pr_json_merged_into_issue_target — the target-branch and identity rule
+# every poller path applies before it marks an issue merged (issue #5618:
+# an unrelated PR saying "Fixes #<n>" merged into the wrong branch made the
+# reconcile loop force ai:merged and mark the wave child merged, although
+# close_merged_issues_sweep already rejects that merge since #4813 / #5226).
+# ---------------------------------------------------------------------------
+
+GH_HELPERS_SCRIPT = REPO_ROOT / "scripts" / "gh_helpers.sh"
+_TEST_REPO = "shubhodeep1/coding-workflows"
+_PROJECT_BRANCH = "orchestrator/project-5600"
+
+_EXTRACT_GH_HELPER_FN = r"""
+extract_gh_helper_fn() {
+	local fn="$1"
+	awk -v fn="${fn}" '
+		BEGIN { in_fn=0 }
+		$0 ~ "^"fn"\\(\\)" { in_fn=1 }
+		in_fn { print }
+		in_fn && /^\}$/ { exit }
+	' "__GH_HELPERS__"
+}
+"""
+
+
+def _bootstrap_target_helpers(tmp: Path, poller_fns: list[str], gh_helper_fns: list[str]) -> None:
+	extractor = _EXTRACT_FN.replace("__POLLER__", str(POLLER_SCRIPT))
+	gh_extractor = _EXTRACT_GH_HELPER_FN.replace("__GH_HELPERS__", str(GH_HELPERS_SCRIPT))
+	lines = ["set -euo pipefail", extractor, gh_extractor, ": > helpers.sh"]
+	lines += [f"extract_fn '{fn}' >> helpers.sh" for fn in poller_fns]
+	lines += [f"extract_gh_helper_fn '{fn}' >> helpers.sh" for fn in gh_helper_fns]
+	r = _run_bash("\n".join(lines), cwd=tmp)
+	assert r.returncode == 0, f"extraction failed: {r.stderr}\n{r.stdout}"
+	body = (tmp / "helpers.sh").read_text(encoding="utf-8")
+	for fn in poller_fns + gh_helper_fns:
+		assert f"{fn}()" in body, f"missing {fn} in helpers.sh"
+
+
+def _target_pr(
+	issue: int,
+	*,
+	base: str,
+	head: str,
+	head_repo: str = _TEST_REPO,
+	default_branch: str = "main",
+) -> str:
+	return json.dumps({
+		"number": 9001,
+		"state": "closed",
+		"merged_at": "2026-09-30T10:00:00Z",
+		"body": f"Fixes #{issue}",
+		"head": {"ref": head, "sha": "0" * 40, "repo": {"full_name": head_repo}},
+		"base": {"ref": base, "repo": {"full_name": _TEST_REPO, "default_branch": default_branch}},
+	})
+
+
+def _target_rc(
+	issue: str,
+	pr_json: str,
+	*targets: str,
+	with_identity_helper: bool = True,
+) -> tuple[int, str]:
+	"""Return (rc, ISSUE_TARGET_MERGE_REJECT_REASON) of the extracted predicate."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap_target_helpers(
+			tmp,
+			["_pr_json_merged_into_issue_target"],
+			["pr_head_ref_is_issue_automation_branch"] if with_identity_helper else [],
+		)
+		(tmp / "pr.json").write_text(pr_json, encoding="utf-8")
+		quoted_targets = " ".join(f"'{t}'" for t in targets)
+		script = textwrap.dedent(f"""
+		set -uo pipefail
+		export GITHUB_REPOSITORY='{_TEST_REPO}'
+		source helpers.sh
+		_rc=0
+		_pr_json_merged_into_issue_target '{issue}' "$(cat pr.json)" {quoted_targets} || _rc=$?
+		printf 'RC=%s\\n' "${{_rc}}"
+		printf 'REASON=%s\\n' "${{ISSUE_TARGET_MERGE_REJECT_REASON}}"
+		""")
+		r = _run_bash(script, cwd=tmp)
+		assert r.returncode == 0, f"predicate harness exited {r.returncode}: {r.stderr}"
+		rc = -1
+		reason = ""
+		for line in r.stdout.splitlines():
+			if line.startswith("RC="):
+				rc = int(line[len("RC="):])
+			if line.startswith("REASON="):
+				reason = line[len("REASON="):]
+		return rc, reason
+
+
+def test_target_default_branch_merge_is_accepted():
+	"""A default-branch merge keeps the closing-keyword identity, as the sweep does."""
+	pr = _target_pr(5618, base="main", head="claude/any-branch", head_repo="someone/fork")
+	assert _target_rc("5618", pr, _PROJECT_BRANCH) == (0, "")
+
+
+def test_target_project_branch_merge_from_automation_head_is_accepted():
+	pr = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5618")
+	assert _target_rc("5618", pr, _PROJECT_BRANCH) == (0, "")
+	followup = _target_pr(5618, base=_PROJECT_BRANCH, head="fix/5618-followup-1790000000")
+	assert _target_rc("5618", followup, _PROJECT_BRANCH) == (0, "")
+
+
+def test_target_wrong_base_merge_is_rejected():
+	"""The finding: `Fixes #N` merged into an unrelated branch never counts."""
+	pr = _target_pr(5618, base="feature/unrelated", head="ai/issue-5618")
+	assert _target_rc("5618", pr, _PROJECT_BRANCH) == (1, "non_target_base")
+
+
+def test_target_branch_merge_from_foreign_head_is_rejected():
+	pr = _target_pr(5618, base=_PROJECT_BRANCH, head="claude/unrelated-fix")
+	assert _target_rc("5618", pr, _PROJECT_BRANCH) == (1, "unverified_identity")
+	other_issue = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5617")
+	assert _target_rc("5618", other_issue, _PROJECT_BRANCH) == (1, "unverified_identity")
+
+
+def test_target_branch_merge_from_fork_head_is_rejected():
+	pr = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5618", head_repo="attacker/coding-workflows")
+	assert _target_rc("5618", pr, _PROJECT_BRANCH) == (1, "unverified_identity")
+	no_repo = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5618", head_repo="")
+	assert _target_rc("5618", no_repo, _PROJECT_BRANCH) == (1, "unverified_identity")
+
+
+def test_target_unknowns_fail_closed():
+	"""Empty default branch, empty targets, empty base, and bad input are all rejections."""
+	no_default = _target_pr(5618, base="main", head="ai/issue-5618", default_branch="")
+	assert _target_rc("5618", no_default, _PROJECT_BRANCH)[0] == 1
+	on_project = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5618")
+	assert _target_rc("5618", on_project) == (1, "non_target_base")
+	assert _target_rc("5618", on_project, "") == (1, "non_target_base")
+	no_base = _target_pr(5618, base="", head="ai/issue-5618")
+	assert _target_rc("5618", no_base, "")[0] == 1
+	assert _target_rc("5618", "{}", _PROJECT_BRANCH)[0] == 1
+	assert _target_rc("not-a-number", on_project, _PROJECT_BRANCH)[0] == 1
+
+
+def test_target_missing_identity_helper_fails_closed():
+	pr = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5618")
+	assert _target_rc("5618", pr, _PROJECT_BRANCH, with_identity_helper=False) == (1, "unverified_identity")
+
+
+def test_target_any_listed_target_counts():
+	"""Stall recovery passes the body's integration branch and the managed project branch."""
+	pr = _target_pr(5618, base="claude/implement-plan-issue-4813-x", head="ai/issue-5618")
+	assert _target_rc("5618", pr, "", "claude/implement-plan-issue-4813-x")[0] == 0
+	assert _target_rc("5618", pr, "claude/implement-plan-issue-4813-x", "")[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# _reconcile_merged_pr_issue — stall recovery's ai:merged tag (issue #5618).
+# gh, gh_retry, _safe_gh_jq and _fetch_pr_json are stubbed; the label edit is
+# recorded to a file so the tests see whether the tag was written.
+# ---------------------------------------------------------------------------
+
+
+def _reconcile_run(pr_payload: dict | None, issue_payload: dict | None) -> tuple[list[str], str, str]:
+	"""Run _reconcile_merged_pr_issue for issue 5618 / PR 9001.
+
+	Returns (gh calls, stderr, healing notes)."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap_target_helpers(
+			tmp,
+			[
+				"_jq_field",
+				"_pr_json_closes_issue",
+				"_pr_json_is_issue_implementation_pr",
+				"_pr_json_merged_into_issue_target",
+				"_reconcile_merged_pr_issue",
+			],
+			[
+				"pr_head_ref_is_issue_automation_branch",
+				"issue_body_integration_branch",
+				"issue_body_orchestrator_project_branch",
+			],
+		)
+		(tmp / "pr.json").write_text(json.dumps(pr_payload) if pr_payload is not None else "", encoding="utf-8")
+		(tmp / "issue.json").write_text(json.dumps(issue_payload) if issue_payload is not None else "", encoding="utf-8")
+		script = textwrap.dedent(f"""
+		set -euo pipefail
+		export GITHUB_REPOSITORY='{_TEST_REPO}'
+		gh() {{ printf '%s\\n' "$*" >> gh_calls.log; }}
+		gh_retry() {{ "$@"; }}
+		_fetch_pr_json() {{ if [ -s pr.json ]; then cat pr.json; else echo '{{}}'; fi; }}
+		_safe_gh_jq() {{ if [ -s issue.json ]; then cat issue.json; else return 1; fi; }}
+		add_healing_note() {{ printf '%s\\n' "$*" >> healing.log; }}
+		tg_notify() {{ :; }}
+		_gh_url() {{ printf 'https://github.com/%s/%s' "${{GITHUB_REPOSITORY}}" "$1"; }}
+		source helpers.sh
+		: > gh_calls.log
+		: > healing.log
+		_reconcile_merged_pr_issue '5618' 'ai:done' 'retrigger_review' '9001'
+		""")
+		r = _run_bash(script, cwd=tmp)
+		assert r.returncode == 0, f"reconcile harness exited {r.returncode}: {r.stderr}"
+		calls = [c for c in (tmp / "gh_calls.log").read_text(encoding="utf-8").splitlines() if c]
+		notes = (tmp / "healing.log").read_text(encoding="utf-8")
+		return calls, r.stderr, notes
+
+
+def _merged_payload(base: str, head: str, body: str = "Fixes #5618", head_repo: str = _TEST_REPO) -> dict:
+	return json.loads(_target_pr(5618, base=base, head=head, head_repo=head_repo)) | {"body": body}
+
+
+def _issue_payload(body: str, labels: list[str] | None = None) -> dict:
+	return {"number": 5618, "body": body, "labels": [{"name": n} for n in (labels or [])]}
+
+
+def _labelled(calls: list[str]) -> bool:
+	return any("issue edit 5618" in c and "--add-label ai:merged" in c for c in calls)
+
+
+def test_reconcile_default_branch_merge_is_tagged():
+	calls, _, notes = _reconcile_run(_merged_payload("main", "claude/fix"), _issue_payload("Plain issue."))
+	assert _labelled(calls), calls
+	assert "tagged ai:merged" in notes
+
+
+def test_reconcile_integration_branch_merge_from_automation_head_is_tagged():
+	issue = _issue_payload("- Integration branch: `claude/implement-plan-issue-4813-x`\n")
+	calls, _, _ = _reconcile_run(_merged_payload("claude/implement-plan-issue-4813-x", "ai/issue-5618"), issue)
+	assert _labelled(calls), calls
+
+
+def test_reconcile_managed_child_project_branch_merge_is_tagged():
+	issue = _issue_payload("Tracking issue: #5600\n", ["ai:orchestrator-managed"])
+	calls, _, _ = _reconcile_run(_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"), issue)
+	assert _labelled(calls), calls
+
+
+def test_reconcile_unlabelled_project_branch_merge_is_not_tagged():
+	"""Body text alone never makes an issue managed (issue #4957)."""
+	issue = _issue_payload("Tracking issue: #5600\nManaged by: AI Orchestrator\n")
+	calls, err, notes = _reconcile_run(_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"), issue)
+	assert not _labelled(calls), calls
+	assert "STALL_MERGED_LABEL_REJECTED issue=5618 pr=9001" in err
+	assert "reason=non_target_base" in err
+	assert "not tagged ai:merged" in notes
+
+
+def test_reconcile_wrong_base_merge_is_not_tagged():
+	"""The finding's scenario through the stall path."""
+	issue = _issue_payload("- Integration branch: `claude/implement-plan-issue-4813-x`\n")
+	calls, err, _ = _reconcile_run(_merged_payload("feature/unrelated", "claude/unrelated"), issue)
+	assert not _labelled(calls), calls
+	assert "reason=non_target_base" in err
+
+
+def test_reconcile_foreign_head_into_integration_branch_is_not_tagged():
+	issue = _issue_payload("- Integration branch: `claude/implement-plan-issue-4813-x`\n")
+	calls, err, _ = _reconcile_run(_merged_payload("claude/implement-plan-issue-4813-x", "claude/unrelated"), issue)
+	assert not _labelled(calls), calls
+	assert "reason=unverified_identity" in err
+
+
+def test_reconcile_mention_only_or_unmerged_pr_is_not_tagged():
+	calls, err, _ = _reconcile_run(_merged_payload("main", "claude/fix", body="Refs #5618"), _issue_payload(""))
+	assert not _labelled(calls), calls
+	assert "reason=not_implementation_pr" in err
+	unmerged = _merged_payload("main", "ai/issue-5618") | {"merged_at": None}
+	calls, err, _ = _reconcile_run(unmerged, _issue_payload(""))
+	assert not _labelled(calls), calls
+	assert "reason=not_merged" in err
+
+
+def test_reconcile_fetch_failures_fail_closed():
+	calls, err, _ = _reconcile_run(None, _issue_payload(""))
+	assert not _labelled(calls), calls
+	assert "reason=pr_fetch_failed" in err
+	calls, err, _ = _reconcile_run(_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"), None)
+	assert not _labelled(calls), calls
+	assert "reason=issue_fetch_failed" in err
+
+
+# ---------------------------------------------------------------------------
+# Call-site wiring: the reconcile loop, the validation-dispatch wave gate, and
+# the backward-scan promotion must consult the predicate before recording
+# merged state (issue #5618).
+# ---------------------------------------------------------------------------
+
+
+def _poller_text() -> str:
+	return POLLER_SCRIPT.read_text(encoding="utf-8")
+
+
+def _function_body(text: str, name: str) -> str:
+	start = text.index(f"\n{name}() {{")
+	end = text.index("\n}\n", start)
+	return text[start:end]
+
+
+def test_reconcile_loop_gates_merged_candidates_before_adopting_them():
+	text = _poller_text()
+	start = text.index('LINKED_PR_CANDIDATES="$(_issue_cross_ref_pr_numbers_unique "${inum}"')
+	loop = text[start:text.index('PR_STATES_JSON="$(echo "${PR_STATES_JSON}"', start)]
+	gate = loop.index('_pr_json_merged_into_issue_target "${inum}" "${_linked_pr_candidate_json}" "${CWS_INTEGRATION_BRANCH:-}"')
+	adopt = loop.index('LINKED_PR_NUM="${_linked_pr_candidate}"')
+	merged = loop.index('PR_MERGED="${_linked_pr_candidate_merged:-false}"')
+	assert gate < adopt < merged
+	assert "reason=${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}" in loop[gate:adopt]
+	assert "continue" in loop[gate:adopt]
+
+
+def test_validation_dispatch_gate_rechecks_merged_links():
+	body = _function_body(_poller_text(), "refresh_validation_dispatch_wave_gate")
+	gate = body.index('_pr_json_merged_into_issue_target "${_vdg_inum}" "${_vdg_pr_json}" "${integration_branch}"')
+	downgrade = body.index('{($key): {state: "unknown", merged: false}}')
+	wave = body.index("check-wave-status")
+	assert gate < downgrade < wave
+	assert "path=validation_dispatch_gate" in body
+
+
+def test_candidate_details_linked_pr_carries_target_fields():
+	body = _function_body(_poller_text(), "_fetch_candidate_issue_details_graphql")
+	assert "headRepository { nameWithOwner }" in body
+	assert "baseRepository { defaultBranchRef { name } }" in body
+	assert "head_repo: (.headRepository.nameWithOwner // null)" in body
+	assert "default_branch: (.baseRepository.defaultBranchRef.name // null)" in body
+
+
+def test_backward_scan_gates_ready_to_merge_promotion():
+	text = _poller_text()
+	start = text.index('_pw_pr_target_reject=""')
+	promote = text.index('promoting to ai:merged."', start)
+	block = text[start:promote]
+	assert '_pr_json_is_issue_implementation_pr "${pw_inum}" "${_pw_pr_json}"' in block
+	assert "_pr_json_merged_into_issue_target \"${pw_inum}\" \"${_pw_pr_json}\"" in block
+	assert ".integration_branch" in block
+	assert 'elif [ "${PW_PR_MERGED}" = "true" ]; then' in block
+
+
+# ---------------------------------------------------------------------------
 # Direct-invocation entrypoint
 #
 # `.github/workflows/*.yml` runs this test as `python3 tests/<file>.py` from
