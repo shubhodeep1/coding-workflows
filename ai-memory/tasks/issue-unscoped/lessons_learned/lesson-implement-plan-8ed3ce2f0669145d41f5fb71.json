@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T01:49:59Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-closed safety check over free-form model output cannot enumerate the output's shapes: back a structured parser with a catch-all that treats any mention of the location it guards (the file named near the entry's lines, or with no line) as a possible conflict, instead of adding one more recognised spelling per audit round.",
+  "phase": "implement_plan",
+  "pr_number": 5351,
+  "record_id": "lesson-implement-plan-8ed3ce2f0669145d41f5fb71",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4975-bind-flagger-citation-to-finding",
+    "file:scripts/review_claude_fixer_nonblocking.py"
+  ]
+}
