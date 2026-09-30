@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/edit_comment.py:154-171 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: A same-uid process can replace a parent directory with a symlink between the scratchpad path validation and `os.open`; because `O_NOFOLLOW` protects only the final component, the open can reach a different caller-owned file that passes the subsequent `fstat` checks and has its contents published as a comment.\n  WHY: MAJOR was reported by minimax and openai, while deepseek and qwen rated this NIT and described the same-uid race as impractical or a separate, pre-existing attack vector; using the highest reported severity, the race can bypass the path identity check and publish another file's contents.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/scripts/edit_comment.py:154-171 | severity=low | confidence=[3]\n  PROBLEM: The resolved path is identity-checked before opening, but `O_NOFOLLOW` protects only the final component, leaving a parent-directory symlink swap possible between the check and `os.open`.\n  WHY: A same-uid process would need to race the resolve-to-open window; the subsequent `fstat` checks could pass on the reached file.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/edit_comment.py:154-171 | severity=high | confidence=[4]\n  PROBLEM: Parent directories can be swapped for a symlink between resolving and identity-checking the path and opening it, allowing `os.open` to reach a different file that passes the `fstat` checks.\n  WHY: A same-uid concurrent session can cause the reached file's contents to be published as a comment under the caller's `gh api` credentials.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/edit_comment.py:154\u2013171 | severity=high | confidence=[4]\n  PROBLEM: A parent directory can be replaced with a symlink between scratchpad path validation and `os.open`, which follows the intermediate symlink despite `O_NOFOLLOW`.\n  WHY: A concurrent same-uid process can redirect the open to another caller-owned, singly linked regular file that passes the subsequent checks and has its contents published as a comment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/edit_comment.py:lines 154-171 | severity=low | confidence=[3]\n  PROBLEM: A concurrent same-uid process can replace a parent directory with a symlink between `Path.resolve(strict=True)` and `os.open()`, which follows the intermediate symlink to a file outside the scratchpad.\n  WHY: The reached file can pass the `fstat` checks and have its contents published as a comment; the review characterizes this as a separate, pre-existing attack vector requiring precise timing.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d462a2c97f971c405d4c3bbf0c49e7f0c1542f1d31b26fe29d20c0f60b54c26e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5714,
+    "run_id": "36727512029",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36727512029",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930143632_b714c72bdf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5714,
+    "run_id": "36727512029"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T14:36:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
