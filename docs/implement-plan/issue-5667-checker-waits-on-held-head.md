@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5667
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5667-checker-waits-on-held-head   Final PR: #5684 draft
-- Status: IN_PROGRESS
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5716: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: none (twin-first: no wait armed while the hold stands; the /reclarify stage arms it)
 - Last updated: 2026-09-30
 - Last note: Phase 1 implemented twin-first (session_014UrEEoVKvj38v5RGSkCTbZ): `workflow-templates/.claude/scripts/check_in_status.py` plain PR mode reports `held` for a trusted hold on a `claude/implement-plan-*` head; command twin, CLAUDE.md §26.H, agents.md, README.md, changelog fragment; 22 new tests pass against the twin, and the template-parity checks wait for the twin sync.
 
 ## Phases
-1. [ ] Phase 1 — plain PR mode honours a hold on a Claude-fixer head   — protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/implement-plan-claude.md` (twins only) — PR open, waiting on the twin sync; review rounds: 0; interventions: 0
+1. [ ] Phase 1 — plain PR mode honours a hold on a Claude-fixer head   — protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/implement-plan-claude.md` (twins only) — PR #5716 open, held, waiting on the twin sync; review rounds: 0; interventions: 0
    - [x] `check_pr` reads trusted claims once for a `claude/implement-plan-` head and returns `held` before labels / hand-off / conflict / checks (`workflow-templates/.claude/scripts/check_in_status.py:250-278`), reusing the listing for `_check_claude_fixer_pr` (`:276`); docstring rule and API budget updated
    - [x] Command twin: done-waiting *PR* bullet adds **Held** (`workflow-templates/.claude/commands/implement-plan-claude.md:223`); twin-first later-stage bullet puts the hold on the pushed head in the same step as the blocker (`:38`)
    - [x] Tests against the twin: `tests/test_check_in_status.py:861-1003` (`test_held_head_with_a_later_handoff_waits_instead_of_a_review_round` …); the 5 new core tests fail against the old script and pass against the twin
@@ -43,4 +43,5 @@
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
 - Security pass: run (`security_pass_skip.py`: no skip label).
+- 2026-09-30: phase PR #5716 opened; `hold` claim posted on its head and the twin-sync blocker on #5667 (`ai:claude-blocked`). Local run of the 61 related test files: 2903 passed; 6 template-parity failures (until the sync) and 1 environment failure (`gawk` missing in the container, `test_review_pipeline_integration_chain_module_runs_clean`).
 - Finding (AD-4): project checker `session_014L62sdmdQ6xVjdSYUu2nWq` (issue-5068) reports "created review-round stage, re-armed 60m check-in" after starting a stage, although its prompt's step 5 says to end the turn without re-arming.
