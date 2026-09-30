@@ -481,6 +481,46 @@ if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
   opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" 1 config_generation || true
   exit 1
 fi
+
+# Source-repo only (#5627): the model runs on a private copy of the merge index
+# (see _resolver_model_index_prepare). OpenCode's snapshot tracking runs git
+# with the inherited environment, so it would write its own index into that
+# copy and hide the unmerged entries from the model. The resolver never reads
+# OpenCode snapshots; turn them off in this resolver-only config.
+_resolver_disable_opencode_snapshot()
+{
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${RESOLVER_OPENCODE_CONFIG}" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+path = Path(sys.argv[1])
+temp_name = None
+try:
+	config = json.loads(path.read_text(encoding="utf-8"))
+	if not isinstance(config, dict):
+		raise ValueError("resolver OpenCode config is not a JSON object")
+	config["snapshot"] = False
+	with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as temp:
+		temp_name = temp.name
+		json.dump(config, temp, indent=2)
+		temp.write("\n")
+	os.chmod(temp_name, path.stat().st_mode & 0o777)
+	os.replace(temp_name, path)
+except (OSError, ValueError) as exc:
+	if temp_name is not None:
+		Path(temp_name).unlink(missing_ok=True)
+	print(f"::error::Cannot disable OpenCode snapshots in the resolver config ({type(exc).__name__}).", file=sys.stderr)
+	sys.exit(1)
+PY
+}
+
+if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] && ! _resolver_disable_opencode_snapshot; then
+  opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" 1 config_generation || true
+  exit 1
+fi
 if ! opencode_require_bootstrap review_conflict_resolve writer "${MODEL_EDITOR}" \
   "${RESOLVER_OPENCODE_CONFIG}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
   exit 1
@@ -497,6 +537,27 @@ RESOLVER_FP_BASELINE_STATE_FILE="${RUNTIME_DIR}/resolver_fp_baseline_state.json"
 RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact.json"
 RESOLVER_SCOPE_SNAPSHOT_DIR="${RUNTIME_DIR}/resolver_scope_snapshot"
 RESOLVER_SCOPE_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_scope_violations.txt"
+RESOLVER_MODEL_INDEX_FILE="${RUNTIME_DIR}/resolver_model_index"
+
+# Source-repo only (#5627): the model shares the checkout but gets a private
+# copy of the captured merge index through GIT_INDEX_FILE, so a `git add` of
+# the file it resolved never changes the real index, which both attempt-scope
+# guards require to stay unchanged. The copy is refreshed before every attempt
+# and never read back: the script stages the accepted resolution itself. A
+# model that bypasses the copy still changes the real index and fails closed.
+_resolver_model_index_prepare()
+{
+  local _real_index
+  case "${RESOLVER_MODEL_INDEX_FILE}" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  _real_index="$(git rev-parse --path-format=absolute --git-path index)" || return 1
+  [ -f "${_real_index}" ] || return 1
+  rm -f -- "${RESOLVER_MODEL_INDEX_FILE}" "${RESOLVER_MODEL_INDEX_FILE}.lock" || return 1
+  cp -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}" || return 1
+  cmp -s -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}"
+}
 
 # Source-repo only: the final touched-set gate compares against the prepare
 # step's pre-resolver tree. Snapshot each attempt as well, since the allowlist
@@ -2235,6 +2296,13 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     "${RESOLVER_OPENCODE_CONFIG}"
     "${RESOLVER_OPENCODE_WORKSPACE}"
   )
+  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+    if ! _resolver_model_index_prepare; then
+      echo "::error::Cannot prepare the resolver model's private Git index; refusing to invoke model."
+      exit 1
+    fi
+    resolver_opencode_cmd=(env "GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}" "${resolver_opencode_cmd[@]}")
+  fi
   _run_codex=true
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
