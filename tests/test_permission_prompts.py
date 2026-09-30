@@ -1146,6 +1146,10 @@ def test_lookup_prefers_a_comment_report_over_the_issue_body_and_untimed_matches
 	assert result["comment_url"] == "c2" and "--newer" in result["command"]
 	github(fail_search=True, issues=issues[:1], comments={1: comments[1]})
 	assert twin.lookup(SESSION, FILING)["comment_url"] == "c1"
+	# Malformed or zone-less timestamps count as missing instead of failing the comparison.
+	issues[0]["updated_at"], comments[1][0]["created_at"] = "2026-09-30T11:00:00", "not a time"
+	github(fail_search=True, issues=issues, comments=comments)
+	assert twin.lookup(SESSION, FILING)["comment_url"] == "c2"
 
 
 def test_lookup_not_found_and_read_failure(tmp_path, github, twin, capsys):

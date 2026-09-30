@@ -1034,9 +1034,11 @@ def lookup(session_label: str, slug: str) -> dict:
 
 	def report_time(value: object) -> datetime | None:
 		try:
-			return check_in_status._parse_time(value)
+			parsed_time = check_in_status._parse_time(value)
 		except ValueError:
 			return None
+		# A time without a zone cannot be compared with GitHub's UTC times.
+		return parsed_time if parsed_time.tzinfo is not None else None
 
 	newest_match: dict | None = None
 	newest_time: datetime | None = None
