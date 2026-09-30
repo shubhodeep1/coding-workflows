@@ -221,6 +221,17 @@ jobs:
           DEFAULT_BRANCH_NAME="${PR_BASE_DEFAULT_BRANCH:-main}"
           ISSUE_INTEGRATION_BRANCHES=""
           ISSUE_MANAGED_PROJECT_BRANCHES=""
+          # Issue #5227: the issues whose lineage the next step may finalize.
+          # An issue is added only on a path the target-branch gate accepts
+          # (or, unchanged, an orchestrator-tracking issue), so a PR merged
+          # into a non-target branch never writes that issue's AI-memory
+          # lineage as `merged`. A positive list fails closed.
+          LINEAGE_FINALIZE_ISSUE_NUMBERS=""
+          # Issues put in TRACKING_ISSUES only because their classification
+          # lookup failed. The gate never read their body, so their lineage
+          # is finalized only when no target branch is needed: an unmerged
+          # close or a default-branch merge (fail closed, #5227).
+          LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS=""
           if ! type issue_body_integration_branch >/dev/null 2>&1; then
             # Older gh_helpers.sh: no parser, so only default-branch
             # merges count (fail closed).
@@ -284,6 +295,9 @@ jobs:
             printf '%s\n' "${MANAGED_ISSUES:-}" >> "$GITHUB_ENV"
             echo "EOF" >> "$GITHUB_ENV"
             echo "ORCHESTRATOR_CLASSIFICATION_COMPLETE=${ORCHESTRATOR_CLASSIFICATION_COMPLETE}" >> "$GITHUB_ENV"
+            echo "LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
           }
 
           classify_orchestrator_issues_from_payload() {
@@ -507,6 +521,7 @@ jobs:
                   echo "::warning::Orchestrator fallback lookup failed for issue #${_orch_num}; conservatively treating as tracking (skip)."
                   ORCHESTRATOR_CLASSIFICATION_COMPLETE="false"
                   TRACKING_ISSUES+="${_orch_num}"$'\n'
+                  LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS+="${_orch_num}"$'\n'
                   continue
                 fi
                 _orch_meta_branch="$(issue_body_integration_branch "$(printf '%s' "${_orch_meta}" | jq -r '.body // ""' 2>/dev/null || echo "")")"
@@ -534,6 +549,13 @@ jobs:
 
             if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
               echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label and close are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
+              if [ -n "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" ] \
+                && printf '%s\n' "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" | grep -qxF "${issue_number}" \
+                && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${DEFAULT_BRANCH_NAME}" ]; then
+                echo "Issue #${issue_number} could not be classified and PR merged into ${PR_BASE_REF}, not the default branch ${DEFAULT_BRANCH_NAME}; skipping its lineage finalization."
+              else
+                LINEAGE_FINALIZE_ISSUE_NUMBERS+="${issue_number}"$'\n'
+              fi
               continue
             fi
 
@@ -568,6 +590,7 @@ jobs:
               fi
             fi
 
+            LINEAGE_FINALIZE_ISSUE_NUMBERS+="${issue_number}"$'\n'
             echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
             set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"
 
@@ -586,7 +609,8 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
           # Export linked issue numbers and orchestrator classification for
-          # downstream lineage, alerting, and cleanup steps.
+          # downstream lineage, alerting, and cleanup steps. Lineage reads
+          # LINEAGE_FINALIZE_ISSUE_NUMBERS, not LINKED_ISSUE_NUMBERS (#5227).
           export_orchestrator_issue_classification
 
       - name: Finalize linked issue lineage state
@@ -617,6 +641,15 @@ jobs:
           if [ "${AI_MEMORY_ENABLED_NORMALIZED}" != "true" ]; then
             echo "AI memory disabled; skipping lineage finalization."
             echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"ai_memory_disabled\",\"source\":\"issue_pr_status.yml\"}"
+            exit 0
+          fi
+
+          if [ -z "$(printf '%s' "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" | tr -d '[:space:]')" ]; then
+            # Issue #5227: every linked issue was rejected by the
+            # target-branch gate (a merge into a branch that is not the
+            # issue's target), so none of them finished here.
+            echo "No linked issue was accepted by the target-branch gate; skipping lineage finalization."
+            echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"no_accepted_issues\",\"source\":\"issue_pr_status.yml\"}"
             exit 0
           fi
 
@@ -653,7 +686,7 @@ jobs:
               --actor "${ACTOR}" \
               --pr-number "${PR_NUMBER}" \
               --pr-url "${PR_URL}"
-          done <<< "${LINKED_ISSUE_NUMBERS}"
+          done <<< "${LINEAGE_FINALIZE_ISSUE_NUMBERS}"
 
       # /implement-plan-claude records reusable lessons in its progress log
       # (docs/implement-plan/<slug>.md, `## Lessons`). When a PR that carries

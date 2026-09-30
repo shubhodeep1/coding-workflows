@@ -103,6 +103,9 @@ if len(args) >= 2 and args[0] == "api" and args[1].startswith("repos/") and "/is
 	# caller's own --jq filter with jq, as gh does, so the test exercises the
 	# workflow's label transform instead of a pre-flattened payload.
 	import subprocess
+	if state.get("orch_rest_fail"):
+		print("rest unavailable", file=sys.stderr)
+		sys.exit(1)
 	num = args[1].rsplit("/", 1)[1]
 	issue = state["issues"][num]
 	rest_issue = {
@@ -146,6 +149,7 @@ def _run_step(
 	pr_head_ref: str = "claude/some-feature",
 	pr_head_repo: str = REPOSITORY,
 	orch_graphql_fail: bool = False,
+	orch_rest_fail: bool = False,
 ) -> dict:
 	tmp = Path(tempfile.mkdtemp(prefix="issue-pr-status-gate-"))
 	try:
@@ -166,6 +170,7 @@ def _run_step(
 			"closing_refs": list(closing_refs or []),
 			"closed": [],
 			"orch_graphql_fail": orch_graphql_fail,
+			"orch_rest_fail": orch_rest_fail,
 		}), encoding="utf-8")
 		label_calls = tmp / "label_calls.txt"
 		label_calls.write_text("", encoding="utf-8")
@@ -208,9 +213,41 @@ def _run_step(
 			for line in label_calls.read_text(encoding="utf-8").splitlines()
 			if line.strip()
 		]
-		return {"stdout": result.stdout, "closed": state["closed"], "labels": labels}
+		return {
+			"stdout": result.stdout,
+			"closed": state["closed"],
+			"labels": labels,
+			"env": _parse_github_env(github_env.read_text(encoding="utf-8")),
+		}
 	finally:
 		shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _parse_github_env(text: str) -> dict[str, str]:
+	"""Parse `$GITHUB_ENV` the way the runner does: `NAME=value` lines and
+	`NAME<<EOF` … `EOF` heredocs. A later write of the same name wins."""
+	parsed: dict[str, str] = {}
+	lines = text.splitlines()
+	idx = 0
+	while idx < len(lines):
+		line = lines[idx]
+		if "<<" in line and "=" not in line.split("<<", 1)[0]:
+			name, delimiter = line.split("<<", 1)
+			idx += 1
+			value_lines = []
+			while idx < len(lines) and lines[idx] != delimiter:
+				value_lines.append(lines[idx])
+				idx += 1
+			parsed[name] = "\n".join(value_lines)
+		elif "=" in line:
+			name, value = line.split("=", 1)
+			parsed[name] = value
+		idx += 1
+	return parsed
+
+
+def _issue_list(value: str) -> list[int]:
+	return [int(item) for item in value.split() if item.strip()]
 
 
 SECURITY_FOLLOW_UP_BODY = (
@@ -513,6 +550,245 @@ def test_unmerged_close_behaviour_is_unchanged() -> None:
 	assert result["closed"] == [10], result
 
 
+# Issue #5227: the lineage step finalizes only the issues the gate accepted.
+
+LINEAGE_STEP_NAME = "Finalize linked issue lineage state"
+MEMORY_HELPERS_STUB = r'''#!/usr/bin/env bash
+memory_ensure_branch() { :; }
+memory_finalize_task() {
+	printf '%s\n' "$*" >> "${FINALIZE_CALLS_FILE}"
+}
+'''
+
+
+def _run_lineage_step(gate_env: dict[str, str], *, pr_merged: bool = True) -> dict:
+	"""Run the lineage step's real `run:` script with the lists the gate step
+	exported and a stub memory_helpers.sh that records memory_finalize_task."""
+	tmp = Path(tempfile.mkdtemp(prefix="issue-pr-status-lineage-"))
+	try:
+		(tmp / "scripts").mkdir()
+		(tmp / "scripts" / "memory_helpers.sh").write_text(MEMORY_HELPERS_STUB, encoding="utf-8")
+		calls = tmp / "finalize_calls.txt"
+		calls.write_text("", encoding="utf-8")
+		script_text = _step_script(LINEAGE_STEP_NAME)
+		script_text = script_text.replace("${{ github.event.pull_request.merged }}", "true" if pr_merged else "false")
+		script_text = script_text.replace("${{ github.server_url }}", "https://github.com")
+		assert "${{" not in script_text, "unsubstituted workflow expression in lineage step"
+		script = tmp / "step.sh"
+		script.write_text(script_text, encoding="utf-8")
+		env = {
+			"PATH": os.environ.get("PATH", ""),
+			"HOME": str(tmp),
+			"FINALIZE_CALLS_FILE": str(calls),
+			"AI_MEMORY_ENABLED": "true",
+			"MEMORY_HELPERS_READY": "1",
+			"REPOSITORY": REPOSITORY,
+			"PR_NUMBER": "4748",
+			"PR_URL": f"https://github.com/{REPOSITORY}/pull/4748",
+			"WORKFLOW_NAME": "AI Issue PR Status Sync",
+			"RUN_ID": "1",
+			"RUN_ATTEMPT": "1",
+			"ACTOR": "someone",
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}
+		for name in ("LINKED_ISSUE_NUMBERS", "LINEAGE_FINALIZE_ISSUE_NUMBERS"):
+			if name in gate_env:
+				env[name] = gate_env[name]
+		result = subprocess.run(
+			["bash", str(script)],
+			cwd=tmp,
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+		assert result.returncode == 0, f"lineage step failed rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+		finalized = []
+		for line in calls.read_text(encoding="utf-8").splitlines():
+			parts = line.split()
+			finalized.append((
+				int(parts[parts.index("--issue-number") + 1]),
+				parts[parts.index("--final-state") + 1],
+			))
+		return {"stdout": result.stdout, "finalized": finalized}
+	finally:
+		shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_rejected_merge_is_not_finalized_as_merged() -> None:
+	"""The #5227 finding: the gate leaves the issue alone, and the lineage step
+	must not write its lineage as `merged` either."""
+	gate = _run_step(
+		issues={4688: {"body": SECURITY_FOLLOW_UP_BODY, "labels": ["ai:security", "ai:claude"]}},
+		pr_base_ref="claude/implement-plan-issue-4688-own-project",
+		pr_body=INCIDENT_PR_BODY,
+	)
+	assert gate["labels"] == [], gate
+	assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [4688], gate["env"]
+	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], gate["env"]
+
+	lineage = _run_lineage_step(gate["env"])
+	assert lineage["finalized"] == [], lineage
+	assert "No linked issue was accepted by the target-branch gate; skipping lineage finalization." in lineage["stdout"]
+	assert '"reason":"no_accepted_issues"' in lineage["stdout"], lineage["stdout"]
+
+
+def test_accepted_merges_are_finalized_as_merged() -> None:
+	cases = [
+		({10: {"body": "Standalone issue.", "labels": ["ai:claude"]}}, "main", [10]),
+		({10: {"body": "- Integration branch: `claude/implement-plan-parent`\n", "labels": ["ai:security"]}}, "claude/implement-plan-parent", [10]),
+		({10: {"body": MANAGED_CHILD_BODY, "labels": ["ai:orchestrator-managed"]}}, "orchestrator/project-5", []),
+	]
+	for issues, base, closing_refs in cases:
+		gate = _run_step(issues=issues, pr_base_ref=base, pr_body="Fixes #10\n", closing_refs=closing_refs, pr_head_ref="ai/issue-10")
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [10], (base, gate["env"])
+		lineage = _run_lineage_step(gate["env"])
+		assert lineage["finalized"] == [(10, "merged")], (base, lineage)
+
+
+def test_mixed_link_finalizes_only_the_accepted_issue() -> None:
+	"""One PR, two linked issues: #10 names the PR's base as its integration
+	branch, #11 does not. Only #10 finishes here."""
+	gate = _run_step(
+		issues={
+			10: {"body": "- Integration branch: `claude/implement-plan-parent`\n", "labels": ["ai:security"]},
+			11: {"body": "Standalone issue.", "labels": ["ai:claude"]},
+		},
+		pr_base_ref="claude/implement-plan-parent",
+		pr_body="Fixes #10\nFixes #11\n",
+		closing_refs=[10, 11],
+		pr_head_ref="ai/issue-10",
+	)
+	assert gate["labels"] == [("10", "ai:merged")], gate
+	assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [10, 11], gate["env"]
+	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [10], gate["env"]
+	lineage = _run_lineage_step(gate["env"])
+	assert lineage["finalized"] == [(10, "merged")], lineage
+
+
+def test_unmerged_close_still_finalizes_as_closed() -> None:
+	"""AD-1: a PR closed without merging keeps today's lineage finalization,
+	whatever its base."""
+	gate = _run_step(
+		issues={10: {"body": "Standalone issue.", "labels": ["ai:claude"]}},
+		pr_base_ref="feature/unrelated",
+		pr_body="Fixes #10\n",
+		closing_refs=[10],
+		pr_merged=False,
+	)
+	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [10], gate["env"]
+	lineage = _run_lineage_step(gate["env"], pr_merged=False)
+	assert lineage["finalized"] == [(10, "closed")], lineage
+
+
+def test_tracking_issue_lineage_is_unchanged() -> None:
+	"""AD-1: the gate skips an orchestrator-tracking issue without mutating it,
+	and its lineage is finalized exactly as before this change."""
+	gate = _run_step(
+		issues={5: {"body": "Project tracker.", "labels": ["ai:orchestrator-tracking"]}},
+		pr_base_ref="orchestrator/project-5",
+		pr_body="Fixes #5\n",
+		closing_refs=[5],
+	)
+	assert gate["labels"] == [] and gate["closed"] == [], gate
+	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [5], gate["env"]
+	lineage = _run_lineage_step(gate["env"])
+	assert lineage["finalized"] == [(5, "merged")], lineage
+
+
+def test_no_linked_issue_exports_an_empty_lineage_list() -> None:
+	gate = _run_step(
+		issues={},
+		pr_base_ref="main",
+		pr_body="No issue here.\n",
+	)
+	assert gate["env"].get("LINEAGE_FINALIZE_ISSUE_NUMBERS", None) is not None, gate["env"]
+	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], gate["env"]
+	lineage = _run_lineage_step(gate["env"])
+	assert lineage["finalized"] == [], lineage
+	assert "No linked issues found; skipping lineage finalization." in lineage["stdout"], lineage["stdout"]
+
+
+def test_unclassified_issue_on_non_default_merge_is_not_finalized() -> None:
+	"""Conformance fix: when both classification reads fail, the gate treats
+	the issue as tracking (skip) without reading its body. On a merge into a
+	non-default branch its target branch is unknown, so its lineage is not
+	finalized (fail closed)."""
+	gate = _run_step(
+		issues={10: {"body": "Standalone issue.", "labels": ["ai:claude"]}},
+		pr_base_ref="feature/unrelated",
+		pr_body="Fixes #10\n",
+		orch_graphql_fail=True,
+		orch_rest_fail=True,
+	)
+	assert gate["labels"] == [] and gate["closed"] == [], gate
+	assert gate["env"]["ORCHESTRATOR_CLASSIFICATION_COMPLETE"] == "false", gate["env"]
+	assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [10], gate["env"]
+	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], gate["env"]
+	assert "Issue #10 could not be classified" in gate["stdout"], gate["stdout"]
+	lineage = _run_lineage_step(gate["env"])
+	assert lineage["finalized"] == [], lineage
+	assert '"reason":"no_accepted_issues"' in lineage["stdout"], lineage["stdout"]
+
+
+def test_unclassified_issue_keeps_default_merge_and_unmerged_lineage() -> None:
+	"""An unclassified issue still finalizes where no target branch is needed:
+	a default-branch merge (`merged`) and an unmerged close (`closed`)."""
+	cases = [("main", True, "merged"), ("feature/unrelated", False, "closed")]
+	for base, merged, final_state in cases:
+		gate = _run_step(
+			issues={10: {"body": "Standalone issue.", "labels": ["ai:claude"]}},
+			pr_base_ref=base,
+			pr_body="Fixes #10\n",
+			pr_merged=merged,
+			orch_graphql_fail=True,
+			orch_rest_fail=True,
+		)
+		assert gate["labels"] == [] and gate["closed"] == [], (base, gate)
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [10], (base, gate["env"])
+		lineage = _run_lineage_step(gate["env"], pr_merged=merged)
+		assert lineage["finalized"] == [(10, final_state)], (base, lineage)
+
+
+def test_classified_tracking_issue_keeps_lineage_when_rest_fallback_works() -> None:
+	"""AD-1 still holds on the REST fallback path: a tracking issue the
+	fallback did classify is finalized on a non-default merge as before."""
+	gate = _run_step(
+		issues={5: {"body": "Project tracker.", "labels": ["ai:orchestrator-tracking"]}},
+		pr_base_ref="orchestrator/project-5",
+		pr_body="Fixes #5\n",
+		orch_graphql_fail=True,
+	)
+	assert gate["labels"] == [] and gate["closed"] == [], gate
+	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [5], gate["env"]
+	lineage = _run_lineage_step(gate["env"])
+	assert lineage["finalized"] == [(5, "merged")], lineage
+
+
+def test_non_automation_head_merge_is_not_finalized() -> None:
+	"""The #5226 head check is a target-branch gate rejection too: a merge into
+	the issue's own integration branch from a head that is not the issue's
+	automation branch (or from a fork) leaves the issue's lineage alone."""
+	for head_ref, head_repo in (("feature/unrelated", REPOSITORY), ("ai/issue-10", "attacker/widgets")):
+		gate = _run_step(
+			issues={10: {"body": "- Integration branch: `claude/implement-plan-parent`\n", "labels": ["ai:security"]}},
+			pr_base_ref="claude/implement-plan-parent",
+			pr_body="Fixes #10\n",
+			closing_refs=[10],
+			pr_head_ref=head_ref,
+			pr_head_repo=head_repo,
+		)
+		assert gate["labels"] == [], (head_ref, head_repo, gate)
+		assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [10], (head_ref, head_repo, gate["env"])
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], (head_ref, head_repo, gate["env"])
+		lineage = _run_lineage_step(gate["env"])
+		assert lineage["finalized"] == [], (head_ref, head_repo, lineage)
+		assert '"reason":"no_accepted_issues"' in lineage["stdout"], lineage["stdout"]
+
+
+# CI runs this file as a script (ci.yml "Phase label transition and fallback
+# contract tests"), not under pytest, so every test must be called here. Keep
+# this block last: a test defined after it never runs in CI.
 if __name__ == "__main__":
 	test_merge_into_another_project_branch_leaves_issue_untouched()
 	test_default_branch_merge_labels_and_closes()
@@ -530,4 +806,14 @@ if __name__ == "__main__":
 	test_judge_followup_head_on_integration_branch_labels()
 	test_default_branch_merge_from_fork_still_labels_and_closes()
 	test_unmerged_close_behaviour_is_unchanged()
+	test_rejected_merge_is_not_finalized_as_merged()
+	test_accepted_merges_are_finalized_as_merged()
+	test_mixed_link_finalizes_only_the_accepted_issue()
+	test_unmerged_close_still_finalizes_as_closed()
+	test_tracking_issue_lineage_is_unchanged()
+	test_no_linked_issue_exports_an_empty_lineage_list()
+	test_unclassified_issue_on_non_default_merge_is_not_finalized()
+	test_unclassified_issue_keeps_default_merge_and_unmerged_lineage()
+	test_classified_tracking_issue_keeps_lineage_when_rest_fallback_works()
+	test_non_automation_head_merge_is_not_finalized()
 	print("PASS")
