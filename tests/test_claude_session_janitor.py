@@ -15,6 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = ROOT / "scripts" / "claude_session_janitor.py"
 CLAUDE_MD = ROOT / "CLAUDE.md"
+AGENTS_MD = ROOT / "agents.md"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PICKUP = ROOT / ".claude" / "commands" / "claude-issue-pickup.md"
 DISPATCH = ROOT / ".claude" / "commands" / "claude-issue-dispatch.md"
@@ -106,6 +107,11 @@ def _archived_ids(result):
 		("#4887 · PR #4924 — issue o/r#4887 — implement", "issue_start", {"repo": "o/r", "issue": 4887}),
 		("#4723 · PR o/r#4729 — fix review", "fixer", {"repo": "o/r", "pr": 4729}),
 		("#4723 · PR o/r#4729 — fixed ci", "fixer", {"repo": "o/r", "pr": 4729}),
+		# The forms the pickup was seen creating on 2026-09-30 (issue #4887, conformance run 2).
+		("#5068 · implement-issue-claude", "issue_start", {"repo": None, "issue": 5068}),
+		("#5504 · PR #5519 — implement-issue-claude", "issue_start", {"repo": None, "issue": 5504}),
+		("PR#4546 · fix-claude-pr", "fixer", {"repo": None, "pr": 4546}),
+		("#4545 · PR#4546 · fix-claude-pr", "fixer", {"repo": None, "pr": 4546}),
 		("#4887 · PR #4924 — implement-plan issue-4887-x — conformance 1/3", "stage", {"issue": 4887, "stage": "conformance 1/3"}),
 		("PR #12 merged — no action needed", "report", {"pr": 12}),
 		("PR #12 merged — action needed", "report", {"pr": 12}),
@@ -145,6 +151,9 @@ def test_titles_the_dispatcher_and_fixer_create_are_recognised():
 		"implement-plan claude-fixer-unattended-convergence — phase 3/4",
 		"Issue #4887 — implementation notes",
 		"implement-issue-claude — #47x",
+		"implement-issue-claude",
+		"#12 · implement-issue-claude-notes",
+		"PR#12 · fix-claude-pr-notes",
 		"PR #12 — fixture cleanup",
 		"Fix the login bug",
 		"",
@@ -246,6 +255,14 @@ def test_repository_less_session_is_kept_with_an_error(monkeypatch):
 	assert "no GitHub repository" in result["errors"][0]
 
 
+@pytest.mark.parametrize("title", ["PR ../users#12 — fixed review", "PR o/..#12 — fix review", "issue ./x#7 — implement"])
+def test_dot_segment_repository_is_kept_with_an_error_and_no_call(monkeypatch, title):
+	calls = _stub(monkeypatch, {})
+	result = janitor.classify([_session("session_f", title)], NOW)
+	assert result["archive"] == [] and result["kept"] == 1 and calls == []
+	assert "path segment" in result["errors"][0]
+
+
 def test_failed_read_keeps_the_session(monkeypatch):
 	_stub(monkeypatch, {"repos/o/r/pulls/12": janitor.SessionReadError("gh api repos/o/r/pulls/12 failed: HTTP 403")})
 	result = janitor.classify([_session("session_f", "PR o/r#12 — fixed review")], NOW)
@@ -319,6 +336,24 @@ def test_issue_start_superseded_through_the_prefixed_stage_title(monkeypatch):
 		_session("session_s", "#7 · PR #9 — implement-plan issue-7-fix-thing — conformance 1/3", created_hours=2),
 	]
 	assert _archived_ids(janitor.classify(sessions, NOW)) == ["session_i"]
+
+
+def test_pickup_named_sessions_are_swept(monkeypatch):
+	# Live titles the pickup gave its sessions (issue #4887, conformance run 2):
+	# the number sits only in the prefix, and the repository comes from the source.
+	calls = _stub(monkeypatch, {"repos/o/r/pulls/4546": _merged(5), "repos/o/r/issues/5068": {"state": "closed"},
+		"repos/o/r/issues/5070": {"state": "open"}})
+	sessions = [
+		_session("session_s", "#5126 · PR #5130 — implement-plan issue-5126-x — phase 1/1 — review round", created_hours=2),
+		_session("session_f", "PR#4546 · fix-claude-pr", created_hours=10),
+		_session("session_a", "#5126 · implement-issue-claude", category="need_input", created_hours=10),
+		_session("session_b", "#5068 · PR #5069 — implement-issue-claude", created_hours=10),
+		_session("session_c", "#5070 · implement-issue-claude", created_hours=10),
+	]
+	result = janitor.classify(sessions, NOW)
+	assert _archived_ids(result) == ["session_f", "session_a", "session_b"]
+	assert result["kept"] == 1 and result["not_ours"] == 1 and result["errors"] == []
+	assert sorted(calls) == ["repos/o/r/issues/5068", "repos/o/r/issues/5070", "repos/o/r/pulls/4546"]
 
 
 @pytest.mark.parametrize(("state", "archived"), [("closed", True), ("open", False)])
@@ -460,11 +495,19 @@ def test_claude_md_documents_the_sweep():
 	text = " ".join(CLAUDE_MD.read_text(encoding="utf-8").split())
 	section = text[text.index("### I) Stale session sweep"):text.index("## §27.")]
 	for needle in ("scripts/claude_session_janitor.py", "`— wake.`", "`next_after_id`", "`SESSION_STATUS_IDLE`",
-		"`REQUIRES_ACTION`", "2 hours", "7 days", "`need_input`", "one REST read per distinct", "`get_session`"):
+		"`REQUIRES_ACTION`", "2 hours", "7 days", "`need_input`", "one REST read per distinct", "`get_session`",
+		"`PR#<n> · fix-claude-pr`", "`#<n> · implement-issue-claude`", "`#<n> · PR #<pr> — implement-issue-claude`"):
 		assert needle in section, needle
 	pushing = text[text.index("### D) What the pushing session does"):text.index("### E) Enforcement")]
 	assert "archives it 7 days after the report (§26.I)" in pushing
 	assert "`/fix-claude-pr` session" in pushing and "archives itself" in pushing
+
+
+def test_agents_md_lists_the_pickup_title_forms():
+	text = " ".join(AGENTS_MD.read_text(encoding="utf-8").split())
+	section = text[text.index("Stale session sweep (CLAUDE.md §26.I, #4887)"):]
+	for needle in ("`PR#<n> · fix-claude-pr`", "`#<n> · implement-issue-claude`", "`#<n> · PR #<pr> — implement-issue-claude`"):
+		assert needle in section[:1500], needle
 
 
 def test_fix_claude_pr_twin_archives_the_fixer_on_a_terminal_pr():
