@@ -388,7 +388,10 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
         fi
       done
     fi
-    if [ "${claude_fixer_roster_size}" -eq 0 ]; then
+    if [ -z "${PREVIOUS_REVIEWS_DIR:-}" ] || [ ! -d "${PREVIOUS_REVIEWS_DIR}" ]; then
+      echo "::warning::Claude-fixer reviewer roster cannot be read (PREVIOUS_REVIEWS_DIR is unset or not a directory); the ledger is not clean."
+      claude_fixer_failed_slots_verified="false"
+    elif [ "${claude_fixer_roster_size}" -eq 0 ]; then
       echo "::warning::Claude-fixer reviewer roster is empty (no status_review_<slug>.txt or review_<slug>.txt in PREVIOUS_REVIEWS_DIR); the ledger is not clean."
       claude_fixer_failed_slots_verified="false"
     fi

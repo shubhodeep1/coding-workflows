@@ -114,8 +114,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `review_<slug>.txt` for (issue #5297: the ledger can leave a reviewer
    out entirely, and a missing block is never a missing vote); an
    omitted slot, an empty roster, or an unexpected slot name hands off
-   with a `::warning::`. It
-   then takes the same clean path and logs
+   with a `::warning::`. A failed-slot ledger that passes all of these
+   checks then takes the same clean path as a ledger with no failed slot
+   and logs
    `CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS pr=… head=… round=… failed_slots=… clean_reviewers=… min=…`.
    Fewer clean reviewers, any other text, or a status or output file that
    does not match hands the round off with a `::warning::` naming the block

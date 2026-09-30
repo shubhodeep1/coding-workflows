@@ -1168,11 +1168,27 @@ def test_roster_file_with_an_unexpected_slot_name_is_not_clean():
 	_assert_roster_gap_hands_off(proc, calls, github_env, "Claude-fixer reviewer roster holds a file with an unexpected slot name (status_review_odd.name.txt); the ledger is not clean.")
 
 
-def test_missing_reviews_dir_is_an_empty_roster():
+def test_missing_reviews_dir_is_an_unreadable_roster():
 	blocks, _statuses = _panel(failed=("minimax/minimax-m3",))
 	with tempfile.TemporaryDirectory() as td:
 		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks))
+	_assert_roster_gap_hands_off(proc, calls, github_env, "Claude-fixer reviewer roster cannot be read (PREVIOUS_REVIEWS_DIR is unset or not a directory); the ledger is not clean.")
+	assert "reviewer roster is empty" not in proc.stdout
+
+
+def test_reviews_dir_that_is_not_a_directory_is_an_unreadable_roster():
+	blocks, _statuses = _panel(failed=("minimax/minimax-m3",))
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), extra_env={"PREVIOUS_REVIEWS_DIR": str(Path(td) / "no_such_dir")})
+	_assert_roster_gap_hands_off(proc, calls, github_env, "Claude-fixer reviewer roster cannot be read (PREVIOUS_REVIEWS_DIR is unset or not a directory); the ledger is not clean.")
+
+
+def test_empty_reviews_dir_is_an_empty_roster():
+	blocks, _statuses = _panel(failed=("minimax/minimax-m3",))
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), outputs={})
 	_assert_roster_gap_hands_off(proc, calls, github_env, "Claude-fixer reviewer roster is empty (no status_review_<slug>.txt or review_<slug>.txt in PREVIOUS_REVIEWS_DIR); the ledger is not clean.")
+	assert "reviewer roster cannot be read" not in proc.stdout
 
 
 def test_ledger_covering_the_whole_roster_still_meets_the_quorum():
@@ -1185,6 +1201,38 @@ def test_ledger_covering_the_whole_roster_still_meets_the_quorum():
 	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
 	assert "ledger omits reviewer" not in proc.stdout
 	assert "clean_reviewers=4 min=4" in proc.stdout
+
+
+def test_roster_check_behaves_the_same_under_mawk_and_gawk():
+	# The ledger-slug and duplicate-check awk programs run under whichever awk
+	# the runner image provides, so pin both the exploit and full coverage.
+	omitted_blocks, omitted_statuses = _panel(failed=("minimax/minimax-m3",))
+	omitted_blocks = [(slug, body) for slug, body in omitted_blocks if slug != GROK]
+	omitted_outputs = _runner_outputs(("minimax/minimax-m3",))
+	omitted_outputs[GROK] = _checklist_output({"CORRECTNESS & LOGIC": LABELLED_FINDING})
+	full_blocks, full_statuses = _panel(failed=("minimax/minimax-m3", "x-ai/grok-4.20"))
+	full_outputs = _runner_outputs(("minimax/minimax-m3", "x-ai/grok-4.20"))
+	for awk_name in ("mawk", "gawk"):
+		awk_path = shutil.which(awk_name)
+		if awk_path is None:
+			pytest.skip(f"{awk_name} not installed")
+		for blocks, statuses, outputs, omitted in (
+			(omitted_blocks, omitted_statuses, omitted_outputs, True),
+			(full_blocks, full_statuses, full_outputs, False),
+		):
+			with tempfile.TemporaryDirectory() as td:
+				shim = Path(td) / "awk_shim"
+				shim.mkdir()
+				(shim / "awk").symlink_to(awk_path)
+				path = os.pathsep.join((str(shim), str(Path(td) / "bin"), os.environ.get("PATH", "")))
+				proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=_ledger(blocks), statuses=statuses, outputs=outputs, min_clean="4", extra_env={"PATH": path})
+			if omitted:
+				_assert_roster_gap_hands_off(proc, calls, github_env, f"Claude-fixer ledger omits reviewer '{GROK}' that the reviewer runner ran; the ledger is not clean.")
+			else:
+				assert proc.returncode == 0, (awk_name, proc.stderr)
+				assert calls == [], awk_name
+				assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env, awk_name
+				assert "clean_reviewers=4 min=4" in proc.stdout, awk_name
 
 
 def test_workflow_wires_the_minimum_clean_reviewers_variable():

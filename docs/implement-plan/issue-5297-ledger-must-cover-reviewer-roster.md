@@ -5,16 +5,16 @@
 - Project branch: claude/implement-plan-issue-5297-ledger-must-cover-reviewer-roster   Final PR: #5303 draft
 - Source issue: shubhodeep1/coding-workflows#5297   Base branch: claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote   Security pass: skip (ai:security: automation-produced issue)
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (head claude/implement-plan-issue-5297-ledger-must-cover-reviewer-roster-phase-1; number in the stage report and the checker instructions)
+- Waiting on: PR #5306 (phase 1/1 into the project branch)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
-- Last updated: 2026-09-29
-- Last note: phase 1 implemented and verified (89 Claude-fixer tests incl. mawk and gawk, 232 with the size and review_autofix contract tests, changelog tests, shellcheck); phase PR opened against the project branch; waiting on its review round or merge
+- Check-in: checker session_01U5bovtxjovuW9C4AdVFSvq   safety net and hand-back: see the latest stage report and resume block
+- Last updated: 2026-09-30
+- Last note: review round 1 on PR #5306: fixed the mawk/gawk coverage gap for the roster check, the ambiguous agents.md sentence, and the empty-roster warning for an unset or missing PREVIOUS_REVIEWS_DIR; rejected the `task_gap` prefix finding (the parsed block list holds only `clean` and `failed` records)
 
 ## Phases
-1. [ ] Phase 1 — Ledger must cover the runner's reviewer roster (failed-slot path of the Claude-fixer clean-ledger check, tests, docs, changelog)   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — Ledger must cover the runner's reviewer roster (failed-slot path of the Claude-fixer clean-ledger check, tests, docs, changelog)   — PR #5306 open (waiting); review rounds: 1; interventions: 0
    - scripts/review_autofix_step_claude_fixer_handoff.sh: roster from status_review_<slug>.txt and review_<slug>.txt; every roster slot needs a ledger block; empty roster or bad slug fails closed
    - tests/test_review_autofix_claude_fixer_mode.py: exploit (6 reviewers, min 4, 1 failed, 1 omitted finding) hands off; omitted clean slot, output-only slot, bad slug hand off; existing tests pass
    - README.md, agents.md, changelog.d/5297-ledger-must-cover-reviewer-roster.md
@@ -37,6 +37,7 @@
 - AD-4 [plan, 2026-09-29] Security pass for this project? — Picked: A — skip, as security_pass_skip.py verified. Alternatives: B — run. Why: the issue is itself an audit follow-up; the parent project's security pass re-audits the branch. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:intervention] Every new awk program in a review_autofix step script needs its own mawk and gawk test run; a parametrised test that covers another awk program in the same script does not cover it. (files: scripts/review_autofix_step_claude_fixer_handoff.sh, tests/test_review_autofix_claude_fixer_mode.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher; session session_01PNBt8chdKoRBRJDwPFFsHj in Auto mode.
