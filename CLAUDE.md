@@ -2188,8 +2188,9 @@ no longer needs an operator's hand:
     on the terminal hand-back (§26.D);
   - **issue-start** (`Issue #<n> — implement`,
     `issue <owner>/<repo>#<n> — implement`, `implement-issue-claude — #<n>`,
-    and `#<n> · implement-issue-claude`, whose only issue number is the
-    prefix, a form the pickup has been seen to use):
+    and `#<n> · implement-issue-claude` (later
+    `#<n> · PR #<pr> — implement-issue-claude`), whose only issue number is
+    the prefix, a form the pickup has been seen to use):
     a later `implement-plan issue-<n>-… — <stage>` session (not a checker,
     `waiting:`, or `deploy-activate` session) for the same repository and
     issue is on the page, or the issue is closed;

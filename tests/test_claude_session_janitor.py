@@ -15,6 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = ROOT / "scripts" / "claude_session_janitor.py"
 CLAUDE_MD = ROOT / "CLAUDE.md"
+AGENTS_MD = ROOT / "agents.md"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PICKUP = ROOT / ".claude" / "commands" / "claude-issue-pickup.md"
 DISPATCH = ROOT / ".claude" / "commands" / "claude-issue-dispatch.md"
@@ -254,6 +255,14 @@ def test_repository_less_session_is_kept_with_an_error(monkeypatch):
 	assert "no GitHub repository" in result["errors"][0]
 
 
+@pytest.mark.parametrize("title", ["PR ../users#12 — fixed review", "PR o/..#12 — fix review", "issue ./x#7 — implement"])
+def test_dot_segment_repository_is_kept_with_an_error_and_no_call(monkeypatch, title):
+	calls = _stub(monkeypatch, {})
+	result = janitor.classify([_session("session_f", title)], NOW)
+	assert result["archive"] == [] and result["kept"] == 1 and calls == []
+	assert "path segment" in result["errors"][0]
+
+
 def test_failed_read_keeps_the_session(monkeypatch):
 	_stub(monkeypatch, {"repos/o/r/pulls/12": janitor.SessionReadError("gh api repos/o/r/pulls/12 failed: HTTP 403")})
 	result = janitor.classify([_session("session_f", "PR o/r#12 — fixed review")], NOW)
@@ -487,11 +496,18 @@ def test_claude_md_documents_the_sweep():
 	section = text[text.index("### I) Stale session sweep"):text.index("## §27.")]
 	for needle in ("scripts/claude_session_janitor.py", "`— wake.`", "`next_after_id`", "`SESSION_STATUS_IDLE`",
 		"`REQUIRES_ACTION`", "2 hours", "7 days", "`need_input`", "one REST read per distinct", "`get_session`",
-		"`PR#<n> · fix-claude-pr`", "`#<n> · implement-issue-claude`"):
+		"`PR#<n> · fix-claude-pr`", "`#<n> · implement-issue-claude`", "`#<n> · PR #<pr> — implement-issue-claude`"):
 		assert needle in section, needle
 	pushing = text[text.index("### D) What the pushing session does"):text.index("### E) Enforcement")]
 	assert "archives it 7 days after the report (§26.I)" in pushing
 	assert "`/fix-claude-pr` session" in pushing and "archives itself" in pushing
+
+
+def test_agents_md_lists_the_pickup_title_forms():
+	text = " ".join(AGENTS_MD.read_text(encoding="utf-8").split())
+	section = text[text.index("Stale session sweep (CLAUDE.md §26.I, #4887)"):]
+	for needle in ("`PR#<n> · fix-claude-pr`", "`#<n> · implement-issue-claude`", "`#<n> · PR #<pr> — implement-issue-claude`"):
+		assert needle in section[:1500], needle
 
 
 def test_fix_claude_pr_twin_archives_the_fixer_on_a_terminal_pr():

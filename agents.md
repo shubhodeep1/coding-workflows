@@ -1096,7 +1096,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   - Eligible titles, with or without the #4886 prefix: fixer / hold
     (`PR [<repo>]#<n> — fix|fixed|on hold…`, `PR#<n> · fix-claude-pr`),
     issue-start (`Issue #<n> — implement`, `issue <repo>#<n> — implement`,
-    `implement-issue-claude — #<n>`, `#<n> · implement-issue-claude`), and
+    `implement-issue-claude — #<n>`, `#<n> · implement-issue-claude`, later
+    `#<n> · PR #<pr> — implement-issue-claude`), and
     report (`PR #<n> merged|closed — …needed`). The two `·` forms are what
     the pickup has been seen to name its sessions; their number comes from
     the prefix and the repository from the session's source.

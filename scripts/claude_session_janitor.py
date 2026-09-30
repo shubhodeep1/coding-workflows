@@ -66,7 +66,9 @@ API budget (CLAUDE.md §15): REST only, never GraphQL, one `gh api
 repos/<owner>/<repo>/pulls/<n>` or `…/issues/<n>` call per distinct pull
 request or issue that a rule needs, and none for report sessions or for a
 superseded issue-start session. A failed read keeps the session and is
-reported in `errors` (fail safe: never archive on missing data).
+reported in `errors` (fail safe: never archive on missing data). A
+repository with a `.` or `..` path segment is never read and keeps the
+session, with an error.
 """
 
 from __future__ import annotations
@@ -318,6 +320,8 @@ def classify(sessions: list[dict], now: dt.datetime, self_id: str | None = None,
 				repo = fields.get("repo") or session_repo(session)
 				if not repo:
 					raise ValueError("no GitHub repository in the title or the session sources")
+				if any(segment in (".", "..") for segment in repo.split("/")):
+					raise ValueError(f"repository {repo!r} has a '.' or '..' path segment")
 				if kind == "fixer":
 					terminal = _terminal_pr_age_hours(repo, fields["pr"], now, cache)
 					if terminal is not None and terminal[1] >= fixer_grace_hours:
