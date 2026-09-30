@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:683-684 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `matcher_covers` treats the literal `*` as a match-all regex, so a guard matcher changed to `*` passes the differential check even though it is invalid at runtime.\n  WHY: The guard can be silently disabled while the check reports no wiring regression; all reviewers rated this BLOCKER except qwen_qwen3_7-plus, which rated it NIT.\n- scripts/guard_differential.py:641-644, 690-710 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Python's `json.loads` accepts non-standard constants such as `NaN`, and the timeout check can accept the resulting non-finite value because comparisons with NaN do not report a timeout regression.\n  WHY: Invalid settings can pass the differential check even though strict runtime JSON loaders reject them; if NaN is accepted at runtime, timeout enforcement can fail. Severity ratings ranged from BLOCKER to NIT.\n- scripts/guard_differential.py: compare_settings_wiring, the `if head_text is not None and head_settings is None:` early return (around line 762-765) and read_settings_text (`except (OSError, UnicodeDecodeError): return \"\"`) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Read failures are converted to empty text and reported as parse failures, obscuring the distinction between an I/O/decode error and malformed settings.\n  WHY: Operators receive the same `reason=unparseable` diagnosis for a read failure as for deliberately malformed settings.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/guard_differential.py:683 | severity=critical | confidence=4\n  PROBLEM: `matcher_covers` treats the literal string `*` as match-all.\n  WHY: The wiring check passes for `*`, but Claude Code's settings parser would reject it as an invalid regex or fail to match tools, silently stopping the guard.\n- scripts/guard_differential.py:690-710 | severity=critical | confidence=4\n  PROBLEM: Python's `json.loads` accepts `NaN`, and the resulting NaN timeout bypasses the timeout comparison.\n  WHY: Claude Code's strict JSON parser would reject `NaN`, so hooks do not load even though the guard reports no wiring regression.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/guard_differential.py:683-684 | severity=critical | confidence=4\n  PROBLEM: `matcher_covers` treats the literal string `*` as a match-all tool matcher.\n  WHY: The check reports no regression for an invalid regex that prevents the guard from running.\n- scripts/guard_differential.py:641-644, 690-710 | severity=high | confidence=4\n  PROBLEM: `parse_settings` accepts non-standard `NaN`, and the timeout comparison does not detect the resulting NaN.\n  WHY: Strict JSON parsing in Claude Code rejects the settings file and drops configured guard hooks.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/guard_differential.py: matcher_covers at the `if head == base or head in (None, \"\", \"*\")` branch (around line 683-684) | severity=critical | confidence=4\n  PROBLEM: `matcher_covers` treats the literal matcher `\"*\"` as match-all.\n  WHY: Changing a guard matcher to `*` passes the check, but the runtime cannot match tool calls against it.\n- scripts/guard_differential.py: parse_settings (json.loads call, ~line 644) and _effective_timeout (~line 690-710) | severity=critical | confidence=4\n  PROBLEM: `json.loads` accepts `NaN`, `Infinity`, and `-Infinity`, and a NaN timeout passes the timeout regression check.\n  WHY: The settings file fails to load at runtime, silently removing the guard.\n- scripts/guard_differential.py: compare_settings_wiring, the `if head_text is not None and head_settings is None:` early return (around line 762-765) and read_settings_text (`except (OSError, UnicodeDecodeError): return \"\"`) | severity=low | confidence=3\n  PROBLEM: Read failures are reported as parse failures.\n  WHY: A transient permission or locale error produces the same `reason=unparseable` diagnosis as malformed settings.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/guard_differential.py:683 | severity=critical | confidence=4\n  PROBLEM: `matcher_covers` treats `\"*\"` as a match-all matcher.\n  WHY: The differential check accepts an invalid regex, leaving the runtime unable to invoke the guard.\n- scripts/guard_differential.py:641-644, 690-710 | severity=critical | confidence=4\n  PROBLEM: `parse_settings` accepts NaN and `_effective_timeout` converts it to a float that bypasses the timeout comparison.\n  WHY: The check can report no wiring regression for a settings file the runtime cannot load, leaving guard hooks inactive.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/guard_differential.py:683-684 (matcher_covers function) | severity=low | confidence=3\n  PROBLEM: `matcher_covers` treats the matcher string `*` as match-all.\n  WHY: The check passes an invalid regex that causes the runtime hook not to run.\n- scripts/guard_differential.py:641-644 (parse_settings), 690-710 (_effective_timeout and wiring_failures) | severity=low | confidence=3\n  PROBLEM: `json.loads` accepts NaN, and the resulting timeout bypasses the timeout check.\n  WHY: The runtime rejects the invalid JSON settings file, stopping all hooks.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/guard_differential.py:683 \u2014 `if head == base or head in (None, \"\", \"*\"):` | severity=critical | confidence=4\n  PROBLEM: `matcher_covers` treats the string `\"*\"` as a match-all superset.\n  WHY: The invalid matcher passes the differential check, but Claude Code cannot compile it, silently disabling the guard.\n- scripts/guard_differential.py:690-695 (`_effective_timeout`) and 706-710 (`wiring_failures` timeout comparison) | severity=high | confidence=4\n  PROBLEM: Python's `json.loads` accepts NaN, and the resulting timeout passes the timeout comparison.\n  WHY: The check misses the change and, if NaN reaches runtime timeout handling, the hook process may never be killed.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e6436074c00e58c5d865a99fbab969a1968fecff42df95608a1e09d210ae0fd0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5356,
+    "run_id": "36690602434",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36690602434",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930091802_bbed843edd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5356,
+    "run_id": "36690602434"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T09:18:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
