@@ -336,9 +336,9 @@ def _read_review_run_listing(path: str, missing_ok: bool = False, title_bound: b
 	so the listing raises `check_in_status.ReadError` instead of being read
 	around (fail closed). With `title_bound` (the internal-review.yml
 	listing, whose runs are bound to a PR by title alone) every run must also
-	carry a string `display_title`: a run without one could be this PR's
-	review, and skipping it as unbound would fail open (PR #5178 review
-	round 2).
+	carry a non-blank string `display_title`: a run without one could be this
+	PR's review, and skipping it as unbound would fail open (PR #5178 review
+	rounds 2 and 3).
 	"""
 	try:
 		listing = check_in_status.gh_api(path)
@@ -349,7 +349,7 @@ def _read_review_run_listing(path: str, missing_ok: bool = False, title_bound: b
 	runs = listing.get("workflow_runs")
 	if not isinstance(runs, list) or any(
 		not isinstance(run, dict) or type(run.get("id")) is not int or not isinstance(run.get("status"), str)
-		or (title_bound and not isinstance(run.get("display_title"), str))
+		or (title_bound and not (isinstance(run.get("display_title"), str) and run["display_title"].strip()))
 		for run in runs
 	):
 		raise check_in_status.ReadError(f"gh api {path} returned a malformed runs listing")
@@ -376,7 +376,7 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	call each; a 404 there, the workflow not existing in that repo, is no
 	runs). Any other failed read, a 404 on the head-branch listing included,
 	and a listing with a run that has no integer `id` or string `status`
-	(or, in the internal-review.yml listing, no string `display_title`)
+	(or, in the internal-review.yml listing, no non-blank string `display_title`)
 	raise `check_in_status.ReadError`.
 
 	Output: None, or {"state": "review_active" | "review_superseded",

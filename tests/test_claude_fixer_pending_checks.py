@@ -582,6 +582,11 @@ def _malformed(run: dict, **fields) -> dict:
 		{"internal-review.yml": [_malformed(_dispatch(RUN_ID + 2, status="in_progress"), display_title=_DROP)]}),
 	("sweep dispatch with a null title, failed", [],
 		{"internal-review.yml": [_malformed(_dispatch(RUN_ID + 2, conclusion="failure"), display_title=None)]}),
+	# PR #5178 review round 3: a blank title binds to no PR either.
+	("sweep dispatch with an empty title, still running", [],
+		{"internal-review.yml": [_malformed(_dispatch(RUN_ID + 2, status="in_progress"), display_title="")]}),
+	("sweep dispatch with a whitespace title, failed", [],
+		{"internal-review.yml": [_malformed(_dispatch(RUN_ID + 2, conclusion="failure"), display_title="  ")]}),
 ])
 def test_a_malformed_run_in_a_listing_raises_for_the_sweep_to_log(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,

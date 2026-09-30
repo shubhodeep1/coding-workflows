@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5148-pending-checks-newer-review-race-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5148
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
-- Project branch: claude/implement-plan-issue-5148-pending-checks-newer-review-race   Final PR: #5178 ready — review rounds: 3
+- Project branch: claude/implement-plan-issue-5148-pending-checks-newer-review-race   Final PR: #5178 ready — review rounds: 4
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge)
-- Waiting on: PR #5178 (final PR into the #4900 project branch), the review of the final-merge review round 3 push
+- Waiting on: PR #5178 (final PR into the #4900 project branch), the review of the final-merge review round 4 push
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01HRuW9tokc4gWgq1vPau85k   safety net and hand-back: ids in the final-merge review round 3 report
+- Check-in: checker session_01HRuW9tokc4gWgq1vPau85k   safety net and hand-back: ids in the final-merge review round 4 report
 - Last updated: 2026-09-30
-- Last note: final-merge review round 3 (workflow round 2, session session_01GxxbZrZ9L1iJBW1henakKU): an `internal-review.yml` dispatch without a string `display_title` now fails the runs read (fail closed) instead of counting as unbound; the head-branch filter finding was rejected (GitHub's `branch` filter is exact). Waiting on the next review of PR #5178.
+- Last note: final-merge review round 4 (workflow round 3, session session_01V4gujBVh5RazaxgQmrW7c3): an `internal-review.yml` dispatch with an empty or whitespace-only `display_title` now fails the runs read too, like one with no title. Waiting on the next review of PR #5178.
 
 ## Phases
 1. [x] Phase 1 — defer the pending-checks merge while a newer review is active or unsettled   — PR #5183 merged 2026-09-29; review rounds: 1; interventions: 0
@@ -35,7 +35,7 @@
 ## Completion
 - Completion PR #5302 merged 2026-09-29 — doc moved to docs/completed/issue-5148-pending-checks-newer-review-race-plan.md
 - Merged PRs: phase 1 #5183, conformance fix 1 #5209, conformance fix 2 #5253
-- Final PR #5178 ready (into the #4900 project branch) — review rounds: 3
+- Final PR #5178 ready (into the #4900 project branch) — review rounds: 4
 
 ## Activation
 
@@ -57,9 +57,10 @@
 - [source:conformance] When a guard lists workflow runs by workflow file, list the wrapper workflows too: a `workflow_dispatch` wrapper that calls a reusable workflow (such as `review_rb_judge_dispatch.yml` calling `review_autofix.yml`) records its runs under the wrapper's own path, not the reusable workflow's. (files: scripts/claude_fixer_pending_checks.py, .github/workflows/review_rb_judge_dispatch.yml)
 - [source:conformance] When a module's API budget grows, update every caller that restates it too: a batching contract (CLAUDE.md §15) in the calling script's docstring goes stale silently, because no test reads it. (files: scripts/claude_pr_sweep.py, scripts/claude_fixer_pending_checks.py)
 - [source:intervention] When an API budget is restated in several docstrings, pin each count with a test that derives it from the constant the code iterates over (and counts the calls the code makes); reviewers flag the wording round after round otherwise. (files: scripts/claude_fixer_pending_checks.py, tests/test_claude_fixer_pending_checks.py)
-- [source:intervention] When a guard binds runs (or comments) to a PR by one field, such as a run title, a record missing that field must fail the read like any other malformed record; skipping it as "not ours" is the one place a fail-closed guard quietly fails open. (files: scripts/claude_fixer_pending_checks.py)
+- [source:intervention] When a guard binds runs (or comments) to a PR by one field, such as a run title, a record missing that field, or carrying a blank one, must fail the read like any other malformed record; skipping it as "not ours" is the one place a fail-closed guard quietly fails open. (files: scripts/claude_fixer_pending_checks.py)
 
 ## Notes
+- Final-merge review round 4 (2026-09-30, head 8f669dc, PR #5178; workflow round 3): the one consensus finding (minimax-m3, NIT, confidence 3) was valid: `_read_review_run_listing(..., title_bound=True)` accepted an empty-string `display_title`, which binds to no PR, so such a run was skipped as unbound, the fail-open path round 3 closed for a missing title. A blank or whitespace-only title now raises `ReadError` too; `internal-review.yml`'s `run-name` always formats `Internal: AI Review & Autofix [pr:<N>]` for a dispatch, so no real run is refused. Two new cases in `test_a_malformed_run_in_a_listing_raises_for_the_sweep_to_log` (both fail without the fix). Checks: the five project suites (334 passed, Python 3.11), `ruff check --select E,F --ignore E501` (pass).
 - Final-merge review round 3 (2026-09-30, head de0ea45, PR #5178; workflow round 2): two consensus findings, both from minimax-m3. (1) `check_review_runs()` binds `internal-review.yml` dispatches by exact `display_title`, so a run with no title is skipped as unbound: valid in substance, fixed differently. The suggested `[pr:<N>]` substring fallback cannot match a missing title, and the workflow's `run-name` always formats the exact title that `check_in_status.py` binds by, so a fallback would match nothing new. Instead `_read_review_run_listing(..., title_bound=True)` raises `ReadError` for an `internal-review.yml` run without a string `display_title`, the same fail-closed rule as a run without an integer `id` or string `status`. Two new cases in `test_a_malformed_run_in_a_listing_raises_for_the_sweep_to_log` (both fail without the fix). (2) Require `head_branch == head_ref` on the head-branch listing: rejected. GitHub's `branch` filter is exact (checked on 2026-09-30: `branch=claude` and `branch=claude/implement-plan-issue-5148` return 0 runs, the full name returns 17, all on that branch), and an extra run there can only defer or refuse the merge, so the filter would add no safety. Checks: the five project suites (332 passed, Python 3.11), `ruff check --select E,F --ignore E501` (pass).
 - Final-merge review round 2 (2026-09-30, head 5c453c4, PR #5178; the workflow labels it round 1 because the conflict merge reset its count): the one consensus finding (minimax-m3, NIT, confidence 2) was valid: `check_review_runs()`'s docstring listed each run read with its own "(1 call …)" and gave no total, while the module and sweep docstrings give one. It now says "5 calls in all" and names the 3 unbound dispatch listings; `test_the_stated_run_read_budget_matches_the_listings_read` counts the listings `evaluate()` actually reads and checks all three docstrings against `UNBOUND_DISPATCH_REVIEW_WORKFLOWS` (it fails when either count is edited out of step). The earlier hand-off on the same head (gemini-3.1-flash-lite: the docstring "claims 1 call") misread the per-listing wording; the newer run's ledger replaced it. Checks: the five project suites (330 passed, Python 3.11), `ruff check --select E,F --ignore E501` (pass). No behaviour change.
 - Final-merge conflict (2026-09-30, head 78d1298, PR #5178): the base branch gained #5179 (issue #5147, pending-checks marker bound to the reviewed base), which conflicted in two docstrings only (`evaluate()` state list in `scripts/claude_fixer_pending_checks.py`, the module docstring of `tests/test_claude_fixer_pending_checks.py`); both sides kept. The code merged cleanly and stays coherent: the base-binding checks return before the check-run snapshot, and the #5148 re-read compares the same marker comment id, so it re-confirms the binding. Checks: the five project suites (329 passed, Python 3.12), `ruff check --select E,F --ignore E501` (pass). The previous stage session's summary said PR #5178 had merged; it had not (open, `mergeable_state: dirty`), yet it had closed #5148 and labelled it `ai:merged`; reopened under AD-11.
