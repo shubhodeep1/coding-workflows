@@ -1500,8 +1500,11 @@ with one line, `REJECTED_FINDING: <ID> | <file>:<line> | flagged_by: <slug>
 that re-reports the same defect adds `consensus_id: <id>` to it, and the summariser copies that line. Before the
 hand-off step counts the ledger, the same script moves a consensus finding
 into a `NON-BLOCKING FINDINGS` block when it was raised by exactly one
-reviewer, carries one `consensus_id` that the flagger itself cited and that
-names a pass-1 entry by the same reviewer at an overlapping range, and a
+reviewer, carries one `consensus_id` that the flagger itself cited as a
+`consensus_id:` line inside one of its own `File:` finding records, at the
+same file and a line overlapping the entry (issue #4975: the id quoted
+anywhere else in its output binds nothing), and that names a pass-1 entry by
+the same reviewer at an overlapping range, and a
 strict majority of the other successful reviewers (at least two) voted with
 an ID whose manifest entry records that `consensus_id`, file, overlapping
 range, and flagger. Its per-reviewer copies move only when they carry the
@@ -1529,9 +1532,17 @@ an earlier run never counts again. The manifest is saved with the
 partial-finalize artifacts for a resume that skips the whole reviewer phase.
 The binding to the finding is by `consensus_id`, never by file and line
 proximity (issue #4687): a finding stays blocking when another consensus
-entry of either pass lies within 3 lines of it or its `consensus_id` is
-duplicated, so a rejection of one finding can never demote a distinct one
-next to it. A round left with only non-blocking
+entry of either pass lies within 3 lines of it, the flagger reported another
+finding in that file within 3 lines (or without a readable line; a quoted,
+bolded, or prefixed spelling of the path is that file, `docs/README.md`
+included for `README.md`, and
+`1250 to 1262` or `1250, 1262` covers every line it names), or the
+flagging reviewer's raw output names that file anywhere outside the cited
+finding with a line number within 3 lines or with no line number at all
+(any spelling, such as `README.md#L1262`, a quoted, fenced, or table-row
+finding, or prose, and any path, `src/routes/+page.svelte` and `@scope`
+directories included), or its `consensus_id` is duplicated, so a rejection of one finding can never demote
+a distinct one next to it. A round left with only non-blocking
 entries still posts the ledger and then takes the zero-findings auto-merge
 path (fresh ready checks still required); a mixed round hands off the rest,
 and the fixer ignores the non-blocking block. Task gaps, findings two or more
@@ -1546,7 +1557,8 @@ votes=<n>`, one `CLAUDE_FIXER_NONBLOCKING_ENTRY` per demoted entry, one
 reason=<reason>` per single-reviewer entry that stays blocking (`unparsed`,
 `flagger_not_successful`, `no_consensus_id`, `multiple_consensus_ids`,
 `duplicate_consensus_id`, `unknown_consensus_id`, `consensus_id_mismatch`,
-`flagger_did_not_cite`, `ambiguous_nearby_pass1`, `ambiguous_nearby`,
+`flagger_did_not_cite`, `flagger_citation_mismatch`,
+`ambiguous_nearby_pass1`, `ambiguous_nearby`, `ambiguous_flagger_nearby`,
 `too_few_rejecters`, `no_automated_proof`), and `CLAUDE_FIXER_NONBLOCKING_LEGACY_REJECTIONS
 count=<n>` when rejection lines without a run ID were ignored;
 `CLAUDE_FIXER_HANDOFF` gains `nonblocking=<n>`. The pass-2 header step logs

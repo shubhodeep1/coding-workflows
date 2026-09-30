@@ -103,6 +103,13 @@ REAL_FINDING = (
 	"  WHY: word splitting."
 )
 
+# The flagger's raw pass-2 output re-reporting both pass-1 entries, each in its
+# own File: record with its own consensus_id line (issue #4975).
+FLAGGER_CITES_BOTH = (
+	f"File: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\nProblem: lost its backtick\n\n"
+	f"File: README.md\nLine or code reference: 1264\nconsensus_id: {FLAW_ID}\nProblem: command injection\n"
+)
+
 # The run ID the manifest issues for the README pass-1 entry (issue #4688).
 FINDING_ID = "RF-0123456789abcdef"
 
@@ -343,7 +350,7 @@ def test_issue_4687_rejections_of_a_false_positive_do_not_demote_a_nearby_flaw(t
 	flaw = _with_id(FLAW_FINDING, FLAW_ID)
 	ledger = _ledger(README_FINDING + "\n" + flaw)
 	reviews = _reviews(tmp_path, rejecters=OTHERS, pass1=PASS1_README + "\n" + PASS1_FLAW,
-		flagger_output=f"consensus_id: {RID}\nconsensus_id: {FLAW_ID}\n")
+		flagger_output=FLAGGER_CITES_BOTH)
 	text, demoted = _run(tmp_path, ledger, reviews)
 	assert demoted == [] and text == ledger
 	# The flaw has no rejection; the rejected entry is ambiguous next to it.
@@ -396,6 +403,305 @@ def test_issue_4687_a_distant_finding_in_the_same_file_is_not_ambiguous(tmp_path
 	ledger = _ledger(README_FINDING + "\n" + far)
 	_text, demoted = _run(tmp_path, ledger, _reviews(tmp_path, rejecters=OTHERS))
 	assert [record["path"] + ":" + str(record["lines"][0]) for record in demoted] == ["README.md:1261"]
+
+
+# ── Issue #4975: the flagger's citation binds to one of its structured findings ──
+
+# The flagger's default pass-2 record: it re-reports the README pass-1 entry.
+CITING_RECORD = f"File: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\nProblem: lost its backtick\n"
+# A different, real defect the flagger raises on the same line in pass 2.
+NEW_DEFECT_RECORD = "File: README.md\nLine or code reference: 1261\nProblem: the example interpolates an untrusted title into a shell line\n"
+
+
+@pytest.mark.parametrize("quote", [
+	f"\nMy earlier finding {RID} was a false positive.\n",
+	f"\nconsensus_id: {RID}\n",
+	f"\n```\nFile: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\n```\n",
+	f"REJECTED_FINDING: {RID} | README.md:1261 | flagged_by: {FLAGGER} | reason: withdrawn\nconsensus_id: {RID}\n",
+	f"SUMMARY\nconsensus_id: {RID}\n",
+	f"## Withdrawn\nconsensus_id: {RID}\n",
+])
+def test_issue_4975_the_id_quoted_outside_a_finding_record_binds_nothing(tmp_path, quote):
+	"""The exploit: a new same-line defect, the old id quoted elsewhere, the id on the ledger entry."""
+	ledger = _ledger(README_FINDING)
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=NEW_DEFECT_RECORD + quote)
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews) == {"README.md:1261": "flagger_did_not_cite"}
+
+
+def test_issue_4975_an_id_line_before_any_finding_record_binds_nothing(tmp_path):
+	ledger = _ledger(README_FINDING)
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=f"consensus_id: {RID}\n\n" + NEW_DEFECT_RECORD)
+	assert _run(tmp_path, ledger, reviews)[1] == []
+	assert _kept(ledger, reviews) == {"README.md:1261": "flagger_did_not_cite"}
+
+
+@pytest.mark.parametrize("flagger_output", [
+	f"File: docs/other.md\nLine or code reference: 1261\nconsensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: 1300\nconsensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: the rewrapped backtick\nconsensus_id: {RID}\n",
+	f"File: README.md\nconsensus_id: {RID}\n",
+	f"File: (see above)\nLine or code reference: 1261\nconsensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: `fetch(url, 1261)`\nconsensus_id: {RID}\n",
+	f"File: the README example, line 1261\nconsensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\nconsensus_id: {FLAW_ID}\n",
+	CITING_RECORD + "\n" + CITING_RECORD,
+])
+def test_issue_4975_a_citation_that_does_not_bind_one_record_at_the_entry_stays_blocking(tmp_path, flagger_output):
+	ledger = _ledger(README_FINDING)
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=flagger_output)
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews) == {"README.md:1261": "flagger_citation_mismatch"}
+
+
+@pytest.mark.parametrize("other_record", [
+	NEW_DEFECT_RECORD,
+	"File: README.md\nLine or code reference: 1264\nProblem: injection\n",
+	"File: README.md:1258\nProblem: injection\n",
+	"File: README.md\nProblem: injection\n",
+	"File: (unknown)\nLine or code reference: 1261\nProblem: injection\n",
+	# Conformance run 1: a number in code text is not a line, a numbered or
+	# heading item is a record, and a prose File: value names no file.
+	"File: README.md\nLine or code reference: `retries = 3` (line 1261)\nProblem: injection\n",
+	"File: README.md\nLine or code reference: run(\"$title\", 2)\nProblem: injection\n",
+	"2. File: README.md:1262\nProblem: injection\n",
+	"### File: README.md:1262\nProblem: injection\n",
+	"File: the README install example, line 1261\nProblem: injection\n",
+	# Conformance run 2: a decorated or prefixed spelling of the same file is
+	# that file, and a range or list reads every line it names.
+	"File: **README.md**\nLine or code reference: 1262\nProblem: injection\n",
+	"File: \"README.md\"\nLine or code reference: 1262\nProblem: injection\n",
+	"File: [README.md](README.md#L1262)\nProblem: injection\n",
+	"File: README.md.\nLine or code reference: 1262\nProblem: injection\n",
+	"File: /home/runner/work/coding-workflows/coding-workflows/README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"File: README.md\nLines: 1250 to 1262\nProblem: injection\n",
+	"File: README.md\nLines: 1250, 1262\nProblem: injection\n",
+	"File: README.md\nLines: 1250-1262.\nProblem: injection\n",
+	"File: README.md\nLines: 1250 & 1262\nProblem: injection\n",
+	# PR #5116 review round 1 (AD-11): a diff prefix is the same file, and a
+	# different file sharing the suffix also keeps the entry blocking.
+	"File: b/README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"File: docs/README.md\nLine or code reference: 1262\nProblem: injection\n",
+])
+def test_issue_4975_another_flagger_finding_at_the_entry_keeps_it_blocking(tmp_path, other_record):
+	"""The summariser folded a same-line defect into the rejected entry: the flagger's output shows two findings there."""
+	ledger = _ledger(README_FINDING)
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=CITING_RECORD + "\n" + other_record)
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews) == {"README.md:1261": "ambiguous_flagger_nearby"}
+
+
+@pytest.mark.parametrize("other_record", [
+	"File: README.md\nLine or code reference: 1400\nProblem: stale link\n",
+	"File: scripts/foo.sh\nLine or code reference: 1261\nProblem: unquoted variable\n",
+	"File: docs/README.md.bak\nLine or code reference: 1261\nProblem: stale copy\n",
+	"File: README.md\nLines: 1400 to 1410\nProblem: stale link\n",
+])
+def test_issue_4975_a_distant_flagger_finding_does_not_block_demotion(tmp_path, other_record):
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=CITING_RECORD + "\n" + other_record)
+	_text, demoted = _run(tmp_path, _ledger(README_FINDING), reviews)
+	assert [record["path"] for record in demoted] == ["README.md"]
+
+
+@pytest.mark.parametrize("other_finding", [
+	# Conformance run 3: spellings of a second finding the record parser does
+	# not read. The fail-closed scan still sees the file named near the entry.
+	"File: README.md#L1262\nProblem: injection\n",
+	"File: `README.md#L1261-L1262`\nProblem: injection\n",
+	"File: README.md?plain=1#L1262\nProblem: injection\n",
+	"File: README.md@L1262\nProblem: injection\n",
+	"*File:* README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"_File:_ README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"`File:` README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"> File: README.md\n> Line or code reference: 1262\n> Problem: injection\n",
+	"```\nFile: README.md\nLine or code reference: 1262\nProblem: injection\n```\n",
+	"| File | Line | Problem |\n| README.md | 1262 | injection |\n",
+	"Location: README.md:1262\nProblem: injection\n",
+	"File: README.MD\nLine or code reference: 1262\nProblem: injection\n",
+	"File: .\\README.md\nLine or code reference: 1262\nProblem: injection\n",
+	# The file named with no line at all is unreadable, as for a record (AD-3).
+	"Also: README.md interpolates an untrusted title into a shell line.\n",
+])
+def test_issue_4975_a_second_finding_the_record_parser_misses_keeps_the_entry_blocking(tmp_path, other_finding):
+	ledger = _ledger(README_FINDING)
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=CITING_RECORD + "\n" + other_finding)
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews) == {"README.md:1261": "ambiguous_flagger_nearby"}
+
+
+@pytest.mark.parametrize("other_text", [
+	"Location: README.md:1400\nProblem: stale link\n",
+	"README.md lines 1400 to 1410 also need a refresh.\n",
+	"File: scripts/foo.sh#L1261\nProblem: unquoted variable\n",
+	"File: docs/README.md.bak#L1261\nProblem: stale copy\n",
+	"README install notes look fine; version 1261 of nothing.\n",
+	f"REJECTED_FINDING: RF-00000000000000aa | scripts/foo.sh:1261 | flagged_by: {OTHERS[0]} | reason: quoted.\n",
+])
+def test_issue_4975_the_fail_closed_scan_ignores_other_files_and_distant_lines(tmp_path, other_text):
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=CITING_RECORD + "\n" + other_text)
+	_text, demoted = _run(tmp_path, _ledger(README_FINDING), reviews)
+	assert [record["path"] for record in demoted] == ["README.md"]
+
+
+# Issue #4975 Q3: the conformance 3/3 fix check found that the fail-closed scan
+# never matched an entry path holding a character outside ``[\w./\\-]``.
+PROBE_PATHS = [
+	"README.md",
+	"src/routes/+page.svelte",
+	"src/@types/index.d.ts",
+	"packages/@acme/ui/README.md",
+	"docs/c++/notes.md",
+]
+
+
+def _probe_reviews(tmp: Path, monkeypatch, path: str, second_finding: str) -> tuple[str, Path]:
+	"""The README fixture moved to ``path``: pass-1 entry, ledger entry, citing record, manifest, and verified votes."""
+	monkeypatch.setitem(SOURCE_FILES, path, README_LINES)
+	pass1 = PASS1_README.replace("README.md:1261", f"{path}:1261")
+	cid = _cid(pass1)
+	ledger = _ledger(README_FINDING.replace("README.md:", f"{path}:").replace(RID, cid))
+	citing = f"File: {path}\nLine or code reference: 1261\nconsensus_id: {cid}\nProblem: lost its backtick\n"
+	reviews = _reviews(tmp, rejecters=[], path=path, cid=cid, pass1=pass1, flagger_output=citing + second_finding)
+	vote = (f"REJECTED_FINDING: {FINDING_ID} | {path}:1261 | flagged_by: {FLAGGER} | reason: the backtick is present."
+		f" | evidence: {path}:1261 | quote: {QUOTE}\n")
+	_others_write(reviews, "No issues found.\n" + vote)
+	return ledger, reviews
+
+
+@pytest.mark.parametrize("path", PROBE_PATHS)
+def test_issue_4975_probe_paths_demote_without_a_second_finding(tmp_path, monkeypatch, path):
+	"""Control: every probe path demotes on a well-formed citation, so the cases below fail only on the second finding."""
+	ledger, reviews = _probe_reviews(tmp_path, monkeypatch, path, "")
+	_text, demoted = _run(tmp_path, ledger, reviews)
+	assert [record["path"] for record in demoted] == [path]
+
+
+@pytest.mark.parametrize("path", PROBE_PATHS)
+@pytest.mark.parametrize("second_finding", [
+	"File: {path}#L1262\nProblem: injection\n",
+	"> File: {path}\n> Line or code reference: 1262\n> Problem: injection\n",
+	"Also: {path} interpolates an untrusted title into a shell line.\n",
+	"Location: /home/runner/work/repo/repo/{path}:1262\nProblem: injection\n",
+	"Location: {upper}:1262\nProblem: injection\n",
+])
+def test_issue_4975_a_second_finding_at_any_probe_path_keeps_the_entry_blocking(tmp_path, monkeypatch, path, second_finding):
+	ledger, reviews = _probe_reviews(tmp_path, monkeypatch, path, "\n" + second_finding.format(path=path, upper=path.upper()))
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews) == {f"{path}:1261": "ambiguous_flagger_nearby"}
+
+
+@pytest.mark.parametrize(("paragraph", "path", "expected"), [
+	("File: src/routes/+page.svelte#L1262", "src/routes/+page.svelte", True),
+	("see `src/@types/index.d.ts:1262`.", "src/@types/index.d.ts", True),
+	("docs\\c++\\notes.md line 1262", "docs/c++/notes.md", True),
+	("the +page.svelte load function", "src/routes/+page.svelte", True),
+	("File: ./README.md.", "README.md", True),
+	("File: b/README.md", "README.md", True),
+	("File: docs/README.md", "README.md", True),
+	("File: docs/README.md.bak", "README.md", False),
+	("File: myREADME.md", "README.md", False),
+	("File: src/routes/+page.svelte.orig", "src/routes/+page.svelte", False),
+	("File: src/routes/page.svelte", "src/routes/+page.svelte", False),
+	("File: docs/c++/notes.mdx", "docs/c++/notes.md", False),
+	("no file here", "README.md", False),
+	("no file here", "./", True),
+	("no file here", ".", True),
+	("(no file here)", "docs/", False),
+	("the docs/ folder", "docs/", True),
+	("File: docs/README.md", "docs//README.md", True),
+])
+def test_issue_4975_paragraph_names_path_matches_the_path_literally(paragraph, path, expected):
+	assert nonblocking._paragraph_names_path(paragraph, path) is expected
+
+
+def test_issue_4975_finding_records_report_their_line_spans_on_request():
+	output = f"SECURITY\n{CITING_RECORD}SEVERITY: MAJOR\n\nFile: a.py:4\nProblem: x\nREJECTED_FINDING: none\n"
+	assert [record["span"] for record in nonblocking.flagger_finding_records(output, with_spans=True)] == [(1, 6), (7, 9)]
+	assert all("span" not in record for record in nonblocking.flagger_finding_records(output))
+
+
+@pytest.mark.parametrize("flagger_output", [
+	CITING_RECORD,
+	f"- **File:** `README.md:1261`\n- **Problem:** lost its backtick\n- **consensus_id:** `{RID}`\n",
+	f"File: `README.md`\nLine or code reference: `README.md:1261`\nconsensus_id: `{RID}`\n",
+	f"File: README.md\nLine: L1261\nconsensus_id: {RID}\n",
+	f"FILE: ./README.md\nLines: 1260-1262\nconsensus_id: {RID}\n",
+	f"File: README.md, line 1261\nconsensus_id: {RID}\n",
+	f"File: README.md\nconsensus_id: {RID}\nLine or code reference: 1261\nProblem: lost its backtick\n",
+	f"CORRECTNESS\nFile: README.md\nLine or code reference: 1261\nconsensus_id: {RID}\n\nREJECTED_FINDING: none\n",
+	f"1. **File:** `README.md:1261`\n   consensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: `retries = 3` (line 1261)\nconsensus_id: {RID}\n",
+	f"File: README.md\nLine or code reference: 1261 `retries = 3`\nconsensus_id: {RID}\n",
+])
+def test_issue_4975_a_citation_inside_the_flaggers_record_demotes(tmp_path, flagger_output):
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=flagger_output)
+	_text, demoted = _run(tmp_path, _ledger(README_FINDING), reviews)
+	assert [record["path"] for record in demoted] == ["README.md"]
+
+
+def test_issue_4975_finding_records_parse_the_reviewer_shape():
+	output = (
+		"SECURITY\n"
+		f"File: scripts/a.py\nLine or code reference: 40-44\nconsensus_id: {RID}\nProblem: x\n"
+		"Why it fails at runtime: y\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\n"
+		f"consensus_id: {FLAW_ID}\n"
+		"File: scripts/b.py:7\nLine or code reference: 99\nProblem: z\n"
+		"```\nFile: scripts/c.py\nLine or code reference: 1\n```\n"
+		"Requirement: add a flag\nExpected change site: scripts/d.py\n"
+	)
+	assert nonblocking.flagger_finding_records(output) == [
+		{"path": "scripts/a.py", "lines": (40, 44), "consensus_ids": [RID]},
+		{"path": "scripts/b.py", "lines": (7, 7), "consensus_ids": []},
+	]
+
+
+@pytest.mark.parametrize(("output", "expected"), [
+	("File: a.py\nLine or code reference: `retries = 3`\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: lock.acquire(1) without release\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: `a.py:40-44`\n", ("a.py", (40, 44))),
+	("File: a.py\nLine or code reference: `x = 3` around line 40\n", ("a.py", (40, 40))),
+	("File: a.py\nLine or code reference: #L40\n", ("a.py", (40, 40))),
+	("File: a.py (40)\n", ("a.py", (40, 40))),
+	("File: Makefile:12\n", ("Makefile", (12, 12))),
+	("File: Makefile (line 3)\n", (None, (3, 3))),
+	("1) File: a.py:4-6\n", ("a.py", (4, 6))),
+	# PR #5060 review round 1: a version or a URL's host:port is not path:N.
+	("File: a.py\nLine or code reference: see version 3.14:40 for context\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: `1.2.3:40`\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: `http://localhost:8080`\n", ("a.py", None)),
+	("File: a.py\nLine or code reference: see scripts/Makefile:12\n", ("a.py", (12, 12))),
+	("File: a.py\nLine or code reference: `.github/workflows/ci.yml:7-9`\n", ("a.py", (7, 9))),
+	# Conformance run 2: wrapping markup, quotes, and link brackets are not
+	# part of the path; ``N to M`` is a range; a listed line widens the range.
+	("File: **a.py**\nLine: 4\n", ("a.py", (4, 4))),
+	("File: 'a.py'\nLine: 4\n", ("a.py", (4, 4))),
+	("File: <scripts/a.py>\nLine: 4\n", ("scripts/a.py", (4, 4))),
+	("File: **`a.py:4`**\n", ("a.py", (4, 4))),
+	("File: [a.py](a.py#L4)\n", ("a.py", (4, 4))),
+	("File: a.py;\nLine: 4\n", ("a.py", (4, 4))),
+	("File: __init__.py\nLine: 4\n", ("__init__.py", (4, 4))),
+	("File: a.py\nLines: 40 to 44\n", ("a.py", (40, 44))),
+	("File: a.py\nLines: 40 through 44.\n", ("a.py", (40, 44))),
+	("File: a.py\nLines: 40, 52\n", ("a.py", (40, 52))),
+	("File: a.py\nLine or code reference: lines 40 and 52-54\n", ("a.py", (40, 54))),
+	("File: a.py:40, 52\n", ("a.py", (40, 52))),
+	("File: a.py\nLine: 40, `x = 3`\n", ("a.py", (40, 40))),
+	("File: a.py\nLine: 40 total\n", ("a.py", (40, 40))),
+	# PR #5116 review round 1: ``&`` lists a line only right after a reference.
+	("File: a.py\nLines: 40 & 52\n", ("a.py", (40, 52))),
+	("File: a.py\nLine: 40 set X & 52\n", ("a.py", (40, 40))),
+	("File: a.py\nLine: 40, `x & 52`\n", ("a.py", (40, 40))),
+	("File: .\nLine: 4\n", (None, (4, 4))),
+])
+def test_issue_4975_finding_records_read_only_explicit_paths_and_lines(output, expected):
+	"""Conformance run 1: code text reads no line, and a prose File: value reads no path."""
+	records = nonblocking.flagger_finding_records(output)
+	assert [(record["path"], record["lines"]) for record in records] == [expected]
 
 
 def test_a_duplicated_id_in_the_ledger_stays_blocking(tmp_path):
@@ -869,7 +1175,7 @@ def test_issued_ids_drive_demotion_end_to_end(tmp_path):
 def test_issued_ids_never_demote_a_nearby_flaw_end_to_end(tmp_path):
 	"""#4687 on top of #4688: votes for the false positive's run ID leave the flaw beside it blocking."""
 	pass1 = _ledger(PASS1_README + "\n" + PASS1_FLAW)
-	reviews = _reviews(tmp_path, rejecters=[], manifest=False, flagger_output=f"consensus_id: {RID}\nconsensus_id: {FLAW_ID}\n")
+	reviews = _reviews(tmp_path, rejecters=[], manifest=False, flagger_output=FLAGGER_CITES_BOTH)
 	(reviews / "consensus_pass1.txt").write_text(pass1, encoding="utf-8")
 	entries = nonblocking.issue_ids(pass1, reviews / nonblocking.MANIFEST_NAME)
 	readme_id = next(e["id"] for e in entries if e["start"] == 1261)
@@ -983,6 +1289,7 @@ def test_cross_pollination_header_lists_issued_ids_and_shows_consensus_ids(tmp_p
 	# The ledger shown is annotated; the persisted pass-1 ledger is never rewritten.
 	assert f"  consensus_id: {RID}" in text.split("=== CONSENSUS FINDINGS ===", 1)[1]
 	assert "  consensus_id: <consensus_id>" in text
+	assert "a consensus_id anywhere else in your output does not count." in text
 	assert "consensus_id" not in (tmp_path / "runtime" / "previous_reviews" / "consensus_pass1.txt").read_text()
 	# A rebuilt header (same-head resume) issues fresh IDs.
 	proc, manifest, summary = _build_summary(tmp_path, SCRIPT.parent, PASS1_LEDGER)
