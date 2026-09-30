@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T16:24:33Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A GitHub Actions run's log, and every env value echoed in it, is readable only after the run completes (`gh run view --log` refuses an in-progress run), so a check that reads a run's inputs from its log belongs in the stage that reads the result, never in the stage that dispatched it",
+  "phase": "implement_plan",
+  "pr_number": 5625,
+  "record_id": "lesson-implement-plan-5b73da3bd93f6ef201617e3d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5016-dispatch-exact-run-id",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}

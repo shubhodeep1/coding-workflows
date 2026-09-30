@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T16:24:33Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a helper's cost or contract changes, update every table that describes it, including the CLAUDE.md \u00a723.I helper table, not only README.md and agents.md",
+  "phase": "implement_plan",
+  "pr_number": 5625,
+  "record_id": "lesson-implement-plan-49b49767d68689c5bfa4383d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5016-dispatch-exact-run-id",
+    "file:CLAUDE.md"
+  ]
+}

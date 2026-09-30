@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T16:24:33Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An instruction that identifies an object from data served only after it completes (a run's log) must say what to do with the objects still in progress, or the \"none matched\" path fires early",
+  "phase": "implement_plan",
+  "pr_number": 5625,
+  "record_id": "lesson-implement-plan-cb24079d499f6cbcd12b749e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5016-dispatch-exact-run-id",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
