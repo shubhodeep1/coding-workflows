@@ -3,23 +3,26 @@
 - Plan: docs/plans/issue-5452-edit-comment-scratchpad-only-plan.md
 - Source issue: shubhodeep1/coding-workflows#5452
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5452-edit-comment-scratchpad-only   Final PR: pending
+- Project branch: claude/implement-plan-issue-5452-edit-comment-scratchpad-only   Final PR: #5464 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5465 (review of the round 1 log fix on top of twin sync 3, b4430cc)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01EKem5RE2k4bXrwGD5FZWRy (reused)   safety net and hand-back: re-armed by session_018amcQs6CGoJTHqGc14jDEh (ids in its report)
 - Last updated: 2026-09-30
-- Last note: project branch opened; phase 1 starting.
+- Last note: twin sync 3 landed as b4430cc; Status back to IN_PROGRESS. The review of b4430cc (workflow round 1) found no code defect; its one consensus task gap (this log still read BLOCKED / twin sync 3 pending, and the PR body's twin-sync checkbox was unticked) is fixed here and in the PR body.
 
 ## Phases
-1. [ ] Phase 1 — restrict edit_comment.py input files to the session scratchpad   — protected paths: `.claude/scripts/edit_comment.py`, `.claude/commands/implement-plan-claude.md`
-   - [ ] twin `workflow-templates/.claude/scripts/edit_comment.py`: `read_input_file` / `is_scratchpad_path` / `_temp_roots`, used by `load_replacements` and `--body-file`
-   - [ ] `tests/test_edit_comment.py`: load the twin; scratchpad fixture; rejection and unit cases
-   - [ ] CLAUDE.md §23.I, `agents.md`, twin `implement-plan-claude.md` Comment helper
-   - [ ] `changelog.d/5452-edit-comment-scratchpad-only.md` (`security`)
-   - [ ] `[claude-twin-sync]` copy into `.claude/` (after the phase PR opens)
+1. [ ] Phase 1 — restrict edit_comment.py input files to the session scratchpad   — PR #5465 open (waiting on the review of the round 1 log fix); review rounds: 3; interventions: 0; protected paths: `.claude/scripts/edit_comment.py`, `.claude/commands/implement-plan-claude.md`
+   - [x] twin `workflow-templates/.claude/scripts/edit_comment.py`: `read_input_file` / `is_scratchpad_path` / `_temp_roots`, used by `load_replacements` and `--body-file`
+   - [x] `tests/test_edit_comment.py`: load the twin; scratchpad fixture; rejection and unit cases
+   - [x] CLAUDE.md §23.I, `agents.md`, twin `implement-plan-claude.md` Comment helper
+   - [x] `changelog.d/5452-edit-comment-scratchpad-only.md` (`security`)
+   - [x] `[claude-twin-sync]` copy into `.claude/` (after the phase PR opens) — bfb3389, 2026-09-30
+   - [x] review round 1 fix: `[claude-twin-sync]` copy of `workflow-templates/.claude/scripts/edit_comment.py` into `.claude/` — 6a48797, 2026-09-30
+   - [x] review of 6a48797 (workflow round 1) fix: `[claude-twin-sync]` copy of `workflow-templates/.claude/scripts/edit_comment.py` into `.claude/` — b4430cc, 2026-09-30
+   - [x] review of b4430cc (workflow round 1) fix: progress log and PR body brought up to date (task gap only, no code change)
 
 ## Conformance
 
@@ -38,10 +41,20 @@
 - AD-4 [plan, 2026-09-30] Which copy do the behaviour tests load while `.claude/` waits for the twin sync? — Picked: A — the `workflow-templates/.claude/scripts/` twin, with `test_template_parity` still comparing both copies. Alternatives: B — keep loading `.claude/scripts/edit_comment.py`. Why: the twin-first rule (CLAUDE.md §28.C interim) says tests read the twin so they pass before the sync; after it both copies are identical. Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-09-30] Add an environment variable to widen the allowed roots? — Picked: A — no. Alternatives: B — `EDIT_COMMENT_ALLOWED_DIRS`. Why: an override would reopen the path for any command that sets it, and the §23.H guard deliberately has no escape hatch either. Applied in: no code change. Status: pending review
 - AD-6 [plan, 2026-09-30] Exit code for a rejected path? — Picked: A — 1 (invalid argument), before any API call, with a JSON `error`. Alternatives: B — 2 (call failed). Why: the documented contract uses 1 for an invalid argument and 2 for a failed call; nothing was called. Applied in: phase 1 PR. Status: pending review
+- AD-7 [phase 1/1 — review round 1, 2026-09-30] Bind the scratchpad check to this session's own id (`CLAUDE_CODE_SESSION_ID`), or only to the documented layout? — Picked: A — only the layout `<temp root>/claude-*/<project>/<session>/scratchpad/<file>` (scratchpad the fourth component), any session. Alternatives: B — also require the session component to equal `CLAUDE_CODE_SESSION_ID` when it is set. Why: AD-1 already allows any session's scratchpad; another same-user session's scratchpad is not a privilege boundary, and an env-var binding fails closed after a resume changes the session id while the prompt's scratchpad path stays. Applied in: PR #5465. Status: pending review
+- AD-8 [phase 1/1 — review round 1, 2026-09-30] Size limit for `--body-file` / `--replacements` files? — Picked: A — `MAX_INPUT_FILE_BYTES = 16 * MAX_BODY_CHARS` (1,048,576 bytes), checked with `fstat` before the read and enforced again by a bounded read. Alternatives: B — `4 * MAX_BODY_CHARS` (the UTF-8 worst case for a body only). Why: a body over 65,536 characters is rejected later anyway; 16x leaves room for JSON escaping in a replacements file and still keeps a huge file out of memory. Applied in: PR #5465. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A helper allowlisted in `.claude/settings.json` that reads a caller-supplied file path must confine it (resolve symlinks, reject hard links and non-regular files) before the read, or it becomes a promptless exfiltration path. (files: .claude/scripts/edit_comment.py, .claude/settings.json)
+- [source:intervention] A path allowlist check must pin the exact directory depth it documents (not "a `scratchpad` somewhere below `claude-*`"), and a helper that reads a caller-supplied file must bound the read by size before loading it, not only validate the parsed result. (files: .claude/scripts/edit_comment.py)
+- [source:intervention] A byte cap on a file read must be enforced on bytes: open in binary mode, read at most cap + 1 bytes, then decode; a text-mode `read(n)` counts characters and can consume up to 4n bytes of UTF-8. (files: .claude/scripts/edit_comment.py)
 
 ## Notes
 - Permission mode: auto (issue mode records it; §28.A).
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
 - Security pass: run (`security_pass_skip.py`: no skip label).
+- Twin sync 1 (2026-09-30): `workflow-templates/.claude/scripts/edit_comment.py` (sha256 bff0569b53d3f6b0abbd1078eea898614f8beae44cfad73fe899b7b75e4bc06e) → `.claude/scripts/edit_comment.py`; `workflow-templates/.claude/commands/implement-plan-claude.md` (sha256 c6f55a6fd3abcdad91b90ff9337e4f7d6452fe02fb325fb86eed92732d07b8d8) → `.claude/commands/implement-plan-claude.md`. The owner answered the blocker with A and `/reclarify`; synced as bfb3389; Status back to IN_PROGRESS; `ai:claude-blocked` removed; project branch synced with main (e549756); project checker session_01EKem5RE2k4bXrwGD5FZWRy created; the blocked stage session session_01Lnqgd9mXSVtxnPBWaUdhXQ left open (session_01EbynNNTD3BbZLrdCRgrGPN).
+- Review round 1 (2026-09-30, session_01Kc5NbCZmiVs2fMgUzEmeZf): fixed — `is_scratchpad_path` accepted `claude-*/scratchpad/` lookalikes and a `scratchpad` at any depth; `read_input_file` read the whole file before the body-size check. Rejected — the twin-sync task gap (already done as bfb3389). Twin sync 2: `workflow-templates/.claude/scripts/edit_comment.py` (sha256 4c34f080cf3900ba2e2f7223ff39393a2d690ef12217330c9ab9b86066e31e2e) → `.claude/scripts/edit_comment.py`; the owner answered A and `/reclarify`; synced as 6a48797 (2026-09-30).
+- Review of 6a48797, workflow round 1 (2026-09-30, session_01WV8TWs4rPoLuzbL9aDyR41): fixed — `read_input_file` bounded and checked the read in decoded characters, not bytes (consensus, 6 reviewers). Rejected — the `fd = -1` handle-leak (1 reviewer, confidence 2: once `os.fdopen` succeeds the file object owns the descriptor and `with` closes it; the rewrite moves the assignment before the `with` anyway). Task gap fixed — this log (twin sync 2 recorded). Twin sync 3: `workflow-templates/.claude/scripts/edit_comment.py` → `.claude/scripts/edit_comment.py` (sha256 de6413db4b36c33988d3c4b860997bd2a62c5a4891176322d68c618354d0e9f5); the owner answered A and `/reclarify` (2026-09-30 09:03); synced as b4430cc, sha256 matches.
+- Resume after twin sync 3 (2026-09-30, session_01WdPyMLzxsLPtm7UokxQA2V): synced the project branch with main (f6d87af), removed `ai:claude-blocked`, reused checker session_01EKem5RE2k4bXrwGD5FZWRy, and armed the wait on PR #5465.
+- Review of b4430cc, workflow round 1 (2026-09-30, session_018amcQs6CGoJTHqGc14jDEh): no code findings from any of the 6 reviewers. One consensus task gap (3 reviewers, confidence 5, NIT): the log still read `Status: BLOCKED` / twin sync 3 pending and the PR body's `[claude-twin-sync]` checkbox was unticked. Valid; fixed in this log and the PR body. Local check before the push: both `edit_comment.py` copies and both `implement-plan-claude.md` copies byte-identical; 7 related suites 209 passed, 1 skipped. The stage session session_01WV8TWs4rPoLuzbL9aDyR41 (review of 6a48797) still shows need_input for twin sync 3, which has landed since; left open (never archived while waiting on the user).
