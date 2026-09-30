@@ -1056,9 +1056,19 @@ reviews, comments, and conflicts stay a direct §12 request.
     sets it from the repository variable).
   The check is off when `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` is unset. It
   adds at most the head-commit read and the active-run reads the hand-back
-  mode already budgets. `stall_redispatched` is true when a trusted
-  `review` claim on the head came from a claimant the caller does not
-  ignore. `/fix-claude-pr` answers `review-stalled` by claiming the head
+  mode already budgets. `stall_redispatched` is true when the review
+  workflow's dispatched-run listing (the one the active-run reads already
+  fetched) holds a run that meets every condition below (issue #5376):
+  - completed and not cancelled;
+  - a `workflow_dispatch` run of `internal-review.yml` on the default
+    branch (or of `ai-review.yml`, titled `AI Review [pr:<n>]`, in a
+    consumer repo);
+  - titled for this PR;
+  - created at or after the head arrived. That time is the later of the
+    head's committer date and its earliest check-run `started_at`, so a
+    backdated commit cannot pull an older run in.
+  Claims never set it. They are leases only, and the PR's author can post
+  one. `/fix-claude-pr` answers `review-stalled` by claiming the head
   (`review`) and dispatching `internal-review.yml` (`ai-review.yml` in
   consumer repos) with `pr_number` through `dispatch_workflow.py`, which
   now allows `internal-review.yml`. A head already re-dispatched is held

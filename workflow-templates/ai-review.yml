@@ -2,6 +2,10 @@
 # automatically when upstream templates change. To opt out of auto-updates,
 # set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
 name: AI Review
+# Dispatched runs carry their PR in the run name, so .claude/scripts/check_in_status.py
+# can bind a fixer's or the sweep's re-dispatch (sent from the default branch)
+# to its PR (issue #5376). Other events keep GitHub's default run name.
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('AI Review [pr:{0}]', inputs.pr_number) || '' }}"
 on:
   # ready_for_review is included so that converting a draft PR to a
   # non-draft re-fires the review gate. This is the unlock path for
