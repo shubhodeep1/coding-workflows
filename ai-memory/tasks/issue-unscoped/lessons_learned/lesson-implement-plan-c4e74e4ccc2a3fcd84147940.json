@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T01:45:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test file that CI runs as a script (`python3 tests/<file>.py`) executes only the tests its `__main__` block calls, so tests appended below that block never run in CI; keep the block last and call every test from it, or run the file under pytest.",
+  "phase": "implement_plan",
+  "pr_number": 5355,
+  "record_id": "lesson-implement-plan-c4e74e4ccc2a3fcd84147940",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5227-lineage-only-target-branch-merges",
+    "file:tests/test_issue_pr_status_target_branch_gate.py",
+    "file:.github/workflows/ci.yml"
+  ]
+}
