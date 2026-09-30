@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:506-507 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The comment above the `${head:+...}` guard says an empty `head_branch` from a run produces a blank line, but the new jq filter excludes empty `head_branch` values.\n  WHY: The guard remains necessary because an empty PR head could match a blank line; its stated rationale is stale and may mislead maintainers.\n- - END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/review_merge_train.sh\n  Line or code reference: 506-507\n  severity=NIT | confidence=5\n  PROBLEM: The comment above the grep -Fxq guard is stale after the _mt_inflight_review_branches rework. The comment states \"a run whose head_branch is \"\" prints one\" as a rationale for the ${head:+...} guard. However, the new local jq filter at line 442 uses (if .head_branch != \"\" then .head_branch else empty end), which explicitly skips runs with an empty head_branch. The ${head:+-e \"${head}\"} guard at line 508 remains necessary to prevent an empty PR head string from becoming a grep -Fx \"\" blank-line pattern, but the comment now cites a reason that no longer applies to the current implementation.\n  WHY: This is a documentation-only defect. It does not cause a runtime failure, but it may mislead future maintainers about why the guard exists.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/review_merge_train.sh\n  Location: lines 506-507 (comment above the grep -Fxq guard in _mt_release)\n  PROBLEM: The comment states \"a run whose head_branch is \"\" prints one\" but the rewritten `_mt_inflight_review_branches` (lines 441-449) filters out empty `head_branch` values via `(if .head_branch != \"\" then .head_branch else empty end)`. The comment is now stale: under the new filter, an empty `head_branch` emits no key at all (verified by `test_release_empty_head_does_not_match_blank_run_branch`, which still passes via the `${head:+...}` defense-in-depth guard). The first half of the comment (\"An empty head is never a pattern: grep -Fx with \"\" matches a blank line\") is still correct and necessary.\n  WHY: Suggested minimal fix: Update the second line to drop the now-inaccurate claim, e.g. `# An empty head is never a pattern: grep -Fx with \"\" matches a blank line, so the ${head:+...} guard skips it.` (~2 lines.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: scripts/review_merge_train.sh\n  Line or code reference: lines 506-507 (comment above the `grep -Fxq` guard in `_mt_release`)\n  severity=NIT | confidence=5\n  PROBLEM: The comment says \"a run whose head_branch is '' prints one\" (a blank line), but the new `_mt_inflight_review_branches` jq filter at line 442 uses `(if .head_branch != \"\" then .head_branch else empty end)`, which suppresses empty head_branch values entirely. A run with head_branch=\"\" no longer emits any output line.\n  WHY: The `${head:+-e \"${head}\"}` guard on line 508 is still necessary and correct \u2014 an empty PR head would still make `grep -Fx` match a blank line if one existed in the input. But the comment's stated reason (that runs with empty head_branch produce blank lines) is now wrong. A future reader would misunderstand why the guard exists and might remove it or misattribute the risk.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: scripts/review_merge_train.sh\n  Line or code reference: lines 506-507 (comment above the grep -Fxq guard in _mt_release)\n  severity=NIT | confidence=4\n  PROBLEM: The comment says \"a run whose head_branch is \"\" prints one\", explaining why the ${head:+-e \"${head}\"} guard is needed. This was accurate with the old code where (.head_branch // empty) emitted \"\" for an empty-string head_branch, but the new _mt_inflight_review_branches jq filter uses (if .head_branch != \"\" then .head_branch else empty end), which emits nothing for empty-string head_branch. The guard is still correct (it prevents an empty PR HEAD from the PR listing, not a run's head_branch, from becoming a grep -Fx \"\" blank-line pattern), but the comment's stated rationale is now stale and could mislead a future reader into thinking the guard protects against run head_branch=\"\" keys that no longer exist.\n  WHY: No runtime failure; the guard works correctly. The comment is documentation that describes behavior the code no longer exhibits.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "877e4c3b5186ec200d9264a576fb0010d1479127f6c79757588c00ab88418ee7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5578,
+    "run_id": "36691152088",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36691152088",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930090347_a39369ceff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5578,
+    "run_id": "36691152088"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T09:03:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
