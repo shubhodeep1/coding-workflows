@@ -54,14 +54,21 @@ reaching the network. Every `CLAUDE_*` variable is removed, so no kill switch
 is inherited.
 
 Output: one `GUARD_DIFFERENTIAL` line per regression, per missing corpus, and
-a summary line. `--json` also prints every shape's result. Exit 0 when clean
-or when no hook changed, 1 on a regression or a missing corpus, 2 on a usage
-or setup error (bad ref, unreadable corpus).
+a summary line. `--json` also prints every shape's result. A change to this
+script or to a `Guard differential …` step of `.github/workflows/ci.yml`
+prints a `verifier_change` warning, whether or not a hook changed. Exit 0 when
+clean or when no hook changed, 1 on a regression or a missing corpus, 2 on a
+usage or setup error (bad ref, unreadable corpus). A `verifier_change` never
+changes the exit code.
 
 Wired as the `Guard differential check (issue #5174)` step of the
 `tests-hooks-and-orchestrator` job in `.github/workflows/ci.yml` (reported
 through the `CI / lint` aggregate), which runs on every pull request into
-`main` and `stable`, so a #4785 twin-sync PR is gated by it too.
+`main` and `stable`, so a #4785 twin-sync PR is gated by it too. The step
+runs the base branch's copy of this script, not the PR's (issue #5327), so
+a PR cannot weaken a guard and edit the verifier to pass in the same change.
+Only a base that does not carry the script yet runs the PR's copy, with a
+warning. The step may pass only flags the base copy already accepts.
 """
 
 from __future__ import annotations
@@ -83,6 +90,9 @@ from typing import Callable
 LOG_KEY = "GUARD_DIFFERENTIAL"
 HOOK_TREES = (".claude/hooks", "workflow-templates/.claude/hooks")
 DEFAULT_CORPUS_DIR = "tests/guard_corpus"
+VERIFIER_SCRIPT_PATH = "scripts/guard_differential.py"
+CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+GUARD_STEP_NAME_PREFIX = "Guard differential"
 HOOK_TIMEOUT_SECONDS = 120
 _STRIPPED_ENV_KEYS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST")
 
@@ -102,6 +112,7 @@ INTENDED_LOOSENING_HEADING_RE = re.compile(
 MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
+STEP_START_RE = re.compile(r"^(?P<indent>\s*)- name:\s*(?P<name>.*?)\s*$")
 
 
 @dataclass(frozen=True)
@@ -137,6 +148,7 @@ class Report:
 	results: list[ShapeResult] = field(default_factory=list)
 	missing_corpus: list[str] = field(default_factory=list)
 	trees: list[str] = field(default_factory=list)
+	verifier_changes: list[str] = field(default_factory=list)
 
 	@property
 	def regressions(self) -> list[ShapeResult]:
@@ -538,6 +550,65 @@ def ref_corpora(repo_root: Path, ref: str, corpus_dir: str) -> dict[str, list[Sh
 	return corpora
 
 
+def _side_text(repo_root: Path, ref: str | None, path: str) -> str | None:
+	"""The text of `path` at `ref` (the working tree when `ref` is None), or
+	None when the file is absent there."""
+	if ref is None:
+		try:
+			return (repo_root / path).read_text(encoding="utf-8")
+		except OSError:
+			return None
+	blob = _repo_git(repo_root, "cat-file", "-p", f"{ref}:{path}", check=False)
+	return blob.stdout if blob.returncode == 0 else None
+
+
+def guard_differential_steps(workflow_text: str | None) -> list[str]:
+	"""The text of every workflow step whose name starts with
+	GUARD_STEP_NAME_PREFIX: from its `- name:` line up to the next step at
+	the same indentation, or the first non-blank line indented less."""
+	if not workflow_text:
+		return []
+	lines = workflow_text.splitlines()
+	steps: list[str] = []
+	index = 0
+	while index < len(lines):
+		start = STEP_START_RE.match(lines[index])
+		if not start or not start.group("name").strip("\"'").startswith(GUARD_STEP_NAME_PREFIX):
+			index += 1
+			continue
+		indent = len(start.group("indent"))
+		end = index + 1
+		while end < len(lines):
+			line = lines[end]
+			if line.strip():
+				line_indent = len(line) - len(line.lstrip())
+				if line_indent < indent or (line_indent == indent and line.lstrip().startswith("- ")):
+					break
+			end += 1
+		steps.append("\n".join(lines[index:end]).rstrip())
+		index = end
+	return steps
+
+
+def verifier_changes(repo_root: Path, base_ref: str, head_ref: str | None) -> list[str]:
+	"""Paths of the check's own machinery that differ between base and head.
+
+	Issue #5327: CI runs the base branch's copy of this script, so a PR's
+	change to it takes effect only after it merges; the change is still
+	reported, as is any change to a `Guard differential …` step of the CI
+	workflow, so reviewers read them as security-boundary changes. Other
+	edits to the workflow are not reported.
+	"""
+	changes: list[str] = []
+	if _side_text(repo_root, base_ref, VERIFIER_SCRIPT_PATH) != _side_text(repo_root, head_ref, VERIFIER_SCRIPT_PATH):
+		changes.append(VERIFIER_SCRIPT_PATH)
+	base_steps = guard_differential_steps(_side_text(repo_root, base_ref, CI_WORKFLOW_PATH))
+	head_steps = guard_differential_steps(_side_text(repo_root, head_ref, CI_WORKFLOW_PATH))
+	if base_steps != head_steps:
+		changes.append(CI_WORKFLOW_PATH)
+	return changes
+
+
 # ──────────────────────────────────────────────────────────────────
 # The comparison
 # ──────────────────────────────────────────────────────────────────
@@ -614,7 +685,7 @@ def run_check(
 	corpora = merge_corpora(load_corpora(corpus_dir), *committed)
 	listed = intended_loosening(pr_body)
 	changed = changed_paths(repo_root, base_ref, head_ref)
-	report = Report()
+	report = Report(verifier_changes=verifier_changes(repo_root, base_ref, head_ref))
 	for tree in HOOK_TREES:
 		tree_changes = [path for path in changed if path.startswith(f"{tree}/") and path.endswith(".py")]
 		if not tree_changes and not all_trees:
@@ -654,6 +725,12 @@ def _describe(outcome: Outcome) -> str:
 
 
 def print_report(report: Report, as_json: bool) -> None:
+	for path in report.verifier_changes:
+		print(
+			f"::warning::{LOG_KEY} verifier_change path={path}: this PR changes the guard differential "
+			"check itself. CI runs the base branch's copy of the verifier, so a change to it applies "
+			"only once it has merged. Review it as a change to a security boundary."
+		)
 	if not report.trees:
 		print(f"{LOG_KEY} status=skipped reason=no-hook-change")
 		return
@@ -695,7 +772,7 @@ def print_report(report: Report, as_json: bool) -> None:
 	print(
 		f"{LOG_KEY} status={status} trees={','.join(report.trees)} shapes={len(report.results)} "
 		f"regressions={len(report.regressions)} intended_loosening={intended} "
-		f"missing_corpus={len(report.missing_corpus)}"
+		f"missing_corpus={len(report.missing_corpus)} verifier_changes={len(report.verifier_changes)}"
 	)
 	if report.regressions:
 		print(

@@ -461,6 +461,116 @@ def test_cli_unreadable_pr_body_exits_2(hook_repo: Path, tmp_path: Path) -> None
 
 
 # ──────────────────────────────────────────────────────────────────
+# Verifier-change report (issue #5327)
+# ──────────────────────────────────────────────────────────────────
+
+
+SAMPLE_CI_WORKFLOW = textwrap.dedent(
+	"""\
+	jobs:
+	  tests:
+	    steps:
+	      - name: Checkout repository
+	        uses: actions/checkout@v5
+
+	      - name: "Guard differential check (issue #5174)"
+	        if: github.event_name == 'pull_request'
+	        run: |
+	          python3 verifier.py --base-ref FETCH_HEAD
+
+	      - name: Other step
+	        run: echo other
+	  later:
+	    steps:
+	      - name: Guard differential tests
+	        run: echo tests
+	"""
+)
+
+
+@pytest.fixture()
+def verifier_repo(hook_repo: Path) -> Path:
+	"""`hook_repo` with the verifier script and a CI workflow committed on `main`."""
+	(hook_repo / "scripts").mkdir()
+	(hook_repo / "scripts" / "guard_differential.py").write_text("print('v1')\n", encoding="utf-8")
+	workflows = hook_repo / ".github" / "workflows"
+	workflows.mkdir(parents=True)
+	(workflows / "ci.yml").write_text(SAMPLE_CI_WORKFLOW, encoding="utf-8")
+	_git(hook_repo, "add", "-A")
+	_git(hook_repo, "commit", "-q", "-m", "verifier")
+	return hook_repo
+
+
+def test_guard_differential_steps_cut_each_named_step() -> None:
+	steps = gd.guard_differential_steps(SAMPLE_CI_WORKFLOW)
+	assert len(steps) == 2
+	assert steps[0].startswith('      - name: "Guard differential check (issue #5174)"')
+	assert steps[0].endswith("python3 verifier.py --base-ref FETCH_HEAD")
+	assert "Other step" not in steps[0]
+	assert steps[1] == "      - name: Guard differential tests\n        run: echo tests"
+	assert gd.guard_differential_steps(None) == []
+	assert gd.guard_differential_steps("jobs: {}\n") == []
+
+
+def test_guard_differential_steps_find_the_shipped_ci_steps() -> None:
+	steps = gd.guard_differential_steps(CI_WORKFLOW.read_text(encoding="utf-8"))
+	names = [step.splitlines()[0].strip() for step in steps]
+	assert names == [
+		'- name: "Guard differential tests (issue #5174)"',
+		'- name: "Guard differential check (issue #5174)"',
+	]
+	assert "FETCH_HEAD:scripts/guard_differential.py" in steps[1]
+	assert "check-in reminder" not in steps[1]
+
+
+def test_cli_reports_a_verifier_script_change_without_failing(verifier_repo: Path) -> None:
+	(verifier_repo / "scripts" / "guard_differential.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+	proc = _cli(verifier_repo)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "::warning::GUARD_DIFFERENTIAL verifier_change path=scripts/guard_differential.py:" in proc.stdout
+	assert "path=.github/workflows/ci.yml" not in proc.stdout
+	assert "status=skipped reason=no-hook-change" in proc.stdout
+
+
+@pytest.mark.parametrize(
+	("old", "new"),
+	[
+		("python3 verifier.py --base-ref FETCH_HEAD", "true"),
+		('      - name: "Guard differential check (issue #5174)"\n', '      - name: "Renamed check"\n'),
+		("echo tests", "echo skipped"),
+	],
+)
+def test_cli_reports_a_guard_step_change(verifier_repo: Path, old: str, new: str) -> None:
+	workflow = verifier_repo / ".github" / "workflows" / "ci.yml"
+	text = workflow.read_text(encoding="utf-8")
+	assert text.count(old) == 1
+	workflow.write_text(text.replace(old, new), encoding="utf-8")
+	proc = _cli(verifier_repo)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "::warning::GUARD_DIFFERENTIAL verifier_change path=.github/workflows/ci.yml:" in proc.stdout
+
+
+def test_cli_ignores_other_workflow_edits(verifier_repo: Path) -> None:
+	workflow = verifier_repo / ".github" / "workflows" / "ci.yml"
+	workflow.write_text(
+		workflow.read_text(encoding="utf-8").replace("echo other", "echo changed") + "  extra:\n    steps: []\n",
+		encoding="utf-8",
+	)
+	proc = _cli(verifier_repo)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "verifier_change" not in proc.stdout
+
+
+def test_cli_verifier_change_keeps_the_regression_exit_code(verifier_repo: Path) -> None:
+	(verifier_repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_SILENT_HOOK, encoding="utf-8")
+	(verifier_repo / "scripts" / "guard_differential.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+	proc = _cli(verifier_repo)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "verifier_change path=scripts/guard_differential.py" in proc.stdout
+	assert "regressions=1" in proc.stdout and "verifier_changes=1" in proc.stdout
+
+
+# ──────────────────────────────────────────────────────────────────
 # Shipped corpora, scenarios, and environment
 # ──────────────────────────────────────────────────────────────────
 
@@ -610,6 +720,98 @@ def test_ci_runs_the_check_on_pull_requests() -> None:
 	assert 'git fetch --no-tags --depth=1 origin "${GUARD_DIFFERENTIAL_BASE_REF}"' in step
 	assert "${{ github.base_ref }}" in step
 	assert not re.search(r"\bgh\s+(?:api|pr|issue|run)\b", step) and "api.github.com" not in step
+	# Issue #5327: the verifier that runs is the base commit's copy.
+	assert 'git show "FETCH_HEAD:scripts/guard_differential.py"' in step
+	assert 'python3 "${guard_differential_verifier_dir}/guard_differential.py"' in step
+	assert "python3 scripts/guard_differential.py" not in step
+
+
+def _ci_step_run(name: str) -> str:
+	yaml = pytest.importorskip("yaml")
+	workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+	for job in workflow["jobs"].values():
+		for step in job.get("steps", []):
+			if step.get("name") == name:
+				return step["run"]
+	raise AssertionError(f"step {name!r} not found")
+
+
+def _fake_verifier(label: str, code: int) -> str:
+	return textwrap.dedent(
+		f"""\
+		import sys
+		body = open(sys.argv[sys.argv.index("--pr-body-file") + 1], encoding="utf-8").read()
+		print("VERIFIER={label} path0=" + sys.path[0] + " argv=" + " ".join(sys.argv[1:]) + " body=" + repr(body))
+		sys.exit({code})
+		"""
+	)
+
+
+def _run_check_step(tmp_path: Path, base_has_verifier: bool) -> subprocess.CompletedProcess:
+	"""Run the real `Guard differential check` step body in a checkout of a
+	PR branch whose own verifier exits 3, against a local `origin`."""
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, "init", "-q", "-b", "main")
+	_git(origin, "config", "user.email", "t@example.com")
+	_git(origin, "config", "user.name", "T")
+	_git(origin, "config", "commit.gpgsign", "false")
+	(origin / "README.md").write_text("base\n", encoding="utf-8")
+	if base_has_verifier:
+		(origin / "scripts").mkdir()
+		(origin / "scripts" / "guard_differential.py").write_text(_fake_verifier("base", 0), encoding="utf-8")
+	_git(origin, "add", "-A")
+	_git(origin, "commit", "-q", "-m", "base")
+	workspace = tmp_path / "workspace"
+	_git(tmp_path, "clone", "-q", origin.as_uri(), str(workspace))
+	_git(workspace, "config", "user.email", "t@example.com")
+	_git(workspace, "config", "user.name", "T")
+	_git(workspace, "config", "commit.gpgsign", "false")
+	_git(workspace, "checkout", "-q", "-b", "pr")
+	(workspace / "scripts").mkdir(exist_ok=True)
+	(workspace / "scripts" / "guard_differential.py").write_text(_fake_verifier("head", 3), encoding="utf-8")
+	_git(workspace, "add", "-A")
+	_git(workspace, "commit", "-q", "-m", "pr edits the verifier")
+	runner_temp = tmp_path / "runner-temp"
+	runner_temp.mkdir()
+	event = tmp_path / "event.json"
+	event.write_text(json.dumps({"pull_request": {"body": "the pr body"}}), encoding="utf-8")
+	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+	env.update(
+		{
+			"HOME": str(tmp_path),
+			"GIT_CONFIG_NOSYSTEM": "1",
+			"RUNNER_TEMP": str(runner_temp),
+			"GITHUB_EVENT_PATH": str(event),
+			"GUARD_DIFFERENTIAL_BASE_REF": "main",
+		}
+	)
+	return subprocess.run(
+		["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", _ci_step_run("Guard differential check (issue #5174)")],
+		cwd=workspace,
+		capture_output=True,
+		text=True,
+		env=env,
+		timeout=120,
+	)
+
+
+def test_ci_step_runs_the_base_verifier_not_the_prs(tmp_path: Path) -> None:
+	proc = _run_check_step(tmp_path, base_has_verifier=True)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "VERIFIER=base" in proc.stdout
+	assert "VERIFIER=head" not in proc.stdout
+	assert "GUARD_DIFFERENTIAL verifier=base source=" in proc.stdout
+	assert f"path0={tmp_path / 'runner-temp' / 'guard-differential-verifier'} " in proc.stdout
+	assert "argv=--base-ref FETCH_HEAD --pr-body-file " in proc.stdout
+	assert "body='the pr body'" in proc.stdout
+
+
+def test_ci_step_falls_back_to_the_prs_verifier_with_a_warning(tmp_path: Path) -> None:
+	proc = _run_check_step(tmp_path, base_has_verifier=False)
+	assert proc.returncode == 3, proc.stdout + proc.stderr
+	assert "VERIFIER=head" in proc.stdout
+	assert "::warning::GUARD_DIFFERENTIAL verifier=head reason=base-has-no-verifier base=main" in proc.stdout
 
 
 def test_ci_runs_the_unit_tests() -> None:
