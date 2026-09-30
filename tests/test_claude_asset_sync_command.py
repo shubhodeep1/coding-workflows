@@ -89,6 +89,9 @@ def test_settings_change_is_verified_before_any_further_work(commands):
 	assert "run it once more" in section
 	assert "make no further commit, push, claim, comment, label change, or dispatch for this work" in section
 	assert "[Settings restart](#settings-restart)" in section
+	# Step 4 never pushes the sync merge ahead of the step 6 check (PR #5511 review round 1).
+	assert "Push it with the push the caller already uses" not in section
+	assert "Do not push it on its own: the caller's own push carries it, and never before step 6 below has confirmed the settings when the merge changed `.claude/settings.json`" in section
 	assert "$(" not in section
 
 

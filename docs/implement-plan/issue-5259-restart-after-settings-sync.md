@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5259-restart-after-settings-sync   Final PR: #5283 draft
 - Status: BLOCKED
-- Stage: conformance 2/3
+- Stage: conformance 2/3 — review round
 - Activation: not started
-- Waiting on: conformance-fix PR 2 (`claude/implement-plan-issue-5259-restart-after-settings-sync-conformance-fix-2`): twin sync (`[claude-twin-sync]` of `workflow-templates/.claude/scripts/loaded_settings_check.py` and `workflow-templates/.claude/commands/implement-plan-claude.md`), then `/reclarify` on #5259
+- Waiting on: PR #5511: twin sync (`[claude-twin-sync]` of the review-round-1 changes to `workflow-templates/.claude/scripts/loaded_settings_check.py` and `workflow-templates/.claude/commands/implement-plan-claude.md`), then `/reclarify` on #5259
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (twin-first hold; the stage `/reclarify` resumes arms the wait on conformance-fix PR 2 with project checker session_01AZ9NYMGehcX3kmHiQv4Se3, reusable)
+- Check-in: none (twin-first hold; the stage `/reclarify` resumes arms the wait on PR #5511 with project checker session_01AZ9NYMGehcX3kmHiQv4Se3, reusable)
 - Last updated: 2026-09-30
-- Last note: conformance run 2: CONFORMANT (Correctness: CONCERNS) with two EVIDENCE-BASED concerns fixed twin-first in conformance-fix PR 2; hold claim and twin-sync blocker posted on #5259.
+- Last note: PR #5511 review round 1: 4 findings fixed twin-first (no-record pre-recorder reason, step 4 push before the step 6 check, undecodable `git show`, non-list `hooks`) plus the test gap; hold claim and twin-sync blocker posted on #5259.
 
 ## Phases
 1. [x] Phase 1 — record, check, and restart — PR #5301 merged 2026-09-29 (0f61e1a) without its `.claude/` copies; twin-sync PR #5350 merged 2026-09-30 (5121ec3; carries them, f8b44fd); review rounds: 1 (on #5350: 3 findings fixed in 2771e3b, 2 rejected; round-1 twins synced in 9b385c5 after the second twin-sync blocker was answered by `/reclarify` on #5259); interventions: 0 — protected paths: `.claude/hooks/settings_load_recorder.py`, `.claude/scripts/loaded_settings_check.py`, `.claude/settings.json`, `.claude/commands/implement-plan-claude.md`, `.claude/commands/fix-claude-pr.md`, `.claude/commands/seed-repo.md`
@@ -26,7 +26,7 @@
 
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT — fix PR #5425 merged 2026-09-30 (d660ac3; pre-security; twin sync 0651fa6). Finding fixed: step 2's project-branch sync merge pushed without pointing at the sync's step 6 settings check. Not fixed (HYPOTHESIS): see `## Notes`. Review rounds: 1 (round 1: 0 consensus findings; 3 task gaps / 6 NITs, all "deliverable present", rejected; `CLAUDE_FIXER_VERDICT_BOT_LOGIN` unset → Q2 on #5259, answered A: merged by the master session under Q46).
-- Run 2 — 2026-09-30: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — conformance-fix PR 2 (pre-security; twin-first, `[claude-twin-sync]` pending). Findings fixed: (1) run 1's HYPOTHESIS is EVIDENCE-BASED — Claude Code's hooks reference says `ConfigChange` runs the hooks in effect before the change, so a branch whose `settings.json` predates the recorder never records the sync merge's reload; `loaded_settings_check.py --before HEAD^1` now names that case (AD-11); (2) `agents.md` still said a merged `settings.json` applies from the next session. 843 → 862 tests pass with the twins copied over `.claude/`.
+- Run 2 — 2026-09-30: CONFORMANT (Implemented: COMPLETE, Correctness: CONCERNS) — conformance-fix PR 2 (pre-security; twin-first, `[claude-twin-sync]` pending). Findings fixed: (1) run 1's HYPOTHESIS is EVIDENCE-BASED — Claude Code's hooks reference says `ConfigChange` runs the hooks in effect before the change, so a branch whose `settings.json` predates the recorder never records the sync merge's reload; `loaded_settings_check.py --before HEAD^1` now names that case (AD-11); (2) `agents.md` still said a merged `settings.json` applies from the next session. 843 → 862 tests pass with the twins copied over `.claude/`. PR #5511. Review rounds: 1 (round 1 on `c2429c5`: 5 consensus findings and 2 task gaps, all valid and fixed twin-first — the missing-record path now names a pre-recorder branch, step 4 no longer pushes the sync merge ahead of step 6, `recorder_wired_at` survives undecodable `git show` output, `recorder_wired` skips a non-list `hooks`; 871 tests pass with the twins copied over `.claude/`).
 
 ## Security pass
 
@@ -53,6 +53,7 @@
 - [source:conformance] When a new check gates a push, name it in every step that pushes the same merge: a step that says "push" and only cross-references the section holding the check is a sibling path a literal reader skips. (files: .claude/commands/implement-plan-claude.md)
 - [source:plan-deviation] Check the harness's documented reload behaviour before designing around "read only at session start": Claude Code's file watcher hot-reloads `settings.json` (hooks and permissions) and runs `ConfigChange` per detected change, so a load check must follow `ConfigChange`, not just SessionStart. (files: .claude/hooks/settings_load_recorder.py, .claude/commands/implement-plan-claude.md)
 - [source:conformance] A hook that must observe a settings change cannot rely on `ConfigChange` alone: Claude Code runs it with the hooks loaded before the change, so a checkout whose settings lack the hook never records the next change. Design load checks for the transition from un-wired settings. (files: .claude/hooks/settings_load_recorder.py, .claude/scripts/loaded_settings_check.py)
+- [source:intervention] A fail-closed check that reports a cause-specific reason must pick that reason on every early-return path, above all "no record": the case the reason was written for usually never wrote a record, so a test that seeds a record exercises the wrong branch. (files: .claude/scripts/loaded_settings_check.py, tests/test_settings_load_recorder.py)
 
 ## Notes
 - Started by the Claude issue dispatcher routine (`dispatch shubhodeep1/coding-workflows#5259: start`, trig_01S9RqpmwPtkyb24Ypi2gKzk) into session `session_01He3eCz8uiMKn6xvEm4y8Lu` (permission mode `auto`).
@@ -66,3 +67,4 @@
 - Protected-path approval: conformance fix 1 runs under `phase 1 — twin-first`: only `workflow-templates/.claude/commands/implement-plan-claude.md` changes on PR #5425.
 - Conformance run 2 (2026-09-30), resumed by `/implement-issue-claude` session `session_019oxXiKHJJPCyEJB2aqneDh` after `/reclarify` (Q2: A, #5425 merged). The project branch was up to date with its base (`a0e3dd3`). The previous stage session `session_01JjskHB9AGznTbabV5zGLYD` was left open (its status is `need_input`), per the archiving rule. The run-1 HYPOTHESIS is resolved by AD-11 (see `## Conformance`).
 - Protected-path approval: conformance fix 2 runs under `phase 1 — twin-first`: only `workflow-templates/.claude/scripts/loaded_settings_check.py` and `workflow-templates/.claude/commands/implement-plan-claude.md` change on conformance-fix PR 2.
+- PR #5511 review round 1 (2026-09-30), stage session `session_0136ptRLXByh5AtRQXMNpcQX`: the project branch was up to date with its base (`a0e3dd3`); the previous stage session `session_01NRhPcyKRCdYXLp3Bz2gRLn` was archived. The round runs under `phase 1 — twin-first`: only the twins of `.claude/scripts/loaded_settings_check.py` and `.claude/commands/implement-plan-claude.md` change, so the `.claude/` parametrizations and twin parity checks stay red until the `[claude-twin-sync]` commit.

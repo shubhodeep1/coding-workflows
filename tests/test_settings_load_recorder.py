@@ -284,6 +284,43 @@ def test_check_names_a_pre_recorder_branch_without_changing_the_verdict(claude_d
 	assert plain["reason"] == "the session has not loaded this settings.json"
 
 
+def test_check_names_a_pre_recorder_branch_without_a_record(claude_dir: Path, tmp_path: Path):
+	"""The canonical pre-recorder case: the recorder never ran, so there is no
+	record at all; the reason still names the cause (issue #5259, PR #5511)."""
+	home = tmp_path / "home"
+	repo = _merged_repo(tmp_path / "repo", {"hooks": {}})
+	assert not _record_file(home, "s-1").exists()
+	result = _run_check(claude_dir, repo, home, "--before", "HEAD^1", session_env="s-1")
+	assert result.returncode == 1, result.stdout
+	verdict = json.loads(result.stdout)
+	assert verdict["current"] is False
+	assert verdict["before_recorder_wired"] is False
+	assert verdict["loaded_sha256"] is None
+	assert "wired no ConfigChange recorder" in verdict["reason"] and "(HEAD^1)" in verdict["reason"]
+	# A branch that wired the recorder before keeps the plain no-record reason.
+	wired = _merged_repo(tmp_path / "wired", RECORDER_WIRING)
+	plain = json.loads(_run_check(claude_dir, wired, home, "--before", "HEAD^1", session_env="s-1").stdout)
+	assert plain["before_recorder_wired"] is True
+	assert plain["reason"].startswith("no record for this session")
+
+
+def test_check_before_an_undecodable_revision_is_null(claude_dir: Path, tmp_path: Path):
+	"""Undecodable `git show` output is an unreadable revision, never a crash."""
+	root = tmp_path / "repo"
+	(root / ".claude").mkdir(parents=True)
+	_git(root, "init", "-q", "-b", "work")
+	(root / ".claude" / "settings.json").write_bytes(b'{"hooks": {"x": "\xff\xfe"}}\n')
+	_git(root, "add", ".")
+	_git(root, "commit", "-q", "-m", "undecodable")
+	(root / ".claude" / "settings.json").write_text('{"hooks": {}}\n', encoding="utf-8")
+	_git(root, "commit", "-q", "-am", "readable")
+	result = _run_check(claude_dir, root, tmp_path / "home", "--before", "HEAD^1", session_env="s-1")
+	assert result.returncode == 1, result.stderr
+	verdict = json.loads(result.stdout)
+	assert verdict["before_recorder_wired"] is None
+	assert verdict["reason"].startswith("no record for this session")
+
+
 def test_check_with_a_recorder_wired_before_keeps_the_plain_reason(claude_dir: Path, tmp_path: Path):
 	home = tmp_path / "home"
 	repo = _merged_repo(tmp_path / "repo", RECORDER_WIRING)
@@ -315,6 +352,8 @@ def test_check_before_an_unreadable_revision_is_null(claude_dir: Path, project: 
 		({"hooks": {"ConfigChange": [{"matcher": "user_settings", "hooks": [{"command": RECORDER_COMMAND}]}]}}, False),
 		({"hooks": {"SessionStart": [{"hooks": [{"command": RECORDER_COMMAND}]}]}}, False),
 		({"hooks": {"ConfigChange": "bad"}}, False),
+		({"hooks": {"ConfigChange": [{"matcher": "project_settings", "hooks": True}]}}, False),
+		({"hooks": {"ConfigChange": [{"matcher": "project_settings", "hooks": 42}, {"hooks": [{"command": RECORDER_COMMAND}]}]}}, True),
 		([], False),
 	),
 )

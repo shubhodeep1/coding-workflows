@@ -22,7 +22,8 @@ whether it wired the recorder under `ConfigChange`. Claude Code runs
 `ConfigChange` with the hooks loaded before a change, so on a branch whose
 `settings.json` predates the recorder the merged file's reload can never be
 recorded; the reason then says so instead of claiming the file was not
-loaded. It never changes the verdict.
+loaded, and also when no record exists at all (such a branch wires no
+recorder at SessionStart either). It never changes the verdict.
 
 Output is one JSON line: `current` (bool), `loaded_sha256` (from the record,
 or null), `file_sha256` (the file now, or `absent`), `record` (the record
@@ -92,7 +93,10 @@ def recorder_wired(settings_data) -> bool:
 	for entry in entries:
 		if not isinstance(entry, dict) or not _matches_project_settings(entry.get("matcher")):
 			continue
-		for hook in entry.get("hooks") or []:
+		inner = entry.get("hooks")
+		if not isinstance(inner, list):
+			continue
+		for hook in inner:
 			if isinstance(hook, dict) and RECORDER_SCRIPT_NAME in str(hook.get("command", "")):
 				return True
 	return False
@@ -109,7 +113,8 @@ def recorder_wired_at(rev: str, settings: Path) -> bool | None:
 			timeout=10,
 			check=False,
 		)
-	except (OSError, subprocess.SubprocessError):
+	except (OSError, subprocess.SubprocessError, ValueError):
+		# ValueError covers UnicodeDecodeError from undecodable `git show` output.
 		return None
 	if shown.returncode != 0:
 		return None
@@ -138,7 +143,10 @@ def check(session_id: str | None, settings: Path, directory: Path, before: str |
 	try:
 		record = json.loads(path.read_text(encoding="utf-8"))
 	except FileNotFoundError:
-		result["reason"] = "no record for this session: the settings load recorder hook has not run"
+		if result["before_recorder_wired"] is False:
+			result["reason"] = UNOBSERVABLE_REASON.format(rev=before)
+		else:
+			result["reason"] = "no record for this session: the settings load recorder hook has not run"
 		return result
 	except (OSError, ValueError):
 		result["reason"] = "record unreadable"
