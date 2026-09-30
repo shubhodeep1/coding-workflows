@@ -3,23 +3,23 @@
 - Plan: docs/plans/issue-5495-gh-retry-stdout-isolation-plan.md
 - Source issue: shubhodeep1/coding-workflows#5495
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5495-gh-retry-stdout-isolation   Final PR: pending
+- Project branch: claude/implement-plan-issue-5495-gh-retry-stdout-isolation   Final PR: #5509 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (review by review_autofix.yml, Claude-fixer mode)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened by session_01PRUpuGPRtMfDoFnj9iAiB7 (/implement-issue-claude #5495)
+- Last note: phase 1 implemented and verified by session_01PRUpuGPRtMfDoFnj9iAiB7; phase PR opened against the project branch
 
 ## Phases
 1. [ ] Phase 1 — buffer `gh_retry` stdout per attempt so only the successful attempt's output reaches the caller
-   - [ ] `scripts/gh_helpers.sh` `gh_retry`: per-attempt stdout buffer, replay on success, drop + byte-count warning on failure, mktemp guard
-   - [ ] `tests/test_gh_retry_stdout_isolation.py` [new]: fake-`gh` cases (rate-limited ×2 then success to a file and to `$(…)`, permanent failure, exhausted retries, first-try success, dropped-bytes warning, temp-file cleanup); fails on the old `gh_retry`
-   - [ ] `.github/workflows/ci.yml`: register the new test in the gh_helpers step
-   - [ ] `changelog.d/5495-gh-retry-stdout-isolation.md` [new] (`fixed`)
-   - [ ] `README.md` / `agents.md`: `gh_retry` stdout contract
+   - [x] `scripts/gh_helpers.sh` `gh_retry` (`:452-521`; buffer `:461-472`, drop warning `:475-478`): per-attempt stdout buffer, replay on success, drop + byte-count warning on failure, mktemp guard
+   - [x] `tests/test_gh_retry_stdout_isolation.py` [new] (8 tests; 7 of 8 failed before the fix): fake-`gh` cases (rate-limited ×2 then success to a file and to `$(…)`, permanent failure, exhausted retries, first-try success, dropped-bytes warning, temp-file cleanup); fails on the old `gh_retry`
+   - [x] `.github/workflows/ci.yml`: register the new test in the gh_helpers step
+   - [x] `changelog.d/5495-gh-retry-stdout-isolation.md` [new] (`fixed`)
+   - [x] `README.md` / `agents.md`: `gh_retry` stdout contract
    - Done: new + existing gh_helpers tests pass; `bash -n`, shellcheck (no new findings), yamllint clean
 
 ## Conformance
@@ -43,6 +43,7 @@
 ## Lessons
 
 ## Notes
+- Phase 1 verification (2026-09-30): new test 8/8 (15 repeated runs, all green) and 7/8 failing on the pre-fix `gh_retry`; the 47 test files that source `gh_helpers.sh` or mention `gh_retry` gave 1707 passed, 1 failed at `-n 4`. The failure, `test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean`, is `gawk: command not found` in `scripts/review_issue_ledger.sh` (the container has no gawk; unrelated). At `-n 8` the 26 extra failures in `test_orchestrate_final_merge_required_checks_gate.py` and others were 60 s subprocess timeouts under load (sourcing the poller takes ~30 s); they pass at `-n 4` and alone. `bash -n` clean; shellcheck finding counts identical before and after; yamllint `ci.yml` clean; changelog contract tests 47/47.
 - Issue progress comment: 5905562246.
 - `security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}` → Security pass: run.
 - Follow-up candidate (AD-3): the inline `gh_retry()` fallbacks in `.github/workflows/review_autofix.yml` still let failed attempts' stdout through to their `$(…)` captures.
