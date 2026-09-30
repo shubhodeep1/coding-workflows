@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T09:04:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a doc states when a change takes effect (\"only once it has merged\"), qualify it for every fallback path the step has, such as a bootstrap branch that runs the PR's own copy, in each place the rule is stated, not only where the fallback is first described.",
+  "phase": "implement_plan",
+  "pr_number": 5539,
+  "record_id": "lesson-implement-plan-00fe035bc1568a7733294943",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:agents.md",
+    "file:changelog.d/5327-pinned-guard-verifier.md"
+  ]
+}

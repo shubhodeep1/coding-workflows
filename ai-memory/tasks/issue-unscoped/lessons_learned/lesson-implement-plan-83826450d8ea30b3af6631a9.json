@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T09:04:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Docs for a CI step that runs a script fetched from the base branch at run time must say a change applies to every run after it merges, including new runs on already-open PRs, not only to PRs opened afterwards.",
+  "phase": "implement_plan",
+  "pr_number": 5539,
+  "record_id": "lesson-implement-plan-83826450d8ea30b3af6631a9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:agents.md",
+    "file:.github/workflows/ci.yml"
+  ]
+}
