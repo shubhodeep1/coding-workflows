@@ -5,25 +5,27 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4755-report-blocking-permission-prompts
 - Project branch: claude/implement-plan-issue-5126-lookup-full-label-scan   Final PR: #5160 (draft)
 - Status: BLOCKED
-- Stage: phase 1/1
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #5165: twin sync
+- Waiting on: conformance fix PR (see ## Conformance): twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (no wait armed while BLOCKED on the twin sync)
-- Last updated: 2026-09-29
-- Last note: Phase 1 PR #5165 opened with the fix in the workflow-templates/.claude twin only; held with a `hold` claim for the operator's [claude-twin-sync] of .claude/scripts/permission_prompts.py (sha256 29bc5735af1d85ec49023d1d02cc25999811eb68554f3ee59f83cf3fc589e77a), then /reclarify on #5126.
+- Check-in: none while BLOCKED on the twin sync; project checker session_01KFpX9wDF5pwN8i2yd4ctth stays idle for reuse
+- Last updated: 2026-09-30
+- Last note: conformance 1/3 (session_01P2nGEZgpsbgzxY2xhHZrso): CONFORMANT with CONCERNS; 4 EVIDENCE-BASED concerns fixed in the conformance fix PR, twin-first (workflow-templates/.claude/scripts/permission_prompts.py and check_in_status.py); held for the operator's [claude-twin-sync], then /reclarify on #5126 arms the wait on that PR (next stage conformance 2/3).
 
 ## Phases
-1. [ ] Phase 1 — lookup checks every candidate   — protected paths: .claude/scripts/permission_prompts.py (twin: workflow-templates/.claude/scripts/permission_prompts.py)
+1. [x] Phase 1 — lookup checks every candidate   — protected paths: .claude/scripts/permission_prompts.py (twin: workflow-templates/.claude/scripts/permission_prompts.py)
    - `_lookup_candidates`: paginated search (`_gh_api_paginated_object`), `ReadError` on `incomplete_results: true`, the full labelled list in the fallback
    - `lookup`: every candidate, no comments read when `comments` is 0
    - module docstring and `LOOKUP_MAX_HITS` comment
    - tests/test_permission_prompts.py: lookup tests against the twin (G1–G5)
    - agents.md lookup bullet; changelog.d/5126-lookup-full-label-scan.md
    - Done: lookup tests pass against the twin; only test_template_parity red until the operator's [claude-twin-sync]; ruff clean
-   - PR #5165 open (held for twin sync); review rounds: 0; interventions: 0
+   - PR #5165 merged 2026-09-29 (into the project branch, before the twin sync; the #5316 race); review rounds: 0; interventions: 0
+   - Twin sync: recovery PR #5433 (Q1: A, issue comment 5903809630) merged 2026-09-30 as 867a9b5 (Q2: A, issue comment 5905191883); review rounds: 1 (1 confidence-1 NIT rejected; no verdict bot, #4648)
 
 ## Conformance
+- Run 1 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — fix PR (conformance-fix-1, held for twin sync) (pre-security)
 
 ## Security pass
 
@@ -39,10 +41,18 @@
 - AD-3 [plan, 2026-09-29] What happens to `LOOKUP_MAX_HITS`, which no longer caps anything? — Picked: A — keep it defined with a comment that `lookup` no longer uses it. Alternatives: B — delete it; C — reuse it as the page size. Why: §6 forbids removing or repurposing an identifier. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-09-29] How do the tests cover a change made only in the `workflow-templates/.claude/` twin? — Picked: A — the lookup tests load the twin and share the main module's `check_in_status`. Alternatives: B — test the `.claude/` copy and leave the tests red until the sync. Why: the interim twin-first rule (CLAUDE.md §28.C) says tests read the twin. Applied in: phase 1 PR. Status: pending review
 
+- AD-5 [conformance 1/3, 2026-09-30] How should `lookup` stop missing `incomplete_results: true` on a search page after the first? — Picked: A — keep the flag from any page in the shared `check_in_status._gh_api_paginated_object`. Alternatives: B — page the search inside `_lookup_candidates`; C — leave it, since one session id rarely has over 100 hits. Why: one guarded line that keeps the plan's §15 rule to reuse the shared paginated helper; check-run pages carry no such key, so the checker is unchanged; C keeps a G3 false negative in an A09 fix. Applied in: conformance fix PR. Status: pending review
+- AD-6 [conformance 1/3, 2026-09-30] Which report should `lookup` return when several issues hold one for the session? — Picked: A — the newest by creation time, stopping at the first candidate last updated before it. Alternatives: B — scan every candidate and keep the newest; C — keep the first match (pre-existing since #4755) and document it. Why: the module docstring promises the newest marker and the poller needs the current prompt; A adds no issue reads in the common case, B always costs about one read per labelled issue, C leaves a stale command in the alert. Applied in: conformance fix PR. Status: pending review
+
 ## Lessons
+- [source:conformance] A paginated read that merges pages must carry per-page status flags (such as `incomplete_results`) from every page, not only the first. (files: .claude/scripts/check_in_status.py)
+- [source:conformance] A lookup that scans candidates in `updated_at` order must pick the newest match by its own timestamp; an issue bumped by an unrelated comment otherwise wins. (files: .claude/scripts/permission_prompts.py)
 - [source:security] A fallback that replaces a refused search must not keep the search's result cap: scan every page of the repository-scoped list, or answer "unknown", never "not found". (files: .claude/scripts/permission_prompts.py)
 
 ## Notes
+- 2026-09-30: project branch synced with its base as ba0fc9e, bringing in the #5125 and #5127 fixes; up to date with the base at the conformance 1/3 stage (base 78ab4df, not merged).
+- Conformance 1/3 findings (all EVIDENCE-BASED CONCERNs, reproduced by tests that failed before the fix): F1 `_gh_api_paginated_object` kept only page 1's fields, so a later page's `incomplete_results: true` gave `found: false` (G3); F2 `lookup` returned the first match in updated order, so an issue bumped by another session's comment returned an older prompt (pre-existing since #4755, the docstring promised the newest); F3 docstring, agents.md and the changelog said an incomplete search exits 2 only "without the report", but it exits 2 whatever the partial hits hold (plan risk 2, accepted); F4 CLAUDE.md §23.I's helper table still gave the old `lookup` budget ("at most 3").
+- Protected-path approval for the conformance fix: phase 1's recorded twin-first approval applies (a later stage whose push changes `.claude/**` edits only the twins and posts the hold claim and twin-sync blocker).
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher routine `dispatch shubhodeep1/coding-workflows#5126: deliver` in session_01FNYvhuMREc42dsu1w1q3r6 (Auto mode, claude-opus-5-5).
 - Security pass: skip — `security_pass_skip.py` printed `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`.
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-29)
