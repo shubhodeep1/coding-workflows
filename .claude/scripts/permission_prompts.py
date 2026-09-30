@@ -33,9 +33,13 @@ nothing. For each pattern with occurrences not filed yet:
   - otherwise → one new issue labelled `ai:permission-prompt` and `ai:claude`,
     so clarify routes it to the Claude issue implementer.
 Filed counts are kept in `filed-state.json` next to the logs, so a later run
-in the same session files only what is new. `file` also skips every
-signature `report-now` already reported (listed under `already_reported`),
-so a prompt is reported once per session.
+in the same session files only what is new. `file` also skips the
+occurrences `report-now` already delivered to this repository, so a prompt
+is reported once per session: a signature whose every occurrence came from
+a session that reported it here is listed under `already_reported`. A report
+that went to another repository (a consumer's PR or issue), or that another
+session made, never suppresses the rest (issue #5125); each report records
+its `repo` and the logged session (`log_session`) it came from.
 
 `report-now` is the immediate report (issue #4755). The logger hook starts it
 detached on every `PermissionRequest`, so it prints nothing, always exits 0,
@@ -67,7 +71,11 @@ make `report-now` post it again; no reservation, no POST. A failed POST, or
 no target, removes the reservation. A reservation still `pending` counts
 toward the cap but not as reported for `file`, so after any failure `file`
 still files the pattern at the end of the stage. A successful POST records
-its target, and `filed-state.json` as `file` would record it.
+its target, and, in the filing repository, `filed-state.json` counts the
+reporting session's occurrences as filed, never another session's already in
+the shared log (issue #5125). The entry also records the repository (`repo`)
+and the logged session (`log_session`) the report is for, which `file` checks
+before it skips anything.
 
 `lookup` is read-only and serves the operator's poller: it finds the newest
 session marker for a session and prints the sanitized command and the issue
@@ -377,12 +385,16 @@ def group_patterns(records: list[dict]) -> list[dict]:
 				"tool_name": tool,
 				"shape": shape,
 				"count": 0,
+				"sessions": {},
 				"reasons": [],
 				"first_ts": record.get("ts"),
 				"last_ts": record.get("ts"),
 				"example": "",
 			}
 		pattern["count"] += 1
+		# Occurrences per logged session, so `file` can skip only a session's own reported ones (issue #5125).
+		log_session = str(record.get("session_id") or "")
+		pattern["sessions"][log_session] = pattern["sessions"].get(log_session, 0) + 1
 		pattern["last_ts"] = record.get("ts")
 		pattern["example"] = record_example(record)
 		reason = str(record.get("reason") or "")
@@ -666,25 +678,45 @@ def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | 
 		return _file_pending(log_dir, patterns, summary, session_label, dry_run, slug)
 
 
+def _delivered_reports(log_dir: Path, slug: str) -> dict[str, dict]:
+	"""Map signature → {"target", "log_sessions"} for the `report-now` reports delivered to `slug` (issue #5125).
+
+	The log directory is shared by every session on the host, whatever
+	repository it works in, so an entry counts only when its POST landed (not
+	`pending`), it went to `slug` (`repo`), and it names the logged session its
+	prompt came from (`log_session`). An entry written before these fields
+	existed counts for nothing: filing twice is safer than never filing.
+	"""
+	delivered: dict[str, dict] = {}
+	for bucket in _load_immediate_state(log_dir)["sessions"].values():
+		for sig, entry in bucket["reports"].items():
+			log_session = entry.get("log_session")
+			if entry.get("target") == PENDING_TARGET or str(entry.get("repo") or "").lower() != slug.lower():
+				continue
+			if not isinstance(log_session, str) or not log_session:
+				continue
+			found = delivered.setdefault(sig, {"target": entry.get("target"), "log_sessions": set()})
+			found["log_sessions"].add(log_session)
+	return delivered
+
+
 def _file_pending(log_dir: Path, patterns: list[dict], summary: dict, session_label: str, dry_run: bool, slug: str) -> tuple[int, dict]:
 	"""The filing half of `file_patterns`, run under `filing.lock`."""
 	state = _load_state(log_dir)
-	# `file` covers every session in the log directory, so a signature any session reported counts;
-	# a `pending` reservation does not, because its POST may never have landed.
-	reported = {
-		sig: entry
-		for bucket in _load_immediate_state(log_dir)["sessions"].values()
-		for sig, entry in bucket["reports"].items()
-		if entry.get("target") != PENDING_TARGET
-	}
+	delivered = _delivered_reports(log_dir, slug)
 	pending = []
 	for pattern in patterns:
 		sig = pattern["signature"]
-		if sig in reported:
-			# Reported once already by `report-now` this session (issue #4755).
-			summary["already_reported"].append({"signature": sig, "target": reported[sig].get("target")})
-			continue
 		new_count = pattern["count"] - state.get(sig, 0)
+		if sig in delivered:
+			# `report-now` already delivered this signature here for some sessions (issue #4755): their
+			# occurrences are covered; every other session's are still filed (issue #5125).
+			covered_sessions = delivered[sig]["log_sessions"]
+			uncovered = sum(count for log_session, count in pattern["sessions"].items() if log_session not in covered_sessions)
+			if uncovered <= 0:
+				summary["already_reported"].append({"signature": sig, "target": delivered[sig]["target"]})
+				continue
+			new_count = min(new_count, uncovered)
 		if new_count > 0:
 			pending.append((pattern, new_count))
 	if not pending:
@@ -835,7 +867,14 @@ def _report_now(log_file: Path, cwd: str | None, session_label: str, now: dateti
 		filing_repo = slug.lower() == FILING_REPO
 		# Reserve before the POST: when this write fails nothing is posted, and a
 		# write failure after the POST can no longer lead to a second report.
-		entry = {"target": PENDING_TARGET, "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "session": session_label}
+		# `repo` and `log_session` let `file` skip only what reached its own repository (issue #5125).
+		entry = {
+			"target": PENDING_TARGET,
+			"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+			"session": session_label,
+			"repo": slug.lower(),
+			"log_session": str(record.get("session_id") or ""),
+		}
 		bucket["reports"][sig] = entry
 		bucket["count"] += 1
 		_save_immediate_state(log_dir, immediate)
@@ -851,7 +890,9 @@ def _report_now(log_file: Path, cwd: str | None, session_label: str, now: dateti
 		_save_immediate_state(log_dir, immediate)
 		if filing_repo:
 			state = _load_state(log_dir)
-			state[sig] = max(state.get(sig, 0), pattern["count"])
+			# Only this logged session's occurrences are covered: another session's, already in the
+			# shared log, stay unfiled so `file` still files them (issue #5125).
+			state[sig] = max(state.get(sig, 0), pattern["sessions"].get(entry["log_session"], 0))
 			_save_state(log_dir, state)
 		return f"reported: {target}"
 

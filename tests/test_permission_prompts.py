@@ -41,7 +41,9 @@ def _load(name, path):
 
 
 logger = _load("permission_prompt_logger", HOOK_PATH)
-pp = _load("permission_prompts", SCRIPT_PATH)
+# The workflow-templates twin, which a `.claude/` change lands in first (twin-first, CLAUDE.md §28.C);
+# test_template_parity keeps it identical to `.claude/scripts/permission_prompts.py`.
+pp = _load("permission_prompts", TEMPLATE_SCRIPT_PATH)
 
 NOW = datetime(2026, 9, 27, 3, 0, 0, tzinfo=timezone.utc)
 
@@ -588,6 +590,81 @@ def test_file_still_files_other_patterns_after_a_report(tmp_path, github):
 	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
 	assert code == 0 and len(summary["filed"]) == 1 and len(summary["already_reported"]) == 1
 	assert len(fake.posts) == 2
+
+
+def test_report_now_records_the_repository_and_logged_session(tmp_path, github):
+	github()
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	_report(log_file)
+	sig = pp.group_patterns(pp.load_records(log_file.parent))[0]["signature"]
+	entry = pp._load_immediate_state(log_file.parent)["sessions"][SESSION]["reports"][sig]
+	assert entry["repo"] == FILING and entry["log_session"] == "sess-1"
+
+
+def test_file_is_not_suppressed_by_a_report_to_another_repository(tmp_path, github):
+	# Issue #5125: a report on a consumer PR must not stop coding-workflows from filing the pattern.
+	github(slug="someone/consumer", branch="claude/implement-plan-issue-12-fix", pulls=[{"number": 77}])
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	assert _report(log_file) == "reported: PR #77"
+	fake = github()
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and summary["already_reported"] == [] and len(summary["filed"]) == 1
+	assert fake.posts[0][0] == "repos/shubhodeep1/coding-workflows/issues"
+
+
+def test_file_is_not_suppressed_by_another_sessions_report(tmp_path, github):
+	# Issue #5125: one session's report covers its own occurrences, never another session's.
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	sig = pp.group_patterns(pp.load_records(log_file.parent))[0]["signature"]
+	fake = github(issues=[{"number": 42, "state": "open", "body": f"x\n<!-- ai:permission-prompt:v1 sig={sig} -->"}])
+	assert _report(log_file) == "reported: issue #42"
+	logger.append_record(logger.build_record(_payload("ls"), NOW), log_file.parent)
+	logger.append_record(logger.build_record(_payload("ls", session_id="sess-2"), NOW), log_file.parent)
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and summary["already_reported"] == []
+	# Only sess-2's occurrence is new: sess-1's later one is covered by its own report.
+	assert summary["commented"] == [{"signature": sig, "issue": 42, "occurrences": 1}]
+	assert len(fake.posts) == 2
+	# Nothing is new afterwards, so a second run posts nothing.
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and summary["commented"] == [] and summary["filed"] == [] and len(fake.posts) == 2
+
+
+def test_file_is_not_suppressed_by_another_sessions_earlier_occurrence(tmp_path, github):
+	# Issue #5125: sess-2's occurrence is already in the shared log when sess-1 reports; the
+	# report marks only sess-1's occurrences as filed, so `file` still files sess-2's.
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	logger.append_record(logger.build_record(_payload("ls", session_id="sess-2"), NOW), log_file.parent)
+	sig = pp.group_patterns(pp.load_records(log_file.parent))[0]["signature"]
+	fake = github(issues=[{"number": 42, "state": "open", "body": f"x\n<!-- ai:permission-prompt:v1 sig={sig} -->"}])
+	assert _report(log_file) == "reported: issue #42"
+	assert pp._load_state(log_file.parent)[sig] == 1
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and summary["already_reported"] == []
+	assert summary["commented"] == [{"signature": sig, "issue": 42, "occurrences": 1}]
+	assert len(fake.posts) == 2
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and summary["commented"] == [] and summary["filed"] == [] and len(fake.posts) == 2
+
+
+def test_file_ignores_reports_without_a_repository_or_logged_session(tmp_path, github):
+	# Issue #5125: entries written before `repo` / `log_session` existed never suppress filing.
+	github()
+	log_file = _session_log(tmp_path, [_payload("ls")])
+	sig = pp.group_patterns(pp.load_records(log_file.parent))[0]["signature"]
+	for legacy in ({"target": "PR #77"}, {"target": "issue #5", "repo": FILING}, {"target": "issue #5", "log_session": "sess-1"}):
+		pp._save_immediate_state(log_file.parent, {"sessions": {SESSION: {"reports": {sig: legacy}, "count": 1}}})
+		assert pp._delivered_reports(log_file.parent, FILING) == {}
+	code, summary = pp.file_patterns(log_file.parent, "s1", False, slug=FILING)
+	assert code == 0 and summary["already_reported"] == [] and len(summary["filed"]) == 1
+
+
+def test_delivered_reports_match_the_repository_case_insensitively(tmp_path):
+	directory = tmp_path / "log"
+	entry = {"target": "issue #9", "repo": "Shubhodeep1/Coding-Workflows", "log_session": "sess-1"}
+	pp._save_immediate_state(directory, {"sessions": {SESSION: {"reports": {"abc123abc123": entry}, "count": 1}}})
+	assert pp._delivered_reports(directory, FILING) == {"abc123abc123": {"target": "issue #9", "log_sessions": {"sess-1"}}}
+	assert pp._delivered_reports(directory, "someone/consumer") == {}
 
 
 @pytest.mark.parametrize(
