@@ -1,31 +1,36 @@
 # Implement-Plan Log — Guard differential check: fail closed on settings-only guard disablement
 
-- Plan: docs/plans/issue-5328-settings-guard-wiring-check-plan.md
+- Plan: docs/completed/issue-5328-settings-guard-wiring-check-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5328   Progress comment: 5902373778
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5174-guard-differential-check
 - Project branch: claude/implement-plan-issue-5328-settings-guard-wiring-check   Final PR: #5356 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
-- Activation: not started
-- Waiting on: PR #5369
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-5174-guard-differential-check) — the base is not the default branch, so steps 12–13 do not run (Issue Mode)
+- Waiting on: completion PR (claude/implement-plan-issue-5328-settings-guard-wiring-check-complete → the project branch)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01DZdvBhT9Qf3x3SXQfb4Ugi (project checker, reused); safety net and hand-back ids in the stage report
+- Check-in: checker session_01DZdvBhT9Qf3x3SXQfb4Ugi (reused)   safety net / hand-back: see the validation 1/3 read-result stage report
 - Last updated: 2026-09-30
-- Last note: review round 2 (session session_01W4tTj8UKhKRzuJFJCcxA44): the one finding (3 ledger entries, NIT/low: a redundant `reason=env` line when a settings file is deleted) rejected; the env line is the only regression for a deleted env-only file, now pinned by `test_cli_a_deleted_settings_file_with_only_env_fails`. No verdict bot, so no verdict posted; the round's push is the project-branch sync (cba1f90, 4 doc-only commits from the issue base) merged into the phase branch, the pin test, and this log (AD-8). tests/test_guard_differential.py 111 passed.
+- Last note: validation cycle 1 (run 36678494935, target_ref = the project branch at ac0c3b2) passed 10/10; no validation-fix PR, so no conformance re-run. Plan moved to docs/completed/ in the completion PR; next is final-merge (mark final PR #5356 ready, then close #5328 after it merges into the #5174 branch).
 
 ## Phases
-1. [ ] Phase 1 — settings guard-wiring check (`scripts/guard_differential.py`, tests, `ci.yml` step comment, `agents.md`, changelog)   — PR #5369 open (waiting); review rounds: 2; interventions: 0
+1. [x] Phase 1 — settings guard-wiring check (`scripts/guard_differential.py`, tests, `ci.yml` step comment, `agents.md`, changelog)   — PR #5369 merged 2026-09-30 (bbcb6b1); review rounds: 3; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-09-30: CONFORMANT (Step 3 COMPLETE, Step 4 PASS) — no fix PR (pre-security); session session_01BGKCAL9yE1P5PMAAuwVQMP
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue)
 
 ## Validation
+- Cycle 1 — run 36678494935 2026-09-30 (target_ref: claude/implement-plan-issue-5328-settings-guard-wiring-check at ac0c3b2; authorized as a stacked target by main's validate.yml): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 269s); no fix PR
 
 ## Completion
+- Completion PR (branch claude/implement-plan-issue-5328-settings-guard-wiring-check-complete) open — doc moved to docs/completed/issue-5328-settings-guard-wiring-check-plan.md
+- Final PR #5356 draft (into claude/implement-plan-issue-5174-guard-differential-check)
 
 ## Activation
+- n/a: the base branch is the #5174 project branch, so the change goes live with that project's final PR #5185 (Issue Mode)
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-30] Which settings entries are "mandatory" guard wiring? — Picked: A — every hook entry, under any event, whose command names `.claude/hooks/<name>_guard.py`, plus the `disableAllHooks` kill switch. Alternatives: B — `PreToolUse` entries only; C — every hook entry, guards or not. Why: covers the finding and the one-key kill switch of the same class without failing every harmless non-guard hook edit (§5). Applied in: phase 1 PR. Status: pending review
@@ -44,3 +49,5 @@
 ## Notes
 - 2026-09-30: started by the Claude issue dispatcher (`/implement-issue-claude`), session session_01JGsmyk8gEMSXFh6ocygH4q. The issue base is the #5174 project branch, so the final PR targets it and activation is n/a.
 - Protected paths: none. Phase 1 edits no `.claude/**` file.
+- 2026-09-30 (conformance 1/3): project branch synced with the issue base in ac0c3b2 (`[claude-merge-resolve]`; the `ci.yml` step comment conflicted with #5325's change to the same comment, both sides kept).
+- 2026-09-30 (validation 1/3): `docs/INVENTORY.md` still has no entry for `scripts/guard_differential.py`, so `tests/inventory_parity.py` fails on this branch and its base. It is inherited from #5174 (PR #5187) and recorded as the #5325 project's AD-4; it surfaces on #5174's final PR #5185 into `main`, so this project does not fix it (§5).
