@@ -218,6 +218,29 @@ def test_check_fails_closed_on_a_malformed_record(claude_dir: Path, project: Pat
 	assert json.loads(_run_check(claude_dir, project, home, session_env="s-1").stdout)["reason"] == "record malformed"
 
 
+def test_check_fails_closed_without_a_settings_file_even_when_the_record_says_absent(claude_dir: Path, tmp_path: Path):
+	home = tmp_path / "home"
+	empty = tmp_path / "empty"
+	empty.mkdir()
+	_run_recorder(claude_dir, {"hook_event_name": "SessionStart", "source": "startup", "session_id": "s-1"}, home, empty)
+	assert json.loads(_record_file(home, "s-1").read_text(encoding="utf-8"))["sha256"] == "absent"
+	result = _run_check(claude_dir, empty, home, session_env="s-1")
+	assert result.returncode == 1, result.stdout
+	verdict = json.loads(result.stdout)
+	assert verdict["current"] is False
+	assert verdict["loaded_sha256"] == verdict["file_sha256"] == "absent"
+	assert verdict["reason"] == "no readable settings.json to verify"
+
+
+def test_recorder_and_check_share_the_record_contract(claude_dir: Path):
+	recorder = _load(claude_dir / RECORDER)
+	check = _load(claude_dir / CHECK)
+	assert recorder.RECORD_DIR_PARTS == check.RECORD_DIR_PARTS
+	assert recorder.ABSENT == check.ABSENT
+	assert recorder._SESSION_FILE_RE.pattern == check._SESSION_FILE_RE.pattern
+	assert recorder.SETTINGS_RELATIVE_PATH == check.DEFAULT_SETTINGS
+
+
 def test_check_usage_error_exits_2(claude_dir: Path, project: Path, tmp_path: Path):
 	assert _run_check(claude_dir, project, tmp_path, "--unknown").returncode == 2
 
