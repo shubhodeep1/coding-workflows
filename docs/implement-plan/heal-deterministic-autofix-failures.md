@@ -3,13 +3,13 @@
 - Plan: docs/completed/heal-deterministic-autofix-failures-plan.md (moved from docs/plans/ in the completion PR)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Status: COMPLETE
-- Stage: completion
-- Activation: pending verify-activation
-- Waiting on: completion PR (branch claude/implement-plan-heal-deterministic-autofix-failures-complete)
+- Stage: activation
+- Activation: deploy-activate started (session_016P7FeK9zr1XzmHTkH6eUxe)
+- Waiting on: `@stable` promotion by docs/deploy-activation/pr-4443.md step 9 (runbook docs/deploy-activation/plan-heal-deterministic-autofix-failures-plan.md)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01F2ssEbNUkDaVFUvyMLKZEz   safety net and hand-back: see the completion-stage report (session_01LEgTnawM6DVbtZQkHVQgNL)
 - Last updated: 2026-09-27
-- Last note: Validation cycle 1 (run 36248291165) passed, 10/10 tests; conformance run 1 CONFORMANT; security pass closed at the 5-cycle cap (user decision Q18: A). Completion PR moves the plan to docs/completed/; next stage verify-activation 1/3.
+- Last note: verify-activation cycle 1 DORMANT (live in coding-workflows; `@stable` lacks P2–P4 while promotion is held); /deploy-activate runbook started and waits for the pr-4443 step 9 promotion.
 
 ## Phases
 1. [x] Phase 1 — Heal dispatch envelope and visible rejection — PR #4303 merged 2026-09-23; interventions: 0
@@ -35,7 +35,8 @@
 - Completion PR from claude/implement-plan-heal-deterministic-autofix-failures-complete — doc moved to docs/completed/heal-deterministic-autofix-failures-plan.md
 
 ## Activation
-- not started (next stage: verify-activation 1/3, scope activation)
+- Verify cycle 1 — 2026-09-27 (session_01LD7P1fqjrZXU7g1TmsvSVn, scope activation, unattended): DORMANT — no fix PR, 0 auto-decisions. Live in coding-workflows on main 6e00a6e (review run 36314357232, intake run 36316962977); `@stable` v1.29.12 has P1 but not P2–P4; promotion paused by `PROMOTE_CYCLE_ENABLED=false` (docs/deploy-activation/pr-4443.md step 8b).
+- deploy-activate started 2026-09-27 (session_016P7FeK9zr1XzmHTkH6eUxe): runbook docs/deploy-activation/plan-heal-deterministic-autofix-failures-plan.md; waits for the pr-4443 step 9 promotion, then verifies `stable` content and one consumer review run.
 
 ## Auto-decisions
 - none
@@ -43,6 +44,7 @@
 ## Lessons
 - [source:security] Workflows that run PR- or branch-controlled code (support scripts, build files, workspace hooks, Python imports) in a step that also holds GH_PAT or other secrets were the dominant finding class across all five audit cycles; run such code tokenless and without network, or pin it to the default branch, before exposing a credential in the same job. (files: .github/workflows/review_autofix.yml, .github/workflows/validate.yml, .github/workflows/security-audit.yml, scripts/run_workspace_hook.sh, scripts/validate_process.sh)
 - [source:security] Fixes to one credential-exposure path kept surfacing an adjacent one in the next cycle (hooks, then hook replay, then preflight imports, then import shadowing), so the pass ran into the 5-cycle cap; when a finding touches a trust boundary, audit every other entry point that crosses the same boundary in the same fix. (files: .github/workflows/validate.yml, scripts/validate_process.sh)
+- [source:activation] A project that edits reusable workflows is live in coding-workflows on merge (internal wrappers call @main) but reaches consumers only through @stable promotion; check the promotion kill switch PROMOTE_CYCLE_ENABLED and stable's file content, not commit ancestry, because promotions are non-ancestral. (files: .github/workflows/promote-main-to-stable.yml, .github/workflows/review_autofix.yml)
 
 ## Notes
 - 2026-09-23: phase branches follow /implement-plan-claude naming (`claude/implement-plan-heal-deterministic-autofix-failures-phase-<n>`), one fresh branch per phase from origin/main.

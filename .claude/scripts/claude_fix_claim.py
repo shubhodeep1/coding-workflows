@@ -8,7 +8,9 @@ the claims through `.claude/scripts/check_in_status.py --hand-back`
 (`read_fix_claims`) and leave a claimed head alone until the head moves or
 the lease (CLAUDE_FIX_CLAIM_LEASE_HOURS, default 3) ends. A `hold` claim parks
 the head for a human decision when the hand-back cap is reached; it never
-expires while the head stays the same.
+expires while the head stays the same. The reader counts a claim only when it
+was posted as the PR's author or as CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN (issue
+#4622), so post it with the identity whose sessions own the PR.
 
 Usage:
 

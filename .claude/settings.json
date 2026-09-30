@@ -49,8 +49,18 @@
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/stale_routines.py *)",
       "Bash(python3 .claude/scripts/claude_fix_claim.py *)",
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/claude_fix_claim.py *)",
+      "Bash(python3 .claude/scripts/security_pass_skip.py *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/security_pass_skip.py *)",
       "Bash(python3 scripts/claude_issue_route.py queue-pending *)",
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py queue-pending *)",
+      "Bash(python3 scripts/claude_issue_route.py arm-check-in-request *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py arm-check-in-request *)",
+      "Bash(python3 .claude/scripts/dispatch_workflow.py *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/dispatch_workflow.py *)",
+      "Bash(python3 .claude/scripts/edit_comment.py *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/edit_comment.py *)",
+      "Bash(python3 .claude/scripts/permission_prompts.py *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/permission_prompts.py *)",
       "mcp__github__create_pull_request",
       "mcp__github__update_pull_request",
       "mcp__github__add_issue_comment",
@@ -164,6 +174,28 @@
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pr_check_in_reminder.py",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/permission_prompt_logger.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/permission_prompt_logger.py",
+            "timeout": 10
           }
         ]
       }

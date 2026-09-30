@@ -13,7 +13,10 @@ name: Claude Issue Intake
 #      the setup smoke test.
 #
 # scripts/claude_issue_intake.sh validates the repo against
-# .github/ai/consumer_repos.json (plus this repo), then queues the issue as one
+# .github/ai/consumer_repos.json (plus this repo), authorizes the dispatch
+# (issue #4620: the run's actor has admin or write on the target repo, the
+# target is an open issue there, and its author passes clarify's gate or a
+# trusted `/reclarify` vouched for it), then queues the issue as one
 # `ai:claude-issue-queue` issue in this repo, opened with the job's
 # GITHUB_TOKEN so no workflow reacts to it. The Claude issue pickup session
 # (.claude/commands/claude-issue-pickup.md, woken hourly) starts an Opus
@@ -107,6 +110,26 @@ jobs:
 
       # Renamed from "Fire the Claude issue dispatcher routine" (#4525, operator-approved).
       - name: Queue the issue for the Claude issue pickup
+        env:
+          # Who sent this run, as GitHub reports it (never the payload). The
+          # intake refuses unless each login has admin or write on the
+          # target repo (issue #4620).
+          CLAUDE_ISSUE_DISPATCHER: ${{ github.actor }}
+          CLAUDE_ISSUE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          # The queue item is recorded here and uploaded below; the pickup
+          # starts nothing this run's artifact does not list (issue #4621).
+          CLAUDE_ISSUE_QUEUE_BINDING_FILE: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
         run: |
           set -euo pipefail
           bash scripts/claude_issue_intake.sh
+
+      # Runs even when a later intake step failed, so a queue item this run
+      # opened is never left without its binding (issue #4621).
+      - name: Upload the queue binding for the Claude issue pickup
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: claude-issue-queue-binding
+          path: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
+          if-no-files-found: ignore
+          retention-days: 30
