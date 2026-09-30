@@ -55,7 +55,13 @@ The operator wants these landed first, so the automation can be synced to consum
 | **Retire the master session**: plan `docs/plans/retire-master-session-plan.md`, final PR #5132 (no source issue) | Escalation judge (phase 1), blocked-issue sweep and automatic resume (phase 2), guard-change classifier (phase 3, waits on #4785), poller retirement (phase 4). | Phase 1 PR #5164 was held 12 h on an unseen twin-sync blocker (posted on #5132, which has no issue); synced as `ba70679` at 03:29Z; review round in stage `session_01WxpmE7bZjiqP6dwYFuqiUK`. Project checker `session_01PxYwa7Rwnpb7RYbmsURfQ9`. |
 | **#4948**: automatic twin-first default | Removes the "how should phase N run?" stop until #4785 lands. | Done, on `main` (`ce1db50`). |
 
-**When #4648 and #4785 are on `main`:** release once (Q10: B). Dispatch `test-and-mark-stable.yml` on `main`, which tags `@stable` and notifies the 13 consumer repos in `.github/ai/consumer_repos.json`. Confirm with the operator in one line before running it (a billed dispatch reaching 13 repos, §23.C). Then confirm the run concluded `success` and tell the operator the consumers are synced.
+**When #4648 and #4785 are on `main`:** release once (Q10: B). Dispatch `promote-main-to-stable.yml` on `main`. It fast-forwards `stable` to `main`, then dispatches `test-and-mark-stable.yml` on `stable`, which runs the release gate, tags `@stable`, and notifies the 13 consumer repos in `.github/ai/consumer_repos.json`.
+- Never dispatch `test-and-mark-stable.yml` on `main`. Outside `gate_only` mode it fails unless it runs on `stable` (its `Validate dispatch ref` step).
+- `stable` must be an ancestor of `main`. If the fast-forward is refused, fix the divergence first.
+- Never dispatch while another gate, promote run or release is active: the gate's E2E job cancels concurrent siblings.
+- Check first whether the daily `cycle` job of `promote-main-to-stable.yml` (00:00 UTC) has already promoted the tip.
+
+Confirm with the operator in one line before running it (a billed dispatch reaching 13 repos, §23.C). Then confirm that both the promote run and the `test-and-mark-stable.yml` run it dispatched concluded `success`, and tell the operator the consumers are synced.
 
 **Also pending (2026-09-30 04:45Z):**
 - **#5417** (recover a chain stuck behind a prompt-blocked session) answered Q1: A: when PR #5215 merges into the convergence project branch, add `Integration branch: claude/implement-plan-claude-fixer-unattended-convergence` to #5417's body and comment `/reclarify` (or `/reclarify` alone if #4648 is already on `main`).
@@ -129,7 +135,6 @@ Each duty below is done by hand today and moves into the automation through the 
 | Replacing sessions started without a repository checkout | #4938 |
 | Resumes the classifier refuses after a master answer | #5018 |
 | Operator-only permission prompts | #5068, #4786, #4909, #4891, #4858, #4678 |
-| Waking a session after its blocker is answered (`/reclarify` waits up to an hour) | #4990 |
 | A chain stalls when its stage or fixer session sits on a permission prompt and swallows the hand-back | #5417 |
 | Waking the pickup early / 15-minute pickup cadence (quarter Routines) | #5423 |
 | Answering blockers posted on final PRs of projects with no source issue | retire-master plan phase 2 (G3b) |
@@ -141,6 +146,7 @@ Each duty below is done by hand today and moves into the automation through the 
 
 | What | ID |
 |---|---|
+| Master session (current, since 2026-09-30 04:50Z; sweep is a `send_later` chain named `Master: 15-min sweep`) | `session_01RNCnXFXVviFXqJaopAD78D` |
 | Master poller session | `session_012fZCZUmcWNdWwcdSsuDAGu` |
 | Claude issue pickup session (hourly, trigger `Claude issue pickup: hourly`) | `session_01ArxJDkmfCGHBaW5Ph9zoHN` |
 | Deprecated Routine the **operator** must delete by hand | `trig_01GykbNLA7znHCJGWRetq4Ye` |
@@ -175,7 +181,7 @@ Each duty below is done by hand today and moves into the automation through the 
 | Protected-path phases stop to ask a question Q40 already answers | #4948 |
 | Long-running branches run outdated hooks (guard fixes on `main` not merged in) | #4952 |
 | Review gate silently skips a PR whose body quotes the skip-AI marker; checker waits forever | #4985 |
-| Pickup starts only 10 sessions per hourly wake, so resumes wait hours | #4990 |
+| Pickup starts only 10 sessions per hourly wake, so resumes wait hours | fixed by #4990 (merged: limit 20, resumes first, one 30-minute catch-up wake) |
 | Auto-mode classifier refuses a resume the master answered ("Auto-Mode Bypass") | #5018 |
 | Stacked projects cannot run runtime validation | #4734 (Q17 covers it until then) |
 | Checker given an empty `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` never sees review hand-offs and waits forever | #5057 |
@@ -196,7 +202,7 @@ Each duty below is done by hand today and moves into the automation through the 
 - **Never use `fire_trigger`** for hand-backs: it starts a fresh session with no context.
 - **GitHub access through the proxy.** Search endpoints and GraphQL are blocked. Use `mcp__github__search_issues` and repo-scoped REST.
 - **§21 merged-PR guard.** After your PR merges, start new work on a fresh branch from `origin/main`: `claude/magical-edison-7pkk3t-<n+1>`.
-- **Protected-path writes.** Writes to `.claude/**` via `cp` work in Auto mode for commands and scripts, but hooks and `settings.json` are denied (Q62/Q64).
+- **Protected-path writes.** Writes to `.claude/**` via `cp` usually work in Auto mode for commands and scripts. Hooks and `settings.json` are denied (Q62/Q64). A command sync that also patches a `.claude/` file with no twin can be denied as "Self-Modification" too (#5068, 2026-09-30). Once denied, don't retry it in Auto mode; ask the operator for a non-Auto window, the same as Q62/Q64.
 - **Session-status fields.** A session in `REQUIRES_ACTION` with "Waiting on permission: Bash" is a permission prompt only the operator can answer in that session's view. **Always give the operator a direct link to every session waiting on a permission prompt** (`https://claude.ai/code/<session id>`), with its issue and PR numbers, whenever you report one (operator, 2026-09-29). Find them yourself instead of repeating an older list: `list_sessions` (`mine: true`, `limit: 100`, paging with `after_id` back two days), keeping non-archived sessions whose `session_status` is `SESSION_STATUS_REQUIRES_ACTION` or whose `post_turn_summary` says "Waiting on permission". Then check that each one's issue is still open. The poller follows the same rule.
 - **Rate limits.** Watch the master's own `rate_limit_info`. A `seven_day` `allowed_warning` means restart the master, or trim its work, before hitting the cap.
 - **Context size.** Every turn re-reads the whole conversation, poller hand-offs included. Past about 700k tokens (`get_session` → `context_usage`), hand over to a fresh master. Have the **operator** start it in the app, so it sits at depth 0; a master you create yourself lands one link deeper each time. Then send it a handover message listing the in-flight items, re-point the poller, and archive yourself.
@@ -204,7 +210,7 @@ Each duty below is done by hand today and moves into the automation through the 
 Learned 2026-09-29:
 - **Read the whole blocker before a twin sync.** Blockers can list a `.claude/` file that has **no twin** (for example `.claude/commands/claude-issue-pickup.md`), with an exact edit and the expected sha256. A truncated read misses it: #4886's `72273b8` did, and `d0520f7` fixed it. Check every listed sha256 after copying.
 - **Consumer-variant commands differ on purpose.** `validate-consumer-issue`, `verify-activation`, `analyze-log`, `investigate-issue` and `deploy-activate` never match their twins, so never sync them.
-- **Wake a stage session directly** when you know its id. A one-shot trigger that says "answered on the issue (comment …); continue" costs one message. `/reclarify` goes through the pickup queue, which can take an hour (#4990) and can start a session with **no repository checkout** (#4938). Use `/reclarify` only when you don't know the session.
+- **Wake a stage session directly** when you know its id. A one-shot trigger that says "answered on the issue (comment …); continue" costs one message. `/reclarify` goes through the pickup queue, which waits for the next pickup wake (#5423) and can start a session with **no repository checkout** (#4938). Use `/reclarify` only when you don't know the session.
 - **`/reclarify` must be the first text of the comment.** `clarify.yml` starts the job only when the comment body starts with `/reclarify`. An answer that puts `/reclarify` on its last line is skipped silently: no `ai:claude-issue-routed` comment, and the project stays stalled. On 2026-09-29, 13 answered projects sat unrouted for 3–14 h this way (#5243). Put `/reclarify` on the first line and the answer below it. Within 5 minutes, check that the `ai:claude-issue-routed` comment appeared. `/reclarify` on a **closed** issue is always skipped (#5222): after merging an issue-mode final PR, start the next stage yourself with the two-step `create_session` + `— resume.` trigger.
 - **Pickup-started sessions sometimes have no `sources`** (`get_session` → `session_context` has no `sources`). They ask about push access or skill locations. Archive the session and start a replacement yourself with `create_session` and `source_url` (#4938).
 - **A session's `post_turn_summary` is frozen at its last turn.** Before acting on a "blocked" item, read the issue's newest comment and the PR head. The poller was told the same on 2026-09-29 (rule update "verify on GitHub").
@@ -227,5 +233,7 @@ Learned 2026-09-30:
 - **Obsolete interim rules.** Before adding an interim rule, check whether its sunset condition has already happened: #5370 (interim Q17 for stage sessions) was closed unmerged because #4734 had landed an hour earlier.
 - **A pasted blocker patch may need `git apply --recount`.** Markdown can drop a trailing blank context line; check the resulting sha256 against the blocker.
 - **Session lists go stale fast.** Re-read each session's live state with `get_session` right before telling the operator it needs approval; the operator may have answered it already.
-- **Routines slip under load.** On 2026-09-30 ~04:15Z scheduled fires ran about 6 minutes late; a quarter Routine's `next_run_at` can show a later time than its cron minute.
+- **Routines slip under load.** On 2026-09-30 ~04:15Z scheduled fires ran about 6 minutes late; a quarter Routine's `next_run_at` can show a later time than its cron minute. By ~05:10Z a one-shot trigger set for 04:54Z showed `next_run_at` 05:27Z (33 minutes late). Don't assume a rule update or wake has landed until the target session replies, and don't send a second one because the first is late.
+- **Blockers on closed issues are invisible to the sweep.** The close sweep closes an issue when its completion PR merges into a **project branch**, not `main` (#4813). The project goes on: its final PR is still open. A later twin-sync blocker posted on that closed issue never appears in the open `ai:claude-blocked` list, and `/reclarify` there is skipped (#5222). #5012's blocker for final PR #5028 sat 11 h that way. Also check the hold claims on every open `claude/*` PR (`check_in_status.py --hand-back`, state `held`) and read the linked issue even when it is closed.
+- **Restarting a checker whose issue the close sweep closed early.** Q63 condition 2 (issue open) is there so finished projects aren't restarted. When the issue was closed only by the #4813 sweep and the project's final PR is still open, the project isn't finished. Answer on the issue, then wake the project checker directly with the `implement-plan <slug>: check-in` trigger, and tell it the closed issue isn't terminal (done for #5012 on 2026-09-30).
 - **Poller reports can be wrong.** At 03:07Z it reported PR #5370 as fixed while the PR was open. Verify anything it claims before acting or relaying it.
