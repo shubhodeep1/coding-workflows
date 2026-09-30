@@ -1,0 +1,59 @@
+---
+name: Claude Issue Queue Watchdog
+
+# Hourly check that the Claude issue pickup is still draining the queue.
+#
+# claude-issue-intake.yml queues every standalone issue routed to Claude as
+# one `ai:claude-issue-queue` issue in this repo. The Claude issue pickup
+# session (.claude/commands/claude-issue-pickup.md) wakes hourly, starts the
+# implementation session for each item, and closes it. When an item is still
+# open after CLAUDE_ISSUE_QUEUE_STALE_HOURS (repo variable, default 3), the
+# pickup has stopped: scripts/claude_issue_queue_watchdog.sh labels the
+# item `ai:claude-issue-queue-stale` and sends one Telegram ERROR with the
+# restart command. It never starts sessions itself (Actions cannot).
+
+"on":
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: claude-issue-queue-watchdog-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+
+jobs:
+  watchdog:
+    if: github.repository == 'shubhodeep1/coding-workflows'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # GITHUB_TOKEN: label writes on queue issues do not start workflows.
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      CLAUDE_ISSUE_QUEUE_STALE_HOURS: ${{ vars.CLAUDE_ISSUE_QUEUE_STALE_HOURS || '3' }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Flag queue items nobody picked up
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="${RUNNER_TEMP}/claude-issue-queue-watchdog-${GITHUB_RUN_ID}"
+          export RUNTIME_DIR
+          bash scripts/claude_issue_queue_watchdog.sh

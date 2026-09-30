@@ -4,18 +4,27 @@
 from __future__ import annotations
 
 import contextlib
+import http.client
 import importlib.util
 import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
+import sys
+import threading
 import time
 from pathlib import Path
+from unittest import mock
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -45,7 +54,8 @@ PHASE_H_CONTEXT_BUDGET_FIXTURE = FIXTURES_DIR / "phase-h-context-budget-overflow
 
 
 def _workflow_text() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# Moved step bodies (scripts/review_autofix_step_*.sh) inlined again.
+	return expanded_review_autofix_text()
 
 
 def _stage_helper_text() -> str:
@@ -359,6 +369,7 @@ def _run_collect_pr_check_runs_harness(
 	check_runs_responses: list[dict[str, object]] | None = None,
 	check_runs_autofix_enabled: str = "true",
 	self_run_id: str = "",
+	exclude_self_from_context: str = "false",
 	wait_timeout_secs: str = "300",
 	poll_interval_secs: str = "20",
 	log_tail_bytes: str = "0",
@@ -399,6 +410,7 @@ def _run_collect_pr_check_runs_harness(
 			"CHECK_RUNS_LOG_TAIL_BYTES": log_tail_bytes,
 			"GH_RETRY_MAX_ATTEMPTS": gh_retry_max_attempts,
 			"SELF_RUN_ID": self_run_id,
+			"CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT": exclude_self_from_context,
 		})
 
 		result = subprocess.run(
@@ -1318,7 +1330,7 @@ def _run_agents_md_materiality_harness(
 				**os.environ,
 				"AGENTS_MD_MATERIALITY_ENABLED": enabled,
 				"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED": "0",
-				"AGENTS_MD_MATERIALITY_MODEL": "openai/gpt-5.6-luna",
+				"AGENTS_MD_MATERIALITY_MODEL": "openai/gpt-6-luna",
 				"AGENTS_MD_MATERIALITY_REASONING": "medium",
 				"AGENTS_MD_MATERIALITY_RESULT_FILE": str(files["result"]),
 				"AGENTS_MD_MATERIALITY_COMMENT_FILE": str(files["comment"]),
@@ -2668,8 +2680,8 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_FLOOR_RULES_ENABLED: ${{ vars.REVIEW_FLOOR_RULES_ENABLED || '1' }}",
 		"REVIEW_FLOOR_KEYWORDS_FILE: ${{ vars.REVIEW_FLOOR_KEYWORDS_FILE || '' }}",
 		"REVIEW_CONSOLIDATOR_ENABLED: ${{ vars.REVIEW_CONSOLIDATOR_ENABLED || '1' }}",
-		"REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-5.6-sol' }}",
-		"REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'xhigh' }}",
+		"REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-6-sol' }}",
+		"REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'high' }}",
 		"REVIEW_CONSOLIDATOR_TIMEOUT_SECS: ${{ vars.REVIEW_CONSOLIDATOR_TIMEOUT_SECS || '300' }}",
 		"REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}",
 		"REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}",
@@ -2716,7 +2728,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}",
 		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
-		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.6-luna' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-6-luna' }}",
 		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
 		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
@@ -2731,7 +2743,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 
 	stage_step_block = _step_block("Stage workflow support files")
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in stage_step_block
-	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in stage_step_block
+	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in stage_step_block
 	assert "REQUIRED_BOOTSTRAP_SCRIPTS=" not in stage_step_block
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}"' not in stage_step_block
 	required_bootstrap_line = next(
@@ -2765,7 +2777,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}",
 		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
-		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.6-luna' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-6-luna' }}",
 		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
 		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
@@ -2830,8 +2842,8 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" 1 config_writer_missing' in summariser
 	assert 'opencode_emit_failure_alert review_summariser reviewer' in summariser
 	assert 'opencode_strip_ansi < "${tmp_stdout}"' in summariser
-	assert 'opencode_run_cmd "$@"' in apply_fixes
-	assert 'writer\n    "${editor_attempt_model}"' in apply_fixes
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in apply_fixes
+	assert '"${editor_attempt_model}"' in apply_fixes
 	assert 'opencode_emit_failure_alert review_apply_fixes writer' in apply_fixes
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in apply_fixes
 	assert 'failure_class=config_writer_missing' in apply_fixes
@@ -3017,7 +3029,7 @@ def test_summariser_missing_opencode_helpers_emits_classified_error() -> None:
 			"SUPPORT_SCRIPTS_DIR": str(support_dir),
 			"PREVIOUS_REVIEWS_DIR": str(previous_reviews_dir),
 			"RUNTIME_DIR": str(runtime_dir),
-			"XPOLL_SUMMARISER_MODEL": "openai/gpt-5.6-luna",
+			"XPOLL_SUMMARISER_MODEL": "openai/gpt-6-luna",
 			"TG_CAPTURE_FILE": str(telegram_capture),
 		})
 		result = subprocess.run(
@@ -3028,7 +3040,7 @@ def test_summariser_missing_opencode_helpers_emits_classified_error() -> None:
 			check=False,
 		)
 
-		stable_alert = "opencode_agent_failure phase=review_summariser role=reviewer model=openai/gpt-5.6-luna rc=1 failure_class=helpers_missing"
+		stable_alert = "opencode_agent_failure phase=review_summariser role=reviewer model=openai/gpt-6-luna rc=1 failure_class=helpers_missing"
 		assert result.returncode == 1, result
 		assert result.stderr.strip() == stable_alert, result.stderr
 		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
@@ -3269,6 +3281,34 @@ def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusio
 	assert "Check-run context sha256:" in result["stdout"]
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
 	assert any("--paginate" in call and "--slurp" in call and "/check-runs?per_page=100" in call for call in call_texts)
+
+
+def test_post_review_snapshot_ignores_only_its_own_incomplete_check() -> None:
+	runs = [
+		{"id": 1, "name": "review / codex-agent", "status": "in_progress", "details_url": "https://github.com/owner/repo/actions/runs/777/job/1"},
+		{"id": 2, "name": "ci", "status": "completed", "conclusion": "success"},
+	]
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, self_run_id="777", exclude_self_from_context="true",
+		check_runs_responses=[{"json": [{"check_runs": runs}]}],
+	)
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 1\n" in result["context_text"]
+	assert "incomplete_count: 0\n" in result["context_text"]
+
+
+def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="0",
+		check_runs_responses=[{"json": [{"check_runs": [
+			{"id": 1, "name": "ci", "status": "pending"},
+			{"id": 2, "name": "lint", "status": "completed", "conclusion": "startup_failure"},
+			{"id": 3, "name": "unknown", "status": "completed", "conclusion": None},
+		]}]}],
+	)
+	assert "collection_status: timeout\n" in result["context_text"]
+	assert "incomplete_count: 2\n" in result["context_text"]
+	assert "failed_count: 1\n" in result["context_text"]
 
 
 def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:
@@ -3986,7 +4026,7 @@ def test_review_consolidator_prompt_is_staged_for_review_runtime_support() -> No
 	assert 'PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-consolidator.txt"' in consolidate
 	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/prompts/review-consolidator.txt"' in stage_helper
-	assert 'src=".codex-workflow-src-main/prompts/review-consolidator.txt"' in stage_helper
+	assert 'src=".codex-workflow-src-main/prompts/review-consolidator.txt"' not in stage_helper
 	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"' in stage_helper
 	assert 'review-consolidator.txt not found in checked-out support sources' in stage_helper
 	assert 'REVIEW_CONSOLIDATOR_ENABLED=true' in stage_helper
@@ -4187,7 +4227,7 @@ def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
 	assert "REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"' in stage_helper
-	assert 'src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"' in stage_helper
+	assert 'src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"' not in stage_helper
 	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in stage_helper
 	assert 'review_filter_uninteresting_files.sh not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in preflight_block
@@ -4255,7 +4295,7 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert "REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_helper
-	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' in stage_helper
+	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' not in stage_helper
 	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in stage_helper
 	assert 'review_agents_md_materiality.sh not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in preflight_block
@@ -4274,8 +4314,94 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert 'AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality' in gate_block
 	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in gate_block
 	assert 'PR_FILES_JSON="${pr_files_json}" python3 - <<\'PY\'' in gate_block
+	assert 'changed_files: .changed_files' in gate_block
+	assert 'FILES_SKIP_SUPPRESSED="true"' in gate_block
+	assert 'PROTECTED_SKIP_SUPPRESSED="true"' in gate_block
+	assert 'reason=protected_path' in gate_block
+	assert 'length < 3000' in gate_block
+	assert '(.previous_filename | valid_path)' in gate_block
+	assert gate_block.count('gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files"') == 1
+	assert gate_block.index('PROTECTED_SKIP_SUPPRESSED="false"') < gate_block.index('AGENTS_MD_MATERIALITY_ENABLED:-0')
+	assert '&& [ "${FILES_SKIP_SUPPRESSED}" != "true" ]' in gate_block
+	assert '&& [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ]' in gate_block
 	assert "=== BEGIN UNTRUSTED AGENTS MD MATERIALITY RESULT ===" in prompt_text
 	assert "SEVERITY: high` by default" in prompt_text
+
+
+def test_gate_protects_executable_configuration_from_both_skip_routes() -> None:
+	# Run the real gate body with the existing mocked /pulls/{n}/files
+	# harness. The doc-only branch needs a large change under docs/; the
+	# small-diff branch also accepts root and nested paths outside docs/.
+	from test_workflow_failure_heal import SHA_A, _run_gate
+
+	base_pr = {
+		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A},
+		"labels": [], "additions": 1, "deletions": 1, "changed_files": 1,
+		"mergeable": True, "mergeable_state": "clean", "title": "test", "body": "",
+	}
+	protected_paths = (
+		"Dockerfile", "src/DOCKERFILE.prod", "apps/dev.Dockerfile", "docs/Dockerfile-prod",
+		"nested/Containerfile", "docker-compose.yml", "docs/.dockerignore", "docs/DOCKER-COMPOSE-prod.YML",
+		"docs/compose.override.yaml", "docs/Compose.yaml", "docs/Makefile",
+		"docs/build.gradle.kts", "docs/Taskfile.yml", "docs/pytest.config.py", "docs/BUILD.bazel",
+		"docs/custom.json", "docs/build.rules.toml", "docs/requirements-dev.txt",
+		"docs/.npmrc", "docs/test.sh",
+	)
+	for materiality in ("false", "true"):
+		for path in protected_paths:
+			with tempfile.TemporaryDirectory(prefix="gate-executable-") as tmp_name:
+				# Large docs/ changes qualify only via the doc-only route;
+				# other paths qualify only via the small-diff route.
+				additions = 400 if path.startswith("docs/") else 1
+				result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+					"pr": {**base_pr, "additions": additions, "deletions": additions},
+					"file_pages": [[{"filename": path, "status": "modified"}]],
+				}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": materiality})
+				assert result.returncode == 0, (path, result.stderr)
+				assert outputs["deterministic_skip"] == "false" and outputs["should_run"] == "true", (path, result.stdout)
+				assert "protected_suppressed=true" in result.stdout, (path, result.stdout)
+				assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1, path
+
+	# A rename out of an executable configuration is still protected, even
+	# when only the new filename looks like ordinary documentation.
+	for additions, destination, source in (
+		(1, "docs/guide.md", "src/DOCKERFILE.prod"),
+		(400, "docs/guide.md", "docs/compose.override.yaml"),
+	):
+		with tempfile.TemporaryDirectory(prefix="gate-executable-rename-") as tmp_name:
+			result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+				"pr": {**base_pr, "additions": additions, "deletions": additions},
+				"file_pages": [[{"filename": destination, "previous_filename": source, "status": "renamed"}]],
+			}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+			assert result.returncode == 0, result.stderr
+			assert outputs["should_run"] == "true" and outputs["deterministic_skip"] == "false", result.stdout
+			assert "protected_suppressed=true" in result.stdout
+			assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1
+
+	for additions, path, expected_reason in (
+		(400, "docs/guide.md", "docs_only"),
+		(400, "docs/docker-compose.md", "docs_only"),
+		(1, "src/widget.py", "small_diff"),
+	):
+		with tempfile.TemporaryDirectory(prefix="gate-benign-skip-") as tmp_name:
+			result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+				"pr": {**base_pr, "additions": additions, "deletions": additions},
+				"file_pages": [[{"filename": path, "status": "modified"}]],
+			}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+			assert result.returncode == 0, (path, result.stderr)
+			assert outputs["deterministic_skip"] == "true" and outputs["should_run"] == "false", (path, result.stdout)
+			assert outputs["det_skip_reason"] == expected_reason, path
+			assert "protected_suppressed=false" in result.stdout, path
+			assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1, path
+	with tempfile.TemporaryDirectory(prefix="gate-incomplete-files-") as tmp_name:
+		result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+			"pr": {**base_pr, "changed_files": 2},
+			"file_pages": [[{"filename": "Dockerfile", "status": "modified"}]],
+		}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+		assert result.returncode == 0, result.stderr
+		assert outputs["deterministic_skip"] == "false" and outputs["should_run"] == "true", result.stdout
+		assert "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE" in result.stdout
+		assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1
 
 
 def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers() -> None:
@@ -4286,7 +4412,7 @@ def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewe
 	reviewers = _reviewers_text()
 
 	assert 'failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"' in stage_helper
-	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' in stage_helper
+	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' not in stage_helper
 	assert 'install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in stage_helper
 	assert 'reviewer_failback_chains.json not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in preflight_block
@@ -4859,7 +4985,7 @@ def test_reviewer_filter_stat_harness_handles_brace_expansion_renames() -> None:
 def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
 	stage_helper = _stage_helper_text()
 	apply_fixes = _apply_fixes_text()
-	assert "review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh" in stage_helper
+	assert "review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh" in stage_helper
 	parse_idx = apply_fixes.index('if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then')
 	verify_idx = apply_fixes.index('if verify_script="$(resolve_support_script review_reject_verify.sh)"; then')
 	ledger_idx = apply_fixes.index('if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then')
@@ -4992,7 +5118,7 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		"| Reviewer scope | ${reviewer_scope_label} |",
 		"| Raw bundle size (bytes) | ${bundle_bytes} |",
 		"| Floor tags | ${floor_tag_count} |",
-		"| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.6-sol} |",
+		"| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-6-sol} |",
 		"| Consolidator invoked | ${consolidator_invoked} |",
 		"| Consolidator output bytes | ${consolidator_output_bytes} |",
 		"| Parsed issue blocks | ${parsed_blocks} |",
@@ -5623,6 +5749,61 @@ def test_review_partial_resume_path_does_not_workflow_dispatch_without_new_push(
 	assert "env.AUTOFIX_RESUME_TERMINAL != 'true'" in block
 
 
+def _evaluate_step_if_gate(step_name: str, gate_env: dict[str, str]) -> bool:
+	"""Evaluate a step's ``if:`` over env.* comparisons; unset vars are ''."""
+	if_line = next(
+		line.strip() for line in _step_block(step_name).splitlines() if line.strip().startswith("if:")
+	)
+	expression = if_line[len("if:"):].strip().strip('"')
+	assert "steps." not in expression, f"gate evaluator only models env.* terms: {step_name}"
+
+	def replace_comparison(match: re.Match[str]) -> str:
+		actual_value = gate_env.get(match.group(1), "")
+		result = actual_value == match.group(3) if match.group(2) == "==" else actual_value != match.group(3)
+		return str(result)
+
+	python_expression = re.sub(r"env\.([A-Z0-9_]+)\s*(==|!=)\s*'([^']*)'", replace_comparison, expression)
+	python_expression = python_expression.replace("success()", "True").replace("&&", " and ").replace("||", " or ")
+	assert re.fullmatch(r"[\sA-Za-z()]*", python_expression), python_expression
+	return bool(eval(python_expression))  # noqa: S307 - only True/False/and/or/() remain
+
+
+# A dispatched conflict-recovery run on a PR whose same-head resume state is
+# terminal (PR #4332: round 3/3, no_progress). The editor and commit steps are
+# skipped, so DID_COMMIT is unset.
+_TERMINAL_RESUME_CONFLICT_ENV = {
+	"CAN_PUSH": "true",
+	"AUTOFIX_RESUME_TERMINAL": "true",
+}
+
+
+def test_terminal_resume_still_resolves_merge_conflicts() -> None:
+	assert _evaluate_step_if_gate("Detect merge conflicts", _TERMINAL_RESUME_CONFLICT_ENV)
+	conflict_env = {**_TERMINAL_RESUME_CONFLICT_ENV, "MERGE_CONFLICT": "true"}
+	for step_name in (
+		"Prepare merge-conflict resolver prompt and pre-snapshot",
+		"Run Codex resolver, validate, stage, commit",
+	):
+		assert _evaluate_step_if_gate(step_name, conflict_env), step_name
+	resolved_env = {**conflict_env, "CONFLICT_RESOLVED": "true"}
+	assert _evaluate_step_if_gate("Telegram conflict resolution message", resolved_env)
+
+
+def test_terminal_resume_push_only_carries_resolved_merge() -> None:
+	resolved_env = {**_TERMINAL_RESUME_CONFLICT_ENV, "MERGE_CONFLICT": "true", "CONFLICT_RESOLVED": "true"}
+	assert _evaluate_step_if_gate("Push all pending commits", resolved_env)
+	unresolved_commit_env = {**_TERMINAL_RESUME_CONFLICT_ENV, "DID_COMMIT": "true"}
+	assert not _evaluate_step_if_gate("Push all pending commits", unresolved_commit_env)
+	non_terminal_commit_env = {"CAN_PUSH": "true", "AUTOFIX_RESUME_TERMINAL": "false", "DID_COMMIT": "true"}
+	assert _evaluate_step_if_gate("Push all pending commits", non_terminal_commit_env)
+	# The editor and commit steps must keep skipping terminal resumes, which is
+	# what keeps DID_COMMIT unset on that path.
+	commit_block = _step_block("Commit changes")
+	editor_block = _step_block("Apply fixes with editor model")
+	assert "env.AUTOFIX_RESUME_TERMINAL != 'true'" in commit_block
+	assert "env.AUTOFIX_RESUME_TERMINAL != 'true'" in editor_block
+
+
 def test_review_partial_finalize_marker_sets_no_progress_terminal_state() -> None:
 	with tempfile.TemporaryDirectory(prefix="partial-finalize-no-progress-") as td:
 		context = _build_partial_finalize_step_context(Path(td))
@@ -6219,14 +6400,21 @@ def _run_dependency_install_step(
 	*,
 	pytest_importable: bool,
 ) -> dict[str, str]:
-	"""Execute the dependency-install step body against a synthetic repo.
+	"""Execute the container's dependency-install body against a synthetic repo.
 
 	`pip` and `python3` are stubbed on PATH so nothing is really installed:
 	the `python3` stub reports pytest importability from `pytest_importable`
 	and records every invocation.  Returns the step's stdout/stderr under
 	"output" and the recorded stub invocations under "calls".
 	"""
-	script = _step_run_script("Install project dependencies (best-effort)")
+	workflow_step = _step_run_script("Install project dependencies (best-effort)")
+	assert 'review_untrusted_sandbox.sh" prepare' in workflow_step
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	script = helper.split('--workdir /source "${image}" /bin/bash -c \'\n', 1)[1].split("\n\t\t' ||", 1)[0]
+	# The isolation helper creates the venv before this body executes; the
+	# unit stub supplies pip/python3 on PATH without installing packages.
+	script = script.replace('python3 -m venv --system-site-packages /source/.review-venv || exit 1', ':')
+	script = script.replace('export PATH=/source/.review-venv/bin:$PATH', ':')
 	with tempfile.TemporaryDirectory(prefix="autofix-dep-install-") as td:
 		root = Path(td)
 		repo = root / "repo"
@@ -6618,6 +6806,411 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			]
 
 
+def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
+	gate = _step_block("Evaluate review gate")
+	assert "REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}" in gate
+	assert "REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}" in gate
+	assert '[ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ]' in gate
+	assert "''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;" in gate
+	# One comments call serves the terminal same-head skip and the cap (§15);
+	# its filter keeps both marker families.
+	assert gate.count('gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"') == 1
+	assert gate.count("gh api user --jq") == 1
+	assert 'contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")' in gate
+	assert 'contains("review-autofix-failure")' in gate
+	assert gate.count("gate_fetch_marker_comments\n") >= 2
+	assert "autofix-identical-failure-count" in gate
+	assert '--author-login "${gate_marker_author_login}"' in gate
+	# The cap runs after the terminal skip and before the deterministic skip,
+	# and never swallows a force_rb_judge dispatch.
+	terminal = gate.index('SKIP_REASON="terminal_same_head"')
+	cap = gate.index('SKIP_REASON="fingerprint_cap"')
+	deterministic = gate.index("# Deterministic pre-review skip (last gate check):")
+	assert terminal < cap < deterministic
+	assert 'if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then' in gate
+	for output in ("fingerprint_cap", "fingerprint_cap_fp", "fingerprint_cap_reason", "fingerprint_cap_count", "fingerprint_cap_max", "fingerprint_cap_already_applied", "fingerprint_cap_marker_author_login"):
+		assert f'echo "{output}=${{' in gate, output
+		assert f"{output}: ${{{{ steps.evaluate.outputs.{output} }}}}" in _job_block("gate"), output
+	gate_job = _job_block("gate")
+	block = _step_block("Checkout fingerprint cap helper")
+	assert "continue-on-error: true" in block
+	assert "sparse-checkout: scripts/workflow_failure_heal.py" in block
+	assert "ref: ${{ steps.resolve_support.outputs.review_support_sha }}" in block
+	assert "Checkout fingerprint cap helper main snapshot" not in gate_job
+	assert gate_job.index("- name: Resolve trusted review support commit") < gate_job.index("- name: Checkout fingerprint cap helper")
+	assert gate_job.index("- name: Verify fingerprint cap support identity") < gate_job.index("- name: Evaluate review gate")
+	assert 'FINGERPRINT_CAP_SUPPORT_VERIFIED:-false' in gate_job
+
+
+def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
+	job = _job_block("fingerprint-cap-block")
+	assert "needs: gate" in job
+	assert "group: fingerprint-cap-${{ github.repository }}-${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.run_id }}" in job
+	assert "cancel-in-progress: false" in job
+	assert "if: ${{ needs.gate.outputs.fingerprint_cap == 'true' && needs.gate.outputs.fingerprint_cap_already_applied != 'true' }}" in job
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in job
+	assert "PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in job
+	assert "FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}" in job
+	assert "FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}" in job
+	assert 'fresh_cap_comments_file="${work_dir}/fresh_comments.json"' in job
+	assert "reason=fresh_cap_marker_lookup_failed" in job
+	# Idempotent: a cap marker already on the head ends the job before any write.
+	already = job.index("AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=")
+	assert already < job.index('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"')
+	assert already < job.index('ensure_label_exists "ai:review-blocked"')
+	# One PR read; linked issues via the strict title/body fallback, else the PR.
+	assert job.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+	assert "extract_repo_scoped_issue_refs_from_text" in job
+	assert 'set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"' in job
+	assert '"repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked"' in job
+	assert "**AI review/autofix stopped: identical failure repeated**" in job
+	assert "<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP}" in job
+	assert 'AUTOFIX_FAILURE_REASON="identical_failure_cap"' in job
+	assert 'WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK="1"' in job
+	# The failed runs' markers ride in the comments fetched above, so the heal
+	# intake reads their logs instead of this gate-stopped run's (§15: no new call).
+	assert 'PR_ISSUE_COMMENTS_FILE="${fresh_cap_comments_file}"' in job
+	assert 'AUTOFIX_FAILURE_MARKER_AUTHOR="${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}"' in job
+	assert 'tg_send_msg "${MSG}" "WARNING"' in job
+	assert "head_moved" in job
+
+
+def test_identical_failure_fingerprint_marker_on_every_failure_comment() -> None:
+	# The no-output, changes-lost and no-op-suspicious comments post before
+	# "Assemble failure evidence" and compute the marker inline.
+	inline_steps = {
+		"Post editor summary comment": 1,
+		"Telegram editor-changes-lost warning": 1,
+		"Telegram editor-noop-suspicious warning": 3,
+	}
+	for name, posts in inline_steps.items():
+		block = _step_block(name)
+		assert "autofix-failure-fingerprint" in block, name
+		assert '--head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}"' in block, name
+		assert block.count('BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"') == posts, name
+	post_summary = _step_block("Post editor summary comment")
+	assert '--failure-reason "${autofix_empty_failure_reason}"' in post_summary
+	# The reviewer step failing (the editor never ran) names the failure
+	# reviewers_failed; otherwise it stays editor_empty_noop.
+	assert 'autofix_empty_failure_reason="editor_empty_noop"' in post_summary
+	assert 'REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}' in post_summary
+	assert 'if [ "${REVIEWERS_STEP_OUTCOME:-}" = "failure" ]; then' in post_summary
+	assert 'autofix_empty_failure_reason="reviewers_failed"' in post_summary
+	assert 'echo "AUTOFIX_REVIEWERS_FAILED=true" >> "$GITHUB_ENV"' in post_summary
+	assert "reviewer-failure-evidence" in post_summary
+	# The retry-friendly no-output flow and its streak heading are unchanged.
+	assert "**AI review/autofix produced no output — will retry**" in post_summary
+	assert 'echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"' in post_summary
+	failure_comment = _step_block("Post review-blocked comment on PR (workflow failure)")
+	assert 'BODY+=$\'\\n\\n\'"${AUTOFIX_FAILURE_MARKER}"' in failure_comment
+	# Every call site fingerprints the same evidence files, so one run's
+	# comments carry one fingerprint.
+	evidence = _step_block("Assemble failure evidence")
+	files = (
+		'--evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt"',
+	)
+	for name in (*inline_steps, "Assemble failure evidence"):
+		block = _step_block(name)
+		for line in files:
+			assert line in block, (name, line)
+	assert "if: always() && (failure() || env.EDITOR_NOOP_SUSPICIOUS == 'true' || env.EDITOR_CHANGES_LOST == 'true')" in evidence
+	for exported in ("AUTOFIX_FAILURE_FP=", "AUTOFIX_FAILURE_REASON=", "AUTOFIX_FAILURE_MARKER="):
+		assert exported in evidence
+	assert "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_missing" in evidence
+	text = _workflow_text()
+	assert text.index("- name: Assemble failure evidence") < text.index("- name: Mark linked issues review-blocked (workflow failure)")
+	assert text.index("- name: Assemble failure evidence") < text.index("- name: Post review-blocked comment on PR (workflow failure)")
+	assert "AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in _job_block("codex-agent")
+	assert 'echo "AUTOFIX_FAILURE_HEAL_PY=${AUTOFIX_FAILURE_HEAL_PY}" >> "$GITHUB_ENV"' in text
+
+
+def test_identical_failure_fingerprint_stage_stderr_is_captured() -> None:
+	editor = _step_block("Apply fixes with editor model")
+	tee = '2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)'
+	assert editor.count('bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" ' + tee) == 2
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh" 2> >(tee -a "${RUNTIME_DIR}/collect_metadata_stderr.txt" >&2)' in _step_block("Collect PR metadata")
+
+
+
+_EDITOR_GUARD_RE = re.compile(r':\s+"\$\{([A-Za-z_][A-Za-z0-9_]*):\?')
+_EDITOR_PREFLIGHT_VAR_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*$")
+
+
+def _code_lines(text: str) -> list[str]:
+	return [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+
+
+def _editor_preflight_body(text: str) -> str:
+	lines = text.splitlines()
+	start = lines.index("review_apply_fixes_preflight()")
+	end = next(idx for idx in range(start + 1, len(lines)) if lines[idx] == "}")
+	return "\n".join(lines[start:end + 1])
+
+
+def _editor_preflight_guard_gaps(text: str) -> set[str]:
+	"""Guarded names (`: "${VAR:?…}"`, comments ignored) missing from the preflight list."""
+	guarded = {m.group(1) for line in _code_lines(text) for m in _EDITOR_GUARD_RE.finditer(line)}
+	body = _editor_preflight_body(text)
+	array = body[body.index("preflight_required_vars=("):]
+	array = array[:array.index("\n\t)")]
+	listed = {m.group(1) for line in _code_lines(array) if (m := _EDITOR_PREFLIGHT_VAR_RE.match(line))}
+	return guarded - listed
+
+
+def test_editor_preflight_mode_covers_every_guard() -> None:
+	text = APPLY_FIXES.read_text(encoding="utf-8")
+	assert re.search(r"^# supports: --preflight$", text, re.MULTILINE)
+	assert 'if [ "${1:-}" = "--preflight" ]; then\n\treview_apply_fixes_preflight\n\texit $?\nfi' in text
+	# The dispatch sits after the helper sourcing and before any top-level
+	# work (prompt files, reviewer bundles) the editor run does.
+	dispatch = text.index('if [ "${1:-}" = "--preflight" ]; then')
+	assert text.index('source "${OPENCODE_HELPERS_PATH}"') < dispatch < text.index('REVIEWER_MANIFEST_FILE="${RUNTIME_DIR}/reviewer_manifest.txt"')
+	assert _editor_preflight_guard_gaps(text) == set()
+	# The rule rejects a guard added without its preflight entry, and a
+	# commented-out guard or the comment text itself is not a guard.
+	guarded = text.replace("CODEX_STALL_GUARD_HELPER=", ': "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"\nCODEX_STALL_GUARD_HELPER=', 1)
+	assert _editor_preflight_guard_gaps(guarded) == {"OPENROUTER_API_KEY"}
+	covered = guarded.replace("\t\t# same change.\n\t)", "\t\t# same change.\n\t\tOPENROUTER_API_KEY\n\t)", 1)
+	assert covered != guarded
+	assert _editor_preflight_guard_gaps(covered) == set()
+
+
+def test_editor_preflight_mode_reports_each_check_and_fails_fast() -> None:
+	with tempfile.TemporaryDirectory(prefix="editor-preflight-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		runtime_dir = tmp / "runtime"
+		runtime_dir.mkdir()
+		(bin_dir / "opencode").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		(bin_dir / "opencode").chmod(0o755)
+		date_executable = shutil.which("date")
+		dirname_executable = shutil.which("dirname")
+		bash_executable = shutil.which("bash")
+		assert date_executable and dirname_executable and bash_executable
+		(bin_dir / "date").symlink_to(date_executable)
+		(bin_dir / "dirname").symlink_to(dirname_executable)
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"RUNTIME_DIR": str(runtime_dir),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		})
+		env.pop("CODEX_HELPERS_PATH", None)
+		ok = subprocess.run(["bash", str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
+		assert ok.returncode == 0, ok.stderr
+		assert ok.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=ok checks=4 failed=0"
+		for check in ("opencode_helpers", "opencode_config_writer", "opencode_binary", "runtime_dir"):
+			assert f"REVIEW_EDITOR_PREFLIGHT check={check} result=ok " in ok.stderr
+		assert list(runtime_dir.iterdir()) == [], "preflight must not write runtime files"
+
+		(bin_dir / "opencode").unlink()
+		env["PATH"] = str(bin_dir)
+		env["RUNTIME_DIR"] = str(tmp / "missing-runtime")
+		env["CODEX_HELPERS_PATH"] = str(tmp / "missing-codex-helpers.sh")
+		bad = subprocess.run([bash_executable, str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
+		assert bad.returncode == 1, bad.stderr
+		assert bad.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=fail checks=5 failed=3"
+		for check in ("codex_helpers", "opencode_binary", "runtime_dir"):
+			assert f"REVIEW_EDITOR_PREFLIGHT check={check} result=fail " in bad.stderr
+
+
+def _step_explicit_env_names(step_name: str) -> list[str]:
+	block = _step_block(step_name)
+	env = block[block.index("\n        env:\n") + len("\n        env:\n"):block.index("\n        run: |")]
+	return [line.strip().split(":", 1)[0] for line in env.splitlines() if line.startswith("          ") and not line.strip().startswith("#")]
+
+
+def test_editor_preflight_step_wiring() -> None:
+	preflight = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	editor_env = _step_explicit_env_names("Apply fixes with editor model")
+	assert editor_env == ["GH_TOKEN", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
+	editor = _step_block("Apply fixes with editor model")
+	for name in editor_env:
+		line = next(line.strip() for line in editor.splitlines() if line.strip().startswith(f"{name}:"))
+		assert line in preflight, name
+	assert "REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}" in preflight
+	probe = preflight.index("""grep -q '^# supports: --preflight' "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh\"""")
+	flag = preflight.index('"${REVIEW_EDITOR_PREFLIGHT_ENABLED:-true}"')
+	invoke = preflight.index('bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" --preflight 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)')
+	assert flag < probe < invoke
+	# The file checks run (and fail) first; the editor preflight follows them.
+	assert preflight.index('echo "Preflight check PASSED: all required files present."') < flag
+	assert 'echo "EDITOR_PREFLIGHT_FAILED=true" >> "$GITHUB_ENV"' in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT result=fail" in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT skip reason=unsupported script_ref=${SCRIPT_REF:-unknown}" in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT skip reason=disabled" in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT skip reason=editor_not_scheduled" in preflight
+
+
+_RUNTIME_OUTPUT_RE = re.compile(r'(?:>>?|\btee(?:\s+-a)?)\s*"?(\$\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}[^"\s;)|&]*)')
+
+
+def _runtime_outputs(text: str) -> set[str]:
+	"""Runtime files a script writes: `${RUNTIME_DIR…}/<file>` and `${*_FILE}` redirect or tee targets."""
+	outputs: set[str] = set()
+	for line in _code_lines(text):
+		for match in _RUNTIME_OUTPUT_RE.finditer(line):
+			target = re.sub(r"^\$\{([A-Za-z_][A-Za-z0-9_]*):-[^}]*\}", r"${\1}", match.group(1))
+			name = target[2:target.index("}")]
+			if (name == "RUNTIME_DIR" and target.startswith("${RUNTIME_DIR}/")) or name.endswith("_FILE"):
+				outputs.add(target)
+	return outputs
+
+
+def _main_primary_scripts() -> list[str]:
+	line = next(line for line in _stage_helper_text().splitlines() if line.startswith("MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="))
+	return line.split("=", 1)[1].strip('"').split()
+
+
+def _origin_main_ref() -> str | None:
+	def _has_ref() -> bool:
+		return subprocess.run(["git", "rev-parse", "--verify", "--quiet", "origin/main^{commit}"], cwd=REPO_ROOT, capture_output=True, check=False).returncode == 0
+	if _has_ref():
+		return "origin/main"
+	shallow = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=REPO_ROOT, capture_output=True, text=True, check=False).stdout.strip() == "true"
+	# --depth only on an already-shallow checkout (CI): it would turn a full
+	# local clone shallow.
+	fetch = ["git", "fetch", "--depth=1", "origin", "main:refs/remotes/origin/main"] if shallow else ["git", "fetch", "origin", "main:refs/remotes/origin/main"]
+	try:
+		subprocess.run(fetch, cwd=REPO_ROOT, capture_output=True, check=False, timeout=120)
+	except (OSError, subprocess.TimeoutExpired):
+		return None
+	return "origin/main" if _has_ref() else None
+
+
+def _main_pinned_output_violations(branch_text: str, main_text: str) -> set[str]:
+	return _runtime_outputs(branch_text) - _runtime_outputs(main_text)
+
+
+def test_main_pinned_scripts_add_no_runtime_output_over_main() -> None:
+	# The comparison utility remains useful for diagnosing older review runs;
+	# runtime code now comes from the workflow SHA, not a moving main snapshot.
+	main_copy = 'printf "%s\\n" "${x}" > "${PR_BODY_FILE}"\n: > "${RUNTIME_DIR}/metadata.txt"\n'
+	branch_copy = main_copy + 'jq -n "{}" > "${RUNTIME_DIR}/linked_issue_digest.json"\necho x | tee -a "${DIGEST_FILE}" >/dev/null\n'
+	assert _main_pinned_output_violations(branch_copy, main_copy) == {"${RUNTIME_DIR}/linked_issue_digest.json", "${DIGEST_FILE}"}
+	assert _main_pinned_output_violations(main_copy, branch_copy) == set()
+	assert _runtime_outputs('# > "${RUNTIME_DIR}/commented.txt"\ncat x > "${RUNTIME_DIR:-/tmp}/y.txt" 2>/dev/null\n') == {"${RUNTIME_DIR}/y.txt"}
+
+	assert 'src=".codex-workflow-src/scripts/${f}"' in _stage_helper_text()
+
+
+def test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop() -> None:
+	text = _stage_helper_text()
+	start = text.index("for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do")
+	loop = text[start:text.index("\ndone\n", start)]
+	assert 'src=".codex-workflow-src/scripts/${f}"' in loop
+	assert '.codex-workflow-src-main' not in loop
+
+
+def test_review_support_identity_is_bound_across_jobs() -> None:
+	workflow = _workflow_text()
+	gate_job = _job_block("gate")
+	assert "review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}" in gate_job
+	assert "review_support_ref: ${{ steps.resolve_support.outputs.review_support_ref }}" in gate_job
+	assert "review_support_repo: ${{ steps.resolve_support.outputs.review_support_repo }}" in gate_job
+	assert "WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in gate_job
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in _step_block("Resolve trusted review support commit")
+	assert "gh api repos/shubhodeep1/coding-workflows/branches/main" in gate_job
+	assert "gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable" in gate_job
+	assert "gh api repos/shubhodeep1/coding-workflows/commits/stable" not in gate_job
+	for job_name in ("gate", "post-merge-validate-dispatch", "post-merge-force-poll", "fingerprint-cap-block", "codex-agent"):
+		job = _job_block(job_name)
+		assert "job.workflow_" not in job, job_name
+		assert "WORKFLOW_REF: ${{ " in job, job_name
+		assert "WORKFLOW_REPOSITORY: ${{ " in job, job_name
+		assert "WORKFLOW_SHA: ${{ " in job, job_name
+		if job_name != "codex-agent":
+			assert 'git -C .codex-workflow-src rev-parse HEAD' in job, job_name
+			assert "ref: ${{ " in job, job_name
+		else:
+			assert 'git -C .codex-workflow-src rev-parse HEAD' in job
+			assert "WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}" in job
+	assert 'ref: ${{ github.repository == \'shubhodeep1/coding-workflows\' && github.sha || \'stable\' }}' not in workflow
+	stage = _stage_helper_text().split('WORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT=', 1)[0]
+	assert '.codex-workflow-src-main/' not in stage
+	assert '[[ ! "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]]' in stage
+
+
+def test_review_support_ref_rejects_untrusted_workflow_identity() -> None:
+	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	gate_step = next(step for step in workflow["jobs"]["gate"]["steps"] if step.get("name") == "Resolve trusted review support commit")
+	resolve_step = next(step for step in workflow["jobs"]["codex-agent"]["steps"] if step.get("name") == "Resolve workflow support ref")
+	with tempfile.TemporaryDirectory(prefix="review-workflow-identity-") as td:
+		github_env = Path(td) / "github_env"
+		github_output = Path(td) / "github_output"
+		sha = "a" * 40
+		main_sha = "b" * 40
+		stable_sha = "c" * 40
+		pinned_sha = "d" * 40
+		mock_bin = Path(td) / "bin"
+		mock_bin.mkdir()
+		mock_gh = mock_bin / "gh"
+		mock_gh.write_text(
+			'#!/usr/bin/env bash\ncase "$2" in\n'
+			'  repos/shubhodeep1/coding-workflows/branches/main) [ "${MOCK_MAIN_FAIL:-false}" != true ] || exit 1; printf "%s\\n" "$MOCK_MAIN_RESPONSE" ;;\n'
+			'  repos/shubhodeep1/coding-workflows/git/ref/tags/stable) printf "%s\\n" "$MOCK_STABLE_REF" ;;\n'
+			'  repos/shubhodeep1/coding-workflows/git/tags/*) printf "%s\\n" "$MOCK_STABLE_TAG" ;;\n'
+			'  *) exit 1 ;;\nesac\n', encoding="utf-8",
+		)
+		mock_gh.chmod(0o755)
+		gate_base_env = {
+			"PATH": f"{mock_bin}:{os.environ.get('PATH', '')}", "GITHUB_OUTPUT": str(github_output),
+			"GH_TOKEN": "test-token", "MOCK_MAIN_RESPONSE": json.dumps({"protected": True, "commit": {"sha": main_sha}}),
+			"MOCK_STABLE_REF": json.dumps({"object": {"type": "tag", "sha": "e" * 40}}),
+			"MOCK_STABLE_TAG": json.dumps({"object": {"type": "commit", "sha": stable_sha}}),
+		}
+		for caller_repo, workflow_repo, workflow_ref, workflow_sha, expected_sha, expected_ref in (
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", "refs/heads/main", sha, main_sha, "refs/heads/main"),
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", "refs/heads/ai/issue-4399", sha, main_sha, "refs/heads/main"),
+			("consumer/repo", "shubhodeep1/coding-workflows", "refs/tags/stable", sha, stable_sha, "refs/tags/stable"),
+			("consumer/repo", "shubhodeep1/coding-workflows", pinned_sha, sha, pinned_sha, pinned_sha),
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", pinned_sha, sha, None, None),
+			("consumer/repo", "other/repo", "refs/tags/stable", sha, None, None),
+			("consumer/repo", "shubhodeep1/coding-workflows", "refs/heads/feature", sha, None, None),
+			("consumer/repo", "shubhodeep1/coding-workflows", "refs/tags/stable", "not-a-sha", None, None),
+		):
+			github_output.write_text("", encoding="utf-8")
+			job_json = json.dumps({"workflow_repository": workflow_repo, "workflow_ref": f"shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{workflow_ref}", "workflow_sha": workflow_sha})
+			gate_env = {**gate_base_env, "CALLER_REPOSITORY": caller_repo, "WORKFLOW_JOB_JSON": job_json}
+			result = subprocess.run(["bash", "-c", gate_step["run"]], env=gate_env, capture_output=True, text=True)
+			assert (result.returncode == 0) == (expected_sha is not None), (caller_repo, workflow_ref, result.stderr)
+			if expected_sha is not None:
+				assert f"review_support_sha={expected_sha}\n" in github_output.read_text(encoding="utf-8")
+				assert f"review_support_ref={expected_ref}\n" in github_output.read_text(encoding="utf-8")
+			else:
+				assert github_output.read_text(encoding="utf-8") == ""
+		for main_response, main_fail in (({"protected": False, "commit": {"sha": main_sha}}, "false"), ({"protected": True, "commit": {"sha": "invalid"}}, "false"), ({}, "true")):
+			github_output.write_text("", encoding="utf-8")
+			gate_env = {**gate_base_env, "CALLER_REPOSITORY": "shubhodeep1/coding-workflows", "WORKFLOW_JOB_JSON": json.dumps({"workflow_repository": "shubhodeep1/coding-workflows", "workflow_ref": "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/heads/ai/issue-4399", "workflow_sha": sha}), "MOCK_MAIN_RESPONSE": json.dumps(main_response), "MOCK_MAIN_FAIL": main_fail}
+			result = subprocess.run(["bash", "-c", gate_step["run"]], env=gate_env, capture_output=True, text=True)
+			assert result.returncode != 0 and not github_output.read_text(encoding="utf-8"), result.stderr
+		github_output.write_text("", encoding="utf-8")
+		stable_env = {**gate_base_env, "CALLER_REPOSITORY": "consumer/repo", "WORKFLOW_JOB_JSON": json.dumps({"workflow_repository": "shubhodeep1/coding-workflows", "workflow_ref": "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/tags/stable", "workflow_sha": sha}), "MOCK_STABLE_REF": json.dumps({"object": {"type": "commit", "sha": stable_sha}})}
+		result = subprocess.run(["bash", "-c", gate_step["run"]], env=stable_env, capture_output=True, text=True)
+		assert result.returncode == 0 and f"review_support_sha={stable_sha}\n" in github_output.read_text(encoding="utf-8"), result.stderr
+		github_output.write_text("", encoding="utf-8")
+		stable_env["MOCK_STABLE_REF"] = json.dumps({"object": {"type": "tag", "sha": "invalid"}})
+		result = subprocess.run(["bash", "-c", gate_step["run"]], env=stable_env, capture_output=True, text=True)
+		assert result.returncode != 0 and not github_output.read_text(encoding="utf-8"), result.stderr
+		for ref, repo, workflow_sha, allowed in (
+			("refs/heads/main", "shubhodeep1/coding-workflows", sha, True),
+			("refs/tags/stable", "shubhodeep1/coding-workflows", sha, True),
+			(sha, "shubhodeep1/coding-workflows", sha, True),
+			("refs/heads/ai/issue-4399", "shubhodeep1/coding-workflows", sha, False),
+			("refs/heads/main", "other/repo", sha, False),
+			("refs/heads/main", "shubhodeep1/coding-workflows", "not-a-sha", False),
+		):
+			github_env.write_text("", encoding="utf-8")
+			env = {"PATH": os.environ.get("PATH", ""), "GITHUB_ENV": str(github_env), "WORKFLOW_REPOSITORY": repo, "WORKFLOW_REF": ref, "WORKFLOW_SHA": workflow_sha}
+			result = subprocess.run(["bash", "-c", resolve_step["run"]], env=env, capture_output=True, text=True)
+			assert (result.returncode == 0) == allowed, (ref, repo, result.stderr)
+			assert (f"SCRIPT_REF={sha}" in github_env.read_text(encoding="utf-8")) == allowed
+
+
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
@@ -6716,8 +7309,256 @@ def main() -> int:
 	test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha()
 	test_review_blocked_judge_merges_are_bound_to_judged_head_sha()
 	test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha()
+	test_identical_failure_fingerprint_cap_gate_wiring()
+	test_identical_failure_fingerprint_cap_block_job_wiring()
+	test_identical_failure_fingerprint_marker_on_every_failure_comment()
+	test_identical_failure_fingerprint_stage_stderr_is_captured()
+	test_editor_preflight_mode_covers_every_guard()
+	test_editor_preflight_mode_reports_each_check_and_fails_fast()
+	test_editor_preflight_step_wiring()
+	test_main_pinned_scripts_add_no_runtime_output_over_main()
+	test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop()
+	test_stage_step_backfills_missing_model_catalog_rows_from_main()
+	test_stage_step_model_catalog_backfill_fails_open()
+	test_review_isolation_wiring_and_model_relay()
+	test_review_isolation_workspace_transfer_and_hostile_paths()
+	test_review_isolation_traverses_only_allowed_github_directories()
+	test_review_relay_accepts_only_configured_chat_model()
+	test_review_relay_main_preserves_invoked_mode()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
+
+
+def _run_model_catalog_backfill(tmp: Path, staged_catalog: dict | str, main_catalog: dict | str | None) -> tuple[subprocess.CompletedProcess[str], Path]:
+	"""Run the "Model catalog backfill" block of "Stage workflow support files" in ``tmp``."""
+	workflow = yaml.safe_load(_workflow_text())
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	stage_run = next(step["run"] for step in steps if step.get("name") == "Stage workflow support files")
+	start = stage_run.index("# Model catalog backfill.")
+	end = stage_run.index("\nfi\n", stage_run.index("MODEL_CATALOG_BACKFILL failed", start)) + len("\nfi\n")
+	snippet = "set -euo pipefail\n" + stage_run[start:end]
+	support = tmp / "support" / "scripts"
+	support.mkdir(parents=True, exist_ok=True)
+	main_dir = tmp / ".codex-workflow-src-main" / "scripts"
+	main_dir.mkdir(parents=True, exist_ok=True)
+	staged_path = support / "codex_model_catalog.json"
+	staged_path.write_text(staged_catalog if isinstance(staged_catalog, str) else json.dumps(staged_catalog), encoding="utf-8")
+	main_path = main_dir / "codex_model_catalog.json"
+	main_path.unlink(missing_ok=True)
+	if main_catalog is not None:
+		main_path.write_text(main_catalog if isinstance(main_catalog, str) else json.dumps(main_catalog), encoding="utf-8")
+	result = subprocess.run(
+		["bash", "-c", snippet],
+		cwd=tmp,
+		env=_git_clean_env({"SUPPORT_SCRIPTS_DIR": str(support)}),
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	return result, staged_path
+
+
+def _write_reviewer_opencode_config(tmp: Path, catalog_path: Path, model_slug: str) -> subprocess.CompletedProcess[str]:
+	models_cache = tmp / "models.json"
+	models_cache.write_text(
+		json.dumps({"openrouter": {"models": {model_slug: {"limit": {"context": 1000000, "output": 1000}}}}}),
+		encoding="utf-8",
+	)
+	return subprocess.run(
+		[
+			"bash", str(REPO_ROOT / "scripts" / "write_opencode_config.sh"),
+			"--role", "reviewer", "--model", model_slug,
+			"--project-path", str(tmp), "--config-path", str(tmp / "config.json"), "--serena", "off",
+		],
+		env={**os.environ, "OPENCODE_MODEL_CATALOG_PATH": str(catalog_path), "OPENCODE_MODELS_PATH": str(models_cache)},
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+
+
+def test_stage_step_backfills_missing_model_catalog_rows_from_main() -> None:
+	# The catalog and roster are now pinned to the same workflow SHA.
+	stage = _step_block("Stage workflow support files")
+	assert "main_model_catalog=" not in stage
+	assert 'catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"' in _stage_helper_text()
+
+
+def test_stage_step_model_catalog_backfill_fails_open() -> None:
+	stage = _step_block("Stage workflow support files")
+	assert "MODEL_CATALOG_BACKFILL added=0 source=workflow_commit" in stage
+	assert ".codex-workflow-src-main/scripts/codex_model_catalog.json" not in stage
+
+
+def test_review_isolation_wiring_and_model_relay() -> None:
+	step = _step_block("Install project dependencies (best-effort)")
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	stage = _stage_helper_text()
+	assert 'review_untrusted_sandbox.sh" prepare' in step
+	assert "pip install" not in step and "npm ci" not in step
+	assert "--network none --read-only --cap-drop ALL" in helper
+	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run' in helper
+	assert '--mount "type=bind,src=${root}/source,dst=/source"' in helper
+	assert '--mount "type=bind,src=${workspace}' not in helper
+	assert '--env OPENROUTER_API_KEY=isolated-placeholder' in helper
+	assert 'review_untrusted_workspace.py" transfer' in helper
+	assert ': > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"' in helper
+	assert 'if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then' in _apply_fixes_text()
+	assert 'review_sandbox/Dockerfile' in stage
+	assert '"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in _workflow_text()
+	broker = (REPO_ROOT / "scripts/clarify_openrouter_broker.py").read_text(encoding="utf-8")
+	assert 'REVIEW_PATH = "/api/v1/chat/completions"' in broker
+	assert '"review-broker"' in broker and '"review-bridge"' in broker
+	assert 'self.server.model' in broker
+
+
+def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / ".git-credentials").write_text("private-sentinel")
+		(host / "scripts/app.py").write_text("before\n")
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			(host / f"scripts/module{module_suffix}").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**os.environ, "GIT_DIR": str(host / ".git"), "GIT_WORK_TREE": str(host)},
+				capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			assert (source / f"scripts/module{module_suffix}").read_text() == "before\n"
+		assert subprocess.run(["git", "-C", str(host), "rev-parse", "HEAD"], env=_git_clean_env(), capture_output=True).returncode != 0
+		assert not (source / ".git-credentials").exists()
+		assert "private-sentinel" not in (source / ".git" / "config").read_text()
+		(source / "scripts/app.py").write_text("backend write\n")
+		(source / "scripts/backend.py").write_text("untrusted build output\n")
+		assert run("refresh").returncode == 0
+		assert (source / "scripts/app.py").read_text() == "before\n"
+		assert not (source / "scripts/backend.py").exists()
+		(source / "scripts/app.py").write_text("after\n")
+		(source / "scripts/new.py").write_text("new\n")
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			(source / f"scripts/module{module_suffix}").write_text("after\n")
+		assert run("transfer").returncode == 0
+		assert (host / "scripts/app.py").read_text() == "after\n"
+		assert (host / "scripts/new.py").read_text() == "new\n"
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			assert (host / f"scripts/module{module_suffix}").read_text() == "after\n"
+		# A later retry has an updated baseline; a concurrent host edit does not.
+		(host / "scripts/app.py").write_text("host changed\n")
+		(source / "scripts/app.py").write_text("isolated changed\n")
+		assert run("transfer").returncode != 0
+		assert (host / "scripts/app.py").read_text() == "host changed\n"
+		(host / "scripts/app.py").write_text("after\n")
+		(source / "scripts/new.py").unlink()
+		(source / "scripts/new.py").symlink_to("/etc/passwd")
+		assert run("transfer").returncode != 0
+		assert (host / "scripts/new.py").read_text() == "new\n"
+
+
+def test_review_isolation_traverses_only_allowed_github_directories() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		for subdir in ("workflows", "actions"):
+			(host / ".github" / subdir).mkdir(parents=True)
+			(host / ".github" / subdir / "example.yml").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		assert run("refresh").returncode == 0
+		(source / ".github/workflows/example.yml").write_text("after\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
+		(source / ".github/ai").mkdir()
+		(source / ".github/ai/untrusted.yml").write_text("untrusted\n")
+		assert run("transfer").returncode != 0
+		assert not (host / ".github/ai/untrusted.yml").exists()
+
+
+def test_review_relay_accepts_only_configured_chat_model() -> None:
+	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
+	assert spec and spec.loader
+	broker_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(broker_module)
+	seen = []
+
+	class Upstream:
+		def __init__(self, _host, **_kwargs):
+			pass
+
+		def request(self, method, path, body, headers):
+			seen.append((method, path, json.loads(body)["model"], headers["Authorization"]))
+
+		def getresponse(self):
+			class Response:
+				status = 200
+				def getheader(self, _name, default):
+					return default
+				def read1(self, _size):
+					return b""
+			return Response()
+
+		def close(self):
+			pass
+
+	with tempfile.TemporaryDirectory() as td, mock.patch.object(broker_module.http.client, "HTTPSConnection", Upstream):
+		server = broker_module.UnixHTTPServer(str(Path(td) / "broker.sock"), broker_module.Relay)
+		server.mode = "review-broker"
+		server.model = "openai/gpt-6-sol"
+		server.api_key = "test-only-key"
+		thread = threading.Thread(target=server.serve_forever, daemon=True)
+		thread.start()
+		try:
+			for path, model, status in (("/api/v1/responses", "openai/gpt-6-sol", 400),
+				("/api/v1/chat/completions", "other/model", 400),
+				("/api/v1/chat/completions", "openai/gpt-6-sol", 200)):
+				conn = broker_module.UnixHTTPConnection(str(Path(td) / "broker.sock"))
+				# The rejected route closes before reading a body; send no body
+				# there to avoid a client-side BrokenPipe race on a Unix socket.
+				body = None if path == "/api/v1/responses" else json.dumps({"model": model})
+				conn.request("POST", path, body, {"Content-Type": "application/json"})
+				assert conn.getresponse().status == status
+				conn.close()
+		finally:
+			server.shutdown()
+			server.server_close()
+			thread.join(timeout=2)
+	assert seen == [("POST", "/api/v1/chat/completions", "openai/gpt-6-sol", "Bearer test-only-key")]
+
+
+def test_review_relay_main_preserves_invoked_mode() -> None:
+	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
+	assert spec and spec.loader
+	broker_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(broker_module)
+	with mock.patch.object(broker_module, "UnixHTTPServer") as broker_class, \
+		mock.patch.object(broker_module.http.server, "HTTPServer") as bridge_class, \
+		mock.patch.object(broker_module.os, "chmod"), \
+		mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-only-key"}):
+		for mode in ("broker", "bridge", "review-broker", "review-bridge"):
+			with mock.patch.object(broker_module.sys, "argv", ["broker", mode, "/unused.sock"]):
+				broker_module.main()
+			server = broker_class.return_value if mode.endswith("broker") else bridge_class.return_value
+			assert server.mode == mode
 
 
 if __name__ == "__main__":

@@ -31,9 +31,7 @@ CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR}/codex_stall_guard.sh"
 LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
   "${SUPPORT_SCRIPTS_DIR}/ledger_emit_substate.sh" \
-  ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
-  ".codex-workflow-src-main/scripts/ledger_emit_substate.sh" \
-  "scripts/ledger_emit_substate.sh"; do
+  ".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
   if [ -f "${_ledger_candidate}" ]; then
     LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
     break
@@ -111,9 +109,6 @@ fi
 if [ -f "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" ]; then
   # shellcheck disable=SC1091
   source "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" 2>/dev/null || true
-elif [ -f "scripts/pr_checks_lib.sh" ]; then
-  # shellcheck disable=SC1091
-  source scripts/pr_checks_lib.sh 2>/dev/null || true
 fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   # Keep prompt sanitization available even when gh_helpers.sh was not
@@ -269,7 +264,7 @@ emit_context_budget_warn_for_prompt() {
 
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
     python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
@@ -416,7 +411,7 @@ emit_review_rb_lessons_learned_records() {
 
   telemetry_json="$(printf '%s\n' "${judge_json}" | {
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
     python3 - "${PWD}" "${issue_number}" "${pr_number}" <<'PY'
 import json
 import os
@@ -733,18 +728,13 @@ render_review_rb_semble_prefetch() {
 if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
   :
 else
-  # Try to re-fetch the helper script if it was removed during cleanup.
-  wf_source="${REPOSITORY%/*}/coding-workflows"
-  if [ "${REPOSITORY}" = "${wf_source}" ]; then
-    script_ref="${GITHUB_SHA}"
-  else
-    script_ref="stable"
-  fi
+  # Fetch only the verified workflow commit if cleanup removed the helper.
+  wf_source="shubhodeep1/coding-workflows"
+  script_ref="${SCRIPT_REF:-}"
   mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-  if { gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
-    "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || \
-     gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
-      "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; } && \
+  if [[ "${script_ref}" =~ ^[0-9a-f]{40}$ ]] &&
+    gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
+      "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null &&
     [ -s "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
     chmod +x "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
   else
@@ -1326,10 +1316,10 @@ rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 # window on a single attempt before emitting the final JSON.
 # Stepping the effort down each retry frees enough budget for the
 # model to terminate exploration and write the JSON. Starting
-# level is resolved from JUDGE_REASONING_EFFORT (default `xhigh`,
+# level is resolved from JUDGE_REASONING_EFFORT (default `high`,
 # override via the THINKING_LEVEL_REVIEW_BLOCKED_JUDGE repo var).
 # Keep the ladder inside the reasoning levels advertised for the
-# default gpt-5.6-sol judge path; `low` is the floor in this script.
+# default gpt-6-sol judge path; `low` is the floor in this script.
 case "${JUDGE_REASONING_EFFORT}" in
   xhigh)   JUDGE_ATTEMPT_LEVELS=("xhigh" "high" "medium") ;;
   high)    JUDGE_ATTEMPT_LEVELS=("high" "medium" "low") ;;

@@ -1,10 +1,34 @@
-Given a GitHub issue (number / URL) — or any reference that identifies a project (PR, plan doc, feature name) — in `$ARGUMENTS`, determine three things about **this** repo (`shubhodeep1/coding-workflows`) at `main`: (1) is the project **fully implemented**, (2) is it **correct** — does the code actually do what the plan / issue specified, audited rather than assumed — and (3) is it **activated** — i.e. will it **start working automatically** on its trigger, or does something still need to be done to make it run? Diagnose, then fix: the verdict is graded against `main` and reported in chat, and then every **EVIDENCE-BASED** defect the audit found, plus every activation gap that is pure code in this repo, is fixed on a branch, verified, pushed, and opened as one ready-for-review PR whose body lists each issue, why it was an issue, and the fix applied (see [Fix Policy](#fix-policy)). Operator activation steps (repo-vars, secrets, merges, `@stable` tags) are still enumerated, never performed. `$ARGUMENTS` is free-form and should contain at least one concrete reference (`#1234`, an issue/PR URL, a plan path, or a clearly-named feature).
+Given a GitHub issue (number / URL) — or any reference that identifies a project (PR, plan doc, feature name) — in `$ARGUMENTS`, determine three things about **this** repo (`shubhodeep1/coding-workflows`) at `main`: (1) is the project **fully implemented**, (2) is it **correct** — does the code actually do what the plan / issue specified, audited rather than assumed — and (3) is it **activated** — i.e. will it **start working automatically** on its trigger, or does something still need to be done to make it run? Diagnose, then fix: the verdict is graded against `main` and reported in chat, and then every **EVIDENCE-BASED** defect the audit found, plus every activation gap that is pure code in this repo, is fixed on a branch, verified, pushed, and opened as one ready-for-review PR whose body lists each issue, why it was an issue, and the fix applied (see [Fix Policy](#fix-policy)). Operator activation steps (repo-vars, secrets, merges, `@stable` tags) are still enumerated, never performed. `$ARGUMENTS` is free-form and should contain at least one concrete reference (`#1234`, an issue/PR URL, a plan path, or a clearly-named feature). An optional trailing `— scope conformance` or `— scope activation` narrows the run to one half of the check (see [Scope](#scope)); without it the full check runs, unchanged. A trailing `— scope fix-check #<PR>` instead re-checks only one merged fix PR's diff and opens no fix PR (`/implement-plan-claude` uses it after its last allowed conformance run). A trailing `— unattended` (passed by `/implement-plan-claude`) makes the run auto-decide the findings that need a decision instead of asking (see [Unattended Runs](#unattended-runs)). Whenever the project has a `/implement-plan-claude` progress log with recorded auto-decisions, the report lists them for human review, without asking again.
 
 $ARGUMENTS
 
+## Scope
+
+`$ARGUMENTS` may end with `— scope conformance`, `— scope activation`, or `— scope fix-check #<PR>[, #<PR>…]` (`--` in place of the em dash is accepted). With none of them, the run is **full** scope: every step below, exactly as written. A scope only narrows what is audited, graded, and fixed; it never widens anything.
+
+| Scope | Steps run | Verdict | Step 7 fixes |
+| --- | --- | --- | --- |
+| full (default) | 1–8 | LIVE / DORMANT / INCOMPLETE | EVIDENCE-BASED Step 4 findings and `CODE-FIXABLE` Step 5 gaps |
+| `conformance` | 1–4, 6–8 (Step 5 skipped) | CONFORMANT / INCOMPLETE | EVIDENCE-BASED Step 4 findings only |
+| `activation` | 1, 2, 5–8 (Steps 3–4 skipped) | LIVE / DORMANT | `CODE-FIXABLE` Step 5 gaps only |
+| `fix-check` | 1–3 and 4 narrowed to the fix PR, 6, 8 (Steps 5 and 7 skipped) | FIX-VERIFIED / FIX-DEFECTIVE | none |
+
+- **`conformance`** answers "does the merged code do what the plan says, correctly?". The verdict is **CONFORMANT** when Step 3 is COMPLETE and Step 4 is PASS or CONCERNS, and **INCOMPLETE** otherwise. It says nothing about whether the project runs: the `Activated:`, `Will it run automatically?`, and `To activate` lines are omitted from the report. `/implement-plan-claude` runs this scope before its security pass, so every conformance fix is security-audited and validated afterwards.
+- **`activation`** answers "will it run on its trigger?" for a project whose implementation and correctness an earlier `conformance` run already graded (the caller records that run; this scope does not re-audit the code). `Implemented:` and `Correctness:` are reported as `not audited (activation scope)`, and `Audit findings` / `Checks run` are omitted unless Step 5 ran a check. INCOMPLETE is not a verdict of this scope: if Step 5 shows code the project needs is missing outright (not merely dormant), stop, say a full-scope run is needed, and do not grade.
+- **`fix-check`** answers "did this fix PR fix what it claimed, without breaking anything?" for one or more merged fix PRs named after the marker. `/implement-plan-claude` runs it once, in place of a fourth conformance run, after the fix PR opened by its third and last allowed conformance run merges. The criteria are the findings the fix PR's body lists under `## Findings fixed` and `## Auto-decisions`, not the plan's acceptance criteria. The audit surface is the files that PR changed and the call sites immediately reachable from them, not the whole project. Step 3 maps each listed finding to the merged change that resolves it. Step 4 audits only the diff: a listed finding left unresolved, a defect the diff introduced, a sibling path the fix missed (see **Sibling paths** under Step 4), or a test that does not exercise the fix. It runs the checks that bear on the changed files. The verdict is **FIX-VERIFIED** when every listed finding is resolved and no EVIDENCE-BASED defect in the diff stands, and **FIX-DEFECTIVE** otherwise. Step 7 never runs: this scope opens no fix PR, so it cannot start another audit round. A defect it notices in code the fix PR did not touch is reported under `Outside fix-check scope`, never fixed, and does not change the verdict; the caller records it. `Implemented:` and `Correctness:` describe the fix PR only, and the `Activated:`, `Will it run automatically?`, and `To activate` lines are omitted.
+
+## Unattended Runs
+
+`$ARGUMENTS` may also end with `— unattended` (after any scope marker; `--` in place of the em dash is accepted). `/implement-plan-claude` passes it at its conformance and activation stages, where nobody is watching the session. It changes one thing, under CLAUDE.md §28:
+
+- **Decisions are auto-decided, not asked.** A qualifying finding whose fix Step 7b would otherwise hold back for a Q/A question (a §12.D tradeoff, a documented-contract change, a §6 / §10 item) gets its question written in the §2 format as usual, and then its RECOMMENDED option is taken. The option must honour §28.B: §6 aliases alongside and never a rename in place, the `/db/contracts/*` update in the same PR, the safer choice when security is involved. A code option is applied, verified, and shipped in the Step 7 fix PR like any other fix. A "leave as is" or documentation option is applied the same way, or recorded with `Applied in: no code change`. Each one is reported under `Auto-decisions made this run` in the [Output Format](#output-format), in the §28.D `AD-<n>` format, numbered after the entries already in the project's progress log. The fix PR body lists them too.
+- **Unchanged:** HYPOTHESIS findings, `could not verify`, `OPERATOR` gaps, and any question with no §28-safe option are still reported under `Not fixed`, never auto-decided (§28.C). A run without `— unattended` asks exactly as before.
+
+**Auto-decisions list.** When the project has a progress log at `docs/implement-plan/<slug>.md` (the slug is the plan filename without `-plan.md`) whose `## Auto-decisions` section has entries, a full- or activation-scope run prints all of them, with their status, under `Auto-decisions (for review)`, together with any it made itself. The list is shown, never asked: the human replies `change AD-<n> → <letter>` if they want a different choice, and `/implement-plan-claude` (Auto-Decisions) or `/deploy-activate` handles the reply (§28.E). A conformance-scope run lists only the ones it made.
+
 ## Procedure
 
-1. **Parse `$ARGUMENTS`.** Extract the issue number / URL, PR refs, plan-doc path, or feature name. If there is no concrete reference — just vague prose — stop and ask for one. Restate the parsed reference in the `Summary`.
+1. **Parse `$ARGUMENTS`.** Extract the issue number / URL, PR refs, plan-doc path, or feature name, and the optional trailing scope (see [Scope](#scope); default full) and `— unattended` marker (see [Unattended Runs](#unattended-runs)). If there is no concrete reference — just vague prose — stop and ask for one. Restate the parsed reference and the scope in the `Summary`.
 
 2. **Understand the intended project.** Fetch the issue and everything linked to it — linked PRs, tracking comments, sub-issues, the orchestrator state comment if present — via `mcp__github__issue_read` / `pull_request_read` (or `gh`, see [Tool Access](#tool-access)). Pin down: what it builds, its acceptance criteria, and **how it is meant to run** — a cron schedule, a `pull_request` / `push` trigger, `repository_dispatch`, `workflow_dispatch` (manual), a long-running supervisor (§18.C), or on-demand. Also read `README.md` / `agents.md` for the feature's documented behavior and any env-var / repo-var contract.
 
@@ -16,6 +40,7 @@ $ARGUMENTS
 
    **What to audit** — read the real code at `main`, never infer correctness from a diff summary or a PR description:
    - **Plan conformance** — does each criterion's implementation do what the plan *said*, or does it diverge (a weaker check, a different default, a dropped case, a `TODO` left behind, a stub that returns early)? Divergence is a finding even when the code is otherwise sound.
+   - **Sibling paths** — for every behaviour the project changes, find each other place the same code path reaches, and check the change landed there too. Two kinds are easy to miss: every template, prompt, config, or variant the code selects between (for example a generic resolver prompt and its `orchestrator/project-*` variant), and every child process that inherits an environment variable or setting exported around a subprocess (an agent CLI's own `git` calls, not only the model's tool calls). A rule, guard, or env var that reaches one of them and not the others is a finding.
    - **Security first (§1)** — injection (shell / SQL / template), secrets leaking into logs, PR bodies, or commit messages, missing authz, unsafe deserialization, an unquoted expansion in a workflow.
    - **Correctness defects** — inverted condition, wrong operator, swapped arguments, off-by-one, wrong env var / repo-var / field / index / collection name, a return path that silently skips the work.
    - **Error paths and boundaries (§3)** — unvalidated input, unchecked external / API responses, a path that fails closed where it must fail open (or the reverse), `set -euo pipefail` interactions, unhandled non-zero exits.
@@ -54,12 +79,14 @@ $ARGUMENTS
    - **DORMANT** — implemented but it will not run until a manual step. Enumerate the **exact** steps to activate (set `VAR=1`, add secret `Y`, merge to the default branch, flip a flag, start a supervisor, tag `@stable` for consumers).
    - **INCOMPLETE** — not fully implemented, **including a Step 4 FAIL that downgraded `Implemented:` to PARTIAL**; list what is missing or defective before activation is even possible.
 
+   A narrowed scope uses its own verdict set instead (see [Scope](#scope)): `conformance` grades **CONFORMANT** / **INCOMPLETE** from Steps 3–4 alone; `activation` grades **LIVE** / **DORMANT** from Step 5 alone; `fix-check` grades **FIX-VERIFIED** / **FIX-DEFECTIVE** from Steps 3–4 on the fix PR's diff alone.
+
    The verdict is graded against `main` **before** any fix is applied; the fix PR from Step 7 does not upgrade it (see [Rules](#rules)).
 
-7. **Fix — apply, verify, ship.** Select the findings that qualify under the [Fix Policy](#fix-policy): every **EVIDENCE-BASED** Step 4 finding (BLOCKER and CONCERN alike) and every Step 5 gap tagged `CODE-FIXABLE`. If nothing qualifies, go to Step 8 with `Fix PR: none` and the reason. Otherwise:
+7. **Fix — apply, verify, ship.** Select the findings that qualify under the [Fix Policy](#fix-policy): every **EVIDENCE-BASED** Step 4 finding (BLOCKER and CONCERN alike) and every Step 5 gap tagged `CODE-FIXABLE` — limited to the steps the [Scope](#scope) ran (`conformance`: Step 4 findings only; `activation`: Step 5 gaps only). If nothing qualifies, go to Step 8 with `Fix PR: none` and the reason. Otherwise:
    a. **Branch.** Resolve the default branch dynamically (do not hardcode `main`) and create `claude/verify-activation-<ref-slug>` from it (append `-2`, `-3`, … on collision). If an **open** PR already exists for that branch from an earlier run, check it out and push onto it — one PR per project (§12.A). If that PR has **merged**, restart the branch from the default branch per §21.A; never stack on merged history.
-   b. **Apply** each fix as the smallest change that removes the defect (§12.C: a guard, a bounds check, a corrected name, the missing wiring line), extending existing mechanisms rather than adding new ones (§5). A fix that would rename or remove a §6 identifier, change a §10 contract without an obvious update path, flip a documented default, or that has more than one plausible shape with material tradeoffs is **not applied** — it goes to `Not fixed` with a §2 Q/A question (§12.D).
-   c. **Verify** every fix: re-run the Step 4 check that demonstrated the defect and confirm it now passes; add or extend a test when the defect had no coverage (§12.C). Re-run the full set of Step 4 checks on the final tree. A fix whose verification cannot run, or fails, is reverted and reported under `Not fixed` as `could not verify` — never ship an unverified change.
+   b. **Apply** each fix as the smallest change that removes the defect (§12.C: a guard, a bounds check, a corrected name, the missing wiring line), extending existing mechanisms rather than adding new ones (§5). A fix that would rename or remove a §6 identifier, change a §10 contract without an obvious update path, flip a documented default, or that has more than one plausible shape with material tradeoffs is **not applied** — it goes to `Not fixed` with a §2 Q/A question (§12.D). In an `— unattended` run it is auto-decided instead (see [Unattended Runs](#unattended-runs)): the RECOMMENDED option is applied and recorded as an auto-decision.
+   c. **Verify** every fix: re-run the Step 4 check that demonstrated the defect and confirm it now passes; add or extend a test when the defect had no coverage (§12.C). Re-run the full set of Step 4 checks on the final tree (`activation` scope: the checks Step 5 ran, plus the repo's tests for every file the fix touched). A fix whose verification cannot run, or fails, is reverted and reported under `Not fixed` as `could not verify` — never ship an unverified change.
    d. **Docs and changelog.** Update `README.md` / `agents.md` when a fix changes documented behaviour (§7), the matching `/db/contracts/*.yml` when it touches a query or index (§10.A), and add one `changelog.d/<issue>-<slug>.md` fragment when the fixes change observable behaviour (§20.A) — never edit `CHANGELOG.md` directly.
    e. **Commit** per scope (§12.E): one commit per finding, or per theme of related findings — never one per file. Each message names the finding it resolves and why it was a defect, e.g. `fix(<area>): <what changed> — verify-activation finding <file:line>: <why>`.
    f. **Push and open the PR.** `git push -u origin <branch>` (retry transient network errors with exponential backoff: 2s, 4s, 8s, 16s — up to 4 retries). Write the body per [PR Body](#pr-body), lint it with `PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py --pr-body-file <file> --repo shubhodeep1/coding-workflows` (§19: reference the project issue as `Refs #N`, never `Fixes` / `Closes` / `Resolves #N`), then open a ready-for-review PR (`draft: false`) via `mcp__github__create_pull_request` against the default branch. Never push to the default branch.
@@ -70,12 +97,13 @@ $ARGUMENTS
 
 ```
 Summary: <parsed reference; project in one phrase; verdict in one word>
+Scope: full / conformance / activation / fix-check <PR refs>
 
 Project: <issue #N — title>  (linked PRs: #…, merged? yes/no)
-Implemented: COMPLETE / PARTIAL / NOT — <evidence: file:line, merged PR#>
-Correctness: PASS / CONCERNS / FAIL — <surface: N files audited, M checks run; headline finding or "no defects found">
-Activated: YES / NO — <the gate: trigger / flag default / secret>
-Will it run automatically?: YES (trigger: <cron «expr» from default branch | push | pull_request | repository_dispatch>) / NO
+Implemented: COMPLETE / PARTIAL / NOT — <evidence: file:line, merged PR#>   (activation scope: not audited (activation scope))
+Correctness: PASS / CONCERNS / FAIL — <surface: N files audited, M checks run; headline finding or "no defects found">   (activation scope: not audited (activation scope))
+Activated: YES / NO — <the gate: trigger / flag default / secret>   (omitted in conformance scope)
+Will it run automatically?: YES (trigger: <cron «expr» from default branch | push | pull_request | repository_dispatch>) / NO   (omitted in conformance scope)
 
 Audit findings (omit only when PASS with nothing to note):
 - [BLOCKER|CONCERN] <file:line> — <the defect and why it is wrong> (EVIDENCE-BASED | HYPOTHESIS)
@@ -83,7 +111,7 @@ Audit findings (omit only when PASS with nothing to note):
 Checks run:
 - <command> — pass / fail / could-not-run (<reason>)
 
-Fix PR: <url> (branch claude/verify-activation-<slug>, N commits) / none — <no fixable findings | every finding needs a decision | could not verify>
+Fix PR: <url> (branch claude/verify-activation-<slug>, N commits) / none — <no fixable findings | every finding needs a decision | could not verify | fix-check scope (never opens one)>
 
 Fixes applied (omit when none):
 - [BLOCKER|CONCERN|GAP] <file:line> — Issue: <what was wrong>. Why it is an issue: <the acceptance criterion, CLAUDE.md rule, or runtime behaviour it broke>. Fix: <what changed> (<short-sha>). Verified by: <check that now passes>.
@@ -91,8 +119,18 @@ Fixes applied (omit when none):
 Not fixed (omit when none):
 - [BLOCKER|CONCERN|GAP] <file:line> — <reason: HYPOTHESIS | §6 rename | §10 contract | §12.D tradeoff | OPERATOR gap | could not verify> — <Q-ID when a decision would unblock it>
 
+Auto-decisions made this run (only in an `— unattended` run; omit when none):
+- AD-<n> [<stage>, <YYYY-MM-DD>] <question> — Picked: <letter> — <option>. Alternatives: <letter> — <option>; … Why: <one line>. Applied in: <fix PR | no code change>. Status: pending review
+
+Auto-decisions (for review) (full / activation scope, when the project's progress log has entries; a list, never a question):
+- AD-<n> [<stage>] <question> — Picked: <letter> — <option>. Alternatives: … Status: <pending review | confirmed | changed to <letter>>
+Reply `change AD-<n> → <letter>` to change one; everything else stands.
+
 To activate (only if not already automatic — OPERATOR steps, never performed by this command):
 1. <exact step — set REPO_VAR X=1 (read at <file:line>, default 0); add secret Y; merge <branch> to default; tag @stable; start supervisor Z>
+
+Outside fix-check scope (fix-check scope only; omit when none — never fixed, never changes the verdict):
+- [BLOCKER|CONCERN] <file:line> — <defect in code the fix PR did not touch> (EVIDENCE-BASED | HYPOTHESIS)
 
 Gaps / risks:
 - <missing implementation, defect that downgraded the verdict, unset required secret, flag default-off, cron not on default branch, consumers not dispatched>
@@ -108,7 +146,7 @@ Verdict first, fixes second: Steps 3–6 grade the project as it stands on `main
 - Every Step 4 finding classified **EVIDENCE-BASED**, BLOCKER or CONCERN — the code was read or a check was run and the defect is demonstrated. The §12.B categories apply: security, crash / data-loss, correctness defects, missing error handling at boundaries, type / contract violations, stale docs and misleading comments, latent bugs in adjacent code the audit exercised, a missing or tautological test for a criterion.
 - Every Step 5 gap tagged **`CODE-FIXABLE`** — the gate is a file in this repo (see the Step 5 list).
 
-**Never fix automatically — report it, and ask in §2 Q/A format when a decision would unblock it:**
+**Never fix automatically — report it, and ask in §2 Q/A format when a decision would unblock it** (in an `— unattended` run, the §6 / §10 / §12.D decision items below are auto-decided instead, per [Unattended Runs](#unattended-runs); every other item here is unchanged):
 - **HYPOTHESIS** findings — a fix for an unverified defect is a guess. Verify first (read more, run the check); if it cannot be verified in this run it stays a CONCERN under `Not fixed`.
 - **§6** renames, removals, or repurposing of any existing identifier; **§10** changes without an obvious contract-update path.
 - **§12.D** items: architectural refactors or new abstractions, multiple plausible fixes with material tradeoffs, behaviour changes to documented contracts (`README.md`, `agents.md`, `/db/contracts/*`), scope explosion (10+ files).
@@ -126,7 +164,7 @@ Verdict first, fixes second: Steps 3–6 grade the project as it stands on `main
 
 Refs #<N>
 
-**Verdict on the default branch before this PR:** <LIVE | DORMANT | INCOMPLETE> — Implemented: <…>, Correctness: <…>, Activated: <…>
+**Verdict on the default branch before this PR:** <LIVE | DORMANT | INCOMPLETE | CONFORMANT> (scope: <full | conformance | activation>) — Implemented: <…>, Correctness: <…>, Activated: <…>
 
 ## Findings fixed
 | # | Finding | Why it is an issue | Fix | Verified by |
@@ -135,6 +173,9 @@ Refs #<N>
 
 ## Not fixed (needs a decision or out of reach)
 - <finding> — <reason>
+
+## Auto-decisions (only in an `— unattended` run; omit when none)
+- AD-<n> — <question> — Picked: <letter> — <option>. Alternatives: … Why: <one line>
 
 ## Checks run
 - <command> — pass / fail
@@ -157,6 +198,8 @@ Steps 1–6 are read-only; Step 7 writes to this repo's fix branch and nothing e
 ## Rules
 
 - **Verdict first, then fix — and the verdict is graded against `main`.** Steps 3–6 report the project as it stands on the default branch; Step 7 then ships fixes on a branch. A fix PR does **not** upgrade the verdict: a project audited FAIL stays INCOMPLETE in this run's report, with `Fix PR:` pointing at the remedy. Re-run `/verify-activation` after the PR merges to earn the upgrade; `/deploy-activate` keeps gating on the reported verdict.
+- **`— unattended` replaces a question with a recorded pick, and does nothing else.** It auto-decides the decision items (§28), and every pick is reported as an `AD-<n>` entry. It never auto-fixes a HYPOTHESIS, an unverifiable fix, an `OPERATOR` gap, or a question with no §28-safe option. The `Auto-decisions (for review)` list is printed for the human to read, never re-asked.
+- **A scope narrows, never widens.** `— scope conformance` skips the activation check and its fixes; `— scope activation` skips the implementation and correctness audit and its fixes (see [Scope](#scope)). Without a scope the run is full, exactly as before. `— scope fix-check` audits only the named fix PRs' diffs and never opens a fix PR.
 - **Fix only what the evidence demonstrates.** EVIDENCE-BASED findings and `CODE-FIXABLE` gaps are fixed; HYPOTHESIS findings, §6 / §10 / §12.D items, and `OPERATOR` gaps are reported (see [Fix Policy](#fix-policy)). Never fix speculatively, never silently widen scope, never edit a test to pass without evidence the test is wrong, never broaden a `catch` / `except` or add a retry to mask a deterministic failure.
 - **Every fix is verified before it is pushed, and every fix is explained.** The report and the PR body carry, per fix: the issue, why it was an issue, what changed, and the check that proves it. A bare "fixed" is not acceptable.
 - **Operator activation steps are never performed by this command.** Repo-vars, secrets, default flips, merges, `@stable` tags, workflow dispatches, supervisors, and infrastructure stay under `To activate` for the operator or `/deploy-activate`.

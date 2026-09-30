@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize unselected workflow runs via gpt-5.6-luna to widen analysis coverage.
+"""Summarize unselected workflow runs via gpt-6-luna to widen analysis coverage.
 
 Runs as an optional pre-step of the Codex analysis pass in
 `.github/workflows/workflow-log-analysis.yml`. The collector writes per-step
@@ -7,7 +7,7 @@ Runs as an optional pre-step of the Codex analysis pass in
 plus a small successful-run sample (~7%); every other run in the window has
 metadata but no log content. This script picks up to `--max-summaries` of
 those unselected runs (newest-first), fetches each run's log archive from
-GitHub, and asks gpt-5.6-luna for a terse per-run summary that preserves the
+GitHub, and asks gpt-6-luna for a terse per-run summary that preserves the
 signals the downstream analyzer Codex pass looks for (outcome, failure step,
 warnings, token/API hot-spots, AI_MEMORY_TELEMETRY lines, retries).
 
@@ -48,7 +48,7 @@ except ModuleNotFoundError:
 	from scripts.openrouter_prompt_cache import format_openrouter_usage_line, is_cache_disabled
 
 
-DEFAULT_MODEL = "openai/gpt-5.6-luna"
+DEFAULT_MODEL = "openai/gpt-6-luna"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MAX_SUMMARIES = 100
 DEFAULT_TOKEN_BUDGET = 1_500_000
@@ -458,7 +458,7 @@ def _emit_telemetry(stats: dict[str, Any]) -> None:
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(
 		description=(
-			"Summarize unselected workflow runs via gpt-5.6-luna and write log_summary "
+			"Summarize unselected workflow runs via gpt-6-luna and write log_summary "
 			"fields back into workflow_log_report.json."
 		)
 	)
@@ -487,7 +487,7 @@ def build_parser() -> argparse.ArgumentParser:
 		default=DEFAULT_PER_RUN_INPUT_CHARS,
 		help="Max prompt characters per run after step head/tail truncation.",
 	)
-	parser.add_argument("--model", default=None, help="OpenRouter model id (default gpt-5.6-luna).")
+	parser.add_argument("--model", default=None, help="OpenRouter model id (default gpt-6-luna).")
 	parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="OpenRouter base URL.")
 	parser.add_argument(
 		"--timeout-seconds",

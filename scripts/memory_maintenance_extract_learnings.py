@@ -22,7 +22,7 @@ except ModuleNotFoundError:
 	from scripts.repo_root import repo_root as resolve_repo_root
 
 
-REQUESTED_MODEL = "openai/gpt-5.6-luna"
+REQUESTED_MODEL = "openai/gpt-6-luna"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DISCOVERY_FAILURE_EXIT = 10
 PROMPT_RENDER_FAILURE_EXIT = 11

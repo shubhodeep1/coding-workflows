@@ -28,6 +28,11 @@ on:
         required: false
         type: string
         default: ""
+      target_ref:
+        description: Branch to validate instead of the default branch (empty = default branch or the tracking issue's integration branch)
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -43,4 +48,5 @@ jobs:
       compose_file: ${{ inputs.compose_file || 'docker-compose.yml' }}
       validation_timeout: ${{ inputs.validation_timeout || '15' }}
       alert_msg_level: ${{ inputs.alert_msg_level || '' }}
+      target_ref: ${{ inputs.target_ref || '' }}
     secrets: inherit

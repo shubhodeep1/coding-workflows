@@ -3082,6 +3082,217 @@ def _print_json(payload: dict[str, Any] | list[Any]) -> None:
 	print(json.dumps(payload, ensure_ascii=True, sort_keys=False, indent=2))
 
 
+# ---------------------------------------------------------------------------
+# Lessons learned: causes recorded as they happen, turned into
+# lessons_learned_record.v1 payloads when the project completes.
+# ---------------------------------------------------------------------------
+
+LESSON_EVENT_KINDS = ("judge_fixup", "validation_fix", "security_finding", "stall_recovery")
+LESSON_EVENTS_MAX = 20
+LESSON_EVENT_TEXT_MAX_CHARS = 400
+LESSON_EVENT_FILES_MAX = 10
+COMPLETION_LESSON_TEXT_MAX_CHARS = 4000
+COMPLETION_LESSON_FILE_TAGS_MAX = 20
+
+_COMPLETION_LESSON_FRAMING: dict[str, tuple[str, str]] = {
+	"judge_fixup": (
+		"the wave judge filed fix-up issues because merged work missed the project spec",
+		"State these requirements explicitly in plans and issue bodies for similar work.",
+	),
+	"validation_fix": (
+		"runtime validation needed fixes before it passed",
+		"Cover these behaviours with tests or validation checks up front in similar work.",
+	),
+	"security_finding": (
+		"the security pass reported findings that needed fixes",
+		"Build these protections into plans that touch the same files.",
+	),
+	"stall_recovery": (
+		"issues stalled and needed automated recovery",
+		"Similar work may need smaller, more explicit issues for these phases.",
+	),
+}
+
+
+def _positive_int_or_none(value: Any) -> int | None:
+	try:
+		parsed = int(value)
+	except (TypeError, ValueError):
+		return None
+	return parsed if parsed > 0 else None
+
+
+def normalize_lesson_event(event: Any) -> dict[str, Any] | None:
+	"""Return a bounded, well-formed lesson event, or None when unusable.
+
+	Shape: ``{"kind", "text", "issues", "files", "cycle", "at"}``. ``kind`` must
+	be one of LESSON_EVENT_KINDS and ``text`` non-empty; text is whitespace-
+	collapsed and cut to LESSON_EVENT_TEXT_MAX_CHARS, files to
+	LESSON_EVENT_FILES_MAX unique repo-relative paths.
+	"""
+	if not isinstance(event, dict):
+		return None
+	kind = str(event.get("kind") or "").strip()
+	if kind not in LESSON_EVENT_KINDS:
+		return None
+	text = " ".join(str(event.get("text") or "").split())[:LESSON_EVENT_TEXT_MAX_CHARS]
+	if not text:
+		return None
+	issues: list[int] = []
+	for raw in event.get("issues") or []:
+		number = _positive_int_or_none(raw)
+		if number is not None and number not in issues:
+			issues.append(number)
+	files: list[str] = []
+	for raw in event.get("files") or []:
+		path = str(raw or "").strip()
+		while path.startswith("./"):
+			path = path[2:]
+		if not path or path.startswith("/") or ".." in path.split("/") or path in files:
+			continue
+		files.append(path)
+		if len(files) >= LESSON_EVENT_FILES_MAX:
+			break
+	return {
+		"kind": kind,
+		"text": text,
+		"issues": issues,
+		"files": files,
+		"cycle": _positive_int_or_none(event.get("cycle")),
+		"at": _positive_int_or_none(event.get("at")) or int(time.time()),
+	}
+
+
+def append_lesson_event(state: dict[str, Any], event: Any) -> dict[str, Any]:
+	"""Append *event* to ``state["lesson_events"]``, keeping the newest LESSON_EVENTS_MAX.
+
+	An event with the same kind, text, and issues as one already recorded is
+	not appended again (a re-run tick must not double-count). Mutates and
+	returns *state*. Raises ValueError for an unusable event.
+	"""
+	normalized = normalize_lesson_event(event)
+	if normalized is None:
+		raise ValueError("lesson event needs a known kind and non-empty text")
+	existing = [item for item in (state.get("lesson_events") or []) if isinstance(item, dict)]
+	for item in existing:
+		if (item.get("kind"), item.get("text"), item.get("issues")) == (
+			normalized["kind"],
+			normalized["text"],
+			normalized["issues"],
+		):
+			state["lesson_events"] = existing[-LESSON_EVENTS_MAX:]
+			return state
+	existing.append(normalized)
+	state["lesson_events"] = existing[-LESSON_EVENTS_MAX:]
+	return state
+
+
+def _completion_lesson_record_id(tracking_issue: int, source: str, text: str) -> str:
+	digest = hashlib.sha256(f"{tracking_issue}\n{source}\n{text}".encode("utf-8")).hexdigest()
+	return f"lesson-orchestrator-{tracking_issue}-{source.replace('_', '-')}-{digest[:16]}"
+
+
+def _completion_lesson(tracking_issue: int, source: str, text: str, files: list[str]) -> dict[str, Any]:
+	text = text[:COMPLETION_LESSON_TEXT_MAX_CHARS]
+	tags = [f"source:{source}", f"project:{tracking_issue}"]
+	for path in files[:COMPLETION_LESSON_FILE_TAGS_MAX]:
+		tag = f"file:{path}"
+		if tag not in tags:
+			tags.append(tag)
+	return {
+		"record_id": _completion_lesson_record_id(tracking_issue, source, text),
+		"lesson_kind": "project_retrospective",
+		"lesson_text": text,
+		"tags": tags,
+	}
+
+
+def _int_field(state: dict[str, Any], key: str) -> int:
+	try:
+		return max(0, int(state.get(key) or 0))
+	except (TypeError, ValueError):
+		return 0
+
+
+def build_completion_lessons(state: dict[str, Any], tracking_issue: int) -> list[dict[str, Any]]:
+	"""Turn a completed project's recorded causes and counters into lessons.
+
+	One lesson per event kind present in ``lesson_events`` (its causes, the
+	issues involved, and the files as ``file:`` tags), plus one ``summary``
+	lesson for counters no event explains: judge recovery attempts, judge
+	stall cycles, review-blocked retries, and validation / security cycles
+	beyond the first when no matching event was recorded. A project with no
+	events and no such counters yields no lessons. Deterministic: the same
+	state always gives the same lessons and record ids.
+	"""
+	title = " ".join(str(state.get("project_title") or "Orchestrator project").split())
+	prefix = f'Orchestrator project "{title}" (#{tracking_issue})'
+	events = [e for e in (normalize_lesson_event(item) for item in (state.get("lesson_events") or [])) if e]
+	lessons: list[dict[str, Any]] = []
+
+	for kind in LESSON_EVENT_KINDS:
+		kind_events = [event for event in events if event["kind"] == kind]
+		if not kind_events:
+			continue
+		what, guidance = _COMPLETION_LESSON_FRAMING[kind]
+		causes: list[str] = []
+		files: list[str] = []
+		for event in kind_events:
+			refs = ", ".join(f"#{number}" for number in event["issues"])
+			causes.append(f"{event['text']}{f' ({refs})' if refs else ''}")
+			for path in event["files"]:
+				if path not in files:
+					files.append(path)
+		text = f"{prefix}: {what} ({len(kind_events)} time(s)). Causes: {'; '.join(causes)}. {guidance}"
+		lessons.append(_completion_lesson(tracking_issue, kind, text, files))
+
+	kinds_seen = {event["kind"] for event in events}
+	counts: list[str] = []
+	recovery_count = _int_field(state, "recovery_count")
+	if recovery_count:
+		counts.append(f"{recovery_count} judge recovery attempt(s) (revert and re-plan)")
+	judge_stall_cycles = _int_field(state, "judge_stall_cycles")
+	if judge_stall_cycles:
+		counts.append(f"{judge_stall_cycles} judge stall cycle(s)")
+	review_blocked = state.get("review_blocked_retries")
+	review_blocked_total = 0
+	if isinstance(review_blocked, dict):
+		for value in review_blocked.values():
+			review_blocked_total += _positive_int_or_none(value) or 0
+	if review_blocked_total:
+		counts.append(f"{review_blocked_total} review-blocked retry(ies)")
+	validation_cycles = max(_int_field(state, "validation_completed_cycle"), _int_field(state, "validation_cycle"))
+	if validation_cycles > 1 and "validation_fix" not in kinds_seen:
+		counts.append(f"{validation_cycles} runtime validation cycles")
+	security_cycles = _int_field(state, "security_pass_cycle")
+	if security_cycles > 1 and "security_finding" not in kinds_seen:
+		counts.append(f"{security_cycles} security audit cycles")
+	if counts:
+		text = f"{prefix} completed only after {', '.join(counts)}. Similar projects may need smaller waves or more explicit issue specs."
+		lessons.append(_completion_lesson(tracking_issue, "summary", text, []))
+	return lessons
+
+
+def cmd_append_lesson_event(args: argparse.Namespace) -> int:
+	state_path = Path(args.state_file)
+	state = json.loads(state_path.read_text(encoding="utf-8"))
+	append_lesson_event(state, json.loads(args.event_json))
+	# Write-then-rename so a failure never leaves a truncated state file.
+	tmp_path = state_path.with_name(f"{state_path.name}.lesson-event.tmp")
+	tmp_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+	os.replace(tmp_path, state_path)
+	return 0
+
+
+def cmd_completion_lessons(args: argparse.Namespace) -> int:
+	state = json.loads(Path(args.state_file).read_text(encoding="utf-8"))
+	tracking_issue = _positive_int_or_none(args.tracking_issue)
+	if tracking_issue is None:
+		raise ValueError("--tracking-issue must be a positive integer")
+	_print_json({"lessons": build_completion_lessons(state, tracking_issue)})
+	return 0
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
 	path = Path(args.input_file).resolve()
 	with path.open("r", encoding="utf-8") as f:
@@ -3695,6 +3906,16 @@ def build_parser() -> argparse.ArgumentParser:
 	p_caps.add_argument("--implementing-threshold-minutes", type=int, default=None)
 	p_caps.add_argument("--now-ts", type=int, default=None)
 	p_caps.set_defaults(func=cmd_concurrency_caps)
+
+	p_lesson = subparsers.add_parser("append-lesson-event", help="Record a lesson event (cause) in orchestrator state, in place")
+	p_lesson.add_argument("--state-file", required=True)
+	p_lesson.add_argument("--event-json", required=True)
+	p_lesson.set_defaults(func=cmd_append_lesson_event)
+
+	p_completion_lessons = subparsers.add_parser("completion-lessons", help="Print the lessons a completed project yields")
+	p_completion_lessons.add_argument("--state-file", required=True)
+	p_completion_lessons.add_argument("--tracking-issue", required=True)
+	p_completion_lessons.set_defaults(func=cmd_completion_lessons)
 
 	return parser
 

@@ -277,7 +277,7 @@ def test_success_preserves_discovery_request_normalization_and_telemetry(
 	assert request_call["request"].get_header("Authorization") == "Bearer super-secret-api-key"
 	assert request_call["request"].get_header("Content-type") == "application/json"
 	assert request_body == {
-		"model": "openai/gpt-5.6-luna",
+		"model": "openai/gpt-6-luna",
 		"messages": [{"role": "user", "content": "rendered prompt"}],
 		"temperature": 0.0,
 		"max_tokens": 1200,

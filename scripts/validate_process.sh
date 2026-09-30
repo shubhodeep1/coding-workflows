@@ -133,17 +133,17 @@ if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
   TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
 fi
 
-MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.6-sol}"
-# Defaults to xhigh to match the repo-wide gpt-5.6-sol reasoning-level
+MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-6-sol}"
+# Defaults to high to match the repo-wide gpt-6-sol reasoning-level
 # policy and `validate.yml`'s workflow-level `THINKING_LEVEL_VALIDATE ||
-# 'xhigh'`. Earlier revisions defaulted to `medium`/`none`; `none` is
+# 'high'`. Earlier revisions defaulted to `medium`/`none`; `none` is
 # not in `scripts/codex_model_catalog.json`'s `supported_reasoning_levels`
-# for the gpt-5.x family, so the standalone / local invocation default
+# for the default gpt-6-sol model, so the standalone / local invocation default
 # is kept aligned with the workflow env to avoid silent drift.
-MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
+MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-high}"
 # Discover is a low-volume execution-heavy task (read repo metadata,
-# emit `.ai/validate.yml` hints). It now defaults to `xhigh` to match
-# the repo-wide gpt-5.6-sol reasoning-level policy; the per-phase override
+# emit `.ai/validate.yml` hints). It now defaults to `high` to match
+# the repo-wide gpt-6-sol reasoning-level policy; the per-phase override
 # knob is retained so operators can drop discover's level independently
 # of the parent MODEL_REASONING_EFFORT (mirrors the per-phase pattern
 # used in implement.yml — MODEL_REPAIR_REASONING_EFFORT,
@@ -151,17 +151,17 @@ MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
 # patches ~/.codex/config.toml before its codex exec call and restores
 # `MODEL_REASONING_EFFORT` after — see the "Validation hint discovery
 # attempt" loop further down.
-MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-xhigh}"
+MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-high}"
 # `none` is intentionally rejected here: the parent MODEL_REASONING_EFFORT
 # rationale above cites the catalog (`scripts/codex_model_catalog.json`)
-# not advertising `none` for the gpt-5.x family, so accepting it for the
+# not advertising `none` for the default gpt-6-sol model, so accepting it for the
 # per-phase override would be inconsistent. To use `none` everywhere,
 # update the catalog first.
 case "${MODEL_REASONING_EFFORT_DISCOVER}" in
   xhigh|high|medium|low) ;;
   *)
-    echo "::warning::Invalid MODEL_REASONING_EFFORT_DISCOVER='${MODEL_REASONING_EFFORT_DISCOVER}'. Falling back to 'xhigh'."
-    MODEL_REASONING_EFFORT_DISCOVER="xhigh"
+    echo "::warning::Invalid MODEL_REASONING_EFFORT_DISCOVER='${MODEL_REASONING_EFFORT_DISCOVER}'. Falling back to 'high'."
+    MODEL_REASONING_EFFORT_DISCOVER="high"
     ;;
 esac
 CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
@@ -2013,6 +2013,9 @@ run_template_validation_harness_renderer()
 	local templates_root="workflow-templates/validation-harness"
 	local renderer_summary=""
 	local python3_bin="python3"
+	local renderer_python="${RUNTIME_DIR:-}/renderer-venv/bin/python"
+	local renderer_empty_dir="${RUNTIME_DIR:-}/renderer-empty"
+	local renderer_workspace=""
 
 	HARNESS_GENERATOR_MODE="templates"
 
@@ -2034,33 +2037,64 @@ run_template_validation_harness_renderer()
 		return 15
 	fi
 
+	# Do not run even diagnostic Python probes from the credentialed workspace.
+	if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${renderer_empty_dir}" ]; then
+		printf '%s\n' 'Trusted renderer runtime is unavailable; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
 	python3_bin="$(command -v python3 2>/dev/null || printf '%s' 'python3')"
+	if [ ! -f "${renderer_python}" ]; then
+		printf '%s\n' 'Isolated renderer Python is unavailable; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
 	{
 		printf '\n--- python3 environment probe ---\n'
-		printf 'command -v python3: %s\n' "$(command -v python3 2>&1 || echo 'not found')"
-		printf 'python3 -V: %s\n' "$("${python3_bin}" -V 2>&1 || echo 'failed')"
-		"${python3_bin}" -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))' 2>&1 \
+		printf 'command -v python3: %s\n' "${python3_bin}"
+		printf 'renderer python3 -V: %s\n' "$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -V 2>&1 || echo 'failed')"
+		(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))') 2>&1 \
 			|| printf '(python3 -c probe failed)\n'
 		printf -- '--- end python3 environment probe ---\n'
 	} >> "${GENERATE_LOG_FILE}" 2>&1
-	if ! "${python3_bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
-		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $("${python3_bin}" -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
+	if ! (cd "${renderer_empty_dir}" && "${renderer_python}" -I -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)') >/dev/null 2>&1; then
+		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(cd "${renderer_empty_dir}" && "${renderer_python}" -I -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
 		return 17
 	fi
 	if [ "${VALIDATION_RENDERER_DEPENDENCIES_READY:-true}" != "true" ]; then
 		printf '%s\n' 'Template renderer dependency setup did not succeed; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
 		return 14
 	fi
-	if ! "${python3_bin}" -c 'import yaml, jsonschema, jinja2' >/dev/null 2>&1; then
-		printf '%s\n' 'Template renderer dependencies (yaml, jsonschema, jinja2) are not importable by python3; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+	renderer_workspace="$(pwd -P)"
+	# Resolve all paths before leaving the workspace. -I removes both the script
+	# directory and PYTHON* / user-site paths from the renderer import search.
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c '
+import importlib.util
+import pathlib
+import sys
+import sysconfig
+environment = pathlib.Path(sys.argv[1]).resolve()
+if pathlib.Path(sys.prefix).resolve() != environment:
+    raise SystemExit("Renderer interpreter is not the isolated environment")
+roots = [pathlib.Path(sysconfig.get_path(key)).resolve() for key in ("purelib", "platlib")]
+if not all(root.is_relative_to(environment) for root in roots):
+    raise SystemExit("Renderer package paths are not in the isolated environment")
+for name in ("yaml", "jsonschema", "jinja2"):
+    spec = importlib.util.find_spec(name)
+    if spec is None or spec.origin is None or not any(pathlib.Path(spec.origin).resolve().is_relative_to(root) for root in roots):
+        raise SystemExit("Renderer dependency origin is not in the isolated environment: " + name)
+    if spec.submodule_search_locations and not all(any(pathlib.Path(location).resolve().is_relative_to(root) for root in roots) for location in spec.submodule_search_locations):
+        raise SystemExit("Renderer dependency search path is not in the isolated environment: " + name)
+import yaml, jsonschema, jinja2
+' "${RUNTIME_DIR}/renderer-venv" 2>&1)"; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+		printf '%s\n' 'Template renderer dependencies (yaml, jsonschema, jinja2) are unavailable in the isolated environment; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
 		return 14
 	fi
 
-	if ! renderer_summary="$("${python3_bin}" "${renderer_script}" \
-		--manifest "${manifest_path}" \
-		--schema "${schema_path}" \
-		--templates-root "${templates_root}" \
-		--output-root validation 2>&1)"; then
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I "${renderer_workspace}/${renderer_script}" \
+		--manifest "${renderer_workspace}/${manifest_path}" \
+		--schema "${renderer_workspace}/${schema_path}" \
+		--templates-root "${renderer_workspace}/${templates_root}" \
+		--output-root "${renderer_workspace}/validation" 2>&1)"; then
 		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
 		return 14
 	fi

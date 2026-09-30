@@ -15,3 +15,40 @@ jobs:
   cancel:
     uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@main
     secrets: inherit
+
+  heal-pr-reconcile:
+    # Workflow failure heal files a review/autofix fix on the failing PR's own
+    # head branch, so the heal PR is stacked on it. When that source PR
+    # closes, close its heal PRs (source not merged: the heal branch carries
+    # the rejected commits) or move the heal commits onto the source base and
+    # re-point them (source merged). PR #4349 was stranded on the closed
+    # PR #4323's branch. See scripts/workflow_failure_heal_pr_reconcile.sh.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && vars.WORKFLOW_HEAL_PR_RECONCILE_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      # GitHub's job token only reads; checkout and reconciliation writes use GH_PAT.
+      contents: read
+    concurrency:
+      group: heal-pr-reconcile-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      REPOSITORY: ${{ github.repository }}
+      SOURCE_PR_NUMBER: ${{ github.event.pull_request.number }}
+      SOURCE_PR_MERGED: ${{ github.event.pull_request.merged }}
+      SOURCE_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      SOURCE_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      SOURCE_BASE_REF: ${{ github.event.pull_request.base.ref }}
+      WORKFLOW_HEAL_PR_RECONCILE_ENABLED: ${{ vars.WORKFLOW_HEAL_PR_RECONCILE_ENABLED || 'true' }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Reconcile heal PRs of the closed pull request
+        continue-on-error: true
+        run: PYTHONDONTWRITEBYTECODE=1 bash scripts/workflow_failure_heal_pr_reconcile.sh

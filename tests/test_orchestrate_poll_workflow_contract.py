@@ -113,7 +113,7 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 	assert "STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}" in wf
 	assert "for security_prompt in mode-security-audit.txt mode-judge-security-pass-exhaustion.txt; do" in wf
 	assert "_templates/mode-judge-security-pass-exhaustion.txt" in wf
-	assert "WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}" in wf
+	assert "WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}" in wf
 	for asset in (
 		"codex_heartbeat.sh",
 		"security_audit.sh",

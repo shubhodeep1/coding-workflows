@@ -11,7 +11,12 @@ that failure classification is correct.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -30,7 +35,8 @@ FULL_RM_LINE = (
 
 
 def _workflow() -> str:
-    return REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
+    # Moved step bodies (scripts/review_autofix_step_*.sh) inlined again.
+    return expanded_review_autofix_text()
 
 
 def _section(start_marker: str, end_marker: str) -> str:

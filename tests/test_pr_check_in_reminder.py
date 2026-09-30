@@ -141,10 +141,25 @@ def test_evaluate_reminds_after_pr_write_tools(tool_name):
 	assert context == hook.REMINDER
 	assert "§26" in context
 	assert "send_later" in context
-	assert "delay_minutes=180" in context
-	assert "Haiku" in context
+	assert "delay_minutes=60" in context
+	assert "delay_minutes=180" not in context
+	assert "Sonnet" in context
 	assert "create_session" in context
+	# Low effort needs the two-step start: `/effort low` alone, then a
+	# one-shot trigger that delivers the instructions.
+	assert "`/effort low` alone" in context
+	assert "create_trigger with persistent_session_id" in context
 	assert "Never subscribe" in context
+	# The terminal verdict is handed back so the pushing session writes the report.
+	assert "create_trigger" in context
+	assert "update_trigger" in context
+	assert "persistent_session_id = this session" in context
+	assert "run_once_at = now + 7 days" in context
+	assert "hand-back" in context
+	assert "never its prompt" in context
+	assert "writes the action-needed report" in context
+	assert "Never use fire_trigger for the hand-back" in context
+	assert "stale_routines.py" in context
 
 
 @pytest.mark.parametrize("command", PUSH_COMMANDS)
@@ -354,12 +369,25 @@ def test_claude_md_documents_the_rule():
 	assert f"`{hook.SETTINGS_MATCHER}`" in text
 	assert "tests/test_pr_check_in_reminder.py" in text
 	joined = " ".join(text.split())
-	assert "`delay_minutes: 180`" in joined
-	assert "`model: claude-haiku-4-5-20251001`" in joined
-	assert '`model: "haiku"`' in joined
+	assert "`delay_minutes: 60`" in joined
+	assert "`delay_minutes: 180`" not in joined
+	assert "arms an hourly status check-in" in joined
+	assert "`model: claude-sonnet-5`" in joined
+	assert "the prompt `/effort low` **and nothing else**" in joined
+	assert "Call `create_trigger` with `persistent_session_id` = the checker's session id" in joined
+	assert '`model: "sonnet"`' in joined
 	assert ".claude/scripts/check_in_status.py" in joined
 	assert "`/implement-plan-claude` is the exception" in joined
 	assert "PushNotification" in joined
+	# The pushing session, not the Sonnet checker, writes the terminal report.
+	assert "`persistent_session_id` = this session's id" in joined
+	assert "`run_once_at` = now + 7 days" in joined
+	assert "When the hand-back wakes the pushing session, it first runs" in joined
+	assert "The pushing session writes the report (the checker writes it only in the §26.C step 5 fallback)" in joined
+	assert "(pushing session unreachable)" in joined
+	assert "`fire_trigger` is never used for it" in joined
+	assert "The checker changes only the Routine's `run_once_at`, never its prompt" in joined
+	assert "carries no verdict" in joined
 	assert (
 		"fails open with a `systemMessage` warning when the hook payload cannot be read, "
 		"is invalid or non-object JSON, or evaluation raises an internal exception."

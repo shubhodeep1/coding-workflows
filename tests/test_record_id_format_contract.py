@@ -16,6 +16,10 @@ CONTRACTUAL_RECORD_ID_PATTERN = re.compile(
 	r"[A-Za-z0-9:-])?)_(?P<timestamp>\d{14})_(?P<suffix>[0-9a-f]{10})$"
 )
 HEX_SUFFIX_PATTERN = re.compile(r"^[0-9a-f]{10}$")
+DETERMINISTIC_RECORD_ID_PATTERN = re.compile(
+	r"^(?P<prefix>[A-Za-z0-9:-](?:[A-Za-z0-9_.:-]*"
+	r"[A-Za-z0-9:-])?)-(?P<suffix>[0-9a-f]{24})$"
+)
 
 if str(REPO_ROOT) not in sys.path:
 	sys.path.insert(0, str(REPO_ROOT))
@@ -63,6 +67,21 @@ def test_make_record_id_preserves_current_sanitization_behavior() -> None:
 		record_id_value = ai_memory_lib.make_record_id(prefix_input)
 		prefix_part, _, _ = _assert_record_id_tail(record_id_value)
 		assert prefix_part == expected_prefix, f"{prefix_input!r} produced {prefix_part=}"
+
+
+def test_make_deterministic_record_id_is_stable_and_uses_its_alongside_format() -> None:
+	first = ai_memory_lib.make_deterministic_record_id(
+		"lesson-implement-plan", "sample", "conformance", "Text."
+	)
+	assert first == ai_memory_lib.make_deterministic_record_id(
+		"lesson-implement-plan", "sample", "conformance", "Text."
+	)
+	assert first != ai_memory_lib.make_deterministic_record_id(
+		"lesson-implement-plan", "sample", "security", "Text."
+	)
+	match = DETERMINISTIC_RECORD_ID_PATTERN.fullmatch(first)
+	assert match is not None
+	assert match.group("prefix") == "lesson-implement-plan"
 
 
 def main() -> int:

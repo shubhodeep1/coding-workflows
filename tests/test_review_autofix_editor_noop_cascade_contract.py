@@ -298,7 +298,7 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 	# Assert the behaviour, not one code shape, so a cache-buster-preserving
 	# refactor does not trip this guard while a regression to the base prompt
 	# still does.
-	assert 'opencode_run_cmd "$@"' in text
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run\n    "${prompt_file}"' in text
 
 
 	def _shell_function_blocks(script_text: str) -> dict[str, str]:

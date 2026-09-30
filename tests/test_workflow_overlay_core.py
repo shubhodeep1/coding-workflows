@@ -316,7 +316,7 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 		workflow_text = workflow_path.read_text(encoding="utf-8")
 		if workflow_path.name == "review_autofix.yml":
 			assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in workflow_text
-			assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in workflow_text
+			assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in workflow_text
 			assert 'bash "${helper}"' in workflow_text
 			assert 'bash "${helper}" validate' not in workflow_text
 			assert 'if [ "${1:-}" = "validate" ]; then\n\tmain_validate "$@"\nelse\n\tstage_review_runtime_support\nfi' in stage_helper_text
@@ -326,7 +326,10 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 		assert "load_workflow_overlay.py" in workflow_text, workflow_path
 		assert "workflow_overlay.v1.json" in workflow_text, workflow_path
 		if workflow_path.name == "validate.yml":
-			assert 'bash "${helper_path}" validate --manifest "${manifest_path}"' in workflow_text
+			# #4463 runs the staging helper from the trusted support checkout,
+			# never from the (possibly explicit target_ref) repo checkout.
+			assert 'WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"' in workflow_text
+			assert 'bash "${helper_path}" validate --manifest "${manifest_path}"' not in workflow_text
 			assert "WORKFLOW.md overlay is opt-in by file presence" in stage_helper_text
 			assert '--github-env "${GITHUB_ENV}"' in stage_helper_text
 		else:
@@ -340,7 +343,7 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 	assert 'bash "${helper}"' in review_autofix_text
 	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py"' in stage_helper_text
 	assert '--schema-path "${SUPPORT_AI_MEMORY_DIR}/schemas/workflow_overlay.v1.json"' in stage_helper_text
-	assert 'bash "${helper_path}" validate --manifest "${manifest_path}"' in (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text(encoding="utf-8")
+	assert 'WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"' in (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text(encoding="utf-8")
 	for snippet in (
 		"python3 scripts/load_workflow_overlay.py",
 		'--repo-root "${REPO_ROOT}"',

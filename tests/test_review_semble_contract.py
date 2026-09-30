@@ -185,7 +185,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert "EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}" in workflow
 	assert "UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}" in workflow
 	assert 'helper=".codex-workflow-src/scripts/stage_workflow_support.sh"' in stage_step_block
-	assert 'helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"' in stage_step_block
+	assert 'helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"' not in stage_step_block
 	assert 'WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \\' in stage_step_block
 	assert 'bash "${helper}"' in stage_step_block
 	assert 'Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src}' in stage_step_block
@@ -215,7 +215,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert "REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-\n    render_prompt.py" in workflow
 	assert "for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do" in stage_step_block
 	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then' in stage_step_block
-	assert 'Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it).' in stage_step_block
+	assert 'Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (verified stage_workflow_support.sh at ${SCRIPT_REF} did not stage it).' in stage_step_block
 	assert 'for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}; do' in preflight_block
 	assert 'check_required_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
 	assert 'for f in ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do' in preflight_block
@@ -294,7 +294,7 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	# index build now and writes SEMBLE_INDEX_AVAILABLE=true on success.
 	assert 'wrapper_script=""' in index_block
 	assert 'wrapper_script="${SUPPORT_SCRIPTS_DIR}/build_semble_wrapper.sh"' in index_block
-	assert 'wrapper_script="scripts/build_semble_wrapper.sh"' in index_block
+	assert 'wrapper_script="scripts/build_semble_wrapper.sh"' not in index_block
 	assert 'bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true' in index_block
 	assert "build_semble_wrapper: Semble wrapper unavailable:" in index_block
 	assert '"${SEMBLE_BIN_PATH}" index . --out "${SEMBLE_INDEX_PATH}"' not in index_block
@@ -392,7 +392,7 @@ def test_reviewer_checklist_prompt_contract_and_gate() -> None:
 	assert "REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"' in stage_helper
-	assert 'src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"' in stage_helper
+	assert 'src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"' not in stage_helper
 	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"' in stage_helper
 	assert 'review-reviewer-checklist.txt not found in checked-out support sources' in stage_helper
 	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-reviewer-checklist.txt"' in reviewers

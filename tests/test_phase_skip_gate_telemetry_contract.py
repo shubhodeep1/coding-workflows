@@ -3,7 +3,13 @@
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+import subprocess
+import tempfile
+
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -51,7 +57,60 @@ def test_clarify_route_emits_stable_gate_telemetry() -> None:
 	block = _step_block(CLARIFY_WF, "Decide clarify route")
 
 	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}" in block
+	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=untrusted_issue_author outcome=skip issue=${ISSUE_NUMBER}" in block
 	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}" in block
+	assert "ISSUE_AUTHOR_TRUSTED" in block
+	assert "ISSUE_META_FILE" in block
+	assert "EVENT_ACTION" in block
+	label_block = _step_block(CLARIFY_WF, "Set clarification phase label")
+	fast_block = _step_block(CLARIFY_WF, "Orchestrator-managed fast path")
+	assert "steps.clarify_route.outputs.orchestrator_fast_path == 'true'" in label_block
+	assert "steps.clarify_route.outputs.orchestrator_fast_path == 'true'" in fast_block
+
+
+def test_clarify_opened_route_checks_fetched_provenance() -> None:
+	workflow = yaml.safe_load(_read(CLARIFY_WF))
+	step = next(step for step in workflow["jobs"]["clarify"]["steps"] if step.get("name") == "Decide clarify route")
+	with tempfile.TemporaryDirectory() as workdir:
+		root = Path(workdir)
+		meta_path = root / "issue.json"
+		output_path = root / "output"
+		cases = [
+			("issues", "opened", "User", "OWNER", "maintainer", False, "open", False, False),
+			("issues", "opened", "User", "MEMBER", "maintainer", True, "open", True, True),
+			("issues", "opened", "User", "COLLABORATOR", "maintainer", False, "open", False, False),
+			("issues", "opened", "Bot", "NONE", "github-actions[bot]", True, "open", True, True),
+			("issues", "opened", "User", "NONE", "outsider", False, "open", True, False),
+			("issues", "opened", "Bot", "OWNER", "other[bot]", True, "open", True, False),
+			("issues", "opened", "User", "OWNER", "github-actions[bot]", True, "open", True, True),
+			("issues", "opened", None, None, None, True, "open", True, False),
+			("issues", "opened", "User", "OWNER", "maintainer", True, "closed", True, False),
+			("issue_comment", "created", "User", "NONE", "outsider", False, "open", False, False),
+		]
+		for event_name, event_action, user_type, association, login, orchestrator, state, skip, fast_path in cases:
+			payload = {"state": state, "user": {"type": user_type, "login": login}, "labels": [], "author_association": association}
+			if orchestrator:
+				payload["labels"] = [{"name": "ai:orchestrator-managed"}]
+			meta_path.write_text(json.dumps(payload), encoding="utf-8")
+			output_path.write_text("", encoding="utf-8")
+			env = os.environ.copy()
+			for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+				env.pop(name, None)
+			env.update({
+				"ISSUE_META_FILE": str(meta_path),
+				"GITHUB_OUTPUT": str(output_path),
+				"EVENT_NAME": event_name,
+				"EVENT_ACTION": event_action,
+				"COMMENT_BODY": "/reclarify" if event_name == "issue_comment" else "",
+				"RUN_ID": "1",
+				"ISSUE_NUMBER": "123",
+			})
+			result = subprocess.run(["bash", "-c", step["run"]], env=env, text=True, capture_output=True, check=True)
+			outputs = output_path.read_text(encoding="utf-8")
+			assert f"skip_codex={str(skip).lower()}" in outputs, result.stdout
+			assert f"orchestrator_fast_path={str(fast_path).lower()}" in outputs, result.stdout
+			if event_name == "issues" and association is None:
+				assert "reason=untrusted_issue_author" in result.stdout
 
 
 def test_plan_gate_steps_emit_stable_skip_and_defer_telemetry() -> None:

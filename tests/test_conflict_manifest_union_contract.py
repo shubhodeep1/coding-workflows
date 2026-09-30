@@ -96,12 +96,18 @@ def test_prepare_names_the_manifest_and_kill_switch() -> None:
 
 def test_prepare_preserves_separate_resolver_path_classes() -> None:
 	text = _prepare_text()
+	resolve_text = RESOLVE.read_text(encoding="utf-8")
 	initial_snapshot = 'RESOLVER_INITIAL_UNMERGED_PATHS_FILE="${RUNTIME_DIR}/resolver_initial_unmerged_paths.txt"'
 	fingerprint_snapshot = 'RESOLVER_FINGERPRINT_ONLY_PATHS_FILE="${RUNTIME_DIR}/resolver_fingerprint_only_paths.txt"'
 	assert initial_snapshot in text
 	assert fingerprint_snapshot in text
 	assert text.index(initial_snapshot) < text.index("# Deterministic union-merge")
 	assert 'cp "${_fp_new_tmp}" "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}"' in text
+	assert initial_snapshot in resolve_text
+	assert fingerprint_snapshot in resolve_text
+	assert 'wc -l < "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}"' in resolve_text
+	assert 'wc -l < "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}"' in resolve_text
+	assert "Resolver path classification: initial_unmerged=" in resolve_text
 
 
 def test_workflows_register_manifest_union_contract_test() -> None:

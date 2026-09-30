@@ -23,6 +23,8 @@ ALLOWLIST_EXCEPTIONS = {
 	"audit_consumer_drift.yml": "Consumer-wrapper drift audit is scheduled/manual repository maintenance, not an orchestrator issue-phase checkout path.",
 	"cancel_on_pr_close.yml": "PR-close cleanup cancels branch runs and has no orchestrator issue-phase checkout.",
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",
+	"claude-issue-intake.yml": "Claude issue intake is repository_dispatch automation that queues the issue for the Claude issue pickup from the default branch; it runs no orchestrator issue phase and reads no issue metadata into a checkout ref.",
+	"claude-issue-queue-watchdog.yml": "Claude issue queue watchdog is scheduled default-branch automation that labels stale queue issues; it runs no orchestrator issue phase and reads no issue metadata into a checkout ref.",
 	"integration-pr-readiness.yml": "Integration-PR readiness check runs on pull_request refs and posts commit status metadata, not orchestrator issue-phase checkout.",
 	"issue_pr_status.yml": "Issue/PR status utility workflow does not execute orchestrator issue phases.",
 	"lint-plan-archival.yml": "Plan-archival lint validates pull_request body/diff state rather than orchestrator issue-phase integration refs.",
@@ -32,6 +34,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"orchestrate.yml": "Project bootstrap workflow has no integration-branch metadata at checkout time.",
 	"orchestrate_poll.yml": "Poller handles multiple tracking issues per run; a single checkout integration ref is undefined.",
 	"review_autofix.yml": "PR review/autofix operates on PR refs rather than orchestrator integration metadata.",
+	"review_autofix_sweep.yml": "The claude-pr-catch-all job checks out the default branch for scripts/claude_pr_sweep.py and the consumer registry; it reads PR state over the API and never checks out an issue or integration ref.",
 	"security-audit.yml": "Scheduled/manual default-branch security audit is a source-repo maintenance workflow, not an orchestrator issue-phase checkout path.",
 	"sync_ai_labels.yml": "Repository label-sync maintenance manages ai:* labels and does not execute orchestrator issue phases.",
 	"test-and-mark-stable.yml": "Release test workflow checks specific refs/tags and is outside orchestrator phase execution.",
@@ -49,6 +52,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"auto-release-stable.yml": "Scheduled stable-branch release check operates on repo refs (stable branch vs stable tag), not tracking-issue metadata.",
 	"workflow_failure_heal.yml": "Escalation reporter checks out the repo only to read consumer wrapper release pins and dispatches upstream; it executes no orchestrator issue phase.",
 	"workflow-failure-heal-intake.yml": "Heal intake is repository_dispatch / workflow_run issue-filing automation on the default branch, not an orchestrator issue-phase checkout path.",
+	"internal-cancel-on-pr-close.yml": "Heal PR reconcile checks out main on pull_request close to merge or close heal PRs of the closed PR; it executes no orchestrator issue phase.",
 }
 
 
@@ -107,14 +111,22 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 			checkout_resolver_step = "- name: Resolve checkout ref"
 			checkout_resolver_id = "id: checkout_ref"
 		else:
-			checkout_ref = "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+			# validate.yml authorizes an explicit `target_ref` against a
+			# project PR and pins its head SHA, which wins over the tracking
+			# issue's integration branch.
+			ref_expression = (
+				"steps.authorized_target.outputs.sha || steps.refctx.outputs.ref || github.event.repository.default_branch"
+				if workflow_name == "validate.yml"
+				else "steps.refctx.outputs.ref || github.event.repository.default_branch"
+			)
+			checkout_ref = f"ref: ${{{{ {ref_expression} }}}}"
 			resolved_ref_name = {
 				"clarify.yml": "CLARIFY_RESOLVED_REF",
 				"orchestrate_clarify_respond.yml": "ORCHESTRATE_CLARIFY_RESOLVED_REF",
 				"plan.yml": "PLAN_RESOLVED_REF",
 				"validate.yml": "VALIDATE_RESOLVED_REF",
 			}[workflow_name]
-			resolved_ref_env = f"{resolved_ref_name}: ${{{{ steps.refctx.outputs.ref || github.event.repository.default_branch }}}}"
+			resolved_ref_env = f"{resolved_ref_name}: ${{{{ {ref_expression} }}}}"
 			resolved_ref_log = f'echo "Resolved ref: ${{{resolved_ref_name}}}"'
 			unsafe_resolved_ref_log = "echo \"Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
 			resolved_base_env = ""

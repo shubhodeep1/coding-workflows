@@ -396,6 +396,115 @@ def test_sweep_emits_summary_line():
 	assert "Noop-suspicious recovery complete" in sweep
 
 
+CAP_SKIP_START = "# Fingerprint-cap skip (see the sweep header)."
+CAP_SKIP_END = "_noop_dispatch_rc=0"
+CAP_HEAD = "d0c5b24683522700e6e5aaa19f2d7052715c684b"
+
+
+def _cap_skip_block() -> str:
+	"""Return the Step 3a fingerprint-cap skip snippet, verbatim."""
+	sweep = _sweep_block()
+	start = sweep.find(CAP_SKIP_START)
+	assert start != -1, "Step 3a must carry the fingerprint-cap skip block"
+	end = sweep.find(CAP_SKIP_END, start)
+	assert end != -1
+	return sweep[start:end]
+
+
+def _run_cap_skip(comments: list, commits: list, login: str | None) -> tuple[str, int]:
+	"""Run the verbatim skip snippet inside a one-iteration loop.
+
+	`gh_retry` / `_safe_gh_jq` are stubbed; `login=None` makes the
+	identity lookup fail. Returns (stdout, GET /user call count)."""
+	import json
+	import subprocess
+	import tempfile
+
+	with tempfile.TemporaryDirectory() as tmp:
+		calls = Path(tmp) / "calls"
+		script = f"""
+set -uo pipefail
+gh_retry() {{ "$@"; }}
+_safe_gh_jq() {{
+	echo x >> {json.dumps(str(calls))}
+	{"return 1" if login is None else f"printf '%s' {json.dumps(login)}"}
+}}
+N_PR=4332
+N_NOOP_COUNT=2
+NOOP_MAX_RETRIES=3
+NOOP_RECOVERY_CAP_SKIPPED=0
+NOOP_CAP_TRUSTED_LOGIN=""
+NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
+N_COMMENTS_JSON={json.dumps(json.dumps(comments))}
+N_COMMITS_JSON={json.dumps(json.dumps(commits))}
+for _pr in a b; do
+{_cap_skip_block()}
+	echo "DISPATCH pr=${{N_PR}}"
+done
+echo "SKIPPED=${{NOOP_RECOVERY_CAP_SKIPPED}}"
+"""
+		result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+		call_count = len(calls.read_text().splitlines()) if calls.exists() else 0
+		return result.stdout, call_count
+
+
+def _cap_comment(login: str, head: str = CAP_HEAD) -> dict:
+	return {
+		"user": {"login": login},
+		"body": f"**AI review/autofix stopped: identical failure repeated**\n<!-- review-autofix-failure-cap:v1 head={head} fp={'a' * 64} reason=editor_empty_noop count=3 -->",
+	}
+
+
+def test_cap_skip_suppresses_redispatch_when_cap_applied_on_head():
+	"""PR #4332 regression: a trusted cap marker on the current head means
+	the gate will end every dispatch, so the sweep must not re-dispatch
+	(or alert) on every cycle. The identity lookup is issued once and
+	cached across PRs."""
+	out, calls = _run_cap_skip([_cap_comment("Shubhodeep1")], [{"sha": "0" * 40}, {"sha": CAP_HEAD}], "shubhodeep1")
+	assert "DISPATCH" not in out, out
+	assert f"NOOP_RECOVERY_SKIP_FINGERPRINT_CAP pr=4332 head={CAP_HEAD} count=2 max=3" in out, out
+	assert "SKIPPED=2" in out, out
+	assert calls == 1, f"GET /user must be issued once per cycle, got {calls}"
+
+
+def test_cap_skip_ignores_marker_for_older_head():
+	"""A push creates a new head; a cap marker for the old head must not
+	block recovery, and no identity lookup is spent on it."""
+	out, calls = _run_cap_skip([_cap_comment("shubhodeep1", head="1" * 40)], [{"sha": CAP_HEAD}], "shubhodeep1")
+	assert out.count("DISPATCH") == 2, out
+	assert calls == 0
+
+
+def test_cap_skip_ignores_untrusted_marker_author():
+	"""A marker copied into a comment by another user must not suppress
+	recovery."""
+	out, _ = _run_cap_skip([_cap_comment("mallory")], [{"sha": CAP_HEAD}], "shubhodeep1")
+	assert out.count("DISPATCH") == 2, out
+
+
+def test_cap_skip_fails_open_when_identity_unresolvable():
+	"""Identity lookup failure keeps the legacy re-dispatch and is not
+	retried for every PR in the same cycle."""
+	out, calls = _run_cap_skip([_cap_comment("shubhodeep1")], [{"sha": CAP_HEAD}], None)
+	assert out.count("DISPATCH") == 2, out
+	assert "fingerprint-cap skip disabled this cycle" in out
+	assert calls == 1
+
+
+def test_cap_skip_fails_open_without_head_sha():
+	out, calls = _run_cap_skip([_cap_comment("shubhodeep1")], [], "shubhodeep1")
+	assert out.count("DISPATCH") == 2, out
+	assert calls == 0
+
+
+def test_cap_skip_marker_literal_matches_workflow():
+	"""The sweep must look for the exact marker prefix the workflow's
+	fingerprint-cap-block job posts."""
+	wf = _workflow_text()
+	assert "<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} " in wf
+	assert "<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA} " in _cap_skip_block()
+
+
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
 	# tests via that pattern rather than pytest discovery, so without

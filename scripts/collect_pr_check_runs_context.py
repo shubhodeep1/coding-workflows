@@ -29,7 +29,7 @@ BACKOFF_CAP_SECS = 120
 DEFAULT_LOG_TAIL_BYTES = 16384
 MAX_LOG_TAIL_BYTES = 131072
 LOG_TAIL_LINES = 200
-FAILURE_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled", "stale"}
+FAILURE_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled", "stale", "startup_failure"}
 
 
 def _required_env(name: str) -> str:
@@ -179,7 +179,9 @@ def _build_wait_view(raw_text: str, self_run_id: str) -> list[dict[str, Any]]:
 	wait_view: list[dict[str, Any]] = []
 	for run in _extract_runs(raw_text):
 		status = "" if run.get("status") is None else str(run.get("status"))
-		if status not in ("queued", "in_progress"):
+		# GitHub also returns requested/pending/waiting. A completed-only
+		# snapshot is required before a clean Claude-fixer review may merge.
+		if status == "completed":
 			continue
 		details_url = "" if run.get("details_url") is None else str(run.get("details_url"))
 		if self_run_id and f"/actions/runs/{self_run_id}/job/" in details_url:
@@ -268,7 +270,14 @@ def _fetch_log_tail(*, details_url: str, log_tail_bytes: int, repository: str, t
 
 def _build_context_text(*, raw_text: str, head_sha: str, final_status: str) -> str:
 	runs = _extract_runs(raw_text)
-	incomplete = [run for run in runs if run.get("status") in ("queued", "in_progress")]
+	# Only the post-review clean-result probe opts in: its own running job
+	# cannot complete before the probe, but every other incomplete check must
+	# still block auto-merge. Ordinary reviewer context keeps the self entry.
+	if os.environ.get("CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT", "false") == "true":
+		self_run_id = os.environ.get("SELF_RUN_ID", "")
+		if self_run_id.isdigit():
+			runs = [run for run in runs if f"/actions/runs/{self_run_id}/job/" not in str(run.get("details_url") or "")]
+	incomplete = [run for run in runs if run.get("status") != "completed" or run.get("conclusion") is None]
 	failed = [
 		run for run in runs
 		if run.get("status") == "completed"

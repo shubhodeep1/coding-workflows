@@ -59,7 +59,7 @@ findings.
 | keep_fixing round cap; merge-time `/answer` for follow-ups parked in `ai:blocked` | in PR #4135 (pending merge) | `MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS` (default 2), `security_pass_unblock_filed_advisory_followups`, state `security_pass_followups_merge_checked` |
 | **D1** line ownership via `git blame` (`SECURITY_AUDIT_LINE_OWNERSHIP`, `advisory_findings`) | **not implemented** | no identifier exists in `scripts/security_audit.sh` or the poller |
 | **D2** per-line "older than last audit" suppression, `verified_fixed_finding_ids`, `SECURITY_PASS_VERIFIED_FIXED` | **not implemented; suppression dropped by this refresh (D2′)** | prior-id re-emission is live through `SECURITY_AUDIT_PRIOR_FINDINGS`; the verified-fixed log is kept as remaining work |
-| **D3** pre-existing findings routed to advisories at audit time (`SECURITY_PASS_ADVISORY_FOLLOWUP_CAP`) | **not implemented** | advisories today come only from the judge or a waive, after the budget is spent |
+| **D3** pre-existing findings routed to advisories at audit time (uncapped; the planned `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` was dropped on 2026-09-25) | **not implemented** | advisories today come only from the judge or a waive, after the budget is spent |
 | **D4** rebind a clean pass across a clean sync merge (`SECURITY_PASS_REBOUND`) | **not implemented** | the budget-reset path (PR #4013) re-audits instead |
 
 ## Context
@@ -111,7 +111,8 @@ manual scripts), §19 (`Refs #N` only), §20 (changelog fragments).
 
 Clarification answers that fixed the design: original round (2026-09-06, all
 `A`): blame-based line ownership; 3-line context window; one capped
-`ai:security` follow-up per pre-existing finding; head advance with zero new
+`ai:security` follow-up per pre-existing finding (the cap was dropped on
+2026-09-25, see D3); head advance with zero new
 project lines rebinds without a model run; three phases. Refresh round
 (2026-09-19): Q5: A — route pre-existing findings to advisories rather than
 narrowing the audit to hunks, because that keeps coverage identical while
@@ -162,23 +163,29 @@ project-written line blocks (replaces the original D2).
   blocks under D1 with no special case. The concern raised in the original
   D2 note is moot under D2′.
 
-### D3 — Pre-existing findings become capped `ai:security` follow-ups at audit time
+### D3 — Pre-existing findings become `ai:security` follow-ups at audit time
 
 - **Chosen:** findings that pass validity, file scope, confidence, exclusions,
   and waivers but whose blame window is entirely older than the merge-base
-  land in `advisory_findings`. On every audit run the poller files at most
-  `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` (default 5) of them through the
-  existing `create_security_pass_advisory_followup` (source `preexisting`),
-  **immediately**, not deferred: the cited code is older than the merge-base,
-  so it already exists on the default branch and the standalone pipeline can
-  plan it there today. Rows above the cap are carried in state
-  (`security_pass_advisory_backlog`) and filed on later ticks, capped the same
-  way. They never gate completion, never count toward the fix-cycle budget,
-  and are handed to the engine on the next audit as waived rows so they are
-  not re-reported as blocking.
+  land in `advisory_findings`. On the audit tick the poller files **every**
+  one of them through the existing `create_security_pass_advisory_followup`
+  (source `preexisting`), with no per-tick or per-run cap, **immediately**,
+  not deferred: the cited code is older than the merge-base, so it already
+  exists on the default branch and the standalone pipeline can plan it there
+  today. A create that fails leaves the waiver row with
+  `followup_pending: true` plus the `finding` payload and `audited_head_sha`
+  (the shape deferred judge advisories already use), and the next tick
+  retries it. They never gate completion, never count toward the fix-cycle
+  budget, and are handed to the engine on the next audit as waived rows so
+  they are not re-reported as blocking.
 - **Alternatives considered:** drop them (the pre-2026-09 out-of-scope
   behaviour); one consolidated advisory issue per project; defer them until
-  the final merge like judge-time advisories; uncapped.
+  the final merge like judge-time advisories; a per-tick cap
+  (`SECURITY_PASS_ADVISORY_FOLLOWUP_CAP`, default 5) with the overflow carried
+  in a `security_pass_advisory_backlog` state array. The cap was dropped on
+  2026-09-25 together with the weekly audit's 3-per-week follow-up cap: a
+  capped finding is a finding nobody files (tracker #3576, run 35996690244,
+  surfaced 5 findings and filed 3; #4431 and #4432 had to be filed by hand).
 - **Why:** the findings are real (the cycle-7 list is a genuine hardening
   backlog for this repository) and dropping them loses value, but blocking on
   them charges the wrong project. Deferral exists (PR #4119) because
@@ -186,7 +193,8 @@ project-written line blocks (replaces the original D2).
   branch; a pre-existing finding by definition does not. The weekly audit
   already owns the `ai:security` follow-up shape and the
   `<!-- ai:security-finding:<id> -->` marker, so reuse is §5-compliant; the
-  cap protects §15 and issue-tracker noise. `ai:security` issues enter
+  marker and state dedupe keep the volume to one issue per distinct finding,
+  which is what §15 and the issue tracker need. `ai:security` issues enter
   clarify → plan → implement on their own, so no docs mirror or
   `/audit-plans` change is needed (Q6).
 
@@ -238,8 +246,8 @@ suppression covers them.
 
 - A finding whose cited line and 3-line window are all older than the
   project's merge-base never blocks completion; it is filed as an
-  `ai:security` follow-up (up to 5 per audit run, backlog carried in state)
-  and reported on the tracking issue.
+  `ai:security` follow-up (one per finding, no cap) and reported on the
+  tracking issue.
 - A finding on any project-written line blocks, on every cycle, regardless
   of when the line was written (D2′).
 - On fix cycle N+1 a prior finding not re-emitted is logged as verified
@@ -253,9 +261,10 @@ suppression covers them.
 
 ## Non-goals
 
-- No change to the weekly audit's cadence, tracker, or 3-per-week follow-up
-  cap; the security pass's advisory follow-ups use the same label and marker
-  but their own cap.
+- No change to the weekly audit's cadence or tracker. Its 3-per-week
+  follow-up cap was removed separately on 2026-09-25; the weekly audit and
+  the security pass's advisory follow-ups share the `ai:security` label and
+  the finding marker, and neither caps the number of issues.
 - No suppression of project-owned findings by age (the original D2 is
   withdrawn).
 - No change to the exhaustion judge, the keep_fixing cap, or deferred
@@ -274,10 +283,10 @@ suppression covers them.
 - **§6 naming immutability:** nothing is renamed or removed. New identifiers,
   all verified unique by grep on 2026-09-19: env vars
   `SECURITY_AUDIT_LINE_OWNERSHIP`, `SECURITY_AUDIT_OWNERSHIP_CONTEXT_LINES`,
-  `SECURITY_PASS_LINE_OWNERSHIP`, `SECURITY_PASS_OWNERSHIP_CONTEXT_LINES`,
-  `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP`; findings-JSON fields
+  `SECURITY_PASS_LINE_OWNERSHIP`, `SECURITY_PASS_OWNERSHIP_CONTEXT_LINES`;
+  findings-JSON fields
   `advisory_findings`, `verified_fixed_finding_ids`, `counts.advisory`;
-  state fields `security_pass_advisory_backlog`; shell functions
+  shell functions
   `security_pass_rebind_if_no_new_project_lines`,
   `security_pass_file_advisory_findings`; log prefixes
   `SECURITY_PASS_REBOUND`, `SECURITY_PASS_VERIFIED_FIXED`,
@@ -296,12 +305,13 @@ suppression covers them.
   engine call at ≈6360) is extended to type-check the new keys **only when
   present**.
 - **§15 API hygiene:** per audit run the only new calls are, on the advisory
-  path, at most `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` issue creates through
+  path, one issue create per new advisory finding through
   `create_security_pass_advisory_followup`, which already dedupes on state
   and on one cached marker search per tracking issue per poller process.
   Rebinding, ownership classification, and verified-fixed logging use local
-  git only. Advisory creation is fail-open: a failed create keeps the row in
-  `security_pass_advisory_backlog` and never blocks the pass.
+  git only. Advisory creation is fail-open: a failed create keeps
+  `followup_pending` on the waiver row for the next tick and never blocks the
+  pass.
 - **§19:** advisory issue bodies and all comments use `Refs #<tracking>`.
 - **§20:** one `changelog.d/` fragment per phase; `CHANGELOG.md` untouched.
 - **§14:** no `.github/ai/consumer_repos.json` change; consumers get the
@@ -335,8 +345,8 @@ run_security_pass_inline (poller, every completion route; ≈6227)
   │   prior ids absent from output      → verified_fixed_finding_ids
   │
   ├─ security_pass_last_audited_sha = head (existing)
-  ├─ advisory_findings → waiver rows (source preexisting) + backlog
-  │     → security_pass_file_advisory_findings (cap 5/tick, fail-open,
+  ├─ advisory_findings → waiver rows (source preexisting)
+  │     → security_pass_file_advisory_findings (all rows, no cap, fail-open,
   │       create_security_pass_advisory_followup, filed immediately)
   ├─ findings == 0 → passed (existing)
   └─ findings > 0 → security_pass_reported_findings = findings (existing)
@@ -374,15 +384,14 @@ functional.
    Done when: the full `tests/test_orchestrate_poll_process.py` suite passes;
    new tests prove rebinding on a clean sync merge and no rebinding on an
    evil merge or a non-merge commit; the engine env carries the ownership
-   vars; `advisory_findings` become waiver rows plus advisory issues (≤ cap
-   per tick, backlog carried, deduped, fail-open, tracking comment names
-   them) and never block; an old-engine result without additive fields still
+   vars; `advisory_findings` become waiver rows plus one advisory issue each
+   (no cap, deduped, fail-open with retry on the next tick, tracking comment
+   names them) and never block; an old-engine result without additive fields still
    blocks and passes exactly as today; `SECURITY_PASS_LINE_OWNERSHIP=file`
    restores per-file scope.
    Rollback: revert the PR, or set repo var `SECURITY_PASS_LINE_OWNERSHIP=file`
-   to restore per-file scope while keeping rebinding, or
-   `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP=0` to stop advisory issues (rows still
-   accumulate in the backlog and are filed when the cap is raised).
+   to restore per-file scope while keeping rebinding (no findings are routed
+   to advisories in `file` mode, so no advisory issues are filed).
 
 ## Implementation Steps
 
@@ -441,15 +450,14 @@ functional.
    to `MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS`): add
    `SECURITY_PASS_LINE_OWNERSHIP="${SECURITY_PASS_LINE_OWNERSHIP:-project-lines}"`
    (accept `file` | `project-lines`, warn and default on anything else),
-   `SECURITY_PASS_OWNERSHIP_CONTEXT_LINES` (default `3`),
-   `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` (default `5`, integer ≥ 0).
+   `SECURITY_PASS_OWNERSHIP_CONTEXT_LINES` (default `3`).
 9. `.github/workflows/orchestrate_poll.yml` (≈ line 690, next to
-   `SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED`): add the three env rows with
+   `SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED`): add the two env rows with
    the same defaults; `tests/test_orchestrate_poll_workflow_contract.py`
    asserts them.
-10. `ensure_security_pass_state_fields` (≈ line 4498): normalize
-    `security_pass_advisory_backlog` (array of finding objects with the eight
-    finding keys plus `audited_head_sha`; default `[]`, last 100 kept).
+10. `ensure_security_pass_state_fields` (≈ line 4498): no new state field;
+    the retry state lives on the existing `security_pass_waived_findings`
+    rows (`followup_pending`, `finding`, `audited_head_sha`).
 11. New `security_pass_rebind_if_no_new_project_lines <head_sha>
     <merge_base_sha>` called from `run_security_pass_inline` immediately
     before the existing `prior_security_status = passed` budget reset
@@ -478,21 +486,21 @@ functional.
     when `advisory_findings` is non-empty, append each row to
     `security_pass_waived_findings` via `security_pass_record_waivers` with
     `source: "preexisting"`, `waived_by: "line-ownership"`,
-    `waived_at_cycle`, `issue: null`, and to `security_pass_advisory_backlog`
-    with `audited_head_sha`; log `SECURITY_PASS_ADVISORY_ROUTED
+    `waived_at_cycle`, `issue: null`, `followup_pending: true`, the `finding`
+    payload, and `audited_head_sha`; log `SECURITY_PASS_ADVISORY_ROUTED
     tracking_issue=… head_sha=… count=<n> ids=<comma list>`. Then call
     `security_pass_file_advisory_findings`.
 15. New `security_pass_file_advisory_findings <integration_branch> <head_sha>`:
-    for at most `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` rows of
-    `security_pass_advisory_backlog` (oldest first), call
+    for every `security_pass_waived_findings` row with `source: "preexisting"`
+    and `followup_pending: true` (oldest first, no cap), call
     `create_security_pass_advisory_followup "<finding>" "<integration_branch>"
     "<audited_head_sha>" "<justification>" "preexisting"` (sixth argument
     empty: not deferred) where the justification reads "The cited line
     predates this project's merge-base and already exists on the default
     branch; routed as a non-blocking advisory by line ownership." On an issue
-    number, drop the row from the backlog (the create path already records
-    `security_pass_followup_issues` and sets `issue` on the waiver row). A
-    failed create leaves the row for the next tick. Log per row through the
+    number the create path already records `security_pass_followup_issues`,
+    sets `issue` on the waiver row, and clears `followup_pending`. A failed
+    create leaves the row pending for the next tick. Log per row through the
     existing `SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED`. Return 0 always.
     Add each filed issue to `security_pass_followups_merge_checked` (PR
     #4135) so the merge-time re-answer never reads it: it was planned against
@@ -555,13 +563,12 @@ Unit / contract (sandbox git repos, fake `codex`, as the existing suites do):
     with the existing budget reset;
   - engine env carries the ownership vars; `SECURITY_PASS_SCOPE` logs them;
   - old-engine output (no additive keys) still blocks/passes as today;
-  - advisories: routed rows become waiver rows with `source: "preexisting"`
-    and backlog rows; ≤ cap filed per tick through the existing create path,
-    filed immediately (no `followup_pending`), deduped by marker and state,
-    added to `security_pass_followups_merge_checked`; the rest filed on the
-    next tick; a create failure keeps the row; the tracking comment names
-    them; `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP=0` files nothing and blocks
-    nothing;
+  - advisories: routed rows become waiver rows with `source: "preexisting"`;
+    every row is filed on the same tick through the existing create path
+    (more than 5 rows are all filed, with no cap), deduped by marker and
+    state, added to `security_pass_followups_merge_checked`; a create failure
+    keeps `followup_pending` and the next tick retries it; the tracking
+    comment names them;
   - a project whose only findings are advisory passes on the first audit and
     completes;
   - `SECURITY_PASS_LINE_OWNERSHIP=file` reproduces today's blocking result on
@@ -594,9 +601,9 @@ below the number of genuinely project-owned findings.
   is non-empty for any evil merge, so it is audited. A merge with only
   whitespace resolution still shows in `--cc`; it is audited, which is the
   safe direction.
-- **Advisory issue volume.** Cap of 5 per tick, backlog carried in state
-  (last 100), marker and state dedupe, and the repo var can be set to `0`.
-  For #3965 the first post-upgrade audit would route the current cycle-7
+- **Advisory issue volume.** One issue per distinct finding, with no cap:
+  marker and state dedupe stop repeats, and `SECURITY_PASS_LINE_OWNERSHIP=file`
+  stops routing (and so filing) advisories altogether. For #3965 the first post-upgrade audit would route the current cycle-7
   class of findings, which is the intended outcome.
 - **Old poller + new engine.** The engine never enables ownership mode on
   its own, so nothing changes. **New poller + old engine.** Additive keys
@@ -611,9 +618,9 @@ below the number of genuinely project-owned findings.
 ## Rollout
 
 - Both phases ship default-on for the security pass with per-feature kill
-  switches: `SECURITY_PASS_LINE_OWNERSHIP=file` restores per-file scope,
-  `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP=0` stops advisory issues, and
-  `ENABLE_SECURITY_PASS=false` remains the global kill switch. The weekly
+  switches: `SECURITY_PASS_LINE_OWNERSHIP=file` restores per-file scope and
+  stops advisory routing, and `ENABLE_SECURITY_PASS=false` remains the global
+  kill switch. The weekly
   audit is unaffected in every phase.
 - Consumers receive each phase on the next `@stable` sync of `scripts/`,
   `prompts/`, and the reusable `orchestrate_poll.yml`; no wrapper or repo-var
