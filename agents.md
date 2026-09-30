@@ -1162,10 +1162,20 @@ reviews, comments, and conflicts stay a direct §12 request.
 - **`Stop`:** blocks (`{"decision": "block"}`) when both of these hold:
   - the final message has a §2 question (`Q<n>:` plus two or more lettered
     choice lines, or `Q<n>: A/B`) or a fixed-phrase permission ask;
-  - no tool call in the current turn carried
-    `<!-- ai:claude-blocked:v1 -->` with a non-error result. The hook reads
-    this from `transcript_path`. `last_assistant_message` is preferred for
-    the final text.
+  - the current turn has no verified blocker on the marker's issue (issue
+    #5082). Both must succeed in the turn, on the marker's `owner/repo`
+    (case-insensitive) and issue number: a comment whose body starts with
+    `<!-- ai:claude-blocked:v1 -->` (`mcp__*__add_issue_comment`, or a
+    `gh api` POST to `repos/<owner>/<repo>/issues/<N>/comments` whose
+    output carries the comment's `html_url` or `issue_url`), and a write
+    adding `ai:claude-blocked` to that issue (`mcp__*__issue_write` with
+    `method: "update"` and `labels`, or a `gh api` POST to
+    `…/issues/<N>/labels`). A `Bash` call
+    counts only when it holds `gh api` calls alone, joined by `&&` at most,
+    after an optional leading `cd <path>;`. An `echo` of the marker, a
+    comment on another issue or repository, or a failed or unverifiable
+    call never counts. The hook reads this from `transcript_path`.
+    `last_assistant_message` is preferred for the final text.
 
   The per-session count lives in `<id>.state.json`, with a cap of 2 blocks.
   After the cap the stop is allowed with a
