@@ -9,7 +9,7 @@ The #5316 merge hold gate checked claims and twin parity once, then ran `gh pr m
 | New audit value | `AUTOFIX_AUTO_MERGE_HEAD_BOUND` / `AUTOFIX_DET_SKIP_MERGE_BOUND … action=squash_sync` |
 | New refusal reason | `AUTOFIX_AUTO_MERGE_SKIPPED … reason=merge_not_ready` |
 | New log key | `AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=<n> head_sha=<sha> result=disabled\|failed` |
-| Extra API calls | 1 GraphQL mutation, only when an open `claude/*` PR is enrolled; 0 for other PRs |
+| Extra API calls | 1 `gh pr merge --disable-auto` (GraphQL lookup + mutation), only when an open `claude/*` PR is enrolled, up to 3 attempts with 1 REST re-check after each failure; 0 for other PRs |
 
 What this means for operators: nothing changes in coding-workflows. `main` and the project branches require no checks, so these PRs already merged at once. In a consumer repo whose base requires checks or reviews that are still pending when the review finishes, a `claude/*` PR now stays open with a `merge_not_ready` warning instead of being armed. The next review run, from a push or a dispatch, merges it. The pending-checks merge path planned in #4900 will do this automatically, and it must merge synchronously too. Other PRs keep their existing auto-merge calls.
 

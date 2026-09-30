@@ -539,15 +539,36 @@ jobs:
           # claude/* PRs are merged synchronously after the hold gate and never
           # enrolled in auto-merge (issue #5565). An enrollment left by an older
           # run, or made by hand, would merge a newer or held head without the
-          # gate, so every review run (every push starts one) cancels it. One
-          # GraphQL mutation, only when the PR object above shows an enrollment.
-          # A failed cancel warns and the run continues.
+          # gate, so every review run (every push starts one) cancels it, only
+          # when the PR object above shows an enrollment. `gh pr merge
+          # --disable-auto` is GraphQL (a PR lookup and the
+          # disablePullRequestAutoMerge mutation; there is no REST endpoint).
+          # Up to 3 attempts; after a failed one, one REST `pulls/{n}` read
+          # checks whether the enrollment is already gone (a cancel whose
+          # response was lost). A cancel that still fails warns with gh's
+          # first error line and the run continues.
           if [ "${pr_state}" = "open" ] && [ "${pr_auto_merge}" = "true" ] && [[ "${pr_head_ref}" == claude/* ]]; then
-            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto >/dev/null 2>&1; then
-              echo "AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate:-unknown} result=disabled"
-            else
-              echo "AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate:-unknown} result=failed"
-              echo "::warning::Could not cancel the auto-merge enrollment on claude/* PR #${PR_NUMBER}; it can still merge without the merge hold gate. Disable auto-merge on the PR by hand."
+            _am_cancel_result="failed"
+            _am_cancel_err=""
+            for _am_cancel_attempt in 1 2 3; do
+              if _am_cancel_err="$(gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto 2>&1 >/dev/null)"; then
+                _am_cancel_result="disabled"
+                break
+              fi
+              if [ "$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.auto_merge == null' 2>/dev/null || echo "false")" = "true" ]; then
+                _am_cancel_result="disabled"
+                break
+              fi
+              if [ "${_am_cancel_attempt}" -lt 3 ]; then
+                sleep "$(( _am_cancel_attempt * 2 ))"
+              fi
+            done
+            echo "AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate:-unknown} result=${_am_cancel_result}"
+            if [ "${_am_cancel_result}" != "disabled" ]; then
+              _am_cancel_err="${_am_cancel_err%%$'\n'*}"
+              _am_cancel_err="${_am_cancel_err//$'\r'/}"
+              _am_cancel_err="${_am_cancel_err:0:300}"
+              echo "::warning::Could not cancel the auto-merge enrollment on claude/* PR #${PR_NUMBER} after 3 attempts (${_am_cancel_err:-no error output}); it can still merge without the merge hold gate. Disable auto-merge on the PR by hand."
             fi
           fi
 

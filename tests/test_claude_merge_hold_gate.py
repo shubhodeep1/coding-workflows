@@ -77,12 +77,18 @@ FAKE_GH = textwrap.dedent(
 	fixture = json.load(open(os.environ["FAKE_GH_FIXTURE"], encoding="utf-8"))
 	if args[:2] == ["pr", "merge"]:
 		if "--disable-auto" in args:
-			sys.exit(1 if os.environ.get("FAKE_GH_DISABLE_FAIL") else 0)
+			if os.environ.get("FAKE_GH_DISABLE_FAIL"):
+				sys.stderr.write("HTTP 502: Bad Gateway (https://api.github.com/graphql)\\nsecond line\\n")
+				sys.exit(1)
+			sys.exit(0)
 		if os.environ.get("FAKE_GH_MERGE_FAIL") and "--auto" not in args:
 			sys.stderr.write("X Pull request is not mergeable: the base branch policy prohibits the merge.\\n")
 			sys.exit(1)
 		sys.exit(0)
 	if args[:2] == ["api", "graphql"]:
+		sys.exit(0)
+	if args[:1] == ["api"] and "--jq" in args and args[args.index("--jq") + 1] == ".auto_merge == null":
+		sys.stdout.write("true" if os.environ.get("FAKE_GH_AUTO_MERGE_GONE") else "false")
 		sys.exit(0)
 	if args[:1] == ["api"]:
 		path = next((a for a in args[1:] if "/" in a), "")
@@ -512,29 +518,58 @@ def test_gate_pr_fetch_reports_the_auto_merge_enrollment():
 	assert run.index("auto_merge: (.auto_merge != null)") < run.index(CANCEL_BLOCK_START.strip())
 
 
-def _run_cancel_block(tmp_path, state="open", auto_merge="true", head_ref="claude/implement-plan-x-phase-1", fail=False):
+def _run_cancel_block(tmp_path, state="open", auto_merge="true", head_ref="claude/implement-plan-x-phase-1", fail=False, gone=False):
 	extra = {"PR_NUMBER": "42", "REPOSITORY": REPO, "pr_state": state, "pr_auto_merge": auto_merge,
 		"pr_head_ref": head_ref, "pr_head_sha_gate": HEAD}
 	if fail:
 		extra["FAKE_GH_DISABLE_FAIL"] = "1"
+	if gone:
+		extra["FAKE_GH_AUTO_MERGE_GONE"] = "1"
 	env = _fake_gh_env(tmp_path, _fixture(), extra)
+	# The retry backoff sleeps; record the delays instead of waiting.
+	sleep_stub = tmp_path / "bin" / "sleep"
+	sleep_stub.write_text(f'#!/bin/sh\necho "$1" >> "{tmp_path / "sleeps.txt"}"\n', encoding="utf-8")
+	sleep_stub.chmod(0o755)
 	script = "set -euo pipefail\n" + textwrap.dedent(_cancel_block())
 	proc = subprocess.run(["bash", "-c", script], cwd=str(tmp_path), env=env, capture_output=True, text=True, check=False)
 	return proc, [call for call in _calls(tmp_path) if call[:2] == ["pr", "merge"]]
+
+
+def _cancel_rechecks(tmp_path):
+	return [call for call in _calls(tmp_path) if call[:2] == ["api", f"repos/{REPO}/pulls/42"]]
 
 
 def test_gate_cancels_an_enrollment_on_an_open_claude_pr(tmp_path):
 	proc, merges = _run_cancel_block(tmp_path)
 	assert proc.returncode == 0, proc.stderr
 	assert merges == [["pr", "merge", "42", "--repo", REPO, "--disable-auto"]]
+	assert _cancel_rechecks(tmp_path) == []
 	assert f"AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=42 head_sha={HEAD} result=disabled" in proc.stdout
 
 
 def test_gate_cancel_failure_warns_and_continues(tmp_path):
 	proc, merges = _run_cancel_block(tmp_path, fail=True)
 	assert proc.returncode == 0, proc.stderr
+	assert merges == [["pr", "merge", "42", "--repo", REPO, "--disable-auto"]] * 3
+	# After each failed attempt one REST read checks whether the enrollment is gone.
+	assert len(_cancel_rechecks(tmp_path)) == 3
+	assert (tmp_path / "sleeps.txt").read_text(encoding="utf-8").split() == ["2", "4"]
+	assert proc.stdout.count("AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED") == 1
+	assert f"AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=42 head_sha={HEAD} result=failed" in proc.stdout
+	warning = next(line for line in proc.stdout.splitlines() if line.startswith("::warning::"))
+	assert "HTTP 502: Bad Gateway (https://api.github.com/graphql)" in warning
+	assert "second line" not in proc.stdout
+
+
+def test_gate_cancel_counts_a_lost_response_as_disabled(tmp_path):
+	# The mutation landed but gh reported an error: the re-check sees no enrollment.
+	proc, merges = _run_cancel_block(tmp_path, fail=True, gone=True)
+	assert proc.returncode == 0, proc.stderr
 	assert merges == [["pr", "merge", "42", "--repo", REPO, "--disable-auto"]]
-	assert "result=failed" in proc.stdout and "::warning::" in proc.stdout
+	assert len(_cancel_rechecks(tmp_path)) == 1
+	assert not (tmp_path / "sleeps.txt").exists()
+	assert f"AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=42 head_sha={HEAD} result=disabled" in proc.stdout
+	assert "::warning::" not in proc.stdout
 
 
 @pytest.mark.parametrize("state,auto_merge,head_ref", [
@@ -546,6 +581,7 @@ def test_gate_leaves_other_prs_alone(tmp_path, state, auto_merge, head_ref):
 	proc, merges = _run_cancel_block(tmp_path, state=state, auto_merge=auto_merge, head_ref=head_ref)
 	assert proc.returncode == 0, proc.stderr
 	assert merges == []
+	assert _cancel_rechecks(tmp_path) == []
 	assert "AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED" not in proc.stdout
 
 

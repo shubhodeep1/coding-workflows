@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5565-claude-sync-merge-cancel-auto-merge   Final PR: #5574 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (opened from claude/implement-plan-issue-5565-claude-sync-merge-cancel-auto-merge-phase-1; number in the stage report and resume block)
+- Waiting on: PR #5603
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01GcyAp4JGTne7wrHFfj4g66   safety net and hand-back: see the review-round stage report
 - Last updated: 2026-09-30
-- Last note: phase 1 implemented and verified locally (tests/test_claude_merge_hold_gate.py 50 passed; review pipeline contract, Claude-fixer mode, workflow size, changelog, inventory parity, log prefix, actionlint green); phase PR opened
+- Last note: review round 1 (head 4faa60bbaf7b): fixed 2 findings (retry the stale auto-merge cancel, surface gh's stderr), corrected the cancel's API wording; rejected 3 (hold without a push — AD-4; REST claim — `gh pr merge --disable-auto` is GraphQL; jq idiom NIT)
 
 ## Phases
-1. [ ] Phase 1 — synchronous claude/* merge and stale auto-merge cancellation (scripts/review_enable_auto_merge.sh, review_autofix.yml gate + deterministic-skip-merge, gate docstring, tests, docs) — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — synchronous claude/* merge and stale auto-merge cancellation (scripts/review_enable_auto_merge.sh, review_autofix.yml gate + deterministic-skip-merge, gate docstring, tests, docs) — PR #5603 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -37,6 +37,7 @@
 - AD-7 [plan, 2026-09-30] Edit CLAUDE.md §26.H? — Picked: A — no; README and `agents.md` only. Alternatives: B — edit CLAUDE.md and its twin. Why: §5, #5316 AD-8. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:intervention] A best-effort GitHub mutation in a workflow step (warn and continue on failure) should retry with backoff, re-read the state after each failure so a lost response is not reported as a failure, and put gh's first stderr line in the warning; `>/dev/null 2>&1` hides the cause. (files: .github/workflows/review_autofix.yml)
 
 ## Notes
 - Local verification env (2026-09-30): Python 3.11 container with a scratch venv (pytest, pyyaml, ruff, shellcheck-py) and actionlint 1.7.12. `ruff check` with the repo's pyproject config reports EXE001/BLE001 on scripts/claude_merge_hold_gate.py identically on the base; CI's selection (`--select E,F --ignore E501`) passes. shellcheck SC1007 on scripts/review_enable_auto_merge.sh:36 is pre-existing.

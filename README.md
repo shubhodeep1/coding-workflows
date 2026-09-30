@@ -1491,9 +1491,10 @@ checking the gate again. If GitHub cannot merge yet (required checks or
 reviews still pending), nothing is enrolled, the run logs
 `AUTOFIX_AUTO_MERGE_SKIPPED … reason=merge_not_ready`, and the next review
 run tries again. Every review run also cancels an auto-merge enrollment it
-finds on an open `claude/*` PR (made before this change, or by hand) and
-logs `AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=<n> head_sha=<sha>
-result=disabled|failed`, so a push never inherits an armed merge. Cost, for `claude/*` heads only: one call per 100 PR
+finds on an open `claude/*` PR (made before this change, or by hand), with
+up to 3 attempts, and logs `AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=<n>
+head_sha=<sha> result=disabled|failed`, so a push never inherits an armed
+merge; a cancel that still fails warns with `gh`'s error. Cost, for `claude/*` heads only: one call per 100 PR
 comments, one compare, and two tree reads only when a twin changed. Other
 PRs make no extra call.
 

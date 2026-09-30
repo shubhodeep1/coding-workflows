@@ -1047,9 +1047,13 @@ reviews, comments, and conflicts stay a direct §12 request.
   merge queue on a branch `claude/*` PRs target. The gate job's
   `evaluate` step reads `auto_merge` in its existing `pulls/{n}` projection
   and, for an open `claude/*` PR that is enrolled (from before #5565 or by
-  hand), runs `gh pr merge --disable-auto` (one GraphQL mutation) and logs
+  hand), runs `gh pr merge --disable-auto` (GraphQL: a PR lookup and the
+  `disablePullRequestAutoMerge` mutation; GitHub has no REST endpoint for
+  it) up to 3 times, with one REST `pulls/{n}` read after each failed
+  attempt to see whether the enrollment is already gone, and logs
   `AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=<n> head_sha=<sha>
-  result=disabled|failed`; a failed cancel warns and the run continues.
+  result=disabled|failed`; a cancel that still fails warns with `gh`'s first
+  error line and the run continues.
   Every push starts a review run, so a head change always cancels.
   Any new merge path for `claude/*` PRs, such as the pending-checks merge
   of #4900, must call the gate before `gh pr merge` and merge synchronously. The `claude-pr-catch-all` job of
