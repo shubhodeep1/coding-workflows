@@ -1221,7 +1221,8 @@ side so that class cannot land unnoticed.
   loosening under the retire-master Q3: A rule, so a sync that carries it
   waits for the operator. CI reads the body from the event payload of the
   push, so a body edited later needs another push to count.
-- **Wiring.** `ci.yml`'s `lint` job runs `Guard differential tests (issue
+- **Wiring.** `ci.yml`'s `tests-hooks-and-orchestrator` job (reported
+  through the `CI / lint` aggregate) runs `Guard differential tests (issue
   #5174)` and, on pull requests only, `Guard differential check (issue
   #5174)`: it fetches the base branch with git and runs `--base-ref
   FETCH_HEAD --pr-body-file <body from GITHUB_EVENT_PATH>` against the
