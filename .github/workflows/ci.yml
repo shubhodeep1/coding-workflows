@@ -1062,6 +1062,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_phantom_review_run_filter.py
 
+      - name: Test-and-mark-stable default-branch review dispatch tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_e2e_dispatch_default_branch.py
+
       - name: Mark-stable release-tag refspec contract test
         run: |
           set -euo pipefail

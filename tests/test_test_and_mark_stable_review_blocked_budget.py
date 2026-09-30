@@ -223,7 +223,12 @@ def test_phase4b_dispatches_only_without_active_work_and_pins_one_run() -> None:
 	assert 'RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))' in retry
 	assert '"repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"' in retry
 	assert 'select(.head_sha == "${RETRY_DISPATCH_SHA}")' not in retry
+	# Issue #5520: the retry is dispatched from the default branch and
+	# registered from the provenance-checked dispatch listing, never from an
+	# unfiltered workflow_dispatch page or at the PR branch.
 	assert 'actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch' not in retry
+	assert 'E2E_RETRY_DISPATCH_RUNS=$(e2e_review_dispatch_runs "${PR_NUMBER}")' in retry
+	assert '--ref "${BRANCH}"' not in dispatch_branch
 	assert 'echo "status=retry_timeout" >> "$GITHUB_OUTPUT"' in retry
 	assert 'echo "status=pr_closed_during_retry" >> "$GITHUB_OUTPUT"' in retry
 	assert 'echo "status=pr_state_check_failed" >> "$GITHUB_OUTPUT"' in retry

@@ -124,7 +124,11 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
           review-autofix wrapper that the smoke gate dispatches and
           polls. Defaults to `internal-review.yml`, the source repo's
           template. Override only when smoke-testing against a
-          consumer repo that renamed the wrapper.
+          consumer repo that renamed the wrapper. The gate dispatches
+          it from the default branch and finds those runs by their PR
+          run name, which only `internal-review.yml` and `ai-review.yml`
+          set (issue #5520): with any other file, Phase 4 waits on
+          pull_request runs only and the Phase 4b retry cannot dispatch.
         required: false
         type: string
         default: "internal-review.yml"
@@ -1326,12 +1330,12 @@ jobs:
           # default internal-review.yml) is never auto-triggered and
           # wait-review (Phase 4) ages out at REVIEW_TIMEOUT minutes.
           # Run 25204168842 was the most recent confirmed occurrence.
-          # Explicitly dispatch ${REVIEW_WORKFLOW_FILE} against the PR
-          # branch so a review run with head_sha=BAIT_SHA always exists
-          # — workflow_dispatch resolves the ref's tip SHA at dispatch
-          # time, and we just pushed the bait commit there, so the
-          # dispatched run carries head_sha=BAIT_SHA and is matched by
-          # wait-review's pinned filter without any extra logic.
+          # Explicitly dispatch ${REVIEW_WORKFLOW_FILE} for the PR so a
+          # review run of the bait head always exists. The run starts from
+          # the default branch (see "Dispatch ref" below), so its own
+          # head_sha is the default branch's; wait-review finds it by its
+          # PR run name and accepts it only when the head its codex-agent
+          # job checked out equals the pin (issue #5520).
           # The dispatch is keyed on a separate concurrency group (in
           # the source repo's internal-review.yml at lines 48-50,
           # group `internal-review-dispatch-pr-N`; consumer repos with
@@ -1350,24 +1354,21 @@ jobs:
           # repo we just pushed the bait commit to, leaving Phase 4
           # still vulnerable to no_review_triggered.
           #
-          # Dispatch ref (issue #4898, finding
-          # review-dispatches-unmerged-workflow): this site IS exposed. The
-          # dispatch runs BRANCH's copy of ${REVIEW_WORKFLOW_FILE} with
-          # TEST_REPO's secrets (secrets: inherit), and BRANCH is
-          # ai/issue-<N> of the smoke issue this job opened. It carries the
-          # E2E implement run's commits and the bait commit above, and any
-          # writer to TEST_REPO (by default this repository) can push to it.
-          # It stays at the branch ref because Phase 4 pins review runs to
-          # head_sha == BAIT_SHA, and only a dispatch at the branch
-          # produces that SHA; a default-branch dispatch carries the
-          # default branch's SHA and would never match. The retrigger in
-          # review_autofix.yml, the sweep, the poller, the merge train, and
-          # the forward-merge fallback all dispatch from the default branch.
+          # Dispatch ref (issue #5520, finding
+          # e2e-dispatch-executes-unreviewed-workflow): no --ref, so the run
+          # starts from TEST_REPO's default branch. A dispatch at BRANCH
+          # (ai/issue-<N> of the smoke issue this job opened) ran that
+          # branch's copy of ${REVIEW_WORKFLOW_FILE} with TEST_REPO's
+          # secrets (secrets: inherit), and any writer to TEST_REPO can push
+          # to BRANCH before this step runs. The wrapper still reviews the
+          # PR head: review_autofix.yml checks it out from the PR's
+          # metadata. Like the retrigger in review_autofix.yml, the sweep,
+          # the poller, the merge train, and the forward-merge fallback
+          # (issues #4618, #4701, #4898).
           if gh workflow run "${REVIEW_WORKFLOW_FILE}" \
               --repo "${TEST_REPO}" \
-              --ref "${BRANCH}" \
               -f pr_number="${PR_NUMBER}" >/tmp/dispatch_resp.txt 2>&1; then
-            echo "✓ Dispatched ${REVIEW_WORKFLOW_FILE} on ${BRANCH} for PR #${PR_NUMBER} (Bug B fallback)"
+            echo "✓ Dispatched ${REVIEW_WORKFLOW_FILE} from the default branch for PR #${PR_NUMBER} (Bug B fallback)"
           else
             echo "::warning::Could not dispatch ${REVIEW_WORKFLOW_FILE} as Bug B fallback; relying on pull_request:synchronize event only"
             cat /tmp/dispatch_resp.txt >&2 || true
@@ -1475,6 +1476,171 @@ jobs:
 
           . ./scripts/comprehensive_test_and_release_gh_api.sh
 
+          E2E_REVIEW_DISPATCH_API=gh_api_safe_quiet_print
+          # ── Default-branch review dispatch runs (issue #5520) ──
+          # Phase 3c and Phase 4b dispatch ${REVIEW_WORKFLOW_FILE} without
+          # --ref, so the run starts from TEST_REPO's default branch: its
+          # head_branch and head_sha are the default branch's, and the
+          # branch listing and head_sha pin cannot see it. These helpers find
+          # it and bind it to the PR head it reviewed. Phase 4 and Phase 4b
+          # carry this same block (the job sources scripts/ from its
+          # ref: main checkout, so a helper there could be missing when this
+          # workflow runs from another ref);
+          # tests/test_test_and_mark_stable_e2e_dispatch_default_branch.py
+          # keeps the two copies identical. E2E_REVIEW_DISPATCH_API names the
+          # step's own gh api wrapper.
+          #
+          # A run name alone proves nothing (issue #5094: GitHub evaluates
+          # run-name from the workflow file at the dispatched ref). A run
+          # counts only when the workflow-scoped listing returns it as a
+          # workflow_dispatch run of ${REVIEW_WORKFLOW_FILE} on the default
+          # branch, with that wrapper's exact PR run name. Only the two
+          # wrappers that set a PR run name are matched; any other
+          # review_workflow_file matches nothing.
+          #
+          # The reviewed head is the first "Captured INITIAL_HEAD_SHA=<sha>
+          # for stale-base detection." line in the run's codex-agent job
+          # log. In a default-branch run that line comes from reviewed
+          # workflow code (review_autofix.yml pinned @main / @stable), right
+          # after the job hard-resets to the PR head. The step's own script
+          # echo is unexpanded and never matches the 40-hex pattern.
+          declare -A E2E_REVIEW_DISPATCH_HEADS=()
+          E2E_REVIEW_DISPATCH_DEFAULT_BRANCH=""
+          e2e_review_dispatch_title() {
+            case "${REVIEW_WORKFLOW_FILE}" in
+              internal-review.yml) printf 'Internal: AI Review & Autofix [pr:%s]' "$1" ;;
+              ai-review.yml) printf 'AI Review [pr:%s]' "$1" ;;
+            esac
+          }
+          # Sets E2E_REVIEW_DISPATCH_DEFAULT_BRANCH once (one GET
+          # repos/<repo>); returns 1 when it cannot be resolved.
+          e2e_review_dispatch_resolve_default_branch() {
+            local resolved_branch=""
+            [ -z "${E2E_REVIEW_DISPATCH_DEFAULT_BRANCH}" ] || return 0
+            resolved_branch=$("${E2E_REVIEW_DISPATCH_API}" "repos/${TEST_REPO}" --jq '.default_branch // empty') || return 1
+            [[ "${resolved_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+            E2E_REVIEW_DISPATCH_DEFAULT_BRANCH="${resolved_branch}"
+          }
+          # Prints the matched runs for PR $1 as a JSON array (one GET
+          # actions/workflows/<file>/runs), or [] when the wrapper has no PR
+          # run name or the default branch is unresolved. Returns 1 on an
+          # API failure or a malformed listing.
+          e2e_review_dispatch_runs() {
+            local dispatch_title=""
+            local dispatch_listing=""
+            dispatch_title=$(e2e_review_dispatch_title "$1")
+            if [ -z "${dispatch_title}" ] || [ -z "${E2E_REVIEW_DISPATCH_DEFAULT_BRANCH}" ]; then
+              printf '[]'
+              return 0
+            fi
+            dispatch_listing=$("${E2E_REVIEW_DISPATCH_API}" "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&branch=${E2E_REVIEW_DISPATCH_DEFAULT_BRANCH}&per_page=100") || return 1
+            printf '%s' "${dispatch_listing}" | jq -c \
+              --arg title "${dispatch_title}" \
+              --arg branch "${E2E_REVIEW_DISPATCH_DEFAULT_BRANCH}" \
+              --arg path ".github/workflows/${REVIEW_WORKFLOW_FILE}" \
+              'if type == "object" and (.workflow_runs | type == "array") then
+                [.workflow_runs[]
+                  | select(type == "object")
+                  | select((.id | type) == "number" and .id > 0 and .id == (.id | floor))
+                  | select(.event == "workflow_dispatch" and .head_branch == $branch and .path == $path and .display_title == $title)
+                  | select((.status | type) == "string" and (.created_at | type) == "string")]
+              else error("malformed review dispatch run listing") end'
+          }
+          # Caches run $1's reviewed head in E2E_REVIEW_DISPATCH_HEADS: the
+          # 40-hex SHA, or "none" when the run has no codex-agent job or
+          # the job never logged the line. Two calls (jobs, job log), once
+          # per run; returns 1 on an API failure and caches nothing, so the
+          # next poll retries. Call it only for a completed run.
+          e2e_review_dispatch_resolve_head() {
+            local head_run_id="$1"
+            local head_jobs_json=""
+            local head_job_id=""
+            local head_log_file=""
+            local head_line=""
+            [ -z "${E2E_REVIEW_DISPATCH_HEADS[${head_run_id}]+x}" ] || return 0
+            head_jobs_json=$("${E2E_REVIEW_DISPATCH_API}" "repos/${TEST_REPO}/actions/runs/${head_run_id}/jobs?per_page=100") || return 1
+            head_job_id=$(printf '%s' "${head_jobs_json}" | jq -r '[.jobs[]? | select((.name // "") | test("(^| / )codex-agent( \\([^)]*\\))?$"))] | last | .id // empty') || return 1
+            if [ -z "${head_job_id}" ]; then
+              E2E_REVIEW_DISPATCH_HEADS[${head_run_id}]="none"
+              return 0
+            fi
+            [[ "${head_job_id}" =~ ^[0-9]+$ ]] || return 1
+            head_log_file="$(mktemp)"
+            if ! "${E2E_REVIEW_DISPATCH_API}" "repos/${TEST_REPO}/actions/jobs/${head_job_id}/logs" > "${head_log_file}"; then
+              rm -f "${head_log_file}"
+              return 1
+            fi
+            head_line=$(grep -a -m1 -oE 'Captured INITIAL_HEAD_SHA=[0-9a-f]{40} for stale-base detection\.' "${head_log_file}" || true)
+            rm -f "${head_log_file}"
+            if [ -n "${head_line}" ]; then
+              head_line="${head_line#Captured INITIAL_HEAD_SHA=}"
+              E2E_REVIEW_DISPATCH_HEADS[${head_run_id}]="${head_line:0:40}"
+            else
+              E2E_REVIEW_DISPATCH_HEADS[${head_run_id}]="none"
+            fi
+          }
+          # ── end of the default-branch review dispatch helpers ──
+
+          # Phase 4's use of the helpers. Sets E2E_REVIEW_DISPATCH_DONE_RUN
+          # to the newest completed, non-cancelled matched run whose reviewed
+          # head equals PIN_SHA, and E2E_REVIEW_DISPATCH_ACTIVE_RUN to the
+          # oldest matched run still active that was created at or after
+          # BAIT_CREATED_AT (a run created later checks out a head that
+          # already carries the bait). A run in flight is never accepted:
+          # only its completion, with a matching reviewed head, counts.
+          e2e_review_dispatch_pick() {
+            local pick_runs=""
+            local pick_rows=""
+            local pick_id=""
+            local pick_status=""
+            local pick_head=""
+            local pick_result=""
+            E2E_REVIEW_DISPATCH_DONE_RUN=""
+            E2E_REVIEW_DISPATCH_ACTIVE_RUN=""
+            [ -n "$(e2e_review_dispatch_title "${PR_NUMBER}")" ] || return 0
+            if ! e2e_review_dispatch_resolve_default_branch; then
+              echo "  ⚠ could not resolve ${TEST_REPO}'s default branch; this poll matches no default-branch review dispatch run" >&2
+              return 0
+            fi
+            if ! pick_runs=$(e2e_review_dispatch_runs "${PR_NUMBER}"); then
+              echo "  ⚠ default-branch review dispatch listing failed; this poll uses branch runs only" >&2
+              return 0
+            fi
+            pick_rows=$(printf '%s' "${pick_runs}" | jq -r --arg bait "${BAIT_CREATED_AT:-}" \
+              'sort_by(.created_at, .id) | reverse | .[] | select(.conclusion != "cancelled") | select($bait == "" or .created_at >= $bait) | [.id, .status] | @tsv')
+            while IFS=$'\t' read -r pick_id pick_status; do
+              [ -n "${pick_id}" ] || continue
+              if [ "${pick_status}" != "completed" ]; then
+                if [ -n "${BAIT_CREATED_AT:-}" ]; then
+                  E2E_REVIEW_DISPATCH_ACTIVE_RUN=$(printf '%s' "${pick_runs}" | jq -c --argjson id "${pick_id}" '.[] | select(.id == $id)')
+                fi
+                continue
+              fi
+              [ -z "${E2E_REVIEW_DISPATCH_DONE_RUN}" ] || continue
+              if [ -z "${E2E_REVIEW_DISPATCH_HEADS[${pick_id}]+x}" ]; then
+                if ! e2e_review_dispatch_resolve_head "${pick_id}"; then
+                  echo "E2E_REVIEW_DISPATCH_CORRELATION pr=${PR_NUMBER} run=${pick_id} reviewed_head=unknown pin=${PIN_SHA} result=unresolved"
+                  continue
+                fi
+                pick_head="${E2E_REVIEW_DISPATCH_HEADS[${pick_id}]}"
+                if [ "${pick_head}" = "none" ]; then
+                  pick_result="no_reviewed_head"
+                elif [ "${pick_head}" = "${PIN_SHA}" ]; then
+                  pick_result="match"
+                else
+                  pick_result="mismatch"
+                fi
+                echo "E2E_REVIEW_DISPATCH_CORRELATION pr=${PR_NUMBER} run=${pick_id} reviewed_head=${pick_head} pin=${PIN_SHA} result=${pick_result}"
+              fi
+              if [ "${E2E_REVIEW_DISPATCH_HEADS[${pick_id}]}" = "${PIN_SHA}" ]; then
+                E2E_REVIEW_DISPATCH_DONE_RUN=$(printf '%s' "${pick_runs}" | jq -c --argjson id "${pick_id}" '.[] | select(.id == $id)')
+              fi
+            done <<< "${pick_rows}"
+          }
+          if [ -n "${PIN_SHA:-}" ] && [ -z "$(e2e_review_dispatch_title "${PR_NUMBER}")" ]; then
+            echo "::notice::${REVIEW_WORKFLOW_FILE} names no dispatched run for its PR; default-branch review dispatch runs are not matched and Phase 4 waits on pull_request runs only (issue #5520)"
+          fi
+
           # Give the review workflow a moment to start
           sleep 5
 
@@ -1502,15 +1668,14 @@ jobs:
             # only when the bait-injection step did not produce a SHA
             # (status=skipped path).
             #
-            # The URL no longer pins event=pull_request: Phase 3c also
-            # dispatches ${REVIEW_WORKFLOW_FILE} as a Bug B fallback, and
-            # those runs carry event=workflow_dispatch. Dropping the
-            # event filter from the URL lets head_sha=BAIT_SHA match
-            # both paths uniformly. (We still rely on the jq name match
-            # to avoid latching onto e.g. CI runs that happen to share
-            # the bait SHA.) The dispatched run's head_sha matches
-            # BAIT_SHA because we dispatch with --ref "${BRANCH}" and
-            # GitHub records the ref's tip SHA at dispatch time.
+            # The URL does not pin event=pull_request, so a
+            # workflow_dispatch run on the PR branch (one dispatched there
+            # before issue #5520, or by hand) still matches head_sha. (We
+            # still rely on the jq name match to avoid latching onto e.g.
+            # CI runs that happen to share the bait SHA.) The Phase 3c Bug B
+            # fallback now dispatches from the default branch, so its run is
+            # never in this branch listing; the block after this selection
+            # finds it by its PR run name and reviewed head.
             #
             # GitHub's "Running Copilot Code Review" run is excluded
             # (event == "dynamic" / name contains "copilot"): it is a
@@ -1619,6 +1784,39 @@ jobs:
                 --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i")) | select((.event == "dynamic" or (.name | test("copilot"; "i"))) | not) | select(.name != .path)] | sort_by(.created_at) | last' || echo "")
             fi
 
+            # Default-branch dispatch runs (issue #5520): the Phase 3c
+            # dispatch never shows up in the branch listing above, so look
+            # for it separately while a bait is pinned. The branch selection
+            # and its tier order stay as they are. A completed dispatch run
+            # whose reviewed head equals PIN_SHA wins over any branch run
+            # that has not finished (the tier-1 rule: a finished run beats
+            # an active sibling). An active dispatch run is watched only when
+            # the branch selection found nothing or only a cancelled run.
+            # Skipped while the branch call is rate-limited, so the guard
+            # below still skips the whole cycle. API cost (§15): the branch
+            # listing cannot contain a default-branch run, and a repo-wide
+            # listing cannot be bounded to one page, so this adds one
+            # workflow-scoped listing per poll, one default-branch read per
+            # step, and two cached reads per completed candidate run.
+            E2E_REVIEW_DISPATCH_WATCHING=0
+            if [ -n "${PIN_SHA:-}" ] && [ "${RATE_LIMIT_BACKOFF:-0}" -eq 0 ]; then
+              e2e_review_dispatch_pick
+              E2E_REVIEW_DISPATCH_BRANCH_STATE=$(printf '%s' "${REVIEW_RUN}" | jq -r 'if type != "object" then "none" elif .status == "completed" and .conclusion != "cancelled" then "done" elif .status == "completed" then "cancelled" else "active" end' 2>/dev/null || true)
+              [ -n "${E2E_REVIEW_DISPATCH_BRANCH_STATE}" ] || E2E_REVIEW_DISPATCH_BRANCH_STATE="none"
+              if [ -n "${E2E_REVIEW_DISPATCH_DONE_RUN}" ] && [ "${E2E_REVIEW_DISPATCH_BRANCH_STATE}" != "done" ]; then
+                REVIEW_RUN="${E2E_REVIEW_DISPATCH_DONE_RUN}"
+                echo "  ↪ Using default-branch dispatch run #$(printf '%s' "${REVIEW_RUN}" | jq -r '.id') (reviewed head ${PIN_SHA:0:7})"
+              elif [ -n "${E2E_REVIEW_DISPATCH_ACTIVE_RUN}" ] \
+                  && { [ "${E2E_REVIEW_DISPATCH_BRANCH_STATE}" = "none" ] || [ "${E2E_REVIEW_DISPATCH_BRANCH_STATE}" = "cancelled" ]; }; then
+                REVIEW_RUN="${E2E_REVIEW_DISPATCH_ACTIVE_RUN}"
+                # Its reviewed head is only read once it completes, so the
+                # in-progress shortcuts below (failed steps, editor no-op)
+                # must not accept it.
+                E2E_REVIEW_DISPATCH_WATCHING=1
+                echo "  ↪ Watching default-branch dispatch run #$(printf '%s' "${REVIEW_RUN}" | jq -r '.id') until it completes"
+              fi
+            fi
+
             # If rate-limited, skip this cycle entirely (don't corrupt state)
             if [ "$RATE_LIMIT_BACKOFF" -gt 0 ] && [ -z "$REVIEW_RUN" ]; then
               ELAPSED=$((ELAPSED + POLL_INTERVAL))
@@ -1689,7 +1887,7 @@ jobs:
                 else
                   FAILED_STEPS="0"
                 fi
-                if [ "$FAILED_STEPS" -gt 0 ]; then
+                if [ "$FAILED_STEPS" -gt 0 ] && [ "${E2E_REVIEW_DISPATCH_WATCHING}" = "0" ]; then
                   echo "  ⚠ Review run has ${FAILED_STEPS} failed step(s) — main work has failed, cleanup still running"
                   echo "::warning::Review workflow has failed steps while cleanup is still in_progress"
                   echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
@@ -1798,7 +1996,7 @@ jobs:
                     # a validated review."`); GitHub Actions preserves
                     # workflow-command prefixes verbatim in the raw log
                     # bytes returned by /actions/jobs/{id}/logs.
-                    if grep -qaF '::warning::Editor summary contains failure/fallback markers' "$LOG_FILE"; then
+                    if [ "${E2E_REVIEW_DISPATCH_WATCHING}" = "0" ] && grep -qaF '::warning::Editor summary contains failure/fallback markers' "$LOG_FILE"; then
                       # When the editor's no-op was caused by a model
                       # safety-policy refusal (an OpenAI-style "I'm
                       # sorry, but I cannot assist" final-channel
@@ -2027,9 +2225,10 @@ jobs:
       # effort and prompt content; production runs hit empty-completion
       # state non-deterministically). On first pytest failure we
       # snapshot the branch head SHA, adopt the oldest active review run
-      # for the bait/current head when one exists, or re-dispatch
-      # ${REVIEW_WORKFLOW_FILE} via `--ref "${BRANCH}"` and register the
-      # oldest matching post-snapshot run. We allow up to 25 minutes for
+      # for the bait/current head (or an active default-branch dispatch
+      # run for the PR) when one exists, or re-dispatch
+      # ${REVIEW_WORKFLOW_FILE} from the default branch (issue #5520) and
+      # register the oldest matching post-snapshot dispatch run. We allow up to 25 minutes for
       # the pinned run to complete (raised from 10 min
       # after run 25371432937 truncated a still-running successful
       # retry); if the second verification also fails, we hard-fail
@@ -2084,6 +2283,10 @@ jobs:
           # inline expression makes GitHub Actions treat the whole script
           # as one expression, capped at 21,000 chars; this body is ~21.3k.
           PRIOR_REVIEW_RUN: ${{ steps.wait-review.outputs.review_run_id }}
+          # Lower bound for adopting an active default-branch dispatch run
+          # (issue #5520): a run created at or after the bait checks out a
+          # head that already carries it.
+          BAIT_CREATED_AT: ${{ steps.inject-bait.outputs.bait_created_at }}
         run: |
           set -euo pipefail
           BRANCH="ai/issue-${ISSUE_NUMBER}"
@@ -2163,6 +2366,111 @@ jobs:
             rm -f "${err_file}"
             return "${rc}"
           }
+
+          E2E_REVIEW_DISPATCH_API=gh_api_with_retry
+          # ── Default-branch review dispatch runs (issue #5520) ──
+          # Phase 3c and Phase 4b dispatch ${REVIEW_WORKFLOW_FILE} without
+          # --ref, so the run starts from TEST_REPO's default branch: its
+          # head_branch and head_sha are the default branch's, and the
+          # branch listing and head_sha pin cannot see it. These helpers find
+          # it and bind it to the PR head it reviewed. Phase 4 and Phase 4b
+          # carry this same block (the job sources scripts/ from its
+          # ref: main checkout, so a helper there could be missing when this
+          # workflow runs from another ref);
+          # tests/test_test_and_mark_stable_e2e_dispatch_default_branch.py
+          # keeps the two copies identical. E2E_REVIEW_DISPATCH_API names the
+          # step's own gh api wrapper.
+          #
+          # A run name alone proves nothing (issue #5094: GitHub evaluates
+          # run-name from the workflow file at the dispatched ref). A run
+          # counts only when the workflow-scoped listing returns it as a
+          # workflow_dispatch run of ${REVIEW_WORKFLOW_FILE} on the default
+          # branch, with that wrapper's exact PR run name. Only the two
+          # wrappers that set a PR run name are matched; any other
+          # review_workflow_file matches nothing.
+          #
+          # The reviewed head is the first "Captured INITIAL_HEAD_SHA=<sha>
+          # for stale-base detection." line in the run's codex-agent job
+          # log. In a default-branch run that line comes from reviewed
+          # workflow code (review_autofix.yml pinned @main / @stable), right
+          # after the job hard-resets to the PR head. The step's own script
+          # echo is unexpanded and never matches the 40-hex pattern.
+          declare -A E2E_REVIEW_DISPATCH_HEADS=()
+          E2E_REVIEW_DISPATCH_DEFAULT_BRANCH=""
+          e2e_review_dispatch_title() {
+            case "${REVIEW_WORKFLOW_FILE}" in
+              internal-review.yml) printf 'Internal: AI Review & Autofix [pr:%s]' "$1" ;;
+              ai-review.yml) printf 'AI Review [pr:%s]' "$1" ;;
+            esac
+          }
+          # Sets E2E_REVIEW_DISPATCH_DEFAULT_BRANCH once (one GET
+          # repos/<repo>); returns 1 when it cannot be resolved.
+          e2e_review_dispatch_resolve_default_branch() {
+            local resolved_branch=""
+            [ -z "${E2E_REVIEW_DISPATCH_DEFAULT_BRANCH}" ] || return 0
+            resolved_branch=$("${E2E_REVIEW_DISPATCH_API}" "repos/${TEST_REPO}" --jq '.default_branch // empty') || return 1
+            [[ "${resolved_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+            E2E_REVIEW_DISPATCH_DEFAULT_BRANCH="${resolved_branch}"
+          }
+          # Prints the matched runs for PR $1 as a JSON array (one GET
+          # actions/workflows/<file>/runs), or [] when the wrapper has no PR
+          # run name or the default branch is unresolved. Returns 1 on an
+          # API failure or a malformed listing.
+          e2e_review_dispatch_runs() {
+            local dispatch_title=""
+            local dispatch_listing=""
+            dispatch_title=$(e2e_review_dispatch_title "$1")
+            if [ -z "${dispatch_title}" ] || [ -z "${E2E_REVIEW_DISPATCH_DEFAULT_BRANCH}" ]; then
+              printf '[]'
+              return 0
+            fi
+            dispatch_listing=$("${E2E_REVIEW_DISPATCH_API}" "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&branch=${E2E_REVIEW_DISPATCH_DEFAULT_BRANCH}&per_page=100") || return 1
+            printf '%s' "${dispatch_listing}" | jq -c \
+              --arg title "${dispatch_title}" \
+              --arg branch "${E2E_REVIEW_DISPATCH_DEFAULT_BRANCH}" \
+              --arg path ".github/workflows/${REVIEW_WORKFLOW_FILE}" \
+              'if type == "object" and (.workflow_runs | type == "array") then
+                [.workflow_runs[]
+                  | select(type == "object")
+                  | select((.id | type) == "number" and .id > 0 and .id == (.id | floor))
+                  | select(.event == "workflow_dispatch" and .head_branch == $branch and .path == $path and .display_title == $title)
+                  | select((.status | type) == "string" and (.created_at | type) == "string")]
+              else error("malformed review dispatch run listing") end'
+          }
+          # Caches run $1's reviewed head in E2E_REVIEW_DISPATCH_HEADS: the
+          # 40-hex SHA, or "none" when the run has no codex-agent job or
+          # the job never logged the line. Two calls (jobs, job log), once
+          # per run; returns 1 on an API failure and caches nothing, so the
+          # next poll retries. Call it only for a completed run.
+          e2e_review_dispatch_resolve_head() {
+            local head_run_id="$1"
+            local head_jobs_json=""
+            local head_job_id=""
+            local head_log_file=""
+            local head_line=""
+            [ -z "${E2E_REVIEW_DISPATCH_HEADS[${head_run_id}]+x}" ] || return 0
+            head_jobs_json=$("${E2E_REVIEW_DISPATCH_API}" "repos/${TEST_REPO}/actions/runs/${head_run_id}/jobs?per_page=100") || return 1
+            head_job_id=$(printf '%s' "${head_jobs_json}" | jq -r '[.jobs[]? | select((.name // "") | test("(^| / )codex-agent( \\([^)]*\\))?$"))] | last | .id // empty') || return 1
+            if [ -z "${head_job_id}" ]; then
+              E2E_REVIEW_DISPATCH_HEADS[${head_run_id}]="none"
+              return 0
+            fi
+            [[ "${head_job_id}" =~ ^[0-9]+$ ]] || return 1
+            head_log_file="$(mktemp)"
+            if ! "${E2E_REVIEW_DISPATCH_API}" "repos/${TEST_REPO}/actions/jobs/${head_job_id}/logs" > "${head_log_file}"; then
+              rm -f "${head_log_file}"
+              return 1
+            fi
+            head_line=$(grep -a -m1 -oE 'Captured INITIAL_HEAD_SHA=[0-9a-f]{40} for stale-base detection\.' "${head_log_file}" || true)
+            rm -f "${head_log_file}"
+            if [ -n "${head_line}" ]; then
+              head_line="${head_line#Captured INITIAL_HEAD_SHA=}"
+              E2E_REVIEW_DISPATCH_HEADS[${head_run_id}]="${head_line:0:40}"
+            else
+              E2E_REVIEW_DISPATCH_HEADS[${head_run_id}]="none"
+            fi
+          }
+          # ── end of the default-branch review dispatch helpers ──
 
           fetch_canary_to_tmp() {
             # NOTE: do NOT use `blob=$(gh api ... || echo "")` — on
@@ -2328,13 +2636,16 @@ jobs:
           # Phase 3c or pull_request:synchronize; adopting the oldest one
           # avoids adding another run behind it in pr-autofix concurrency.
           #
-          # `gh workflow run` is dispatched with --ref "${BRANCH}"
-          # (its documented contract is branch/tag, not raw SHA);
-          # RETRY_DISPATCH_SHA and BAIT_SHA select already-active work before
-          # dispatch. After dispatch, the branch-scoped baseline identifies
-          # the oldest new run even if the branch advanced. Once selected,
-          # one positive run id is polled directly so a newer peer cannot
-          # replace it.
+          # `gh workflow run` is dispatched without --ref, from TEST_REPO's
+          # default branch (issue #5520: a dispatch at BRANCH ran the
+          # branch's own copy of the wrapper with TEST_REPO's secrets).
+          # RETRY_DISPATCH_SHA and BAIT_SHA select already-active branch
+          # work before dispatch, and an active default-branch dispatch run
+          # for the PR created at or after the bait is adopted next. After
+          # dispatch, the baseline (the highest run id either listing
+          # showed) identifies the oldest new dispatch run for the PR. Once
+          # selected, one positive run id is polled directly so a newer
+          # peer cannot replace it.
           if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]] || [ "${PRIOR_REVIEW_RUN}" -lt 1 ]; then
             echo "::error::wait-review.outputs.review_run_id is not a positive integer ('${PRIOR_REVIEW_RUN}'); refusing retry discovery with a no-op exclusion filter"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
@@ -2373,7 +2684,36 @@ jobs:
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          # Default-branch dispatch runs for the PR (issue #5520). The
+          # branch listing above cannot hold them. E2E_RETRY_DISPATCH_READY
+          # stays 0 when the wrapper names no dispatched run for its PR or
+          # the default branch cannot be resolved; then no dispatch run is
+          # adopted, and the dispatch below is refused.
+          E2E_RETRY_DISPATCH_RUNS="[]"
+          E2E_RETRY_DISPATCH_READY=0
+          E2E_RETRY_FROM_DISPATCH=0
+          if ! [[ "${BAIT_CREATED_AT:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+            BAIT_CREATED_AT=""
+          fi
+          if [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] && [ -n "$(e2e_review_dispatch_title "${PR_NUMBER}")" ]; then
+            if ! e2e_review_dispatch_resolve_default_branch; then
+              echo "::warning::Could not resolve ${TEST_REPO}'s default branch; no default-branch review dispatch run can be adopted or registered"
+            elif ! E2E_RETRY_DISPATCH_RUNS=$(e2e_review_dispatch_runs "${PR_NUMBER}"); then
+              echo "::error::Could not list default-branch review dispatch runs before retry dispatch"
+              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            else
+              E2E_RETRY_DISPATCH_READY=1
+            fi
+          fi
+          # Each listing's highest id is read from stdin: a 100-run page is
+          # far larger than one command-line argument may be.
           RETRY_BASELINE_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r '[.workflow_runs[].id] | max // 0')
+          E2E_RETRY_DISPATCH_BASELINE_ID=$(printf '%s\n' "${E2E_RETRY_DISPATCH_RUNS}" | jq -r '[.[].id] | max // 0')
+          if [[ "${E2E_RETRY_DISPATCH_BASELINE_ID}" =~ ^[0-9]+$ ]] && [[ "${RETRY_BASELINE_ID}" =~ ^[0-9]+$ ]] \
+              && [ "${E2E_RETRY_DISPATCH_BASELINE_ID}" -gt "${RETRY_BASELINE_ID}" ]; then
+            RETRY_BASELINE_ID="${E2E_RETRY_DISPATCH_BASELINE_ID}"
+          fi
           if ! [[ "${RETRY_BASELINE_ID}" =~ ^[0-9]+$ ]]; then
             echo "::error::Malformed review run baseline id: '${RETRY_BASELINE_ID}'"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
@@ -2390,6 +2730,18 @@ jobs:
               | select(.head_sha == $bait_sha or .head_sha == $retry_sha)]
             | sort_by(.created_at, .id)
             | .[0] // empty')
+          if [ -z "${RETRY_ACTIVE_RUN}" ] && [ "${E2E_RETRY_DISPATCH_READY}" = "1" ] && [ -n "${BAIT_CREATED_AT}" ]; then
+            RETRY_ACTIVE_RUN=$(printf '%s\n' "${E2E_RETRY_DISPATCH_RUNS}" | jq -c \
+              --arg bait_created_at "${BAIT_CREATED_AT}" \
+              --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
+              '[.[]
+                | select(.id != $prior_run_id)
+                | select(.status != "completed")
+                | select(.created_at >= $bait_created_at)]
+              | sort_by(.created_at, .id)
+              | .[0] // empty')
+            [ -z "${RETRY_ACTIVE_RUN}" ] || E2E_RETRY_FROM_DISPATCH=1
+          fi
 
           RETRY_RUN_ID=""
           RETRY_STATUS=""
@@ -2404,24 +2756,29 @@ jobs:
             fi
             echo "✓ Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work"
           else
-            # Dispatch ref (issue #4898): exposed in the same way as the
-            # Phase 3c Bug B dispatch (BRANCH's copy of the wrapper, with
-            # TEST_REPO's secrets), and kept at the branch for the same
-            # reason: the retry registration lists runs with
-            # branch=${BRANCH} (RETRY_RUNS_QUERY) and adopts ones whose
-            # head_sha is BAIT_SHA or RETRY_DISPATCH_SHA; a default-branch
-            # dispatch appears in neither.
+            # Dispatch ref (issue #5520, finding
+            # e2e-dispatch-executes-unreviewed-workflow): no --ref, like the
+            # Phase 3c Bug B dispatch, so the run is the default branch's
+            # copy of the wrapper, not BRANCH's. It can only be registered
+            # by its PR run name, so a wrapper without one (or an
+            # unresolved default branch) is refused here rather than
+            # dispatched blind.
+            if [ "${E2E_RETRY_DISPATCH_READY}" != "1" ]; then
+              echo "::error::Cannot register a default-branch retry run: ${REVIEW_WORKFLOW_FILE} names no dispatched run for PR #${PR_NUMBER}, or ${TEST_REPO}'s default branch is unresolved (issue #5520)"
+              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
                 --repo "${TEST_REPO}" \
-                --ref "${BRANCH}" \
                 -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
               echo "::error::Retry dispatch failed; cannot recover"
               cat /tmp/retry_dispatch.txt >&2 || true
               echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
               exit 1
             fi
+            E2E_RETRY_FROM_DISPATCH=1
             RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))
-            echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — registering the oldest new branch run after baseline ${RETRY_BASELINE_ID}"
+            echo "✓ Retry dispatch sent from the default branch (${BRANCH} head ${RETRY_DISPATCH_SHA:0:7}) — registering the oldest new dispatch run for PR #${PR_NUMBER} after baseline ${RETRY_BASELINE_ID}"
           fi
 
           # EDITOR_RETRY_BUDGET_MINUTES defaults to 25 (was 10; raised after
@@ -2468,28 +2825,18 @@ jobs:
                 echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
                 exit 1
               fi
-              if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
+              # The retry was dispatched from the default branch, so it
+              # shows up only in the dispatch listing (issue #5520), which
+              # e2e_review_dispatch_runs already validated and narrowed to
+              # the PR's exact run name on the default branch.
+              if ! E2E_RETRY_DISPATCH_RUNS=$(e2e_review_dispatch_runs "${PR_NUMBER}"); then
                 echo "::warning::Could not list post-dispatch review runs; retrying within the registration window"
                 continue
               fi
-              if ! printf '%s\n' "${RETRY_RUNS_JSON}" | jq -e '
-                type == "object" and
-                (.workflow_runs | type == "array") and
-                all(.workflow_runs[];
-                  type == "object" and
-                  (.id | type == "number") and .id > 0 and .id == (.id | floor) and
-                  (.head_sha | type == "string") and
-                  (.status | type == "string") and
-                  (.created_at | type == "string") and
-                  ((.conclusion == null) or (.conclusion | type == "string")))
-              ' >/dev/null 2>&1; then
-                echo "::warning::Malformed post-dispatch review run-list payload; retrying within the registration window"
-                continue
-              fi
-              RETRY_RUN_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r \
+              RETRY_RUN_ID=$(printf '%s\n' "${E2E_RETRY_DISPATCH_RUNS}" | jq -r \
                 --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
                 --argjson baseline_id "${RETRY_BASELINE_ID}" \
-                '[.workflow_runs[]
+                '[.[]
                   | select(.id > $baseline_id and .id != $prior_run_id)]
                 | sort_by(.created_at, .id)
                 | .[0].id // empty')
@@ -2540,6 +2887,30 @@ jobs:
             echo "::error::Retry review run #${RETRY_RUN_ID} completed with conclusion=${RETRY_CONCL} (not 'success'); refusing to attribute the resulting canary state to the editor"
             echo "status=retry_workflow_failed" >> "$GITHUB_OUTPUT"
             exit 1
+          fi
+
+          # A default-branch dispatch run (dispatched or adopted above) is
+          # bound to the PR head it reviewed, read from its codex-agent job
+          # log (issue #5520). A run that logged no reviewed head never
+          # checked out the PR (for example a gate skip), so the canary it
+          # leaves behind says nothing about the editor: report
+          # retry_workflow_failed rather than spec_mismatch. A failed read
+          # is a registration failure.
+          if [ "${E2E_RETRY_FROM_DISPATCH}" = "1" ]; then
+            if ! e2e_review_dispatch_resolve_head "${RETRY_RUN_ID}"; then
+              echo "E2E_REVIEW_DISPATCH_CORRELATION pr=${PR_NUMBER} run=${RETRY_RUN_ID} reviewed_head=unknown retry_head=${RETRY_DISPATCH_SHA} result=unresolved"
+              echo "::error::Could not read the reviewed PR head of retry review run #${RETRY_RUN_ID}"
+              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            E2E_RETRY_REVIEWED_HEAD="${E2E_REVIEW_DISPATCH_HEADS[${RETRY_RUN_ID}]}"
+            if [ "${E2E_RETRY_REVIEWED_HEAD}" = "none" ]; then
+              echo "E2E_REVIEW_DISPATCH_CORRELATION pr=${PR_NUMBER} run=${RETRY_RUN_ID} reviewed_head=none retry_head=${RETRY_DISPATCH_SHA} result=no_reviewed_head"
+              echo "::error::Retry review run #${RETRY_RUN_ID} logged no reviewed PR head; it never reviewed PR #${PR_NUMBER}, so the canary state is not the editor's"
+              echo "status=retry_workflow_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            echo "E2E_REVIEW_DISPATCH_CORRELATION pr=${PR_NUMBER} run=${RETRY_RUN_ID} reviewed_head=${E2E_RETRY_REVIEWED_HEAD} retry_head=${RETRY_DISPATCH_SHA} result=reviewed"
           fi
 
           # ── Attempt 2 ──────────────────────────────────────────────
