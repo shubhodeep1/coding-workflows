@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Guard differential check: run every adversarial corpus shape through the
-base-branch hook and the PR's hook, and fail on a silent loosening.
+base-branch hook and the PR's hook, and fail on every loosening the PR body
+does not declare, whether or not the new hook printed a warning.
 
 Issue #5174. The `.claude/hooks/*_guard.py` hooks are the security boundary of
 unattended sessions (CLAUDE.md §21, §23.H, §25, and the inline-edit guard of
@@ -25,9 +26,11 @@ the base and the head:
   3. Records each decision (`block`, `deny`, `ask`, `none`, `allow`, `error`)
      and whether the hook emitted a warning (`systemMessage`).
   4. Fails on every shape whose head decision is less strict than its base
-     decision (block = deny > ask > none > allow = error) while the head
-     emitted no warning, unless the PR body lists the shape under an
-     `Intended loosening:` section. A listed shape counts as a loosening
+     decision (block = deny > ask > none > allow = error), unless the PR body
+     lists the shape under an `Intended loosening:` section. A head warning
+     does not excuse the loosening (issue #5325: any hook can print a
+     `systemMessage`); it is only reported, as `+warning` on the regression
+     line and `"warned"` in `--json`. A listed shape counts as a loosening
      under the retire-master Q3: A rule, so a sync carrying it waits for the
      operator.
 
@@ -657,7 +660,9 @@ def compare_hook_dirs(
 				stdin = build_stdin(shape, scenario.cwd, scenario.substitutions)
 				outcomes.append(run_hook(hook_file, stdin, scenario.cwd, env))
 			base, head = outcomes
-			loosened = STRICTNESS[head.decision] < STRICTNESS[base.decision] and not head.warned
+			# A warning is a diagnostic, never an excuse: a changed guard can
+			# print any `systemMessage` (issue #5325).
+			loosened = STRICTNESS[head.decision] < STRICTNESS[base.decision]
 			results.append(
 				ShapeResult(
 					shape=shape,
@@ -790,9 +795,10 @@ def print_report(report: Report, as_json: bool) -> None:
 	if report.regressions:
 		print(
 			f"{LOG_KEY}: a shape the base hook blocked, denied, or asked (or left to the normal "
-			"permission flow) is now allowed without a warning. Make the new hook fall back with "
-			"a warning, or, if the loosening is intended, list each shape verbatim under an "
-			"`Intended loosening:` section of the PR body (the sync then waits for the operator)."
+			"permission flow) is now treated less strictly; a warning from the new hook does not "
+			"excuse it. Keep the base hook's decision for the shape, or, if the loosening is "
+			"intended, list each shape verbatim under an `Intended loosening:` section of the PR "
+			"body (the sync then waits for the operator)."
 		)
 
 
