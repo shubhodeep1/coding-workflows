@@ -136,19 +136,25 @@ class PollerPrNamedRunContract(unittest.TestCase):
 		self.helper = text[helper_start:text.index("\n}\n", helper_start)]
 
 	def test_guard_looks_up_pr_named_dispatch_runs(self) -> None:
-		# Issue #4701: the lookup moved into the shared helper, which covers
-		# both wrapper names with one call (no workflow filter). Issue #5094:
-		# that call is REST so each run's path and head_branch can be checked.
-		self.assertIn('_pr_named_review_dispatch_runs "${pr_number}"', self.body)
+		# Issue #4701: the lookup lives in the shared helper, which matches
+		# both wrapper names. Issue #4927: it lists each wrapper's own
+		# workflow_dispatch runs page by page instead of one global page of
+		# the newest 100 dispatches, and an incomplete listing counts as an
+		# active run. Issue #5094: each listed run's head_branch and path are
+		# checked before its name counts.
+		self.assertIn('_pr_named_review_dispatch_runs "${pr_number}")" || pr_named_rc=$?', self.body)
+		self.assertIn('if [ "${pr_named_rc}" -ne 0 ]; then', self.body)
+		self.assertIn("for _pnr_wrapper in internal-review.yml ai-review.yml; do", self.helper)
 		self.assertIn(
-			'"repos/${GITHUB_REPOSITORY}/actions/runs?event=workflow_dispatch&branch=${default_branch_uri}&per_page=100"',
+			'actions/workflows/${_pnr_wrapper}/runs?event=workflow_dispatch&created=>=${_pnr_cutoff}&per_page=100&page=${_pnr_page}',
 			self.helper,
 		)
-		self.assertNotIn("--workflow", self.helper)
-		self.assertNotIn("/workflows/", self.helper.split("jq -c", 1)[0])
+		self.assertNotIn("gh run list", self.helper)
+		self.assertNotIn("--limit 100", self.helper)
 		self.assertIn('("Internal: AI Review & Autofix [pr:" + $pr + "]")', self.helper)
 		self.assertIn('("AI Review [pr:" + $pr + "]")', self.helper)
-		self.assertIn('select((.head_branch // "") == $default_branch)', self.helper)
+		self.assertIn('select((.headBranch // "") == $default_branch)', self.helper)
+		self.assertIn('headBranch: .head_branch, path: .path', self.helper)
 		self.assertIn('(.path // "") == ".github/workflows/internal-review.yml"', self.helper)
 		self.assertIn('(.path // "") == ".github/workflows/ai-review.yml"', self.helper)
 
