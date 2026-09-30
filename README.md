@@ -342,9 +342,14 @@ reviewing the plan: an outside author's issue is never auto-approved. The `/recl
 only comments from a user whose `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`.
 A comment that starts with `/reclarify` always counts. On an issue waiting on a human answer
 (`ai:claude-blocked`, `ai:claude-handoff-failed`, or `ai:blocked`), `/reclarify` at the start of any
-later line counts too, unless the comment carries an `<!-- ai:` automation marker, so an answer can
-end with `/reclarify` (issue #5243). A mention inside a sentence, in backticks, or indented never
-counts, and the `Decide clarify route` step repeats the rule and skips anything else with
+later line counts too, so an answer can end with `/reclarify` (issue #5243). Automation posts as the
+same trusted user, so that later-line form fails closed (issue #5309): it never counts in a comment
+that contains an HTML comment (`<!--`, which every automation marker is), on an
+`ai:orchestrator-tracking` or `ai:orchestrator-managed` issue, or, in the route step, inside a fenced
+code block. The clarify, plan and implement comments that add `ai:blocked` end with an
+`<!-- ai:…:v1 -->` marker.
+A mention inside a sentence, in backticks, or indented never counts, and the `Decide clarify route`
+step repeats the rule and skips anything else with
 `AI_PHASE_GATE_V1 … reason=not_reclarify_command`. The `/answer` route in `ai-plan` and the
 `/approved` route in `ai-implement` accept the same trusted-user associations and also accept
 `github-actions[bot]` with their documented auto-answer and auto-approve markers, respectively. Copy
@@ -366,7 +371,7 @@ jobs:
   clarify:
     if: >-
       ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
-      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && (contains(toJson(github.event.issue.labels.*.name), '"ai:claude-blocked"') || contains(toJson(github.event.issue.labels.*.name), '"ai:claude-handoff-failed"') || contains(toJson(github.event.issue.labels.*.name), '"ai:blocked"')))))
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!--') && !contains(toJson(github.event.issue.labels.*.name), '"ai:orchestrator-tracking"') && !contains(toJson(github.event.issue.labels.*.name), '"ai:orchestrator-managed"') && (contains(toJson(github.event.issue.labels.*.name), '"ai:claude-blocked"') || contains(toJson(github.event.issue.labels.*.name), '"ai:claude-handoff-failed"') || contains(toJson(github.event.issue.labels.*.name), '"ai:blocked"')))))
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
@@ -1313,7 +1318,7 @@ three REST reads.
 | To … | Do |
 | --- | --- |
 | Send every new issue in a repo to Codex | Set repo variable `AI_ISSUE_IMPLEMENTER=codex` |
-| Move one issue to Codex | Add `ai:codex`, then comment `/reclarify` (the `ai:claude` claim is released) |
+| Move one issue to Codex | Add `ai:codex`, then comment `/reclarify` (the `ai:claude` claim and any `ai:claude-blocked` / `ai:claude-handoff-failed` label are released) |
 | Send one issue to Claude in a `codex` repo | Add `ai:claude`, then comment `/reclarify` |
 | Retry a failed handoff or resume a blocked issue | Comment `/reclarify` |
 
@@ -1339,7 +1344,7 @@ exhausted cap, a failed security or validation run, an ask-first operation,
 a missing base branch) comments once on the issue, labels it
 `ai:claude-blocked`, and sends a push notification; answer there and comment
 `/reclarify` to resume (on its own line, at the start of the comment or of any
-later line of it). If `claude_issue_route.py`
+later line of it outside a code block, in a comment with no `<!--` HTML comment). If `claude_issue_route.py`
 itself errors, clarify falls back to the Codex pipeline with a warning, so no
 issue is dropped.
 

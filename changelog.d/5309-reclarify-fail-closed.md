@@ -1,0 +1,17 @@
+<!-- changelog: security -->
+- **Automation comments can no longer resume a blocked issue through a later-line `/reclarify`.** The later-line form fails closed on automation text: it ignores comments with an HTML comment, orchestrator tracking and managed issues, and fenced code blocks.
+
+Automation posts issue comments as the same trusted `User` account a maintainer uses, and many of those comments copy model output. The security audit (#5309, high) showed the gap. The orchestrator's clarify escalation adds `ai:blocked`, then posts the model's escalation text without a marker, so a `/reclarify` line in that text resumed Codex clarification without the human answer it was waiting for. The gate in `clarify.yml`, `internal-clarify.yml` and `workflow-templates/ai-clarify.yml` now accepts a later-line `/reclarify` only in a comment with no `<!--` HTML comment (every automation marker is one), and never on an `ai:orchestrator-tracking` or `ai:orchestrator-managed` issue. The `Decide clarify route` step also ignores a `/reclarify` line inside a fenced code block, where automation quotes model output and untrusted excerpts. The clarify, plan and implement comments that add `ai:blocked`, and the plan's "Clarification required" comment, now end with an `<!-- ai:…:v1 -->` marker. A switch to Codex drops stale `ai:claude-blocked` and `ai:claude-handoff-failed` labels as well as the `ai:claude` claim.
+
+| The numbers that matter | Value |
+| --- | --- |
+| New comment markers | `<!-- ai:clarify-escalation:v1 -->` (`scripts/orchestrate_parse_and_post_answer.sh`), `<!-- ai:plan-blocked:v1 -->` and `<!-- ai:clarification-required:v1 -->` (`plan.yml`), `<!-- ai:implement-blocked:v1 -->` (`implement.yml`) |
+| Later-line `/reclarify` never counts on | `ai:orchestrator-tracking`, `ai:orchestrator-managed` |
+| Comment starting with `/reclarify` | unchanged, on every issue |
+| Extra GitHub API calls | 0 per route; 2 more label deletions only when a Codex route releases a Claude claim |
+
+What this means for operators and maintainers: to resume a blocked standalone issue, answer and put `/reclarify` on its own line, outside any code block, with no HTML comment in the reply. On orchestrator issues, answer with `/answer` as the escalation says, or start the comment with `/reclarify`. Consumer repos get the stricter `ai-clarify.yml` gate on the next `@stable` sync. Until then the reusable workflow's own gate and route step apply.
+
+### For contributors
+
+The expression language cannot parse Markdown, so the fenced-code-block check lives only in the route step (`RECLARIFY_FENCE_OPEN_RE` / `RECLARIFY_FENCE_CLOSE_RE`, CommonMark fence rules). Such a comment starts a runner that then skips with `reason=not_reclarify_command`. A new automation comment that copies model output should end with its own `<!-- ai:<name>:v1 -->` line. `tests/test_phase_wrapper_predicate_contract.py` pins the clause, and `tests/test_phase_skip_gate_telemetry_contract.py` runs the real route step over the escalation, heal-marker, tracking, managed and fence cases and checks every marker site.

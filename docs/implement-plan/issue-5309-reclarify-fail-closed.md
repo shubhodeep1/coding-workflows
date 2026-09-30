@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5309-reclarify-fail-closed-plan.md
 - Source issue: shubhodeep1/coding-workflows#5309
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5309-reclarify-fail-closed   Final PR: pending
+- Project branch: claude/implement-plan-issue-5309-reclarify-fail-closed   Final PR: #5324 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (review workflow)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from claude/implement-plan-issue-5243-reclarify-any-line.
+- Last note: phase 1 implemented: `<!--` + orchestrator-scope later-line gate, fenced-block route-step scan, four escalation markers, stale Claude labels released on a Codex route.
 
 ## Phases
-1. [ ] Phase 1 — fail-closed later-line `/reclarify` gate
+1. [ ] Phase 1 — fail-closed later-line `/reclarify` gate   — PR open (waiting); review rounds: 0; interventions: 0
    - Job predicate (four copies): `<!--` exclusion, `ai:orchestrator-tracking` / `ai:orchestrator-managed` exclusion.
    - `Decide clarify route`: same rules plus fenced-code-block scan; `RELEASE_CLAUDE_CLAIM` also for stale Claude labels.
    - Release step drops `ai:claude-blocked` / `ai:claude-handoff-failed`.
