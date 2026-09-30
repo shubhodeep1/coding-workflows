@@ -1,18 +1,18 @@
 # Implement-Plan Log — Finalize issue lineage only for merges the target-branch gate accepted
 
-- Plan: docs/plans/issue-5227-lineage-only-target-branch-merges-plan.md
+- Plan: docs/completed/issue-5227-lineage-only-target-branch-merges-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5227
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Base branch: claude/implement-plan-issue-4813-close-sweep-target-branch-merges
 - Project branch: claude/implement-plan-issue-5227-lineage-only-target-branch-merges   Final PR: #5257 draft
-- Status: IN_PROGRESS
-- Stage: conformance 3/3
-- Activation: not started
-- Waiting on: conformance fix PR (branch claude/implement-plan-issue-5227-lineage-only-target-branch-merges-conformance-fix-3)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation (n/a while the issue base is claude/implement-plan-issue-4813-close-sweep-target-branch-merges; settled at final-merge)
+- Waiting on: completion PR (branch claude/implement-plan-issue-5227-lineage-only-target-branch-merges-complete)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01PDr5T95Ca99NuYW2c1g8XD (project checker, reused)
 - Last updated: 2026-09-30
-- Last note: conformance fix 2 PR #5355 merged 2026-09-30; the stage merged the issue base (bringing the #5226 automation-head rule) into the project branch; conformance run 3 CONFORMANT with one CONCERN (no test covered lineage on the new #5226 head-rejection path), fixed test-only in the conformance-fix-3 PR; the next stage is `conformance 3/3 — fix check`.
+- Last note: conformance fix 3 PR #5390 merged 2026-09-30 and its fix check was FIX-VERIFIED; validation cycle 1 (run 36667229747, target_ref = the project branch) passed 10/10; the completion PR moves the plan to docs/completed/ and the next stage is `final-merge 1/1`.
 
 ## Phases
 1. [x] Phase 1 — lineage allow-list in `issue_pr_status.yml` (workflow + tests + README row + changelog fragment)   — PR #5269 merged 2026-09-29; review rounds: 0; interventions: 0
@@ -20,14 +20,18 @@
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR #5313 merged 2026-09-30 (pre-security; security pass skipped for this project)
 - Run 2 — 2026-09-30: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR on branch claude/implement-plan-issue-5227-lineage-only-target-branch-merges-conformance-fix-2: `tests/test_issue_pr_status_target_branch_gate.py` ran only 12 of its 21 tests as a script (ci.yml), the `__main__` block now runs last and calls all 21 (pre-security; security pass skipped) — PR #5355 merged 2026-09-30
-- Run 3 — 2026-09-30: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR on branch claude/implement-plan-issue-5227-lineage-only-target-branch-merges-conformance-fix-3: after the base merge brought #5226's automation-head check into the gate, no test asserted that its rejection skips lineage; added `test_non_automation_head_merge_is_not_finalized` (pre-security; security pass skipped; last run the cap allows, so the fix PR gets the fix check)
+- Run 3 — 2026-09-30: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — fix PR on branch claude/implement-plan-issue-5227-lineage-only-target-branch-merges-conformance-fix-3: after the base merge brought #5226's automation-head check into the gate, no test asserted that its rejection skips lineage; added `test_non_automation_head_merge_is_not_finalized` (pre-security; security pass skipped; last run the cap allows, so the fix PR gets the fix check) — PR #5390 merged 2026-09-30
+- Fix check — 2026-09-30: FIX-VERIFIED (#5390) — no outside-scope defects
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue; `security_pass_skip.py` verified)
 
 ## Validation
+- Cycle 1 — run 36667229747 2026-09-30 (target_ref: claude/implement-plan-issue-5227-lineage-only-target-branch-merges, head 097a566): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 281s); no fix PR
 
 ## Completion
+- Completion PR (branch claude/implement-plan-issue-5227-lineage-only-target-branch-merges-complete) open 2026-09-30 — doc moved to docs/completed/issue-5227-lineage-only-target-branch-merges-plan.md
+- Final PR #5257 draft (into claude/implement-plan-issue-4813-close-sweep-target-branch-merges); marked ready at the final-merge stage
 
 ## Activation
 
