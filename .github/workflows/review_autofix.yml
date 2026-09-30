@@ -485,6 +485,8 @@ jobs:
           pr_mergeable=""
           pr_mergeable_state=""
           pr_head_sha_gate=""
+          pr_author_login=""
+          pr_head_repo=""
           pr_title_cached="${PR_TITLE:-}"
           pr_body_cached="${PR_BODY:-}"
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -510,14 +512,17 @@ jobs:
             # additions/deletions totals (deterministic-skip size check), and
             # mergeable/mergeable_state (deterministic-skip conflict
             # suppression below), and changed_files (to verify the paginated
-            # path list before either skip branch can run).
+            # path list before either skip branch can run), and the PR author
+            # plus head repository (Claude twin sync provenance, issue #5610).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), author_login: (.user.login // ""), head_repo: (.head.repo.full_name // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
               pr_head_ref="$(printf '%s' "${_pr_gate}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
               pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
+              pr_author_login="$(printf '%s' "${_pr_gate}" | jq -r '.author_login // ""' 2>/dev/null || echo "")"
+              pr_head_repo="$(printf '%s' "${_pr_gate}" | jq -r '.head_repo // ""' 2>/dev/null || echo "")"
               pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
               pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
               pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
@@ -533,6 +538,63 @@ jobs:
             fi
           fi
 
+          # Claude twin sync exemption (CLAUDE.md §28.C, issue #5610). The
+          # branch name alone is not provenance: a fork or a consumer
+          # repository can name a branch claude/claude-twin-sync-*. Only a
+          # sync PR claude-twin-sync.yml opened may skip review: in
+          # coding-workflows (the only repository that workflow runs in),
+          # from a same-repository head, authored by the account GH_PAT
+          # authenticates as (the sync opens its PR with secrets.GH_PAT, and
+          # this step runs with the same secret). Anything that cannot be
+          # verified is reviewed normally; genuine sync PRs still carry
+          # [skip ai]. The no-PR claude-branch push path (no PR number) keeps
+          # the exemption in coding-workflows only: that push came from this
+          # repository's own branch and the run cannot merge anything.
+          # gate_resolve_pat_login is the gate's only `gh api user` lookup. It
+          # runs at most once per gate evaluation (a failure is not retried)
+          # and both this exemption and gate_fetch_marker_comments read its
+          # cached result (CLAUDE.md §15).
+          gate_pat_login=""
+          gate_pat_login_attempted="false"
+          gate_resolve_pat_login()
+          {
+            if [ "${gate_pat_login_attempted}" = "true" ]; then
+              return 0
+            fi
+            gate_pat_login_attempted="true"
+            if ! gate_pat_login="$(gh api user --jq '.login // ""' 2>/dev/null)"; then
+              gate_pat_login=""
+            fi
+          }
+          gate_twin_sync_exempt()
+          {
+            local deny_reason=""
+            if [[ "${pr_head_ref}" != claude/claude-twin-sync-* ]]; then
+              return 1
+            fi
+            if [ "${REPOSITORY}" != "shubhodeep1/coding-workflows" ]; then
+              deny_reason="not_library_repository"
+            elif [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+              if [ -z "${pr_head_repo}" ] || [ "${pr_head_repo,,}" != "${REPOSITORY,,}" ]; then
+                deny_reason="head_repository_mismatch"
+              elif [ -z "${pr_author_login}" ]; then
+                deny_reason="pr_author_unknown"
+              else
+                gate_resolve_pat_login
+                if [ -z "${gate_pat_login}" ]; then
+                  deny_reason="sync_identity_unavailable"
+                elif [ "${pr_author_login,,}" != "${gate_pat_login,,}" ]; then
+                  deny_reason="pr_author_not_sync_identity"
+                fi
+              fi
+            fi
+            if [ -n "${deny_reason}" ]; then
+              echo "AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT reason=${deny_reason} pr=${PR_NUMBER:-none} head_ref=${pr_head_ref} head_repo=${pr_head_repo:-unknown} author=${pr_author_login:-unknown}"
+              return 1
+            fi
+            return 0
+          }
+
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
             SHOULD_RUN="false"
             SKIP_REASON="pr_state_unknown"
@@ -543,12 +605,13 @@ jobs:
             if [ "${pr_merged}" = "true" ]; then
               POST_MERGE_DISPATCH="true"
             fi
-          elif [[ "${pr_head_ref}" == claude/claude-twin-sync-* ]]; then
+          elif gate_twin_sync_exempt; then
             # CLAUDE.md §28.C: a Claude twin sync PR copies already-reviewed
             # workflow-templates/.claude/** into .claude/**. It is merged by
             # claude-twin-sync.yml (commands/scripts) or by the repository
             # owner (hooks/settings), never by AI review, so a removed
             # [skip ai] marker cannot route a guard change into auto-merge.
+            # gate_twin_sync_exempt (above) verifies it is a genuine sync PR.
             SHOULD_RUN="false"
             SKIP_REASON="claude_twin_sync"
             echo "AUTOFIX_GATE_SKIP reason=claude_twin_sync pr=${PR_NUMBER} head_ref=${pr_head_ref}"
@@ -711,10 +774,11 @@ jobs:
             fi
             # The existing PR and comments calls do not expose the identity
             # authenticated by GH_PAT, so this lookup cannot be merged into
-            # either response. Resolve it once for this gate evaluation.
-            if ! gate_marker_author_login="$(gh api user --jq '.login // ""' 2>/dev/null)"; then
-              gate_marker_author_login=""
-            fi
+            # either response. Resolve it once for this gate evaluation;
+            # gate_resolve_pat_login reuses the twin sync exemption's lookup
+            # when that already ran.
+            gate_resolve_pat_login
+            gate_marker_author_login="${gate_pat_login}"
             if [ -z "${gate_marker_author_login}" ]; then
               gate_marker_fetch_state="marker_author_unavailable"
               return 0

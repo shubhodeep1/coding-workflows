@@ -479,9 +479,14 @@ def emit(value):
 		text = subprocess.run(["jq", "-rc", jq], input=text, capture_output=True, text=True, check=True).stdout
 	sys.stdout.write(text if text.endswith("\n") else text + "\n")
 
+if os.environ.get("MOCK_GATE_CALL_LOG"):
+	with open(os.environ["MOCK_GATE_CALL_LOG"], "a", encoding="utf-8") as log:
+		log.write(path + "\n")
 if args[:1] != ["api"]:
 	sys.exit(1)
 if path == "user":
+	if state.get("user_fail"):
+		sys.exit(1)
 	emit({"login": state["login"]})
 elif path.endswith("/comments"):
 	if state.get("comments_fail"):
@@ -496,7 +501,7 @@ else:
 '''
 
 
-def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str = "workflow_dispatch", converged_head: str = "", extra_env: dict | None = None, marker_author: str = AUTHOR, files: list[dict] | None = None, pr_overrides: dict | None = None, comments_fail: bool = False):
+def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str = "workflow_dispatch", converged_head: str = "", extra_env: dict | None = None, marker_author: str = AUTHOR, files: list[dict] | None = None, pr_overrides: dict | None = None, comments_fail: bool = False, user_fail: bool = False):
 	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
@@ -512,6 +517,7 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1", **(pr_overrides or {})},
 		"files": files,
 		"comments_fail": comments_fail,
+		"user_fail": user_fail,
 	}), encoding="utf-8")
 	output_file = tmp / "out.txt"
 	output_file.write_text("", encoding="utf-8")
@@ -580,16 +586,97 @@ def test_gate_leaves_other_prs_alone():
 	assert out["claude_fixer"] == "false" and out["should_run"] == "true"
 
 
+TWIN_SYNC_REF = "claude/claude-twin-sync-0123456789ab"
+LIBRARY_REPO = "shubhodeep1/coding-workflows"
+
+
+def _twin_sync_pr(*, head_repo: str = LIBRARY_REPO, author: str = AUTHOR) -> dict:
+	"""PR overrides for a claude/claude-twin-sync-* head: head repository and author."""
+	return {"head": {"ref": TWIN_SYNC_REF, "sha": HEAD, "repo": {"full_name": head_repo}}, "user": {"login": author}}
+
+
 def test_gate_skips_claude_twin_sync_prs_without_merging():
-	"""CLAUDE.md §28.C: sync PRs are merged by claude-twin-sync.yml or the owner, never by AI review."""
+	"""CLAUDE.md §28.C: sync PRs are merged by claude-twin-sync.yml or the owner, never by AI review.
+
+	Only a genuine sync PR is exempt (issue #5610): in coding-workflows, from a
+	same-repository head, authored by the GH_PAT account the sync writes as.
+	"""
 	for event_name, converged in (("pull_request", ""), ("workflow_dispatch", HEAD)):
 		with tempfile.TemporaryDirectory() as td:
-			proc, out = _run_gate(Path(td), head_ref="claude/claude-twin-sync-0123456789ab", comments=[], event_name=event_name, converged_head=converged)
+			proc, out = _run_gate(Path(td), head_ref=TWIN_SYNC_REF, comments=[], event_name=event_name, converged_head=converged,
+				pr_overrides=_twin_sync_pr(author=AUTHOR.upper()), extra_env={"REPOSITORY": LIBRARY_REPO})
 		assert proc.returncode == 0, proc.stderr
 		assert out["should_run"] == "false", event_name
+		assert out["skip_reason"] == "claude_twin_sync", event_name
 		assert out.get("deterministic_skip") != "true", event_name
 		assert out.get("claude_fixer_converged") != "true", event_name
 		assert "AUTOFIX_GATE_SKIP reason=claude_twin_sync pr=42" in proc.stdout, proc.stdout[-2000:]
+		assert "AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT" not in proc.stdout
+
+
+def test_gate_reviews_twin_sync_named_prs_without_sync_provenance():
+	"""Issue #5610: the branch name alone never skips review."""
+	cases = (
+		("not_library_repository", {"REPOSITORY": "consumer/app"}, _twin_sync_pr(head_repo="consumer/app"), False),
+		("head_repository_mismatch", {"REPOSITORY": LIBRARY_REPO}, _twin_sync_pr(head_repo="attacker/coding-workflows"), False),
+		("head_repository_mismatch", {"REPOSITORY": LIBRARY_REPO}, {"head": {"ref": TWIN_SYNC_REF, "sha": HEAD, "repo": None}, "user": {"login": AUTHOR}}, False),
+		("pr_author_unknown", {"REPOSITORY": LIBRARY_REPO}, {"head": {"ref": TWIN_SYNC_REF, "sha": HEAD, "repo": {"full_name": LIBRARY_REPO}}}, False),
+		("pr_author_not_sync_identity", {"REPOSITORY": LIBRARY_REPO}, _twin_sync_pr(author="some-collaborator"), False),
+		("sync_identity_unavailable", {"REPOSITORY": LIBRARY_REPO}, _twin_sync_pr(), True),
+	)
+	for reason, env, overrides, user_fail in cases:
+		with tempfile.TemporaryDirectory() as td:
+			tmp = Path(td)
+			proc, out = _run_gate(tmp, head_ref=TWIN_SYNC_REF, comments=[], event_name="pull_request",
+				pr_overrides=overrides, extra_env=env, user_fail=user_fail)
+		assert proc.returncode == 0, (reason, proc.stderr)
+		assert f"AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT reason={reason} pr=42 head_ref={TWIN_SYNC_REF}" in proc.stdout, (reason, proc.stdout[-2000:])
+		assert "AUTOFIX_GATE_SKIP reason=claude_twin_sync" not in proc.stdout, reason
+		assert out.get("skip_reason", "") != "claude_twin_sync", reason
+		assert out["should_run"] == "true", reason
+		assert out["claude_fixer"] == "true", reason
+
+
+def test_gate_twin_sync_skip_marker_still_skips_unverified_sync_prs():
+	"""A genuine sync PR whose identity cannot be read still skips through its [skip ai] marker."""
+	body = "[skip ai] — the twin content was reviewed in its own PR; this PR is a mechanical copy."
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=TWIN_SYNC_REF, comments=[], event_name="pull_request",
+			pr_overrides=_twin_sync_pr(), extra_env={"REPOSITORY": LIBRARY_REPO, "PR_BODY": body}, user_fail=True)
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT reason=sync_identity_unavailable" in proc.stdout
+	assert out["should_run"] == "false" and out["skip_reason"] == "skip_ai_marker"
+
+
+def test_gate_twin_sync_identity_lookup_is_shared_with_the_marker_check():
+	"""CLAUDE.md §15: one `gh api user` call per gate evaluation, even when both checks need it."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		calls = tmp / "calls.log"
+		proc, out = _run_gate(tmp, head_ref=TWIN_SYNC_REF, comments=[_c(HANDOFF)], event_name="workflow_dispatch",
+			pr_overrides=_twin_sync_pr(author="some-collaborator"),
+			extra_env={"REPOSITORY": LIBRARY_REPO, "MOCK_GATE_CALL_LOG": str(calls)})
+		paths = calls.read_text(encoding="utf-8").splitlines()
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT reason=pr_author_not_sync_identity" in proc.stdout
+	assert out["skip_reason"] == "claude_fixer_awaiting_session", out
+	assert paths.count("user") == 1, paths
+
+
+def test_gate_twin_sync_no_pr_push_path_is_exempt_only_in_the_library():
+	for repository, exempt in ((LIBRARY_REPO, True), ("consumer/app", False)):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=TWIN_SYNC_REF, comments=[], event_name="push",
+				extra_env={"REPOSITORY": repository, "PR_NUMBER": "", "FORCE_CLAUDE_BRANCH_REVIEW": "true", "HEAD_REF_OVERRIDE": TWIN_SYNC_REF})
+		assert proc.returncode == 0, (repository, proc.stderr)
+		assert "AUTOFIX_GATE_NO_PR_FALLBACK" in proc.stdout, repository
+		if exempt:
+			assert out["should_run"] == "false" and out["skip_reason"] == "claude_twin_sync", out
+			assert "AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT" not in proc.stdout
+		else:
+			assert "AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT reason=not_library_repository pr=none" in proc.stdout, proc.stdout[-2000:]
+			assert out.get("skip_reason", "") != "claude_twin_sync", out
+			assert out["should_run"] == "true", out
 
 
 def test_gate_skips_dispatch_rerun_while_the_session_owns_the_round():

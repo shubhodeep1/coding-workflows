@@ -20,7 +20,10 @@ name: Claude Twin Sync
 #     claude-twin-sync/owner-approval reports whether the owner's latest review
 #     approves the current head.
 # Sync PRs carry [skip ai]; review_autofix.yml and the CLAUDE.md §26.H sweep
-# also skip their head ref, so AI review can never merge a guard change.
+# also skip their head ref, so AI review can never merge a guard change. The
+# review gate skips only a genuine sync PR (issue #5610): in this repository,
+# from a same-repository head, authored by the GH_PAT account this workflow
+# opens the PR with; any other claude/claude-twin-sync-* PR is reviewed.
 #
 # Triggers: a push that changed a twin, an hourly catch-up, a manual run, CI
 # finishing on a sync branch (the merge attempt), and a review on a sync PR
