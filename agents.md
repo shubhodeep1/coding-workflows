@@ -1195,7 +1195,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   `settings.json`, the sync's step 6 runs the allowlisted
   `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py`
   (one JSON line; exit 0 current, 1 not current, 2 usage error; the session
-  id defaults to `CLAUDE_CODE_SESSION_ID`; a missing record is not current).
+  id defaults to `CLAUDE_CODE_SESSION_ID`; a missing record, or no readable
+  `settings.json` on disk, is not current).
   Still not current after one re-run → the session writes nothing more for
   that work and hands it to a fresh session: a `— settings restart` stage
   session carrying `Asset-sync restart: <id>`, or a fresh `/fix-claude-pr`
