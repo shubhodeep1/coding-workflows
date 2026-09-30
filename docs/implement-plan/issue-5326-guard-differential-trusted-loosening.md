@@ -5,19 +5,20 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5174-guard-differential-check
 - Project branch: claude/implement-plan-issue-5326-guard-differential-trusted-loosening   Final PR: #5360 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 2/3
 - Activation: not started
-- Waiting on: conformance fix PR (see ## Conformance)
+- Waiting on: conformance 2/3 fix PR (see ## Conformance)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: project checker session_01KsqE28FAB72xsTiHLCUEvX (per-wait safety-net and hand-back ids are in the stage report)
 - Last updated: 2026-09-30
-- Last note: conformance 1/3: CONFORMANT (G1-G6 mapped to merged code, 105 guard differential tests pass); one stale-doc concern fixed in the conformance fix PR (a malformed `--head-sha` always exits 2, even with no hook change; AD-7).
+- Last note: conformance 2/3: CONFORMANT (G1-G6 still map to merged code after #5449, 106 guard differential tests pass); one stale-comment concern fixed in the conformance fix-2 PR (the four `tests/guard_corpus/*.txt` headers still named the PR-body exemption).
 
 ## Phases
 1. [x] Phase 1 — base-branch loosening policy (script, policy file, tests, ci.yml step, docs)   — PR #5389 merged 2026-09-30 (250b29f); review rounds: 1; interventions: 0
 
 ## Conformance
-- Run 1 — 2026-09-30: CONFORMANT — fix PR (stale `--head-sha` exit-code wording in agents.md and plan G5, plus a pinning test) (pre-security)
+- Run 1 — 2026-09-30: CONFORMANT — fix PR #5449 merged 2026-09-30 (stale `--head-sha` exit-code wording in agents.md and plan G5, plus a pinning test) (pre-security)
+- Run 2 — 2026-09-30: CONFORMANT — fix PR (the four `tests/guard_corpus/*.txt` headers still said a PR-body `Intended loosening:` listing passes a shape; now name the base-branch policy, plus a pinning test) (pre-security)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue), per the plan header.
@@ -41,6 +42,8 @@
 - [source:intervention] A versioned JSON config must reject a missing, non-integer (including `true`), or unknown `version` instead of reading it under the current rules, and every audit field the text output prints must also be in the `--json` rows. (files: scripts/guard_differential.py)
 - [source:conformance] When a CLI validates a flag before an early skip, the docs must say the flag fails even on the skip path; phrase exit-code rules per input, not "X or Y exits 2 once …". (files: agents.md, scripts/guard_differential.py)
 - [source:conformance] A new `scripts/*.py` needs its `docs/INVENTORY.md` entry in the same PR, or `tests/inventory_parity.py` (`CI / Inventory parity`) fails on the next PR into `main`. (files: docs/INVENTORY.md, tests/inventory_parity.py)
+
+- [source:conformance] When a rule moves, grep every file that restates it, including data-file header comments such as `tests/guard_corpus/*.txt`, not only the docs the plan lists; pin the new wording with a test. (files: tests/guard_corpus/pr_merge_status_guard.txt, tests/test_guard_differential.py)
 
 ## Notes
 - Conformance 1/3 (2026-09-30), outside this project's scope and not fixed here: (1) `tests/inventory_parity.py` fails on the project branch (and on its base) because `docs/INVENTORY.md` lacks `scripts/guard_differential.py`, a #5174 gap that #5185's CI will report; fixing it in each of #5174's four child projects would conflict. (2) `ci.yml` runs the PR's own copy of `scripts/guard_differential.py`, so a PR can edit the checker itself (visible in the diff, unlike the body); #5327's project (final PR #5364) pins the verifier to the base branch.
