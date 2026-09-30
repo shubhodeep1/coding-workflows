@@ -178,8 +178,9 @@ rejected.
    - **Release mode:**
      - It lists `git rev-list --no-merges <base>..<head> -- <protected pathspecs>`,
        plus the merge commits that make a protected change of their own
-       (`git log --remerge-diff`, and octopus merges that differ from every
-       parent), so a protected edit inside a merge commit is checked too.
+       (`git log --remerge-diff`, and octopus merges with a protected file
+       that is not the version of the one parent that changed it, AD-18),
+       so a protected edit inside a merge commit is checked too.
        It refuses a shallow checkout (conformance run 2).
      - `scripts/mark-stable.sh`, the manual release path, runs the same
        check before it moves any tag (conformance run 2, AD-17).

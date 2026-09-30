@@ -7,7 +7,9 @@
 # (scripts/protected_path_authorization.py release, issue #4919), so it needs
 # `gh` authenticated for the repository and a full (not shallow) clone; exit 6
 # means the check refused or its checker could not run, exit 7 that
-# origin/stable moved after the check. No tag moves in either case.
+# origin/stable moved after the check. No tag moves in either case. Exit 8
+# means origin's `stable` or major-version tag changed after this run read it
+# (a concurrent release): the pointer push is refused instead of rolling it back.
 # Usage: ./scripts/mark-stable.sh v1.1.0
 set -euo pipefail
 
@@ -129,6 +131,28 @@ elif [ "${PREVIOUS_STABLE_LSREMOTE_RC}" -ne 2 ]; then
 	echo "       Refusing to release without the protected-path release check's base." >&2
 	exit "${PREVIOUS_STABLE_LSREMOTE_RC}"
 fi
+# The pointer pushes below lease on the values read here, so a release that
+# moved `stable` or ${MAJOR} meanwhile is never overwritten by this older one.
+# An empty lease means "the tag must still be absent".
+PREVIOUS_STABLE_LEASE=""
+if [ "${PREVIOUS_STABLE_LSREMOTE_RC}" -eq 0 ]; then
+	PREVIOUS_STABLE_LEASE="$(git rev-parse --verify "${RELEASE_CHECK_BASE_REF}")"
+fi
+set +e
+PREVIOUS_MAJOR_LSREMOTE_OUT="$(git ls-remote --exit-code --tags origin "refs/tags/${MAJOR}" 2>&1)"
+PREVIOUS_MAJOR_LSREMOTE_RC=$?
+set -e
+PREVIOUS_MAJOR_LEASE=""
+if [ "${PREVIOUS_MAJOR_LSREMOTE_RC}" -eq 0 ]; then
+	PREVIOUS_MAJOR_LEASE="$(printf '%s\n' "${PREVIOUS_MAJOR_LSREMOTE_OUT}" | awk -v ref="refs/tags/${MAJOR}" '$2 == ref { print $1; exit }')"
+	if [[ ! "${PREVIOUS_MAJOR_LEASE}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "error: could not read origin's refs/tags/${MAJOR}: ${PREVIOUS_MAJOR_LSREMOTE_OUT}" >&2
+		exit 1
+	fi
+elif [ "${PREVIOUS_MAJOR_LSREMOTE_RC}" -ne 2 ]; then
+	echo "error: 'git ls-remote --tags origin refs/tags/${MAJOR}' failed (rc=${PREVIOUS_MAJOR_LSREMOTE_RC}): ${PREVIOUS_MAJOR_LSREMOTE_OUT}" >&2
+	exit "${PREVIOUS_MAJOR_LSREMOTE_RC}"
+fi
 # The commit this release tags: the existing version tag on a recovery rerun,
 # otherwise the current origin/stable.
 if [ "${SKIP_VERSION_TAG_CREATE}" -eq 1 ]; then
@@ -156,7 +180,11 @@ if [ "${SKIP_VERSION_TAG_CREATE}" -eq 0 ]; then
 fi
 # Release exactly the commit the protected-path check passed.
 if [ "$(git rev-parse --verify "${VERSION_TAG}^{commit}")" != "${RELEASE_CHECK_HEAD}" ]; then
-	echo "error: ${VERSION_TAG} points at $(git rev-parse --verify "${VERSION_TAG}^{commit}"), not at ${RELEASE_CHECK_HEAD}, the commit the protected-path release check passed (origin/stable moved). Delete the local tag ('git tag -d ${VERSION_TAG}') and rerun. No tag was pushed." >&2
+	echo "error: ${VERSION_TAG} points at $(git rev-parse --verify "${VERSION_TAG}^{commit}"), not at ${RELEASE_CHECK_HEAD}, the commit the protected-path release check passed (origin/stable moved). No tag was pushed; rerun to check the new origin/stable." >&2
+	if [ "${SKIP_VERSION_TAG_CREATE}" -eq 0 ]; then
+		# This run created the local tag and never pushed it; drop it so the rerun can create it again.
+		git tag -d "${VERSION_TAG}" >/dev/null
+	fi
 	exit 7
 fi
 git tag -f stable "${VERSION_TAG}"
@@ -165,6 +193,12 @@ git tag -f "${MAJOR}" "${VERSION_TAG}"
 if [ "${SKIP_VERSION_TAG_CREATE}" -eq 0 ]; then
 	git push origin "refs/tags/${VERSION_TAG}"
 fi
-git push -f origin refs/tags/stable
-git push -f origin "refs/tags/${MAJOR}"
+if ! git push --force-with-lease="refs/tags/stable:${PREVIOUS_STABLE_LEASE}" origin refs/tags/stable; then
+	echo "error: origin's refs/tags/stable is no longer ${PREVIOUS_STABLE_LEASE:-absent}, the value this run read before its release check (another release moved it, or the push failed). ${VERSION_TAG} may be published, but stable and ${MAJOR} were not moved. Check the other release before rerunning." >&2
+	exit 8
+fi
+if ! git push --force-with-lease="refs/tags/${MAJOR}:${PREVIOUS_MAJOR_LEASE}" origin "refs/tags/${MAJOR}"; then
+	echo "error: origin's refs/tags/${MAJOR} is no longer ${PREVIOUS_MAJOR_LEASE:-absent}, the value this run read before its release check (another release moved it, or the push failed). stable was moved to ${VERSION_TAG}; ${MAJOR} was not. Check the other release before rerunning." >&2
+	exit 8
+fi
 echo "Done. ${VERSION_TAG} is now the stable release (${MAJOR} pointer updated)."

@@ -51,7 +51,8 @@ the unauthorized one); the JSON's `auto_merge` field says what happened.
 `release` checks every non-merge commit in `<base>..<head>` that touches a
 protected path, and every merge commit that makes a protected change of its
 own (a conflict resolution or a hand-edited merge: `--remerge-diff` for a
-two-parent merge, any difference from every parent for an octopus merge), so
+two-parent merge; for an octopus merge, a protected file that is not the
+version of the one parent that changed it, or of the merge base), so
 wrapping a change in a merge commit cannot hide it. It needs the full
 history: a shallow checkout fails. A commit passes when one of its merged PRs
 (`commits/{sha}/pulls`) has an authorizing comment at that PR's `head.sha`,
@@ -464,21 +465,70 @@ def protected_merge_commits(base: str | None, head: str, git_dir: str | None) ->
 	a hand-edited merge pushed straight to a branch. A two-parent merge counts
 	when `--remerge-diff` (the recorded merge against git's own re-merge of
 	its parents, git 2.36 or later) touches a protected path. An octopus
-	merge, which `--remerge-diff` does not cover, counts when it differs on a
-	protected path from every parent."""
+	merge, which `--remerge-diff` does not cover, counts when a protected
+	file differs from what a clean merge gives (octopus_makes_protected_change)."""
 	rev_range = f"{base}..{head}" if base else head
-	out = _git(
-		["log", "--merges", "--max-parents=2", "--format=%x00%H", "--remerge-diff", "--name-only", rev_range, "--", *PROTECTED_PATHSPECS],
-		git_dir,
-	)
+	try:
+		out = _git(
+			["log", "--merges", "--max-parents=2", "--format=%x00%H", "--remerge-diff", "--name-only", rev_range, "--", *PROTECTED_PATHSPECS],
+			git_dir,
+		)
+	except ReadError as exc:
+		if "remerge-diff" in str(exc):
+			raise ReadError(f"{exc} (the release check needs git 2.36 or later for --remerge-diff)") from exc
+		raise
 	found: list[str] = []
 	for record in out.split("\x00")[1:]:
 		lines = [line.strip() for line in record.splitlines() if line.strip()]
 		if len(lines) > 1 and SHA_RE.fullmatch(lines[0]):
 			found.append(lines[0])
-	octopus = _git(["rev-list", "--min-parents=3", rev_range, "--", *PROTECTED_PATHSPECS], git_dir)
-	found.extend(line.strip() for line in octopus.splitlines() if SHA_RE.fullmatch(line.strip()))
+	# Every octopus merge in the range, with no pathspec: history
+	# simplification would skip one whose protected tree equals one parent's,
+	# including a merge that drops another parent's protected change.
+	octopus = _git(["rev-list", "--min-parents=3", rev_range], git_dir)
+	for line in octopus.splitlines():
+		sha = line.strip()
+		if SHA_RE.fullmatch(sha) and octopus_makes_protected_change(sha, git_dir):
+			found.append(sha)
 	return found
+
+
+def _protected_names(old: str, new: str, git_dir: str | None) -> set[str]:
+	"""Protected paths whose content differs between two commits (no rename
+	detection, so a rename lists both paths)."""
+	out = _git(["diff-tree", "-r", "-z", "--no-renames", "--name-only", old, new, "--", *PROTECTED_PATHSPECS], git_dir)
+	return {name for name in out.split("\x00") if name}
+
+
+def octopus_makes_protected_change(sha: str, git_dir: str | None) -> bool:
+	"""Whether octopus merge `sha` makes a protected change of its own.
+
+	Against the parents' octopus merge base, a clean octopus merge takes each
+	protected file from the one parent that changed it, or keeps the base
+	version when no parent did. The merge counts when a protected file breaks
+	that: a hand edit, a new file, or a parent's change dropped. A protected
+	file that two or more parents changed would need a content merge this
+	check cannot verify, so it counts too (fail closed), as does a merge whose
+	parents share no merge base."""
+	parents = _git(["rev-list", "--parents", "-n", "1", sha], git_dir).split()[1:]
+	try:
+		base = _git(["merge-base", "--octopus", *parents], git_dir).strip()
+	except ReadError:
+		return True
+	if not SHA_RE.fullmatch(base):
+		return True
+	changed = [_protected_names(base, parent, git_dir) for parent in parents]
+	differs = [_protected_names(parent, sha, git_dir) for parent in parents]
+	for name in set().union(*changed, *differs):
+		carriers = [index for index, names in enumerate(changed) if name in names]
+		if len(carriers) > 1:
+			return True
+		for index, names in enumerate(differs):
+			# Clean: the file differs from exactly the parents that did not
+			# carry the change, and from none when no parent changed it.
+			if (name in names) != (bool(carriers) and index not in carriers):
+				return True
+	return False
 
 
 def protected_commits(base: str | None, head: str, git_dir: str | None) -> list[str]:

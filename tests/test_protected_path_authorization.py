@@ -622,6 +622,99 @@ def test_check_release_checks_an_octopus_merge_that_differs_from_every_parent(tm
 	assert [entry["commit"] for entry in result["blocked"]] == [octopus]
 
 
+def _octopus_repo(tmp_path):
+	"""A release repo with three branches off `stable`: `one` changes
+	`.claude/commands/a.md`, `two` adds `.claude/commands/b.md`, and `three`
+	changes an unprotected file; `main` has moved too, so no merge fast-forwards."""
+	repo, _arrival = _release_repo(tmp_path)
+	branch_commits = {}
+	for branch, path in (("one", ".claude/commands/a.md"), ("two", ".claude/commands/b.md"), ("three", "docs/three.md")):
+		_git(repo, "checkout", "-q", "-b", branch, "stable")
+		branch_commits[branch] = _commit(repo, path, f"{branch} branch\n", f"{branch} change")
+	_git(repo, "checkout", "-q", "main")
+	_commit(repo, "README.md", "readme\n", "unprotected main change")
+	return repo, branch_commits
+
+
+def _octopus(repo, branches, message, edit=None):
+	subprocess.run(
+		["git", "-C", str(repo), "-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "--no-commit", *branches],
+		check=True, capture_output=True, text=True,
+		env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"},
+	)
+	if edit:
+		edit(repo)
+	_git(repo, "commit", "-q", "--allow-empty", "-m", message)
+	sha = _git(repo, "rev-parse", "HEAD")
+	assert len(_git(repo, "rev-list", "--parents", "-n", "1", sha).split()) == len(branches) + 2, "must be an octopus merge"
+	return sha
+
+
+def test_check_release_passes_a_clean_octopus_that_combines_protected_changes(tmp_path):
+	# Each protected file comes from the one parent that changed it: the merge
+	# adds nothing of its own, so only the parents' commits are checked.
+	repo, branch_commits = _octopus_repo(tmp_path)
+	octopus = _octopus(repo, ["one", "two", "three"], "clean octopus")
+	assert not ppa.octopus_makes_protected_change(octopus, str(repo))
+	result = ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=_release_get({}, {}))
+	assert octopus not in [entry["commit"] for entry in result["blocked"]]
+	assert {entry["commit"] for entry in result["blocked"]} == {branch_commits["one"], branch_commits["two"]}
+
+
+def test_check_release_checks_an_octopus_that_drops_a_parents_protected_change(tmp_path):
+	# Keeping the base version of a file one parent changed reverts that
+	# change inside the merge; tree-level path limiting skips such a merge
+	# when its protected tree equals another parent's.
+	repo, _branch_commits = _octopus_repo(tmp_path)
+
+	def keep_base(repo_dir):
+		_git(repo_dir, "checkout", "stable", "--", ".claude/commands/a.md")
+
+	octopus = _octopus(repo, ["one", "two", "three"], "octopus that drops one", edit=keep_base)
+	assert ppa.octopus_makes_protected_change(octopus, str(repo))
+	result = ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=_release_get({}, {}))
+	assert octopus in [entry["commit"] for entry in result["blocked"]]
+
+
+def test_check_release_checks_an_octopus_that_adds_a_protected_file(tmp_path):
+	repo, _branch_commits = _octopus_repo(tmp_path)
+
+	def add_file(repo_dir):
+		(repo_dir / ".claude" / "commands" / "new.md").write_text("new\n", encoding="utf-8")
+		_git(repo_dir, "add", ".claude/commands/new.md")
+
+	octopus = _octopus(repo, ["three", "two"], "octopus with a new protected file", edit=add_file)
+	assert ppa.octopus_makes_protected_change(octopus, str(repo))
+
+
+def test_octopus_with_a_protected_file_two_parents_changed_fails_closed(tmp_path):
+	# Two parents changing the same protected file need a content merge the
+	# check cannot verify, so the merge is checked even when git merged it
+	# cleanly.
+	repo, _arrival = _release_repo(tmp_path)
+	_commit(repo, ".claude/commands/c.md", "1\n2\n3\n4\n5\n6\n7\n", "seed")
+	_git(repo, "tag", "-f", "stable")
+	for branch, old, new in (("top", "1", "one"), ("bottom", "7", "seven")):
+		_git(repo, "checkout", "-q", "-b", branch, "stable")
+		text = (repo / ".claude" / "commands" / "c.md").read_text(encoding="utf-8").replace(f"{old}\n", f"{new}\n")
+		_commit(repo, ".claude/commands/c.md", text, branch)
+	_git(repo, "checkout", "-q", "-b", "other", "stable")
+	_commit(repo, "docs/other.md", "other\n", "other")
+	_git(repo, "checkout", "-q", "main")
+	_commit(repo, "README.md", "readme\n", "unprotected main change")
+	octopus = _octopus(repo, ["top", "bottom", "other"], "same-file octopus")
+	assert ppa.octopus_makes_protected_change(octopus, str(repo))
+
+
+def test_protected_merge_commits_names_the_git_version_when_remerge_diff_is_unknown(monkeypatch):
+	def old_git(args, git_dir):
+		raise ppa.ReadError("git log --merges failed: fatal: unrecognized argument: --remerge-diff")
+
+	monkeypatch.setattr(ppa, "_git", old_git)
+	with pytest.raises(ppa.ReadError, match="git 2.36 or later"):
+		ppa.protected_merge_commits("base", "head", None)
+
+
 def test_check_release_grandfathers_a_protected_merge_before_the_gate(tmp_path):
 	repo = tmp_path / "repo"
 	repo.mkdir()
@@ -1100,6 +1193,47 @@ def test_mark_stable_script_releases_the_checked_commit_when_the_check_passes(tm
 	first, second = [json.loads(line)["argv"] for line in calls.read_text(encoding="utf-8").splitlines()]
 	assert first[first.index("--repo") + 1] == "owner/name"
 	assert first[first.index("--head") + 1] == second[second.index("--head") + 1] == stable_head
+
+
+def _race_checker(scripts, race_code):
+	"""Replace the stub checker with one that passes after running
+	`race_code` (a concurrent release acting while this run is checking)."""
+	(scripts / "protected_path_authorization.py").write_text(
+		"import json, subprocess, sys\n" + textwrap.dedent(race_code) + 'print(json.dumps({"decision": "pass"}))\n',
+		encoding="utf-8",
+	)
+
+
+def test_mark_stable_script_does_not_roll_back_a_stable_tag_moved_after_it_was_read(tmp_path):
+	env, remote, operator, scripts, _calls, stable_head, _previous = _mark_stable_setup(tmp_path, 0)
+	# Another release points origin's stable tag somewhere new mid-run.
+	_race_checker(scripts, f"""\
+		subprocess.run(["git", "-C", {str(remote)!r}, "tag", "-f", "stable", {stable_head!r}], check=True, capture_output=True)
+		""")
+	proc = subprocess.run(["bash", str(scripts / "mark-stable.sh"), "v9.9.9"], cwd=operator, capture_output=True, text=True, env=env)
+	assert proc.returncode == 8, proc.stderr
+	assert "refs/tags/stable is no longer" in proc.stderr
+	raw_stable = subprocess.run(["git", "-C", str(remote), "rev-parse", "refs/tags/stable"], check=True, capture_output=True, text=True, env=env).stdout.strip()
+	assert raw_stable == stable_head, "the concurrent release's lightweight stable tag must survive"
+	assert "v9" not in _remote_tags(remote, env), "the major-version pointer must not move either"
+
+
+def test_mark_stable_script_drops_its_unpushed_version_tag_when_origin_stable_moves(tmp_path):
+	env, remote, operator, scripts, _calls, _stable_head, _previous = _mark_stable_setup(tmp_path, 0)
+	# A first release (no stable tag yet), and the stable branch advances
+	# after the check read it.
+	subprocess.run(["git", "-C", str(remote), "tag", "-d", "stable"], check=True, capture_output=True, env=env)
+	_race_checker(scripts, f"""\
+		remote = {str(remote)!r}
+		tree = subprocess.run(["git", "-C", remote, "rev-parse", "refs/heads/stable^{{tree}}"], check=True, capture_output=True, text=True).stdout.strip()
+		new = subprocess.run(["git", "-C", remote, "commit-tree", tree, "-p", "refs/heads/stable", "-m", "race"], check=True, capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "-C", remote, "update-ref", "refs/heads/stable", new], check=True)
+		""")
+	proc = subprocess.run(["bash", str(scripts / "mark-stable.sh"), "v9.9.9"], cwd=operator, capture_output=True, text=True, env=env)
+	assert proc.returncode == 7, proc.stderr
+	assert _remote_tags(remote, env) == {}, "no tag may be pushed"
+	local = subprocess.run(["git", "-C", str(operator), "tag", "-l", "v9.9.9"], check=True, capture_output=True, text=True, env=env).stdout.strip()
+	assert local == "", "the unpushed local version tag must be removed so a rerun can create it"
 
 
 @pytest.mark.parametrize("prefix", ["PROTECTED_PATH_GATE", "AUTOFIX_AUTO_MERGE_PROTECTED_PATH"])
