@@ -48,7 +48,9 @@
 #            call whenever blockers exist, plus conditional label/comment writes
 #            when queue state changes. Gate-side release adds one comments-list
 #            call, up to one marker PATCH, and one label DELETE.
-#   release: 1 list call (open PRs, all bases, 100 per page) + 1 recent-runs
+#   release: 1 list call (open PRs, all bases, 100 per page; it also yields
+#            the default branch that vouches for PR-named review runs, issue
+#            #5524) + 1 recent-runs
 #            call that prevents dispatch beside an active review + files calls
 #            as above, cached per PR for the run; each unblocked queued PR adds
 #            1 comments-list call and up to 1 marker PATCH before its label-
@@ -178,9 +180,13 @@ _mt_intersect() {
 }
 
 # Open PRs, oldest first, one compact JSON object per line:
-# {number, head, base, draft, labels[]}. `tojson` matters: `gh api --jq`
-# pretty-prints object results across several lines, and the callers read
-# this output line by line. $1 = base branch filter (empty = all bases).
+# {number, head, base, draft, labels[], default_branch}. `tojson` matters:
+# `gh api --jq` pretty-prints object results across several lines, and the
+# callers read this output line by line. $1 = base branch filter (empty =
+# all bases). `default_branch` is the repository's default branch as GitHub
+# reports it on every PR (`base.repo.default_branch`, "" when absent); the
+# release reads it from here to vouch for PR-named review runs (issue #5524)
+# without an extra API call.
 _mt_list_open_prs() {
 	local base="$1" endpoint
 	endpoint="repos/${MT_REPO}/pulls?state=open&sort=created&direction=asc&per_page=100"
@@ -188,7 +194,7 @@ _mt_list_open_prs() {
 		endpoint="${endpoint}&base=${base}"
 	fi
 	gh_retry gh api --paginate "${endpoint}" \
-		--jq '.[] | {number: .number, head: .head.ref, base: .base.ref, draft: .draft, labels: [.labels[].name]} | tojson' 2>/dev/null
+		--jq '.[] | {number: .number, head: .head.ref, base: .base.ref, draft: .draft, labels: [.labels[].name], default_branch: (.base.repo.default_branch // "")} | tojson' 2>/dev/null
 }
 
 # Older open ai/issue-* PRs (same base, lower number, not draft, not
@@ -407,10 +413,40 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # ("Internal: AI Review & Autofix [pr:<N>]" / "AI Review [pr:<N>]") also
 # prints "pr:<N>". Git refs cannot contain ":", so the two kinds of key never
 # collide, and _mt_release checks both.
+#
+# Provenance (security, issue #5524): GitHub evaluates a workflow_dispatch
+# run's name from the workflow file at the dispatched ref, so a run
+# dispatched from an altered branch can carry any PR's name and would hold
+# that PR in the queue. A run therefore prints "pr:<N>" only when all hold
+# (the same check issue #5094 added to the poller):
+#   - its event is workflow_dispatch;
+#   - its head_branch is $1, the repository's default branch, the only ref
+#     whose workflow files are reviewed;
+#   - its (path, name) is exactly one of the wrappers' own pairs:
+#     .github/workflows/internal-review.yml  "Internal: AI Review & Autofix [pr:<N>]"
+#     .github/workflows/ai-review.yml        "AI Review [pr:<N>]"
+# An empty $1 (the default branch could not be resolved) prints no "pr:"
+# key at all: unverified runs are ignored for release deduplication.
+# Head-branch keys are unchanged. The listing is still one call; the run
+# rows are filtered locally because `gh api --jq` cannot take --arg.
+#
+# Usage: _mt_inflight_review_branches [default_branch]
+# Returns non-zero when the runs listing fails.
 _mt_inflight_review_branches()
 {
-	gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?per_page=100" \
-		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | ((.head_branch // empty), (if (.event // "") == "workflow_dispatch" then ((.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)") else empty end))' 2>/dev/null | sort -u
+	local mt_inflight_default_branch="${1:-}" mt_inflight_runs
+	mt_inflight_runs="$(gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?per_page=100" \
+		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | {head_branch: (.head_branch // ""), event: (.event // ""), display_title: (.display_title // ""), path: (.path // "")} | tojson' 2>/dev/null)" || return 1
+	[ -n "${mt_inflight_runs}" ] || return 0
+	printf '%s\n' "${mt_inflight_runs}" | jq -r --arg default_branch "${mt_inflight_default_branch}" '
+		(if .head_branch != "" then .head_branch else empty end),
+		(if $default_branch != "" and .event == "workflow_dispatch" and .head_branch == $default_branch then
+			(if .path == ".github/workflows/internal-review.yml" then
+				(.display_title | capture("^Internal: AI Review & Autofix \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)")
+			elif .path == ".github/workflows/ai-review.yml" then
+				(.display_title | capture("^AI Review \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)")
+			else empty end)
+		else empty end)' 2>/dev/null | sort -u
 }
 
 # Dispatch ref (security, issue #4701): the dispatch always runs the default
@@ -440,12 +476,18 @@ _mt_dispatch_review() {
 
 _mt_release() {
 	local base_filter="${BASE_BRANCH:-}" prs_json line num head base labels files blockers inflight_review_branches="" released=0 examined=0
-	local release_queue_comment_id release_comment_body release_label_restored
+	local release_queue_comment_id release_comment_body release_label_restored release_default_branch=""
 	if ! prs_json="$(_mt_list_open_prs "")"; then
 		_mt_warn "merge-train release: could not list open PRs; fail-open (nothing released)."
 		return 0
 	fi
-	if ! inflight_review_branches="$(_mt_inflight_review_branches)"; then
+	# The default branch vouches for PR-named review runs (issue #5524). It
+	# comes from the PR listing above, never from a guessed fallback.
+	release_default_branch="$(printf '%s\n' "${prs_json}" | jq -r 'select((.default_branch // "") != "") | .default_branch' 2>/dev/null | head -n 1 || true)"
+	if [ -z "${release_default_branch}" ] && [ -n "${prs_json}" ]; then
+		_mt_warn "MERGE_TRAIN_PR_NAMED_PROVENANCE repo=${MT_REPO} outcome=default_branch_unresolved pr_named_matching=disabled"
+	fi
+	if ! inflight_review_branches="$(_mt_inflight_review_branches "${release_default_branch}")"; then
 		_mt_warn "merge-train release: could not list active review runs; continuing without the dispatch-dedup guard."
 		inflight_review_branches=""
 	fi
