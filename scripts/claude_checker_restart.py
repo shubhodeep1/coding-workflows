@@ -77,8 +77,9 @@ A `restart` entry carries `checker`, `slug`, `repo`, `trigger_name`
 Re-queue (OWNER scope addition): a checker named only by a progress log that
 `get_session` reports as not found. The issue is re-queued when it is still
 open, labelled `ai:claude`, not `ai:claude-blocked`; no project session on the
-page is active; no other checker of the slug is on the page; no enabled
-trigger belongs to the project; and no trusted `/reclarify` comment was
+page is active; no other checker of the slug is on the page; the trigger
+page is complete (`has_more` false) and no enabled trigger on it belongs to
+the project; and no trusted `/reclarify` comment was
 posted in the last `REQUEUE_COOLDOWN_HOURS` (24). A `requeue` entry carries
 `repo`, `issue`, `slug`, `checker`, and the exact `comment_body`, which
 starts with `/reclarify`.
@@ -702,6 +703,10 @@ def _evaluate_requeue(checker, entry, state, sessions, triggers, now, requeue, r
 	others = [view["id"] for view in sessions if view["status"] != STATUS_ARCHIVED and checker_slug(view["title"]) == slug]
 	if others:
 		skip(checker, slug, f"other_checker_exists: {others[0]}")
+		return
+	if state["triggers_has_more"]:
+		# A project trigger on a later page (a stage start, a hand-back) cannot be ruled out.
+		skip(checker, slug, "triggers_page_incomplete")
 		return
 	pending = _project_trigger(triggers, slug)
 	if pending:
