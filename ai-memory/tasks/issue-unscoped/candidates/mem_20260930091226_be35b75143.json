@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1536, 1545; duplicate helper at 2427, 2436 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Both lookups filter by the default branch and then require `head_branch == default_branch`, excluding workflow_dispatch runs for which GitHub reports `head_branch` as null.\n  WHY: A null `head_branch` can prevent Phase 4 from recognizing a review and prevent Phase 4b from adopting or registering a dispatched retry; severity was reported as MAJOR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:1536, 1545; duplicate helper at 2427, 2436 | severity=MAJOR | confidence=5\n  PROBLEM: Both lookups filter by the default branch and then require `head_branch == default_branch`. This excludes workflow_dispatch runs for which GitHub reports `head_branch` as null, a behavior already documented in `agents.md` and covered by `tests/test_review_autofix_sweep_stale_queued.py`.\n  WHY: If the Phase 3c dispatch has a null `head_branch` and the bait push did not trigger a pull_request run, Phase 4 never recognizes the review and eventually reports no review triggered. In Phase 4b, the same filter prevents adopting or registering a dispatched retry, causing the retry to fail despite a successful review run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4c6f54b608a7e908f8a4c1907dc82608617d6d0479b62d1b2578aeb8e92709a6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5561,
+    "run_id": "36687668503",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36687668503",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930091226_be35b75143",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5561,
+    "run_id": "36687668503"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T09:12:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
