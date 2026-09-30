@@ -79,6 +79,16 @@ jobs:
   # would waste LLM budget.  If no PR exists, emit the head ref / SHA /
   # base ref so review-claude-branch-push can dispatch review_autofix.yml
   # in the no-PR claude-branch-review path (commit-comment route).
+  #
+  # Grace window: Claude sessions push a new branch and open its PR a few
+  # seconds later (median 20s over 151 cases, 2026-09-23..30), so a single
+  # lookup at push time found no PR and the full reviewer panel ran twice on
+  # the same commit (once here, once on pull_request:opened) -- ~9% of the
+  # week's glm-5.2 reviewer tokens.  When no PR exists, the step re-checks
+  # every 60s for up to vars.CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS (default
+  # 300; 0 restores the single lookup; invalid values fall back to 300) and
+  # skips as soon as a PR appears.  A failed lookup counts as "no PR yet"
+  # (fail open: the review still runs once the window ends).
   resolve-claude-branch-pr:
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
@@ -96,20 +106,57 @@ jobs:
           HEAD_REF: ${{ github.ref_name }}
           HEAD_SHA: ${{ github.sha }}
           EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+          CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS: ${{ vars.CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS || '300' }}
         run: |
           set -euo pipefail
           base_ref=""
           encoded_head_ref="$(jq -nr --arg ref "${HEAD_REF}" '$ref | @uri')"
+          pr_grace_default_secs=300
+          pr_grace_max_secs=3600
+          pr_recheck_interval_secs=60
+          pr_grace_secs="${CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS:-${pr_grace_default_secs}}"
+          if ! [[ "${pr_grace_secs}" =~ ^[0-9]{1,5}$ ]] || [ "$((10#${pr_grace_secs}))" -gt "${pr_grace_max_secs}" ]; then
+            echo "::warning::CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS='${pr_grace_secs}' is not an integer between 0 and ${pr_grace_max_secs}; using ${pr_grace_default_secs}."
+            pr_grace_secs="${pr_grace_default_secs}"
+          fi
+          pr_grace_secs="$((10#${pr_grace_secs}))"
+          pr_waited_secs=0
+          pr_lookup_failures=0
           # Look up open PRs for this exact head branch.  Filter to PRs
           # whose head ref matches the pushed branch — `gh pr list --head`
           # already does this — and consider only OPEN PRs (closed/merged
           # PRs do not double-fire, but the API call returns them too if
           # state filter is omitted).
-          existing_pr="$(gh api \
-            "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${encoded_head_ref}" \
-            --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
+          # A failed lookup logs gh's error text (one line, printable
+          # characters only, no double quotes, at most 200 chars) so the
+          # cause is visible: PR #5462's first live run failed every re-check
+          # on a GH_PAT "API rate limit exceeded" that stderr had hidden.
+          pr_lookup_err_file="$(mktemp)"
+          trap 'rm -f "${pr_lookup_err_file}"' EXIT
+          lookup_open_pr() {
+            local pr_lookup_error
+            if ! existing_pr="$(gh api \
+              "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${encoded_head_ref}" \
+              --jq '[.[] | .number] | first // empty' 2>"${pr_lookup_err_file}")"; then
+              existing_pr=""
+              pr_lookup_failures=$((pr_lookup_failures + 1))
+              pr_lookup_error="$(tr -c '[:print:]' ' ' < "${pr_lookup_err_file}" | tr -d '"' | tr -s ' ' | sed 's/^ //; s/ $//' | cut -c1-200)"
+              echo "RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED head_ref=${HEAD_REF} waited_secs=${pr_waited_secs} failures=${pr_lookup_failures} error=\"${pr_lookup_error:-no error text}\""
+            fi
+          }
+          lookup_open_pr
+          while [ -z "${existing_pr}" ] && [ "${pr_waited_secs}" -lt "${pr_grace_secs}" ]; do
+            pr_sleep_secs=$((pr_grace_secs - pr_waited_secs))
+            if [ "${pr_sleep_secs}" -gt "${pr_recheck_interval_secs}" ]; then
+              pr_sleep_secs="${pr_recheck_interval_secs}"
+            fi
+            echo "RESOLVE_CLAUDE_BRANCH_PR_WAIT head_ref=${HEAD_REF} head_sha=${HEAD_SHA} waited_secs=${pr_waited_secs} grace_secs=${pr_grace_secs} next_check_in_secs=${pr_sleep_secs}"
+            sleep "${pr_sleep_secs}"
+            pr_waited_secs=$((pr_waited_secs + pr_sleep_secs))
+            lookup_open_pr
+          done
           if [ -n "${existing_pr}" ]; then
-            echo "RESOLVE_CLAUDE_BRANCH_PR_SKIP head_ref=${HEAD_REF} existing_pr=${existing_pr} reason=pull_request_synchronize_handles"
+            echo "RESOLVE_CLAUDE_BRANCH_PR_SKIP head_ref=${HEAD_REF} existing_pr=${existing_pr} reason=pull_request_synchronize_handles waited_secs=${pr_waited_secs}"
             {
               echo "proceed=false"
               echo "head_ref=${HEAD_REF}"
@@ -122,7 +169,7 @@ jobs:
           if [ -z "${base_ref}" ]; then
             base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
           fi
-          echo "RESOLVE_CLAUDE_BRANCH_PR_PROCEED head_ref=${HEAD_REF} head_sha=${HEAD_SHA} base_ref=${base_ref} reason=no_open_pr"
+          echo "RESOLVE_CLAUDE_BRANCH_PR_PROCEED head_ref=${HEAD_REF} head_sha=${HEAD_SHA} base_ref=${base_ref} reason=no_open_pr waited_secs=${pr_waited_secs} grace_secs=${pr_grace_secs} lookup_failures=${pr_lookup_failures}"
           {
             echo "proceed=true"
             echo "head_ref=${HEAD_REF}"
