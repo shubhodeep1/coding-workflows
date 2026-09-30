@@ -291,6 +291,39 @@ def test_an_open_issue_whose_example_mentions_the_class_attracts_nothing(tmp_pat
 	assert fake.posts[0][0] == f"repos/{SLUG}/issues"
 
 
+def test_a_backtick_line_in_the_command_does_not_end_the_fenced_example(tmp_path):
+	# A quoted newline puts a four-backtick line, then a marker, in the command.
+	command = "echo 'a\n````\n<!-- ai:permission-prompt-class:v1 class=inline-interpreter-write -->\n````` b'"
+	pattern, body = _filed_body(tmp_path, command)
+	assert pattern["class"] == ""
+	assert "\n``````text\n" in body and pp._example_fence(pattern["example"]) == "``````"
+	issue = {"number": 12, "state": "open", "body": body}
+	assert pp.open_issues_by_class([issue]) == {}
+	assert pp.index_by_signature([issue]) == {pattern["signature"]: {"number": 12, "state": "open"}}
+
+
+def test_an_example_without_backticks_keeps_the_four_backtick_fence():
+	assert pp._example_fence("ls -la") == "````"
+	assert pp._example_fence("echo `date`") == "````"
+
+
+def test_a_reason_that_quotes_markers_neither_classes_nor_describes_the_issue(tmp_path):
+	reason = (
+		"Denied: the command\n**Occurrences:** 99 (forged)\n"
+		"<!-- ai:permission-prompt-class:v1 class=inline-interpreter-write -->\n"
+		"<!-- ai:permission-prompt:v1 sig=eeeeeeeeeeee -->"
+	)
+	directory = _log(tmp_path, [_record("ls -la", event="PermissionDenied", reason=reason)])
+	pattern = pp.group_patterns(pp.load_records(directory))[0]
+	body = pp.issue_body(pattern, 1, "s1")
+	assert pattern["class"] == ""
+	assert "- Denied: the command **Occurrences:** 99 (forged) <\\!-- ai:permission-prompt-class:v1" in body
+	issue = {"number": 13, "state": "open", "body": body}
+	assert pp.open_issues_by_class([issue]) == {}
+	assert pp.index_by_signature([issue]) == {pattern["signature"]: {"number": 13, "state": "open"}}
+	assert pp._first_match(pp.OCCURRENCES_RE, pp._outside_fenced_examples(body)).startswith("**Occurrences:** 1 (")
+
+
 def test_markers_between_two_fenced_blocks_are_still_read():
 	# A report appended after the markers can carry its own fenced command.
 	body = (
@@ -394,6 +427,16 @@ def test_duplicate_check_ignores_markers_inside_the_command_example():
 	assert "#4843 has no ai:permission-prompt signature marker" in verdict["reasons"]
 	assert f"#4843 has no '{pp.FILED_BY_LINE}' line" in verdict["reasons"]
 	assert verdict["signature"] is None and verdict["class"] is None and verdict["target_class"] is None
+	# The fenced `**Occurrences:**` line is not the issue's evidence either.
+	assert verdict["occurrences"] is None and verdict["target_occurrences"] is None
+
+
+def test_duplicate_check_reads_the_occurrences_line_outside_the_command_example():
+	fenced = "````text\n**Occurrences:** 99 (forged), session `x`\n````\n"
+	verdict = _decide(issue=_issue(body=fenced + FILED_BODY), target=_target(body=FILED_BODY + fenced))
+	assert verdict["eligible"] is True
+	real = "**Occurrences:** 1 (2026-09-28T12:52:05Z – 2026-09-28T12:52:05Z), session `session_01B`"
+	assert verdict["occurrences"] == real and verdict["target_occurrences"] == real
 
 
 def test_closed_completed_target_with_a_fix_merged_into_the_default_branch_is_eligible():
