@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T01:16:31Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A hook that inspects `Bash` commands in the transcript must accept the shapes sessions really use (`cd <repo>; \u2026`, `&&` chains); test it against a real session transcript, not only hand-built commands.",
+  "phase": "implement_plan",
+  "pr_number": 5099,
+  "record_id": "lesson-implement-plan-1a20a2c70f6affeef0cdb1ea",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5082-verify-blocked-comment-evidence",
+    "file:.claude/hooks/unattended_question_guard.py",
+    "file:tests/test_unattended_question_guard.py"
+  ]
+}
