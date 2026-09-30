@@ -2655,7 +2655,8 @@ print(m.group(1) if m else "")
       # of #4605 / PR #4607) was refused for a new changelog fragment and four
       # new test fixtures and latched ai:scope-blocked (heal #4665).  The judge
       # declares them in `new_output_paths`.  An entry must pass the path
-      # validator, must not name `.git`, must carry no glob metacharacter or
+      # validator, must have no `.git` segment (any depth or letter case),
+      # must carry no glob metacharacter or
       # trailing `/` (files_touched_scope_guard.py reads those as globs and
       # directory prefixes), must not exist at the closed head, so no
       # existing file or directory is ever exempted this way, and must end in
@@ -2710,8 +2711,12 @@ print(m.group(1) if m else "")
             elif ! _rb_valid_repo_relative_path "${RB_NEW_OUTPUT_PATH}"; then
               RB_NEW_OUTPUT_REASON="invalid_path"
             else
-              case "${RB_NEW_OUTPUT_PATH}" in
-                .git|.git/*|*//*|*/.)
+              # A `.git` segment is refused at any depth and in any letter
+              # case, as git's own verify_path refuses it (PR #4667 review
+              # round 2).  Lowercasing leaves the glob and `/` checks below
+              # unchanged.
+              case "${RB_NEW_OUTPUT_PATH,,}" in
+                .git|.git/*|*/.git|*/.git/*|*//*|*/.)
                   RB_NEW_OUTPUT_REASON="invalid_path"
                   ;;
                 *[\*\?\[]*)
@@ -2735,7 +2740,12 @@ print(m.group(1) if m else "")
                 # `tests/fixtures/new_suite` would exempt a whole new subtree.
                 # Keep only file-shaped paths: the last segment needs a `.`
                 # that is neither its first nor its last character (PR #4667
-                # review round 1).
+                # review round 1).  The name alone cannot tell a file from a
+                # directory, so this errs toward skipping: an extensionless
+                # new file (`Dockerfile`, `.gitignore`) falls back to today's
+                # human-gated scope block, and a new dotted directory name
+                # (`conf.d`) is the residual the plan accepts, one brand-new
+                # subtree the judge named (review round 2, AD-8).
                 RB_NEW_OUTPUT_BASENAME="${RB_NEW_OUTPUT_PATH##*/}"
                 case "${RB_NEW_OUTPUT_BASENAME#?}" in
                   *.?*)

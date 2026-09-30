@@ -1334,7 +1334,8 @@ judge declares in `new_output_paths` (`REISSUE_FILES_TOUCHED_NEW_OUTPUTS`).
 A declared path is kept only when it passes the path validator, is
 printable ASCII with no leading or trailing space (the scope guard trims
 entries and splits lines on Unicode separators), carries no
-glob character or trailing `/`, is not `.git`, does not exist at the
+glob character or trailing `/`, has no `.git` segment (any depth or
+letter case), does not exist at the
 closed head (a failed lookup there skips it too), and ends in a segment with
 a file extension (`no_extension` otherwise: the scope guard lets a bare entry
 cover everything beneath it, so a new directory-shaped path would exempt a

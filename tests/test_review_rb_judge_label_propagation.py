@@ -1066,6 +1066,8 @@ def test_close_and_reissue_spot_fix_rejects_unsafe_new_output_paths() -> None:
 			"tests/fixtures/*.json",
 			"tests/fixtures/new_dir/",
 			"tests/fixtures/new_case.json",
+			"sub/.git/hooks.txt",
+			"sub/.GIT",
 		]
 	)
 	_assert_new_output_footer_and_skips(
@@ -1079,12 +1081,18 @@ def test_close_and_reissue_spot_fix_rejects_unsafe_new_output_paths() -> None:
 			(5, "invalid_path"),
 			(6, "tests/fixtures/*.json", "glob"),
 			(7, "tests/fixtures/new_dir/", "directory"),
+			(9, "invalid_path"),
+			(10, "invalid_path"),
 		],
 	)
 	stdout = state["_stdout"]
-	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=8 added=1 skipped=7 total=2" in stdout
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=10 added=1 skipped=9 total=2" in stdout
 	assert "../escape.json" not in stdout, "paths that fail the validator must never be echoed"
 	assert ".git/config" not in stdout
+	# PR #4667 review round 2: a `.git` segment is refused at any depth and in
+	# any letter case, as git's own verify_path refuses it.
+	assert "sub/.git/hooks.txt" not in stdout
+	assert "sub/.GIT" not in stdout
 
 
 def test_close_and_reissue_spot_fix_new_output_paths_reject_what_the_scope_guard_would_rewrite() -> None:
