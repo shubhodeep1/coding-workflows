@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T09:37:33Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A rule that bans a chained shell shape must ban it between the allowlisted commands themselves (not only for the reads appended to them), and the command file's own examples must not use that shape, because sessions copy examples exactly as written.",
+  "phase": "implement_plan",
+  "pr_number": 5304,
+  "record_id": "lesson-implement-plan-b0727d6fd026223f6a864c86",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5293-run-git-sync-unchained",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md",
+    "file:workflow-templates/.claude/commands/fix-claude-pr.md"
+  ]
+}
