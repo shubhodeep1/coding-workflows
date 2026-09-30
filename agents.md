@@ -1033,8 +1033,26 @@ reviews, comments, and conflicts stay a direct §12 request.
   1 refuses, 2 (read error, truncated tree, head moved, missing gate)
   refuses too. The log key is
   `AUTOFIX_AUTO_MERGE_SKIPPED reason=hold_claim|twin_parity|gate_unavailable`.
+  Once the gate allows, both paths merge a `claude/*` head **synchronously**
+  (`gh pr merge --squash --match-head-commit <sha>`, never `--auto`; issue
+  #5565), because an auto-merge enrollment waits for pending required checks
+  and then merges without re-running the gate, so a later `hold` or push
+  could not stop it. They log `AUTOFIX_AUTO_MERGE_HEAD_BOUND` /
+  `AUTOFIX_DET_SKIP_MERGE_BOUND … action=squash_sync`. When GitHub refuses
+  the merge (required checks or reviews still pending, a moved head, a
+  conflict), nothing is enrolled, no merge-authorization label is added, and
+  the run logs `AUTOFIX_AUTO_MERGE_SKIPPED reason=merge_not_ready`; the next
+  review run (a push or a dispatch) re-evaluates. A base with a merge queue
+  would queue the PR instead, which is an armed merge too, so do not put a
+  merge queue on a branch `claude/*` PRs target. The gate job's
+  `evaluate` step reads `auto_merge` in its existing `pulls/{n}` projection
+  and, for an open `claude/*` PR that is enrolled (from before #5565 or by
+  hand), runs `gh pr merge --disable-auto` (one GraphQL mutation) and logs
+  `AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=<n> head_sha=<sha>
+  result=disabled|failed`; a failed cancel warns and the run continues.
+  Every push starts a review run, so a head change always cancels.
   Any new merge path for `claude/*` PRs, such as the pending-checks merge
-  of #4900, must call the gate before `gh pr merge`. The `claude-pr-catch-all` job of
+  of #4900, must call the gate before `gh pr merge` and merge synchronously. The `claude-pr-catch-all` job of
   `.github/workflows/review_autofix_sweep.yml` (cron `17 * * * *`; the
   review-dispatch `sweep` job skips that tick) runs
   `scripts/claude_pr_sweep.py` over this repo and every repo in
@@ -1800,6 +1818,7 @@ and shipped:
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `AUTOFIX_AUTO_MERGE_SKIPPED`
 - `AUTOFIX_MERGE_HOLD_GATE`
+- `AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED`
 - `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -1994,6 +2013,7 @@ LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=AUTOFIX_AUTO_MERGE_SKIPPED
 LOG_PREFIX.name=AUTOFIX_MERGE_HOLD_GATE
+LOG_PREFIX.name=AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---

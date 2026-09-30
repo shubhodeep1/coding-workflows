@@ -20,10 +20,12 @@
 #     claude_merge_hold_gate.py (default: the verified support checkout,
 #     ${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/claude_merge_hold_gate.py)
 #
-# Log keys: AUTOFIX_AUTO_MERGE_HEAD_BOUND (merge enabled for a head),
-# AUTOFIX_AUTO_MERGE_SKIPPED reason=hold_claim|twin_parity|gate_unavailable
-# (a claude/* head the merge hold gate refused, issue #5316), and
-# AUTOFIX_MERGE_HOLD_GATE action=allow (the gate passed a claude/* head).
+# Log keys: AUTOFIX_AUTO_MERGE_HEAD_BOUND (merge enabled for a head;
+# action=squash_sync is the synchronous merge of a claude/* head, issue
+# #5565), AUTOFIX_AUTO_MERGE_SKIPPED reason=hold_claim|twin_parity|
+# gate_unavailable (a claude/* head the merge hold gate refused, issue #5316)
+# or reason=merge_not_ready (GitHub refused the synchronous claude/* merge),
+# and AUTOFIX_MERGE_HOLD_GATE action=allow (the gate passed a claude/* head).
 #
 # Outputs (via GITHUB_ENV):
 #   AUTO_MERGE_READY_LABELS_ALLOWED — true only when the reviewed head may
@@ -316,6 +318,26 @@ if [ "${_orch_is_integration_pr}" = "true" ]; then
 		fi
 	else
 		echo "PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' matches ORCH_INTEGRATION_BRANCH_PATTERN='${ORCH_INTEGRATION_BRANCH_PATTERN}' — auto-merge suppressed. finalize_integration_merge_if_needed handles the legitimate final merge synchronously once the project is complete and the integration tip is contained in the default branch."
+	fi
+	exit 0
+fi
+
+# claude/* heads are merged synchronously, never enrolled in auto-merge
+# (issue #5565). An enrollment waits for pending required checks and then
+# merges without re-running the hold gate above, so a `hold` posted, or a
+# head pushed, after enrollment could not stop it. The gate ran moments ago
+# on this exact head; a merge GitHub refuses now (checks or reviews still
+# required, head moved, conflict) enrolls nothing and waits for the next
+# review run. The gate job cancels any enrollment left on a claude/* PR.
+if [[ "${_orch_pr_head_ref}" == claude/* ]]; then
+	echo "Merging claude/* PR #${PR_NUMBER} synchronously (no auto-merge enrollment)..."
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=squash_sync"
+	if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${INITIAL_HEAD_SHA}"; then
+		record_auto_merge_ready_labels_allowed "true"
+		echo "PR #${PR_NUMBER} merged at reviewed head ${INITIAL_HEAD_SHA}."
+	else
+		echo "AUTOFIX_AUTO_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} reason=merge_not_ready"
+		echo "::warning::GitHub refused the synchronous merge of claude/* PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}'); required checks or reviews may still be pending. No auto-merge was enrolled, so no later merge can skip the hold gate. The next review run (a push or a dispatch) re-checks the gate and merges."
 	fi
 	exit 0
 fi

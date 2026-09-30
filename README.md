@@ -1483,7 +1483,17 @@ cannot complete refuses too (fail closed). A refusal logs
 `AUTOFIX_AUTO_MERGE_SKIPPED pr=<n> head_sha=<sha> reason=<hold_claim|twin_parity|gate_unavailable>`,
 and a pass logs `AUTOFIX_MERGE_HOLD_GATE … action=allow`. The next push
 (the `[claude-twin-sync]` copy, or the fixer resuming) starts a new review
-run that re-checks it. Cost, for `claude/*` heads only: one call per 100 PR
+run that re-checks it. After a pass the workflow merges the `claude/*` PR
+**synchronously** (`gh pr merge --squash --match-head-commit`, logged as
+`action=squash_sync`) instead of enrolling it in auto-merge (issue #5565): an
+enrollment would merge later, once pending required checks passed, without
+checking the gate again. If GitHub cannot merge yet (required checks or
+reviews still pending), nothing is enrolled, the run logs
+`AUTOFIX_AUTO_MERGE_SKIPPED … reason=merge_not_ready`, and the next review
+run tries again. Every review run also cancels an auto-merge enrollment it
+finds on an open `claude/*` PR (made before this change, or by hand) and
+logs `AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=<n> head_sha=<sha>
+result=disabled|failed`, so a push never inherits an armed merge. Cost, for `claude/*` heads only: one call per 100 PR
 comments, one compare, and two tree reads only when a twin changed. Other
 PRs make no extra call.
 
