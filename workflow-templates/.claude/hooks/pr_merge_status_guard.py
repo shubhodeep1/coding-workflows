@@ -591,6 +591,8 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 				)
 			)
 			continue
+		if _refspec_writes_no_branch(spec):
+			continue
 		unresolvable_reason = _unresolvable_refspec_reason(refspec)
 		if unresolvable_reason:
 			targets.append(
@@ -636,6 +638,22 @@ def _pattern_refspec_bulk_reason(spec: str) -> str:
 	if not pattern_source or pattern_destination.startswith("refs/tags/"):
 		return ""
 	return f"`git push` with the pattern refspec `{spec}` can write several branches"
+
+
+def _refspec_writes_no_branch(spec: str) -> bool:
+	"""Whether a refspec (without its leading `+`) writes only a non-branch
+	ref, such as `refs/tags/*` or `refs/tags/v*:refs/tags/v*`.
+
+	A `*` / `?` / `[` pattern keeps its literal `refs/<kind>/` prefix, so a
+	tag pattern is skipped like a single tag. A word with `$`, a backtick or
+	`{` can expand into other refspecs and is left to the unresolvable check.
+	"""
+	if any(marker in spec for marker in ("$", "`", "{")):
+		return False
+	pattern_source, pattern_colon, pattern_destination = spec.partition(":")
+	if not pattern_colon:
+		pattern_destination = pattern_source
+	return pattern_destination.startswith("refs/") and not pattern_destination.startswith("refs/heads/")
 
 
 def _unresolvable_refspec_reason(refspec: str) -> str:
@@ -729,6 +747,9 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 	`GIT_DIR=` assignment, and any path word that needs expansion make it
 	unknown for the rest of the command, and the git calls after that point
 	keep the old behaviour (the session checkout) with a `fallback_reason`.
+	So does a `cd` after `&&` behind a command that may fail, once its `&&`
+	chain ends (`a && cd x; git push`, `a && cd x && b || git push`), and a
+	`cd` inside a list sent to the background with `&`.
 	The same segments count as git calls as in `git_subcommands`, so nothing
 	it ignores is judged here.
 	"""
@@ -739,7 +760,30 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 	targets: list[GuardTarget] = []
 	directory: str | None = session_cwd
 	unresolved = ""
+	# One `&&` / `||` list at a time (the segments between `;`, `&` and
+	# newlines). A `cd` after `&&` that follows a command which may fail is
+	# skipped when that command fails; the rest of its `&&` chain is skipped
+	# with it, but whatever follows `||` or the end of the list runs in either
+	# directory. A list ended by `&` runs in a background subshell, so a `cd`
+	# inside it does not reach the commands after it.
+	list_start_directory = directory
+	list_may_fail = False
+	conditional_cd = False
 	for tokens, separator_before, separator_after in segments:
+		list_boundary = separator_before.replace("\n", "")
+		if list_boundary in ("", ";", "&"):
+			if directory is not None:
+				if list_boundary == "&" and directory != list_start_directory:
+					directory, unresolved = None, "a `cd` in a command list run in the background by `&`"
+				elif conditional_cd:
+					directory, unresolved = None, "a `cd` after `&&` that may not have run"
+			list_start_directory = directory
+			list_may_fail = False
+			conditional_cd = False
+		elif list_boundary == "||" and conditional_cd and directory is not None:
+			directory, unresolved = None, "a `cd` after `&&` that may not have run"
+		may_fail_before_segment = list_may_fail
+		list_may_fail = True
 		assignments: dict[str, str] = {}
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
@@ -778,6 +822,11 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 					directory, unresolved = None, f"`cd` to {cd_reason}"
 				else:
 					directory = destination
+					# A `cd` to an existing directory succeeds, so it does not
+					# make the rest of its `&&` chain conditional by itself.
+					list_may_fail = may_fail_before_segment
+					if separator_before.replace("\n", "") == "&&" and may_fail_before_segment:
+						conditional_cd = True
 				continue
 		if executable != "git" and not executable.endswith("/git"):
 			continue

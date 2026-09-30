@@ -1317,6 +1317,10 @@ def test_a_subshell_only_affects_later_commands(tmp_path: Path) -> None:
 		"git push origin :feature/x",
 		"git push origin refs/tags/v1.0",
 		"git push origin v1.0:refs/tags/v1.0",
+		"git push origin 'refs/tags/*'",
+		"git push origin 'refs/tags/*:refs/tags/*'",
+		"git push origin '+refs/tags/v*:refs/tags/v*'",
+		"git push origin 'refs/tags/v1.?'",
 		"git push --tags origin",
 		"git push origin --tags",
 		"git status",
@@ -1386,7 +1390,6 @@ def test_bulk_push_in_an_unresolvable_directory_keeps_the_fallback_and_the_bulk_
 		("git push origin 'refs/heads/*:refs/heads/*'", True),
 		("git push origin '+refs/heads/merged*:refs/heads/merged*'", True),
 		("git push origin 'feature/*'", True),
-		("git push origin 'refs/tags/*:refs/tags/*'", False),
 		("git push origin HEAD:$B", False),
 		("git push origin HEAD:feature/[x]", False),
 	],
@@ -1655,11 +1658,12 @@ def test_e2e_bulk_push_is_not_judged_when_the_guard_is_off(worktree_repo, monkey
 	assert proc.stdout.strip() == ""
 
 
-def test_e2e_tag_only_push_from_a_stranded_checkout_is_allowed(worktree_repo) -> None:
-	"""PR #5173 review: `git push --tags origin` writes no branch, so the
-	stranded checkout's branch is not judged."""
+@pytest.mark.parametrize("command", ["git push --tags origin", "git push origin 'refs/tags/*:refs/tags/*'"])
+def test_e2e_tag_only_push_from_a_stranded_checkout_is_allowed(worktree_repo, command: str) -> None:
+	"""PR #5173 review: `git push --tags origin` and a tag pattern refspec
+	write no branch, so the stranded checkout's branch is not judged."""
 	repo, _, stub_bin, _, calls_log = worktree_repo
-	proc = _run_twin_hook(repo, stub_bin, "git push --tags origin")
+	proc = _run_twin_hook(repo, stub_bin, command)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert _ask_decision(proc) is None
 	assert not calls_log.exists() or not calls_log.read_text(encoding="utf-8").strip()
@@ -1769,6 +1773,40 @@ def test_cd_joined_sequentially_is_still_followed(tmp_path: Path) -> None:
 		"true || false; cd wt && git push origin HEAD:x",
 	):
 		assert _targets(command, tmp_path) == [("push", str(tmp_path / "wt"), "x", "HEAD", True, False)], command
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git fetch origin && cd wt; git push origin HEAD:feature/open",
+		"git fetch origin && cd wt\ngit push origin HEAD:feature/open",
+		"git fetch origin && cd wt && git status || git push origin HEAD:feature/open",
+		"cd wt && git status & git push origin HEAD:feature/open",
+		"cd wt && git status & wait; git push origin HEAD:feature/open",
+	],
+)
+def test_cd_that_may_be_skipped_makes_later_lists_unknown(tmp_path: Path, command: str) -> None:
+	"""PR #5173 review round 1 (head 420ccd0): a `cd` after `&&` behind a
+	command that may fail is skipped with it, and the push after `;`, a newline
+	or `||` then runs in the original directory; a `cd` in a list sent to the
+	background with `&` never reaches the commands after it."""
+	(tmp_path / "wt").mkdir()
+	targets = twin_guard.guard_targets(command, str(tmp_path))
+	assert targets, command
+	push = targets[-1]
+	assert (push.cwd, push.branch, push.tip) == (str(tmp_path), "", "HEAD"), command
+	assert push.fallback_reason, command
+
+
+def test_cd_behind_a_command_that_may_fail_is_followed_inside_its_chain(tmp_path: Path) -> None:
+	(tmp_path / "wt" / "sub").mkdir(parents=True)
+	for command, directory in (
+		("git fetch origin && cd wt && git push origin HEAD:x", tmp_path / "wt"),
+		("git fetch origin && cd wt && git status && git push origin HEAD:x", tmp_path / "wt"),
+		("cd wt && cd sub; git push origin HEAD:x", tmp_path / "wt" / "sub"),
+		("git fetch origin || true; cd wt && git push origin HEAD:x", tmp_path / "wt"),
+	):
+		assert _targets(command, tmp_path) == [("push", str(directory), "x", "HEAD", True, False)], command
 
 
 def test_separator_segments_match_the_plain_segmenter() -> None:
