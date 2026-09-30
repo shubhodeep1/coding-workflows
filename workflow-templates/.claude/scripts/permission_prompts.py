@@ -87,7 +87,10 @@ keyed by session id in `session-meta.json` under `filing.lock`.
 
 Issue text is untrusted data: the tool name, the prompt reason, and the
 command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
-token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
+token-like strings masked (REDACTION_PATTERNS), inside a fenced block
+whose backtick fence is longer than every backtick run in the text, so no
+line of it can close the fence (issue #5127). `lookup` reads the command
+back from the fence that closes right before the report's session marker.
 
 API calls (CLAUDE.md §15), REST only, none when nothing is new:
   - `file`: one read of the `ai:permission-prompt` issues per 100 issues,
@@ -167,6 +170,9 @@ SESSION_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-session:v1 session=(s
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,120}")
 _ISSUE_BRANCH_RE = re.compile(r"^claude/implement-plan-issue-([0-9]+)(?:-|$)")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_BACKTICK_RUN_RE = re.compile(r"`+")
+# The fence `immediate_block` ends with, right before its session marker (issue #5127).
+_CLOSING_FENCE_RE = re.compile(r"\n(`{4,})\n\n\Z")
 
 REDACTION_PATTERNS = (
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
@@ -422,13 +428,26 @@ def issue_title(pattern: dict) -> str:
 	return f"[permission-prompt] {pattern['tool_name']}: {subject}"
 
 
+def _fenced_text(text: str) -> str:
+	"""`text` in a `text` code block whose backtick fence is longer than every backtick run in `text` (at least 4).
+
+	A backtick fence closes only on a line of at least as many backticks
+	(CommonMark), so no line of the untrusted text can close it and turn the
+	rest into Markdown (issue #5127). Text without a run of 4 keeps the
+	4-backtick fence.
+	"""
+	longest = max((len(run) for run in _BACKTICK_RUN_RE.findall(text)), default=0)
+	fence = "`" * max(4, longest + 1)
+	return f"{fence}text\n{text}\n{fence}"
+
+
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
 	reasons = "\n".join(f"- {reason}" for reason in pattern["reasons"]) or "- (none given)"
 	return (
 		f"**Occurrences:** {new_count} ({pattern['first_ts']} – {pattern['last_ts']}), session `{session_label}`\n\n"
 		f"**Reason Claude Code gave:**\n{reasons}\n\n"
 		"**Latest example** (untrusted data from the session; heredoc bodies removed, token-like strings masked):\n\n"
-		f"````text\n{pattern['example']}\n````\n"
+		f"{_fenced_text(pattern['example'])}\n"
 	)
 
 
@@ -645,7 +664,7 @@ def immediate_block(pattern: dict, record: dict, session_label: str, title: str)
 		f"- **Pattern:** `{_inline_code(pattern['shape'] or pattern['tool_name'])}`\n"
 		f"- **Seen:** {record.get('ts') or 'unknown'}\n\n"
 		"**Command** (untrusted data from the session; heredoc bodies removed, token-like strings masked):\n\n"
-		f"````text\n{record_example(record)}\n````\n\n"
+		f"{_fenced_text(record_example(record))}\n\n"
 		+ SESSION_MARKER_TEMPLATE.format(session=session_label, sig=pattern["signature"])
 		+ "\n"
 	)
@@ -909,28 +928,52 @@ _TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 def parse_immediate_block(text: str, session_label: str) -> dict | None:
-	"""The fields of the newest immediate block in `text` for this session, or None."""
-	markers = [match for match in SESSION_MARKER_RE.finditer(text) if match.group(1) == session_label]
-	if not markers:
+	"""The fields of the immediate block that ends `text`, when it is for this session; else None.
+
+	Every report ends its post with its session marker, and the command is
+	untrusted text that may imitate a marker, the heading, a field line, or a
+	fence (issue #5127). So the block is read backwards from the last marker
+	in `text`: the fence that closes right before it, the last line opening
+	that same fence (the command holds no backtick run that long, see
+	`_fenced_text`), and the last line-start heading before that, where only
+	the report's one-line fields sit. Reports posted with the older fixed
+	4-backtick fence parse the same way.
+	"""
+	markers = list(SESSION_MARKER_RE.finditer(text))
+	if not markers or markers[-1].group(1) != session_label:
 		return None
 	marker = markers[-1]
 	head = text[: marker.start()]
-	start = head.rfind(IMMEDIATE_HEADING)
-	if start < 0:
+	closing = _CLOSING_FENCE_RE.search(head)
+	if not closing:
 		return None
-	section = head[start:]
+	fence = closing.group(1)
+	opening = f"\n{fence}text\n"
+	# The opening line's newline is the closing line's own when the command is empty.
+	open_at = head.rfind(opening, 0, closing.start() + 1)
+	if open_at < 0:
+		return None
+	command = head[open_at + len(opening) : closing.start()] if open_at + len(opening) <= closing.start() else ""
+	fields = head[: open_at + 1]
+	start = fields.rfind(f"\n{IMMEDIATE_HEADING}\n")
+	if start >= 0:
+		start += 1
+	elif fields.startswith(f"{IMMEDIATE_HEADING}\n"):
+		start = 0
+	else:
+		return None
+	section = fields[start:]
 
 	def field(name: str) -> str:
 		match = re.search(rf"^- \*\*{re.escape(name)}:\*\* (.*)$", section, re.MULTILINE)
 		return match.group(1).strip() if match else ""
 
 	title = field("Session title")
-	command = re.search(r"^````text\n(.*)\n````$", section, re.MULTILINE | re.DOTALL)
 	return {
 		"signature": marker.group(2),
 		"event": field("Event").split(" (", 1)[0],
 		"tool_name": field("Tool").strip("`"),
-		"command": command.group(1) if command else "",
+		"command": command,
 		"title": title[1:-1] if len(title) >= 2 and title.startswith("`") and title.endswith("`") else "",
 	}
 
