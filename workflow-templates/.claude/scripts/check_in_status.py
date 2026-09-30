@@ -161,13 +161,18 @@ HAND_BACK_KIND_BY_STATE = {"conflict": "conflict", "review-round": "review", "ci
 # The skip-AI opt-out marker (issue #4985). Only an intentional marker counts:
 # anywhere in the PR title, or on a body line that holds nothing but the
 # marker (up to 3 leading spaces) outside a ``` / ~~~ fenced block. A quoted,
-# backticked, indented or mid-sentence mention never counts. The review gate
+# backticked, indented or mid-sentence mention never counts. A fence opens on
+# any line starting with 3+ backticks or tildes (SKIP_AI_FENCE_RE) and closes
+# only on a matching fence (SKIP_AI_FENCE_CLOSE_RE: up to 3 spaces, the same
+# character, at least as long as the opener, then only blanks), so a ``` line
+# inside a ```` fence stays inside it (issue #5377). The review gate
 # in .github/workflows/review_autofix.yml and review_autofix_sweep.yml apply
 # the same rule in awk; scripts/claude_pr_sweep.py calls has_skip_ai_marker.
 # tests/test_skip_ai_marker_rule.py holds all three to one case table.
 SKIP_AI_MARKER = "[skip ai]"
 SKIP_AI_BODY_LINE_RE = re.compile(r"^ {0,3}\[skip ai\][ \t]*$")
-SKIP_AI_FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
+SKIP_AI_FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+SKIP_AI_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 # review_autofix.yml posts this once per head when it skips a PR-backed
 # claude/* head for skip_ai_marker / draft_or_skip_ai (issue #4985).
 REVIEW_SKIPPED_MARKER_RE = re.compile(
@@ -262,21 +267,33 @@ def has_skip_ai_marker(title: object, body: object) -> bool:
 	The title counts wherever it holds the marker. A body line counts only
 	when it holds nothing but the marker (up to 3 leading spaces, trailing
 	blanks and a trailing CR allowed) and lies outside a ``` / ~~~ fenced
-	block; an opening or closing fence line toggles the block. Non-string
-	input counts as empty. No API calls.
+	block. A fence line opens a block that only a matching closing fence
+	ends: up to 3 spaces, a run of the opener's character at least as long
+	as the opener, then only blanks. Any other line inside the block, a
+	shorter or other-character fence included, is content, and an unclosed
+	block runs to the end of the body (issue #5377). Non-string input
+	counts as empty. No API calls.
 	"""
 	if isinstance(title, str) and SKIP_AI_MARKER in title:
 		return True
 	if not isinstance(body, str):
 		return False
 	in_fence = False
+	fence_run = ""
 	for line in body.split("\n"):
 		if line.endswith("\r"):
 			line = line[:-1]
-		if SKIP_AI_FENCE_RE.match(line):
-			in_fence = not in_fence
+		if in_fence:
+			closing = SKIP_AI_FENCE_CLOSE_RE.match(line)
+			if closing and closing.group(1)[0] == fence_run[0] and len(closing.group(1)) >= len(fence_run):
+				in_fence = False
 			continue
-		if not in_fence and SKIP_AI_BODY_LINE_RE.match(line):
+		opening = SKIP_AI_FENCE_RE.match(line)
+		if opening:
+			in_fence = True
+			fence_run = opening.group(1)
+			continue
+		if SKIP_AI_BODY_LINE_RE.match(line):
 			return True
 	return False
 
