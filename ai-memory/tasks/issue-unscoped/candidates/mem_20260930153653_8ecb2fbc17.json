@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py: lines 648-652 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `read_settings_text` treats every nonzero `git cat-file` exit as an absent settings file, so an unreadable base blob can leave no base guard wiring to compare and allow guard removals to pass.\n  WHY: The base-unparseable check is skipped when `base_text` is None, leaving the differential check without the base wiring; reviewers disagreed on severity (NIT versus MAJOR), and z-ai_glm-5_2 disputed the finding's validity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/guard_differential.py: lines 648-652 (read_settings_text) | severity=low | confidence=[2]\n  PROBLEM: When `git cat-file -p ref:path` exits nonzero for any reason, the function returns `None`, which `compare_settings_wiring` treats identically to \"file absent at base ref.\"\n  WHY: If `git cat-file` fails for a reason other than \"path absent\" (disk error, process killed, tree corruption), the check silently accepts a settings file that could have removed every guard.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/guard_differential.py: read_settings_text, the ref branch (~lines 648-652 of the round-2 head); compare_settings_wiring, the base-unparseable guard (~lines 787-791) | severity=high | confidence=[4]\n  PROBLEM: `read_settings_text` returns None for any nonzero git cat-file exit code, conflating \"file does not exist at ref\" with \"file exists but blob is unavailable/corrupt.\"\n  WHY: A shallow or partial clone or unfetched base ref can skip the base-unparseable failure path, leaving no base wiring to compare and allowing guard removals to pass.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/guard_differential.py: read_settings_text, lines 648-652; compare_settings_wiring, lines 787-791 | severity=high | confidence=[4]\n  PROBLEM: A failed `git cat-file` read is treated as though the base settings file does not exist, so the later `base_text is not None` check does not report `base-unparseable` or compare the base guard entries.\n  WHY: If the base commit and tree are readable but its settings blob is unavailable or corrupt, a PR that removes the guard entries can be evaluated with no base wiring and no wiring regression, allowing the check to pass.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/guard_differential.py: lines 648-652 (the git cat-file path) | severity=low | confidence=[4]\n  PROBLEM: A nonzero git cat-file return code is treated as \"file absent\" (returns None), regardless of whether the path doesn't exist at that ref or the blob couldn't be read due to git corruption/I/O error.\n  WHY: If the base settings blob exists but cannot be read, no base wiring is compared, so a head settings file that removes guards can pass the differential check with no wiring regressions reported.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d8084d0bd6ec33febecc4c948798d6ff590ad7c38fbf6434824deeab74f02ffb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5356,
+    "run_id": "36732104433",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36732104433",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930153653_8ecb2fbc17",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5356,
+    "run_id": "36732104433"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T15:36:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
