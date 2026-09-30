@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T16:55:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In a repo without `CLAUDE_FIXER_VERDICT_BOT_LOGIN`, a Claude-fixer review round whose only entries are rejected (here, task gaps whose own evidence showed the requirement implemented) cannot converge, because the rejection verdict must come from the dedicated bot; the chain blocks and the operator merges. Configure the verdict bot before relying on unattended convergence.",
+  "phase": "implement_plan",
+  "pr_number": 5740,
+  "record_id": "lesson-implement-plan-1c2f49ca15e1e5e98c3f7e10",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5617-unmerged-close-automation-identity",
+    "file:.github/workflows/review_autofix.yml",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
