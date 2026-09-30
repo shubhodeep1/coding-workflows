@@ -7,8 +7,10 @@
 #
 # Writes must keep asking, and reads beside unreadable code must keep leaving
 # the decision to the normal permission flow. A hook change that allows one of
-# these fails the check, with or without a warning (issue #5325), unless the PR
-# body lists it under `Intended loosening:`.
+# these fails the check, with or without a warning (issue #5325), unless the
+# base branch's .github/guard_differential/intended_loosening.json approves it
+# for the PR's head commit; a PR-body `Intended loosening:` listing never does
+# (#5326).
 
 # Explicit methods on non-routine endpoints.
 gh api -X DELETE repos/o/r/git/refs/heads/feature/x

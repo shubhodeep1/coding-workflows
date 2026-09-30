@@ -7,8 +7,9 @@
 #
 # Every shape here must keep the base hook's decision or a stricter one. A hook
 # change that treats one less strictly fails the check, with or without a
-# warning (issue #5325), unless the PR body lists it under
-# `Intended loosening:`.
+# warning (issue #5325), unless the base branch's
+# .github/guard_differential/intended_loosening.json approves it for the PR's
+# head commit; a PR-body `Intended loosening:` listing never does (#5326).
 
 # Plain commit and push on the stranded checkout.
 git commit -m 'next'

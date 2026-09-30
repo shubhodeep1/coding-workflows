@@ -2,8 +2,9 @@
 # Run by scripts/guard_differential.py (issue #5174) through the base and the
 # PR's hook in the default scenario. Every `subscribe_pr_activity` call, from
 # any MCP server, must keep blocking. A hook change that allows one fails the
-# check, with or without a warning (issue #5325), unless the PR body lists it
-# under `Intended loosening:`.
+# check, with or without a warning (issue #5325), unless the base branch's
+# .github/guard_differential/intended_loosening.json approves it for the PR's
+# head commit; a PR-body `Intended loosening:` listing never does (#5326).
 
 json: {"tool_name": "mcp__github__subscribe_pr_activity", "tool_input": {"owner": "o", "repo": "r", "pullNumber": 1}}
 json: {"tool_name": "mcp__Claude_Code_Remote__subscribe_pr_activity", "tool_input": {"owner": "o", "repo": "r", "pullNumber": 1}}
