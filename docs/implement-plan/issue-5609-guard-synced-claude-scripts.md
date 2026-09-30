@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5609-guard-synced-claude-scripts-plan.md
 - Source issue: shubhodeep1/coding-workflows#5609
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5609-guard-synced-claude-scripts   Final PR: pending (base claude/implement-plan-issue-4785-twin-first-claude-sync)
+- Project branch: claude/implement-plan-issue-5609-guard-synced-claude-scripts   Final PR: #5650 draft (base claude/implement-plan-issue-4785-twin-first-claude-sync)
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5655
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_019Lc5auXqLNUF8Vdips7jGB   safety net trig_016WYbMrCZCJVxbtnEF5m4sf   hand-back trig_01VPo59EXbAdLtc97DC9DAnd
 - Last updated: 2026-09-30
-- Last note: project branch opened from claude/implement-plan-issue-4785-twin-first-claude-sync (b044617).
+- Last note: phase 1 PR #5655 opened (GUARD_PATH_PREFIXES gains `scripts/`; tests, label description, docs, changelog fragment). Project branch opened from claude/implement-plan-issue-4785-twin-first-claude-sync (b044617).
 
 ## Phases
-1. [ ] Phase 1 — guard `.claude/scripts/**` in the twin sync (code, tests, docs; no `.claude/**` path is edited; protected paths: none)
+1. [ ] Phase 1 — guard `.claude/scripts/**` in the twin sync (code, tests, docs; no `.claude/**` path is edited; protected paths: none)   — PR #5655 open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -38,4 +38,5 @@
 - Security pass: skip (`security_pass_skip.py` → `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`).
 - Session started by the Claude issue dispatcher (routine `implement-issue #5609`); session session_01RJHqprScG1RPCYWzJ6aqc9, permission mode auto.
 - Issue progress comment id 5909404971.
+- Phase 1 verification (2026-09-30): the 10 new or changed assertions in tests/test_claude_twin_sync.py fail on the pre-fix script and pass with it; 26 related suites 1124 passed, 6 skipped; CI ruff (E,F) clean; inventory parity ok; `claude_twin_sync.py check --base origin/main` ok. `workflow-templates/CLAUDE.md` is a symlink to CLAUDE.md, so one edit covers both.
 - Base branch check: PR #4804 (head = the base branch) is open, not merged, so the base has not moved.
