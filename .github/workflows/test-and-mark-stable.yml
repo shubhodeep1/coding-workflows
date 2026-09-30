@@ -1709,7 +1709,9 @@ jobs:
                     if [ -z "${BUG_B_STATE}" ]; then
                       BUG_B_SHA_RC=0
                       BUG_B_SHA=$(smoke_review_checked_out_sha "${TEST_REPO}" "${BUG_B_RUN_ID}") || BUG_B_SHA_RC=$?
-                      if [ "${BUG_B_SHA_RC}" -eq 0 ] && { [ "${BUG_B_SHA}" = "${PIN_SHA}" ] || [ "${BUG_B_SHA}" = "${BAIT_SHA}" ]; }; then
+                      # The helper prints a lowercase SHA; PIN_SHA / BAIT_SHA pass a
+                      # case-insensitive check, so compare lowercased (as Phase 4b does).
+                      if [ "${BUG_B_SHA_RC}" -eq 0 ] && { [ "${BUG_B_SHA}" = "${PIN_SHA,,}" ] || [ "${BUG_B_SHA}" = "${BAIT_SHA,,}" ]; }; then
                         BUG_B_STATE="verified"
                         echo "  ✓ Bug B review run #${BUG_B_RUN_ID} checked out ${BUG_B_SHA:0:7} (bait/pin commit)"
                       elif [ "${BUG_B_SHA_RC}" -eq 0 ]; then
@@ -1731,9 +1733,16 @@ jobs:
                 fi
               fi
               REVIEW_RUN=""
+              # A jq failure on the listing (malformed payload) is logged
+              # rather than read as "no review run yet"; the poll retries.
+              REVIEW_RUN_JQ_RC=0
               if REVIEW_RUNS_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100"); then
                 REVIEW_RUN=$(printf '%s\n' "${REVIEW_RUNS_JSON}" | jq -c --argjson extra "${BUG_B_EXTRA}" \
-                  "([.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not) | select(.name != .path) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] + \$extra) as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" 2>/dev/null || echo "")
+                  "([.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not) | select(.name != .path) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] + \$extra) as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" 2>/dev/null) || REVIEW_RUN_JQ_RC=$?
+                if [ "${REVIEW_RUN_JQ_RC}" -ne 0 ]; then
+                  REVIEW_RUN=""
+                  echo "  (review run listing for ${PR_BRANCH} could not be parsed, jq rc=${REVIEW_RUN_JQ_RC}; retrying next poll)"
+                fi
               fi
             else
               REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \

@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5093-smoke-review-dispatch-default-branch-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5093 (https://github.com/shubhodeep1/coding-workflows/issues/5093)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch
-- Project branch: claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch   Final PR: #5107 draft
+- Project branch: claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch   Final PR: #5107 ready
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round
 - Activation: n/a (base claude/implement-plan-issue-4898-retrigger-dispatch-default-branch)
-- Waiting on: completion PR (head `claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch-complete`; the number is in the validation 1/3 resume stage report and on the #5093 progress comment)
+- Waiting on: PR #5107 (final PR, review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01DeJ3bVofrAPjfdXYapCF43 (reused)   safety net and hand-back in the validation 1/3 resume stage report
+- Check-in: checker session_01DeJ3bVofrAPjfdXYapCF43 (reused)   safety net and hand-back in the final-merge review round 1 stage report
 - Last updated: 2026-09-30
-- Last note: validation skipped on operator answer Q1: A (covered by the base chain's validation); plan moved to docs/completed/ in the completion PR; next: final-merge 1/1.
+- Last note: final PR #5107 review round 1 (head `8015805`): both findings fixed in one `[claude-autofix]` commit (leg (c) SHA compare lowercased as Phase 4b does; a jq failure on the Phase 4 branch listing is logged); next: final-merge review round 2 or merge.
 
 ## Phases
 1. [x] Phase 1 — default-branch smoke review dispatch with checked-out-SHA correlation   — PR #5111 merged 2026-09-29 (as `c7ec923`, merged by hand per the answer to the round-3 block); review rounds: 3; interventions: 0
@@ -36,7 +36,9 @@
 
 ## Completion
 - Completion PR (claude/implement-plan-issue-5093-smoke-review-dispatch-default-branch-complete) open 2026-09-30 — doc moved to docs/completed/issue-5093-smoke-review-dispatch-default-branch-plan.md
-- Final PR #5107 draft (into claude/implement-plan-issue-4898-retrigger-dispatch-default-branch)
+- Completion PR #5491 merged 2026-09-30.
+- Final PR #5107 ready — review rounds: 1 (into claude/implement-plan-issue-4898-retrigger-dispatch-default-branch)
+  - Round 1 (2026-09-30, head `8015805`, 2 consensus findings, both fixed): Phase 4 leg (c) compared the helper's lowercase SHA with `PIN_SHA` / `BAIT_SHA` without lowercasing them, though their validation regex accepts uppercase and Phase 4b already lowercases; a jq failure on the Phase 4 branch listing was read silently as "no review run yet". Tests: uppercase leg (c) cases and `test_phase4_listing_logs_a_jq_failure_instead_of_reading_it_as_no_run`.
 
 ## Activation
 - n/a: the base is #4898's project branch, so the change goes live with that chain's final PRs (#4923, then #4709). The final-merge stage closes issue 5093 and labels it `ai:merged` once #5107 merges.
@@ -58,6 +60,8 @@
 ## Lessons
 - [source:conformance] A PR-named `workflow_dispatch` run counts as trusted evidence only when its `head_branch` is the dispatch (default) branch: `run-name` is evaluated from the workflow file at the dispatched ref, so a null or empty `head_branch` proves nothing and must fail closed; tolerate null only where the run is used to suppress work, never to accept it. (files: scripts/smoke_review_dispatch.sh)
 - [source:conformance] A `gh api .../actions/jobs/<id>/logs` read must pass `--allow-escape-sequences`: job logs carry ANSI colour codes and gh refuses such a body even into a file, so a helper without it fails on every real log; a test `gh` stub must refuse an escape-carrying body without the flag, or the suite passes on a helper that never works. (files: scripts/smoke_review_dispatch.sh, tests/test_smoke_review_dispatch.py)
+
+- [source:intervention] When a SHA passes a case-insensitive `^[0-9a-fA-F]{40}$` check and is then compared with a SHA a helper extracts as lowercase, lowercase both sides (`${VAR,,}`) at every comparison site, not only some, and test the uppercase case at each site. (files: .github/workflows/test-and-mark-stable.yml, tests/test_smoke_review_dispatch.py)
 
 ## Notes
 - Security pass skipped per the plan header (verified automation-produced `ai:security` issue).

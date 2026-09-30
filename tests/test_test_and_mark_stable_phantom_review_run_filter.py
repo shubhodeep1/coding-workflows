@@ -65,7 +65,7 @@ def _pinned_filter() -> str:
 	``extra`` (``[]`` unless a test supplies one).
 	"""
 	match = re.search(
-		r'--argjson extra "\$\{BUG_B_EXTRA\}" \\\s*\n\s*("\(\[\.workflow_runs\[\] \| select\(\.name \| test\(\\"Review\|.*?")\s*2>/dev/null \|\|',
+		r'--argjson extra "\$\{BUG_B_EXTRA\}" \\\s*\n\s*("\(\[\.workflow_runs\[\] \| select\(\.name \| test\(\\"Review\|.*?")\s*2>/dev/null\)? \|\|',
 		_workflow_text(),
 	)
 	assert match, "Pinned Phase 4 review-run jq filter not found in test-and-mark-stable.yml"

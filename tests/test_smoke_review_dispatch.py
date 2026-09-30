@@ -574,7 +574,7 @@ def _phase4_leg_c_block() -> str:
 	return body[start:end]
 
 
-def _phase4_leg_c(run: dict | None, sha_rc: int = 0, sha: str = BAIT, state: str = "") -> dict[str, str]:
+def _phase4_leg_c(run: dict | None, sha_rc: int = 0, sha: str = BAIT, state: str = "", bait: str = BAIT) -> dict[str, str]:
 	tmp = Path(tempfile.mkdtemp(prefix="smoke-leg-c-"))
 	try:
 		(tmp / "run.json").write_text(json.dumps(run) if run is not None else "", encoding="utf-8")
@@ -583,7 +583,7 @@ def _phase4_leg_c(run: dict | None, sha_rc: int = 0, sha: str = BAIT, state: str
 				"set -euo pipefail",
 				f'gh_api_safe_quiet_print() {{ [ -s "{tmp}/run.json" ] || return 1; cat "{tmp}/run.json"; }}',
 				f'smoke_review_checked_out_sha() {{ echo called >> "{tmp}/sha_calls"; printf "%s\\n" "{sha}"; return {sha_rc}; }}',
-				f"TEST_REPO={REPO}; BUG_B_RUN_ID=55; PIN_SHA={PIN}; BAIT_SHA={BAIT}; BUG_B_STATE='{state}'",
+				f"TEST_REPO={REPO}; BUG_B_RUN_ID=55; PIN_SHA={bait}; BAIT_SHA={bait}; BUG_B_STATE='{state}'",
 				_phase4_leg_c_block(),
 				'printf "STATE=%s\\nEXTRA=%s\\n" "${BUG_B_STATE}" "${BUG_B_EXTRA}"',
 			]
@@ -608,9 +608,16 @@ def test_phase4_leg_c_states() -> None:
 	out = _phase4_leg_c(done, sha=BAIT)
 	assert (out["STATE"], json.loads(out["EXTRA"])[0]["id"]) == ("verified", 55)
 
+	# PIN_SHA / BAIT_SHA pass a case-insensitive check; the helper's SHA is lowercase.
+	out = _phase4_leg_c(done, sha=BAIT, bait=BAIT.upper())
+	assert (out["STATE"], json.loads(out["EXTRA"])[0]["id"]) == ("verified", 55)
+
 	out = _phase4_leg_c(done, sha=OTHER)
 	assert (out["STATE"], out["EXTRA"]) == ("rejected", "[]")
 	assert "not the bait/pin commit" in out["stdout"]
+
+	out = _phase4_leg_c(done, sha=OTHER, bait=BAIT.upper())
+	assert (out["STATE"], out["EXTRA"]) == ("rejected", "[]")
 
 	out = _phase4_leg_c(done, sha_rc=1, sha="")
 	assert (out["STATE"], out["EXTRA"]) == ("", "[]")
@@ -630,6 +637,58 @@ def test_phase4_leg_c_states() -> None:
 
 	out = _phase4_leg_c(_run(id=56))
 	assert (out["STATE"], out["EXTRA"], out["sha_calls"]) == ("", "[]", "0")
+
+
+def _phase4_listing_block() -> str:
+	body = _e2e_steps()["wait-review"]["run"]
+	start = body.index('REVIEW_RUN=""', body.index("BUG_B_EXTRA='[]'"))
+	end = body.index('REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request', start)
+	block = body[start:end].rstrip()
+	assert block.endswith("else")
+	return block[: -len("else")]
+
+
+def _phase4_listing(listing: str | None) -> dict[str, str]:
+	tmp = Path(tempfile.mkdtemp(prefix="smoke-listing-"))
+	try:
+		(tmp / "listing.json").write_text(listing or "", encoding="utf-8")
+		script = "\n".join(
+			[
+				"set -euo pipefail",
+				f'gh_api_safe_quiet_print() {{ [ -s "{tmp}/listing.json" ] || return 1; cat "{tmp}/listing.json"; }}',
+				f"TEST_REPO={REPO}; PR_BRANCH=ai/issue-12; PIN_SHA={PIN}; BAIT_CREATED_AT=''; BUG_B_EXTRA='[]'",
+				_phase4_listing_block(),
+				'printf "REVIEW_RUN=%s\\nRC=%s\\n" "${REVIEW_RUN}" "${REVIEW_RUN_JQ_RC}"',
+			]
+		)
+		result = _run_bash(script, dict(os.environ))
+		assert result.returncode == 0, result.stderr
+		values = dict(line.split("=", 1) for line in result.stdout.splitlines() if re.match(r"^(REVIEW_RUN|RC)=", line))
+		values["stdout"] = result.stdout
+		return values
+	finally:
+		shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_phase4_listing_logs_a_jq_failure_instead_of_reading_it_as_no_run() -> None:
+	pinned = _run(id=70, head_branch="ai/issue-12", head_sha=PIN, event="pull_request")
+	out = _phase4_listing(json.dumps({"workflow_runs": [pinned]}))
+	assert (json.loads(out["REVIEW_RUN"])["id"], out["RC"]) == (70, "0")
+	assert "could not be parsed" not in out["stdout"]
+
+	out = _phase4_listing(json.dumps({"workflow_runs": []}))
+	assert (out["REVIEW_RUN"], out["RC"]) == ("null", "0")
+	assert "could not be parsed" not in out["stdout"]
+
+	for malformed in ("not json", json.dumps({"workflow_runs": [{"name": None}]})):
+		out = _phase4_listing(malformed)
+		assert out["REVIEW_RUN"] == "", malformed
+		assert out["RC"] != "0", malformed
+		assert "review run listing for ai/issue-12 could not be parsed" in out["stdout"], malformed
+
+	out = _phase4_listing(None)
+	assert (out["REVIEW_RUN"], out["RC"]) == ("", "0")
+	assert "could not be parsed" not in out["stdout"]
 
 
 def test_phase4_filter_picks_a_verified_leg_c_run_and_still_prefers_leg_a() -> None:
