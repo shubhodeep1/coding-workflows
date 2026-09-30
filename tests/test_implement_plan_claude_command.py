@@ -383,6 +383,8 @@ def test_other_cleanup_sites_skip_a_denied_call(twin_text):
 	assert "a cleanup call, CLAUDE.md §26.I, so a denied archive is noted and never retried" in start
 	hand_back = _section(twin_text, "### Hand-back", "### Fallbacks")
 	assert "This delete and the rename in step 2 are cleanup calls (CLAUDE.md §26.I)" in hand_back
+	assert "A denied delete skips the rename too, because a denial skips the rest of the cleanup." in hand_back
+	assert "The re-read, the `PushNotification`, and the intervention still run." in hand_back
 	assert "first `get_trigger` the id it recorded when it armed the wait" in hand_back
 	assert "`delete_trigger` it only when its `name` starts with `implement-plan <slug>:` and its `persistent_session_id` is this session" in hand_back
 	assert "Not found means it is already gone, so skip the delete" in hand_back

@@ -355,9 +355,17 @@ def test_pickup_skips_a_denied_cleanup_call(pickup_cmd):
 	assert wake.index("end the turn, deleting nothing") < wake.index("Otherwise delete every enabled")
 	assert "If one bound to another session has a later `created_at` than yours, a newer pickup replaced you" in wake
 	assert "report `claude-issue-pickup: not the active pickup (newer trigger <id> → session <persistent_session_id>)`" in wake
-	assert "The pickup left behind reads no queue item, so no target gets two sessions" in keep_one
+	# PR #5097 review round 2: the stand-down, not a repeated delete, is what
+	# keeps one reader, and a wake already running when the restart comes is
+	# not stopped.
+	assert "The pickup left behind reads no queue item" not in keep_one
+	assert "A not-found result means that cleanup is already done." in keep_one
+	assert "Any other failure is recorded as `cleanup skipped: <tool> failed (<error>)` and is not retried" in keep_one
+	assert "The `created_at` check keeps a single queue reader, not the delete." in keep_one
+	assert "For that one wake both pickups can read the queue." in keep_one
+	assert "That is a new cleanup call, skipped the same way when it is denied, and nothing depends on it succeeding." in keep_one
 	rules_one = pickup_cmd[pickup_cmd.index("**One pickup, never deeper.**"):pickup_cmd.index("**Stay lean.**")]
-	assert "only the pickup whose trigger has the latest `created_at` reads the queue" in rules_one
+	assert "only the pickup whose trigger has the latest `created_at` reads the queue, from the older pickup's next wake on" in rules_one
 	assert "; cleanup skipped: set_session_title denied (<reason>)" in pickup_cmd
 	assert "; cleanup skipped: archive_session denied (<reason>)" in pickup_cmd
 	rules = pickup_cmd[pickup_cmd.index("## Rules"):]
