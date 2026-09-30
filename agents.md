@@ -1033,6 +1033,23 @@ reviews, comments, and conflicts stay a direct §12 request.
   1 refuses, 2 (read error, truncated tree, head moved, missing gate)
   refuses too. The log key is
   `AUTOFIX_AUTO_MERGE_SKIPPED reason=hold_claim|twin_parity|gate_unavailable`.
+  The same gate guards merge-authorization labels (issue #5564): the
+  helper's `reviewed_head_is_current_for_labels` (the `ENABLE_AUTO_MERGE`-off
+  and `e2e-smoke-test` exits, which set `AUTO_MERGE_READY_LABELS_ALLOWED`
+  without `gh pr merge`) and the job's `deterministic_skip_head_is_current`
+  run it for `claude/*` heads, because the orchestrator poller merges the PR
+  of every `ai:ready-to-merge` issue. The poller
+  (`_orch_claude_merge_hold_gate_allows` in
+  `scripts/orchestrate_poll_process.sh`) runs it right before its two
+  ready-to-merge merges (current wave, prior-wave backward scan) for
+  `claude/*` heads, with the PR object it already fetched as `--pr-json`,
+  and then merges with `--match-head-commit` on that head; the gate comes
+  from `CLAUDE_MERGE_HOLD_GATE_SCRIPT`, else `.codex-workflow-src/scripts/`,
+  else `.codex-workflow-src-main/scripts/` (missing refuses), and
+  `orchestrate_poll.yml` passes `vars.CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`. Its
+  log key is `ORCH_MERGE_HOLD_GATE pr=<n> head_sha=<sha> action=allow|refuse
+  reason=<skip_reason>`. The poller's judge, stall, and noop force-merges are
+  not gated (they need a judge or stall verdict, not a ready label).
   Any new merge path for `claude/*` PRs, such as the pending-checks merge
   of #4900, must call the gate before `gh pr merge`. The `claude-pr-catch-all` job of
   `.github/workflows/review_autofix_sweep.yml` (cron `17 * * * *`; the
@@ -1800,6 +1817,7 @@ and shipped:
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `AUTOFIX_AUTO_MERGE_SKIPPED`
 - `AUTOFIX_MERGE_HOLD_GATE`
+- `ORCH_MERGE_HOLD_GATE`
 - `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -1994,6 +2012,7 @@ LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=AUTOFIX_AUTO_MERGE_SKIPPED
 LOG_PREFIX.name=AUTOFIX_MERGE_HOLD_GATE
+LOG_PREFIX.name=ORCH_MERGE_HOLD_GATE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---
