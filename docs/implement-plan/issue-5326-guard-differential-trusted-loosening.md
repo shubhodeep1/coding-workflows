@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5326-guard-differential-trusted-loosening-plan.md
 - Source issue: shubhodeep1/coding-workflows#5326   Progress comment: 5902380346
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5174-guard-differential-check
-- Project branch: claude/implement-plan-issue-5326-guard-differential-trusted-loosening   Final PR: pending
+- Project branch: claude/implement-plan-issue-5326-guard-differential-trusted-loosening   Final PR: #5360 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5389
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: project checker `implement-plan issue-5326-guard-differential-trusted-loosening — checker` (session, safety-net, and hand-back ids are in the phase 1 stage report)
 - Last updated: 2026-09-30
-- Last note: project branch opened from claude/implement-plan-issue-5174-guard-differential-check; phase 1 in progress.
+- Last note: phase 1 PR #5389 opened (policy-based intended loosening, 97 guard differential tests passing); waiting on its review round or merge.
 
 ## Phases
-1. [ ] Phase 1 — base-branch loosening policy (script, policy file, tests, ci.yml step, docs)
+1. [ ] Phase 1 — base-branch loosening policy (script, policy file, tests, ci.yml step, docs)   — PR #5389 open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -38,6 +38,7 @@
 ## Lessons
 
 ## Notes
+- Local verification (phase 1): 39 of 40 related suites pass. `tests/test_orchestrate_poll_process.py` (CI-sharded) hit a local 300 s cap with no failure. `tests/test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean` also fails on the unchanged base because this container has no `gawk`.
 - Issue mode (CLAUDE.md §28.A): single-phase plan written by /implement-issue-claude from issue #5326 (security-audit finding on #5174's project branch).
 - Base branch is not the default branch: the issue closes by an explicit close + `ai:merged` at final merge, and steps 12–13 do not run (`Activation: n/a`).
 - `ci.yml` runs only on PRs into `main` / `stable`, so neither this project's PRs nor its final PR (into #5174's branch) run the guard differential step; verification is local, and the step gates #5185 into `main`.
