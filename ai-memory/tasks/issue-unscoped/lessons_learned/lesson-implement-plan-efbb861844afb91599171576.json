@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T02:15:17Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An issue-mode project whose base is another project branch cannot run `validate.yml` with `target_ref`, because the target must have an open PR into the default branch; plan the validation answer (skip, covered by the parent project's validation) up front instead of discovering it at the validation stage.",
+  "phase": "implement_plan",
+  "pr_number": 5371,
+  "record_id": "lesson-implement-plan-efbb861844afb91599171576",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:validation",
+    "plan:issue-5297-ledger-must-cover-reviewer-roster",
+    "file:.github/workflows/validate.yml",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
