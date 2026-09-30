@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T07:24:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A new stable log prefix goes into both agents.md forms: the `- `PREFIX`` prose list and the `LOG_PREFIX.name=PREFIX` registry; contract tests assert both.",
+  "phase": "implement_plan",
+  "pr_number": 4722,
+  "record_id": "lesson-implement-plan-85a81ab7472b7c5610918476",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4713-rerun-cancelled-ci",
+    "file:agents.md"
+  ]
+}
