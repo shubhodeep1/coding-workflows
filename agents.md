@@ -1242,9 +1242,22 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
     `OWNER`) approves the current head, else `pending`; non-guard PRs get
     `success` ("No hook or settings change").
 - **Other automation stays out:** the `review_autofix.yml` gate skips a
-  `claude/claude-twin-sync-*` head (`AUTOFIX_GATE_SKIP reason=claude_twin_sync`,
-  no deterministic-skip auto-merge), and `scripts/claude_pr_sweep.py` never
-  queues a fixer for one.
+  genuine sync PR (`AUTOFIX_GATE_SKIP reason=claude_twin_sync`, no
+  deterministic-skip auto-merge), and `scripts/claude_pr_sweep.py` never
+  queues a fixer for a `claude/claude-twin-sync-*` head. The branch name alone
+  never skips review (issue #5610): the gate exempts a
+  `claude/claude-twin-sync-*` PR only in `shubhodeep1/coding-workflows`, from a
+  same-repository head, and authored by the login `GH_PAT` authenticates as
+  (`gh api user`, the account the sync opens its PR with). Any other PR with
+  that name, a fork or consumer PR included, is reviewed normally and logs
+  `AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT reason=<not_library_repository |
+  head_repository_mismatch | pr_author_unknown | sync_identity_unavailable |
+  pr_author_not_sync_identity>`. The check fails closed when an identity cannot
+  be read; a genuine sync PR then still skips through its `[skip ai]` marker.
+  The no-PR claude-branch push path keeps the exemption in coding-workflows
+  only. The PR author and head repository come from the gate's existing PR
+  fetch, and the `gh api user` lookup is shared with the marker-comment check,
+  so the gate adds no API call.
 - **Sync-state check:** the CI step "Claude twin sync state (CLAUDE.md
   §28.C)" runs `claude_twin_sync.py check --base <base> --head HEAD` on PRs
   into `main` or `stable` (base: the merge commit's first parent) and pushes
