@@ -53,7 +53,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -924,6 +923,13 @@ def test_model_index_is_fresh_per_attempt_and_fails_closed() -> None:
 		)
 		assert relative.returncode != 0
 		assert not (repo / "resolver_model_index").exists()
+		copy_bytes = copy.read_bytes()
+		inherited = subprocess.run(
+			["bash", "-c", f"{prepare}\n_resolver_model_index_prepare\n"], cwd=repo,
+			env={**env, "GIT_INDEX_FILE": str(copy)}, capture_output=True, text=True, check=False,
+		)
+		assert inherited.returncode != 0, "an inherited GIT_INDEX_FILE naming the copy must fail closed"
+		assert copy.read_bytes() == copy_bytes, "the index the guards read must not be deleted"
 	with tempfile.TemporaryDirectory() as directory:
 		not_a_repo = subprocess.run(
 			["bash", "-c", f"{prepare}\n_resolver_model_index_prepare\n"], cwd=directory,

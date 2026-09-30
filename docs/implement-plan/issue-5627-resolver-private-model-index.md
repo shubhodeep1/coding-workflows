@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5627-resolver-private-model-index   Final PR: #5637 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (review round or merge)
+- Waiting on: PR #5648 (review round 2 or merge)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01LX3ut8ixr4nKefuuzQVDA4 (reused; new safety net and hand-back recorded in the stage report)
 - Last updated: 2026-09-30
-- Last note: phase 1 implemented and verified (782 related tests passed, 1 skipped); phase PR opened against the project branch
+- Last note: review round 1 on PR #5648: fixed 3 findings (same-path guard in `_resolver_model_index_prepare`, duplicate `import os`, staging-contract comment), rejected 2 with reasons
 
 ## Phases
-1. [ ] Phase 1 — private resolver model index (`GIT_INDEX_FILE` copy per attempt plus OpenCode snapshot opt-out, source repo only; regression tests; agents.md; changelog fragment)   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — private resolver model index (`GIT_INDEX_FILE` copy per attempt plus OpenCode snapshot opt-out, source repo only; regression tests; agents.md; changelog fragment)   — PR #5648 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -35,8 +35,10 @@
 
 ## Lessons
 - [source:plan-deviation] A heal issue for a source-repo review/autofix failure must target `main`, not the failing PR's head: `review_autofix.yml` loads its support scripts from protected `main`, so a fix on the PR head cannot unblock that PR. (files: scripts/workflow_failure_heal_intake.sh, .github/workflows/review_autofix.yml)
+- [source:intervention] A shell helper that resolves the index with `git rev-parse --git-path index` and then deletes or overwrites a file must refuse when that path is the file it deletes: an inherited `GIT_INDEX_FILE` redirects `--git-path index`. (files: scripts/review_conflict_resolve.sh)
 
 ## Notes
+- Review round 1 (2026-09-30, head 887d5ef): fixed the inherited-`GIT_INDEX_FILE` same-path deletion risk, the duplicate `import os` (pre-existing), and the staging-contract task gap; rejected the raw f-string regex finding (compiles and is deterministic) and the `TypeError` finding (`sys.argv[1]` is always a string).
 - Base branch: the issue named `auto/forward-merge-stable-36694528358-1` (PR #5596's head); the project uses `main` per AD-1.
 - `security_pass_skip.py`: skip=true (label `ai:workflow-heal`).
 - Out of scope: the stale `source_pr_head` comment in `scripts/workflow_failure_heal_intake.sh` that sends source-repo review/autofix heal issues to the PR head branch.

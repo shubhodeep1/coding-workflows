@@ -554,6 +554,11 @@ _resolver_model_index_prepare()
   esac
   _real_index="$(git rev-parse --path-format=absolute --git-path index)" || return 1
   [ -f "${_real_index}" ] || return 1
+  # An inherited GIT_INDEX_FILE makes --git-path index return it; never let
+  # the copy step delete the index the scope guards read.
+  if [ "${_real_index}" = "${RESOLVER_MODEL_INDEX_FILE}" ] || [ "${_real_index}" -ef "${RESOLVER_MODEL_INDEX_FILE}" ]; then
+    return 1
+  fi
   rm -f -- "${RESOLVER_MODEL_INDEX_FILE}" "${RESOLVER_MODEL_INDEX_FILE}.lock" || return 1
   cp -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}" || return 1
   cmp -s -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}"
@@ -2935,6 +2940,9 @@ if [ -n "$(git status --porcelain)" ]; then
     # replaces the unmerged index entries with the editor's
     # resolved content.  Auto-merged paths the editor did not
     # touch stay in the index as git merged them.
+    # This staging runs on the real index on purpose: the model's
+    # private copy (RESOLVER_MODEL_INDEX_FILE, #5627) is never read
+    # back, so GIT_INDEX_FILE must not be set here.
     git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
     while IFS= read -r touched_path; do
       [ -z "${touched_path}" ] && continue
