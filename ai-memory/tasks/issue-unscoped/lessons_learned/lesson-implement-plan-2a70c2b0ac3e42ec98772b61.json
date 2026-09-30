@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T10:36:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a SHA passes a case-insensitive `^[0-9a-fA-F]{40}$` check and is then compared with a SHA a helper extracts as lowercase, lowercase both sides (`${VAR,,}`) at every comparison site, not only some, and test the uppercase case at each site.",
+  "phase": "implement_plan",
+  "pr_number": 5107,
+  "record_id": "lesson-implement-plan-2a70c2b0ac3e42ec98772b61",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5093-smoke-review-dispatch-default-branch",
+    "file:.github/workflows/test-and-mark-stable.yml",
+    "file:tests/test_smoke_review_dispatch.py"
+  ]
+}
