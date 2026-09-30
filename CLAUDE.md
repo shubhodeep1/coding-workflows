@@ -2284,16 +2284,18 @@ This is an explicit carve-out from §0 and §2 (including §2's
   `.github/workflows/claude-twin-sync.yml` (`scripts/claude_twin_sync.py`)
   copies each changed twin into `.claude/**` through one sync PR on
   `claude/claude-twin-sync-<sha>`, so no session ever runs hooks changed on
-  its own branch. A sync PR that changes only commands or scripts is merged
-  by the workflow once every check on its head passed. One that touches
-  `.claude/hooks/**`, `.claude/settings.json`, or
+  its own branch. A sync PR that changes only commands is merged by the
+  workflow once every check on its head passed. One that touches
+  `.claude/hooks/**`, `.claude/scripts/**`, `.claude/settings.json`, or
   `.claude/settings.local.json`, or that lists a conflict (a `.claude/`
   file changed directly), is labelled `ai:claude-sync-approval` and merged
   only by the repository owner: the workflow never approves or merges it,
   because hooks and settings are the guards that limit what sessions can
-  do. `review_autofix.yml` and the §26.H sweep skip sync PRs. CI fails a PR
+  do, and `settings.json` lets every session run the scripts with its
+  GitHub access and no prompt (issue #5609). `review_autofix.yml` and
+  the §26.H sweep skip sync PRs. CI fails a PR
   that moves `.claude/` ahead of its twin; the twin may be ahead while its
-  sync PR is pending. A hook or settings file may change only to the twin
+  sync PR is pending. A hook, script, or settings file may change only to the twin
   already on the base commit, never be deleted, and, on a PR, only from a
   same-repository sync PR: matching the twin in the same PR is not enough. The protected-path stop remains for the `.claude/`
   files that have no twin (`UPSTREAM_ONLY_PATHS` in
