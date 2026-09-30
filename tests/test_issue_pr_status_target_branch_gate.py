@@ -475,22 +475,6 @@ def test_unmerged_close_behaviour_is_unchanged() -> None:
 	assert result["closed"] == [10], result
 
 
-if __name__ == "__main__":
-	test_merge_into_another_project_branch_leaves_issue_untouched()
-	test_default_branch_merge_labels_and_closes()
-	test_declared_integration_branch_merge_labels_without_closing()
-	test_target_branch_alias_counts()
-	test_orchestrator_managed_child_closes_on_integration_branch_merge()
-	test_body_marker_without_label_is_not_managed()
-	test_body_marker_without_label_still_closes_on_default_branch()
-	test_labelled_child_on_unrelated_base_is_left_untouched()
-	test_rest_fallback_applies_the_same_managed_rule()
-	test_non_main_default_branch_is_resolved_from_payload()
-	test_empty_default_branch_falls_back_to_main()
-	test_unmerged_close_behaviour_is_unchanged()
-	print("PASS")
-
-
 # Issue #5227: the lineage step finalizes only the issues the gate accepted.
 
 LINEAGE_STEP_NAME = "Finalize linked issue lineage state"
@@ -703,3 +687,31 @@ def test_classified_tracking_issue_keeps_lineage_when_rest_fallback_works() -> N
 	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [5], gate["env"]
 	lineage = _run_lineage_step(gate["env"])
 	assert lineage["finalized"] == [(5, "merged")], lineage
+
+
+# CI runs this file as a script (ci.yml "Phase label transition and fallback
+# contract tests"), not under pytest, so every test must be called here. Keep
+# this block last: a test defined after it never runs in CI.
+if __name__ == "__main__":
+	test_merge_into_another_project_branch_leaves_issue_untouched()
+	test_default_branch_merge_labels_and_closes()
+	test_declared_integration_branch_merge_labels_without_closing()
+	test_target_branch_alias_counts()
+	test_orchestrator_managed_child_closes_on_integration_branch_merge()
+	test_body_marker_without_label_is_not_managed()
+	test_body_marker_without_label_still_closes_on_default_branch()
+	test_labelled_child_on_unrelated_base_is_left_untouched()
+	test_rest_fallback_applies_the_same_managed_rule()
+	test_non_main_default_branch_is_resolved_from_payload()
+	test_empty_default_branch_falls_back_to_main()
+	test_unmerged_close_behaviour_is_unchanged()
+	test_rejected_merge_is_not_finalized_as_merged()
+	test_accepted_merges_are_finalized_as_merged()
+	test_mixed_link_finalizes_only_the_accepted_issue()
+	test_unmerged_close_still_finalizes_as_closed()
+	test_tracking_issue_lineage_is_unchanged()
+	test_no_linked_issue_exports_an_empty_lineage_list()
+	test_unclassified_issue_on_non_default_merge_is_not_finalized()
+	test_unclassified_issue_keeps_default_merge_and_unmerged_lineage()
+	test_classified_tracking_issue_keeps_lineage_when_rest_fallback_works()
+	print("PASS")
