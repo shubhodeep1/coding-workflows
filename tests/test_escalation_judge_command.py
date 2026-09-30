@@ -97,7 +97,15 @@ def test_judge_knows_every_stop_id(judge):
 
 def test_judge_hands_on_through_the_checker(judge):
 	assert "`Wait: escalation — start <next stage> with /implement-plan-claude`" in judge
-	assert "`Escalation: ES-<n> <budget | descope> — <the narrower fix | the de-scoped part>`" in judge
+	# The stop id rides the line, so a `budget` or `descope` stage knows which
+	# cap it raises and whether `descope` is an `intervention-cap` commit.
+	assert "`Escalation: ES-<n> <budget | descope> (stop <stop id>) — <the narrower fix | the de-scoped part>`" in judge
+
+
+def test_judge_never_archives_itself(judge):
+	never = judge[judge.index("## Never"):]
+	assert "- Archive your own session, for any choice" in never
+	assert "after a `close` it is the only record (CLAUDE.md §26.D)" in never
 
 
 def test_plan_command_lists_exactly_the_ledger_stop_ids(plan):
@@ -148,7 +156,32 @@ def test_escalation_stop_procedure(plan):
 	# The choices come back as stages; passes are never waived.
 	assert "a pass is never waived" in section
 	assert "counts one extra round for each `ES-<n>` entry with `choice=budget` or `choice=descope` for the same stop id" in section
+	assert "(for `intervention-cap`, only entries whose `why=` names the same PR)" in section
 	assert "`claude/implement-plan-<slug>-descope-<n>`" in section
+	assert "For `intervention-cap` (the stop the `Escalation:` line names)" in section
+	assert "`Escalation: ES-<n> <budget | descope> (stop <stop id>) — <the narrower fix | the de-scoped part>`" in section
+
+
+def test_every_cap_defers_to_the_escalations_counting_rule(plan):
+	# Each cap names the judge's granted rounds and links to the one place
+	# ("Escalations") that says they are counted per stop id.
+	procedure = plan[plan.index("## Procedure"):plan.index("## Issue Mode")]
+	for cap in (
+		"Cap: **3 interventions per PR** (plus any rounds the [escalation judge](#escalations) granted)",
+		"**Cap: 3 conformance runs per project**, shared by the pre-security runs and the post-validation re-run in step 10 (plus any runs the [escalation judge](#escalations) granted)",
+		"On exhaustion (5 cycles plus any the [escalation judge](#escalations) granted)",
+		"cap **3 cycles** (`MAX_VALIDATE_CYCLES` default, plus any the [escalation judge](#escalations) granted)",
+		"Cap **3 verify cycles** (plus any the [escalation judge](#escalations) granted)",
+	):
+		assert cap in procedure, cap
+	hand_back = plan[plan.index("### Hand-back"):plan.index("### Fallbacks")]
+	assert "3 interventions per PR plus any rounds the escalation judge granted" in hand_back
+
+
+def test_resume_template_carries_the_stop_id(plan):
+	sessions = plan[plan.index("## Stage Sessions"):plan.index("### Claims")]
+	assert "`Escalation: ES-<n> <budget | descope> (stop <stop id>) — <the narrower fix | the de-scoped part>`" in sessions
+	assert "`Escalation: ES-<n> <budget | descope> — " not in plan
 
 
 def test_checker_takes_an_escalation_wait(plan):

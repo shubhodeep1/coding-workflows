@@ -49,8 +49,9 @@ Subcommands:
 Output is one JSON line. Exit 0 on success; 1 on bad arguments (an unknown
 stop id, a malformed fingerprint or evidence, a used choice); 2 when the
 log cannot be read or an `## Escalations` line is malformed (a line that
-starts `- ` but does not match the format, or a repeated `ES-<n>` id). A
-log without an `## Escalations` section has no entries.
+starts `- ` but does not match the format, a date that is not a real
+calendar date, or a repeated `ES-<n>` id). A log without an
+`## Escalations` section has no entries.
 
 No GitHub API calls and no network (CLAUDE.md §15): the script reads the
 log file and its arguments only.
@@ -105,6 +106,17 @@ class UsageError(Exception):
 
 class LedgerError(Exception):
 	"""An unreadable log or a malformed `## Escalations` line: exit 2."""
+
+
+def _is_calendar_date(value: str) -> bool:
+	"""True for a `YYYY-MM-DD` string that names a real calendar date."""
+	if not DATE_RE.match(value):
+		return False
+	try:
+		dt.date.fromisoformat(value)
+	except ValueError:
+		return False
+	return True
 
 
 class _Parser(argparse.ArgumentParser):
@@ -181,7 +193,7 @@ def parse_entries(log_text: str) -> list[dict]:
 		if not line.strip() or line[0] in " \t":
 			continue
 		match = ENTRY_RE.match(line)
-		if not match or match.group("stop") not in STOP_IDS:
+		if not match or match.group("stop") not in STOP_IDS or not _is_calendar_date(match.group("date")):
 			raise LedgerError(f"malformed ## Escalations line {number}: {line!r}")
 		entry_id = int(match.group("n"))
 		if entry_id in seen:
@@ -227,8 +239,8 @@ def record_line(entries: list[dict], stop: str, fp: str, choice: str, why: str, 
 	why = " ".join(why.split())
 	if not why:
 		raise UsageError("--why must not be empty")
-	if not DATE_RE.match(date):
-		raise UsageError(f"--date must be YYYY-MM-DD, got {date!r}")
+	if not _is_calendar_date(date):
+		raise UsageError(f"--date must be a real calendar date as YYYY-MM-DD, got {date!r}")
 	next_id = max((entry["id"] for entry in entries), default=0) + 1
 	line = f"- ES-{next_id} [{stop}, {date}] fingerprint={fp} choice={choice} why={why}"
 	return {"id": f"ES-{next_id}", "line": line}

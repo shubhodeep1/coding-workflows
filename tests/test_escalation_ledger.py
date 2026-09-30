@@ -187,6 +187,10 @@ def test_entries_outside_the_section_are_ignored(tmp_path, capsys):
 		"- ES-1 [security-cap, 2026-09-29] fingerprint=0123456789ab choice=budget why=\n",
 		"- something else\n",
 		"ES-1 [security-cap, 2026-09-29] fingerprint=0123456789ab choice=budget why=x\n",
+		# Shaped like a date but not a calendar date.
+		"- ES-1 [security-cap, 2026-02-30] fingerprint=0123456789ab choice=budget why=x\n",
+		"- ES-1 [security-cap, 2026-13-01] fingerprint=0123456789ab choice=budget why=x\n",
+		"- ES-1 [security-cap, 0000-00-00] fingerprint=0123456789ab choice=budget why=x\n",
 	],
 )
 def test_malformed_log_line_exits_2(tmp_path, capsys, bad_line):
@@ -262,6 +266,10 @@ def test_record_refuses_a_used_choice(tmp_path, capsys):
 		["--choice", "skip-security", "--why", "x"],
 		["--choice", "budget", "--why", "   "],
 		["--choice", "budget", "--why", "x", "--date", "29-09-2026"],
+		["--choice", "budget", "--why", "x", "--date", "2026-02-30"],
+		["--choice", "budget", "--why", "x", "--date", "2026-04-31"],
+		["--choice", "budget", "--why", "x", "--date", "2026-13-45"],
+		["--choice", "budget", "--why", "x", "--date", "0000-00-00"],
 	],
 )
 def test_record_rejects_bad_arguments(tmp_path, capsys, extra):
