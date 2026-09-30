@@ -2,6 +2,8 @@ Answer **one** `/implement-plan-claude` failure escalation (CLAUDE.md §28.C) wi
 
 `$ARGUMENTS` is the plan path followed by a `— resume.` block (see "Stage Sessions" in `.claude/commands/implement-plan-claude.md`) with a `Stop:` line: `Stop: <stop id>   Blocker comment: <comment URL | report>   Log: docs/implement-plan/<slug>.md`, and the usual `Previous stage session:`, `Checker session:`, `Safety-net trigger:`, and `Project branch:` fields.
 
+**The blocker's thread** is the issue or PR the `Blocker comment:` URL points at: the source issue in issue mode, the final PR in project mode. A legacy-mode project has neither, so its line reads `Blocker comment: report` and there is no thread: step 1 reads no comments (the log and the `— resume.` block are the whole record), and every step below that posts on the thread (steps 3, 6, and 8) makes no GitHub call and puts the same text, marker included, in its report and under the log's `## Notes` instead.
+
 $ARGUMENTS
 
 ## The menu
@@ -42,7 +44,7 @@ A **failure** is a stop id plus its fingerprint (`.claude/scripts/escalation_led
    ```
    and add the `line` it prints to the log's `## Escalations` section with the Edit tool (create the section, before `## Auto-decisions`, when an older log lacks it). For `descope`, also add an `AD-<n>` entry to `## Auto-decisions` (CLAUDE.md §28.D; `Applied in:` the revert PR, `Status: pending review`). Set `Last note: ES-<n> <choice> — <why>`. The entries ride the next PR; until then they travel in the report and the `Uncommitted escalations:` / `Uncommitted auto-decisions:` lines of the `— resume.` block you hand on.
 
-6. **Post the escalation comment** next to the blocker (the same issue or PR), with `mcp__github__add_issue_comment`: the choice, the one-line reason, the narrower fix or the de-scoped part (and why the core goal holds), and the choices that remain for this failure, ending with `<!-- ai:claude-escalation:v1 stop=<stop id> fp=<fp> choice=<choice> -->`.
+6. **Post the escalation comment** on the blocker's thread, with `mcp__github__add_issue_comment` (legacy mode: in the report and the log only, see above): the choice, the one-line reason, the narrower fix or the de-scoped part (and why the core goal holds), and the choices that remain for this failure, ending with `<!-- ai:claude-escalation:v1 stop=<stop id> fp=<fp> choice=<choice> -->`.
 
 7. **Remove `ai:claude-blocked`** from the source issue in issue mode (read its labels with `mcp__github__issue_read`, then `mcp__github__issue_write` `update` with that list minus `ai:claude-blocked`).
 
@@ -56,7 +58,7 @@ A **failure** is a stop id plus its fingerprint (`.claude/scripts/escalation_led
    Fingerprint: <fp>   Allowed: <list>   Choice: <choice> (ES-<n>)
    Why: <one line>   Narrower fix / de-scoped part: <text | n/a>
    Next stage: <title | none (closed)>   Checker: <session id>   Safety net: <trig_… | none>
-   Escalation comment: <URL>   Log: docs/implement-plan/<slug>.md
+   Escalation comment: <URL | report (legacy mode)>   Log: docs/implement-plan/<slug>.md
    Permission prompts: <…>
    ```
 
