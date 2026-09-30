@@ -40,8 +40,9 @@ fi
 #
 # The retry is dispatched from the default branch (issue #4898), so its
 # head_sha is the default branch's, not this head. The probe also counts
-# completed review runs named for the PR since this head was pushed; the
-# head's commit time is one input to that push-time bound. The run's event
+# completed review runs named for the PR since this head was pushed, bounded
+# by the head's first GitHub-recorded run. The head's commit time is still
+# passed but no longer used: the PR author sets it (issue #5523). The run's event
 # lets it fail closed on a dispatch run that is not named for the PR, whose
 # own retry could never count it.
 REVIEWED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
