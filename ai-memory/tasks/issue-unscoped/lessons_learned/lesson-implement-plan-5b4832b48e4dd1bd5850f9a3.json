@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T07:26:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A scan that must find every mention of a known path should search for that path literally with boundary checks, not tokenize the text on a guessed path-character set: real paths hold `+`, `@`, and other characters the set leaves out, and each one silently becomes a miss.",
+  "phase": "implement_plan",
+  "pr_number": 5428,
+  "record_id": "lesson-implement-plan-5b4832b48e4dd1bd5850f9a3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4975-bind-flagger-citation-to-finding",
+    "file:scripts/review_claude_fixer_nonblocking.py"
+  ]
+}
