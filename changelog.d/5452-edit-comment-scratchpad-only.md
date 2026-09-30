@@ -15,4 +15,4 @@ What this means for operators and consumer repos: nothing to configure. Sessions
 
 ### For contributors
 
-The check is `read_input_file` in `edit_comment.py`, with `is_scratchpad_path` and `_temp_roots`. It opens the resolved path with `O_NOFOLLOW | O_NONBLOCK`, checks `fstat` on the open descriptor (type, link count, size), and reads at most `MAX_INPUT_FILE_BYTES + 1` characters, so a file that grows after the check is still never read in full. There is no environment-variable override. `tests/test_edit_comment.py` covers each rejected shape, the scratchpad flow, and the path matcher.
+The check is `read_input_file` in `edit_comment.py`, with `is_scratchpad_path` and `_temp_roots`. It opens the resolved path with `O_NOFOLLOW | O_NONBLOCK`, checks `fstat` on the open descriptor (type, link count, size), and reads at most `MAX_INPUT_FILE_BYTES + 1` bytes before decoding them as UTF-8, so a file that grows after the check is still never read past the limit. There is no environment-variable override. `tests/test_edit_comment.py` covers each rejected shape, the scratchpad flow, and the path matcher.

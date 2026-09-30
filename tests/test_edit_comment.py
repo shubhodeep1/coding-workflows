@@ -218,6 +218,44 @@ def test_file_that_grew_after_fstat_is_not_read_in_full(monkeypatch, github, rea
 	assert "larger than 64 bytes" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", "--body-file", str(big)], github, reads)
 
 
+def test_multibyte_file_that_grew_after_fstat_is_capped_in_bytes(monkeypatch, github, reads, scratchpad, capsys):
+	monkeypatch.setattr(ec, "MAX_INPUT_FILE_BYTES", 64)
+	big = scratchpad / "big.md"
+	# 40 characters but 80 bytes: a character count would let it through.
+	big.write_text("é" * 40, encoding="utf-8")
+	real_fstat = os.fstat
+
+	def small_fstat(fd):
+		info = real_fstat(fd)
+		fields = list(info)
+		fields[6] = 1  # st_size, as if the file were written to after the check
+		return os.stat_result(fields)
+
+	monkeypatch.setattr(ec.os, "fstat", small_fstat)
+	assert "larger than 64 bytes" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", "--body-file", str(big)], github, reads)
+
+
+def test_multibyte_file_within_the_byte_limit_is_read(monkeypatch, github, reads, scratchpad):
+	monkeypatch.setattr(ec, "MAX_INPUT_FILE_BYTES", 64)
+	body_file = scratchpad / "body.md"
+	body_file.write_text("é" * 32, encoding="utf-8")
+	assert ec.main(["--repo", "o/r", "--comment-id", "5", "--body-file", str(body_file)]) == 0
+	assert github["patches"][-1][2] == "é" * 32
+
+
+def test_body_file_newlines_are_decoded_as_before(github, reads, scratchpad):
+	body_file = scratchpad / "body.md"
+	body_file.write_bytes(b"a\r\nb\rc\n")
+	assert ec.main(["--repo", "o/r", "--comment-id", "5", "--body-file", str(body_file)]) == 0
+	assert github["patches"][-1][2] == Path(body_file).read_text(encoding="utf-8") == "a\nb\nc\n"
+
+
+def test_invalid_utf8_is_rejected(github, reads, scratchpad, capsys):
+	body_file = scratchpad / "body.md"
+	body_file.write_bytes(b"\xff\xfe bad")
+	_rejected(capsys, ["--repo", "o/r", "--comment-id", "5", "--body-file", str(body_file)], github, reads)
+
+
 def test_file_at_the_size_limit_is_read(monkeypatch, github, reads, scratchpad):
 	monkeypatch.setattr(ec, "MAX_INPUT_FILE_BYTES", 64)
 	body_file = scratchpad / "body.md"

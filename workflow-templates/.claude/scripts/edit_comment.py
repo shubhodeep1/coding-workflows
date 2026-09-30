@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import io
 import json
 import os
 import re
@@ -129,15 +130,17 @@ def read_input_file(flag: str, path: str) -> str:
 			raise ValueError(f"{flag} {path}: has {info.st_nlink} hard links; only a file with one link is read")
 		if info.st_size > MAX_INPUT_FILE_BYTES:
 			raise ValueError(f"{flag} {path}: {info.st_size} bytes; files over {MAX_INPUT_FILE_BYTES} bytes are not read")
-		with os.fdopen(fd, encoding="utf-8") as handle:
-			fd = -1
-			# Bounded read: a file that grew after fstat is still never read in full.
-			# A character takes at least one byte, so more characters than the
-			# byte limit means more bytes than the limit.
-			text = handle.read(MAX_INPUT_FILE_BYTES + 1)
-		if len(text) > MAX_INPUT_FILE_BYTES:
+		handle = os.fdopen(fd, "rb")
+		# The file object owns the descriptor from here on; `with` closes it.
+		fd = -1
+		with handle:
+			# Bounded read in bytes: a file that grew after fstat is still never
+			# read past the limit, whatever its characters' UTF-8 widths.
+			data = handle.read(MAX_INPUT_FILE_BYTES + 1)
+		if len(data) > MAX_INPUT_FILE_BYTES:
 			raise ValueError(f"{flag} {path}: larger than {MAX_INPUT_FILE_BYTES} bytes; not read")
-		return text
+		# Same decoding as a text-mode read: strict UTF-8, universal newlines.
+		return io.TextIOWrapper(io.BytesIO(data), encoding="utf-8").read()
 	except (OSError, UnicodeDecodeError) as exc:
 		raise ValueError(f"{flag} {path}: {exc}") from exc
 	finally:
