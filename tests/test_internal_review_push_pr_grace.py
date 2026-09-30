@@ -79,6 +79,7 @@ def _run(
 	grace: str | None = "300",
 	default_branch: str = "main",
 	head_ref: str = "claude/implement-plan-issue-42-phase-1",
+	tmpdir: str | None = None,
 ) -> dict:
 	script = _resolve_step()["run"]
 	with tempfile.TemporaryDirectory() as tmp:
@@ -104,6 +105,8 @@ def _run(
 		}
 		if grace is not None:
 			env["CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS"] = grace
+		if tmpdir is not None:
+			env["TMPDIR"] = tmpdir
 		proc = subprocess.run(
 			["bash", "-c", script],
 			env=env,
@@ -201,6 +204,22 @@ def test_invalid_grace_falls_back_to_default_with_warning():
 		assert result["sleeps"] == [60, 60, 60, 60, 60], bad
 		if bad:
 			assert "::warning::CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS=" in result["stdout"], bad
+
+
+def test_max_grace_boundary_is_accepted():
+	result = _run("none", grace="3600")
+	assert result["rc"] == 0, result["stderr"]
+	assert "::warning::" not in result["stdout"]
+	assert result["sleeps"] == [60] * 60
+	assert "waited_secs=3600 grace_secs=3600" in result["stdout"]
+
+
+def test_lookup_error_file_is_removed_on_exit():
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result = _run("fail,none", grace="60", tmpdir=tmpdir)
+		assert result["rc"] == 0, result["stderr"]
+		assert "RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED" in result["stdout"]
+		assert os.listdir(tmpdir) == []
 
 
 def test_leading_zero_grace_is_decimal():

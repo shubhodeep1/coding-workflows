@@ -132,6 +132,7 @@ jobs:
           # cause is visible: PR #5462's first live run failed every re-check
           # on a GH_PAT "API rate limit exceeded" that stderr had hidden.
           pr_lookup_err_file="$(mktemp)"
+          trap 'rm -f "${pr_lookup_err_file}"' EXIT
           lookup_open_pr() {
             local pr_lookup_error
             if ! existing_pr="$(gh api \
