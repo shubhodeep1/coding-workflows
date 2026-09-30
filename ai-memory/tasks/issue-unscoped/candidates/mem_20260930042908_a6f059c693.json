@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/check_in_status.py:356-361 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_dispatched_review_runs()` skips to the fallback workflow source when the primary workflow listing returns an error other than HTTP 404.\n  WHY: A transient error for an existing primary workflow could cause the helper to use an incorrect fallback and misidentify the review workflow.\n- workflow-templates/.claude/scripts/check_in_status.py:777-778 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: `_review_stall_verdict` retains the `ignore_claim_by` parameter, but the parameter no longer affects the stall verdict logic.\n  WHY: It does not fail at runtime; the parameter is retained for caller compatibility, as the docstring documents.\n- workflow-templates/.claude/scripts/check_in_status.py:_head_arrival_time() loop | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_head_arrival_time()` may pass `None` from `run.get(\"started_at\")` to `_parse_time` without checking that the value is a string.\n  WHY: A queued or pending check run with `started_at` set to `None` could raise a `TypeError` before the surrounding exception handler handles it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/scripts/check_in_status.py:777-778 | severity=NIT | confidence=5\n  PROBLEM: The `ignore_claim_by: tuple[str, ...] = ()` parameter is retained on the public helper but no longer influences the verdict.\n  WHY: It does not fail. The docstring explicitly documents the compatibility rationale, and the only caller still passes it for compatibility.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/check_in_status.py:356-361 | severity=MAJOR | confidence=4\n  PROBLEM: The helper skips to the next workflow source in `DISPATCHED_REVIEW_SOURCES` for any error other than HTTP 404.\n  WHY: If the primary workflow exists but returns a transient error, the helper may try a fallback workflow that does not exist or is not the correct configuration, potentially misidentifying the review workflow.\n- workflow-templates/.claude/scripts/check_in_status.py:_head_arrival_time() function, within the loop over head_check_runs | severity=MAJOR | confidence=4\n  PROBLEM: `_head_arrival_time()` may call `_parse_time(run.get(\"started_at\"))` when `started_at` is `None`.\n  WHY: If a queued or pending check run has `started_at` set to `None`, `_parse_time` may raise a `TypeError` before the try-except block handles it, unless `_parse_time` explicitly checks for `None`.\n- workflow-templates/.claude/scripts/check_in_status.py:_review_stall_verdict() signature | severity=NIT | confidence=5\n  PROBLEM: `ignore_claim_by` is retained on the public `_review_stall_verdict` helper signature but is no longer used by the stall verdict logic.\n  WHY: It does not fail at runtime; it is retained for backward compatibility with potential external callers, as noted in the docstring.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6572f80edda5721472712d4c21baa9b60742b9010cc1ac6baba36ac47b49990a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5408,
+    "run_id": "36667727788",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36667727788",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930042908_a6f059c693",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5408,
+    "run_id": "36667727788"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T04:29:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
