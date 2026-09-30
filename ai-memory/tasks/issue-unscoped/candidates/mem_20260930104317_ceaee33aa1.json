@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:765 | severity=low | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The unconditional `$'` substring check treats literal `$'` inside quoted argument data as ANSI-C quoting.\n  WHY: A routine write containing literal `$'` in a quoted value triggers `DECISION_ASK` and can stall an unattended session.\n- .claude/hooks/gh_api_write_guard.py:736 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Bash brace-expands `{a, b}` with unquoted whitespace after the comma, but `_brace_expansion_at` returns False when it encounters unquoted whitespace inside braces.\n  WHY: `-F body={@/etc/passwd, x}` can expand into a file-backed field that the guard does not classify as a write, allowing the call through the Bash allow rule.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/gh_api_write_guard.py:736 | severity=NIT | confidence=2\n  PROBLEM: Bash brace-expands {a, b} (unquoted whitespace after the comma), but _brace_expansion_at returns False when it encounters unquoted whitespace inside braces.\n  WHY: -F body={@/etc/passwd, x} would expand to -F body=@/etc/passwd -F body=x, leaving a file-backed field that the guard does not classify as write. The value starts with { not @, _FIELD_EXPANSION_CHARS_RE does not match {, and the whitespace after the comma makes _brace_expansion_at return False, so _shell_rewrite_hazard also misses it. The guard returns no decision, and the Bash(gh api repos/*) allow rule approves the call.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/gh_api_write_guard.py:765 | severity=NIT | confidence=5\n  PROBLEM: The check treats the literal characters `$'` inside quoted argument data as ANSI-C quoting.\n  WHY: For example, a routine comment write using `-f body='text $'\\'' literal'` contains a literal `$'` in its field value, but Bash does not evaluate it as ANSI-C quoting. The guard nevertheless returns `ask`, so an unattended session can stall on a routine write.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/gh_api_write_guard.py:765 | severity=NIT | confidence=3\n  PROBLEM: The substring check for `$'` runs before the quoting-aware loop and does not respect shell quoting context. A command with a literal `$'` sequence inside a quoted argument (e.g., `gh api repos/a/b -f body='price is $'\\''5'`) triggers the ANSI-C quoting hazard even though Bash treats it as literal text.\n  WHY: The guard returns DECISION_ASK for a routine write, forcing a permission prompt that can stall unattended sessions. The docstring (lines 762-763) documents this as intentional (\"ignores quoting on purpose\"), but the test suite does not cover this edge case, and it regresses routine-write behavior for commands with literal `$'` in quoted data.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5a2b2e8555b9faf0d38d28ae9f9de48217be6840a83780a88a74c07150de695a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4641,
+    "run_id": "36697431701",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36697431701",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930104317_ceaee33aa1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4641,
+    "run_id": "36697431701"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T10:43:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
