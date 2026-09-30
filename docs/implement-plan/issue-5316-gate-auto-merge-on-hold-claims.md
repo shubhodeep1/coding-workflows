@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-5316-gate-auto-merge-on-hold-claims-plan.md
 - Source issue: shubhodeep1/coding-workflows#5316
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims   Final PR: pending
+- Project branch: claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims   Final PR: #5323 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened by the /implement-issue-claude session session_01Smb4yuBUDeNfFkefpx5ari
+- Last note: phase 1 implemented and verified (34 new tests; full suite: only the 74 environment failures that also fail on the base); phase PR opened by session_01Smb4yuBUDeNfFkefpx5ari
 
 ## Phases
-1. [ ] Phase 1 — merge gate on hold claims and twin parity (scripts/claude_merge_hold_gate.py, review_enable_auto_merge.sh, review_autofix.yml deterministic-skip-merge, tests, docs)
+1. [ ] Phase 1 — merge gate on hold claims and twin parity (scripts/claude_merge_hold_gate.py, review_enable_auto_merge.sh, review_autofix.yml deterministic-skip-merge, tests, docs) — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -41,3 +41,4 @@
 ## Notes
 - Security pass: run (`security_pass_skip.py`: no skip label).
 - Phase 1 has no protected paths (no `.claude/**` edit, AD-6).
+- Local verification env (2026-09-30): Python 3.11 container; `tests/test_workflow_retro.py` cannot be collected (3.12 f-string syntax in scripts/workflow_retro.py) and 74 validation-template / validation-runner / workflow-retro-fanout tests fail identically on origin/main (missing toolchain). Not caused by this project.
