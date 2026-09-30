@@ -5,19 +5,19 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5174-guard-differential-check
 - Project branch: claude/implement-plan-issue-5327-pin-guard-differential-verifier   Final PR: #5364 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 1/3 — review round
 - Activation: not started
 - Waiting on: PR #5539
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01QvzxwDiVmtxwS9giV5Ro4Q   safety net and hand-back: see the latest stage report
 - Last updated: 2026-09-30
-- Last note: conformance run 1/3: CONFORMANT (Correctness: CONCERNS); one documentation finding (agents.md and the changelog fragment said a verifier change applies only to PRs opened after it merges; the step fetches the base at run time) fixed in conformance fix PR #5539.
+- Last note: conformance 1/3 review round 1 on fix PR #5539: one valid finding (the post-merge wording did not qualify the bootstrap case, where a base without the verifier runs the PR's copy) fixed in agents.md and the changelog fragment.
 
 ## Phases
 1. [x] Phase 1 — pin the verifier to the base branch and report verifier changes (ci.yml step, scripts/guard_differential.py, tests, agents.md, changelog) — PR #5368 merged 2026-09-30 (b197b1f); review rounds: 3; interventions: 0
 
 ## Conformance
-- Run 1 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — fix PR #5539 (pre-security). Checks: tests/test_guard_differential.py 83 passed; yamllint, actionlint, ruff clean; CI contract, changelog, and workflow-size suites passed.
+- Run 1 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — fix PR #5539 (pre-security); review rounds: 1. Checks: tests/test_guard_differential.py 83 passed; yamllint, actionlint, ruff clean; CI contract, changelog, and workflow-size suites passed.
 
 ## Security pass
 - Skipped: ai:security: automation-produced issue (`.claude/scripts/security_pass_skip.py`).
@@ -38,6 +38,7 @@
 - [source:intervention] A field added to a script's `status=` summary line belongs on every status line the script prints, early-return paths included, and its docs must not claim it on lines printed before the value exists (for example `status=error`). (files: scripts/guard_differential.py, agents.md)
 - [source:intervention] A line-based cutter for YAML steps must not end a step at a comment line indented at or left of the step (valid YAML, but not a boundary), and must drop such trailing comments, or edits to the step's later keys slip past the comparison. (files: scripts/guard_differential.py)
 - [source:conformance] Docs for a CI step that runs a script fetched from the base branch at run time must say a change applies to every run after it merges, including new runs on already-open PRs, not only to PRs opened afterwards. (files: agents.md, .github/workflows/ci.yml)
+- [source:intervention] When a doc states when a change takes effect ("only once it has merged"), qualify it for every fallback path the step has, such as a bootstrap branch that runs the PR's own copy, in each place the rule is stated, not only where the fallback is first described. (files: agents.md, changelog.d/5327-pinned-guard-verifier.md)
 
 ## Notes
 - Issue mode: single-phase plan; security pass skipped per the plan header.

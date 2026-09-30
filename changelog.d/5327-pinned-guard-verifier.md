@@ -9,7 +9,7 @@ The `Guard differential check (issue #5174)` step in `.github/workflows/ci.yml` 
 | New log lines | `verifier=base source=<sha>:…`, `verifier=head reason=base-has-no-verifier`, `verifier_change path=…` |
 | Exit-code impact of a `verifier_change` | none (warning only) |
 
-What this means for contributors: a change to `scripts/guard_differential.py` takes effect once it has merged, on every CI run that starts afterwards (including new runs on pull requests that were already open), and the CI step may pass only flags the base copy already accepts. Land a new flag in the script first and use it in the step in a later PR.
+What this means for contributors: on a base branch that carries the verifier, a change to `scripts/guard_differential.py` takes effect once it has merged, on every CI run that starts afterwards (including new runs on pull requests that were already open); a base branch that does not carry it yet runs each PR's own copy. The CI step may pass only flags the base copy already accepts. Land a new flag in the script first and use it in the step in a later PR.
 
 ### For contributors
 
