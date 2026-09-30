@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Guard differential check: run every adversarial corpus shape through the
-base-branch hook and the PR's hook, and fail on a silent loosening.
+base-branch hook and the PR's hook, and fail on every loosening the PR body
+does not declare, whether or not the new hook printed a warning.
 
 Issue #5174. The `.claude/hooks/*_guard.py` hooks are the security boundary of
 unattended sessions (CLAUDE.md §21, §23.H, §25, and the inline-edit guard of
