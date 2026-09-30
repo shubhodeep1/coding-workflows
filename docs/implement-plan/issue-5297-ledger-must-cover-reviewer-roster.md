@@ -1,17 +1,17 @@
 # Implement-Plan Log — Claude-fixer review: a failed-slot ledger must cover every reviewer the runner ran
 
-- Plan: docs/plans/issue-5297-ledger-must-cover-reviewer-roster-plan.md
+- Plan: docs/completed/issue-5297-ledger-must-cover-reviewer-roster-plan.md (was docs/plans/issue-5297-ledger-must-cover-reviewer-roster-plan.md)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5297-ledger-must-cover-reviewer-roster   Final PR: #5303 draft
 - Source issue: shubhodeep1/coding-workflows#5297   Base branch: claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote   Security pass: skip (ai:security: automation-produced issue)
-- Status: BLOCKED
-- Stage: validation 1/3
-- Activation: not started
-- Waiting on: Q1 answer on #5297 (comment 5902716254), then `/reclarify`
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote)
+- Waiting on: completion PR (claude/implement-plan-issue-5297-ledger-must-cover-reviewer-roster-complete)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01U5bovtxjovuW9C4AdVFSvq (idle, kept for the resumed project; no pending check-in)   safety net none   hand-back none
+- Check-in: checker session_01U5bovtxjovuW9C4AdVFSvq (project checker, reused; safety-net and hand-back ids in the stage report)
 - Last updated: 2026-09-30
-- Last note: conformance 1/3 CONFORMANT (correctness PASS, no fixes); security skipped (AD-4); validation not dispatched because `validate.yml` authorizes a `target_ref` only when its open PR targets `main`, and final PR #5303 targets the #4835 project branch. Skipping validation is never auto-decided (CLAUDE.md §28.C), so Q1 was asked on #5297 (comment 5902716254) with the `ai:claude-blocked` label. A `/reclarify` resume continues from this BLOCKED state.
+- Last note: Q1 answered A on #5297 (comment 5902895096, standing decision Q17): validation skipped, covered by the #4835 project's validation. Project branch synced with the base (#5305, issue #5298's strict clean-vote format; conflicts in the script header, README.md and agents.md resolved keeping both sides). Completion PR moves the plan to docs/completed/, then the final merge of #5303 into the #4835 project branch.
 
 ## Phases
 1. [x] Phase 1 — Ledger must cover the runner's reviewer roster (failed-slot path of the Claude-fixer clean-ledger check, tests, docs, changelog)   — PR #5306 merged 2026-09-30 (df2266c); review rounds: 1; interventions: 0
@@ -28,10 +28,14 @@
 
 ## Validation
 - Cycle 1 — 2026-09-30: not dispatched. `validate.yml` ("Authorize explicit validation target", `.github/workflows/validate.yml:176-210` on main) accepts `target_ref` only when exactly one open PR has that head and `base=<default branch>`. Final PR #5303 targets `claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote`, so the run would fail before validating. Validating the default branch or the base branch in its place is not allowed, so this is a stop (CLAUDE.md §28.C), asked on #5297 (comment 5902716254). Same blocker and question as #4885 and #5114; long-term fix #4734.
+- Validation: skipped (covered by parent project #4835 (non-default base)). Q1: A answered on #5297 (comment 5902895096, 2026-09-30) under the master session's standing decision Q17; the #4835 project runs its security audit and runtime validation on a branch carrying this change before anything reaches `main`. Long-term fix: #4734.
 
 ## Completion
+- Completion PR (branch claude/implement-plan-issue-5297-ledger-must-cover-reviewer-roster-complete) opened 2026-09-30 — doc moved to docs/completed/issue-5297-ledger-must-cover-reviewer-roster-plan.md
+- Final PR #5303 draft (into the #4835 project branch)
 
 ## Activation
+- n/a (base claude/implement-plan-issue-4835-failed-reviewer-slot-missing-vote)
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-29] Should the roster check also apply to ledgers with no failed slot? — Picked: A — no, only the failed-slot path. Alternatives: B — every ledger. Why: the issue and the audited line are the failed-slot quorum; the every-block-clean rule is main's pre-existing behaviour, kept by #4835 AD-1 and #5114 AD-1 (§5, §12.D). Applied in: phase 1. Status: pending review
@@ -48,3 +52,6 @@
 - Issue progress comment id 5901135136.
 - security_pass_skip.py: {"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}.
 - Issue base check (2026-09-29): PR #4847 (head = issue base) is open and draft, so the base has not moved.
+- Issue base check (2026-09-30, completion stage): no closed PR has the issue base as its head; #4847 is still open and draft, so the base has not moved.
+- Sync (2026-09-30, completion stage): merged the base into the project branch (68b17e2), bringing in #5305 (issue #5298, strict clean-vote format). Conflicts in the script's header comment, README.md (`CLAUDE_FIXER_MIN_CLEAN_REVIEWERS` row) and agents.md were resolved by keeping #5298's strict-format text and adding this project's roster sentence; the code merged without conflict (#5298 changes the runner-output classifier, this project adds the roster check after the block loop). Checks after the merge: `pytest tests/test_review_autofix_claude_fixer_mode.py tests/test_workflow_file_size_limit.py tests/test_review_autofix_step_scripts_contract.py tests/test_review_autofix_review_pipeline_contract.py tests/test_changelog_fragment_contract.py tests/test_assemble_changelog.py` (289 passed, none skipped, mawk and gawk both present), every test file that reads README.md, agents.md, the handoff script, changelog.d/ or docs/ (39 files, 1781 passed, 1 skipped), shellcheck, bash -n. A full `pytest tests` run in this container had 101 failures. The ones visible in the saved output tail are in suites that read none of the merged files (validation self-test/refresh/discovery runners, workflow retro, orchestrate gates, run-substate ledger), and every suite that does read them passed in the targeted run above; CI on the PR is the authoritative full run.
+- Resumed by session session_01EAVvkMRQTyfVkQti7mfPJh (issue-mode dispatch after `/reclarify`, Auto mode). The blocked conformance 1/3 stage session session_013f7x6aRJNZuWXWCCuVJ63A was left open (its question is answered on the issue).
