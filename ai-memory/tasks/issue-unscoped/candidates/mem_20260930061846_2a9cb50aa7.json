@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_cancelled_rerun.py:86 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The api_post function treats any successful exit code from gh api as success, ignoring the response body.\n  WHY: GitHub API endpoints like rerun-failed-jobs can return 201 with an error message in the JSON body instead of a success payload. The script will falsely report a successful re-run.\n- scripts/ci_cancelled_rerun.py:70 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The timeout for _gh() is hardcoded to 60 seconds.\n  WHY: A large run listing or a slow API response can exceed this, triggering an ApiError which is indistinguishable from a genuine API failure, resulting in missed re-runs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ci_cancelled_rerun.py:86 | severity=MAJOR | confidence=4\n  PROBLEM: The api_post function treats any successful exit code from gh api as success, ignoring the response body.\n  WHY: GitHub API endpoints like rerun-failed-jobs can return 201 with an error message in the JSON body instead of a success payload. The script will falsely report a successful re-run.\n- scripts/ci_cancelled_rerun.py:70 | severity=NIT | confidence=3\n  PROBLEM: The timeout for _gh() is hardcoded to 60 seconds.\n  WHY: A large run listing or a slow API response can exceed this, triggering an ApiError which is indistinguishable from a genuine API failure, resulting in missed re-runs.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b563c459c92a8e3abf00cabf763c7be3d2b5cde5ab6054ab184f45b9d8a67725",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4722,
+    "run_id": "36674237177",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36674237177",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930061846_2a9cb50aa7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4722,
+    "run_id": "36674237177"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T06:18:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
