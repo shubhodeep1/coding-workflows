@@ -594,7 +594,8 @@ def test_run_paging_stops_at_the_page_that_reaches_the_marker_run(fake_gh):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
 		dispatch_runs=_dispatch_runs(**{"internal-review.yml": older_page + [_dispatch(RUN_ID - 70, pr=7)]}))
 	assert _evaluate()["state"] == "merge_enabled"
-	pages = [call for call in fake_gh.calls() if "/actions/workflows/internal-review.yml/runs?" in " ".join(call)]
+	pages = [call for call in fake_gh.calls()
+		if "/actions/workflows/internal-review.yml/runs?" in " ".join(call) and "&status=" not in " ".join(call)]
 	assert len(pages) == 1 and pages[0][-1].endswith("&page=1"), pages
 
 
@@ -622,6 +623,81 @@ def test_only_the_first_page_of_a_dispatch_listing_may_404(fake_gh, monkeypatch)
 		dispatch_runs=_dispatch_runs(**{"internal-review.yml": _FULL_PAGE_FOR_OTHER_PRS}))
 	monkeypatch.setattr(pending_checks.check_in_status, "gh_api", page_two_404)
 	with pytest.raises(pending_checks.check_in_status.ReadError, match="HTTP 404"):
+		_evaluate()
+	assert fake_gh.merges() == []
+
+
+# PR #5178 review of 95d932b: paging stops at the page that reaches the
+# marker's run, so an older review still queued or running on a later page
+# went unseen. A full last page now also lists each active run status.
+_FULL_PAGE_REACHING_THE_MARKER = [_dispatch(RUN_ID + 99 - offset, pr=7) for offset in range(100)]
+
+
+def _status_reads(fake_gh) -> list[str]:
+	return [" ".join(call) for call in fake_gh.calls() if "&status=" in " ".join(call)]
+
+
+@pytest.mark.parametrize("label, branch_runs, listings, expected", [
+	("older sweep dispatch for this PR still running past the marker page", [],
+		{"internal-review.yml": _FULL_PAGE_REACHING_THE_MARKER + [_dispatch(RUN_ID - 5, status="in_progress")]}, "review_active"),
+	("older sweep dispatch for this PR waiting on its concurrency group", [],
+		{"internal-review.yml": _FULL_PAGE_REACHING_THE_MARKER + [_dispatch(RUN_ID - 5, status="pending")]}, "review_active"),
+	("older unbound dispatch queued past the marker page", [],
+		{"review_autofix.yml": [_unbound(RUN_ID + 99 - offset) for offset in range(100)] + [_unbound(RUN_ID - 5, status="queued")]},
+		"review_active"),
+	("older head-branch run queued past the marker page",
+		[_run(RUN_ID + 99 - offset, workflow="ci.yml") for offset in range(100)] + [_run(RUN_ID - 5, status="queued")], {},
+		"review_active"),
+	("older running dispatch for another PR", [],
+		{"internal-review.yml": _FULL_PAGE_REACHING_THE_MARKER + [_dispatch(RUN_ID - 5, pr=7, status="in_progress")]},
+		"merge_enabled"),
+	("older runs past the marker page all completed", [],
+		{"internal-review.yml": _FULL_PAGE_REACHING_THE_MARKER + [_dispatch(RUN_ID - 5, conclusion="failure")]}, "merge_enabled"),
+])
+def test_an_older_active_review_past_the_marker_page_keeps_the_pr_pending(fake_gh, label, branch_runs, listings, expected):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
+		dispatch_runs=_dispatch_runs(**listings))
+	result = _evaluate()
+	assert result["state"] == expected, (label, result)
+	statuses = {read.split("&status=", 1)[1].split("&", 1)[0] for read in _status_reads(fake_gh)}
+	assert statuses == set(pending_checks.ACTIVE_REVIEW_RUN_STATUSES), (label, statuses)
+	if expected == "review_active":
+		assert f"{RUN_ID - 5}" in result["reason"], (label, result)
+		assert fake_gh.merges() == [], label
+	else:
+		assert len(fake_gh.merges()) == 1, label
+
+
+def test_a_listing_read_in_full_costs_no_status_reads(fake_gh):
+	# §15: a listing that ended on a short page has no older runs left unread.
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": [_dispatch(RUN_ID - offset, pr=7) for offset in range(99)]}))
+	assert _evaluate()["state"] == "merge_enabled"
+	assert _status_reads(fake_gh) == []
+
+
+def test_a_failed_status_read_fails_closed(fake_gh, monkeypatch):
+	real_api = pending_checks.check_in_status.gh_api
+
+	def status_read_fails(path):
+		if "&status=" in path:
+			raise pending_checks.check_in_status.ReadError(f"gh api {path} failed: gh: Server Error (HTTP 502)")
+		return real_api(path)
+
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": _FULL_PAGE_REACHING_THE_MARKER}))
+	monkeypatch.setattr(pending_checks.check_in_status, "gh_api", status_read_fails)
+	with pytest.raises(pending_checks.check_in_status.ReadError, match="HTTP 502"):
+		_evaluate()
+	assert fake_gh.merges() == []
+
+
+def test_a_status_listing_that_never_ends_fails_closed(fake_gh):
+	pages = pending_checks.check_in_status.MAX_PAGINATED_API_PAGES
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": _FULL_PAGE_REACHING_THE_MARKER
+			+ [_dispatch(RUN_ID - 1 - offset, pr=7, status="queued") for offset in range(100 * pages)]}))
+	with pytest.raises(pending_checks.check_in_status.ReadError, match="full pages of active runs"):
 		_evaluate()
 	assert fake_gh.merges() == []
 
@@ -710,6 +786,9 @@ def test_the_stated_run_read_budget_matches_the_listings_read(fake_gh):
 	for doc in (pending_checks.__doc__, sweeper.__doc__):
 		assert re.search(rf"1\s+head-branch runs listing,?(?: and)?\s+{1 + unbound}\s+workflow_dispatch runs listings", doc)
 		assert re.search(rf"1\s+call per 100 runs down to\s+the marker's run \(usually 1, at most {pages}\)", doc)
+		# PR #5178 review of 95d932b: a full last page adds one status-filtered listing per active status.
+		assert re.search(rf"1\s+status-filtered listing\s+for each of\s+the {len(pending_checks.ACTIVE_REVIEW_RUN_STATUSES)}\s+"
+			r"run statuses but `completed`", doc), doc
 	# The paging stops on a short page, so every listing must ask for REVIEW_RUNS_PER_PAGE runs.
 	assert pending_checks.check_in_status.DISPATCHED_REVIEW_RUNS_PATH.endswith(f"per_page={pending_checks.REVIEW_RUNS_PER_PAGE}")
 

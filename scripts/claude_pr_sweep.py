@@ -38,7 +38,10 @@ Batching contract (CLAUDE.md §15):
           then only when ready 1 run read (+1 compare read when that run
           was triggered by an older push), 1 head-branch runs listing and 4
           workflow_dispatch runs listings, each 1 call per 100 runs down to
-          the marker's run (usually 1, at most 10), and 1 per 100 comments
+          the marker's run (usually 1, at most 10), for a listing whose
+          last page read was full 1 status-filtered listing for each of
+          the 5 run statuses but `completed` (usually 1 call, at most 10),
+          and 1 per 100 comments
           again (issue #5148), 1 variable read and the auto-merge helper's
           calls);
   output  one `CLAUDE_PR_SWEEP` log line per decision plus a summary line;

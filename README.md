@@ -1469,7 +1469,9 @@ variable (unset means `true`; `GH_PAT` needs Actions-variables read, or the
 PR is left alone). It also waits while a newer review of the PR may still be
 running (issue #5148): any run on the head branch, an `internal-review.yml`
 dispatch titled for the PR, or any `review_autofix.yml` / `ai-review.yml` /
-`review_rb_judge_dispatch.yml` dispatch that has not completed (`review_active`), and it never merges when
+`review_rb_judge_dispatch.yml` dispatch that has not completed (`review_active`),
+older runs included: a listing that may go on past the pages it read is
+also listed by run status, and it never merges when
 the latest newer completed review of the PR did not succeed or the marker
 changed while it checked (`review_superseded`). A runs listing that holds
 1,000 or more runs newer than the marker's run is a failed read
