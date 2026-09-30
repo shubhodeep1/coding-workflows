@@ -3,22 +3,22 @@
 - Plan: docs/plans/issue-5693-scope-implement-terminal-check-plan.md
 - Source issue: shubhodeep1/coding-workflows#5693
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: stable
-- Project branch: claude/implement-plan-issue-5693-scope-implement-terminal-check   Final PR: pending
+- Project branch: claude/implement-plan-issue-5693-scope-implement-terminal-check   Final PR: #5705 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (opened with this commit; number in the stage report)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from stable; phase 1 starting
+- Last note: phase 1 implemented and verified (32/32 guard tests; 474 related tests pass, 1 environmental gawk failure unrelated); phase 1 PR opened
 
 ## Phases
-1. [ ] Phase 1 — confirm the issue's own Implement runs finished before failing `wait-implement`
-   - [ ] `summarize_scoped_impl_runs` helper in the `wait-implement` step (`.github/workflows/test-and-mark-stable.yml`)
-   - [ ] terminal branch: cached active-run read, issue-scoped walk, fail only on a complete walk with no active issue-scoped run; unknown falls through to the inactivity check
-   - [ ] behavioural tests in `tests/test_test_and_mark_stable_plan_polling_guard.py`
-   - [ ] `changelog.d/5693-scope-implement-terminal-check.md`
+1. [ ] Phase 1 — confirm the issue's own Implement runs finished before failing `wait-implement`   — PR open (waiting); review rounds: 0; interventions: 0
+   - [x] `summarize_scoped_impl_runs` helper in the `wait-implement` step (`.github/workflows/test-and-mark-stable.yml`)
+   - [x] terminal branch: cached active-run read, issue-scoped walk, fail only on a complete walk with no active issue-scoped run; unknown falls through to the inactivity check
+   - [x] behavioural tests in `tests/test_test_and_mark_stable_plan_polling_guard.py`
+   - [x] `changelog.d/5693-scope-implement-terminal-check.md`
    - Done when: new and existing tests pass, the workflow parses as YAML, and it stays under 480,000 bytes
 
 ## Conformance
