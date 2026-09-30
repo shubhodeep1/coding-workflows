@@ -543,7 +543,10 @@ jobs:
 > `review_autofix.yml`. A default-branch run's head is the default branch, so
 > when the branch lookup finds no peer the probe makes one more call and
 > counts queued or running `workflow_dispatch` runs named
-> `Internal: AI Review & Autofix [pr:<N>]` or `AI Review [pr:<N>]`. Look for
+> `Internal: AI Review & Autofix [pr:<N>]` or `AI Review [pr:<N>]`, but only
+> runs of the default branch from the wrapper that sets that name (issue
+> #5522; the probe reads the default branch once with `GET repos/<repo>`).
+> Look for
 > `AUTOFIX_PEER_CHECK` / `AUTOFIX_DISPATCH_SKIPPED` / `AUTOFIX_DISPATCH_ISSUED`
 > lines when auditing collision behaviour in Actions logs.
 >

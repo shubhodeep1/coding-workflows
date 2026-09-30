@@ -28,6 +28,10 @@ name: "Internal: AI Review Autofix Sweep"
 #     internal-review.yml names every dispatched run
 #     `Internal: AI Review & Autofix [pr:<N>]`, and the snapshot below keys
 #     those runs by `pr:<N>` (see dedupe_key) instead of by head branch.
+#   - A run name is evaluated at the dispatched ref, so a branch writer can
+#     forge it (security, issue #5522). A `pr:<N>` key is therefore given
+#     only to a `workflow_dispatch` run of `internal-review.yml` whose
+#     head_branch is the default branch (see dispatch_pr).
 #
 # Concurrency safety:
 #   - Per-PR preflight reuses the `_has_active_autofix_run` pattern
@@ -121,7 +125,8 @@ jobs:
               number,
               head_ref: .head.ref,
               title: (.title // ""),
-              body: (.body // "")
+              body: (.body // ""),
+              default_branch: (.base.repo.default_branch // "")
             })')"
 
           total="$(printf '%s' "${prs_json}" | jq 'length')"
@@ -136,6 +141,19 @@ jobs:
           if [ "${total}" -eq 0 ]; then
             echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
             exit 0
+          fi
+
+          # Default branch for the PR-named run provenance check below
+          # (security, issue #5522). Every PR object in the listing above
+          # carries its base repository's default_branch, so this costs no
+          # API call (CLAUDE.md §15). No single non-empty value disables
+          # PR-named keys for this tick: a guessed branch must never vouch
+          # for a run, and without them the sweep behaves as it did before
+          # issue #4618 (at worst a duplicate dispatch, which the
+          # review_autofix concurrency group absorbs).
+          sweep_default_branch="$(printf '%s' "${prs_json}" | jq -r '[.[].default_branch | select(type == "string" and . != "")] | unique | if length == 1 then .[0] else "" end' 2>/dev/null || true)"
+          if [ -z "${sweep_default_branch}" ]; then
+            echo "::warning::AUTOFIX_SWEEP_PROVENANCE repo=${REPOSITORY} outcome=default_branch_unresolved pr_named_matching=disabled"
           fi
 
           # Snapshot active review-family runs once per workflow, then do
@@ -180,7 +198,7 @@ jobs:
                   -f status="${status}" \
                   -f per_page=100 \
                   2>/dev/null || true
-              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" '
+              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" --arg default_branch "${sweep_default_branch}" '
                   def created_epoch:
                     (.created_at // "")
                     | if . == "" then null
@@ -202,8 +220,22 @@ jobs:
                   # marker cannot claim another PR key. Git refs cannot
                   # contain ":", so a "pr:<N>" key never collides with a
                   # branch key. Everything else stays keyed by head branch.
+                  # GitHub evaluates run-name from the workflow file at the
+                  # dispatched ref, so any branch writer can dispatch an
+                  # altered wrapper whose run is named for another PR
+                  # (security, issue #5522). The name therefore counts only
+                  # on a run of the default branch (provenance: only its
+                  # workflow files are reviewed) from internal-review.yml
+                  # itself (identity; an "@<ref>" path suffix is ignored).
+                  # A run with a null head_branch cannot prove provenance
+                  # and gets no PR key. An empty $default_branch disables
+                  # PR keys. A forged run stays keyed by its own head branch.
                   def dispatch_pr:
-                    if (.event // "") == "workflow_dispatch" then
+                    if $default_branch != ""
+                      and (.event // "") == "workflow_dispatch"
+                      and (.head_branch // "") == $default_branch
+                      and ((.path // "") | sub("@.*$"; "")) == ".github/workflows/internal-review.yml"
+                    then
                       ((.display_title // "")
                         | [match("^Internal: AI Review & Autofix \\[pr:([1-9][0-9]*)\\]$").captures[0].string]
                         | first // "")
@@ -211,11 +243,12 @@ jobs:
                   def dedupe_key:
                     dispatch_pr as $pr
                     | if $pr != "" then "pr:\($pr)" else .head_branch end;
-                  # A run needs a key to count. GitHub can report a null
-                  # head_branch on a workflow_dispatch run (issue #4928), so a
-                  # run named for its PR is kept by its pr:<N> key; dropping
-                  # it let the next tick dispatch that PR again and replace
-                  # the pending review. A run with neither key is dropped.
+                  # A run needs a key to count; a run with neither key is
+                  # dropped. Issue #4928 kept a PR-named run with a null
+                  # head_branch by its pr:<N> key. Since issue #5522 a PR key
+                  # requires the default branch as head_branch, so such a run
+                  # is dropped: at worst the next tick dispatches that PR
+                  # again into the same concurrency group.
                   [
                     .[]
                     | .workflow_runs[]?
@@ -334,8 +367,9 @@ jobs:
             # workflow code with the sweep's secrets). The run is still
             # visible to the active-run guards: internal-review.yml names it
             # `Internal: AI Review & Autofix [pr:<N>]`, which this sweep's
-            # snapshot and the poller's _has_active_autofix_run match by PR,
-            # so the PR #3895 duplicate-dispatch loop stays closed.
+            # snapshot and the poller's _has_active_autofix_run match by PR
+            # (only on a default-branch run of that wrapper, issues #5094,
+            # #5522), so the PR #3895 duplicate-dispatch loop stays closed.
             dispatch_args=(--repo "${REPOSITORY}"
               -f "pr_number=${pr_number}"
               -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS}")
