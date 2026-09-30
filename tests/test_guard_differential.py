@@ -538,6 +538,16 @@ def test_cli_a_malformed_head_sha_exits_2(hook_repo: Path, head_sha: str) -> Non
 	assert "status=error" in proc.stdout
 
 
+def test_cli_a_malformed_head_sha_exits_2_even_when_no_hook_changed(hook_repo: Path) -> None:
+	"""`--head-sha` is validated before the no-hook-change skip (AD-7)."""
+	(hook_repo / "README.md").write_text("changed\n", encoding="utf-8")
+	assert _cli(hook_repo).returncode == 0
+	proc = _cli(hook_repo, "--head-sha", "abc")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "not a full lowercase commit SHA" in proc.stdout
+	assert "status=skipped" not in proc.stdout
+
+
 def test_cli_a_head_sha_that_contradicts_the_head_ref_exits_2(hook_repo: Path) -> None:
 	_loosening_pr(hook_repo)
 	proc = _cli(hook_repo, "--head-ref", "pr", "--head-sha", "e" * 40)
@@ -843,3 +853,5 @@ def test_agents_md_documents_the_corpus() -> None:
 	assert "Intended loosening:" in text
 	assert ".github/guard_differential/intended_loosening.json" in text
 	assert "pr_body_listed=true" in text
+	flat = " ".join(text.split())
+	assert "malformed `--head-sha` (or one that contradicts `--head-ref`) always exits 2, even when no hook changed" in flat
