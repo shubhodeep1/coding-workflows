@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T06:27:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A field added to a script's `status=` summary line belongs on every status line the script prints, early-return paths included, and its docs must not claim it on lines printed before the value exists (for example `status=error`).",
+  "phase": "implement_plan",
+  "pr_number": 5368,
+  "record_id": "lesson-implement-plan-78ea088a49c519310984d7ff",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:scripts/guard_differential.py",
+    "file:agents.md"
+  ]
+}

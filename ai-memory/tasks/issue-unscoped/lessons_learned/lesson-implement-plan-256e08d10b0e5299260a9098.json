@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T06:27:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A line-based cutter for YAML steps must not end a step at a comment line indented at or left of the step (valid YAML, but not a boundary), and must drop such trailing comments, or edits to the step's later keys slip past the comparison.",
+  "phase": "implement_plan",
+  "pr_number": 5368,
+  "record_id": "lesson-implement-plan-256e08d10b0e5299260a9098",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:scripts/guard_differential.py"
+  ]
+}
