@@ -378,6 +378,34 @@ def test_two_result_objects_in_wrapper_text_exit_2(tmp_path, capsys):
 	assert code == 2 and result["archive"] == [] and "expected one" in result["error"]
 
 
+@pytest.mark.parametrize(
+	"stray, real, expected",
+	[
+		# A truncated real page next to a stray empty page must not read as an empty page.
+		('{"data": []}', '{"ccr": {"data": [{"id": "session_a", "title": "PR #12 st', "does not parse"),
+		# A result-shaped line that `_page` refuses is an error, not a skipped line.
+		('{"data": []}', '{"ccr": {"data": ["not an object"]}}', "array of objects"),
+	],
+)
+def test_wrapper_text_that_could_hide_the_real_page_exits_2(tmp_path, capsys, stray, real, expected):
+	path = tmp_path / "sessions.json"
+	path.write_text(f'<other-session nonce="abc" untrusted="true">\n{stray}\n    {real}\n</other-session nonce="abc">\n', encoding="utf-8")
+	triggers = _write(tmp_path, "t.json", {"data": []})
+	code = janitor.main(["--sessions", str(path), "--triggers", str(triggers), "--stall-log-dir", str(tmp_path / "stalls")], now=NOW)
+	result = json.loads(capsys.readouterr().out)
+	assert code == 2 and result["archive"] == [] and expected in result["error"]
+
+
+def test_bare_array_is_accepted_only_as_plain_json(tmp_path, capsys):
+	path = tmp_path / "sessions.json"
+	page = [_session("session_a", "PR #12 status check-in")]
+	path.write_text(f'<other-session nonce="abc" untrusted="true">\n{json.dumps(page)}\n</other-session nonce="abc">\n', encoding="utf-8")
+	triggers = _write(tmp_path, "t.json", {"data": []})
+	code = janitor.main(["--sessions", str(path), "--triggers", str(triggers), "--stall-log-dir", str(tmp_path / "stalls")], now=NOW)
+	result = json.loads(capsys.readouterr().out)
+	assert code == 2 and "no JSON document found" in result["error"]
+
+
 def test_pages_are_merged_and_deduplicated(monkeypatch, tmp_path, capsys):
 	calls = _stub(monkeypatch, {"repos/o/r/pulls/12": _merged_pr()})
 	session = _session("session_a", "PR #12 status check-in")
@@ -547,6 +575,15 @@ def test_fix_claude_pr_runs_the_prompt_report_before_its_report(path):
 	assert "`Permission prompts:` line" in report_step
 	retry_path = text.split("   - `retry` (exit 2)", 1)[1].split("\n", 1)[0]
 	assert "run step 8's permission prompt report, report the error, and end the turn" in retry_path
+
+
+def test_fix_claude_pr_runs_the_prompt_report_on_every_early_end():
+	# The `.claude/` copy follows after the twin sync; the twin carries the rule until then.
+	text = FIX_CLAUDE_PR_PATHS[1].read_text(encoding="utf-8")
+	route_step = text.split("2. **Route on `action`**", 1)[1].split("\n", 1)[0]
+	assert "Every branch below that reports and ends the turn (`hand_back_all`, `held`, `claimed`, `open`, `retry`) first runs step 8's permission prompt report" in route_step
+	claim_step = text.split("4. **Claim the head, before touching anything.**", 1)[1].split("5. **Fix it.**", 1)[0]
+	assert "Exit 2 → retry once, then run step 8's permission prompt report, report the error, and end the turn." in claim_step
 
 
 def test_ci_runs_this_file():
