@@ -1151,9 +1151,12 @@ reviews, comments, and conflicts stay a direct §12 request.
   shape is posted; the shape keeps no raw text
   (`unparseable: <command word>`, `-u*` for an attached value). Other
   tools' input shows `***` for
-  credential-named keys. In consumer repos it only reports. Signatures that
-  `report-now` already reported are skipped and listed under
-  `already_reported`.
+  credential-named keys. In consumer repos it only reports. Occurrences that
+  `report-now` already delivered to this repository are skipped; a pattern
+  whose every occurrence is covered is listed under `already_reported`. Each
+  `report-now` entry records the repository (`repo`) and the logged session
+  (`log_session`) it covers, so a report on a consumer's PR or issue, or
+  another session's report, never suppresses filing here (issue #5125).
 - `permission_prompts.py report-now --log-file F --cwd D [--record-sha256 H]`
   (issue #4755) reports a prompt the moment it blocks an unattended session,
   because a stuck session never reaches step 14. The hook passes `H`, the

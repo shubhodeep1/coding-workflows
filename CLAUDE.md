@@ -1390,7 +1390,10 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   `claude/implement-plan-issue-<N>[-…]` branch, else nowhere. Each signature
   is reported once per session and at most 5 per session (kept per session
   id, so sessions sharing a home directory never suppress each other), and a
-  later `file` skips the reported signatures (`already_reported`). The hook
+  later `file` skips only the occurrences a session's report delivered to
+  the repository `file` files into (`already_reported`): a report on a
+  consumer's PR or issue, or another session's report, never suppresses
+  central filing (issue #5125). The hook
   passes the SHA-256 of the line it logged, so the report is about that
   prompt even when another one is logged first. `CLAUDE_PERMISSION_PROMPT_REPORT=off`
   in the session environment turns `report-now` off (default: unset, on);
