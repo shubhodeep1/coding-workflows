@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T09:00:09Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A cloud session runner may lack `gawk`, which `scripts/review_issue_ledger.sh` needs; install it (`apt-get install -y gawk`) before judging `tests/test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean` red.",
+  "phase": "implement_plan",
+  "pr_number": 5557,
+  "record_id": "lesson-implement-plan-ff598200b7babdfa136738ef",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5514-bind-closed-resume-to-reclarify",
+    "file:scripts/review_issue_ledger.sh"
+  ]
+}
