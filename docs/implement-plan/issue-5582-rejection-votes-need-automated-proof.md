@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-5582-rejection-votes-need-automated-proof-plan.md
 - Source issue: shubhodeep1/coding-workflows#5582
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5582-rejection-votes-need-automated-proof   Final PR: pending
+- Project branch: claude/implement-plan-issue-5582-rejection-votes-need-automated-proof   Final PR: #5605 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from the #4586 project branch; implementing phase 1
+- Last note: phase 1 implemented and verified (unit + end-to-end hand-off tests, exploit reproduced on the old code); phase PR opened
 
 ## Phases
-1. [ ] Phase 1 — votes alone never demote a single-reviewer finding
+1. [ ] Phase 1 — votes alone never demote a single-reviewer finding   — PR opened (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -34,6 +34,7 @@
 - AD-4 [plan, 2026-09-30] Should other projects' changelog fragments and the `.claude/` command docs be edited? — Picked: A — no; the new `security` fragment states the change, and the `.claude/` text stays true of the (now never produced) `NON-BLOCKING FINDINGS` block. Alternatives: B — edit the #4586/#4976 fragments and the `.claude/` twins. Why: smallest change (§5), and no protected-path edit in an unattended session (§28.C). Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:security] A reviewer vote is model output from PR-influenced input: verifying its fields (IDs, quotes, ranges) proves the reviewer copied text, never that a finding is false, so an unattended gate must not let votes alone clear a finding. (files: scripts/review_claude_fixer_nonblocking.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher in session session_01Btdcvy38twXdNjpDgPWDBg (permission mode auto). Base branch `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason` (the issue's `Integration branch:` line; its final PR #4593 is an open draft into `main`). The issue therefore closes by an explicit close plus `ai:merged` at the final-merge stage, not by a `Fixes` keyword.
