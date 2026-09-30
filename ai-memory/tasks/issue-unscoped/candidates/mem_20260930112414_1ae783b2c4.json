@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4084-4108 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When the PR JSON lacks `base.repo.default_branch`, the rejection diagnostic logs an empty `default_branch=` value, which could be misread as an empty-string default branch rather than missing data.\n  WHY: The upstream `jq -r '.base.repo.default_branch // \"\"'` yields an empty string for a missing key, so the `${_sweep_default_branch:-unknown}` fallback does not apply.\n- .github/workflows/issue_pr_status.yml:370-388 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The body/title fallback can send user-controlled extracted issue numbers, including nonexistent or out-of-repository references, into the batched GraphQL lookup.\n  WHY: The lookup returns no match and harmlessly skips these references; this is pre-existing behavior, not introduced by this PR, and is not actionable in this PR scope.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:4084-4108 | severity=NIT | confidence=3\n  PROBLEM: When `_sweep_default_branch` is empty (PR JSON lacks `base.repo.default_branch`), the default-branch acceptance path at line 4084 is a dead letter (`-n` guard ensures a non-empty base never equals empty default). The fall-through to the integration-branch check at line 4088 works correctly, but the diagnostic rejection line at line 4107 reports `default_branch=-unknown` when the field was genuinely absent rather than jq failing. The `default_branch=` value comes from `_sweep_default_branch:-unknown`, but the upstream assignment uses `jq -r '.base.repo.default_branch // \"\"'` which yields `\"\"` on a missing key, not a null/absent value. The `:-unknown` fallback only activates on unset shell variables, so a missing JSON key displays as an empty string in the log line, not `unknown`.\n  WHY: The log line helps debug rejection but shows `default_branch=` (empty string) when the field is absent, which could be misinterpreted as the repository having an empty-string default branch rather than the data being missing.\n- .github/workflows/issue_pr_status.yml:370-388 | severity=NIT | confidence=2\n  PROBLEM: The body/title fallback (`extract_repo_scoped_issue_refs_from_text`) activates only when `ISSUE_NUMBERS` is empty after the closing-issues GraphQL lookup (line 369). This is unchanged from before #4813 and remains the trigger for the #4688 incident. The new target-branch gate then rejects such a body-found issue when the merge base is wrong, so the incident cannot recur. However, the fallback still runs `extract_repo_scoped_issue_refs_from_text` on user-controlled PR body text with no validation that the extracted issue number refers to any actual issue in this repository \u2014 a PR that mentions a nonexistent or out-of-repo issue number still enters the `LOOKUP_ISSUE_NUMBERS` path and triggers the batched GraphQL call. This is pre-existing behavior (the fallback existed before #4813), not introduced by this PR, and the GraphQL call's no-match result causes a harmless skip.\n  WHY: Not a new regression \u2014 the fallback has existed since issue #1469. The new gate neutralizes the practical impact. Mentioned for completeness; not actionable in this PR scope.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cb0263953afe2fa6f5d589972c38c94f2ff361dd5b7c01b7382653fd43d6e274",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36707149093",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36707149093",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930112414_1ae783b2c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36707149093"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T11:24:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
