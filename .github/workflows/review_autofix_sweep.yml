@@ -40,6 +40,12 @@ name: "Internal: AI Review Autofix Sweep"
 #   - Sweep-vs-sweep is bounded by the workflow-level concurrency group
 #     below (`review-autofix-sweep`), which serialises sweep ticks.
 #
+# Cancelled CI (issue #4713):
+#   - After the dispatch loop the same job re-runs, once per head, a PR's
+#     newest `CI` run that ended `cancelled` / `startup_failure` on attempt 1
+#     (scripts/ci_cancelled_rerun.py, log prefix `CI_CANCELLED_RERUN`,
+#     kill switch `CI_CANCELLED_AUTO_RERUN_ENABLED`). This repo only.
+#
 # Cost guard:
 #   - 30 min cadence matches the existing orchestrator poll cadence and is
 #     a conscious trade-off (CLAUDE.md §1: Speed is the lowest priority).
@@ -106,9 +112,16 @@ jobs:
               number,
               head_ref: .head.ref,
               head_repo: (.head.repo.full_name // ""),
+              head_sha: (.head.sha // ""),
               title: (.title // ""),
               body: (.body // "")
             })')"
+
+          # Hand the same snapshot to the cancelled-CI re-run step below
+          # (issue #4713), so it needs no second PR listing (§15). A failed
+          # write only skips that step; it never stops review dispatches.
+          printf '%s' "${prs_json}" > "${RUNNER_TEMP}/review-autofix-sweep-prs.json" \
+            || echo "::warning::AUTOFIX_SWEEP_PR_SNAPSHOT_WRITE_FAILED path=${RUNNER_TEMP}/review-autofix-sweep-prs.json"
 
           total="$(printf '%s' "${prs_json}" | jq 'length')"
           echo "AUTOFIX_SWEEP_START repo=${REPOSITORY} candidates=${total} head_ref_filter=${HEAD_REF_FILTER:-<none>} dry_run=${DRY_RUN}"
@@ -308,6 +321,36 @@ jobs:
           done
 
           echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
+
+      # Issue #4713. Nothing else acts on a `CI` run that ends `cancelled`
+      # (timeout, lost runner, manual cancel): check_in_status.py does not
+      # count it as a failed check, so the PR stalls. Checked out after the
+      # dispatch step so a checkout failure never blocks review dispatches.
+      - name: Check out the cancelled-CI re-run helper
+        if: ${{ !cancelled() }}
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      # Re-runs the failed jobs of the newest `ci.yml` run on a PR's current
+      # head once, when it concluded `cancelled` or `startup_failure` on
+      # attempt 1 with nothing else active on that head. Never a `failure`.
+      # One runs listing per tick; rules and API budget in the script.
+      # Kill switch: repo variable CI_CANCELLED_AUTO_RERUN_ENABLED.
+      - name: Re-run cancelled CI once per PR head
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci_cancelled_rerun.py \
+            --prs "${RUNNER_TEMP}/review-autofix-sweep-prs.json"
 
   # CLAUDE.md §26.H catch-all. Every PR-backed claude/* head runs in
   # Claude-fixer mode, so its conflicts, failed checks, review hand-offs and

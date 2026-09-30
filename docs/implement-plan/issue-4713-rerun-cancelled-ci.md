@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-4713-rerun-cancelled-ci-plan.md
 - Source issue: shubhodeep1/coding-workflows#4713
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-4713-rerun-cancelled-ci   Final PR: (pending) draft
+- Project branch: claude/implement-plan-issue-4713-rerun-cancelled-ci   Final PR: #4721 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #4722
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
-- Last updated: 2026-09-28
-- Last note: project branch opened; implementing phase 1.
+- Check-in: checker session_01CFHuujSGs9A5J62SiGwiCD   safety net (re-armed 2026-09-29)   hand-back trig_01TNRpUcu2Nc88bvGtPkBecL
+- Last updated: 2026-09-29
+- Last note: safety net fired after 24h; the claude-branch-review finding (LOG_PREFIX.name= registry) had no hand-off marker, so the checker never saw it. Fixed in review round 1.
 
 ## Phases
-1. [ ] Phase 1 — cancelled-CI re-run in the review sweep (`scripts/ci_cancelled_rerun.py`, `review_autofix_sweep.yml`, tests, docs, changelog)
+1. [ ] Phase 1 — cancelled-CI re-run in the review sweep (`scripts/ci_cancelled_rerun.py`, `review_autofix_sweep.yml`, tests, docs, changelog)   — PR #4722 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -38,6 +38,10 @@
 - AD-9 [planning, 2026-09-28] Kill-switch parsing? — Picked: A — `1`/`true`/`yes`/`on` enable, anything else disables, unset defaults to `true`. Alternatives: B — only exact `false` disables. Why: matches `ALLOW_WORKFLOW_EDITS`; fails toward no re-run. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:intervention] A new stable log prefix goes into both agents.md forms: the `- `PREFIX`` prose list and the `LOG_PREFIX.name=PREFIX` registry; contract tests assert both. (files: agents.md)
 
 ## Notes
+- 2026-09-29: PR #4722 stalled 24h. Its only review was the push-triggered `claude-branch-review` comment (run 36379062798), which carries no `ai:claude-fixer-handoff` marker; the pull_request run skipped the `review` job. `check_in_status.py` therefore reported `open` every hour. The safety-net session handled the finding directly as review round 1.
+- Live dry run (2026-09-28, read-only): 15 open non-draft PRs, 1 runs listing; would re-run the cancelled attempt-1 CI of #4704, #4693, #4611.
+- The inventory gate (`tests/inventory_parity.py`) needs every new `scripts/` file in `docs/INVENTORY.md`.
 - Security pass: `security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}`, so `Security pass: run`.

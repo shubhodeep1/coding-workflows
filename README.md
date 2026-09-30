@@ -1994,6 +1994,7 @@ through `clarify → plan → implement → review`.
 | `CLAUDE_ISSUE_ROUTINE_ID` | — | Deprecated (#4525), coding-workflows only. The intake no longer fires the "Claude issue dispatcher" routine; when set it only logs `routine_deprecated`. Can be deleted. |
 | `CLAUDE_ISSUE_ROUTINE_BETA` | `experimental-cc-routine-2026-04-01` | Deprecated (#4525), unused: the intake no longer calls the routine `/fire` endpoint. |
 | `CLAUDE_ISSUE_QUEUE_STALE_HOURS` | `3` | coding-workflows only. Age after which `claude-issue-queue-watchdog.yml` flags an open `ai:claude-issue-queue` item `ai:claude-issue-queue-stale` and sends a Telegram ERROR (the pickup has stopped). |
+| `CI_CANCELLED_AUTO_RERUN_ENABLED` | `true` | coding-workflows only. Kill switch for the cancelled-CI re-run in the 30-minute `sweep` job of `review_autofix_sweep.yml` (issue #4713). For each open, non-draft, same-repository PR, the newest `CI` (`ci.yml`) run on the PR's current head is re-run once (`rerun-failed-jobs`) when it concluded `cancelled` or `startup_failure` on attempt 1 and no other `CI` run for that head is queued or in progress. A `failure` is never re-run. `[skip ai]` PRs are skipped. The job makes one runs-listing call per tick and logs one `CI_CANCELLED_RERUN` line per PR. `1`/`true`/`yes`/`on` enable it; any other value disables it. Script: `scripts/ci_cancelled_rerun.py`. |
 
 ## Semantic Cache (Clarification Only)
 
