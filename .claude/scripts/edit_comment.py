@@ -21,14 +21,18 @@ order, each to the result of the previous one. `--body-file` replaces the
 whole body with the file's text instead. `--dry-run` prints the new body and
 writes nothing.
 
-Both files are read only from a Claude Code session scratchpad
-(`<temp dir>/claude-<…>/<project>/<session>/scratchpad/`, the temp dir being
-`tempfile.gettempdir()` or `/tmp`), and only when the path resolves, after
-symlinks, to a regular file with a single hard link and at most
-`MAX_INPUT_FILE_BYTES` bytes (issue #5452). The helper is allowlisted, so
-without this check one command could publish any local file, such as a
-credential file, as a comment with no prompt. Any other path exits 1 before
-the comment is read, and its content is never printed.
+Both files are read only from the calling session's own Claude Code
+scratchpad (`<temp dir>/claude-<uid>/<project>/<session>/scratchpad/`, the
+temp dir being `tempfile.gettempdir()` or `/tmp`, `<uid>` this process's
+`os.getuid()`, and `<session>` the `CLAUDE_CODE_SESSION_ID` the harness
+exports), and only when the path resolves, after symlinks, to a regular file
+owned by this uid, with a single hard link and at most `MAX_INPUT_FILE_BYTES`
+bytes (issues #5452, #5700). The helper is allowlisted, so without this check
+one command could publish any local file, such as a credential file or
+another session's scratchpad file, as a comment with no prompt. When
+`CLAUDE_CODE_SESSION_ID` is unset or malformed, the caller's scratchpad cannot
+be verified and every file is refused. Any rejected path exits 1 before the
+comment is read, and its content is never printed.
 
 API calls (CLAUDE.md §15), REST only: one read of the comment and, unless
 `--dry-run` or the body is unchanged, one PATCH.
@@ -69,6 +73,11 @@ SESSION_TEMP_DIR_PREFIX = "claude-"
 # file never reaches memory. A body over MAX_BODY_CHARS is rejected later
 # anyway; 16x leaves room for JSON escaping in a --replacements file.
 MAX_INPUT_FILE_BYTES = 16 * MAX_BODY_CHARS
+# Claude Code exports the session id to every Bash command; it is the
+# <session> component of that session's scratchpad path (issue #5700).
+SESSION_ID_ENV_VAR = "CLAUDE_CODE_SESSION_ID"
+# One path component: no separator, never "." or "..".
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _temp_roots() -> list[Path]:
@@ -101,20 +110,60 @@ def is_scratchpad_path(resolved: Path, roots: list[Path]) -> bool:
 	return False
 
 
-def read_input_file(flag: str, path: str) -> str:
-	"""Read a `--replacements` / `--body-file` file from the session scratchpad only.
+def _caller_scratchpad_identity() -> tuple[str, str] | None:
+	"""`(claude-<uid>, <session id>)` naming the caller's own scratchpad, or None.
 
-	Raises ValueError, without reading the file, when the path does not
-	resolve to a regular, singly-linked file inside a session scratchpad, or
-	when the file is larger than MAX_INPUT_FILE_BYTES.
+	None means the identity cannot be verified (no `os.getuid`, or
+	CLAUDE_CODE_SESSION_ID unset, empty, or not a single safe path component),
+	and the caller must then refuse every input file.
+	"""
+	getuid = getattr(os, "getuid", None)
+	session_id = os.environ.get(SESSION_ID_ENV_VAR, "")
+	if getuid is None or not SESSION_ID_RE.fullmatch(session_id):
+		return None
+	return f"{SESSION_TEMP_DIR_PREFIX}{getuid()}", session_id
+
+
+def is_own_scratchpad_path(resolved: Path, roots: list[Path], identity: tuple[str, str]) -> bool:
+	"""True when `resolved` is in the scratchpad `identity` names, below one of `roots`.
+
+	`identity` is `(claude-<uid>, <session id>)` from `_caller_scratchpad_identity`:
+	on top of the `is_scratchpad_path` layout, the first component must be
+	that `claude-<uid>` and the session component that session id, so another
+	session's or another user's scratchpad does not count (issue #5700).
+	"""
+	temp_dir_name, session_id = identity
+	for root in roots:
+		try:
+			parts = resolved.relative_to(root).parts
+		except ValueError:
+			continue
+		if is_scratchpad_path(resolved, [root]) and parts[0] == temp_dir_name and parts[2] == session_id:
+			return True
+	return False
+
+
+def read_input_file(flag: str, path: str) -> str:
+	"""Read a `--replacements` / `--body-file` file from the caller's own session scratchpad only.
+
+	Raises ValueError, without reading the file, when the caller's scratchpad
+	cannot be identified (`_caller_scratchpad_identity`), when the path does
+	not resolve to a regular, singly-linked file owned by this uid inside that
+	scratchpad, or when the file is larger than MAX_INPUT_FILE_BYTES.
 	"""
 	try:
 		resolved = Path(path).resolve(strict=True)
 	except (OSError, RuntimeError) as exc:
 		raise ValueError(f"{flag} {path}: {exc}") from exc
-	if not is_scratchpad_path(resolved, _temp_roots()):
+	identity = _caller_scratchpad_identity()
+	if identity is None:
 		raise ValueError(
-			f"{flag} {path}: only files in the Claude Code session scratchpad (<temp dir>/claude-*/<project>/<session>/scratchpad/) are read; "
+			f"{flag} {path}: this session's scratchpad cannot be verified ({SESSION_ID_ENV_VAR} is unset or not a single path component, or os.getuid is unavailable), "
+			"so no file is read; rewrite the comment with mcp__github__update_issue_comment"
+		)
+	if not is_own_scratchpad_path(resolved, _temp_roots(), identity):
+		raise ValueError(
+			f"{flag} {path}: only files in this Claude Code session scratchpad (<temp dir>/{identity[0]}/<project>/{identity[1]}/scratchpad/) are read; "
 			"write the file there with the Write tool, or rewrite the comment with mcp__github__update_issue_comment"
 		)
 	# O_NONBLOCK keeps a FIFO from blocking the open; fstat rejects it below.
@@ -126,6 +175,8 @@ def read_input_file(flag: str, path: str) -> str:
 		info = os.fstat(fd)
 		if not stat.S_ISREG(info.st_mode):
 			raise ValueError(f"{flag} {path}: not a regular file")
+		if info.st_uid != os.getuid():
+			raise ValueError(f"{flag} {path}: owned by uid {info.st_uid}, not this session's uid {os.getuid()}; not read")
 		if info.st_nlink != 1:
 			raise ValueError(f"{flag} {path}: has {info.st_nlink} hard links; only a file with one link is read")
 		if info.st_size > MAX_INPUT_FILE_BYTES:
