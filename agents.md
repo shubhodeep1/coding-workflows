@@ -1225,13 +1225,19 @@ side so that class cannot land unnoticed.
   present in the same side's hooks tree. The matcher must cover the base
   matcher: identical, match-all (absent, empty, or `*`), or a superset when
   both are plain `A|B` tool-name lists; any other regex change fails. The
-  timeout must be no lower (absent = 60 s), and every other key of the entry
+  timeout must be no lower (absent = Claude Code's default: 600 s, or 30 s
+  on `UserPromptSubmit` / `PreModelSwitch` / `PostModelSwitch`, 10 s on
+  `MessageDisplay`, 1.5 s on `SessionEnd`; a non-finite value fails), and
+  every other key of the entry
   and its matcher group (`type`, `async`, …) must be equal. Anything else
   fails closed: for example `python3 -c 'pass' <hook path>`, `… || true`, a
   removed or moved entry, a narrowed matcher, a lower timeout,
   `disableAllHooks` turning on, any change to the top-level `env` object
   (it reaches every hook's process: `CLAUDE_PR_MERGE_GUARD=off` or a
-  shadowing `PATH`), and a deleted, unparseable, or non-object settings file. The identity of a wiring failure is
+  shadowing `PATH`), and a deleted, unparseable, or non-object settings file
+  (parsed as strict JSON like Claude Code does: `NaN` or `Infinity`, or
+  content that is not UTF-8, is unparseable; a working-tree read error exits
+  2 with `status=error`). The identity of a wiring failure is
   `settings:<file>:<event>:<matcher>:<hook>`
   (`settings:<file>:disableAllHooks`, `settings:<file>:env`,
   `settings:<file>:unparseable`). New

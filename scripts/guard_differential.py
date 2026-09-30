@@ -90,6 +90,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shlex
@@ -114,8 +115,17 @@ SETTINGS_FILES = {
 	".claude/hooks": ".claude/settings.json",
 	"workflow-templates/.claude/hooks": "workflow-templates/.claude/settings.json",
 }
-# Claude Code's timeout for a command hook that sets none.
-DEFAULT_HOOK_TIMEOUT_SECONDS = 60
+# Claude Code's timeout for a command hook that sets none: 600 s, lowered on
+# the events below (code.claude.com/docs/en/hooks, "Common fields";
+# `SessionEnd` hooks share a 1.5 s budget that a per-hook timeout raises).
+DEFAULT_HOOK_TIMEOUT_SECONDS = 600
+EVENT_DEFAULT_HOOK_TIMEOUT_SECONDS = {
+	"UserPromptSubmit": 30,
+	"PreModelSwitch": 30,
+	"PostModelSwitch": 30,
+	"MessageDisplay": 10,
+	"SessionEnd": 1.5,
+}
 GUARD_COMMAND_RE = re.compile(r"\.claude/hooks/([A-Za-z0-9_]+_guard)\.py\b")
 CANONICAL_GUARD_COMMAND_RE = re.compile(r'python3 "\$CLAUDE_PROJECT_DIR"/\.claude/hooks/([A-Za-z0-9_]+_guard)\.py')
 PLAIN_MATCHER_RE = re.compile(r"[A-Za-z0-9_]+(?:\|[A-Za-z0-9_]+)*")
@@ -620,17 +630,31 @@ def ref_corpora(repo_root: Path, ref: str, corpus_dir: str) -> dict[str, list[Sh
 
 
 def read_settings_text(repo_root: Path, ref: str | None, path: str) -> str | None:
-	"""The settings file at `ref` (or in the working tree), or None when absent."""
+	"""The settings file at `ref` (or in the working tree), or None when absent.
+
+	Content that is not UTF-8 comes back as "" so it reports `unparseable`; a
+	working-tree read failure is a SetupError (exit 2), not a settings verdict.
+	"""
 	if ref is None:
 		source = repo_root / path
 		if not source.is_file():
 			return None
 		try:
 			return source.read_text(encoding="utf-8")
-		except (OSError, UnicodeDecodeError):
+		except UnicodeDecodeError:
 			return ""
-	blob = _repo_git(repo_root, "cat-file", "-p", f"{ref}:{path}", check=False)
+		except OSError as exc:
+			raise SetupError(f"cannot read settings {path}: {exc}") from exc
+	try:
+		blob = _repo_git(repo_root, "cat-file", "-p", f"{ref}:{path}", check=False)
+	except UnicodeDecodeError:
+		return ""
 	return blob.stdout if blob.returncode == 0 else None
+
+
+def _reject_json_constant(name: str) -> object:
+	# Claude Code reads settings as strict JSON, which has no NaN or Infinity.
+	raise ValueError(f"non-standard JSON constant {name}")
 
 
 def parse_settings(text: str | None) -> dict | None:
@@ -638,7 +662,7 @@ def parse_settings(text: str | None) -> dict | None:
 	if text is None:
 		return None
 	try:
-		parsed = json.loads(text)
+		parsed = json.loads(text, parse_constant=_reject_json_constant)
 	except ValueError:
 		return None
 	return parsed if isinstance(parsed, dict) else None
@@ -687,12 +711,19 @@ def matcher_covers(head: str | None, base: str | None) -> bool:
 	return set(base.split("|")) <= set(head.split("|"))
 
 
-def _effective_timeout(value: object) -> float | None:
+def _effective_timeout(value: object, event: str) -> float | None:
+	"""The timeout Claude Code applies, or None when it is not a finite number."""
 	if value is None:
-		return float(DEFAULT_HOOK_TIMEOUT_SECONDS)
+		return float(EVENT_DEFAULT_HOOK_TIMEOUT_SECONDS.get(event, DEFAULT_HOOK_TIMEOUT_SECONDS))
 	if isinstance(value, bool) or not isinstance(value, (int, float)):
 		return None
-	return float(value)
+	# A JSON number too large for a float parses to inf (`1e400`) or to an int
+	# that float() cannot convert (`1` and 400 zeros).
+	try:
+		seconds = float(value)
+	except OverflowError:
+		return None
+	return seconds if math.isfinite(seconds) else None
 
 
 def wiring_failures(head: GuardWiring, base: GuardWiring, head_hooks: set[str]) -> list[str]:
@@ -704,8 +735,8 @@ def wiring_failures(head: GuardWiring, base: GuardWiring, head_hooks: set[str]) 
 	if not matcher_covers(head.matcher, base.matcher):
 		failures.append("matcher")
 	if head.timeout != base.timeout:
-		head_timeout = _effective_timeout(head.timeout)
-		base_timeout = _effective_timeout(base.timeout)
+		head_timeout = _effective_timeout(head.timeout, head.event)
+		base_timeout = _effective_timeout(base.timeout, base.event)
 		if head_timeout is None or base_timeout is None or head_timeout < base_timeout:
 			failures.append("timeout")
 	if head.extras != base.extras:

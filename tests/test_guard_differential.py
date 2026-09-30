@@ -590,6 +590,61 @@ def test_malformed_timeouts_fail_closed_without_crashing() -> None:
 		assert gd.wiring_failures(head, base, {"fake_guard"}) == ["timeout"]
 
 
+def test_non_finite_timeouts_fail_closed() -> None:
+	# A NaN compares false with everything, so `head < base` alone let it pass.
+	base = gd.GuardWiring("PreToolUse", "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, 30, "{}")
+	for timeout in (float("nan"), float("inf"), float("-inf"), 10**400):
+		head = gd.GuardWiring("PreToolUse", "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, timeout, "{}")
+		assert gd.wiring_failures(head, base, {"fake_guard"}) == ["timeout"]
+
+
+@pytest.mark.parametrize(
+	("event", "head_timeout", "base_timeout", "failures"),
+	[
+		("PreToolUse", 90, None, ["timeout"]),
+		("PreToolUse", None, 30, []),
+		("PreToolUse", 600, None, []),
+		("UserPromptSubmit", None, 100, ["timeout"]),
+		("UserPromptSubmit", 30, None, []),
+		("MessageDisplay", 5, None, ["timeout"]),
+	],
+)
+def test_an_omitted_timeout_is_claude_codes_default(event: str, head_timeout, base_timeout, failures: list[str]) -> None:
+	"""600 s for a command hook, lowered on some events (code.claude.com/docs/en/hooks)."""
+	base = gd.GuardWiring(event, "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, base_timeout, "{}")
+	head = gd.GuardWiring(event, "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, head_timeout, "{}")
+	assert gd.wiring_failures(head, base, {"fake_guard"}) == failures
+
+
+@pytest.mark.parametrize("text", ['{"a": NaN}', '{"a": Infinity}', '{"a": -Infinity}'])
+def test_parse_settings_rejects_non_standard_constants(text: str) -> None:
+	assert json.loads(text)  # Python accepts them by default; Claude Code does not.
+	assert gd.parse_settings(text) is None
+
+
+def test_a_settings_read_failure_is_a_setup_error(settings_repo: Path, monkeypatch) -> None:
+	def unreadable(*args, **kwargs):
+		raise PermissionError("denied")
+
+	monkeypatch.setattr(Path, "read_text", unreadable)
+	with pytest.raises(gd.SetupError, match="cannot read settings .claude/settings.json"):
+		gd.read_settings_text(settings_repo, None, ".claude/settings.json")
+
+
+def test_cli_non_utf8_settings_are_unparseable_in_the_tree_and_at_a_ref(settings_repo: Path) -> None:
+	target = settings_repo / ".claude" / "settings.json"
+	target.write_bytes(json.dumps(_settings()).encode("utf-8") + b"\xff")
+	proc = _cli(settings_repo)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert "reason=unparseable " in line, line
+	_git(settings_repo, "commit", "-q", "-am", "non-utf8 settings")
+	proc = _cli(settings_repo, "--base-ref", "HEAD~1", "--head-ref", "HEAD")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert "reason=unparseable " in line, line
+
+
 def test_cli_the_finding_exploit_fails_in_both_settings_files(settings_repo: Path) -> None:
 	"""The #5328 finding: rewiring the guard to `python3 -c 'pass' <hook path>`
 	used to skip the check because no hook `*.py` file changed."""
@@ -657,6 +712,10 @@ def _with_env(settings: dict, **env: str) -> dict:
 		(_with_env(_settings(), PATH="./bin:/usr/bin"), "env"),
 		("{not json", "unparseable"),
 		("[]", "unparseable"),
+		(json.dumps(_settings(timeout=float("nan"))), "unparseable"),
+		(json.dumps(_settings(timeout=float("inf"))), "unparseable"),
+		(json.dumps(_settings(timeout=12345)).replace("12345", "1e400"), "timeout"),
+		(json.dumps(_settings(timeout=12345)).replace("12345", "1" + "0" * 400), "timeout"),
 	],
 	ids=[
 		"removed",
@@ -673,6 +732,10 @@ def _with_env(settings: dict, **env: str) -> dict:
 		"env-path-shadow",
 		"invalid-json",
 		"not-an-object",
+		"timeout-nan",
+		"timeout-infinity",
+		"timeout-overflows-to-inf",
+		"timeout-int-overflows-float",
 	],
 )
 def test_cli_unverifiable_wiring_changes_fail_closed(settings_repo: Path, head, reason: str) -> None:
