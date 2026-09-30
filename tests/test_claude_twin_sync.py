@@ -1348,6 +1348,26 @@ def test_ci_step_fails_closed_on_an_unreadable_base(repo, ci):
 	assert "PERMISSIVE GUARD RAN" not in proc.stdout
 
 
+def test_ci_step_fails_closed_when_the_listed_script_cannot_be_extracted(repo, ci, tmp_path):
+	# ls-tree lists the blob but `git show` of it fails (PR #5656 review):
+	# the step must stop rather than run an empty or partial copy.
+	real_git = subprocess.run(["bash", "-c", "command -v git"], capture_output=True, text=True, check=True).stdout.strip()
+	(tmp_path / "bin" / "git").write_text(
+		"#!/usr/bin/env bash\n"
+		"if [ \"$1\" = \"show\" ] && [[ \"$2\" == *:scripts/claude_twin_sync.py ]]; then echo 'stub git: show failed' >&2; exit 128; fi\n"
+		f"exec {real_git} \"$@\"\n",
+		encoding="utf-8",
+	)
+	(tmp_path / "bin" / "git").chmod(0o755)
+	before = _move_origin_main(repo, {"scripts/claude_twin_sync.py": REAL_GUARD_SCRIPT})
+	_move_origin_main(repo, {claude("hooks/h.py"): "direct\n"})
+	proc = ci("push", ref_name="main", before=before, checkout_script=PERMISSIVE_GUARD_SCRIPT)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert f"::error::twin sync guard: scripts/claude_twin_sync.py cannot be extracted from {before}; failing closed." in proc.stdout
+	assert "twin sync guard: running" not in proc.stdout
+	assert "PERMISSIVE GUARD RAN" not in proc.stdout
+
+
 def test_ci_step_skips_other_events(repo, ci):
 	proc = ci("pull_request", base_ref="release/x", ref_name="42/merge")
 	assert proc.returncode == 0, proc.stdout + proc.stderr

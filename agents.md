@@ -1272,8 +1272,8 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   directory, with `main`'s tip as the fallback on `stable`, and logs `twin
   sync guard: running scripts/claude_twin_sync.py from <sha>`. A base commit
   that cannot be resolved or read fails the step. Only when every trusted
-  commit resolves and none carries the script yet (`main` before the #4785
-  project merges, `stable` before its next promotion) does it run the
+  commit resolves and none carries the script yet (`main` before #4804
+  merges, `stable` before its next promotion) does it run the
   checkout's copy, with a `::warning::` (bootstrap). Tests load the twin and call
   `tests/claude_twin_state.py::assert_claude_not_ahead`, which skips a
   differing pair in a shallow clone.

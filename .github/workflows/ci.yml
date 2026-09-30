@@ -301,7 +301,10 @@ jobs:
             if [ -n "${twin_guard_listing}" ]; then
               twin_guard_dir="$(mktemp -d)"
               twin_guard_script="${twin_guard_dir}/claude_twin_sync.py"
-              git show "${twin_guard_source}:scripts/claude_twin_sync.py" > "${twin_guard_script}"
+              if ! git show "${twin_guard_source}:scripts/claude_twin_sync.py" > "${twin_guard_script}"; then
+                echo "::error::twin sync guard: scripts/claude_twin_sync.py cannot be extracted from ${twin_guard_source}; failing closed."
+                exit 1
+              fi
               echo "twin sync guard: running scripts/claude_twin_sync.py from ${twin_guard_source}, not the checkout."
               break
             fi
