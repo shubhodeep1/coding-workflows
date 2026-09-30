@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5293-run-git-sync-unchained-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5293 (https://github.com/shubhodeep1/coding-workflows/issues/5293)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5293-run-git-sync-unchained   Final PR: #5304 draft
+- Project branch: claude/implement-plan-issue-5293-run-git-sync-unchained   Final PR: #5304 ready — review rounds: 1
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round
 - Activation: pending verify-activation
-- Waiting on: completion PR (this log commit) into the project branch
+- Waiting on: PR #5304: twin sync (final-merge review round 1)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01JapKTFfN8nqfisU5qRUmmZ (project checker, reused)   safety net and hand-back: in the validation 1/3 — read result stage report
+- Check-in: checker session_01JapKTFfN8nqfisU5qRUmmZ (project checker, reused)   safety net and hand-back: none (held for the twin sync)
 - Last updated: 2026-09-30
-- Last note: validation cycle 1 (run 36669185211, project branch at 4c8d87d) passed 10/10; project branch synced with `main` (a3b914b); completion PR opened to move the plan to docs/completed/
+- Last note: final PR #5304 review round 1 (head 08cb1151b023): git guidance now bans any `;`/`&&` chain between git commands, fixed in the twins; held for a [claude-twin-sync]
 
 ## Phases
 1. [x] Phase 1 — unchained git guidance in `implement-plan-claude.md` and `fix-claude-pr.md`   — protected paths: .claude/commands/implement-plan-claude.md, .claude/commands/fix-claude-pr.md   — PR #5312 merged 2026-09-30 (f5f256f, head 85bb280); `[claude-twin-sync]` 34c469a and f942b48 copied the twins into `.claude/`; review rounds: 2; interventions: 0
@@ -33,7 +33,7 @@
 - Merged into the project branch: phase 1 PR #5312
 - Project branch synced with `main`: 4c8d87d (before security and validation), a3b914b (this stage, clean merge of 31ca2bf, docs-only: `docs/operations/master-session.md`)
 - Completion PR (this log commit) — doc moved to docs/completed/issue-5293-run-git-sync-unchained-plan.md
-- Final PR #5304 draft — marked ready by the final-merge stage
+- Final PR #5304 ready (2026-09-30, after syncing with `main` at 08cb115) — review rounds: 1 (held for twin sync)
 
 ## Activation
 
@@ -45,6 +45,7 @@
 
 ## Lessons
 - [source:intervention] Guidance that tells an unattended session to do something "in a separate call" must name the exact allowlisted command to run alone (for example `git status -sb`), or reviewers flag it and the session may pick a piped form no allow rule matches. (files: workflow-templates/.claude/commands/implement-plan-claude.md, workflow-templates/.claude/commands/fix-claude-pr.md)
+- [source:intervention] A rule that bans a chained shell shape must ban it between the allowlisted commands themselves (not only for the reads appended to them), and the command file's own examples must not use that shape, because sessions copy examples exactly as written. (files: workflow-templates/.claude/commands/implement-plan-claude.md, workflow-templates/.claude/commands/fix-claude-pr.md)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-29)
@@ -54,3 +55,5 @@
 - Review round 1 (2026-09-30, head 34c469ad3a33): the plan's step 1 / step 2 wording ("check the branch state in a separate call") now names `git status -sb` (and `git rev-parse HEAD` in `fix-claude-pr.md`) run as its own Bash call; the changelog fragment follows. A second twin-sync copies the two twins into `.claude/commands/`.
 - Twin sha256 after review round 1: implement-plan-claude.md 4c1c5bc55802ed89f45631691be490ab83eb943f041162f6324aed99f4dfb522; fix-claude-pr.md 933aebd07be0d4c78f28fb3f0c41e0f0c96a679e6587977b28898d4e54fb8952 (second [claude-twin-sync]: f942b48). Twin-parity tests pass from f942b48 on.
 - Review round 2 (2026-09-30, head f942b48e0a8c, workflow round 1 after the twin-sync reset): valid, test runs on both `.claude/commands/` and the twins (parametrized like `test_allowlisted_calls_run_standalone`); valid, the PR body and this log still described the pre-sync hold; rejected, "the PR edits the live `.claude/commands/` files directly", because those edits are the two [claude-twin-sync] commits the operator approved on #5293. An earlier ledger on the same head (run 36656754777) reviewed the pre-sync live copies; f942b48 already resolves it.
+- Final PR #5304 review round 1 (2026-09-30, head 08cb1151b023, ledger 3e822564…): valid (gpt-6-luna, MAJOR), the guidance banned only chained `git status`/`git log` reads, not a `git fetch … && git merge …` chain (the #5293 shape), and step 4 and the checker prompt themselves wrote `git fetch … && git checkout …`; fixed in the twins (each git command is its own Bash call; both examples split) with a regex check in `test_git_commands_run_unchained`. Rejected: deepseek NIT ×2 (no defect, the guidance only narrows use of allowlisted commands); minimax `git rev-parse` not allowlisted (it is, `.claude/settings.json` `Bash(git rev-parse *)`); minimax `git status -sb` note (no defect, reviewer says so). Protected-path approval phase 1 — twin-first: held for a third [claude-twin-sync].
+- Twin sha256 after final-PR review round 1: implement-plan-claude.md f5f635108a5c1de248a1761acf71b153640f4dbc8d519b719cfe8c47c18fa263; fix-claude-pr.md 34a253174a4ca5d86daf59ff2326209a63d75ce26cd5da11644787cca5ba94ba (third [claude-twin-sync] pending).
