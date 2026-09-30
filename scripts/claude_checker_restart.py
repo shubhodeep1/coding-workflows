@@ -76,7 +76,7 @@ Restart (Q63, all must hold; the first that fails is the `skipped` reason):
      than `RESTART_COOLDOWN_HOURS` (3);
   2. for an `issue-<N>-…` slug, issue #<N> is open and not labelled
      `ai:claude-blocked` (read after the free checks: it may cost one REST
-     call);
+     call, which is made only for a looked-up checker);
   6. the record checked above is a fresh `get_session` one: a checker known
      only from the page is `not_looked_up`.
 
@@ -97,7 +97,7 @@ starts with `/reclarify`.
 API budget (CLAUDE.md §15): REST only, never GraphQL. `scan` issues one
 paginated `issues?labels=ai:claude&state=open` read (one call per 100 open
 issues); `decide` issues one issue read per
-distinct candidate issue outside that list and one paginated comment read per
+distinct issue outside that list whose checker was looked up, and one paginated comment read per
 re-queue candidate. The logs are read over git. Every failed read or missing
 input keeps the checker (fail safe) and is listed in `errors`.
 
@@ -561,9 +561,14 @@ def lookups_needed(state: dict, now: dt.datetime) -> list[str]:
 	return needed
 
 
+def _issue_in_open_list(repo: str, issue: int, state: dict) -> bool:
+	"""True when condition 2 can be read from the scan's open-issue list, at no API cost."""
+	return repo == state["repo"] and str(issue) in state["open_issues"]
+
+
 def _issue_open_unblocked(repo: str, issue: int, state: dict, cache: dict) -> tuple[bool, str]:
 	"""(ok, reason) for condition 2; one cached REST read when the issue is not in the open list."""
-	if repo == state["repo"] and str(issue) in state["open_issues"]:
+	if _issue_in_open_list(repo, issue, state):
 		labels = state["open_issues"][str(issue)]
 		return (False, "issue_blocked") if BLOCKED_LABEL in labels else (True, "")
 	key = (repo, issue)
@@ -701,6 +706,11 @@ def decide(state: dict, lookups: dict[str, Any], now: dt.datetime) -> dict:
 		issue = issue_of(slug)
 		repo = view["repo"] or state["repo"]
 		if issue is not None:
+			if checker not in refreshed and not _issue_in_open_list(repo, issue, state):
+				# The issue read below costs a REST call, and a checker known only from the page
+				# is kept whatever it returns (review round 2 on PR #5598).
+				skip(checker, slug, "not_looked_up")
+				continue
 			try:
 				ok, reason = _issue_open_unblocked(repo, issue, state, issue_cache)
 			except (ReadError, KeyError, TypeError, ValueError) as exc:

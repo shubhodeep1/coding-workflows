@@ -9,9 +9,9 @@
 - Activation: not started
 - Waiting on: PR #5598
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01PUk3sYkLpwZZR6nKcaXnx9   safety net and hand-back: see the conformance 2/3 stage report (session_014eT9H8A38TtSRKwLaJGMTB)
+- Check-in: checker session_01PUk3sYkLpwZZR6nKcaXnx9   safety net and hand-back: see the conformance 2/3 — review round 2 stage report (session_01MLRqKwA27jNTvUj8xybLEV)
 - Last updated: 2026-09-30
-- Last note: conformance 2/3 — review round 1 (session_01UpQN9J6XxvdfZiAqtk3Zkp, 2026-09-30): the reviewer panel (5 of 6 reviewers, consensus) found that AD-17 read a page-listed checker's own activity from the page snapshot, which misses a turn taken after the page was read; fixed with AD-18 (a restart needs a fresh `get_session` record). Before that: conformance 2/3 (session_014eT9H8A38TtSRKwLaJGMTB, 2026-09-30): CONFORMANT (correctness CONCERNS) — one EVIDENCE-BASED CONCERN, demonstrated on live data: condition 4 ignored the checker's own last turn, so a checker that re-armed or started its next stage after the trigger and session pages were read looked dead (the #4723 checker started stage session_01CRZYeyS7fB9UuvcK7A28zY at 08:38:01, after the 08:36 page); fixed in conformance fix PR #5598 (AD-17). Earlier: PR #5498 (conformance fix 1) merged 2026-09-30 as 08bd4c5 after review round 1.
+- Last note: conformance 2/3 — review round 2 (session_01MLRqKwA27jNTvUj8xybLEV, 2026-09-30, head 7b564b4, ledger d833f1f9…): fixed the consensus finding (5 of 6 reviewers): `decide` read an issue over REST for a checker it then kept as `not_looked_up`; the paid read now needs a fresh record, while the free open-list check still reports `issue_blocked`. Before that: review round 1 (session_01UpQN9J6XxvdfZiAqtk3Zkp, 2026-09-30): the reviewer panel (5 of 6 reviewers, consensus) found that AD-17 read a page-listed checker's own activity from the page snapshot, which misses a turn taken after the page was read; fixed with AD-18 (a restart needs a fresh `get_session` record). Before that: conformance 2/3 (session_014eT9H8A38TtSRKwLaJGMTB, 2026-09-30): CONFORMANT (correctness CONCERNS) — one EVIDENCE-BASED CONCERN, demonstrated on live data: condition 4 ignored the checker's own last turn, so a checker that re-armed or started its next stage after the trigger and session pages were read looked dead (the #4723 checker started stage session_01CRZYeyS7fB9UuvcK7A28zY at 08:38:01, after the 08:36 page); fixed in conformance fix PR #5598 (AD-17). Earlier: PR #5498 (conformance fix 1) merged 2026-09-30 as 08bd4c5 after review round 1.
 
 ## Phases
 1. [x] Phase 1 — restart script, pickup step 3b, settings twin, docs   — PR #4984 merged 2026-09-30 (db80775, by the operator on Q1: A, bound to b36b423); review rounds: 5 (round 3 stale, not pushed; round 5 all rejected, no verdict bot); interventions: 0   — protected paths: `.claude/settings.json` (edited through its `workflow-templates/.claude/` twin), `.claude/commands/claude-issue-pickup.md` (no twin; exact edit in the blocked comment)
@@ -23,7 +23,7 @@
 
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT (correctness CONCERNS) — fix PR #5498 (conformance-fix-1, merged 2026-09-30 as 08bd4c5): the re-queue path skipped the `has_more` guard (pre-security); review rounds: 1
-- Run 2 — 2026-09-30: CONFORMANT (correctness CONCERNS) — fix PR #5598 (conformance-fix-2): a checker that itself ran in the last 90 minutes was restartable, so one that re-armed or handed off after the trigger and session pages were read got a duplicate check-in or stage (pre-security); review rounds: 1 (AD-18)
+- Run 2 — 2026-09-30: CONFORMANT (correctness CONCERNS) — fix PR #5598 (conformance-fix-2): a checker that itself ran in the last 90 minutes was restartable, so one that re-armed or handed off after the trigger and session pages were read got a duplicate check-in or stage (pre-security); review rounds: 2 (round 1: AD-18; round 2: issue read gated on a fresh record)
 
 ## Security pass
 
@@ -65,6 +65,7 @@
 - [source:conformance] A liveness decision built from listings read earlier in the same run must count the subject's own latest activity: anything it did after the read is invisible, so "no other session is active" alone lets a checker that just acted look dead. (files: scripts/claude_checker_restart.py)
 - [source:intervention] A freshness guard is only as fresh as the record it reads: when one input comes from an earlier listing and another from a later lookup, the decision must use the later one, and a subject known only from the listing must be kept rather than acted on. (files: scripts/claude_checker_restart.py)
 - [source:plan-deviation] The plan looked up only checkers missing from the session page; a page-listed checker that looks restartable is looked up too, within the same cap, so no restart is decided from a listing read before the lookups. (files: scripts/claude_checker_restart.py)
+- [source:intervention] Gate a paid read on the free checks that already decide the outcome: when a later free guard keeps the item whatever the read returns, run it before the read, but keep a free check that gives the more accurate reason ahead of it. (files: scripts/claude_checker_restart.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first per Q40 (issue #4910 body: "Protected paths: `.claude/**`, so use the interim twin-first rule (Q40: A)", 2026-09-29). `.claude/settings.json` changes through its twin; the `claude-issue-pickup.md` diff goes in the blocked comment; the phase PR carries a `hold` claim and the stage stops BLOCKED for the supervising session's `[claude-twin-sync]`.

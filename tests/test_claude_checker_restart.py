@@ -454,6 +454,21 @@ def test_a_failed_lookup_of_a_page_listed_checker_keeps_it(no_api):
 	assert gone["errors"] == [f"{CHECKER}: get_session reports not found for a session on the page"]
 
 
+def test_a_checker_that_was_not_looked_up_costs_no_issue_read(monkeypatch):
+	"""Review round 2 on PR #5598: with the open-issue listing empty (a failed scan), a checker
+	known only from the page used to spend a REST read on its issue before it was kept as
+	`not_looked_up`. The free check now comes first."""
+	calls = _stub(monkeypatch, {"repos/o/r/issues/7": {"state": "open", "labels": []}})
+	state = _state([_checker()], open_issues={})
+	kept = _decide(state, look_up_page=False)
+	assert _reasons(kept)[CHECKER] == "not_looked_up"
+	failed = _decide(state, {CHECKER: {"error": "classifier unavailable"}})
+	assert _reasons(failed)[CHECKER] == "not_looked_up"
+	assert calls == []
+	assert [entry["checker"] for entry in _decide(state)["restart"]] == [CHECKER]
+	assert calls == ["repos/o/r/issues/7"]
+
+
 def test_no_lookup_for_checkers_bound_or_blocked():
 	bound =_state([], [_safety_net("session_stage"), _trigger("trig_c", "x", CHECKER)])
 	assert restart.lookups_needed(bound, NOW) == []
