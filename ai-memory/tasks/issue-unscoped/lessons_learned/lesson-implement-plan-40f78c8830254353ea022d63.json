@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T04:46:40Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A new `scripts/*.py` needs its `docs/INVENTORY.md` entry in the same PR, or `tests/inventory_parity.py` (`CI / Inventory parity`) fails on the next PR into `main`.",
+  "phase": "implement_plan",
+  "pr_number": 5449,
+  "record_id": "lesson-implement-plan-40f78c8830254353ea022d63",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5326-guard-differential-trusted-loosening",
+    "file:docs/INVENTORY.md",
+    "file:tests/inventory_parity.py"
+  ]
+}

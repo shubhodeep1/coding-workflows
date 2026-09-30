@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T04:46:40Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a CLI validates a flag before an early skip, the docs must say the flag fails even on the skip path; phrase exit-code rules per input, not \"X or Y exits 2 once \u2026\".",
+  "phase": "implement_plan",
+  "pr_number": 5449,
+  "record_id": "lesson-implement-plan-9725fb3aecb259c5f4336179",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5326-guard-differential-trusted-loosening",
+    "file:agents.md",
+    "file:scripts/guard_differential.py"
+  ]
+}
