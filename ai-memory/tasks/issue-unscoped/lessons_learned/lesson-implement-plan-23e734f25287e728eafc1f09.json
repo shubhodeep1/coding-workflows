@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T01:44:14Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`GET /repos/{repo}/compare/{sha}...main` returns `ahead` (not `behind`) when `sha` is an ancestor of `main`; verify compare semantics against the live API before acting on a reviewer's reading.",
+  "phase": "implement_plan",
+  "pr_number": 5270,
+  "record_id": "lesson-implement-plan-23e734f25287e728eafc1f09",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5247-stable-twin-guard-check",
+    "file:.github/workflows/ci.yml"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T01:44:14Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A CI step that reads a token should scope it to the events that need it (`${{ github.event_name == 'push' && github.token || '' }}`): on `pull_request` the step runs PR-controlled scripts.",
+  "phase": "implement_plan",
+  "pr_number": 5270,
+  "record_id": "lesson-implement-plan-584f4437773cc5d467246061",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5247-stable-twin-guard-check",
+    "file:.github/workflows/ci.yml"
+  ]
+}

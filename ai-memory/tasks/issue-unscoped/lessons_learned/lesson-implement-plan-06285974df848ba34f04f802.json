@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T01:44:14Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Reviewer models repeatedly cite a \"CLAUDE.md \u00a79 no comments\" rule; \u00a79 covers indentation and braces only, so judge comment findings against the actual CLAUDE.md text, not the reviewer's quote.",
+  "phase": "implement_plan",
+  "pr_number": 5270,
+  "record_id": "lesson-implement-plan-06285974df848ba34f04f802",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5247-stable-twin-guard-check",
+    "file:CLAUDE.md"
+  ]
+}

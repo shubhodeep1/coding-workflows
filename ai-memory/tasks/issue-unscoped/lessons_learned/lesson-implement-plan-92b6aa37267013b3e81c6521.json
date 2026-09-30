@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T01:44:14Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A branch-gated CI check that skips when `github.event.before` is all zeros fails open on a push that creates the branch; give the creating push a fixed base (for `stable`, `main`'s tip) instead of skipping.",
+  "phase": "implement_plan",
+  "pr_number": 5270,
+  "record_id": "lesson-implement-plan-92b6aa37267013b3e81c6521",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5247-stable-twin-guard-check",
+    "file:.github/workflows/ci.yml"
+  ]
+}
