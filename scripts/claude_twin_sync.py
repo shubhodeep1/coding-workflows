@@ -8,11 +8,12 @@ CLAUDE.md §28.C (issue #4785). Claude Code never auto-approves an edit under
 changed twin file into `.claude/**` through one pull request on
 `claude/claude-twin-sync-<sha>`:
 
-* A sync PR that changes only non-guard files (commands, scripts) is merged
+* A sync PR that changes only non-guard files (commands) is merged
   by the workflow once every check run on its head has passed (CI's `lint`
   run included) and every changed file equals the default branch's twin.
 * A sync PR that touches a guard path (`.claude/hooks/**`,
-  `.claude/settings.json`, `.claude/settings.local.json`) or lists a conflict
+  `.claude/scripts/**`, `.claude/settings.json`,
+  `.claude/settings.local.json`) or lists a conflict
   is labelled `ai:claude-sync-approval` and alerted. This script never
   approves, merges, or enables auto-merge on it: the repository owner reviews
   and merges it. The `claude-twin-sync/owner-approval` commit status reports
@@ -87,14 +88,16 @@ UPSTREAM_ONLY_PATHS = frozenset({
 	"commands/validate-consumer-issue.md",
 	"commands/verify-activation.md",
 })
-# The guards that limit what sessions can do. A sync PR touching one merges
-# only by the repository owner's hand.
-GUARD_PATH_PREFIXES = ("hooks/",)
+# The guards that limit what sessions can do, and the scripts sessions run
+# through `permissions.allow` in `.claude/settings.json` with their GitHub
+# access and no prompt (issue #5609). A sync PR touching one merges only by
+# the repository owner's hand.
+GUARD_PATH_PREFIXES = ("hooks/", "scripts/")
 GUARD_PATH_FILES = frozenset({"settings.json", "settings.local.json"})
 SYNC_BRANCH_PREFIX = "claude/claude-twin-sync-"
 APPROVAL_LABEL = "ai:claude-sync-approval"
 APPROVAL_LABEL_COLOR = "b60205"
-APPROVAL_LABEL_DESCRIPTION = "Claude twin sync PR with hook/settings changes or a conflict; only the repo owner merges it"
+APPROVAL_LABEL_DESCRIPTION = "Claude twin sync PR with hook/script/settings changes or a conflict; only the repo owner merges it"
 APPROVAL_STATUS_CONTEXT = "claude-twin-sync/owner-approval"
 REQUIRED_CHECK_NAME = "lint"
 GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
@@ -372,7 +375,7 @@ def guard_violation_reason(repo: str, base: str, head: str, path: str, rel: str,
 	"""
 	local = blob_at(repo, head, path)
 	if local is None:
-		return "guard path deleted; hooks and settings are never deleted through a sync, so the repository owner merges this change by hand"
+		return "guard path deleted; hooks, scripts, and settings are never deleted through a sync, so the repository owner merges this change by hand"
 	if event == "pull_request" and not sync_pr:
 		return f"guard path changed outside a {SYNC_BRANCH_PREFIX}* PR from this repository; edit only {TWIN_ROOT}/{rel} and let the repository owner merge the sync PR"
 	twin_at_base = blob_at(repo, base, f"{TWIN_ROOT}/{rel}")
@@ -567,7 +570,7 @@ def render_body(plan: dict) -> str:
 		why = ", ".join(f"`.claude/{path}`" for path in plan["guard_paths"]) or "the conflicts above"
 		lines.append(f"Needs the repository owner: {why}. The workflow never approves or merges this PR. `{APPROVAL_STATUS_CONTEXT}` turns `success` when the owner's latest review approves the current head.")
 	else:
-		lines.append("No hook or settings change: the workflow merges this PR once every check run on its head has passed.")
+		lines.append("No hook, script, or settings change: the workflow merges this PR once every check run on its head has passed.")
 	return "\n".join(lines) + "\n"
 
 
