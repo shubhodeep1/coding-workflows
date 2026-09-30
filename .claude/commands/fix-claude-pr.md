@@ -42,6 +42,7 @@ $ARGUMENTS
    PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/claude_fix_claim.py post --repo <owner>/<repo> --pr <N> --head <head_sha> --kind <kind> --by <session id>
    ```
    Exit 1 with "head moved" → go back to step 1. Exit 2 → retry once, then report the error and end the turn. The claim is live for `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3); your push moves the head and ends it. A claim or hold counts only when it is posted as the PR's author or as `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` (CLAUDE.md §26.H); posted under any other account it is ignored, and the checker or the sweep may start a second fixer on the same head.
+   **Title.** When the PR's head ref (from `mcp__github__pull_request_read`) is `claude/implement-plan-issue-<I>-…`, the PR belongs to issue `<I>`. Only the head ref counts, never the PR text. A fresh session (not the pushing session working in place) then renames itself with `set_session_title` to `#<I> · PR <owner>/<repo>#<N> — fix <kind>`, so the operator sees the issue first. A failed rename is reported in one line and never blocks the fix.
 
 5. **Fix it.** `git fetch origin <head ref> <base ref>` and `git checkout -B <head ref> origin/<head ref>`; confirm `HEAD` is `<head_sha>` (otherwise step 1 again). Work under CLAUDE.md §12 (PR Review Mode), with §5, §6, §9, §10, §19, §20, §21 and §27 still binding. Never force-push, rebase, merge the PR, close it, or disable, skip or weaken a test or a check.
    - **`claude/implement-plan-*` head** → this PR belongs to an `/implement-plan-claude` project: follow that command's **step 7a** for `review` and `conflict`, and its step 7 **Blocked** rule for `blocked` and `ci`, on this PR only (commit subjects, the finding-by-finding judgement, the verdict-bot rule, removing `ai:review-blocked`). Record the fix in the project log only if you are one of the project's stage sessions. Never start a stage session or arm the project's checker: the project's own checker sees the pushed head.
@@ -59,7 +60,7 @@ $ARGUMENTS
    - **You are a fresh session** → you are now the PR's fixer: register with the existing checker (§26.B step 1b) or, when there is none, arm one (§26.B).
    - **`claude/implement-plan-*` head** → skip this step; the project checker covers the PR.
 
-8. **Report** in chat: the PR, the kind, the head you claimed, what you changed with `file:line` and test evidence (or the hold and its question), the pushed commit, and the check-in ids. Rename this session (`set_session_title` with your session id from step 0, never another session's) to `PR <owner>/<repo>#<N> — <fixed <kind> | on hold: <kind>>`. Send a `PushNotification` only for a hold. Never archive yourself: the report is what the user opens.
+8. **Report** in chat: the PR, the kind, the head you claimed, what you changed with `file:line` and test evidence (or the hold and its question), the pushed commit, and the check-in ids. Rename this session (`set_session_title` with your session id from step 0, never another session's) to `PR <owner>/<repo>#<N> — <fixed <kind> | on hold: <kind>>`, with `#<I> · ` in front when step 4 found the PR's issue. Send a `PushNotification` only for a hold. Never archive yourself: the report is what the user opens.
 
 ## Rules
 
