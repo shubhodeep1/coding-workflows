@@ -455,6 +455,9 @@ class FakeGitHub:
 			raise pp.check_in_status.ReadError("proxy 403")
 		if self.fail_search and path.startswith("search/"):
 			raise pp.check_in_status.ReadError("gh: This GitHub API path is not available (HTTP 403)")
+		# A list of search objects is served one per `page=` number.
+		if isinstance(self.search, list):
+			return self.search[int(path.rsplit("page=", 1)[1]) - 1]
 		return self.search
 
 	def post(self, path, body):
@@ -960,9 +963,11 @@ def test_lookup_finds_the_report_in_an_issue_body(tmp_path, github, twin):
 	assert result["command"] == "gh api repos/o/r/issues --jq '.[]'"
 	assert result["title"] == "implement-issue-claude — #4707"
 	assert result["event"] == "PermissionRequest" and result["tool_name"] == "Bash"
-	assert len(fake.reads) == 1 and "search/issues?q=repo%3Ashubhodeep1%2Fcoding-workflows%20%22" in fake.reads[0]
+	assert "search/issues?q=repo%3Ashubhodeep1%2Fcoding-workflows%20%22" in fake.reads[0]
 	# Issue #5126: the search is read 100 hits per page, not a 3-hit window.
 	assert fake.reads[0].endswith("&sort=updated&order=desc&per_page=100&page=1")
+	# The issue's comments are read too (its count is unknown): a report there would be newer than the body.
+	assert fake.reads[1:] == [f"repos/{FILING}/issues/901/comments"]
 
 
 def test_lookup_finds_the_newest_trusted_comment(tmp_path, github, twin):
@@ -992,8 +997,8 @@ def test_lookup_falls_back_to_the_pattern_issues_when_search_is_refused(tmp_path
 	assert result["command"] == "gh api repos/o/r/issues --jq '.[]'"
 	assert fake.reads[0].startswith("search/issues?")
 	assert fake.reads[1] == f"repos/{FILING}/issues?labels=ai%3Apermission-prompt&state=all&sort=updated&direction=desc"
-	# Issue 7's comments are read before 901's body matches; nothing past the match.
-	assert fake.reads[2:] == [f"repos/{FILING}/issues/7/comments"]
+	# Issue 7's comments are read, then 901's (its body matches, but a comment report would be newer).
+	assert fake.reads[2:] == [f"repos/{FILING}/issues/7/comments", f"repos/{FILING}/issues/901/comments"]
 
 
 def test_lookup_fallback_finds_a_report_past_the_three_newest_issues(tmp_path, github, twin):
@@ -1051,6 +1056,96 @@ def test_lookup_incomplete_search_is_a_failed_read_not_a_negative(tmp_path, gith
 	assert twin.main(["lookup", "--session", SESSION, "--repo", FILING]) == 2
 	output = json.loads(capsys.readouterr().out)
 	assert output["found"] is False and "incomplete results" in output["error"]
+
+
+def test_lookup_incomplete_results_on_a_later_search_page_is_a_failed_read(tmp_path, github, twin, capsys):
+	# The paginated helper kept only page 1's fields, so a later page's
+	# `incomplete_results: true` was dropped and lookup answered `found: false`.
+	_reported_body(tmp_path, github)
+
+	def hits(numbers):
+		return [{"number": n, "html_url": f"i{n}", "author_association": "OWNER", "body": "mentions the session", "comments": 0} for n in numbers]
+
+	pages = [
+		{"total_count": 150, "incomplete_results": False, "items": hits(range(1, 101))},
+		{"total_count": 150, "incomplete_results": True, "items": hits(range(101, 151))},
+	]
+	fake = github(search=pages)
+	with pytest.raises(pp.check_in_status.ReadError, match="incomplete results"):
+		twin.lookup(SESSION, FILING)
+	assert [read.rsplit("page=", 1)[1] for read in fake.reads] == ["1", "2"]
+	assert twin.main(["lookup", "--session", SESSION, "--repo", FILING]) == 2
+	assert "incomplete results" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_paginated_search_keeps_incomplete_results_from_any_page(github):
+	fake = github(search=[
+		{"total_count": 101, "incomplete_results": False, "items": [{"n": n} for n in range(100)]},
+		{"total_count": 101, "incomplete_results": True, "items": [{"n": 100}]},
+	])
+	result = pp.check_in_status._gh_api_paginated_object("search/issues?q=x", "items")
+	assert result["incomplete_results"] is True and len(result["items"]) == 101 and len(fake.reads) == 2
+	github(search={"total_count": 1, "items": [{"n": 1}]})
+	assert "incomplete_results" not in pp.check_in_status._gh_api_paginated_object("search/issues?q=x", "items")
+
+
+def test_lookup_returns_the_newest_report_not_the_most_recently_updated_issue(tmp_path, github, twin):
+	# Another session's comment made issue 1, which holds this session's older
+	# report, the most recently updated issue; lookup returned that older prompt.
+	body = _reported_body(tmp_path, github)
+	older = body.replace("--jq", "--older")
+	issues = [
+		{"number": 1, "html_url": "i1", "author_association": "OWNER", "body": "pattern A", "comments": 2, "updated_at": "2026-09-30T10:00:00Z"},
+		{"number": 2, "html_url": "i2", "author_association": "OWNER", "body": "pattern B", "comments": 1, "updated_at": "2026-09-30T09:30:00Z"},
+	]
+	comments = {
+		1: [
+			{"html_url": "c1", "author_association": "OWNER", "body": older, "created_at": "2026-09-30T08:00:00Z"},
+			{"html_url": "c1b", "author_association": "OWNER", "body": "another session", "created_at": "2026-09-30T10:00:00Z"},
+		],
+		2: [{"html_url": "c2", "author_association": "OWNER", "body": body, "created_at": "2026-09-30T09:00:00Z"}],
+	}
+	fake = github(fail_search=True, issues=issues, comments=comments)
+	result = twin.lookup(SESSION, FILING)
+	assert result["found"] is True and result["comment_url"] == "c2" and result["command"] == "gh api repos/o/r/issues --jq '.[]'"
+	assert fake.reads[2:] == [f"repos/{FILING}/issues/{n}/comments" for n in (1, 2)]
+
+
+def test_lookup_stops_at_an_issue_updated_before_the_newest_report(tmp_path, github, twin):
+	body = _reported_body(tmp_path, github)
+	issues = [
+		{"number": 1, "html_url": "i1", "author_association": "OWNER", "body": "pattern A", "comments": 1, "updated_at": "2026-09-30T10:00:00Z"},
+		{"number": 2, "html_url": "i2", "author_association": "OWNER", "body": "pattern B", "comments": 1, "updated_at": "2026-09-30T09:59:00Z"},
+		{"number": 3, "html_url": "i3", "author_association": "OWNER", "body": "pattern C", "comments": 1, "updated_at": "2026-09-30T09:00:00Z"},
+	]
+	comments = {
+		1: [{"html_url": "c1", "author_association": "OWNER", "body": body, "created_at": "2026-09-30T09:30:00Z"}],
+		2: [{"html_url": "c2", "author_association": "OWNER", "body": "another session", "created_at": "2026-09-30T09:59:00Z"}],
+	}
+	fake = github(fail_search=True, issues=issues, comments=comments)
+	assert twin.lookup(SESSION, FILING)["comment_url"] == "c1"
+	# Issue 2 was updated after the 09:30 report, so it is checked; issue 3 was not, so nothing in it can be newer.
+	assert fake.reads[2:] == [f"repos/{FILING}/issues/{n}/comments" for n in (1, 2)]
+
+
+def test_lookup_prefers_a_comment_report_over_the_issue_body_and_untimed_matches(tmp_path, github, twin):
+	body = _reported_body(tmp_path, github)
+	newer = body.replace("--jq", "--newer")
+	issues = [
+		# No timestamps: the issue's comment report still beats its own body.
+		{"number": 1, "html_url": "i1", "author_association": "OWNER", "body": body, "comments": 1},
+		{"number": 2, "html_url": "i2", "author_association": "OWNER", "body": "other", "comments": 1, "updated_at": "2026-09-30T10:00:00Z"},
+	]
+	comments = {
+		1: [{"html_url": "c1", "author_association": "OWNER", "body": body}],
+		2: [{"html_url": "c2", "author_association": "OWNER", "body": newer, "created_at": "2026-09-30T09:00:00Z"}],
+	}
+	github(fail_search=True, issues=issues, comments=comments)
+	result = twin.lookup(SESSION, FILING)
+	# A timed match replaces an untimed one; an untimed one never replaces a timed one.
+	assert result["comment_url"] == "c2" and "--newer" in result["command"]
+	github(fail_search=True, issues=issues[:1], comments={1: comments[1]})
+	assert twin.lookup(SESSION, FILING)["comment_url"] == "c1"
 
 
 def test_lookup_not_found_and_read_failure(tmp_path, github, twin, capsys):
