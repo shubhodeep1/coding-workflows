@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/check_in_status.py: 161-162, 777-783 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_verified_review_redispatch` treats completed runs with `startup_failure` or `skipped` conclusions as proof of re-dispatch, even when the reviewer never ran.\n  WHY: Such runs can set `stall_redispatched=true`, causing `/fix-claude-pr` to hold and ask instead of retrying an unreviewed PR; severity was rated NIT by deepseek_deepseek-v4-pro and z-ai_glm-5_2, and MAJOR by qwen_qwen3_7-plus, so the highest severity is used.\n- .claude/scripts/check_in_status.py: 780-783 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The filter counts every completed run except `cancelled` as a verified re-dispatch, including `startup_failure`.\n  WHY: A `startup_failure` can complete without starting the workflow or running review jobs, yet this code sets `stall_redispatched=True` and `.claude/commands/fix-claude-pr.md:39-45` holds and asks instead of retrying the review that never ran.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/scripts/check_in_status.py: `REDISPATCH_UNCOUNTED_CONCLUSIONS = (\"cancelled\",)` (line ~162) and `_verified_review_redispatch` (line ~780-783) | severity=low | confidence=3\n  PROBLEM: The conclusion filter treats every completed workflow run except a cancelled one as proof the review was re-dispatched. Runs with conclusion `startup_failure` and `skipped` count, including zero-job runs where the reviewer panel never started.\n  WHY: A `startup_failure` on the default branch's `review_autofix.yml` (e.g., the file exceeded 512 KB) would block every `claude/*` fixer from re-dispatching review after the first attempt. The fixer holds and asks a human instead of retrying, when retrying the same broken workflow file would fail again and the human is already notified. The plan's AD-3 explicitly chose this behavior with the rationale that a failing or skipped run would fail again on retry, so holding and asking is better than looping. The human still receives a PushNotification and can diagnose the systemic issue. The remaining risk is minor: the review is not skipped, only held with a notification.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/check_in_status.py: 780-783; tests/test_check_in_status_hand_back.py:899-903 | severity=high | confidence=5\n  PROBLEM: The filter counts every completed run except `cancelled` as a verified re-dispatch, including `startup_failure`.\n  WHY: A `startup_failure` run can complete without starting the workflow or running any review jobs. This code still sets `stall_redispatched=True`; `.claude/commands/fix-claude-pr.md:39-45` then holds the PR and asks for human input instead of retrying the review that never ran.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/check_in_status.py: 161 (REDISPATCH_UNCOUNTED_CONCLUSIONS) and 780-783 (_verified_review_redispatch filter) | severity=high | confidence=5\n  PROBLEM: The filter treats every completed run except cancelled as proof of redispatch, including runs with conclusion startup_failure or skipped. A startup_failure can be a zero-job run where the workflow failed to start (syntax error, missing secret, etc.) and the reviewer never ran. A skipped run means the workflow was skipped entirely. Neither actually reviewed the PR.\n  WHY: If a startup_failure or skipped run matches the PR title, default branch, and timestamp checks, the code sets stall_redispatched=true. /fix-claude-pr then holds and asks instead of retrying the review, leaving the unreviewed head stalled. This contradicts the plan's reasoning in AD-3 (\"a failing or skipped run would fail again, so hold and ask\"), which assumes the run actually executed. The test at tests/test_check_in_status_hand_back.py:899-903 explicitly asserts this behavior for skipped and startup_failure conclusions.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/check_in_status.py:777-783 | severity=low | confidence=2\n  PROBLEM: A dispatched review run that ends with `conclusion: \"startup_failure\"` (or run-level `skipped`) is treated as a completed re-dispatch, so `stall_redispatched` is set true and `/fix-claude-pr` holds+asks instead of retrying. `startup_failure` is a zero-job run where the reviewer panel never ran (the workflow could not start \u2014 e.g., a transient GitHub issue or a workflow-file problem on the default branch, as in this repo's own #4327), which is semantically closer to `cancelled` than to `failure`.\n  WHY: The head is unreviewed, the re-dispatch reviewed nothing, and the fixer asks a human instead of retrying once. The plan's AD-3 reasoning (\"a failing or skipped run would fail again, so hold and ask\") is defensible for `failure` but debatable for `startup_failure`, which is often transient. The security property the finding addresses is preserved \u2014 a `startup_failure` run is a real GitHub-recorded dispatch from the default branch that a PR author cannot forge \u2014 so this is a safe-direction tradeoff, not a spoofing regression. Recorded as AD-3 pending human review; `test_every_completed_conclusion_but_cancelled_counts` pins the current choice.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9c8162d1c9a6201e2ef006e576eefa1516def9474e72969470c8da0de30a8870",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5387,
+    "run_id": "36714243488",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36714243488",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930132155_52a03cdc57",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5387,
+    "run_id": "36714243488"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T13:21:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
