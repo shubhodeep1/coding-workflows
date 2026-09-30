@@ -4,19 +4,19 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-claude-fixer-unattended-convergence   Final PR: #4648 draft
 - Status: BLOCKED
-- Stage: phase 4/4
+- Stage: phase 4/4 — review round
 - Activation: not started
-- Waiting on: PR #5215: twin sync (the supervising session copies the twins and the `claude-issue-pickup.md` text into `.claude/**`, then review)
+- Waiting on: PR #5215: twin sync of the review round 1 fixes (the supervising session copies `stale_sessions.py` and `fix-claude-pr.md` from their twins into `.claude/**`, then review)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01CUoZtWt9aXXvwPvx9QwhAx (idle; no wait armed while the phase 4 PR holds for the twin sync)
-- Last updated: 2026-09-29
-- Last note: phase 4 implemented twin-first (Q40): `stale_sessions.py`, the `settings.json` and `fix-claude-pr.md` changes are in their `workflow-templates/.claude/**` twins only; `.claude/commands/claude-issue-pickup.md` has no twin, so its exact new text is in the twin-sync blocker comment; the phase PR carries a hold claim
+- Check-in: checker session_01CUoZtWt9aXXvwPvx9QwhAx (idle; no wait armed while PR #5215 holds for the round 1 twin sync)
+- Last updated: 2026-09-30
+- Last note: review round 1 on 029dcaf (session_01AKsXyhBbABJ9GGe1YN7daA): all three findings valid and fixed in the twins only (twin-first per Q40): `_load_document` accepts only one wrapper line that `_page` accepts, `record_stalls` pops `permission_mode` with a default, and `/fix-claude-pr` step 2's `retry` end runs step 8's permission prompt report; PR held again for the twin sync
 
 ## Phases
 1. [x] Phase 1 — Checks-pending, not a hand-off (evidence artifact + helper, checks-pending marker, merge-check gate and step)   — PR #4651 merged 2026-09-27 (squash b7745e7, by the operator under D8 after the supervising session verified every round-1 rejection); review rounds: 1; interventions: 0
 2. [x] Phase 2 — GPT judge for Claude-fixer PRs (judge dispatch input, Claude mode in review_rb_judge.sh, sticky rulings, fixer docs REST dispatch)   — protected paths: .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md; PR #4691 merged 2026-09-28 (squash e1979d2, by the operator under D8 after the hold); `.claude` edits applied by the operator in 6b8a1a3; review rounds: 3 (round 1, 2026-09-28: follow-up issue only when the PR is set to merge, outcome-accurate verdict text, unreadable judge-fix count decides nothing, cautious duplicate rulings, distinct decide-failure skip reason; prompt-guard finding rejected as the plan's accepted risk; round 2, 2026-09-28: all 7 findings and the task gap rejected, see the PR reply; project-branch merge pushed); interventions: 0
 3. [x] Phase 3 — Checkers never ask; reasoning before holds; held backoff (retry_after_minutes)   — protected paths: .claude/commands/implement-plan-claude.md, .claude/commands/fix-claude-pr.md, .claude/commands/implement-issue-claude.md, .claude/scripts/check_in_status.py, .claude/scripts/claude_fix_claim.py; implemented twin-first (Protected-path approval below); PR #4904 merged 2026-09-29 (merge commit 15a1b1c, by the master session under D8 / Q46 after every round-2 finding was rejected with a reason, comment 5887278304); two `[claude-twin-sync]` copies by the supervising session; review rounds: 2 as the workflow counts them (hand-offs on d4d4a16, ee73d4a, c03e646, 5e7a15c and 688b8a6; the count restarted after the twin-sync pushes; every finding on 688b8a6 was rejected); interventions: 0
-4. [ ] Phase 4 — Session janitor (stale_sessions.py run by the hourly Claude issue pickup)   — protected paths: .claude/scripts/stale_sessions.py, .claude/commands/claude-issue-pickup.md, .claude/settings.json, .claude/commands/fix-claude-pr.md; implemented twin-first (Protected-path approval below) from the project branch at f476447; PR #5215 open, held for the twin sync; review rounds: 0; interventions: 0
+4. [ ] Phase 4 — Session janitor (stale_sessions.py run by the hourly Claude issue pickup)   — protected paths: .claude/scripts/stale_sessions.py, .claude/commands/claude-issue-pickup.md, .claude/settings.json, .claude/commands/fix-claude-pr.md; implemented twin-first (Protected-path approval below) from the project branch at f476447; PR #5215 open; twin sync 029dcaf by the supervising session; review rounds: 1 (round 1, 2026-09-30: stray wrapper JSON lines, `permission_mode` pop default, `retry` path prompt report; all fixed, held again for the twin sync); interventions: 0
 
 ## Conformance
 
@@ -70,6 +70,7 @@
 - [source:intervention] Reviewers repeatedly flag a `review_autofix.yml` step for not setting `PR_NUMBER` when it inherits it from the `codex-agent` job env; reject with the job-level env line and the contract test that pins it, and do not add a redundant step-level copy. (files: .github/workflows/review_autofix.yml, tests/test_review_autofix_claude_fixer_mode.py)
 - [source:plan-deviation] A project-branch sync with main that conflicts in `.claude/**` cannot be finished by an unattended stage: resolve it on a side branch with the `.claude/**` files taken from the twins, and have the supervising session copy the twins and fast-forward the project branch; a direct push of the sync to the project branch can also be refused by the Auto-mode classifier as "Auto-Mode Bypass" (#5018). (files: .claude/commands/implement-plan-claude.md)
 - [source:plan-deviation] Live claude.ai session titles drift from the documented formats (`Issue #N — implement`, fixers without a repository, `#N · ` prefixes, project checkers renamed with a `PR #N — ` prefix), and a saved `list_sessions` result is wrapped in the harness's untrusted-data text; any script that selects sessions by title must parse the wrapper and match the live variants without catching a renamed checker. (files: .claude/scripts/stale_sessions.py)
+- [source:intervention] A fallback that scans wrapper text for a JSON payload must accept only a line that passes the payload's shape check and reject more than one match, or a stray `[]` line reads as an empty page and the run silently does nothing. (files: .claude/scripts/stale_sessions.py)
 
 ## Notes
 - Protected-path approval: phase 4 — twin-first per Q40 (2026-09-29)

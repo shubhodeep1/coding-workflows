@@ -25,7 +25,7 @@ $ARGUMENTS
      - `held` → a human decision is pending (see step 3). Report the hold and end the turn.
      - `claimed` → another fixer owns this head (your own claim and your sweep reservation were ignored in step 1). Report and end the turn; never fix alongside it.
      - `open` → nothing is due. If you are a fresh session, make sure the PR has a §26 check-in (step 7) and end the turn.
-   - `retry` (exit 2) → the read failed: run step 1 once more; if it fails again, report the error and end the turn.
+   - `retry` (exit 2) → the read failed: run step 1 once more; if it fails again, run step 8's permission prompt report, report the error, and end the turn.
    - `hand_back_fixer` (`conflict`, `review-round`, `ci-failed`, `blocked`) → continue. `kind` is the claim kind: `conflict`, `review`, `ci`, `blocked`.
 
 3. **Cap.** For `kind` other than `review`, when `cap_reached` is true (`hand_backs` ≥ `cap`, default 3: CLAUDE.md §26.H), do not fix. Hold as [Holds](#holds) describes, with `--reason cap`, then send one `PushNotification` (`<repo>#<N>: Claude fix cap reached (<kind>) — decision needed in "<session title>"`), and ask in the CLAUDE.md §2 Q/A format:

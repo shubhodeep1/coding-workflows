@@ -348,6 +348,36 @@ def test_harness_wrapper_text_is_accepted(monkeypatch, tmp_path, capsys):
 	assert code == 0 and _archived(result) == ["session_a"]
 
 
+def test_stray_json_lines_in_wrapper_text_are_not_read_as_the_page(monkeypatch, tmp_path, capsys):
+	_stub(monkeypatch, {"repos/o/r/pulls/12": _merged_pr()})
+	page = {"ccr": {"data": [_session("session_a", "PR #12 status check-in")], "has_more": False, "last_id": None}}
+	path = tmp_path / "sessions.json"
+	path.write_text(
+		'<other-session nonce="abc" untrusted="true">\n[]\n{}\n{"note": 1}\n'
+		f"    {json.dumps(page)}\n"
+		'</other-session nonce="abc">\n',
+		encoding="utf-8",
+	)
+	triggers = _write(tmp_path, "t.json", {"data": []})
+	code = janitor.main(["--sessions", str(path), "--triggers", str(triggers), "--stall-log-dir", str(tmp_path / "stalls")], now=NOW)
+	result = json.loads(capsys.readouterr().out)
+	assert code == 0 and _archived(result) == ["session_a"]
+
+
+def test_two_result_objects_in_wrapper_text_exit_2(tmp_path, capsys):
+	path = tmp_path / "sessions.json"
+	path.write_text(
+		'<other-session nonce="abc" untrusted="true">\n'
+		f'{json.dumps({"data": []})}\n{json.dumps({"ccr": {"data": [_session("session_a", "PR #12 status check-in")]}})}\n'
+		'</other-session nonce="abc">\n',
+		encoding="utf-8",
+	)
+	triggers = _write(tmp_path, "t.json", {"data": []})
+	code = janitor.main(["--sessions", str(path), "--triggers", str(triggers)], now=NOW)
+	result = json.loads(capsys.readouterr().out)
+	assert code == 2 and result["archive"] == [] and "expected one" in result["error"]
+
+
 def test_pages_are_merged_and_deduplicated(monkeypatch, tmp_path, capsys):
 	calls = _stub(monkeypatch, {"repos/o/r/pulls/12": _merged_pr()})
 	session = _session("session_a", "PR #12 status check-in")
@@ -456,6 +486,14 @@ def test_a_new_prompt_on_the_same_session_is_a_new_stall(monkeypatch, tmp_path, 
 	assert first["stalled_on_prompt"][0]["new"] is True and second["stalled_on_prompt"][0]["new"] is True
 
 
+def test_record_stalls_tolerates_a_stall_without_permission_mode(tmp_path):
+	stall = {"id": "session_s", "title": "t", "updated_at": "2026-09-01T00:00:00Z", "minutes": 45,
+		"needs_action": "Approve or deny Bash", "task_summary": ""}
+	janitor.record_stalls([stall], tmp_path / "stalls", NOW)
+	record = json.loads((tmp_path / "stalls" / "stalled-sessions.jsonl").read_text(encoding="utf-8"))
+	assert stall["new"] is True and record["permission_mode"] == ""
+
+
 def test_stall_records_are_grouped_by_permission_prompts(monkeypatch, tmp_path, capsys):
 	_stub(monkeypatch, {})
 	_run(tmp_path, capsys, [_blocked("session_s", minutes_ago=45), _blocked("session_t", minutes_ago=50)])
@@ -507,6 +545,8 @@ def test_fix_claude_pr_runs_the_prompt_report_before_its_report(path):
 	report_step = text.split("8. **Report**", 1)[1].split("## Holds", 1)[0]
 	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/permission_prompts.py file --session-label <your session id>" in report_step
 	assert "`Permission prompts:` line" in report_step
+	retry_path = text.split("   - `retry` (exit 2)", 1)[1].split("\n", 1)[0]
+	assert "run step 8's permission prompt report, report the error, and end the turn" in retry_path
 
 
 def test_ci_runs_this_file():
