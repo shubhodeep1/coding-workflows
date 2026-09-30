@@ -1,7 +1,9 @@
 """Contract for the intentional skip-AI marker rule and the gate's skip notice (issue #4985).
 
 One rule, three copies: `has_skip_ai_marker` in `.claude/scripts/check_in_status.py`
-(also used by `scripts/claude_pr_sweep.py`), and the `SKIP_AI_BODY_AWK` program in
+(also used by `scripts/claude_pr_sweep.py`; loaded here from its
+`workflow-templates/.claude/` twin, which `tests/test_check_in_status.py` holds
+equal to it), and the `SKIP_AI_BODY_AWK` program in
 the review gate (`.github/workflows/review_autofix.yml`) and in
 `.github/workflows/review_autofix_sweep.yml`. Every copy must answer the same case
 table. The gate's end-of-step skip log and its one-comment-per-head notice for
@@ -25,7 +27,8 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 GATE_WF = ROOT / ".github" / "workflows" / "review_autofix.yml"
 SWEEP_WF = ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
-_spec = importlib.util.spec_from_file_location("check_in_status", ROOT / ".claude" / "scripts" / "check_in_status.py")
+_spec = importlib.util.spec_from_file_location("check_in_status",
+	ROOT / "workflow-templates" / ".claude" / "scripts" / "check_in_status.py")
 checker = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(checker)
 
@@ -54,6 +57,21 @@ CASES = [
 	("Phase 1", "[SKIP AI]", False),
 	("Phase 1", "", False),
 	("", "", False),
+	# Fences close only on a matching fence (issue #5377).
+	("Phase 1", "````md\n```\n[skip ai]\n```\n````", False),
+	("Phase 1", "````md\n```\n```\n````\n[skip ai]", True),
+	("Phase 1", "````\n```\n````\n[skip ai]", True),
+	("Phase 1", "```\ncode\n`````\n[skip ai]", True),
+	("Phase 1", "~~~~\n~~~\n[skip ai]\n~~~~", False),
+	("Phase 1", "```\n~~~\n[skip ai]\n```", False),
+	("Phase 1", "~~~\n```\n[skip ai]\n~~~", False),
+	("Phase 1", "```\n```js\n[skip ai]\n```", False),
+	("Phase 1", "```\n    ```\n[skip ai]\n```", False),
+	("Phase 1", "```\n\t```\n[skip ai]", False),
+	("Phase 1", "```\ncode\n[skip ai]", False),
+	("Phase 1", "```\ncode\n``` x\n[skip ai]", False),
+	("Phase 1", "   ```py \t\ncode\n   ```\t \r\n[skip ai]\r", True),
+	("Phase 1", "\t```\n[skip ai]\n```\n[skip ai]", True),
 ]
 
 
