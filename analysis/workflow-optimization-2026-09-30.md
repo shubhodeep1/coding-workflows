@@ -127,3 +127,172 @@ Among the **355 non-skipped runs**, 349 succeeded (**98.3%**); this denominator 
 | Serena — no target observed | 0 / 0 | 0 observed | 0 | 0 | 0 |
 
 **Collection gap:** folder `summary.json` counts **16 downloaded parsed logs**; the assembled analysis counts **115 `log_parsed` rows**, including **85 `not_selected`** and **14 `empty_archive`** rows. Its 113-sample wall-clock percentile therefore answers a different question from the folder’s 16-sample percentile. Report downloaded-log coverage, summarized-only coverage, and zero-filled rows separately before publishing another aggregate.
+
+## Deep Audit — Workflows & Scripts (2026-09-30)
+
+### Section 1: Bug & Correctness Sweep
+
+Read-only checks covered all 52 `.github/workflows/*.yml` files and 159 `scripts/*.sh` and `scripts/*.py` files. YAML parsing, Python AST parsing, and Bash syntax checks found no parse errors. The findings below concern behavior, not syntax. Previously reported inventory drift, check-run polling latency, and log-collector double counting are not repeated.
+
+- **ID:** SEC-001 · **File:** `.github/workflows/check_failure_triage.yml:219-225`; `scripts/check_failure_triage.sh:281-331` · **Severity:** Critical · **Category:** `security`  
+  **Description:** Triage checks out the PR head using `GH_PAT` without `persist-credentials: false`, then passes PR text and check-run logs to Codex with `--sandbox danger-full-access`. Removing `GH_TOKEN` from the child environment does not address credentials persisted by checkout. **Inference:** prompt-injected diagnosis could read or use checkout credentials; confirm the effective checkout credential storage in this job. [NEEDS VERIFICATION]  
+  **Recommended fix:** Set `persist-credentials: false` on both triage checkouts, remove any persisted Git authentication before model execution, and run diagnosis read-only and isolated from GitHub credentials. Keep authenticated issue creation in a separate post-model step; `.github/workflows/workflow-failure-heal-intake.yml:82-87` and `scripts/workflow_failure_heal_intake.sh:670-680` provide existing credential and sandbox patterns.
+
+- **ID:** BUG-001 · **File:** `scripts/orchestrate_poll_process.sh:20664-20685` (also `scripts/orchestrate_poll_process.sh:19853-19862`, `scripts/orchestrate_poll_process.sh:23748-23749`) · **Severity:** High · **Category:** `bug`  
+  **Description:** The poller checks a fetched PR head and its check-runs, but subsequently invokes `gh pr merge` without `--match-head-commit`. **Inference:** a push between those operations can make the merge request apply to a head that was not checked; auto-merge enrollment also needs later-head reauthorization.  
+  **Recommended fix:** Require a validated, nonempty head SHA and pass `--match-head-commit` on every auto and direct merge branch, as `scripts/review_enable_auto_merge.sh:282-286` does. On a changed head, defer to the next review/synchronize run; separately clear or reauthorize an outstanding auto-merge setting after a push.
+
+- **ID:** SEC-002 · **File:** `scripts/gh_helpers.sh:444-490`; `scripts/gh_helpers.sh:511-558` · **Severity:** High · **Category:** `security`  
+  **Description:** Retry failures print unredacted `$*` and finally dump raw stderr. Unlike the separately escaped diagnostic at lines 460-461, arguments can contain an entire `-f body=...` comment—for example the editor-summary post at `.github/workflows/review_autofix.yml:5113`. **Inference:** a failed request can place untrusted multiline content in Actions logs, including lines resembling workflow commands; whether a particular payload is interpreted depends on the runner and failure path. [NEEDS VERIFICATION]  
+  **Recommended fix:** Log only a sanitized command name, endpoint template, attempt, and failure class. Do not print request bodies, authorization arguments, or raw stderr; apply the existing `_gh_actions_escape` approach to bounded, redacted diagnostics in both retry helpers.
+
+- **ID:** BUG-002 · **File:** `scripts/check_failure_triage.sh:151-177`; `scripts/check_failure_triage.sh:358-395` · **Severity:** Medium · **Category:** `bug`  
+  **Description:** If the triage step’s PR metadata fetch fails, it substitutes `{}`. Empty state and head-repository fields pass both subsequent skip checks, so the script can proceed to create a triage issue without reconfirming that the PR is open and same-repository. The earlier workflow job checks origin, but that result can become stale before this fetch. **Inference:** this matters when the PR changes state or the later fetch is unavailable. [NEEDS VERIFICATION]  
+  **Recommended fix:** Require a successful, parseable PR response with `state=open` and an exact head-repository match immediately before triage issue creation. On an unknown response, alert and stop rather than treating missing fields as approval.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are **calls in the stated code path**, not measured production totals; pagination and retries can increase request counts.
+
+- **ID:** API-001 · **File:** `scripts/orchestrate_poll_process.sh:13933-13936` · **Severity:** Medium · **Category:** `api-redundancy`  
+  **Description:** One reissue reads the same issue endpoint twice, once for `.title` and once for `.body`. **Current → proposed:** 2 GETs → 1 GET per reissue. This pinpoints a case within the earlier report’s broader orchestrator-lookup observation.  
+  **Recommended fix:** Fetch one issue JSON object and extract both fields locally; where several issues need hydration, extend the existing `_fetch_candidate_issue_details_graphql` pattern in `scripts/orchestrate_poll_process.sh:14686-14756`, retaining its cache-miss fallback.
+
+- **ID:** API-002 · **File:** `scripts/orchestrate_poll_process.sh:10431-10444` · **Severity:** Low · **Category:** `api-redundancy`  
+  **Description:** On a snapshot miss, final-PR reconciliation reads the identical PR endpoint separately for state and `merged_at`. **Current → proposed:** 2 GETs → 1 GET per miss; a single response also avoids mixing states from two instants.  
+  **Recommended fix:** Use one `_fetch_pr_json` response and the same `_jq_field` extraction already used for `final_pr_json_snapshot` at lines 10436-10439. No new batching helper is needed.
+
+- **ID:** BATCH-001 · **File:** `scripts/orchestrate_poll_process.sh:15707-15714` · **Severity:** Medium · **Category:** `api-batching`  
+  **Description:** Standalone recovery executes seven `gh issue list` requests, one per phase label, before its candidate-details GraphQL prefetch. **Current → proposed:** 7 list calls → potentially 1 aliased GraphQL call when each result fits its page, plus required pagination or REST fallback. Query cost and parity with the present `--limit 1000` need testing. [NEEDS VERIFICATION]  
+  **Recommended fix:** Extend `_fetch_standalone_marker_issues_graphql`’s aliased-search pattern (`scripts/orchestrate_poll_process.sh:14578-14642`) to return phase-label sets, detect every `hasNextPage`, and preserve the seven-list path when results cannot be proved complete.
+
+- **ID:** BATCH-002 · **File:** `scripts/orchestrate_poll_process.sh:15681-15695` · **Severity:** Medium · **Category:** `api-batching`  
+  **Description:** The tracking-issue loop makes one paginated comments GET per row before extracting state. **Current → proposed:** `T` logical GETs → `ceil(T/25)` GraphQL batches for rows whose required state comments fit the batched response, **plus** per-row fallback for incomplete histories. Old or chunked state comments may require full REST pagination. This is a more specific candidate under the earlier report’s orchestrator per-row lookup observation. [NEEDS VERIFICATION]  
+  **Recommended fix:** Extend `_fetch_candidate_issue_details_graphql` (`scripts/orchestrate_poll_process.sh:14686-14815`) with completeness information for these tracking issues; call `extract_latest_valid_orchestrator_state` on prefetched comments only when complete, otherwise retain the existing paginated GET.
+
+- **ID:** API-003 · **File:** `scripts/gh_helpers.sh:74-94`; `scripts/gh_helpers.sh:439-486` · **Severity:** Medium · **Category:** `api-redundancy`  
+  **Description:** `_is_gh_permanent_failure` recognizes several permanent errors but not an HTTP 401. With the default retry limit, a stable bad-credentials response takes up to five attempts with exponential sleeps. **Current → proposed:** up to 5 requests → 1 request per 401.  
+  **Recommended fix:** Extend the existing permanent-failure classifier for verified authentication failures, before backoff in both `gh_retry` and `gh_retry_to_file`; keep rate-limit handling separate.
+
+- **ID:** API-004 · **File:** `scripts/check_failure_triage.sh:391-395`; `scripts/gh_helpers.sh:439-486` · **Severity:** Medium · **Category:** `api-redundancy`  
+  **Description:** Issue creation uses the generic retry helper after an open-issue dedup read at `scripts/check_failure_triage.sh:219-231`. **Inference:** if GitHub accepts a create but its response is lost, the helper can submit the non-idempotent create again before dedup is rerun. **Current → proposed:** up to 5 POST attempts → 1 POST, with 1 reconciliation read only after an ambiguous outcome. [NEEDS VERIFICATION]  
+  **Recommended fix:** Add a single-attempt mutation path to `gh_helpers.sh`; on ambiguous failure, search for the existing fingerprint marker before another create. Follow the marker-reconciliation and process-cache pattern in `scripts/orchestrate_poll_process.sh:5928-5962`.
+
+- **ID:** API-005 · **File:** `scripts/review_merge_train.sh:255-290` · **Severity:** Low · **Category:** `api-redundancy`  
+  **Description:** When upserting an existing marker comment, `_mt_find_marker_comment_id` lists comments but discards their bodies; `_mt_upsert_comment` then GETs the selected comment to compare its body. **Current → proposed:** 2 GETs → 1 paginated comments lookup per upsert, before any conditional write.  
+  **Recommended fix:** Have the marker lookup return both `id` and `body` from its existing response and pass both to the upsert. For a multi-PR release sweep, the cycle-local keyed-prefetch approach of `_fetch_candidate_issue_details_graphql` is the batching pattern to assess separately, with pagination fallback.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID:** DUP-001 · **File:** `scripts/label_helpers.sh:20-62` (also `scripts/orchestrate_poll_process.sh:2843-2898`; `scripts/validate_process.sh:1158-1190`) · **Severity:** Medium · **Category:** `duplication`  
+  **Description:** Label colors/descriptions and check-and-create behavior have three implementations. The poller and validator read `.github/ai/label_contract.v1.json`; `label_helpers.sh` embeds a second catalog. Contract changes can therefore leave callers with different metadata or failure behavior.  
+  **Recommended fix:** Make `scripts/label_helpers.sh` own `ensure_label_exists <label> [repo]`, reading the contract when available and retaining its embedded catalog as a documented fallback. Keep compatibility wrappers for the poller’s process cache and fail-open behavior; update the poller and validator callers without removing their existing identifiers in place.
+
+- **ID:** DUP-002 · **File:** `scripts/review_run_reviewers.sh:1849-1859`; `scripts/review_run_reviewers.sh:1905-1915` · **Severity:** Low · **Category:** `duplication`  
+  **Description:** Full and scoped reviewer prompt builders repeat the same untrusted comments, check-run, and slop-scan sections, including byte caps and trust-boundary text. A change to one block can silently alter reviewer treatment in only one mode.  
+  **Recommended fix:** Add `emit_reviewer_common_context_sections()` in `scripts/review_run_reviewers.sh`; call it from both `emit_full_reviewer_prompt_context_sections` and `emit_scoped_reviewer_prompt_context_sections` at their current positions, preserving section order.
+
+- **ID:** DUP-003 · **File:** `scripts/check_failure_triage.sh:58-79` (also `scripts/implement_diagnose_post_codex_failure.sh:49-64`; `.github/workflows/implement.yml:5170-5184`) · **Severity:** Low · **Category:** `duplication`  
+  **Description:** Three callers source `gh_helpers.sh` and then carry near-identical fallback definitions of `_safe_gh_jq`; the canonical implementation is `scripts/gh_helpers.sh:580-594`.  
+  **Recommended fix:** Keep `_safe_gh_jq <endpoint> [gh-api-options...]` in `gh_helpers.sh` as the shared implementation. Where support staging guarantees that helper, fail clearly if sourcing fails and remove the inline copies; retain a compatibility path only where an older support ref is explicitly supported.
+
+No workflow pair in the similarly sized, non-comment line comparison exceeded the requested 70% near-duplicate threshold; the closest checked pair was `.github/workflows/internal-plan.yml:1-34` and `.github/workflows/internal-implement.yml:1-32` at 70.00%.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+All 52 workflows parsed. Of 774 `run:` scalars measured, 225 contain `${{ }}` and were assessed; 549 without interpolation were excluded. Lengths below measure the YAML-decoded **template body**, not unknowable runtime substitution lengths.
+
+- **ID:** EXPR-001 · **File:** `.github/workflows/implement.yml:986-1342` · **Severity:** Medium · **Category:** `expression-limit`  
+  **Description:** “Stage workflow support files” is the only interpolated `run:` body above 15,000 characters: **16,985 characters**, with three interpolations and approximately **4,015 characters of headroom** to 21,000 before substitution growth. It is below the 18,000-character High threshold, but continued inline staging changes could cross the limit. [NEEDS VERIFICATION]  
+  **Recommended fix:** Extract the body to a staged `scripts/` helper, passing `github.repository`, `PROMPT_PRELUDE_REFACTOR_ENABLED`, and `UNATTENDED_IDENTITY_REINJECT_ENABLED` through step `env:`. Preserve the step’s conditions and its support-ref checks.
+
+The next-largest interpolated block is `.github/workflows/implement.yml:3223-3529` at **14,392 characters** (about **6,608** headroom), below the flag threshold. The longest measured `if:` scalar was **859 characters** at `.github/workflows/clarify.yml:19`, not near 21,000. No workflow exceeds the requested **800 KB** file-size warning threshold. The repository’s *stricter* workflow-size guard is addressed in Section 5.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID:** CONSIST-001 · **File:** `scripts/review_collect_pr_metadata.sh:25-29`; `scripts/review_collect_pr_metadata.sh:63-68` · **Severity:** Low · **Category:** `consistency`  
+  **Description:** After sourcing `gh_helpers.sh`, this script redefines its public `gh_retry` name with a different, output-file-first signature. Its current local calls use that signature, but any later shared helper called in the same shell would see the incompatible replacement.  
+  **Recommended fix:** Call canonical `gh_retry_to_file <outfile> gh ...` directly at this script’s call sites, leaving `gh_retry`’s existing signature intact.
+
+- **ID:** DEAD-001 · **File:** `scripts/orchestrate_poll_process.sh:20925-20932`; `scripts/orchestrate_poll_process.sh:20948-20962` · **Severity:** Low · **Category:** `dead-code`  
+  **Description:** Both follow-up refusal paths assign `RB_FOLLOWUP_REFUSED="true"`, but the script never reads that variable; the adjacent warnings and `REVIEW_BLOCKED_STATE_CHANGED` assignments perform the observable work.  
+  **Recommended fix:** Remove the unused assignments, or explicitly consume the flag in the subsequent state/retry decision if refusal was intended to change it; test both refusal paths.
+
+- **ID:** SHELL-001 · **File:** `scripts/stage_workflow_support.sh:138-145`; `scripts/stage_workflow_support.sh:198-208` · **Severity:** Low · **Category:** `shellcheck`  
+  **Description:** ShellCheck reports SC2043 for two `for` loops over single literal filenames. They are not splitting bugs, but present one-off operations as iteration and leave warning noise in an otherwise useful lint sweep.  
+  **Recommended fix:** Replace each with a direct assignment and its existing conditional/install body; preserve required-versus-optional failure behavior.
+
+- **ID:** DEBT-001 · **File:** `.github/workflows/review_autofix.yml:1-7508` · **Severity:** Medium · **Category:** `tech-debt`  
+  **Description:** This workflow measures **454,700 bytes**. Although below the prompt’s 800 KB warning, it has only **25,300 bytes** before the repository’s **480,000-byte CI guard** documented in `CLAUDE.md` §27. This is a separate, stricter size constraint, not an expression-limit finding.  
+  **Recommended fix:** Extract a large remaining inline step into a `scripts/review_autofix_step_<slug>.sh` helper using the existing staged-support and step-wrapper pattern; verify the file remains below 480,000 bytes.
+
+No `TODO`, `FIXME`, or `HACK` markers were found in the scoped workflow and script files. ShellCheck also reported warnings associated with intentional pattern matching and cross-function assignments; those are not presented as defects without a demonstrated failure path.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 1 | SEC-001 |
+| High | 2 | BUG-001, SEC-002 |
+| Medium | 9 | BUG-002, API-001, BATCH-001, BATCH-002, API-003, API-004, DUP-001, EXPR-001, DEBT-001 |
+| Low | 7 | API-002, API-005, DUP-002, DUP-003, CONSIST-001, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | `check_failure_triage.yml`, `check_failure_triage.sh`, `orchestrate_poll_process.sh`, `gh_helpers.sh`, and focused tests | Large |
+| API call optimization | `orchestrate_poll_process.sh`, `review_merge_train.sh`, `check_failure_triage.sh`, `gh_helpers.sh`, and parity tests | Large |
+| Code modularization | `label_helpers.sh`, `validate_process.sh`, `orchestrate_poll_process.sh`, `review_run_reviewers.sh`, two diagnosis/triage scripts, `implement.yml`, and tests | Medium |
+| Expression size reduction | `implement.yml`, one staged `scripts/` helper, and contract tests | Medium |
+| Medium/Low fixes | `review_autofix.yml`, `review_collect_pr_metadata.sh`, `stage_workflow_support.sh`, applicable shared helpers, and tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-30)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` meets the static safety conditions and is authorized for implementation. `NEEDS_VERIFICATION` requires the stated checks first. `RISKY_SKIP` must not be auto-implemented because it touches a protected retry, pagination, race, or recovery behavior.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** MERGE-001 · **Safety tag:** `RISKY_SKIP` · **Calls:** `.github/workflows/clarify.yml:583` and `.github/workflows/clarify.yml:585-599`  
+  **Current → proposed:** With semantic caching enabled, 2 logical GET invocations → 1; actual requests depend on pagination and retries. With caching disabled, retain the existing 1 GET.  
+  **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`, ordered by creation ascending.  
+  **Evidence:** The “Fetch issue comments” step retrieves a first page of 50 comments for `${ISSUE_COMMENTS_FILE}`, then fetches the same ordered history with `--paginate --slurp` for `${THREAD_HISTORY_FILE}`. The full history contains the bounded prompt subset, but the calls have different page sizes and failure behavior.  
+  **Proposed fix:** In the “Fetch issue comments” step, assess deriving the first 50 comments from the complete paginated response when semantic caching is enabled; retain the existing bounded GET when it is disabled. Preserve both output-file formats and the cache-bypass behavior on history-fetch failure.  
+  **Safety rationale:** The history call implements pagination, and its failure currently bypasses the semantic cache without discarding the separately fetched prompt context; a direct merge could change both page-boundary and error-handling semantics.  
+  **Downstream signal:** Do not auto-implement. Manually test histories spanning multiple pages and a failure after a successful first page; confirm identical comment ordering, prompt content, retry behavior, and cache-bypass output before considering consolidation.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — Stall-recovery path; the same title/body pattern also occurs at `scripts/orchestrate_poll_process.sh:16631-16632` and `scripts/orchestrate_poll_process.sh:21640-21641`, which need the same recovery-path review.
+- API-002: `RISKY_SKIP` — Final-PR reconciliation is in the race-defending poller; review snapshot freshness and failure behavior manually.
+- BATCH-001: `RISKY_SKIP` — Poller recovery and the existing 1,000-item list limit require completeness and pagination review.
+- BATCH-002: `RISKY_SKIP` — Paginated comment histories feed poller recovery state; incomplete histories cannot replace the existing reads.
+- API-003: `RISKY_SKIP` — Changing the retry classifier affects authentication failures and backoff behavior.
+- API-004: `RISKY_SKIP` — Non-idempotent issue creation sits in a retry path; ambiguous outcomes require manual reconciliation design.
+- API-005: `RISKY_SKIP` — The marker lookup is paginated; retaining its latest-match and failure semantics requires manual review.
+
+### Summary Counts
+
+Counts cover **new findings in this pass**, excluding the seven Deep Audit cross-references.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
