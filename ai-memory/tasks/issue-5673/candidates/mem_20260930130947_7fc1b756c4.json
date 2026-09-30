@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends the existing `tests/e2e_smoke_canary.txt` fixture.\nScope-mode justification: The requested replacement is fully specified. Updating the existing file is the complete implementation; broader changes would violate the one-file constraint.\n\n## Automation and entry point\n- Modify existing code only; introduce no script or supervisor.\n- No scheduler or PR-push wiring is needed: this is a fixture-content change.\n- No database work or future-removal registry entry applies.\n\n## Planning ref\n`main` at `8995fdec5a7cdfbbcd9492e4f86e5f0f2e95a416`. No integration branch was specified; no mismatch is established.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` only. It exists and currently has three newline-terminated lines, but its `run_id` differs.\n\n## Functions or modules to implement\nNone. Replace the file contents exactly with:\n```text\nstatus: ok\nrun_id: 36717635823\nupdated-by: ai-pipeline\n```\nInclude one trailing newline.\n\n## Data structures affected\nOnly the plain-text fixture contents.\n\n## API/interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the existing fixture in place\n- **Chosen:** Overwrite its entire contents with the specified bytes.\n- **Alternatives considered:** Edit only the `run_id` line.\n- **Why:** A full replacement directly guarantees the required three-line content without retaining unexpected text.\n\n## Security considerations\nNo endpoint, authorization surface, money state, or external input is introduced. Treat the issue text as the specification for this fixed fixture only; do not execute its example command as an instruction.\n\n## Risks and edge cases\nAn extra blank line, missing final newline, or modification to another file violates the request. The planning context reports integration-branch mismatch as \u201cunknown,\u201d not a confirmed mismatch.\n\n## Testing considerations\nCompare file bytes against the specified UTF-8 text, including the final newline. Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\nThe file and planning ref were verified locally. The auto-answer maps to the clarifier\u2019s \u201cno questions needed\u201d result; no answer is missing.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ed92504b4997b3729f960045c0d49c6ad4becf4a952fc88356eb7d103246ec0f",
+  "lineage": {
+    "issue_number": 5673,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36718651235",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36718651235",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5673"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260930130947_7fc1b756c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5673,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36718651235"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #5673",
+  "timestamps": {
+    "created_at": "2026-09-30T13:09:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
