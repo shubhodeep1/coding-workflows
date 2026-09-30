@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T06:48:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Validate an allowlist entry as the consumer will read it, not as written: `files_touched_scope_guard.py` trims each entry and splits the issue body with `str.splitlines()`, so a padded or Unicode-separator path can turn into an existing directory or an extra entry. Restrict generated entries to printable ASCII with no edge spaces.",
+  "phase": "implement_plan",
+  "pr_number": 5507,
+  "record_id": "lesson-implement-plan-ddaa21a373c78664962c3b33",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4665-reissue-new-output-paths",
+    "file:scripts/review_rb_judge.sh",
+    "file:scripts/files_touched_scope_guard.py"
+  ]
+}

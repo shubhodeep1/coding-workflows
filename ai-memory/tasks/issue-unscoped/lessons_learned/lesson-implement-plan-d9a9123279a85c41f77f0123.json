@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T06:48:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An existence check that gates an allowlist must tell \"absent\" from \"lookup failed\": `git cat-file -e <sha>:<path>` exits non-zero for both, so use `git --literal-pathspecs ls-tree --full-tree --name-only <sha> -- <path>` (exit 0 with empty output is the only proof of absence) and skip the entry on any other result.",
+  "phase": "implement_plan",
+  "pr_number": 5507,
+  "record_id": "lesson-implement-plan-d9a9123279a85c41f77f0123",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4665-reissue-new-output-paths",
+    "file:scripts/review_rb_judge.sh"
+  ]
+}

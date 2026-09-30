@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T06:48:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "validate.yml bound an explicit target_ref only to an open PR into the default branch, so an issue-mode project whose final PR targets another base (stable, a parent project branch) could not be validated until the binding accepted that base (#4734 / #4746). Check that a gate's target binding covers every base a project can use before dispatching it.",
+  "phase": "implement_plan",
+  "pr_number": 5507,
+  "record_id": "lesson-implement-plan-910f52b0fdd3753d4cfad2a6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:validation",
+    "plan:issue-4665-reissue-new-output-paths",
+    "file:.github/workflows/validate.yml"
+  ]
+}

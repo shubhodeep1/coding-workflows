@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T06:48:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Write invisible or line-breaking characters in test source as `\\u` escapes, never raw: a raw U+2028 renders as a line break for any tool that splits with `str.splitlines()`, so reviewers read the wrong code and cite shifted line numbers.",
+  "phase": "implement_plan",
+  "pr_number": 5507,
+  "record_id": "lesson-implement-plan-37066102d2fdc142272cd9b3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4665-reissue-new-output-paths",
+    "file:tests/test_review_rb_judge_label_propagation.py"
+  ]
+}
