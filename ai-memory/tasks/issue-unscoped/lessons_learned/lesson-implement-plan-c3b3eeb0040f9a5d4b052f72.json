@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T02:45:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change rewrites a helper, grep the whole repo (including `.claude/scripts/` and `workflow-templates/`) for the helper's name: another file's comment that says it mirrors the helper's listing goes stale silently, and a reviewer later reads the mirror as behind.",
+  "phase": "implement_plan",
+  "pr_number": 4966,
+  "record_id": "lesson-implement-plan-c3b3eeb0040f9a5d4b052f72",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4927-paginate-review-dispatch-runs",
+    "file:scripts/orchestrate_poll_process.sh",
+    "file:.claude/scripts/check_in_status.py"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T02:45:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "On a project stacked on another project's branch, the whole-project reviewer reads the parent issue's requirements as task gaps of this diff; list the parent's already-landed requirements with `file:line` in the final PR body so reviewers stop re-raising them.",
+  "phase": "implement_plan",
+  "pr_number": 4966,
+  "record_id": "lesson-implement-plan-15765c190e1961789a43112a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4927-paginate-review-dispatch-runs",
+    "file:workflow-templates/ai-review.yml",
+    "file:.claude/scripts/check_in_status.py"
+  ]
+}
