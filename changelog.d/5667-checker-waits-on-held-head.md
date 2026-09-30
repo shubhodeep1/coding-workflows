@@ -9,7 +9,9 @@ A twin-first stage ends by posting a `hold` claim on the head it pushed and a tw
 | What outranks a hold | merged or closed only (labels, hand-offs, conflicts, and failed checks do not) |
 | What lifts a hold | any push that moves the head |
 | Heads covered | `claude/implement-plan-*` (other PRs never read comments in plain mode) |
-| Extra GitHub API calls | 0 (the one comment listing is read once and reused for the hand-off check) |
+| Extra GitHub API calls, `claude/implement-plan-*` PR without a blocking label | 0 (its one comment listing now comes before the label check and is reused for the hand-off check) |
+| Extra GitHub API calls, `claude/implement-plan-*` PR with a blocking label and no hold | 1 per 100 PR comments per check-in (the hold must be ruled out before the label hands the PR back; this path used to return before reading comments) |
+| Extra GitHub API calls, any other PR | 0 (plain mode reads no comments for it) |
 
 What this means for operators: a project whose phase or fix PR waits on a `[claude-twin-sync]` copy stays parked until someone pushes the sync. It no longer piles up blocked review-round sessions for the same head.
 

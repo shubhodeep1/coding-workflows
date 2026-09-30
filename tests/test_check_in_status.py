@@ -957,6 +957,16 @@ def test_an_older_hold_then_a_newer_claim_on_the_same_head_is_not_held(monkeypat
 	assert out["state"] == "review-round"
 
 
+def test_blocked_fixer_head_without_a_hold_reads_comments_once(monkeypatch, capsys):
+	# The hold outranks a blocking label (AD-2), so a blocked fixer PR pays one
+	# comment listing to rule the hold out; the changelog states that cost.
+	calls = _stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr(labels=[{"name": "ai:review-blocked"}])),
+		[_comment(_handoff())])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "blocked" and out["action"] == "hand_back"
+	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments"]
+
+
 def test_fixer_handoff_reads_comments_once(monkeypatch, capsys):
 	calls = _stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [_comment(_handoff())])
 	_, out = _twin_run(["--pr", "7"], capsys)
