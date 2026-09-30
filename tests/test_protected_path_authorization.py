@@ -534,6 +534,120 @@ def test_check_release_on_a_real_history(tmp_path):
 	assert whole["base"] is None and whole["grandfathered"] == 3 and whole["decision"] == "pass"
 
 
+def _merge_with_edit(repo, branches, path, text, message):
+	"""Merge `branches` into the current branch, edit `path` inside the merge
+	commit itself (a conflict is resolved by that edit), and return the merge
+	commit."""
+	subprocess.run(
+		["git", "-C", str(repo), "-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "--no-commit", *branches],
+		capture_output=True, text=True,
+		env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"},
+	)
+	return _commit(repo, path, text, message)
+
+
+def _release_repo(tmp_path):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q", "-b", "main")
+	arrival = _commit(repo, "scripts/protected_path_authorization.py", "# gate\n", "gate arrives")
+	_commit(repo, ".claude/commands/a.md", "one\n", "claude before the release")
+	_git(repo, "tag", "stable")
+	return repo, arrival
+
+
+def _release_get(prs, comments):
+	def get(path):
+		match = re.fullmatch(r"repos/o/r/commits/([0-9a-f]{40})/pulls", path)
+		if match:
+			return prs.get(match.group(1), [])
+		match = re.fullmatch(r"repos/o/r/issues/(\d+)/comments\?per_page=100&page=1", path)
+		if match:
+			return comments.get(int(match.group(1)), [])
+		raise AssertionError(path)
+	return get
+
+
+def test_check_release_checks_a_merge_that_carries_its_own_protected_change(tmp_path):
+	# Wrapping a protected edit in a merge commit (a hand-edited merge pushed
+	# straight to a branch) must not hide it: `--no-merges` alone skips it.
+	repo, _arrival = _release_repo(tmp_path)
+	_git(repo, "checkout", "-q", "-b", "side")
+	_commit(repo, "docs/side.md", "side\n", "unprotected side change")
+	_git(repo, "checkout", "-q", "main")
+	_commit(repo, "README.md", "readme\n", "unprotected main change")
+	evil = _merge_with_edit(repo, ["side"], ".claude/commands/a.md", "evil\n", "merge side")
+	assert len(_git(repo, "rev-list", "--parents", "-n", "1", evil).split()) == 3, "the edit must live in the merge commit"
+
+	prs, comments = {}, {}
+	get = _release_get(prs, comments)
+	blocked = ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=get)
+	assert blocked["decision"] == "block" and blocked["checked"] == 1
+	assert [entry["commit"] for entry in blocked["blocked"]] == [evil]
+
+	prs[evil] = [_merged(21)]
+	comments[21] = [_comment()]
+	assert ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=get)["decision"] == "pass"
+
+
+def test_check_release_checks_a_protected_conflict_resolution_but_not_a_clean_merge(tmp_path):
+	repo, _arrival = _release_repo(tmp_path)
+	_git(repo, "checkout", "-q", "-b", "side")
+	side = _commit(repo, ".claude/commands/a.md", "side\n", "side changes the command")
+	_git(repo, "checkout", "-q", "main")
+	ours = _commit(repo, ".claude/commands/a.md", "main\n", "main changes the command")
+	resolved = _merge_with_edit(repo, ["side"], ".claude/commands/a.md", "resolved\n", "resolve merge conflicts")
+	_git(repo, "checkout", "-q", "-b", "clean", "stable")
+	_commit(repo, "docs/clean.md", "clean\n", "unprotected")
+	_git(repo, "checkout", "-q", "main")
+	_git(repo, "merge", "-q", "--no-ff", "-m", "merge clean", "clean")
+	clean_merge = _git(repo, "rev-parse", "HEAD")
+
+	result = ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=_release_get({}, {}))
+	listed = [entry["commit"] for entry in result["blocked"]]
+	assert set(listed) == {side, ours, resolved}
+	assert clean_merge not in listed and result["checked"] == 3
+
+
+def test_check_release_checks_an_octopus_merge_that_differs_from_every_parent(tmp_path):
+	repo, _arrival = _release_repo(tmp_path)
+	for branch in ("one", "two"):
+		_git(repo, "checkout", "-q", "-b", branch, "stable")
+		_commit(repo, f"docs/{branch}.md", f"{branch}\n", f"unprotected {branch}")
+	_git(repo, "checkout", "-q", "main")
+	_commit(repo, "README.md", "readme\n", "unprotected main change")
+	octopus = _merge_with_edit(repo, ["one", "two"], ".claude/commands/a.md", "evil\n", "octopus")
+	assert len(_git(repo, "rev-list", "--parents", "-n", "1", octopus).split()) == 4
+	result = ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=_release_get({}, {}))
+	assert [entry["commit"] for entry in result["blocked"]] == [octopus]
+
+
+def test_check_release_grandfathers_a_protected_merge_before_the_gate(tmp_path):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q", "-b", "main")
+	_commit(repo, "README.md", "readme\n", "root")
+	_git(repo, "checkout", "-q", "-b", "side")
+	_commit(repo, "docs/side.md", "side\n", "side")
+	_git(repo, "checkout", "-q", "main")
+	_commit(repo, "docs/main.md", "main\n", "main")
+	_merge_with_edit(repo, ["side"], ".claude/commands/a.md", "old\n", "pre-gate merge with a protected edit")
+	_commit(repo, "scripts/protected_path_authorization.py", "# gate\n", "gate arrives")
+	result = ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=_release_get({}, {}))
+	assert result["decision"] == "pass" and result["grandfathered"] == 2 and result["checked"] == 2
+
+
+def test_check_release_refuses_a_shallow_checkout(tmp_path):
+	# In a shallow clone the boundary commit stands in for the gate's arrival
+	# and would be grandfathered, and `--remerge-diff` has no merge base.
+	repo, _arrival = _release_repo(tmp_path)
+	_commit(repo, ".claude/commands/a.md", "unauthorized\n", "unauthorized change")
+	shallow = tmp_path / "shallow"
+	subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{repo}", str(shallow)], check=True, capture_output=True)
+	with pytest.raises(ppa.ReadError, match="shallow"):
+		ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(shallow), get=_release_get({}, {}))
+
+
 def test_check_release_without_the_gate_script_fails_closed(tmp_path):
 	repo = tmp_path / "repo"
 	repo.mkdir()
@@ -907,6 +1021,85 @@ def test_release_workflows_gate_protected_changes_before_the_tag_moves(workflow,
 	assert "exit 1" in block
 	release_job = text[release:release + 400]
 	assert "validate" in release_job.split("needs:", 1)[1].splitlines()[0]
+
+
+def _mark_stable_setup(tmp_path, checker_rc):
+	"""A bare `o/r.git` remote with a `stable` branch and tag, an operator
+	clone, and a copy of mark-stable.sh next to a stub release checker."""
+	env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_REPOSITORY", "GH_TOKEN", "GITHUB_TOKEN")}
+	env.update({
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+		"GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"), "GIT_CONFIG_NOSYSTEM": "1",
+	})
+	(tmp_path / "gitconfig").write_text("[user]\n\tname = t\n\temail = t@example.com\n[tag]\n\tgpgsign = false\n[commit]\n\tgpgsign = false\n", encoding="utf-8")
+	remote = tmp_path / "o" / "r.git"
+	remote.parent.mkdir()
+	subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, env=env)
+	seed = tmp_path / "seed"
+	subprocess.run(["git", "clone", "-q", str(remote), str(seed)], check=True, env=env, capture_output=True)
+	for text, tag in (("one\n", "stable"), ("two\n", None)):
+		(seed / "README.md").write_text(text, encoding="utf-8")
+		subprocess.run(["git", "-C", str(seed), "add", "README.md"], check=True, env=env)
+		subprocess.run(["git", "-C", str(seed), "commit", "-q", "-m", text.strip()], check=True, env=env)
+		if tag:
+			subprocess.run(["git", "-C", str(seed), "tag", "-a", tag, "-m", tag], check=True, env=env)
+	subprocess.run(["git", "-C", str(seed), "push", "-q", "origin", "HEAD:refs/heads/stable", "refs/tags/stable"], check=True, env=env, capture_output=True)
+	operator = tmp_path / "operator"
+	subprocess.run(["git", "clone", "-q", str(remote), str(operator)], check=True, env=env, capture_output=True)
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "mark-stable.sh").write_text((SCRIPTS_DIR / "mark-stable.sh").read_text(encoding="utf-8"), encoding="utf-8")
+	calls = tmp_path / "checker_calls.jsonl"
+	(scripts / "protected_path_authorization.py").write_text(textwrap.dedent(f"""\
+		import json, subprocess, sys
+		base = sys.argv[sys.argv.index("--base") + 1]
+		resolved = subprocess.run(["git", "rev-parse", "--verify", "--quiet", base + "^{{commit}}"], capture_output=True, text=True).stdout.strip()
+		with open({str(calls)!r}, "a", encoding="utf-8") as fh:
+		    fh.write(json.dumps({{"argv": sys.argv[1:], "base_commit": resolved}}) + "\\n")
+		print(json.dumps({{"decision": "pass" if {checker_rc} == 0 else "block"}}))
+		sys.exit({checker_rc})
+		"""), encoding="utf-8")
+	stable_head = subprocess.run(["git", "-C", str(seed), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+	previous = subprocess.run(["git", "-C", str(seed), "rev-parse", "stable^{commit}"], check=True, capture_output=True, text=True).stdout.strip()
+	return env, remote, operator, scripts, calls, stable_head, previous
+
+
+def _remote_tags(remote, env):
+	# Full ref names: `stable` is both a branch and a tag, so a short name is ambiguous.
+	out = subprocess.run(["git", "-C", str(remote), "for-each-ref", "--format=%(refname) %(*objectname)%(objectname)", "refs/tags"], check=True, capture_output=True, text=True, env=env).stdout
+	return {line.split()[0].removeprefix("refs/tags/"): line.split()[1][:40] for line in out.splitlines() if line.strip()}
+
+
+def test_mark_stable_script_refuses_to_move_tags_when_the_release_check_blocks(tmp_path):
+	env, remote, operator, scripts, calls, stable_head, previous = _mark_stable_setup(tmp_path, 3)
+	before = _remote_tags(remote, env)
+	proc = subprocess.run(["bash", str(scripts / "mark-stable.sh"), "v9.9.9"], cwd=operator, capture_output=True, text=True, env=env)
+	assert proc.returncode == 6, proc.stderr
+	assert "No tag was moved" in proc.stderr
+	assert _remote_tags(remote, env) == before, "a refused release must not move or add any tag"
+	[call] = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
+	argv = call["argv"]
+	assert argv[0] == "release"
+	assert argv[argv.index("--repo") + 1] == "o/r", "the repository comes from the origin URL when GITHUB_REPOSITORY is unset"
+	assert argv[argv.index("--head") + 1] == stable_head
+	assert call["base_commit"] == previous, "the base is the remote's previous stable tag"
+
+
+def test_mark_stable_script_releases_the_checked_commit_when_the_check_passes(tmp_path):
+	env, remote, operator, scripts, calls, stable_head, _previous = _mark_stable_setup(tmp_path, 0)
+	proc = subprocess.run(["bash", str(scripts / "mark-stable.sh"), "v9.9.9"], cwd=operator, capture_output=True, text=True, env={**env, "GITHUB_REPOSITORY": "owner/name"})
+	assert proc.returncode == 0, proc.stderr
+	tags = _remote_tags(remote, env)
+	assert tags["v9.9.9"] == tags["stable"] == tags["v9"] == stable_head
+	# A rerun takes the partial-publish recovery path: the version tag already
+	# exists, and the check runs against the commit that tag names.
+	rerun = subprocess.run(["bash", str(scripts / "mark-stable.sh"), "v9.9.9"], cwd=operator, capture_output=True, text=True, env={**env, "GITHUB_REPOSITORY": "owner/name"})
+	assert rerun.returncode == 0, rerun.stderr
+	assert "partial-publish recovery" in rerun.stdout
+	first, second = [json.loads(line)["argv"] for line in calls.read_text(encoding="utf-8").splitlines()]
+	assert first[first.index("--repo") + 1] == "owner/name"
+	assert first[first.index("--head") + 1] == second[second.index("--head") + 1] == stable_head
 
 
 @pytest.mark.parametrize("prefix", ["PROTECTED_PATH_GATE", "AUTOFIX_AUTO_MERGE_PROTECTED_PATH"])

@@ -49,7 +49,11 @@ access, so one enabled on an earlier, unprotected head would otherwise land
 the unauthorized one); the JSON's `auto_merge` field says what happened.
 
 `release` checks every non-merge commit in `<base>..<head>` that touches a
-protected path. A commit passes when one of its merged PRs
+protected path, and every merge commit that makes a protected change of its
+own (a conflict resolution or a hand-edited merge: `--remerge-diff` for a
+two-parent merge, any difference from every parent for an octopus merge), so
+wrapping a change in a merge commit cannot hide it. It needs the full
+history: a shallow checkout fails. A commit passes when one of its merged PRs
 (`commits/{sha}/pulls`) has an authorizing comment at that PR's `head.sha`,
 or when it is grandfathered: reachable from the gate's arrival commit, the
 oldest first-parent commit on `<head>` that changed this script. Reachability
@@ -451,11 +455,45 @@ def gate_arrival_commit(head: str, git_dir: str | None) -> str | None:
 	return lines[-1] if lines else None
 
 
+def protected_merge_commits(base: str | None, head: str, git_dir: str | None) -> list[str]:
+	"""Merge commits in `base..head` (or all of `head`) that make a protected
+	change of their own.
+
+	A clean merge only brings in its parents' commits, which are checked
+	themselves. A merge can also carry its own edit: a conflict resolution, or
+	a hand-edited merge pushed straight to a branch. A two-parent merge counts
+	when `--remerge-diff` (the recorded merge against git's own re-merge of
+	its parents, git 2.36 or later) touches a protected path. An octopus
+	merge, which `--remerge-diff` does not cover, counts when it differs on a
+	protected path from every parent."""
+	rev_range = f"{base}..{head}" if base else head
+	out = _git(
+		["log", "--merges", "--max-parents=2", "--format=%x00%H", "--remerge-diff", "--name-only", rev_range, "--", *PROTECTED_PATHSPECS],
+		git_dir,
+	)
+	found: list[str] = []
+	for record in out.split("\x00")[1:]:
+		lines = [line.strip() for line in record.splitlines() if line.strip()]
+		if len(lines) > 1 and SHA_RE.fullmatch(lines[0]):
+			found.append(lines[0])
+	octopus = _git(["rev-list", "--min-parents=3", rev_range, "--", *PROTECTED_PATHSPECS], git_dir)
+	found.extend(line.strip() for line in octopus.splitlines() if SHA_RE.fullmatch(line.strip()))
+	return found
+
+
 def protected_commits(base: str | None, head: str, git_dir: str | None) -> list[str]:
-	"""Non-merge commits in `base..head` (or all of `head`) touching a protected path."""
+	"""Commits in `base..head` (or all of `head`) that make a protected change:
+	non-merge commits touching a protected path, then the merges that carry a
+	protected change of their own (protected_merge_commits)."""
 	rev_range = f"{base}..{head}" if base else head
 	out = _git(["rev-list", "--no-merges", rev_range, "--", *PROTECTED_PATHSPECS], git_dir)
-	return [line.strip() for line in out.splitlines() if SHA_RE.fullmatch(line.strip())]
+	commits = [line.strip() for line in out.splitlines() if SHA_RE.fullmatch(line.strip())]
+	seen = set(commits)
+	for sha in protected_merge_commits(base, head, git_dir):
+		if sha not in seen:
+			seen.add(sha)
+			commits.append(sha)
+	return commits
 
 
 def evaluate_release(
@@ -515,6 +553,11 @@ def check_release(
 	get = get or gh_get_json
 	if not REPO_RE.fullmatch(repo or ""):
 		raise ValueError("--repo must be OWNER/REPO")
+	# A shallow history hides the gate's real arrival commit (the shallow
+	# boundary would stand in for it and be grandfathered) and the merge
+	# bases `--remerge-diff` needs, so only a full history is trusted.
+	if _git(["rev-parse", "--is-shallow-repository"], git_dir).strip() != "false":
+		raise ReadError("the release check needs the full git history; this checkout is shallow (fetch with fetch-depth: 0 or git fetch --unshallow)")
 	head = _resolve(head_ref, git_dir)
 	if head is None:
 		raise ReadError(f"release head {head_ref} does not resolve to a commit")
