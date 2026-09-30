@@ -109,7 +109,8 @@ def recorder_wired_at(rev: str, settings: Path) -> bool | None:
 		shown = subprocess.run(
 			["git", "-C", str(directory), "show", f"{rev}:./{settings.name}"],
 			capture_output=True,
-			text=True,
+			# settings.json is UTF-8 whatever the locale; strict decoding keeps an undecodable revision null.
+			encoding="utf-8",
 			timeout=10,
 			check=False,
 		)
