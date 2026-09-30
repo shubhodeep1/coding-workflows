@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T13:12:15Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A helper allowlisted in `.claude/settings.json` that reads a caller-supplied file path must confine it (resolve symlinks, reject hard links and non-regular files) before the read, or it becomes a promptless exfiltration path.",
+  "phase": "implement_plan",
+  "pr_number": 5465,
+  "record_id": "lesson-implement-plan-19ecc84d1f4c6db1973d5a93",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5452-edit-comment-scratchpad-only",
+    "file:.claude/scripts/edit_comment.py",
+    "file:.claude/settings.json"
+  ]
+}

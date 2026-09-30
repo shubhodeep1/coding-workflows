@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T13:12:15Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A path allowlist check must pin the exact directory depth it documents (not \"a `scratchpad` somewhere below `claude-*`\"), and a helper that reads a caller-supplied file must bound the read by size before loading it, not only validate the parsed result.",
+  "phase": "implement_plan",
+  "pr_number": 5465,
+  "record_id": "lesson-implement-plan-f46d62717f4e88de0ed9fa13",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5452-edit-comment-scratchpad-only",
+    "file:.claude/scripts/edit_comment.py"
+  ]
+}
