@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1231-1282, 1355-1411 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: When the scoped Implement run lookup returns an inconclusive result because the page cap is reached (and, as minimax also reports, when a page is unreadable), that result is not cached or throttled, so later polls repeat the lookup over the same run window.\n  WHY: Repeated walks can consume GitHub API quota until the phase timeout; severity is high based on minimax's MAJOR rating, while deepseek, openai, and qwen rated the issue NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml: lines 1242-1273 and 1374-1393 | severity=NIT | confidence=4\n  PROBLEM: When summarize_scoped_impl_runs returns 2 (capped walk, every page full), the cycle-local cache IMPL_SCOPED_ACTIVE_RUN_ID is empty on the next poll iteration, so the walk repeats.\n  WHY: The inactivity timer (PHASE_TIMEOUT) bounds it, but no shorter throttle exists, so a persistent capped result issues up to 10 API calls per 10-second poll cycle until that timeout. At the default POLL_INTERVAL of 10 seconds that is 60 calls/minute until the inactivity limit trips. For a 30-minute PHASE_TIMEOUT, up to 1,800 calls before exit. GitHub's authenticated rate limit of 5,000/hour still covers it, but the walk has no per-run memory beyond PHASE_TIMEOUT.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml: lines 1361-1397 (the new terminal branch) and lines 1231-1282 (summarize_scoped_impl_runs helper); test assertions at tests/test_test_and_mark_stable_plan_polling_guard.py:654-668 and 670-684 | severity=MAJOR | confidence=4\n  PROBLEM: The cycle-local cache `IMPL_SCOPED_ACTIVE_RUN_ID` only covers the rc=0-with-active path. When `summarize_scoped_impl_runs` returns rc=2 (capped walk \u2014 every page up to SCOPED_RUN_LOOKUP_MAX_PAGES=10 was full) or rc=1 (unreadable page), the terminal branch only logs a \"treating as unknown, waiting\" line and clears nothing. The next iteration of the outer `while true` loop therefore re-runs the full helper again, re-reading every page from 1 to 10 on every POLL_INTERVAL tick.\n  WHY: With the default POLL_INTERVAL=10s and a typical PHASE_TIMEOUT of tens of minutes for Implement, a persistent capped result drives up to ~6 walks/min \u00d7 10 pages = 60 GitHub API calls per minute for one smoke job, all on `actions/runs?created=>${IMPL_CREATED_AFTER}` with the issue-scoped filter applied client-side. Page-1 churn keeps resetting `LAST_ACTIVITY`, so this repeats until PHASE_TIMEOUT or the job deadline. The two existing tests lock the bad behavior in: `test_implement_treats_a_capped_walk_as_unknown_and_reads_at_most_ten_pages` asserts `len(paged) == 20` (two polls \u00d7 10 pages), and `test_implement_treats_an_unreadable_page_as_unknown_until_the_inactivity_limit` asserts `sum(\"&page=2&\" in path ...) == 2`. So the regression is not only present but pinned by tests.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml: Lines 1242\u20131273 and 1374\u20131376; the wait loop also sleeps at lines 1355 and 1411. | severity=NIT | confidence=4\n  PROBLEM: When the scoped lookup reaches its 10-page cap, that unknown result is not cached or throttled. Each later terminal check repeats the same walk over the same run window.\n  WHY: With the default 10-second poll interval, the two sleeps put repeated capped scans at roughly one every 20 seconds. That is up to 30 additional GitHub API requests per minute, or about 900 during the default 30-minute phase timeout, while the search window remains unchanged.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml: summarize_scoped_impl_runs (lines 1242\u20131273) and the terminal branch (lines 1374\u20131393) | severity=NIT | confidence=4\n  PROBLEM: When the scoped walk hits the page cap (return code 2), no result is cached and the next poll repeats the full walk. The active-run cache (IMPL_SCOPED_ACTIVE_RUN_ID) is only populated when the walk finds an active run (rc=0, active>0); a capped walk leaves it empty.\n  WHY: In a busy repository where the first 1,000 runs in the created=> window are all full, each POLL_INTERVAL-second poll issues up to SCOPED_RUN_LOOKUP_MAX_PAGES (default 10) API calls until PHASE_TIMEOUT expires. With a 10-second poll interval, that is up to 60 GitHub API requests per minute consumed by a single smoke-test run, drawn from the shared rate-limit budget. The pass-1 finding's claim that \"ongoing changes to the page-1 run state can reset the inactivity timer\" is not correct \u2014 LAST_ACTIVITY is updated by run-state progress, not by the walk itself \u2014 but the repeated-walk cost is real. The edge case is rare (requires 1,000+ runs in the window) and the wait is still bounded by PHASE_TIMEOUT, so severity is low.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7d69d8113ca482412054a781b3d62c6ea2beb3c7f2feb6cce5c562a210701bbb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5712,
+    "run_id": "36726858885",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36726858885",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930145024_3876f5db26",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5712,
+    "run_id": "36726858885"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T14:50:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
