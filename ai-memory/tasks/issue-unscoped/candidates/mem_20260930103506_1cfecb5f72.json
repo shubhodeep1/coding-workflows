@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description requires `README.md` to describe the new rule that rejection votes do not demote findings without an independent automated disproof.\n  expected_change_site: `README.md`, the `CLAUDE_FIXER_ENABLED` row in the Quickstart variables table\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The README diff updates the detailed rejection-vote section and keep-reason list, but not the `CLAUDE_FIXER_ENABLED` row. That row still says a single-reviewer finding rejected by a strict majority \u201cis moved to a visible `NON-BLOCKING FINDINGS` ledger block,\u201d without the required disproof condition, contradicting the new behavior.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The PR description requires `README.md` to describe the new rule that rejection votes do not demote findings without an independent automated disproof.\n  Expected change site: `README.md`, the `CLAUDE_FIXER_ENABLED` row in the Quickstart variables table.\n  Evidence of absence: The README diff updates the detailed rejection-vote section and keep-reason list, but not the `CLAUDE_FIXER_ENABLED` row. That row still says a single-reviewer finding rejected by a strict majority \u201cis moved to a visible `NON-BLOCKING FINDINGS` ledger block,\u201d without the required disproof condition, contradicting the new behavior.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4917db62c997d9a676d34d30f9f6e2573ce2b8fdd413581185632182905c0d5c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5611,
+    "run_id": "36698696348",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36698696348",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930103506_1cfecb5f72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5611,
+    "run_id": "36698696348"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T10:35:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
