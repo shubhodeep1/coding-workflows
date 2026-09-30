@@ -2357,8 +2357,22 @@ enforces §28.B and §28.C in those sessions. It is wired in
 - **`Stop`.** The hook blocks the stop when both of these hold:
   - the final assistant message asks a §2 question (a `Q<n>:` line with
     lettered choices, or `Q<n>: A/B`) or asks for permissions;
-  - no tool call in the current turn posted a `<!-- ai:claude-blocked:v1 -->`
-    comment. The hook checks this in the local transcript, with no API calls.
+  - the current turn did not post a verified blocker on the marker's issue.
+    The hook checks this in the local transcript, with no API calls (issue
+    #5082). Both of these must have succeeded in the turn, on the marker's
+    exact `owner/repo` (case-insensitive) and issue number:
+    - a comment whose body starts with `<!-- ai:claude-blocked:v1 -->`, posted
+      with `mcp__*__add_issue_comment` or a `gh api` POST to
+      `repos/<owner>/<repo>/issues/<N>/comments`, whose result carries that
+      issue's comment URL (`html_url` or `issue_url`);
+    - a write adding the `ai:claude-blocked` label to that issue, with
+      `mcp__*__issue_write` (`method: "update"`, `labels`) or a `gh api` POST to
+      `repos/<owner>/<repo>/issues/<N>/labels` (`labels[]=ai:claude-blocked`).
+
+    A `Bash` call counts only when it holds `gh api` calls alone, joined by
+    `&&` at most, after an optional leading `cd <path>;`. An `echo` of the
+    marker, a comment on another issue or repository, or a failed or
+    unverifiable call never counts.
 
   The reason restates §28.B and §28.C and names the self-serve writes: §23.B
   comments and labels, and the command-approved dispatches through
