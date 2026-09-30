@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update the Authorize explicit validation target step in .github/workflows/validate.yml to also authorize targets where the target PR's base is a project branch (with exactly one open PR into the default branch) or stable (for heal issues).\"\n  expected_change_site: `.github/workflows/validate.yml` and its validate workflow tests\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No diff hunk in `.github/workflows/validate.yml` introduces the requested logic; The PR diff contains no changes to `.github/workflows/validate.yml` or its validate tests; it does not deliver this requirement in the PR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Update the Authorize explicit validation target step in .github/workflows/validate.yml to also authorize targets where the target PR's base is a project branch (with exactly one open PR into the default branch) or stable (for heal issues).\"\n  Expected change site: .github/workflows/validate.yml\n  Evidence of absence: No diff hunk in .github/workflows/validate.yml introduces the requested logic.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n  Deferral: The PR description and plan explicitly scope #5012 to the filer only, and the progress log records the validate.yml limitation as the reason validation was skipped, with the long-term fix tracked in issue #4734 (already auto-rejected in PR #5028 review round 2 comment 5905548683, entry 1, with citation). The change reaches main only through project PR #4770 whose chain runs its own security audit and runtime validation on a branch that contains this fix. Per the reviewer checklist rule on deferred requirements, this is not a gap.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cExtend the Authorize explicit validation target step\u201d to authorize project-branch bases with exactly one open parent PR into the default branch, and `stable` bases for qualifying heal issues.\n  Expected change site: `.github/workflows/validate.yml` and its validate workflow tests.\n  Evidence of absence: The PR diff contains no changes to `.github/workflows/validate.yml` or its validate tests; it does not deliver this requirement in the PR.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "958acb56af0247bf2731a5d64bc37d22757208d5806a38a1e580071c521b2801",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5028,
+    "run_id": "36715635737",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36715635737",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930131027_16b36416b6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5028,
+    "run_id": "36715635737"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T13:10:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
