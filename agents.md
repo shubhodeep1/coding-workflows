@@ -1266,7 +1266,12 @@ side so that class cannot land unnoticed.
   step (a test, a shell script) runs as the same user and could plant a
   `.pth` file in the Python install the verifier runs under and decide its
   exit code, with no change to the script or the step. Keep it there;
-  `tests/test_guard_differential.py` fails when a step is added before it.
+  `tests/test_guard_differential.py` fails when a step is added before it,
+  when the install step runs anything but one `python3 -m pip install` of
+  plain package names (no flag, path, archive, URL, or second command), or
+  when a workflow, job, or step variable (`BASH_ENV`, `ENV`, `PIP_*`,
+  `PYTHON*`), job `defaults`, or a job `container` could make the shell or
+  pip run checkout code first.
   A PR that rewrites `ci.yml` (the step, or a step before it) still
   controls what that run executes, which is inherent to `pull_request`
   workflows: the edit is visible in the diff the reviewer panel reads, and

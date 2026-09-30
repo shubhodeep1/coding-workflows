@@ -973,14 +973,25 @@ def test_ci_check_runs_before_any_pr_code() -> None:
 			break
 	else:
 		raise AssertionError("step 'Guard differential check (issue #5174)' not found")
+	# No environment that makes the shell or pip run checkout code
+	# (BASH_ENV, PIP_REQUIREMENT, PYTHONSTARTUP, ...) and no default shell,
+	# working directory, or container for the job.
+	for scope in (workflow, job):
+		assert not re.search(r"^(?:BASH_ENV|ENV|PIP_|PYTHON)", "\n".join(scope.get("env") or {}), re.MULTILINE)
+	assert not {"defaults", "container"} & set(job)
 	assert [step.get("uses", "").split("@")[0] for step in before[:2]] == ["actions/checkout", "actions/setup-python"]
-	assert "with" not in before[0] or not set(before[0]["with"]) - {"fetch-depth"}
-	assert set(before[1].get("with", {})) == {"python-version"}
+	assert set(before[0]) <= {"name", "uses", "with"}
+	assert set(before[0].get("with") or {}) <= {"fetch-depth"}
+	assert set(before[1]) <= {"name", "uses", "with"}
+	assert set(before[1].get("with") or {}) == {"python-version"}
 	assert [step.get("name") for step in before[2:]] == ["Install Python CI dependencies"]
-	install = before[2]["run"]
-	assert "python3 -m pip install" in install
-	# Package names only: no requirements file, local path, or script from the checkout.
-	assert not re.search(r"(?:^|\s)(?:-r|-e|-c|\.{0,2}/|tests/|scripts/|\.claude/)", install.replace("set -euo pipefail", ""))
+	assert set(before[2]) == {"name", "run"}
+	# Exactly one pip install of plain package names and nothing else: no
+	# flag (-r, --requirement, -e, --editable, -c, ...), no local path or
+	# archive (`.`, `./x`, `x.zip`), no URL or VCS spec, no second command.
+	lines = [line.strip() for line in before[2]["run"].splitlines() if line.strip() and line.strip() != "set -euo pipefail"]
+	assert len(lines) == 1, lines
+	assert re.fullmatch(r"python3 -m pip install(?: [A-Za-z0-9][A-Za-z0-9_-]*)+", lines[0]), lines[0]
 
 
 def test_ci_runs_the_unit_tests() -> None:

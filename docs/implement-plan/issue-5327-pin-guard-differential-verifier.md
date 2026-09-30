@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5174-guard-differential-check
 - Project branch: claude/implement-plan-issue-5327-pin-guard-differential-verifier   Final PR: #5364 draft
 - Status: IN_PROGRESS
-- Stage: conformance 3/3
+- Stage: conformance 3/3 — review round
 - Activation: not started
-- Waiting on: conformance fix PR 3 (this PR); after it merges: conformance 3/3 — fix check
+- Waiting on: PR #5647 (conformance fix PR 3, review round 1 pushed); after it merges: conformance 3/3 — fix check
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01QvzxwDiVmtxwS9giV5Ro4Q   safety net and hand-back: see the latest stage report
 - Last updated: 2026-09-30
-- Last note: conformance 3/3: CONFORMANT (Correctness: CONCERNS) — PR code in the ~20 steps before the check could plant a .pth file and decide the pinned verifier's exit code; fixed by moving the check right after the dependency install (AD-6), in conformance fix PR 3. Last run the cap allows: the next stage is the fix check.
+- Last note: conformance 3/3 review round 1 on PR #5647: the one reviewer finding (11 ledger entries) was valid; `test_ci_check_runs_before_any_pr_code` accepted `pip install .`, long-form flags, URL / archive installs, appended commands, and BASH_ENV / PIP_* / PYTHON* variables. The test now requires exactly one `python3 -m pip install` of plain package names and rejects those variables, job `defaults`, and a job `container`. Next after merge: `conformance 3/3 — fix check`.
 
 ## Phases
 1. [x] Phase 1 — pin the verifier to the base branch and report verifier changes (ci.yml step, scripts/guard_differential.py, tests, agents.md, changelog) — PR #5368 merged 2026-09-30 (b197b1f); review rounds: 3; interventions: 0
@@ -20,6 +20,7 @@
 - Run 1 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — fix PR #5539 (pre-security); review rounds: 1. Checks: tests/test_guard_differential.py 83 passed; yamllint, actionlint, ruff clean; CI contract, changelog, and workflow-size suites passed. Fix PR #5539 merged 2026-09-30 (12e3dc3).
 - Run 2 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — conformance fix PR 2 (pre-security): [CONCERN, EVIDENCE-BASED] `scripts/guard_differential.py` `compare_hook_dirs` alternated base and head runs per shape, so a head hook could rewrite the base copy on its first run and every later loosened shape compared equal (proof of concept: 0 regressions for 2 loosened shapes). Checks: tests/test_guard_differential.py 86 passed (3 new tests fail on the old code); changelog, assemble-changelog, and workflow-size suites passed; ruff, yamllint, actionlint clean. Fix PR #5616 merged 2026-09-30 (6a3260e).
 - Run 3 — 2026-09-30: CONFORMANT (Correctness: CONCERNS) — conformance fix PR 3 (pre-security): [CONCERN, EVIDENCE-BASED] `.github/workflows/ci.yml` ran `Guard differential check (issue #5174)` after about 20 steps that execute code from the PR's checkout as the same user, with a writable setup-python site-packages, so a PR could plant a `.pth` file and decide the pinned verifier's exit code without changing the script or the step (proof of concept: exit 2 became exit 0; no `verifier_change` warning). Checks: tests/test_guard_differential.py 87 passed (the new order test fails on the old layout); all 22 suites that read ci.yml (882 passed); ruff, yamllint, actionlint clean. Last run the cap allows: the next stage is `conformance 3/3 — fix check`.
+  - PR #5647 review rounds: 1 — round 1 (2026-09-30, head 2a7f342): 1 valid finding, fixed (the install-step assertion of `test_ci_check_runs_before_any_pr_code` was too loose); 0 rejected. A mutation check against scratch copies of `ci.yml` caught 13 of 13 bypass shapes with the new assertion and 0 of 13 with the old one; tests/test_guard_differential.py 87 passed; ruff clean.
 
 ## Security pass
 - Skipped: ai:security: automation-produced issue (`.claude/scripts/security_pass_skip.py`).
@@ -45,6 +46,7 @@
 - [source:intervention] When a doc states when a change takes effect ("only once it has merged"), qualify it for every fallback path the step has, such as a bootstrap branch that runs the PR's own copy, in each place the rule is stated, not only where the fallback is first described. (files: agents.md, changelog.d/5327-pinned-guard-verifier.md)
 - [source:conformance] A check that executes untrusted code (the PR's hooks) next to trusted code (the base hooks) must finish every trusted run before the first untrusted one: the untrusted code runs as the same user and can rewrite the trusted copies it can reach. (files: scripts/guard_differential.py)
 - [source:conformance] Pinning a trusted script to the base branch is only as strong as the interpreter it runs under: in a `pull_request` job, run it before any step that executes code from the checkout, which could plant a `.pth` file or rewrite a writable toolcache, and pin that position with a test. (files: .github/workflows/ci.yml, tests/test_guard_differential.py)
+- [source:intervention] A test that pins "only a fixed dependency install runs before this step" must match the whole `run:` body against one exact command shape (plain package names only) and reject variables that run code implicitly (`BASH_ENV`, `PIP_*`, `PYTHON*`); a deny-list of a few flags and paths misses `pip install .`, long-form flags, URLs, archives, and appended commands. (files: tests/test_guard_differential.py)
 
 ## Notes
 - Issue mode: single-phase plan; security pass skipped per the plan header.
