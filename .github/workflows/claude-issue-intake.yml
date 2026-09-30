@@ -68,6 +68,10 @@ jobs:
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      # Threshold for the success-only "Claude issue queued" DEBUG ping;
+      # SILENT by default, set vars.CLAUDE_ISSUE_ROUTED_ALERT_LEVEL=DEBUG to get
+      # it back. Intake failure ERRORs keep ALERT_MSG_LEVEL.
+      CLAUDE_ISSUE_ROUTED_ALERT_LEVEL: ${{ vars.CLAUDE_ISSUE_ROUTED_ALERT_LEVEL || 'SILENT' }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
