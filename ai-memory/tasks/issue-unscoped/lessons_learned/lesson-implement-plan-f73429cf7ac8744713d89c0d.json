@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T13:07:02Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Never put the literal skip-ai marker in a PR's title or body, not even quoted: `review_autofix.yml` greps both and skips the review (`skip_reason=skip_ai_marker`), so the PR sits unreviewed with no hand-off.",
+  "phase": "implement_plan",
+  "pr_number": 5576,
+  "record_id": "lesson-implement-plan-f73429cf7ac8744713d89c0d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4713-rerun-cancelled-ci",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

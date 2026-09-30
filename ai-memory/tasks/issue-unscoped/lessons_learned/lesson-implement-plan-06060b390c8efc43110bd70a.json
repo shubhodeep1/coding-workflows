@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T13:07:02Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A wiring test for a snapshot projection must pin every field a downstream reader uses (`head_repo` as well as `head_sha`), or a merge from `main` that drops the field leaves the feature silently dead with a green suite.",
+  "phase": "implement_plan",
+  "pr_number": 5576,
+  "record_id": "lesson-implement-plan-06060b390c8efc43110bd70a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-4713-rerun-cancelled-ci",
+    "file:tests/test_ci_cancelled_rerun.py",
+    "file:.github/workflows/review_autofix_sweep.yml"
+  ]
+}

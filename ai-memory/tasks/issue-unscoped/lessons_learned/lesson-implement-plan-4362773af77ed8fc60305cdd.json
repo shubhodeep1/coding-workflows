@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T13:07:02Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A Claude-fixer PR whose review findings are all rejected cannot converge while `vars.CLAUDE_FIXER_VERDICT_BOT_LOGIN` is unset: the verdict must come from that bot, never from a collaborator or `GH_PAT`, so the PR needs a held merge by hand.",
+  "phase": "implement_plan",
+  "pr_number": 5576,
+  "record_id": "lesson-implement-plan-4362773af77ed8fc60305cdd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4713-rerun-cancelled-ci",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}
