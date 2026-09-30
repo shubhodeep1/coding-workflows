@@ -4,18 +4,18 @@
 - Source issue: shubhodeep1/coding-workflows#5617
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Base branch: claude/implement-plan-issue-4813-close-sweep-target-branch-merges
-- Project branch: claude/implement-plan-issue-5617-unmerged-close-automation-identity   Final PR: (opening)
+- Project branch: claude/implement-plan-issue-5617-unmerged-close-automation-identity   Final PR: #5629 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started (n/a while the issue base is claude/implement-plan-issue-4813-close-sweep-target-branch-merges; settled at final-merge)
-- Waiting on: none
+- Waiting on: phase 1 PR (branch claude/implement-plan-issue-5617-unmerged-close-automation-identity-phase-1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; phase 1 starting.
+- Last note: phase 1 implemented and verified (gate test file 31/31 as a script; 98 related tests under pytest; the 4 new gating tests fail on the old workflow; yamllint -s and actionlint 1.7.12 clean); phase PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — automation identity for unmerged closes in `issue_pr_status.yml` (workflow + tests + helper comment + README row + changelog fragment)
+1. [ ] Phase 1 — automation identity for unmerged closes in `issue_pr_status.yml` (workflow + tests + helper comment + README row + changelog fragment)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
