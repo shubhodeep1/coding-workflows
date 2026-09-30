@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5610-limit-twin-sync-review-skip-plan.md
 - Source issue: shubhodeep1/coding-workflows#5610
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4785-twin-first-claude-sync
-- Project branch: claude/implement-plan-issue-5610-limit-twin-sync-review-skip   Final PR: pending
+- Project branch: claude/implement-plan-issue-5610-limit-twin-sync-review-skip   Final PR: #5652 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (branch claude/implement-plan-issue-5610-limit-twin-sync-review-skip-phase-1; number in the PR list and the issue progress comment)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: recorded in the next stage's resume block
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; phase 1 in progress
+- Last note: phase 1 implemented and verified (full suite green on Python 3.12); phase PR opened, waiting for review
 
 ## Phases
-1. [ ] Phase 1 — verify twin sync provenance before the review skip
+1. [ ] Phase 1 — verify twin sync provenance before the review skip   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -39,3 +39,4 @@
 
 ## Notes
 - Security pass skipped: `security_pass_skip.py` returned skip=true (label ai:security).
+- Phase 1 local verification: `tests/test_review_autofix_claude_fixer_mode.py` 49 passed (the 4 new tests fail on the old gate); full `tests/` suite under Python 3.12: 5103 passed, 9 skipped, 0 failed. The container needed `gawk` installed (`scripts/review_issue_ledger.sh`), as GitHub runners have it; under Python 3.11 `tests/test_workflow_retro.py` cannot be collected (3.12 f-string syntax), which is pre-existing and unrelated.
