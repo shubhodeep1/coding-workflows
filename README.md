@@ -1486,7 +1486,12 @@ A `claude/*` head with no review trace for `CLAUDE_REVIEW_STALL_HOURS`
 - the checker hands it back, or the catch-all queues it, as a `review` fix;
 - `/fix-claude-pr` re-dispatches the review once (`internal-review.yml`
   here, `ai-review.yml` in consumer repos, with `pr_number`);
-- a head that stalls again after a re-dispatch is held and asked about.
+- a head that stalls again after a re-dispatch is held and asked about. A
+  re-dispatch counts only as a completed, not-cancelled review run that
+  meets two conditions. It was dispatched for the PR from the default
+  branch, titled `Internal: AI Review & Autofix [pr:<n>]`, or
+  `AI Review [pr:<n>]` in consumer repos. It was created after the head
+  arrived. A `review` claim never counts (issue #5376).
 
 Setup: the catch-all needs the Claude issue pickup session to be running
 (`/claude-issue-pickup start`, see [Claude issue implementer](#claude-issue-implementer)),

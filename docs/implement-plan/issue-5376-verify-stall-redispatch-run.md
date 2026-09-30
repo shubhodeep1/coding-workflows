@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5376-verify-stall-redispatch-run-plan.md
 - Source issue: shubhodeep1/coding-workflows#5376 (https://github.com/shubhodeep1/coding-workflows/issues/5376)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4985-skip-marker-review-stall
-- Project branch: claude/implement-plan-issue-5376-verify-stall-redispatch-run   Final PR: pending
+- Project branch: claude/implement-plan-issue-5376-verify-stall-redispatch-run   Final PR: #5387 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5408
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01Nr1eDxdAgRNU9mhy74VqNH   safety net and hand-back re-armed after the round 1 push (ids in the stage report)
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; phase 1 starting.
+- Last note: review round 1 on head `83be7a0` (session_01W8L9mx6L8Xiunj2hwLmY9n): all 3 consensus findings rejected as false positives; no verdict bot is configured, so no verdict was posted; the round's push merges the synced project branch into the PR head for a fresh review.
 
 ## Phases
-1. [ ] Phase 1 — verified-run re-dispatch rule; protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/fix-claude-pr.md` (edited through their `workflow-templates/.claude/` twins)
+1. [ ] Phase 1 — verified-run re-dispatch rule — PR #5408 open (waiting on review; twin sync `e18fa4a` landed); review rounds: 1; interventions: 0; protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/fix-claude-pr.md` (edited through their `workflow-templates/.claude/` twins)
    - checker twin: `_dispatched_review_runs`, `_head_arrival_time`, `_verified_review_redispatch`; `stall_redispatched` from a verified run; `_active_run_count` shares the listing
    - consumer wrapper: `workflow-templates/ai-review.yml` dispatch-only `run-name`
    - fixer twin: `fix-claude-pr.md` step 3 wording
@@ -48,3 +48,6 @@
 - Issue progress comment: 5903022362.
 - Invoking session: session_01GokLJ6bAqCLubeWsfg7Zch (permission mode auto).
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
+- 2026-09-30, phase 1 (session_01GokLJ6bAqCLubeWsfg7Zch): the new hand-back tests (loading the twin) pass: 131 passed, with only the 2 twin-parity checks failing. Related suites (71 files): 2502 passed, 1 skipped. The 5 failures are 4 twin-parity checks and 1 missing `gawk`; the validation-template renderer suites need `jsonschema` and `jinja2`, which are not installed here. With the twins copied into `.claude/` (simulated sync), the 8 affected suites pass (427). ruff and yamllint are clean.
+- 2026-09-30, `/reclarify` resume (session_01DYKF4onPHPSJafUNdeYYH5): the operator answered A on #5376. `[claude-twin-sync]` `e18fa4a` copies both twins; `.claude/` and twin sha256 match the blocker (`66e9b051…3aaf`, `736d160b…dc81`). The project branch took 4 base commits in a clean merge (`162ccb8`), and #5408 still merges cleanly on it. On that merge: 972 passed, 1 skipped across the 19 suites that reference the changed files, and 857 passed, 1 skipped in the 13 twin-parity suites. ruff (`--select E,F --ignore E501`) and yamllint are clean.
+- 2026-09-30 phase 1/1 review round 1 (PR #5408, head `83be7a0`, run 36667727788), session session_01W8L9mx6L8Xiunj2hwLmY9n: ledger of 7 entries, 3 consensus findings from `google_gemini-3_1-flash-lite` (one shared with `deepseek_deepseek-v4-pro`); the other 4 reviewers reported nothing. Rejected all three: (1) "`_dispatched_review_runs()` falls through to the consumer workflow on any non-404 error" misreads `check_in_status.py:365-371`, which `continue`s only on `HTTP 404` and re-raises every other `ReadError` (checked: an `HTTP 502` read raises after 1 call); (2) "`_head_arrival_time()` passes a `None` `started_at` to `_parse_time`" is handled: `_parse_time` (`:301-304`, unchanged by this PR) raises `ValueError` for a non-string, which the loop catches (checked: runs with `started_at: None`, no `started_at`, and a non-dict entry are skipped); (3) `ignore_claim_by` stays on `_review_stall_verdict` because removing a parameter is a §6 breaking change, as its docstring and both reviewers say. No failing check on the head. No verdict bot is configured, so no verdict was posted; the round's push merges the project branch (5 commits: the issue-4985 base sync `162ccb8`, clean) into the PR head as `[claude-merge-resolve]`, plus this log update.
