@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01LHayV9tdHEAgtpejcbwf7v   safety net and hand-back re-armed after the round 1 push (ids in the stage report)
 - Last updated: 2026-09-30
-- Last note: review round 1 on PR #5643: 1 finding fixed (README row wording on unmerged closes), 8 rejected with reasons on the PR; project branch synced with its issue base.
+- Last note: review round 1 on PR #5643: 1 finding fixed (README row wording on unmerged closes), 7 rejected with reasons on the PR; project branch synced with its issue base.
 
 ## Phases
 1. [ ] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)   — PR #5643 open (waiting); review rounds: 1; interventions: 0
