@@ -2170,6 +2170,28 @@ def test_clarify_fallback_does_not_retry_a_permanent_failure(stubs):
 	assert outputs["final_merge_resume"] == "false"
 
 
+def test_clarify_fallback_stops_on_a_permanent_failure_without_mktemp(stubs):
+	# A runner where mktemp fails must still stop on a 404 at attempt 1.
+	mktemp_stub = stubs["tmp"] / "mktemp_bin"
+	mktemp_stub.mkdir(exist_ok=True)
+	(mktemp_stub / "mktemp").write_text("#!/usr/bin/env bash\nexit 1\n")
+	(mktemp_stub / "mktemp").chmod(0o755)
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		route_cwd=_clarify_cwd_without_gh_helpers(stubs),
+		GH_STUB_FAIL_COMMENTS="1",
+		GH_STUB_FAIL_COMMENTS_ERR="HTTP 404: Not Found",
+		GH_RETRY_MAX_ATTEMPTS="3",
+		PATH=f"{mktemp_stub}:{stubs['env']['PATH']}",
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert stubs["log"].read_text().count("api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100") == 1
+	assert "gh_retry_to_file fallback: gh command failed with a non-retryable error (attempt 1/3); not retrying" in result.stdout
+	assert "retrying in" not in result.stdout
+	assert outputs["final_merge_resume"] == "false"
+
+
 def test_clarify_fallback_still_routes_a_final_merge_resume(stubs):
 	result, outputs = _run_clarify_route(
 		stubs,

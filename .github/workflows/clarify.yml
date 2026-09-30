@@ -432,7 +432,7 @@ jobs:
           # validated (non-numeric or 0 → 3) and capped at 5, so the loop
           # always ends and sleeps at most 20s in total; a permanent failure
           # (the real helper's _is_gh_permanent_failure patterns) is not
-          # retried.
+          # retried; that check needs no temp file.
           if ! type gh_retry_to_file >/dev/null 2>&1; then
             GH_RETRY_FALLBACK_MAX_ATTEMPTS="${GH_RETRY_MAX_ATTEMPTS:-3}"
             case "${GH_RETRY_FALLBACK_MAX_ATTEMPTS}" in
@@ -450,25 +450,21 @@ jobs:
               local out="$1"; shift
               local max_attempts=$((10#${GH_RETRY_FALLBACK_MAX_ATTEMPTS}))
               local attempt=1
-              local err_file
-              err_file="$(mktemp "${RUNNER_TEMP:-/tmp}/gh_retry_fallback_stderr.XXXXXX" 2>/dev/null)" || err_file=""
+              local err_text
+              # The real helper's _is_gh_permanent_failure patterns, lowercased.
+              local permanent_re="(['\"][^'\"]+['\"] not found|gh: not found|http 404|404 not found|status code 404|http 422|resource not accessible by (integration|personal access token))"
               while :; do
-                if [ -n "${err_file}" ]; then
-                  if "$@" > "${out}" 2> "${err_file}"; then
-                    rm -f "${err_file}"
-                    return 0
-                  fi
-                  cat "${err_file}" >&2
-                  if grep -qiE "['\"][^'\"]+['\"] not found|gh: Not Found|HTTP 404|404 Not Found|status code 404|HTTP 422|Resource not accessible by (integration|personal access token)" "${err_file}"; then
-                    echo "::warning::gh_retry_to_file fallback: gh command failed with a non-retryable error (attempt ${attempt}/${max_attempts}); not retrying"
-                    rm -f "${err_file}"
-                    return 1
-                  fi
-                else
-                  "$@" > "${out}" && return 0
+                # stderr is captured in a variable and matched in-process, so
+                # the permanent-failure check never depends on a temp file.
+                if err_text="$("$@" 2>&1 > "${out}")"; then
+                  return 0
+                fi
+                [ -z "${err_text}" ] || printf '%s\n' "${err_text}" >&2
+                if [[ "${err_text,,}" =~ ${permanent_re} ]]; then
+                  echo "::warning::gh_retry_to_file fallback: gh command failed with a non-retryable error (attempt ${attempt}/${max_attempts}); not retrying"
+                  return 1
                 fi
                 if [ "${attempt}" -ge "${max_attempts}" ]; then
-                  [ -z "${err_file}" ] || rm -f "${err_file}"
                   echo "::warning::gh_retry_to_file fallback: gh command failed after ${max_attempts} attempts"
                   return 1
                 fi
