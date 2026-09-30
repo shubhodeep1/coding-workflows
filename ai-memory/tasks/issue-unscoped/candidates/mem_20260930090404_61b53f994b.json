@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py:793\u2013803, 806\u2013818 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `_publish_attempts` can exceed the hook\u2019s 30-second timeout because its 24-second budget check does not account for all sequential API calls within an attempt.\n  WHY: Slow comments GETs, backoffs, and subsequent comment and label calls can push execution past the timeout before pending state or the cap result is recorded.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Operator: copy it into `.claude/hooks/unattended_question_guard.py` as a `[claude-twin-sync]` commit on this branch\"\n  expected_change_site: `.claude/hooks/unattended_question_guard.py`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: The live `.claude/hooks/unattended_question_guard.py` still uses `\"--jq\", \".[].body\"` at line 777 and `if cap_marker in out:` at line 781, missing `CAP_BLOCKER_TRUSTED_ASSOCIATIONS`, `CAP_BLOCKER_COMMENTS_JQ`, and `_cap_blocker_on_issue`; The live hook at `.claude/hooks/unattended_question_guard.py` retains the older `_publish_attempts` with `if cap_marker in out:` (line 781) and `\"--jq\", \".[].body\"` (line 777), missing `CAP_BLOCKER_TRUSTED_ASSOCIATIONS`, `CAP_BLOCKER_COMMENTS_JQ`, and `_cap_blocker_on_issue` that the workflow-templates twin has (lines 806-810, 120-136); The live `.claude/hooks/unattended_question_guard.py` still has the pre-round-1 idempotency check (`if cap_marker in out:` at line 781, `\"--jq\", \".[].body\"` at line 777) and lacks `CAP_BLOCKER_TRUSTED_ASSOCIATIONS`, `CAP_BLOCKER_COMMENTS_JQ`, and `_cap_blocker_on_issue`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"Operator: copy it into `.claude/hooks/unattended_question_guard.py` as a `[claude-twin-sync]` commit on this branch (twin sha256 `796cebe9fafee07eda112942c380c46fa8b6b267c26a4c3870372ce18be8cf48`). Until then `test_template_parity[hooks/unattended_question_guard.py]` fails by design; a `hold` claim is posted on the head.\" (PR description)\n  Expected change site: `.claude/hooks/unattended_question_guard.py`\n  Evidence of absence: The live `.claude/hooks/unattended_question_guard.py` still uses `\"--jq\", \".[].body\"` at line 777 and `if cap_marker in out:` at line 781, missing `CAP_BLOCKER_TRUSTED_ASSOCIATIONS`, `CAP_BLOCKER_COMMENTS_JQ`, and `_cap_blocker_on_issue`. The implement-plan log marks the twin re-sync as the explicit remaining task. The PR description defers this to the operator under Q40.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n  This is an explicitly deferred operator task per the Q40 twin-first workflow. The PR description says the parity test fails \"by design\" and a hold claim is posted. The deferral clause applies \u2014 skip this as an unmet requirement.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py:793\u2013803, 806\u2013818 | severity=high | confidence=5\n  PROBLEM: The 24-second budget check accounts for only one 6-second API call per attempt, but an attempt can make three sequential calls: comments GET, comment POST, and label POST.\n  WHY: Two slow failed GET attempts can consume 6 seconds each, plus the 1- and 2-second backoffs. A third attempt that then makes three calls near their 6-second timeout can take the total past the hook\u2019s 30-second timeout. The hook may be terminated before it records the pending state or returns its cap result.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Operator: copy it into .claude/hooks/unattended_question_guard.py as a [claude-twin-sync] commit on this branch\" (PR description, twin-first workflow Q40)\n  Expected change site: `.claude/hooks/unattended_question_guard.py`\n  Evidence of absence: The live hook at `.claude/hooks/unattended_question_guard.py` retains the older `_publish_attempts` with `if cap_marker in out:` (line 781) and `\"--jq\", \".[].body\"` (line 777), missing `CAP_BLOCKER_TRUSTED_ASSOCIATIONS`, `CAP_BLOCKER_COMMENTS_JQ`, and `_cap_blocker_on_issue` that the workflow-templates twin has (lines 806-810, 120-136). The implement-plan log records this as the explicit remaining task: \".claude/hooks/unattended_question_guard.py twin sync (operator, Q40): synced in d8619c3 and f438ca2; re-sync needed after the 2026-09-30 review round 1 fix\". The `test_template_parity[hooks/unattended_question_guard.py]` test fails by design until the operator performs the twin sync, and a `hold` claim is posted on the head to prevent merge.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: \"Operator: copy it into `.claude/hooks/unattended_question_guard.py` as a `[claude-twin-sync]` commit on this branch\"\n  Expected change site: `.claude/hooks/unattended_question_guard.py`\n  Evidence of absence: The live `.claude/hooks/unattended_question_guard.py` still has the pre-round-1 idempotency check (`if cap_marker in out:` at line 781, `\"--jq\", \".[].body\"` at line 777) and lacks `CAP_BLOCKER_TRUSTED_ASSOCIATIONS`, `CAP_BLOCKER_COMMENTS_JQ`, and `_cap_blocker_on_issue`. The twin at `workflow-templates/.claude/hooks/unattended_question_guard.py` has the fixed code (lines 771-788, 806). `test_template_parity[hooks/unattended_question_guard.py]` would fail on the live copy.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n  Note: This is an explicitly deferred operator task per the PR description (\"Only `workflow-templates/.claude/hooks/unattended_question_guard.py` is edited. Operator: copy it into `.claude/hooks/unattended_question_guard.py` as a `[claude-twin-sync]` commit on this branch\") and the implement-plan log (\"re-sync needed after the 2026-09-30 review round 1 fix\"). The PR is a draft with a `hold` claim on the head, so it will not merge until the operator performs the twin sync. Citing the deferral per the task-gap rules \u2014 this is not an unmet requirement, just a pending operator step in the documented twin-first workflow (Q40).\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d7c51bb1be1f909c464a1832812f5afb86af30890dead679fc25c2a73315f21a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5104,
+    "run_id": "36690519113",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36690519113",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930090404_61b53f994b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5104,
+    "run_id": "36690519113"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T09:04:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
