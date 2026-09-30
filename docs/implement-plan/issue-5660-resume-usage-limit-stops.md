@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5660-resume-usage-limit-stops-plan.md
 - Source issue: shubhodeep1/coding-workflows#5660 (progress comment 5911814092)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5660-resume-usage-limit-stops   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5660-resume-usage-limit-stops   Final PR: #5678 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5718: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened; phase 1 starting
+- Last note: phase 1 PR #5718 opened twin-first; hold claim posted; waiting on the Q40 twin sync (twins + claude-issue-pickup.md diff) and /reclarify on #5660
 
 ## Phases
-1. [ ] Phase 1 — usage-limit resumes (selector script, pickup step 1a, sweep name, docs, tests)   — protected paths: .claude/scripts/usage_limit_resumes.py [new], .claude/scripts/stale_routines.py, .claude/settings.json (via workflow-templates/.claude/** twins); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)
+1. [ ] Phase 1 — usage-limit resumes (selector script, pickup step 1a, sweep name, docs, tests)   — protected paths: .claude/scripts/usage_limit_resumes.py [new], .claude/scripts/stale_routines.py, .claude/settings.json (via workflow-templates/.claude/** twins); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #5718 open (hold: twin sync); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -42,7 +42,11 @@
 - AD-13 [plan, 2026-09-30] The handbook's manual procedure and the "Retiring the master" table? — Picked: A — replace the procedure with a pointer plus a fallback for sessions beyond the 3-day window; add the row. Alternatives: B — delete the note, add no row. Why: the issue asks for both. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A selector that resumes stopped sessions must treat any trigger bound to a checker as a live chain (its triggers are its own check-ins), or a resume starts a second send_later chain. (files: workflow-templates/.claude/scripts/usage_limit_resumes.py)
+- [source:plan-deviation] A `rejected` rate_limit_info snapshot does not mean a session stopped: turns completed on overage record it too, so it may only select checkers with no bound trigger. (files: workflow-templates/.claude/scripts/usage_limit_resumes.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
 - security_pass_skip.py: {"skip": false, "label": null, "reason": "no skip label"} → Security pass: run.
+- Phase 1 verification (2026-09-30): full suite in this session's checkout 156 failed / 4916 passed; 114 of the failures also fail on an origin/main copy (missing local tools), 31 orchestrate_* tests time out only in the proxied checkout and pass on a local clone of the phase head, and the rest are the expected pre-sync parity and pickup assertions. A clone with the twins copied and the pickup diff applied passes all 774 tests of the affected suites.
+- Twin-sync blocker posted on #5660 (ai:claude-blocked); no project checker armed yet (twin-first: the stage that /reclarify resumes arms the wait on PR #5718).
