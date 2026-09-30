@@ -20,10 +20,13 @@ Denied, when a segment's command word (past assignments, `env`, `sudo`,
   - `python` / `python3` / `pythonX.Y` running a program from `-c` or from a
     heredoc on stdin (`python3 - <<'EOF'`, `python3 <<'EOF'`) that writes:
     `write_text` / `write_bytes`, `open(` (or `fdopen(`, `.open(`) with a
-    `w` / `a` / `x` / `+` mode, `os.replace`, `os.remove`, a mutating
-    `shutil` call, or `.unlink(`;
+    `w` / `a` / `x` / `+` mode, `os.replace`, `os.rename`, `os.remove`, a
+    mutating `shutil` call, or `.unlink(`;
   - `sed -i` / `--in-place`, `perl -i` / `-pi`, `ruby -i`, and
     `awk` / `gawk -i inplace`: those flags exist only to edit files in place.
+The same applies to a command inside a substitution Bash runs within one word
+(a double-quoted `"$(…)"` or a backtick), which the tokenizer keeps inside
+another command's argument.
 
 No decision (the normal permission flow applies):
   - a read-only interpreter program, `pytest`, `python3 -m …`, and a script
@@ -122,10 +125,17 @@ _PYTHON_WRITE_PATTERNS = (
 	re.compile(r"\bwrite_(?:text|bytes)\s*\("),
 	re.compile(r"\b(?:fd)?open\s*\(" + _OPEN_ARGUMENT_UNIT + r"*?(?:,|\bmode\s*=)\s*" + _MODE_WRITES),
 	re.compile(r"\.open\s*\(\s*(?:mode\s*=\s*)?" + _MODE_WRITES),
-	re.compile(r"\bos\.(?:replace|remove)\s*\("),
-	re.compile(r"\bshutil\.(?:copy|copy2|copyfile|copyfileobj|copytree|copymode|copystat|move|rmtree)\s*\("),
+	re.compile(r"\bos\.(?:replace|rename|renames|remove)\s*\("),
+	re.compile(
+		r"\bshutil\.(?:copy|copy2|copyfile|copyfileobj|copytree|copymode|copystat|move|rmtree"
+		r"|chown|make_archive|unpack_archive)\s*\("
+	),
 	re.compile(r"\.unlink\s*\("),
 )
+
+# Substitutions nested deeper than this inside one word are left to the normal
+# permission flow.
+_MAX_SUBSTITUTION_DEPTH = 4
 
 _AWK_INPLACE_VALUES = frozenset({"inplace", "inplace.awk"})
 _AWK_VALUE_OPTIONS = frozenset({"-f", "-v", "-F", "-e", "-l", "-E", "--file", "--assign", "--field-separator", "--source", "--load", "--exec"})
@@ -180,7 +190,8 @@ def _command_start(tokens: list[str], tokenizer) -> int:
 		if options is None:
 			return index
 		index += 1
-		while index < len(tokens) and tokens[index].startswith("-") and tokens[index] != "-":
+		# A bare `-` ends the options, except for `env`, where it is `-i` (POSIX).
+		while index < len(tokens) and tokens[index].startswith("-") and (tokens[index] != "-" or word == "env"):
 			if tokens[index] == "--":
 				index += 1
 				break
@@ -351,7 +362,7 @@ def segment_kind(tokens: list[str], tokenizer) -> str:
 	return ""
 
 
-def inline_edit_kind(command: str, tokenizer) -> str:
+def inline_edit_kind(command: str, tokenizer, _depth: int = 0) -> str:
 	"""The interpreter kind of the first inline-interpreter file edit in a command, else ""."""
 	stripped, heredocs = tokenizer.strip_heredoc_bodies(command)
 	try:
@@ -384,6 +395,14 @@ def inline_edit_kind(command: str, tokenizer) -> str:
 		source, _program = python_program(tokens[start + 1 :])
 		if source == "stdin" and program_writes(body):
 			return "python"
+	# A double-quoted `$(…)` or a backtick runs its body as a command, but the
+	# tokenizer keeps it inside one word of another command, so no segment
+	# above starts with it. An unquoted `$(…)` is already its own segment.
+	if _depth < _MAX_SUBSTITUTION_DEPTH:
+		for substitution in tokenizer.substitution_bodies(stripped):
+			kind = inline_edit_kind(substitution, tokenizer, _depth + 1)
+			if kind:
+				return kind
 	return ""
 
 

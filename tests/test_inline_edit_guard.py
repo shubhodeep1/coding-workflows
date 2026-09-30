@@ -191,6 +191,20 @@ def test_observed_prompts_are_denied(name):
 		),
 		("python3 -c \"open(os.path.join(str(d), 'x'), encoding='utf-8', mode='a')\"", "python"),
 		("echo start; python3 - <<'EOF' && git diff\nopen('x', 'w')\nEOF", "python"),
+		# `env -` is POSIX `env -i` (final PR #4877 review round 1).
+		("env - python3 -c \"open('x','w').write('y')\"", "python"),
+		("env - LC_ALL=C sed -i 's/a/b/' f", "sed"),
+		("sudo env - sed -i 's/a/b/' f", "sed"),
+		# A substitution Bash runs inside one word of another command.
+		("echo \"$(python3 -c 'open(\"x\",\"w\").write(\"y\")')\"", "python"),
+		("out=\"$(sed -i 's/a/b/' f)\"", "sed"),
+		("echo \"done: `perl -pi -e 's/a/b/' f`\"", "perl"),
+		("echo \"$(echo `sed -i s/a/b/ f`)\"", "sed"),
+		# The rest of the mutating `shutil` calls, and `os.rename`.
+		("python3 -c \"import shutil; shutil.make_archive('a', 'zip', '.')\"", "python"),
+		("python3 -c \"import shutil; shutil.unpack_archive('a.zip', 'd')\"", "python"),
+		("python3 -c \"import shutil; shutil.chown('a', 'me')\"", "python"),
+		("python3 -c \"import os; os.rename('a', 'b')\"", "python"),
 	],
 )
 def test_inline_writes_are_denied(command, kind):
@@ -239,6 +253,13 @@ def test_deny_message_is_the_issue_text():
 		"cat f | python3 -",
 		"cat <<'EOF' > script.py\nopen('x', 'w')\nEOF\npython3 script.py",
 		"ls -la",
+		"env -",
+		"env - sed -n 1p f",
+		"echo \"$(python3 -c 'print(open(\"x\").read())')\"",
+		"git commit -m 'fix $(sed -i s/a/b/ f)'",
+		"echo \"\\$(sed -i s/a/b/ f)\"",
+		"python3 - <<'EOF'\nprint(`x`)\nEOF",
+		"python3 -c \"import shutil; print(shutil.get_archive_formats())\"",
 	],
 )
 def test_reads_scripts_and_data_get_no_decision(command):

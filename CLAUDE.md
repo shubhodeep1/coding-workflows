@@ -1406,8 +1406,10 @@ enforced one (issue #4858):
   interpreter (past assignments, `env`, `sudo`, `timeout N`, `nice`) is
   `python` / `python3` running a program from `-c` or from a heredoc on stdin
   that writes (`write_text`, `write_bytes`, `open(` with a `w` / `a` / `x` /
-  `+` mode, `os.replace`, `os.remove`, a mutating `shutil` call, `.unlink(`),
-  or is `sed -i` / `--in-place`, `perl -i`, `ruby -i`, or `awk -i inplace`.
+  `+` mode, `os.replace`, `os.rename`, `os.remove`, a mutating `shutil` call,
+  `.unlink(`), or is `sed -i` / `--in-place`, `perl -i`, `ruby -i`, or
+  `awk -i inplace`, including inside a double-quoted `$(…)` or a backtick
+  substitution that Bash runs.
   The reason tells the session to use the Edit tool (exact `old_string` /
   `new_string`) or the Write tool, and to edit the
   `workflow-templates/.claude/**` twin of a protected `.claude/**` file (the

@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-4858-inline-edit-guard-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4858
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: main
-- Project branch: claude/implement-plan-issue-4858-inline-edit-guard   Final PR: #4877 draft
-- Status: COMPLETE
-- Stage: final-merge
+- Project branch: claude/implement-plan-issue-4858-inline-edit-guard   Final PR: #4877 ready — review rounds: 1
+- Status: BLOCKED
+- Stage: final-merge — review round
 - Activation: pending verify-activation
-- Waiting on: completion PR (the PR carrying this log update)
+- Waiting on: PR #4877: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_012fdy3doXASWrZZ9W5itkZu (project checker)
+- Check-in: checker session_012fdy3doXASWrZZ9W5itkZu (project checker, idle; the stage after `/reclarify` arms the wait on it)
 - Last updated: 2026-09-30
-- Last note: Validation cycle 1 passed (run 36670668744, 10/10 tests, on project head `504ef23`); the completion PR moves the plan to docs/completed/; final PR #4877 is marked ready once it merges.
+- Last note: Final PR #4877 review round 1 (head `2d13f9f`): all 3 findings valid and fixed in the `workflow-templates/.claude/hooks/` twin (`env -`, substitutions inside one word, the rest of the mutating `shutil` calls). The root copy of `.claude/hooks/inline_edit_guard.py` waits on a `[claude-twin-sync]` commit on the project branch.
 
 ## Phases
 1. [x] Phase 1 — inline-edit guard hook, wiring, logging, docs, tests   — protected paths: `.claude/hooks/inline_edit_guard.py`, `.claude/settings.json`, `.claude/scripts/permission_prompts.py`, `.claude/commands/seed-repo.md` (edited only in their `workflow-templates/.claude/` twins, Q40) — PR #4925 merged 2026-09-29 (merge commit `964c7b0`, twin sync `2917932`); review rounds: 2; interventions: 0
@@ -39,7 +39,7 @@
 ## Completion
 - Completion PR (this log update) — doc moved to docs/completed/issue-4858-inline-edit-guard-plan.md
 - Merged PRs: phase 1 #4925, conformance fixes #5069, #5103, #5216, twin sync #5348
-- Final PR #4877 draft (marked ready in the final-merge stage)
+- Final PR #4877 ready (marked ready 2026-09-30 at `2d13f9f`) — review rounds: 1 (round 1: 3 findings, all fixed; twin sync pending)
 
 ## Activation
 
@@ -63,6 +63,8 @@
 - [source:conformance] When a fix adds a special case at one call site of a shared helper (a step-back over `env`'s options after the tokenizer's prefix skip), move it into a helper every call site uses, and test it behind each wrapper, not only at the start of the command. (files: .claude/hooks/inline_edit_guard.py, tests/test_inline_edit_guard.py)
 - [source:conformance] A regex that matches a call's arguments must allow nested calls at realistic depth (`open(os.path.join(os.path.dirname(p), 'x'), 'w')` is three deep), and a test must pin both a nested write and a nested read. (files: .claude/hooks/inline_edit_guard.py, tests/test_inline_edit_guard.py)
 - [source:conformance] A wrapper's option loop that stops at a bare "-" must know which wrappers take "-" as an option: "env -" is "env -i", so the command after it is hidden. Test the bare-dash form of every wrapper. (files: .claude/hooks/inline_edit_guard.py, tests/test_inline_edit_guard.py)
+- [source:intervention] A guard that decides from each segment's command word must also scan the substitutions Bash runs inside one word (a double-quoted `$(…)` or a backtick): a quote-aware tokenizer keeps them inside another command's argument, so they never become segments. Reuse the tokenizer's own `substitution_bodies` rather than a second parser. (files: .claude/hooks/inline_edit_guard.py, .claude/hooks/gh_api_write_guard.py, tests/test_inline_edit_guard.py)
+- [source:intervention] A write-pattern allowlist of library calls must list every mutating call of that module (for `shutil`: `chown`, `make_archive`, `unpack_archive` as well as the copy/move/remove family) and the siblings of each listed call (`os.rename` next to `os.replace`), with a read-only call of the same module pinned as no decision. (files: .claude/hooks/inline_edit_guard.py, tests/test_inline_edit_guard.py)
 
 ## Notes
 - Permission mode at start: auto.
@@ -90,3 +92,6 @@
 - Security read by session session_012CZbNmgtvXW3DatYcsp6QR (started by the checker). Archived session_018rW4FJrRtiYNamTJrVDcrN, deleted its safety net trig_01EaFnAys4pJUHiNriGzENL9; zombie checkers archived: 0. Synced the project branch with `main` (clean merge `504ef23`, bringing #4920's `gh_api_write_guard.py` change, the tokenizer the inline-edit guard loads; 832 guard / prompt / PR-watch / merge-guard / command / session-title tests pass). The stale Routine sweep selected 9 Routines; all were already gone. No triggers were pending on the checker. Validation dispatched (run 36670668744).
 - Validation read and completion by session session_015S51KPjMVCf9MDndi3vaAz (started by the checker). Archived session_012CZbNmgtvXW3DatYcsp6QR, deleted its safety net trig_01Jk7jVijf2hBqWLYbwf4CoG; zombie checkers archived: 0. Validation run 36670668744 concluded `success` with `validation_status.json` status=pass. Synced the project branch with `main` (clean merge `630f448`, bringing only a `docs/operations/master-session.md` change).
 - This session's own `sed -i` edit of this log was denied by the inline-edit guard with its redirect message, and the retry with the Edit tool went through without a prompt: the guard working as intended on the project branch.
+- Final-merge review round 1 by session session_01J6taHTFZtYMajiiF8owkAi (started by the checker). Archived session_01RWjvGvPCf8WcUmCU8vDZ1Y, deleted its safety net trig_01NNKTXxmHU74cumDUvzco2g and hand-back trig_013g9zuDhmAYdfguLSRWWSbB; zombie checkers archived: 0. The project branch was already up to date with `main`. Claimed head `2d13f9f` (comment 5906448459).
+- Review round 1 (`2d13f9f`, ledger `055f1e75…`): 3 consensus findings, all valid, all in `.claude/hooks/inline_edit_guard.py`. (1) `env -` (POSIX `env -i`) hid the command after it, the concern the fix check recorded: `_command_start` now consumes a bare `-` for `env` only. (2) A writing command inside a double-quoted `$(…)` or a backtick got no decision (the unquoted `$(…)` was already denied): `inline_edit_kind` now recurses, at most 4 deep, into `tokenizer.substitution_bodies`, the §23.H tokenizer's own helper, so `gh_api_write_guard.py` is unchanged (plan Non-goals). (3) `shutil.make_archive` / `unpack_archive` were missing from the mutating calls (AD-6): added with `shutil.chown`. Proactive, same list: `os.rename` / `os.renames`, the siblings of `os.replace`. Side effect, accepted under the plan's "a false deny costs one retry": a double-quoted commit message holding a backticked `sed -i` is now denied, because Bash would run it. 11 new deny cases and 7 new no-decision cases; the 11 deny cases fail on the unchanged root copy.
+- Protected-path approval: final-merge review round 1 — twin-first per Q40 (2026-09-30). Same rule as conformance fixes 2 and 3 (#4785's sync is still not on `main`: no `scripts/claude_twin_sync.py`). Only the `workflow-templates/.claude/hooks/` twin changes. A `hold` claim goes on the new head, and the stage stops BLOCKED until a watched session lands the root copy as a `[claude-twin-sync]` commit on the project branch and comments `/reclarify`. Until then the real tree fails `test_template_parity` and the 11 new deny cases, which load the root copy. In a twin overlay, `tests/test_inline_edit_guard.py` passes 129/129 and the guard, prompt, `gh api` guard, and PR-watch suites pass 446/446. Across the 68 test files that read CLAUDE.md, `agents.md`, the hook, or `workflow-templates/`, the real tree has 2328 passed and 70 failed: the 12 expected pre-sync guard cases, and 58 that come from this container (no `jsonschema` and no `gawk`). With `pyyaml jsonschema jinja2` installed, those files pass 174 of 175; the one left is `gawk: command not found`.

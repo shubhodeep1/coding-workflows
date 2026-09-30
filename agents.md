@@ -1186,8 +1186,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   `permissionDecision: deny` with a redirect to the Edit and Write tools for
   `python` / `python3` programs from `-c` or a stdin heredoc that write
   (`write_text`, `write_bytes`, `open(` with a `w` / `a` / `x` / `+` mode,
-  `os.replace`, `os.remove`, a mutating `shutil` call, `.unlink(`), and for
-  `sed -i`, `perl -i` / `-pi`, `ruby -i`, and `awk -i inplace`. Reads,
+  `os.replace`, `os.rename`, `os.remove`, a mutating `shutil` call,
+  `.unlink(`), and for `sed -i`, `perl -i` / `-pi`, `ruby -i`, and
+  `awk -i inplace`, also inside a double-quoted `$(…)` or a backtick. Reads,
   `pytest`, `python3 -m …`, scripts run from a file path, and interpreter
   text that is only data get no decision. It fails open (no decision on a bad
   payload, an unparseable command, or an internal error), has the kill switch
