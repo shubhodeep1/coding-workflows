@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The #5174 plan Files & Modules section lists `scripts/guard_differential.py` as a new file to ship. The conformance lesson recorded in `docs/implement-plan/issue-5326-guard-differential-trusted-loosening.md` states \"A new `scripts/*.py` needs its `docs/INVENTORY.md` entry in the same PR, or `tests/inventory_parity.py` (`CI / Inventory parity`) fails on the next PR into `main`.\"\n  expected_change_site: docs/INVENTORY.md\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: `grep guard_differential docs/INVENTORY.md` returns nothing; `scripts/guard_differential.py` is not listed in `docs/INVENTORY.md`. Both implement-plan logs document this as a known #5174 gap that #5185's CI will report.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: The #5174 plan Files & Modules section lists `scripts/guard_differential.py` as a new file to ship. The conformance lesson recorded in `docs/implement-plan/issue-5326-guard-differential-trusted-loosening.md` states \"A new `scripts/*.py` needs its `docs/INVENTORY.md` entry in the same PR, or `tests/inventory_parity.py` (`CI / Inventory parity`) fails on the next PR into `main`.\" The #5326 implement-plan log Notes section and the #5174 implement-plan log Notes section both acknowledge this gap: `tests/inventory_parity.py` fails because `docs/INVENTORY.md` lacks `scripts/guard_differential.py`.\n  Expected change site: docs/INVENTORY.md\n  Evidence of absence: `grep guard_differential docs/INVENTORY.md` returns nothing; `scripts/guard_differential.py` is not listed in `docs/INVENTORY.md`. Both implement-plan logs document this as a known #5174 gap that #5185's CI will report.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c627b02cc94f3a4dd621d47c09eaf170ee1970aa99dabb844b1d60433a739a6a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36674937623",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36674937623",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930061004_2b07e41055",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36674937623"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T06:10:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
