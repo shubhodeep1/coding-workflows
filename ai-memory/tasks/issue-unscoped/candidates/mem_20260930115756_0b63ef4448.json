@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/internal-review.yml:134 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `pr_lookup_err_file` temporary file created by `mktemp` is not explicitly cleaned up when the step exits.\n  WHY: This leaves a temporary file for the runner's lifetime; reviewers characterize the impact as bounded or cosmetic on ephemeral runners.\n- tests/test_internal_review_push_pr_grace.py:197-204 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The invalid-grace test does not pin the exact legal upper-bound value `CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS=3600`.\n  WHY: Without a boundary test, changing the comparison from `-gt` to `-ge` or introducing an off-by-one error could reject 3600 without a test catching it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/internal-review.yml: line 134 | PROBLEM: The temporary file `pr_lookup_err_file` created via `mktemp` is not explicitly cleaned up upon step completion or early exit. WHY: Add `trap 'rm -f \"${pr_lookup_err_file}\"' EXIT` immediately after `pr_lookup_err_file=\"$(mktemp)\"`.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_internal_review_push_pr_grace.py: Line or code reference: test_invalid_grace_falls_back_to_default_with_warning at lines 197-204 | severity=low | confidence=3\n  PROBLEM: The invalid-value test asserts that values above the 3600 ceiling fall back to the default, but there is no test for the exact boundary value `CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS=3600`, which is the only legal value at the upper end of the allowed range.\n  WHY: The arithmetic check `[ \"$((10#${pr_grace_secs}))\" -gt \"${pr_grace_max_secs}\" ]` uses `>` not `-ge`, so 3600 must be accepted, but that contract is not pinned. Without a boundary test, a regression that turns the comparison into `-ge` (or an off-by-one in `pr_grace_max_secs`) would only surface when an operator sets the variable to 3600.\n- .github/workflows/internal-review.yml: Line or code reference: step `resolve`, line ~134 (`pr_lookup_err_file=\"$(mktemp)\"`) | severity=low | confidence=3\n  PROBLEM: The `mktemp` temp file used to capture `gh api`'s stderr is created but never explicitly cleaned up via an EXIT trap.\n  WHY: On a public-repo `ubuntu-latest` runner the file is reclaimed when the runner is destroyed, so the leak is bounded, but the step runs on every push to a `claude/**` branch and leaves a `/tmp/tmp.*` file behind each time the lookup fails.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/internal-review.yml: `pr_lookup_err_file=\"$(mktemp)\"` (inside the `resolve` step `run:` body, after the `pr_lookup_failures=0` line) | severity=low | confidence=4\n  PROBLEM: The temp file created by `mktemp` is never removed. There is no `trap ... EXIT` and no explicit `rm` after the polling loop ends.\n  WHY: No runtime failure on GitHub Actions ephemeral runners, but the temp file persists for the lifetime of the runner. This is a resource-hygiene defect, not a functional bug.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/internal-review.yml: line 134, pr_lookup_err_file=\"$(mktemp)\" | PROBLEM: Temporary file created via `mktemp` is not explicitly cleaned up on step exit; it persists in the runner's `/tmp` until the VM is destroyed. WHY: The runner VM is ephemeral so this is cosmetic, not a real resource leak in production.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0acd231f98f3229edbdcdf6de43d39626788b9a1a4e31ba757d434913848a7f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5462,
+    "run_id": "36709780277",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36709780277",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930115756_0b63ef4448",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5462,
+    "run_id": "36709780277"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T11:57:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
