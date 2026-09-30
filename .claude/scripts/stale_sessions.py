@@ -17,9 +17,11 @@ Input:
                               (`mine: true`, `limit: 100`), newest page first.
                               Each is the `{"ccr": {"data": [...], "has_more",
                               "last_id"}}` object, `{"data": [...]}`, or the bare
-                              array, possibly inside the harness's untrusted-data
-                              wrapper text (the JSON line is found and parsed;
-                              the wrapper is ignored).
+                              array. The two object shapes may also sit inside
+                              the harness's untrusted-data wrapper text: the one
+                              line holding the result object is parsed and the
+                              wrapper is ignored (a bare array is accepted only
+                              as plain JSON).
   --triggers FILE [FILE ...]  every saved `list_triggers` page
                               (`enabled: true`, `limit: 100`), same shapes.
                               A session bound to a Routine on a page left out
@@ -177,8 +179,11 @@ def _parse_time(value: object) -> dt.datetime:
 def _load_document(path: str) -> object:
 	"""Parse a saved tool result: plain JSON, or the one result object inside the harness wrapper text.
 
-	In wrapper text only a line holding a JSON object that `_page` accepts counts, so a stray JSON line
-	(`[]`, `{}`) is never read as an empty page; more than one such line is ambiguous and rejected.
+	In wrapper text only a line holding a JSON object with a `ccr` or `data` key counts, so a stray JSON
+	line (`[]`, `{}`) is never read as an empty page. Anything that could hide the real result is rejected
+	instead of skipped: a line starting with `{` that does not parse (a truncated result), a result-shaped
+	object that `_page` refuses, and more than one result object. A stray `{"data": []}` can therefore
+	never stand in for the real page.
 	"""
 	with open(path, encoding="utf-8") as handle:
 		text = handle.read()
@@ -193,9 +198,11 @@ def _load_document(path: str) -> object:
 			continue
 		try:
 			candidate = json.loads(line)
-			_page(candidate)
-		except ValueError:
+		except ValueError as exc:
+			raise ValueError("a JSON line in the wrapper text does not parse (truncated result?)") from exc
+		if not isinstance(candidate, dict) or not {"ccr", "data"} & candidate.keys():
 			continue
+		_page(candidate)
 		found.append(candidate)
 	if len(found) > 1:
 		raise ValueError(f"{len(found)} result objects found in the wrapper text; expected one")
