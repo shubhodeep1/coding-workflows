@@ -70,9 +70,10 @@ comments. The base binding reuses the PR read (no call). With a live marker
 bound to the current base, 1 paginated check-runs read (one call per 100
 check runs, through the collector). Only when the snapshot is ready: 1 review
 run read (+1 compare read when that run was triggered by an older push), 1
-head-branch runs read and 4 workflow_dispatch runs reads (internal-review.yml,
-review_autofix.yml, ai-review.yml, review_rb_judge_dispatch.yml; a missing
-workflow costs its one 404), 1
+head-branch runs listing and 4 workflow_dispatch runs listings
+(internal-review.yml, review_autofix.yml, ai-review.yml,
+review_rb_judge_dispatch.yml; a missing workflow costs its one 404), each 1
+call per 100 runs down to the marker's run (usually 1, at most 10), 1
 read per 100 comments again, 1 repository-variable read, then
 `review_enable_auto_merge.sh` (1 paginated labels read, 1 PR read, 1 merge
 call). Every read goes through `gh api` with
@@ -356,6 +357,34 @@ def _read_review_run_listing(path: str, missing_ok: bool = False, title_bound: b
 	return runs
 
 
+def _read_review_runs_to_marker(path: str, marker_run_id: int, missing_ok: bool = False,
+	title_bound: bool = False) -> list[dict] | None:
+	"""Every run of one newest-first Actions runs listing down to the marker's run; with `missing_ok`, None on a 404.
+
+	`path` ends in `per_page=REVIEW_RUNS_PER_PAGE`. Page 1 is always read,
+	then page after page until one holds a run with an id at or below
+	`marker_run_id` (every run newer than the marker's run has then been
+	seen) or a short page ends the listing: 1 call in the usual case, at most
+	`check_in_status.MAX_PAGINATED_API_PAGES`. Needing more raises
+	`check_in_status.ReadError` rather than deciding on a partial listing
+	(PR #5178 review round 5: 100 internal-review.yml dispatches span about
+	90 minutes in coding-workflows, so a marker older than that fell off the
+	one page read before). Only page 1 may 404 (`missing_ok`); each page is
+	validated by `_read_review_run_listing`.
+	"""
+	runs: list[dict] = []
+	for page_number in range(1, check_in_status.MAX_PAGINATED_API_PAGES + 1):
+		page = _read_review_run_listing(f"{path}&page={page_number}", missing_ok=missing_ok and page_number == 1,
+			title_bound=title_bound)
+		if page is None:
+			return None
+		runs.extend(page)
+		if len(page) < REVIEW_RUNS_PER_PAGE or any(run["id"] <= marker_run_id for run in page):
+			return runs
+	raise check_in_status.ReadError(f"gh api {path} listed {check_in_status.MAX_PAGINATED_API_PAGES} pages "
+		f"without reaching the marker's run {marker_run_id}")
+
+
 def _run_path(run: dict) -> str:
 	path = run.get("path")
 	return path.split("@", 1)[0] if isinstance(path, str) else ""
@@ -369,15 +398,21 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	checks; enabling auto-merge then would skip whatever it finds. Input: the
 	PR's head branch and the id of the review run the marker links.
 
-	Reads, 5 calls in all, each the newest 100 runs:
-	`actions/runs?branch=<head_ref>` (1 call), then the workflow_dispatch runs
-	of internal-review.yml (`check_in_status.DISPATCHED_REVIEW_RUNS_PATH`, 1
-	call) and of each of the 3 UNBOUND_DISPATCH_REVIEW_WORKFLOWS entries (1
-	call each; a 404 there, the workflow not existing in that repo, is no
-	runs). Any other failed read, a 404 on the head-branch listing included,
-	and a listing with a run that has no integer `id` or string `status`
-	(or, in the internal-review.yml listing, no non-blank string `display_title`)
-	raise `check_in_status.ReadError`. These reads are only part of
+	Reads, 5 listings in all, each newest first and 100 runs per call:
+	`actions/runs?branch=<head_ref>`, then the workflow_dispatch runs of
+	internal-review.yml (`check_in_status.DISPATCHED_REVIEW_RUNS_PATH`) and
+	of each of the 3 UNBOUND_DISPATCH_REVIEW_WORKFLOWS entries (a 404 on
+	their first page, the workflow not existing in that repo, is no runs).
+	Each listing is paged until it reaches the marker's run
+	(`_read_review_runs_to_marker`): 1 call in the usual case, at most
+	`check_in_status.MAX_PAGINATED_API_PAGES`, so every run newer than the
+	marker's run is seen. A run older than the marker's run counts only when
+	it is on a page read (always at least the newest 100, as before paging).
+	Any other failed read, a 404 on the head-branch listing included, a
+	listing that needs more pages than that, and a listing with a run that
+	has no integer `id` or string `status` (or, in the internal-review.yml
+	listing, no non-blank string `display_title`) raise
+	`check_in_status.ReadError`. These reads are only part of
 	`evaluate()`'s per-PR budget, which the module docstring states in full,
 	the comments re-read after them included.
 
@@ -395,20 +430,20 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	conclude `success`; a newer review that posted findings or a newer marker
 	is caught by `find_pending_marker`.
 	"""
-	branch_runs = _read_review_run_listing(
-		f"repos/{repo}/actions/runs?branch={quote(head_ref, safe='/')}&per_page={REVIEW_RUNS_PER_PAGE}"
+	branch_runs = _read_review_runs_to_marker(
+		f"repos/{repo}/actions/runs?branch={quote(head_ref, safe='/')}&per_page={REVIEW_RUNS_PER_PAGE}", marker_run_id
 	)
 	title = check_in_status.DISPATCHED_REVIEW_TITLE.format(number=number)
 	bound_dispatches = [
-		run for run in _read_review_run_listing(check_in_status.DISPATCHED_REVIEW_RUNS_PATH.format(repo=repo), missing_ok=True,
-			title_bound=True) or []
+		run for run in _read_review_runs_to_marker(check_in_status.DISPATCHED_REVIEW_RUNS_PATH.format(repo=repo), marker_run_id,
+			missing_ok=True, title_bound=True) or []
 		if run.get("display_title") == title
 	]
 	active = [run for run in branch_runs + bound_dispatches if run.get("status") != "completed"]
 	for workflow_path in UNBOUND_DISPATCH_REVIEW_WORKFLOWS:
-		listing = _read_review_run_listing(
+		listing = _read_review_runs_to_marker(
 			f"repos/{repo}/actions/workflows/{Path(workflow_path).name}/runs?event=workflow_dispatch&per_page={REVIEW_RUNS_PER_PAGE}",
-			missing_ok=True,
+			marker_run_id, missing_ok=True,
 		)
 		active.extend(run for run in listing or [] if run.get("status") != "completed")
 	if active:
@@ -534,11 +569,20 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 		return {"state": newer_review["state"], "head_sha": head_sha, "reason": newer_review["reason"]}
 	# A newer review that completed after the first comment read has already
 	# posted its hand-off or marker, so authorize only a marker that is still
-	# the live one now that no newer review is running (issue #5148).
+	# the live one now that no newer review is running (issue #5148). A review
+	# that starts after its listing was read, up to the merge call below, is
+	# not seen: a window of seconds, while a review takes minutes to post
+	# anything, accepted by the #5148 plan (Risks); closing it would need the
+	# review workflow to hold off or disable auto-merge, which the plan leaves out.
 	current = find_pending_marker(check_in_status.gh_api_list(f"repos/{repo}/issues/{number}/comments"), repo, head_sha, author_login)
-	if current is None or current["comment_id"] != marker["comment_id"]:
+	if current is None:
 		return {"state": "review_superseded", "head_sha": head_sha,
-			"reason": f"pending-checks comment {marker['comment_id']} is no longer the live marker for this head"}
+			"reason": f"pending-checks comment {marker['comment_id']} is no longer the live marker for this head: "
+				"a later hand-off superseded it, or it was deleted"}
+	if current["comment_id"] != marker["comment_id"]:
+		return {"state": "review_superseded", "head_sha": head_sha,
+			"reason": f"pending-checks comment {marker['comment_id']} is no longer the live marker for this head: "
+				f"newer pending-checks comment {current['comment_id']} replaced it"}
 	enable_flag = read_enable_auto_merge(repo)
 	if enable_flag is None:
 		return {"state": "auto_merge_setting_unreadable", "head_sha": head_sha,

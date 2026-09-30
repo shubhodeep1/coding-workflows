@@ -160,7 +160,11 @@ def runs_listing(runs):
 		runs = [run for run in runs if run.get("status") == query["status"]]
 	if "branch" in query:
 		runs = [run for run in runs if run.get("head_branch") == query["branch"]]
-	emit({"total_count": len(runs), "workflow_runs": runs})
+	# Runs are listed in the order the test gives them (newest first, as
+	# GitHub lists them), one `per_page` slice per `page`.
+	per_page = int(query.get("per_page", 30))
+	page = int(query.get("page", 1))
+	emit({"total_count": len(runs), "workflow_runs": runs[(page - 1) * per_page:page * per_page]})
 
 def emit(value):
 	text = json.dumps(value)
@@ -552,6 +556,76 @@ def test_a_failed_run_listing_read_raises_for_the_sweep_to_log(fake_gh):
 	assert fake_gh.merges() == []
 
 
+# PR #5178 review round 5: 100 internal-review.yml dispatches span about 90
+# minutes in coding-workflows, so a newer review of this PR can sit on page 2.
+_FULL_PAGE_FOR_OTHER_PRS = [_dispatch(RUN_ID + 1000 - offset, pr=7) for offset in range(100)]
+
+
+def _unbound(run_id: int, **overrides) -> dict:
+	return _run(run_id, workflow="review_autofix.yml", event="workflow_dispatch", head_branch="main", **overrides)
+
+
+@pytest.mark.parametrize("label, branch_runs, listings, expected", [
+	("newer failed sweep dispatch for this PR on page 2", [],
+		{"internal-review.yml": _FULL_PAGE_FOR_OTHER_PRS + [_dispatch(RUN_ID + 50, conclusion="failure"), _dispatch(RUN_ID - 1)]},
+		"review_superseded"),
+	("sweep dispatch for this PR still running on page 2", [],
+		{"internal-review.yml": _FULL_PAGE_FOR_OTHER_PRS + [_dispatch(RUN_ID + 50, status="queued")]}, "review_active"),
+	("unbound dispatch still running on page 2", [],
+		{"review_autofix.yml": [_unbound(RUN_ID + 1000 - offset) for offset in range(100)]
+			+ [_unbound(RUN_ID + 50, status="in_progress")]}, "review_active"),
+	("newer failed head-branch review on page 2",
+		[_run(RUN_ID + 1000 - offset, workflow="ci.yml") for offset in range(100)] + [_run(RUN_ID + 50, conclusion="failure")], {},
+		"review_superseded"),
+])
+def test_a_newer_review_past_the_first_page_is_still_seen(fake_gh, label, branch_runs, listings, expected):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
+		dispatch_runs=_dispatch_runs(**listings))
+	result = _evaluate()
+	assert result["state"] == expected, (label, result)
+	assert f"{RUN_ID + 50}" in result["reason"], (label, result)
+	assert fake_gh.merges() == [], label
+
+
+def test_run_paging_stops_at_the_page_that_reaches_the_marker_run(fake_gh):
+	# §15: the page holding the marker's run (or an older one) is the last
+	# one read, so a recent marker costs 1 call per listing.
+	older_page = [_dispatch(RUN_ID + 60 - offset, pr=7) for offset in range(100)]
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": older_page + [_dispatch(RUN_ID - 70, pr=7)]}))
+	assert _evaluate()["state"] == "merge_enabled"
+	pages = [call for call in fake_gh.calls() if "/actions/workflows/internal-review.yml/runs?" in " ".join(call)]
+	assert len(pages) == 1 and pages[0][-1].endswith("&page=1"), pages
+
+
+def test_a_listing_that_never_reaches_the_marker_run_raises(fake_gh):
+	# Fail closed: no decision on a listing cut off before the marker's run.
+	pages = pending_checks.check_in_status.MAX_PAGINATED_API_PAGES
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": [_dispatch(RUN_ID + 5000 - offset, pr=7) for offset in range(100 * pages + 1)]}))
+	with pytest.raises(pending_checks.check_in_status.ReadError, match="without reaching the marker's run"):
+		_evaluate()
+	assert len([call for call in fake_gh.calls() if "/actions/workflows/internal-review.yml/runs?" in " ".join(call)]) == pages
+	assert fake_gh.merges() == []
+
+
+def test_only_the_first_page_of_a_dispatch_listing_may_404(fake_gh, monkeypatch):
+	# A 404 past page 1 is not "the workflow does not exist"; it fails the read.
+	real_api = pending_checks.check_in_status.gh_api
+
+	def page_two_404(path):
+		if "/actions/workflows/internal-review.yml/runs?" in path and path.endswith("&page=2"):
+			raise pending_checks.check_in_status.ReadError(f"gh api {path} failed: gh: Not Found (HTTP 404)")
+		return real_api(path)
+
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": _FULL_PAGE_FOR_OTHER_PRS}))
+	monkeypatch.setattr(pending_checks.check_in_status, "gh_api", page_two_404)
+	with pytest.raises(pending_checks.check_in_status.ReadError, match="HTTP 404"):
+		_evaluate()
+	assert fake_gh.merges() == []
+
+
 _DROP = object()
 
 
@@ -629,18 +703,25 @@ def test_the_stated_run_read_budget_matches_the_listings_read(fake_gh):
 	assert _evaluate()["state"] == "merge_enabled"
 	listings = [call for call in fake_gh.calls() if "/actions/runs?" in " ".join(call) or "/actions/workflows/" in " ".join(call)]
 	assert len(listings) == 2 + unbound
-	assert f"Reads, {2 + unbound} calls in all" in pending_checks.check_review_runs.__doc__
+	assert f"Reads, {2 + unbound} listings in all" in pending_checks.check_review_runs.__doc__
 	assert f"each of the {unbound} UNBOUND_DISPATCH_REVIEW_WORKFLOWS entries" in pending_checks.check_review_runs.__doc__
+	# PR #5178 review round 5: each listing is paged down to the marker's run.
+	pages = pending_checks.check_in_status.MAX_PAGINATED_API_PAGES
 	for doc in (pending_checks.__doc__, sweeper.__doc__):
-		assert re.search(rf"1\s+head-branch runs read,?(?: and)?\s+{1 + unbound}\s+workflow_dispatch runs reads", doc)
+		assert re.search(rf"1\s+head-branch runs listing,?(?: and)?\s+{1 + unbound}\s+workflow_dispatch runs listings", doc)
+		assert re.search(rf"1\s+call per 100 runs down to\s+the marker's run \(usually 1, at most {pages}\)", doc)
+	# The paging stops on a short page, so every listing must ask for REVIEW_RUNS_PER_PAGE runs.
+	assert pending_checks.check_in_status.DISPATCHED_REVIEW_RUNS_PATH.endswith(f"per_page={pending_checks.REVIEW_RUNS_PER_PAGE}")
 
 
-@pytest.mark.parametrize("label, later_comments", [
-	("a newer review handed findings off", [_comment(5, _pending_body()), _comment(9, _handoff_body())]),
-	("a newer clean review posted its own marker", [_comment(5, _pending_body()), _comment(9, _pending_body(round_number=2))]),
-	("the marker was deleted", []),
+@pytest.mark.parametrize("label, later_comments, reason", [
+	("a newer review handed findings off", [_comment(5, _pending_body()), _comment(9, _handoff_body())],
+		"a later hand-off superseded it, or it was deleted"),
+	("a newer clean review posted its own marker", [_comment(5, _pending_body()), _comment(9, _pending_body(round_number=2))],
+		"newer pending-checks comment 9 replaced it"),
+	("the marker was deleted", [], "a later hand-off superseded it, or it was deleted"),
 ])
-def test_a_marker_that_changed_during_the_run_reads_is_not_authorized(fake_gh, monkeypatch, label, later_comments):
+def test_a_marker_that_changed_during_the_run_reads_is_not_authorized(fake_gh, monkeypatch, label, later_comments, reason):
 	# A newer review that finished between the first comment read and the run
 	# reads has already posted its comment; the re-read must see it.
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN)
@@ -656,6 +737,8 @@ def test_a_marker_that_changed_during_the_run_reads_is_not_authorized(fake_gh, m
 	monkeypatch.setattr(pending_checks.check_in_status, "gh_api_list", comments_then_later)
 	result = _evaluate()
 	assert result["state"] == "review_superseded", (label, result)
+	# PR #5178 review round 5: the reason says which case fired, for the sweep's log line.
+	assert result["reason"].startswith("pending-checks comment 5 is no longer the live marker") and reason in result["reason"], (label, result)
 	assert len(reads) == 2
 	assert fake_gh.merges() == [], label
 
