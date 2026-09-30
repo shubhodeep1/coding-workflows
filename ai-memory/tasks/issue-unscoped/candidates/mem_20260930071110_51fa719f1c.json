@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/dispatch_workflow.py:213-237 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script performs an unconditional pre-dispatch run list read.\n  WHY: `recent_run_ids` is called before `_post_dispatch`. If this call fails due to a transient API issue (e.g., ReadError), the dispatch POST is never attempted, even though GitHub might have accepted the dispatch. Additionally, on the normal path where the dispatch response provides the run ID, this API call is unnecessary.\n- .claude/scripts/dispatch_workflow.py:126-130 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The temporary payload file could persist if cleanup is bypassed or interrupted.\n  WHY: While the script uses a `finally` block to remove the temporary payload file, ensuring it covers all exception paths within `_post_dispatch` is critical. If exceptions can bypass or interrupt the cleanup in a way not fully guarded by `finally`, it could lead to resource leaks in the CI environment.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The master copy of `.claude/scripts/dispatch_workflow.py` must be synchronized with the twin in `workflow-templates/` after the AD-5 fix; test_template_parity must pass.\"\n  expected_change_site: .claude/scripts/dispatch_workflow.py (and twin)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The master copy (which the test suite loads) on disk at the review head 791b572 still lacks the full AD-5 error handling and the new functionality (`new_runs`, `_response_run_id`, etc.) that the twin copy contains, failing `test_template_parity`; master still lacks AD-5 try/except + if-known_ids-is-None guard at dispatch(); test_template_parity fails; twin has the block but files diverge on disk.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/dispatch_workflow.py:213-237 | confidence=4\n  PROBLEM: Unconditional pre-dispatch run list read.\n  WHY: `recent_run_ids` is called before `_post_dispatch`. If this call fails due to a transient API issue (e.g., ReadError), the dispatch POST is never attempted, even though GitHub might have accepted the dispatch. Additionally, on the normal path where the dispatch response provides the run ID, this API call is unnecessary.\n- .claude/scripts/dispatch_workflow.py:126-130 | confidence=2\n  PROBLEM: Potential temporary file persistence.\n  WHY: While the script uses a `finally` block to remove the temporary payload file, ensuring it covers all exception paths within `_post_dispatch` is critical. If exceptions can bypass or interrupt the cleanup in a way not fully guarded by `finally`, it could lead to resource leaks in the CI environment.\n- Requirement: \"The master copy of `.claude/scripts/dispatch_workflow.py` must be synchronized with the twin in `workflow-templates/` after the AD-5 fix; test_template_parity must pass.\"\n  Expected change site: .claude/scripts/dispatch_workflow.py (and twin)\n  Evidence of absence: The master copy (which the test suite loads) on disk at the review head 791b572 still lacks the full AD-5 error handling and the new functionality (`new_runs`, `_response_run_id`, etc.) that the twin copy contains, failing `test_template_parity`; master still lacks AD-5 try/except + if-known_ids-is-None guard at dispatch(); test_template_parity fails; twin has the block but files diverge on disk.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b0b896da5a26e68e861629db30dd080018ed9a44e3100168b7529111082a213b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5059,
+    "run_id": "36670930991",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36670930991",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930071110_51fa719f1c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5059,
+    "run_id": "36670930991"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T07:11:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
