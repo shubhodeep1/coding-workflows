@@ -2182,6 +2182,7 @@ depend on it.
 
 **GitHub API rate-limits**
 - Shared GitHub quota handling is reset-aware: use the repo helpers' `gh_retry` backoff behavior instead of ad-hoc retry loops. Pointer: `scripts/gh_helpers.sh`.
+- A retry wrapper must buffer each attempt's stdout and emit only the successful attempt's: `gh api` prints failed responses to stdout, so an unbuffered retry prepends error bodies to the real output (#5495). `gh_retry` does this; an inline `"$@"` retry loop does not. Pointers: `scripts/gh_helpers.sh`, `tests/test_gh_retry_stdout_isolation.py`.
 - Rate-limit alerting is deduplicated by pin/cooldown state, and repeated issue/PR lookups should flow through the poller's batched GraphQL helpers. Pointers: `scripts/gh_helpers.sh`, `scripts/orchestrate_poll_process.sh`.
 
 **Memory subsystem**
