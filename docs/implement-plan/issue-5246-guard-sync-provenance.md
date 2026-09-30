@@ -1,17 +1,17 @@
 # Implement-Plan Log — Fail closed on direct `.claude/` guard-path changes in the twin sync-state check
 
-- Plan: docs/plans/issue-5246-guard-sync-provenance-plan.md
+- Plan: docs/completed/issue-5246-guard-sync-provenance-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5246
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4785-twin-first-claude-sync
 - Project branch: claude/implement-plan-issue-5246-guard-sync-provenance   Final PR: #5267 draft
-- Status: BLOCKED
-- Stage: validation 1/3
-- Activation: not started
-- Waiting on: answer to Q1 on #5246 (`ai:claude-blocked`), then `/reclarify`
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4785-twin-first-claude-sync) — steps 12–13 run only if the base moves onto `main` before the final merge
+- Waiting on: completion PR (claude/implement-plan-issue-5246-guard-sync-provenance-complete)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01V6cH71S7p1H6ovhesNZWfA (idle, no pending check-in)   safety net: none   hand-back: none
+- Check-in: checker session_01V6cH71S7p1H6ovhesNZWfA   safety net: see stage report   hand-back: see stage report
 - Last updated: 2026-09-30
-- Last note: conformance 2/3 CONFORMANT with no fix PR (Correctness: CONCERNS, one HYPOTHESIS outside the plan's scope). Security is skipped by the plan header. Validation was not dispatched: `validate.yml` authorizes `target_ref` only for an open PR into the default branch, and final PR #5267 targets the #4785 project branch, so the run would fail before validating. Stopped at `Status: BLOCKED` and asked Q1 on #5246 (CLAUDE.md §28.C; standing decision Q17 applies). After `Q1: A` the next stage is `completion`.
+- Last note: validation 1/3 passed (run 36665281138, 10/10 tests, validated the project branch head 36a9b96 through the draft final PR #5267 binding). Completion PR moves the plan to docs/completed/; next stage is final-merge (mark #5267 ready; after it merges into the #4785 branch, close #5246 with `ai:merged`).
 
 ## Phases
 1. [x] Phase 1 — guard-path rule in `claude_twin_sync.py check`, CI wiring, tests, docs   — PR #5273 merged 2026-09-29; review rounds: 0; interventions: 0
@@ -24,9 +24,12 @@
 - Skipped: `Security pass: skip (ai:security: automation-produced issue)` in the plan header (`.claude/scripts/security_pass_skip.py` verified it).
 
 ## Validation
-- Cycle 1 — 2026-09-30: not dispatched. `validate.yml` ("Authorize explicit validation target") accepts `target_ref` only when exactly one open PR has that head and `base=<default branch>`; final PR #5267 targets `claude/implement-plan-issue-4785-twin-first-claude-sync`, so the listing returns 0 PRs and the run would fail with `target PR binding is missing or ambiguous` before validating. #4734 (validate stacked targets) is not on `main` yet. Validating the default branch or the base branch in its place is not allowed, so this is a stop (CLAUDE.md §28.C), asked as Q1 on #5246.
+- Cycle 1 — 2026-09-30 (superseded by the next line): not dispatched. `validate.yml` ("Authorize explicit validation target") accepts `target_ref` only when exactly one open PR has that head and `base=<default branch>`; final PR #5267 targets `claude/implement-plan-issue-4785-twin-first-claude-sync`, so the listing returns 0 PRs and the run would fail with `target PR binding is missing or ambiguous` before validating. #4734 (validate stacked targets) is not on `main` yet. Validating the default branch or the base branch in its place is not allowed, so this is a stop (CLAUDE.md §28.C), asked as Q1 on #5246.
+- Cycle 1 — run 36665281138 2026-09-30 (target_ref: claude/implement-plan-issue-5246-guard-sync-provenance, authorized head 36a9b96): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 290s); no fix issues. Dispatched after the owner's correction on #5246 (comment 5903503480: #4734 landed via #4746, so the stacked target is authorized; the run passed "Authorize explicit validation target"). Q1 on #5246 is superseded by that correction, not recorded as a skip.
 
 ## Completion
+- Completion PR (branch claude/implement-plan-issue-5246-guard-sync-provenance-complete) open 2026-09-30 — doc moved to docs/completed/issue-5246-guard-sync-provenance-plan.md
+- Final PR #5267 draft — marked ready in the final-merge stage
 
 ## Activation
 
