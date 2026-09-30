@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:462 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The closing-fence regex accepts trailing spaces but not tabs, so a closing fence followed by a tab is not recognized and a later `/reclarify` line is skipped as fenced content.\n  WHY: The reviewers flag a false-negative route skip, not acceptance of an automation command; they classify it as NIT (mapped to low), while minimax_minimax-m3 disputes the premise and says CommonMark excludes tabs after a closing fence.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Append an automation marker outside model-generated text to every escalation comment, and fail closed on automation-origin comments when authorizing /reclarify.\" The plan's goal states every comment that adds ai:blocked carries an `<!-- ai:\u2026:v1 -->` marker on its own last line.\n  expected_change_site: tests/test_orchestrate_clarify_loop_guard.py, tests/test_plan_clarify_blocked_output.py (marker-content assertions on the loop-break and plan-blocked comment bodies).\n  confidence=[2]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: These two test files are not in the PR diff and contain no assertions on the posted comment body markers. However, the new centralized static check test_escalation_comments_end_with_automation_markers in tests/test_phase_skip_gate_telemetry_contract.py structurally verifies all four workflow comment sites and both orchestrate script variants, and test_implement_blocked_verdict_terminalizes.py asserts the implement-blocked marker endswith. The named test files never asserted on comment body text (only label mutations), so no assertion was lost. The gap is covered by the centralized test.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/clarify.yml:462 | severity=NIT | confidence=4\n  PROBLEM: The closing-fence pattern accepts spaces after the fence but not tabs.\n  WHY: A valid Markdown closing fence followed by a tab is not recognized. The scanner then treats a subsequent `/reclarify` line as still inside the fence and skips the route, even though the job-level predicate starts the workflow.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/clarify.yml:462 | severity=NIT | confidence=4\n  PROBLEM: The closing-fence regex accepts only spaces (` *`) after the fence characters, but CommonMark \u00a74.5 treats any trailing whitespace (spaces or tabs) as valid on a closing fence line.\n  WHY: The job-level `if` predicate accepts the comment (it only checks `<!--` and labels), the workflow starts, and the `Decide clarify route` step enters the fence scanner. The scanner never matches the closing fence because the trailing tab is not in `[ ]*`, so `RECLARIFY_OPEN_FENCE` stays set, the `/reclarify` line is treated as fenced content, and the step exits with `IS_RECLARIFY_COMMAND` left false. The run then skips with `reason=not_reclarify_command`. The existing test \"line after an indented closing fence\" uses spaces (`   \\`\\`\\``), so the tab case is uncovered.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/clarify.yml:line 462 | severity=NIT | confidence=3\n  PROBLEM: The closing-fence regex matches only trailing spaces (` *$`), but CommonMark permits trailing tabs as well. A valid closing fence followed by a tab is not recognized as a close, so the scanner treats the fence as still open and any subsequent `/reclarify` line as fenced \u2014 incorrectly skipping a legitimate human command.\n  WHY: A human writes a fenced code block whose closing fence has a trailing tab, then puts `/reclarify` on the next line. The job-level predicate starts the runner (the `<!--` and label checks pass), but the route step's fence scanner never sees the close, stays \"inside\" the fence, and sets IS_RECLARIFY_COMMAND=false, so the blocked issue is not resumed. The human must retry with `/reclarify` as the first line.\n- TASK_GAP\n  Requirement: \"Append an automation marker outside model-generated text to every escalation comment, and fail closed on automation-origin comments when authorizing /reclarify.\" The plan's goal states every comment that adds ai:blocked carries an `<!-- ai:\u2026:v1 -->` marker on its own last line.\n  Expected change site: tests/test_orchestrate_clarify_loop_guard.py, tests/test_plan_clarify_blocked_output.py (marker-content assertions on the loop-break and plan-blocked comment bodies).\n  Evidence of absence: These two test files are not in the PR diff and contain no assertions on the posted comment body markers. However, the new centralized static check test_escalation_comments_end_with_automation_markers in tests/test_phase_skip_gate_telemetry_contract.py structurally verifies all four workflow comment sites and both orchestrate script variants, and test_implement_blocked_verdict_terminalizes.py asserts the implement-blocked marker endswith. The named test files never asserted on comment body text (only label mutations), so no assertion was lost. The gap is covered by the centralized test.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0bf34da6157aa21a07107cbbb08f9259d20324f2d14b169dcc09d6100d7be6a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5324,
+    "run_id": "36717308504",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36717308504",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930132627_275d076acc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5324,
+    "run_id": "36717308504"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T13:26:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
