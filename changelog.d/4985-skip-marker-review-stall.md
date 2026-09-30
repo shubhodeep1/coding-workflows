@@ -14,7 +14,7 @@ Now the marker counts only when it is intentional: in the PR title, or on a desc
 | New API calls for the stall check | none before its no-call checks; then at most the head-commit read and active-run reads the hand-back mode already budgets |
 | Workflows `dispatch_workflow.py` allows | 7 (adds `internal-review.yml`) |
 
-What this means for operators: a PR description can now document the marker without losing its review. A deliberate title marker still skips, and the skip is now visible in the log and, on `claude/*` PRs, as a comment. A `claude/*` PR whose review silently never ran now reaches a fixer within about 2 to 3 hours with no human involved. Set the repository variable `CLAUDE_REVIEW_STALL_HOURS` to change the window. The `.claude/settings.json` and `gh_api_write_guard.py` allow lists gain `internal-review.yml`, and consumer repos receive the change with the next `.claude/` sync.
+What this means for operators: a PR description can now document the marker without losing its review. A deliberate title marker still skips, and the skip is now visible in the log and, on `claude/*` PRs, as a comment. A `claude/*` PR whose review silently never ran now reaches a fixer within about 2 to 3 hours with no human involved. To change the window, set the repository variable `CLAUDE_REVIEW_STALL_HOURS` for the hourly catch-all, and the same name in the §26 checker and fixer session environments, which read it from there (default 2). The `.claude/settings.json` and `gh_api_write_guard.py` allow lists gain `internal-review.yml`, and consumer repos receive the change with the next `.claude/` sync.
 
 ### For contributors
 

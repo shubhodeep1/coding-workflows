@@ -800,6 +800,23 @@ def test_an_answered_handoff_for_the_head_is_a_review_trace():
 	assert checker._head_has_review_trace([_handoff()], HEAD, "someone-else") is None
 
 
+def test_a_head_whose_handoff_was_answered_is_not_stalled(monkeypatch, capsys):
+	# The panel reviewed this head and the dedicated bot answered every finding:
+	# no fix is due, and the answered hand-off still counts as a review trace.
+	verdict = {
+		"body": (f"<!-- ai:claude-fixer-verdict:v1 head={HEAD} -->\n"
+			f"<!-- ai:claude-fixer-verdict:v2 head={HEAD} round=1 ledger={'a' * 64} -->\nNothing left to fix."),
+		"author_association": "NONE", "created_at": "2026-09-26T09:40:00Z",
+		"user": {"login": "dedicated-fixer[bot]", "type": "Bot"},
+	}
+	calls = _stub(monkeypatch, _stalled_responses(), [_handoff(), verdict])
+	monkeypatch.setenv("CLAUDE_FIXER_VERDICT_BOT_LOGIN", "dedicated-fixer[bot]")
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and out["action"] == "wait"
+	assert out["reason"] == "PR #7 open, no fix due: a findings hand-off for this head"
+	assert f"repos/o/r/commits/{HEAD}" not in calls
+
+
 def test_an_active_run_is_not_a_stall(monkeypatch, capsys):
 	_stub(monkeypatch, _stalled_responses(in_progress=1))
 	_, out = _run(capsys)
