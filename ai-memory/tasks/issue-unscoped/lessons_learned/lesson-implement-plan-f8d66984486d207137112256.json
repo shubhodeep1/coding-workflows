@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T04:17:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A versioned JSON config must reject a missing, non-integer (including `true`), or unknown `version` instead of reading it under the current rules, and every audit field the text output prints must also be in the `--json` rows.",
+  "phase": "implement_plan",
+  "pr_number": 5389,
+  "record_id": "lesson-implement-plan-f8d66984486d207137112256",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5326-guard-differential-trusted-loosening",
+    "file:scripts/guard_differential.py"
+  ]
+}
