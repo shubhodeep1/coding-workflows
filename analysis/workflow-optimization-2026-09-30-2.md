@@ -115,3 +115,80 @@ The **260 → 130** retained-call comparison is directly reproducible from full 
 The two sampled Semble runs lack retained target-level steps. Poller `36717447884` reports `SEMBLE_AVAILABLE=false` and `SEMBLE_INDEX_AVAILABLE=false`, but emits no target probe or runtime fallback; availability cannot be generalized from it. **Other MCP servers observed:** none in retained logs or excerpts.
 
 **GH API coverage:** ≥59 inferred label GET attempts in CI `36710322463`; ≥30 inferred check-run fetch invocations across the five timed-out retained reviews; one collector archive HTTP 404 in `36713743563`. Exact window-wide endpoint counts, page counts, retry totals, and rate-limit rates were not supplied.
+
+## Deep Audit — Workflows & Scripts (2026-09-30)
+
+### Section 1: Bug & Correctness Sweep
+
+Static review covered 52 workflows, 97 shell scripts, and 62 Python scripts. All scoped YAML, shell, and Python files parsed. Findings already described in the current report—label-contract errors, mirrored log telemetry, and check-run waits—are not repeated here.
+
+- **SEC-001** — **File:** `scripts/gh_helpers.sh:439-498`; caller example `scripts/orchestrate_parse_and_post_answer.sh:289-290`. **Severity:** High. **Category:** `security`. **Description:** `gh_retry` prints its complete argument list on permanent failure and retry exhaustion. Callers pass comment text as a `-f body=...` argument, so a failed request can print that text to workflow logs. *Inference:* sensitive text included in a comment would be exposed there. **Recommended fix:** Log only an operation name, endpoint class, attempt, and status; never `$*` or an unfiltered response body. Pass long comment bodies through an input file as `post_tracking_comment` does in `scripts/orchestrate_poll_process.sh:2220-2242`.
+
+- **BUG-001** — **File:** `.github/workflows/review_autofix_sweep.yml:168-260,305-345`. **Severity:** High. **Category:** `bug`. **Description:** Each active-run status fetch ends in `|| true`. A failed fetch therefore looks like a successful, possibly empty snapshot; the per-PR guard can then dispatch `internal-review.yml` while a review is already queued or running. **Recommended fix:** Track success for every status and both workflows. If any active-run snapshot is incomplete, skip dispatch for that sweep tick, log the failed status, and retry on the next tick.
+
+- **BUG-002** — **Files:** `scripts/claude_issue_route.py:1176-1197`; `scripts/claude_issue_queue_watchdog.sh:60-70`. **Severity:** High. **Category:** `bug`. **Description:** The pickup and watchdog each read only one `per_page=100` queue page. When more than 100 matching issues are open, issues outside that page are invisible to both processing and stale-item alerting. **Recommended fix:** Paginate both readers, combine pages into one array, and preserve their existing fail-open behavior when a page fails.
+
+- **BUG-003** — **File:** `scripts/claude_pr_sweep.py:146-156,213-255`. **Severity:** High. **Category:** `bug`. **Description:** `queued_pr_fixes` also reads only the first 100 open queue issues before deciding whether to create a PR-fix item. *Inference:* an existing item outside page one can be missed and a duplicate created. **Recommended fix:** Paginate this read before calling `queue_pending`; retain the in-run `already` set and add an over-100-items deduplication test.
+
+- **BUG-004** — **Files:** `scripts/gh_helpers.sh:448-498`; `scripts/orchestrate_parse_and_post_answer.sh:281-291`. **Severity:** Medium. **Category:** `bug`. **Description:** The generic retry loop can repeat a non-idempotent `/answer` comment POST. If GitHub accepts the first POST but its response is lost, a retry can post the answer twice. This failure sequence is plausible but not demonstrated in the supplied runs. **[NEEDS VERIFICATION]** **Recommended fix:** Use a single-attempt POST for this comment, then reconcile an ambiguous result against a stable comment marker before any later attempt.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are code-path estimates, not observed provider totals. `N` is the number of items processed; `C` is the number of comment-page reads needed for blocked items. The current report already covers label-sync reads and check-run polling.
+
+- **BATCH-001** — **File:** `scripts/orchestrate_poll_process.sh:5373-5407`. **Severity:** Medium. **Category:** `api-batching`. **Description:** `security_pass_handle_failed_fix_issue` performs one issue-state REST GET inside its blocker loop: **N reads → `ceil(N/25)` batched reads**, excluding retries and failed-item fallbacks. **Recommended fix:** Add a state-only alias query following `_fetch_candidate_issue_details_graphql` in the same script; cache results for this evaluation and use the existing REST read only for missing or malformed entries.
+
+- **BATCH-002** — **File:** `scripts/orchestrate_poll_process.sh:6161-6225`. **Severity:** Medium. **Category:** `api-batching`. **Description:** Advisory follow-ups each receive an issue state/labels GET; blocked follow-ups additionally receive paginated comment reads. **Current:** `N + C` reads. **Proposed:** `ceil(N/25) + C`, plus fallback reads. **Recommended fix:** Extend the poller’s aliased issue-fetch pattern to retrieve state and labels together. Keep the paginated per-issue comment read for marker verification; do not replace it with a truncated comment snapshot.
+
+- **BATCH-003** — **File:** `scripts/claude_issue_queue_watchdog.sh:75-81`. **Severity:** Low. **Category:** `api-batching`. **Description:** The stale-item loop makes **N individual label POSTs**. An aliased GraphQL mutation could make approximately **`ceil(N/25)` mutation requests plus one label-ID lookup**, with REST fallback for failed items. Mutation permissions, partial-error handling, and available node IDs need parity checks. **[NEEDS VERIFICATION]** **Recommended fix:** Adapt the alias construction used by `_fetch_candidate_issue_details_graphql` for bounded label-mutation batches; retain failed-item REST fallback and the once-per-item alert contract.
+
+- **BATCH-004** — **File:** `scripts/claude_pr_sweep.py:114-126,213-225`; called checker `.claude/scripts/check_in_status.py:579-646`. **Severity:** Medium. **Category:** `api-batching`. **Description:** In the ordinary open, unclaimed, non-conflicted path, each candidate incurs at least a PR GET, an issue-comments GET, and a check-runs GET: **at least `3N` reads plus paginated PR listing**. Batching complete PR metadata and comments while retaining check-run reads projects **`ceil(N/25) + N` reads plus listing**, before exceptional fallbacks. Freshness and comment-pagination parity are unproven. **[NEEDS VERIFICATION]** **Recommended fix:** Extend the `gh_pr_with_all_comments` GraphQL shape using the poller’s 25-item alias pattern; pass complete prefetched context to the checker, and retain its legacy per-PR path on incomplete data.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001** — **Files:** `scripts/collect_workflow_logs.py:96-108`, `scripts/cost_audit.py:283-295`, `scripts/analyze_workflow_logs.py:40-52,62-72`, `scripts/workflow_retro.py:50-62,89-99`. **Severity:** Low. **Category:** `duplication`. **Description:** Four `_parse_iso8601` bodies are identical; two `_percentile` bodies are identical. **Recommended fix:** Create a shared workflow-log statistics module exposing `parse_iso8601(value: str | None) -> datetime | None` and `percentile(values: list[int], pct: int) -> float`; update those four callers and preserve their current empty-input behavior.
+
+- **DUP-002** — **Files:** `scripts/audit_consumer_drift.py:142-164`; `scripts/validation_refresh_runner.py:701-723`. **Severity:** Low. **Category:** `duplication`. **Description:** Both `load_target_repositories` implementations perform the same registry validation and deduplication. **Recommended fix:** Put `load_target_repositories(repos_file: Path) -> list[str]` in a new shared scripts module and update both callers, preserving their error messages and order.
+
+- **DUP-003** — **Files:** `.github/workflows/mark-stable.yml:668-817`; `.github/workflows/test-and-mark-stable.yml:5698-5847`. **Severity:** Medium. **Category:** `duplication`. **Description:** The 6,306-character “Tag version and update stable pointer” run body is duplicated across the two release workflows. **Recommended fix:** Move the shared tag-publication function to a staged shell helper with signature `publish_tag_with_remote_verification <tag_ref> <immutable|moving>`; update both steps while keeping their release gates and tested-SHA checks in place. Do not substitute the manual `scripts/mark-stable.sh` path without establishing semantic parity.
+
+- **DUP-004** — **File:** `.github/workflows/workflow-log-analysis.yml:793-808,1503-1518,2007-2022`. **Severity:** Low. **Category:** `duplication`. **Description:** Three jobs repeat the same fail-soft Semble index-builder block. **Recommended fix:** Place `build_semble_index_or_disable <builder-path>` in `scripts/semble_helpers.sh`, call it from all three jobs, and retain the missing-builder notice and `SEMBLE_INDEX_AVAILABLE=false` output.
+
+No greater-than-70% *whole-workflow* match was established; `DUP-003` concerns an identical step, not an assertion that the two release workflows are interchangeable.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+The YAML-decoded body was measured for each of 776 `run:` blocks; 225 contain `${{ }}`. Blocks without interpolation were excluded. No interpolated body reached 18,000 characters. The largest `if:` expression measured 859 characters.
+
+- **EXPR-001** — **File:** `.github/workflows/implement.yml:986-1342`. **Severity:** Medium. **Category:** `expression-limit`. **Description:** The support-staging `run:` body measures approximately **16,985 characters** before interpolation and contains three `${{ }}` references. This crosses the requested 15,000-character block threshold and leaves approximately **4,015 characters** against the stated 21,000-character threshold. The relationship between decoded block length and the runner’s compiled expression length remains unverified. **[NEEDS VERIFICATION]** **Recommended fix:** Extract the body to a verified-checkout script following the repository’s `review_autofix_step_*.sh` staging pattern; pass GitHub expression values through step `env:` and preserve the existing staged-support ledger checks.
+
+- **DEBT-001** — **File:** `.github/workflows/review_autofix.yml:1-7520`. **Severity:** Low. **Category:** `tech-debt`. **Description:** The file is **455,461 bytes**, leaving **24,539 bytes** before the repository’s 480,000-byte CI guard (`CLAUDE.md:2163-2193`). No workflow exceeds the requested 800 KB warning threshold. The repository documents a stricter **512,000-byte** observed hard limit than the 1 MB limit stated in the audit prompt. **Recommended fix:** Extract a remaining large inline step using the documented step-script, bootstrap-registry, and contract-test procedure before additions consume the guard headroom.
+
+### Section 5: Cross-Cutting Concerns
+
+- **DEAD-001** — **File:** `scripts/review_run_reviewers.sh:829-836`. **Severity:** Low. **Category:** `dead-code`. **Description:** `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE` and `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE` are assigned but have no readers in scoped scripts or workflows; ShellCheck also reports them as SC2034. **Recommended fix:** Remove these two assignments, or wire them into the filter if their raw artifacts are intended to be used; leave the neighboring snapshot variables that do have readers intact.
+
+- **CONSIST-001** — **Files:** `scripts/review_collect_pr_metadata.sh:63-68,209-225`; `scripts/gh_helpers.sh:439-445`. **Severity:** Low. **Category:** `consistency`. **Description:** The metadata script sources the canonical `gh_retry`, then redefines that name with a different, output-file-first signature. Its present callers use the local signature, but a future canonical-style call in this script would be misinterpreted. **Recommended fix:** Rename the local wrapper to a distinct output-file helper, update its six call sites, and continue delegating to `gh_retry_to_file`.
+
+No `TODO`, `FIXME`, or `HACK` marker was found in scoped files. The inspected `validate_driver.sh:725,755` ShellCheck pattern warnings correspond to its documented, intentional glob matching and are not findings.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 4 | SEC-001, BUG-001, BUG-002, BUG-003 |
+| Medium | 6 | BUG-004, BATCH-001, BATCH-002, BATCH-004, DUP-003, EXPR-001 |
+| Low | 7 | BATCH-003, DUP-001, DUP-002, DUP-004, DEBT-001, DEAD-001, CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | Approximately 5 existing files | Medium |
+| API call optimization | Approximately 4 existing files, plus batching helpers | Large |
+| Code modularization | Approximately 9 existing files, plus shared modules | Large |
+| Expression size reduction | 1 workflow, a new script, and contract tests | Medium |
+| Medium/Low fixes | Approximately 4–6 additional existing files | Medium |
