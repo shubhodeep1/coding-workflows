@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:1501-1510 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: This section omits the required independent automated disproof and incorrectly suggests that the listed vote conditions are sufficient to demote findings.\n  WHY: The code gate at `scripts/review_claude_fixer_nonblocking.py:1085-1087` requires independent proof, but the hand-off step supplies no disproof check, so the finding remains blocking.\n- tests/test_review_autofix_claude_fixer_mode.py:528-547 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test name says `auto_merges_and_stays_visible`, but the test asserts that `action=auto_merge` is absent and that a hand-off comment is posted.\n  WHY: The misleading name may lead readers to expect the test verifies auto-merge behavior, when it verifies the opposite.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update README.md to describe the new rule that rejection votes alone do not demote findings on claude/* PRs, including the independent automated disproof condition.\n  expected_change_site: README.md, the CLAUDE_FIXER_ENABLED row in the Quickstart variables table.\n  confidence=[5]\n  flagged_by: [google_gemini-3_8-flash]\n  EVIDENCE: The updated README diff shows the CLAUDE_FIXER_ENABLED row has been updated to include the disproof_check condition and the new behavior (that entries stay blocking with reason no_automated_proof), satisfying the requirement. This finding was raised as a task gap in the first review pass, and the subsequent editor-applied fix addressed it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\nRequirement: Update README.md to describe the new rule that rejection votes alone do not demote findings on claude/* PRs, including the independent automated disproof condition.\nExpected change site: README.md, the CLAUDE_FIXER_ENABLED row in the Quickstart variables table.\nEvidence of absence: The updated README diff shows the CLAUDE_FIXER_ENABLED row has been updated to include the disproof_check condition and the new behavior (that entries stay blocking with reason no_automated_proof), satisfying the requirement. This finding was raised as a task gap in the first review pass, and the subsequent editor-applied fix addressed it.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_claude_fixer_mode.py:528-547 | severity=NIT | confidence=3\n  PROBLEM: The test name reads \"auto_merges_and_stays_visible\" but the test body now asserts the opposite: \"action=auto_merge\" NOT in stdout, and a hand-off comment is posted via calls[0][\"payload\"][\"body\"]. Future readers scanning test names will expect this test to verify auto-merge behavior, when it actually verifies the round is handed to the Claude session instead of auto-merging.\n  WHY: This is a documentation/clarity issue, not a runtime failure. The docstring correctly states the new #5582 behavior, but a reader scanning the function name alone will be misled.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:1501-1510 | severity=NIT | confidence=5\n  PROBLEM: This section says the hand-off script moves findings based on the listed vote conditions, omitting the required independent automated disproof. That contradicts the updated explanation at 1479-1488 and the gate in `scripts/review_claude_fixer_nonblocking.py:1085-1087`.\n  WHY: The code behavior is correct, but this operational documentation tells readers that verified majority votes are sufficient for demotion. The hand-off step supplies no disproof check, so it keeps the finding blocking instead.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0e14b8f2ff15afa02a6b8b32fdb8113f46488d999b9b15b5628a644e18af5806",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5611,
+    "run_id": "36714476134",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36714476134",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930124232_3fcaebd8a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5611,
+    "run_id": "36714476134"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T12:42:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
