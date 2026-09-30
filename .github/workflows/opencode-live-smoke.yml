@@ -36,9 +36,9 @@ jobs:
         minimax/minimax-m3
         z-ai/glm-5.2
         deepseek/deepseek-v4-pro
-        google/gemini-3.1-flash-lite
+        google/gemini-3.8-flash
         qwen/qwen3.7-plus
-        x-ai/grok-4.20
+        openai/gpt-6-luna
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_ADMIN_CHAT_ID: ${{ secrets.TG_ADMIN_CHAT_ID }}
