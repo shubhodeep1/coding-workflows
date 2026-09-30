@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01QvzxwDiVmtxwS9giV5Ro4Q   safety net and hand-back: see the latest stage report
 - Last updated: 2026-09-30
-- Last note: review round 1 on PR #5368: the one consensus finding (the `status=skipped` summary omitted `verifier_changes=<n>`) fixed; the agents.md Output line no longer claims `status=error` carries the count; tests/test_guard_differential.py 77 passed.
+- Last note: review round 2 on PR #5368: the one consensus finding (a `Guard differential` step cut short) fixed. Block scalars were never cut, but a comment line indented left of the step ended it, so later keys went unreported. tests/test_guard_differential.py 78 passed.
 
 ## Phases
-1. [ ] Phase 1 — pin the verifier to the base branch and report verifier changes (ci.yml step, scripts/guard_differential.py, tests, agents.md, changelog) — PR #5368 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — pin the verifier to the base branch and report verifier changes (ci.yml step, scripts/guard_differential.py, tests, agents.md, changelog) — PR #5368 open (waiting); review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -35,6 +35,7 @@
 
 ## Lessons
 - [source:intervention] A field added to a script's `status=` summary line belongs on every status line the script prints, early-return paths included, and its docs must not claim it on lines printed before the value exists (for example `status=error`). (files: scripts/guard_differential.py, agents.md)
+- [source:intervention] A line-based cutter for YAML steps must not end a step at a comment line indented at or left of the step (valid YAML, but not a boundary), and must drop such trailing comments, or edits to the step's later keys slip past the comparison. (files: scripts/guard_differential.py)
 
 ## Notes
 - Issue mode: single-phase plan; security pass skipped per the plan header.

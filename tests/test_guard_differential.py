@@ -512,6 +512,43 @@ def test_guard_differential_steps_cut_each_named_step() -> None:
 	assert gd.guard_differential_steps("jobs: {}\n") == []
 
 
+def test_guard_differential_steps_read_past_outer_comment_lines() -> None:
+	# PR #5368 review round 2: a comment indented less than the step used to
+	# end it, so an edit to the keys after the comment went unreported.
+	workflow = textwrap.dedent(
+		"""\
+		jobs:
+		  tests:
+		    steps:
+		      - name: Guard differential check
+		# pinned verifier below
+		        run: |
+		          # shell comment inside the run block
+		          python3 verifier.py
+		      # comment before the next step
+		      - name: Other step
+		        run: echo other
+		      - name: Guard differential tests
+		        run: echo tests
+		  # comment before the next job
+		  later:
+		    steps: []
+		"""
+	)
+	steps = gd.guard_differential_steps(workflow)
+	assert len(steps) == 2
+	assert steps[0].endswith("python3 verifier.py")
+	assert "# shell comment inside the run block" in steps[0]
+	assert "comment before the next step" not in steps[0]
+	assert steps[1] == "      - name: Guard differential tests\n        run: echo tests"
+	edited = workflow.replace("python3 verifier.py", "true")
+	assert gd.guard_differential_steps(edited) != steps
+	recommented = workflow.replace("# comment before the next step", "# reworded").replace(
+		"# comment before the next job", "# reworded"
+	)
+	assert gd.guard_differential_steps(recommented) == steps
+
+
 def test_guard_differential_steps_find_the_shipped_ci_steps() -> None:
 	steps = gd.guard_differential_steps(CI_WORKFLOW.read_text(encoding="utf-8"))
 	names = [step.splitlines()[0].strip() for step in steps]

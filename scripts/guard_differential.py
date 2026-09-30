@@ -565,7 +565,12 @@ def _side_text(repo_root: Path, ref: str | None, path: str) -> str | None:
 def guard_differential_steps(workflow_text: str | None) -> list[str]:
 	"""The text of every workflow step whose name starts with
 	GUARD_STEP_NAME_PREFIX: from its `- name:` line up to the next step at
-	the same indentation, or the first non-blank line indented less."""
+	the same indentation, or the first non-blank line indented less.
+
+	A comment line at or left of the step's indentation is a YAML comment
+	(block scalar content is always indented deeper), so it neither ends
+	the step nor, when it trails the step, belongs to it: ending there
+	would drop the step's later keys from the comparison."""
 	if not workflow_text:
 		return []
 	lines = workflow_text.splitlines()
@@ -577,15 +582,22 @@ def guard_differential_steps(workflow_text: str | None) -> list[str]:
 			index += 1
 			continue
 		indent = len(start.group("indent"))
+
+		def _outer_comment(line: str) -> bool:
+			return line.lstrip().startswith("#") and len(line) - len(line.lstrip()) <= indent
+
 		end = index + 1
 		while end < len(lines):
 			line = lines[end]
-			if line.strip():
+			if line.strip() and not _outer_comment(line):
 				line_indent = len(line) - len(line.lstrip())
 				if line_indent < indent or (line_indent == indent and line.lstrip().startswith("- ")):
 					break
 			end += 1
-		steps.append("\n".join(lines[index:end]).rstrip())
+		last = end
+		while last > index + 1 and (not lines[last - 1].strip() or _outer_comment(lines[last - 1])):
+			last -= 1
+		steps.append("\n".join(lines[index:last]).rstrip())
 		index = end
 	return steps
 
