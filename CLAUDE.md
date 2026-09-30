@@ -2390,9 +2390,10 @@ enforces §28.B and §28.C in those sessions. It is wired in
   collaborator that starts with `<!-- ai:claude-blocked:v1 -->` and carries
   this session's cap marker. A comment that only quotes the marker never
   suppresses the post. It tries up to 3 times within the hook (1 s and 2 s
-  backoff, each `gh api` call capped at 6 s, a 24 s budget inside the 30 s
-  wiring timeout); a publish that still fails is stored as
-  `cap_blocker: pending` and retried at every later `Stop` in the session.
+  backoff, each `gh api` call capped at 6 s and started only when it fits
+  a 24 s budget inside the 30 s wiring timeout). `cap_blocker: pending` is
+  stored before the first call, so a publish that still fails, or a hook
+  killed mid-publish, is retried at every later `Stop` in the session.
   Each publish adds a `cap_blocker_<posted|exists|failed|invalid>` line to
   `stop-guard.jsonl`; once the state says `posted`, later stops make no call
   and add no line.

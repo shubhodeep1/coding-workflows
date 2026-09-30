@@ -1055,15 +1055,114 @@ def test_pending_retry_is_not_repeated_by_the_cap_path_in_the_same_stop(tmp_path
 	assert result["systemMessage"].startswith(guard.CAP_MESSAGE_PREFIX)
 
 
+class SlowGh(FakeGh):
+	"""A FakeGh on a simulated clock: each call takes its scripted duration.
+
+	`durations` are consumed in call order (an exhausted list takes 0 s);
+	`sleep` advances the same clock, so `now` is the publish's elapsed time.
+	"""
+
+	def __init__(self, durations: list, script: dict | None = None, existing: str = ""):
+		super().__init__(script, existing)
+		self.durations = list(durations)
+		self.now = 0.0
+
+	def clock(self) -> float:
+		return self.now
+
+	def sleep(self, seconds: float) -> None:
+		self.now += seconds
+
+	def __call__(self, args: list, timeout: float):
+		duration = self.durations.pop(0) if self.durations else 0.0
+		assert duration <= timeout
+		self.now += duration
+		return super().__call__(args, timeout)
+
+
+def _publish_on_clock(directory: Path, slow: SlowGh) -> dict:
+	marker = guard.read_marker(SESSION, directory)
+	return guard.publish_cap_blocker(marker, SESSION, guard.KIND_QUESTION, 2, directory, NOW, runner=slow, sleep=slow.sleep, clock=slow.clock)
+
+
 def test_time_budget_bounds_the_attempts(tmp_path):
 	directory = _reach_cap(tmp_path)
+	timeout = guard.CAP_BLOCKER_CALL_TIMEOUT
+	slow = SlowGh([timeout, timeout, timeout], script={"label": [1]})
+	outcome = _publish_on_clock(directory, slow)
+	assert outcome["status"] == "failed" and outcome["attempts"] == 1
+	assert slow.kinds() == ["get", "post_comment", "label"]
+	assert slow.now <= guard.CAP_BLOCKER_BUDGET_SECONDS
+
+
+def test_budget_is_checked_before_every_call_not_only_every_attempt(tmp_path):
+	# Review round 1 on e8dcd8a: attempt 1 used to start three 6 s calls after
+	# only one was checked, running past the 30 s hook timeout.
+	directory = _reach_cap(tmp_path)
+	timeout = guard.CAP_BLOCKER_CALL_TIMEOUT
+	slow = SlowGh([timeout, timeout, timeout, timeout, timeout], script={"post_comment": [124]})
+	outcome = _publish_on_clock(directory, slow)
+	assert slow.kinds() == ["get", "post_comment", "get"]
+	assert outcome["status"] == "failed" and outcome["attempts"] == 2
+	assert outcome["error"] == "the time budget ran out before posting the comment"
+	assert slow.now <= guard.CAP_BLOCKER_BUDGET_SECONDS
+	assert guard.read_state(SESSION, directory)["cap_blocker"] == guard.CAP_BLOCKER_PENDING
+
+
+def test_budget_stop_before_the_label_is_finished_by_the_next_stop(tmp_path):
+	directory = _reach_cap(tmp_path)
+	timeout = guard.CAP_BLOCKER_CALL_TIMEOUT
+	slow = SlowGh([1.0, 5.0, timeout, timeout], script={"post_comment": [1]})
+	outcome = _publish_on_clock(directory, slow)
+	assert slow.kinds() == ["get", "post_comment", "get", "post_comment"]
+	assert outcome["error"] == f"the time budget ran out before adding the {guard.CAP_BLOCKER_LABEL} label"
+	assert slow.now <= guard.CAP_BLOCKER_BUDGET_SECONDS
+	assert guard.read_state(SESSION, directory)["cap_blocker"] == guard.CAP_BLOCKER_PENDING
+
+	healthy = FakeGh(existing=_comments_read(("OWNER", _cap_blocker_comment())))
+	retry = _evaluate(_stop(ORDINARY_REPORT), tmp_path, runner=healthy)
+	assert healthy.kinds() == ["get", "label"] and "already on" in retry["systemMessage"]
+	assert guard.read_state(SESSION, directory)["cap_blocker"] == guard.CAP_BLOCKER_POSTED
+
+
+@pytest.mark.parametrize(
+	"durations, script",
+	[
+		([6.0] * 9, {"get": [124, 124, 124]}),
+		([6.0] * 9, {"label": [124, 124, 124]}),
+		([5.9, 5.9, 5.9, 5.9, 5.9, 5.9], {"post_comment": [124, 124]}),
+		([0.5, 6.0, 0.5, 6.0, 0.5, 6.0], {"post_comment": [124, 124, 124]}),
+		([3.0, 3.0, 6.0, 3.0, 3.0, 6.0, 3.0, 3.0, 6.0], {"label": [124, 124, 124]}),
+	],
+)
+def test_publish_never_outlasts_the_budget(tmp_path, durations, script):
+	directory = _reach_cap(tmp_path)
+	slow = SlowGh(durations, script=script)
+	outcome = _publish_on_clock(directory, slow)
+	assert outcome["status"] == "failed"
+	assert slow.now <= guard.CAP_BLOCKER_BUDGET_SECONDS
+
+
+def test_pending_is_stored_before_the_first_call(tmp_path):
+	directory = _reach_cap(tmp_path)
+	seen: list = []
+
+	def killed_mid_publish(args: list, timeout: float):
+		seen.append(guard.read_state(SESSION, directory).get("cap_blocker"))
+		raise KeyboardInterrupt("the 30 s hook timeout killed the process")
+
 	marker = guard.read_marker(SESSION, directory)
-	ticks = iter([0.0, guard.CAP_BLOCKER_BUDGET_SECONDS])
-	fake = FakeGh(script={"get": [1, 1, 1]})
-	outcome = guard.publish_cap_blocker(
-		marker, SESSION, guard.KIND_QUESTION, 2, directory, NOW, runner=fake, sleep=lambda _s: None, clock=lambda: next(ticks)
-	)
-	assert outcome["status"] == "failed" and outcome["attempts"] == 1 and fake.kinds() == ["get"]
+	with pytest.raises(KeyboardInterrupt):
+		guard.publish_cap_blocker(
+			marker, SESSION, guard.KIND_PERMISSION, 2, directory, NOW, runner=killed_mid_publish, sleep=lambda _s: None, clock=lambda: 0.0
+		)
+	assert seen == [guard.CAP_BLOCKER_PENDING]
+	state = guard.read_state(SESSION, directory)
+	assert state["cap_blocker"] == guard.CAP_BLOCKER_PENDING and state["cap_blocker_kind"] == guard.KIND_PERMISSION
+
+	healthy = FakeGh()
+	retry = _evaluate(_stop(ORDINARY_REPORT), tmp_path, runner=healthy)
+	assert healthy.kinds() == ["get", "post_comment", "label"] and "posted the blocker" in retry["systemMessage"]
 
 
 def test_missing_gh_is_a_pending_failure_not_a_crash(tmp_path, monkeypatch):
