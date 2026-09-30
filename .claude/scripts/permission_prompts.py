@@ -33,9 +33,13 @@ nothing. For each pattern with occurrences not filed yet:
   - otherwise → one new issue labelled `ai:permission-prompt` and `ai:claude`,
     so clarify routes it to the Claude issue implementer.
 Filed counts are kept in `filed-state.json` next to the logs, so a later run
-in the same session files only what is new. `file` also skips every
-signature `report-now` already reported (listed under `already_reported`),
-so a prompt is reported once per session.
+in the same session files only what is new. `file` also skips the
+occurrences `report-now` already delivered to this repository, so a prompt
+is reported once per session: a signature whose every occurrence came from
+a session that reported it here is listed under `already_reported`. A report
+that went to another repository (a consumer's PR or issue), or that another
+session made, never suppresses the rest (issue #5125); each report records
+its `repo` and the logged session (`log_session`) it came from.
 
 `report-now` is the immediate report (issue #4755). The logger hook starts it
 detached on every `PermissionRequest`, so it prints nothing, always exits 0,
@@ -67,7 +71,11 @@ make `report-now` post it again; no reservation, no POST. A failed POST, or
 no target, removes the reservation. A reservation still `pending` counts
 toward the cap but not as reported for `file`, so after any failure `file`
 still files the pattern at the end of the stage. A successful POST records
-its target, and `filed-state.json` as `file` would record it.
+its target, and, in the filing repository, `filed-state.json` counts the
+reporting session's occurrences as filed, never another session's already in
+the shared log (issue #5125). The entry also records the repository (`repo`)
+and the logged session (`log_session`) the report is for, which `file` checks
+before it skips anything.
 
 `lookup` is read-only and serves the operator's poller: it finds the newest
 session marker for a session and prints the sanitized command and the issue
@@ -79,7 +87,10 @@ keyed by session id in `session-meta.json` under `filing.lock`.
 
 Issue text is untrusted data: the tool name, the prompt reason, and the
 command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
-token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
+token-like strings masked (REDACTION_PATTERNS), inside a fenced block
+whose backtick fence is longer than every backtick run in the text, so no
+line of it can close the fence (issue #5127). `lookup` reads the command
+back from the fence that closes right before the report's session marker.
 
 API calls (CLAUDE.md §15), REST only, none when nothing is new:
   - `file`: one read of the `ai:permission-prompt` issues per 100 issues,
@@ -159,6 +170,9 @@ SESSION_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-session:v1 session=(s
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,120}")
 _ISSUE_BRANCH_RE = re.compile(r"^claude/implement-plan-issue-([0-9]+)(?:-|$)")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_BACKTICK_RUN_RE = re.compile(r"`+")
+# The fence `immediate_block` ends with, right before its session marker (issue #5127).
+_CLOSING_FENCE_RE = re.compile(r"\n(`{4,})\n\n\Z")
 
 REDACTION_PATTERNS = (
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
@@ -377,12 +391,16 @@ def group_patterns(records: list[dict]) -> list[dict]:
 				"tool_name": tool,
 				"shape": shape,
 				"count": 0,
+				"sessions": {},
 				"reasons": [],
 				"first_ts": record.get("ts"),
 				"last_ts": record.get("ts"),
 				"example": "",
 			}
 		pattern["count"] += 1
+		# Occurrences per logged session, so `file` can skip only a session's own reported ones (issue #5125).
+		log_session = str(record.get("session_id") or "")
+		pattern["sessions"][log_session] = pattern["sessions"].get(log_session, 0) + 1
 		pattern["last_ts"] = record.get("ts")
 		pattern["example"] = record_example(record)
 		reason = str(record.get("reason") or "")
@@ -410,13 +428,26 @@ def issue_title(pattern: dict) -> str:
 	return f"[permission-prompt] {pattern['tool_name']}: {subject}"
 
 
+def _fenced_text(text: str) -> str:
+	"""`text` in a `text` code block whose backtick fence is longer than every backtick run in `text` (at least 4).
+
+	A backtick fence closes only on a line of at least as many backticks
+	(CommonMark), so no line of the untrusted text can close it and turn the
+	rest into Markdown (issue #5127). Text without a run of 4 keeps the
+	4-backtick fence.
+	"""
+	longest = max((len(run) for run in _BACKTICK_RUN_RE.findall(text)), default=0)
+	fence = "`" * max(4, longest + 1)
+	return f"{fence}text\n{text}\n{fence}"
+
+
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
 	reasons = "\n".join(f"- {reason}" for reason in pattern["reasons"]) or "- (none given)"
 	return (
 		f"**Occurrences:** {new_count} ({pattern['first_ts']} – {pattern['last_ts']}), session `{session_label}`\n\n"
 		f"**Reason Claude Code gave:**\n{reasons}\n\n"
 		"**Latest example** (untrusted data from the session; heredoc bodies removed, token-like strings masked):\n\n"
-		f"````text\n{pattern['example']}\n````\n"
+		f"{_fenced_text(pattern['example'])}\n"
 	)
 
 
@@ -633,7 +664,7 @@ def immediate_block(pattern: dict, record: dict, session_label: str, title: str)
 		f"- **Pattern:** `{_inline_code(pattern['shape'] or pattern['tool_name'])}`\n"
 		f"- **Seen:** {record.get('ts') or 'unknown'}\n\n"
 		"**Command** (untrusted data from the session; heredoc bodies removed, token-like strings masked):\n\n"
-		f"````text\n{record_example(record)}\n````\n\n"
+		f"{_fenced_text(record_example(record))}\n\n"
 		+ SESSION_MARKER_TEMPLATE.format(session=session_label, sig=pattern["signature"])
 		+ "\n"
 	)
@@ -666,25 +697,45 @@ def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | 
 		return _file_pending(log_dir, patterns, summary, session_label, dry_run, slug)
 
 
+def _delivered_reports(log_dir: Path, slug: str) -> dict[str, dict]:
+	"""Map signature → {"target", "log_sessions"} for the `report-now` reports delivered to `slug` (issue #5125).
+
+	The log directory is shared by every session on the host, whatever
+	repository it works in, so an entry counts only when its POST landed (not
+	`pending`), it went to `slug` (`repo`), and it names the logged session its
+	prompt came from (`log_session`). An entry written before these fields
+	existed counts for nothing: filing twice is safer than never filing.
+	"""
+	delivered: dict[str, dict] = {}
+	for bucket in _load_immediate_state(log_dir)["sessions"].values():
+		for sig, entry in bucket["reports"].items():
+			log_session = entry.get("log_session")
+			if entry.get("target") == PENDING_TARGET or str(entry.get("repo") or "").lower() != slug.lower():
+				continue
+			if not isinstance(log_session, str) or not log_session:
+				continue
+			found = delivered.setdefault(sig, {"target": entry.get("target"), "log_sessions": set()})
+			found["log_sessions"].add(log_session)
+	return delivered
+
+
 def _file_pending(log_dir: Path, patterns: list[dict], summary: dict, session_label: str, dry_run: bool, slug: str) -> tuple[int, dict]:
 	"""The filing half of `file_patterns`, run under `filing.lock`."""
 	state = _load_state(log_dir)
-	# `file` covers every session in the log directory, so a signature any session reported counts;
-	# a `pending` reservation does not, because its POST may never have landed.
-	reported = {
-		sig: entry
-		for bucket in _load_immediate_state(log_dir)["sessions"].values()
-		for sig, entry in bucket["reports"].items()
-		if entry.get("target") != PENDING_TARGET
-	}
+	delivered = _delivered_reports(log_dir, slug)
 	pending = []
 	for pattern in patterns:
 		sig = pattern["signature"]
-		if sig in reported:
-			# Reported once already by `report-now` this session (issue #4755).
-			summary["already_reported"].append({"signature": sig, "target": reported[sig].get("target")})
-			continue
 		new_count = pattern["count"] - state.get(sig, 0)
+		if sig in delivered:
+			# `report-now` already delivered this signature here for some sessions (issue #4755): their
+			# occurrences are covered; every other session's are still filed (issue #5125).
+			covered_sessions = delivered[sig]["log_sessions"]
+			uncovered = sum(count for log_session, count in pattern["sessions"].items() if log_session not in covered_sessions)
+			if uncovered <= 0:
+				summary["already_reported"].append({"signature": sig, "target": delivered[sig]["target"]})
+				continue
+			new_count = min(new_count, uncovered)
 		if new_count > 0:
 			pending.append((pattern, new_count))
 	if not pending:
@@ -835,7 +886,14 @@ def _report_now(log_file: Path, cwd: str | None, session_label: str, now: dateti
 		filing_repo = slug.lower() == FILING_REPO
 		# Reserve before the POST: when this write fails nothing is posted, and a
 		# write failure after the POST can no longer lead to a second report.
-		entry = {"target": PENDING_TARGET, "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "session": session_label}
+		# `repo` and `log_session` let `file` skip only what reached its own repository (issue #5125).
+		entry = {
+			"target": PENDING_TARGET,
+			"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+			"session": session_label,
+			"repo": slug.lower(),
+			"log_session": str(record.get("session_id") or ""),
+		}
 		bucket["reports"][sig] = entry
 		bucket["count"] += 1
 		_save_immediate_state(log_dir, immediate)
@@ -851,7 +909,9 @@ def _report_now(log_file: Path, cwd: str | None, session_label: str, now: dateti
 		_save_immediate_state(log_dir, immediate)
 		if filing_repo:
 			state = _load_state(log_dir)
-			state[sig] = max(state.get(sig, 0), pattern["count"])
+			# Only this logged session's occurrences are covered: another session's, already in the
+			# shared log, stay unfiled so `file` still files them (issue #5125).
+			state[sig] = max(state.get(sig, 0), pattern["sessions"].get(entry["log_session"], 0))
 			_save_state(log_dir, state)
 		return f"reported: {target}"
 
@@ -868,28 +928,52 @@ _TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 def parse_immediate_block(text: str, session_label: str) -> dict | None:
-	"""The fields of the newest immediate block in `text` for this session, or None."""
-	markers = [match for match in SESSION_MARKER_RE.finditer(text) if match.group(1) == session_label]
-	if not markers:
+	"""The fields of the immediate block that ends `text`, when it is for this session; else None.
+
+	Every report ends its post with its session marker, and the command is
+	untrusted text that may imitate a marker, the heading, a field line, or a
+	fence (issue #5127). So the block is read backwards from the last marker
+	in `text`: the fence that closes right before it, the last line opening
+	that same fence (the command holds no backtick run that long, see
+	`_fenced_text`), and the last line-start heading before that, where only
+	the report's one-line fields sit. Reports posted with the older fixed
+	4-backtick fence parse the same way.
+	"""
+	markers = list(SESSION_MARKER_RE.finditer(text))
+	if not markers or markers[-1].group(1) != session_label:
 		return None
 	marker = markers[-1]
 	head = text[: marker.start()]
-	start = head.rfind(IMMEDIATE_HEADING)
-	if start < 0:
+	closing = _CLOSING_FENCE_RE.search(head)
+	if not closing:
 		return None
-	section = head[start:]
+	fence = closing.group(1)
+	opening = f"\n{fence}text\n"
+	# The opening line's newline is the closing line's own when the command is empty.
+	open_at = head.rfind(opening, 0, closing.start() + 1)
+	if open_at < 0:
+		return None
+	command = head[open_at + len(opening) : closing.start()] if open_at + len(opening) <= closing.start() else ""
+	fields = head[: open_at + 1]
+	start = fields.rfind(f"\n{IMMEDIATE_HEADING}\n")
+	if start >= 0:
+		start += 1
+	elif fields.startswith(f"{IMMEDIATE_HEADING}\n"):
+		start = 0
+	else:
+		return None
+	section = fields[start:]
 
 	def field(name: str) -> str:
 		match = re.search(rf"^- \*\*{re.escape(name)}:\*\* (.*)$", section, re.MULTILINE)
 		return match.group(1).strip() if match else ""
 
 	title = field("Session title")
-	command = re.search(r"^````text\n(.*)\n````$", section, re.MULTILINE | re.DOTALL)
 	return {
 		"signature": marker.group(2),
 		"event": field("Event").split(" (", 1)[0],
 		"tool_name": field("Tool").strip("`"),
-		"command": command.group(1) if command else "",
+		"command": command,
 		"title": title[1:-1] if len(title) >= 2 and title.startswith("`") and title.endswith("`") else "",
 	}
 

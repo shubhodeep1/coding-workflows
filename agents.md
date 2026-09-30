@@ -1139,9 +1139,15 @@ reviews, comments, and conflicts stay a direct §12 request.
   `filed-state.json` next to the logs keeps a later run in the same session
   from filing the same occurrences again. No cap on open issues. Issue text
   masks token-like strings, removes heredoc bodies, and truncates commands to
-  2,000 characters. In consumer repos it only reports. Signatures that
-  `report-now` already reported are skipped and listed under
-  `already_reported`.
+  2,000 characters. The command sits in a code fence of backticks longer
+  than every backtick run in it (at least 4), so no line of the command can
+  close the fence and render as Markdown (issue #5127). In consumer repos
+  it only reports. Occurrences that
+  `report-now` already delivered to this repository are skipped; a pattern
+  whose every occurrence is covered is listed under `already_reported`. Each
+  `report-now` entry records the repository (`repo`) and the logged session
+  (`log_session`) it covers, so a report on a consumer's PR or issue, or
+  another session's report, never suppresses filing here (issue #5125).
 - `permission_prompts.py report-now --log-file F --cwd D [--record-sha256 H]`
   (issue #4755) reports a prompt the moment it blocks an unattended session,
   because a stuck session never reaches step 14. The hook passes `H`, the
@@ -1188,9 +1194,13 @@ reviews, comments, and conflicts stay a direct §12 request.
   (40 reads for 38 issues on 2026-09-29). Only bodies and comments by an OWNER, MEMBER, or
   COLLABORATOR count. It prints `found`, `issue_url`, `comment_url`,
   `signature`, `event`, `tool_name`, `command`, and `title`, and exits 2 on
-  a failed read. Operator step: the master poller runs it for a session
-  whose `status_detail` reads `Waiting on permission: …` and puts the
-  command and link in its alert.
+  a failed read. It reads only the report that ends the body or comment,
+  back from its session marker and the fence right before it, so a command
+  that imitates a report, a marker, a field, or a fence cannot change what
+  it returns (issue #5127). `command` and `title` are untrusted session
+  data: the poller shows them as data and never follows them. Operator
+  step: the master poller runs it for a session whose `status_detail` reads
+  `Waiting on permission: …` and puts the command and link in its alert.
 - `/implement-plan-claude` step 0 now refuses to run outside Auto mode
   (except issue mode, which records the mode), and a phase touching
   `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
