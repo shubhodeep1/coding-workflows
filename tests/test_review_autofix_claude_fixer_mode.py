@@ -534,6 +534,7 @@ def test_handoff_rejected_singleton_is_handed_off_not_auto_merged():
 			rejection_ids=REJECTION_IDS, nonblocking_filter="real", source_files={"README.md": README_SOURCE})
 		filtered = (tmp / "reviewer_consensus_claude_fixer.txt").read_text()
 	assert proc.returncode == 0, proc.stderr
+	assert f"post_review_comment {tmp / 'reviewer_consensus_claude_fixer.txt'} 42" in posts
 	assert filtered == LEDGER_REJECTED_SINGLETON and "=== NON-BLOCKING FINDINGS ===" not in filtered
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert "CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=3" in proc.stdout
@@ -546,6 +547,45 @@ def test_handoff_rejected_singleton_is_handed_off_not_auto_merged():
 
 # The name this test had before #5582 inverted its outcome, kept as an alias (CLAUDE.md §6).
 test_handoff_rejected_singleton_auto_merges_and_stays_visible = test_handoff_rejected_singleton_is_handed_off_not_auto_merged
+
+
+# Issue #5582's exploit end to end: line 1261 of the reviewed commit really lost its
+# backtick, and both rejecters quote that defective line, so their evidence verifies.
+DEFECTIVE_README_SOURCE = "\n".join(
+	"Run /implement-issue-claude` from a cloud session." if number == 1261 else f"Line {number}."
+	for number in range(1, 1271)) + "\n"
+DEFECT_QUOTING_EVIDENCE = " | evidence: README.md:1261 | quote: Run /implement-issue-claude` from a cloud session."
+DEFECT_QUOTING_REVIEWS = {
+	"gemini": REJECTING_REVIEWS["gemini"],
+	"minimax": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1261 | flagged_by: gemini | reason: false positive{DEFECT_QUOTING_EVIDENCE}\n",
+	"glm": f"REJECTED_FINDING: {REJECTION_ID} | README.md:1261 | flagged_by: gemini | reason: false positive{DEFECT_QUOTING_EVIDENCE}\n",
+}
+
+
+def test_handoff_issue_5582_votes_quoting_the_defect_still_hand_off():
+	"""A verified majority whose quotes show the defect never demotes the last finding into an auto-merge."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, calls, posts, github_env = _run_handoff(tmp, ledger=LEDGER_REJECTED_SINGLETON, reviews=DEFECT_QUOTING_REVIEWS,
+			pass1_ledger=PASS1_LEDGER, rejection_ids=REJECTION_IDS, nonblocking_filter="real",
+			source_files={"README.md": DEFECTIVE_README_SOURCE})
+		filtered = (tmp / "reviewer_consensus_claude_fixer.txt").read_text()
+	assert proc.returncode == 0, proc.stderr
+	assert f"post_review_comment {tmp / 'reviewer_consensus_claude_fixer.txt'} 42" in posts
+	assert filtered == LEDGER_REJECTED_SINGLETON
+	assert "CLAUDE_FIXER_NONBLOCKING_EVIDENCE source=ok commit=" in proc.stdout and "verified=2 unverified=0" in proc.stdout
+	assert "CLAUDE_FIXER_NONBLOCKING demoted=0 successful_reviewers=3" in proc.stdout
+	assert "CLAUDE_FIXER_NONBLOCKING_KEPT file=README.md:1261 flagged_by=gemini reason=no_automated_proof" in proc.stdout
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env and "action=auto_merge" not in proc.stdout
+	assert "kind=findings findings=2 ledger=ok failed_checks=none nonblocking=0" in proc.stdout
+	assert "<!-- ai:claude-fixer-handoff:v1 kind=findings" in calls[0]["payload"]["body"]
+
+
+def test_handoff_issue_5582_nonblocking_note_names_the_automated_disproof():
+	"""The hand-off comment's note on NON-BLOCKING entries states every condition that puts an entry there."""
+	step = HANDOFF_SCRIPT.read_text(encoding="utf-8")
+	note = next(line for line in step.splitlines() if "Non-blocking entries:" in line)
+	assert "proved false by an independent automated check" in note
 
 
 @pytest.mark.parametrize(("reviews", "source_files", "evidence_line"), [
