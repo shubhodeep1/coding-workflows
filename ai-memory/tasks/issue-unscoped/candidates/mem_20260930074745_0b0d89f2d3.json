@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:487-500 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The pagination guard can report a status-filtered listing complete when one run leaves and another enters between page reads but `total_count` stays unchanged, causing the newly entered run to be missed.\n  WHY: `_mt_release` can then miss an active review for the queued PR and dispatch a duplicate; severity ranged from MAJOR to BLOCKER, with qwen_qwen3_7-plus assigning BLOCKER and the other reviewers assigning MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The conformance fix should make a status-filtered paged listing safe against every shape of shift a run can cause between page reads, not only the shape where `total_count` changes.\n  expected_change_site: scripts/review_merge_train.sh lines 487-497; tests/test_review_merge_train.py\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The guard compares only `__mt_runs_total` against `__mt_runs_first_total`; the new tests cover shrink (150 \u2192 140) and grow (150 \u2192 155), but no test covers a same-count membership shift with a 200-run listing; `actions_runs_after_page1.json` supports later-page responses; the conformance entry in `docs/implement-plan/issue-5443-merge-train-complete-run-listing.md` documents only the total-count-change fix.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_merge_train.sh:492-497 (the __mt_runs_first_total capture and listing_shifted check) | severity=MAJOR | confidence=4\n  PROBLEM: The pagination guard treats a listing as stable when total_count stays equal between page 1 and later pages, even though membership can change when one run leaves the status and another enters between page reads.\n  WHY: Distinct IDs from both pages can reach total_count without including the new run, so _mt_release dispatches a duplicate review beside it.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/review_merge_train.sh:lines 492-500 | severity=MAJOR | confidence=4\n  PROBLEM: The pagination shift guard only compares total_count against page 1 (__mt_runs_total -ne __mt_runs_first_total), which does not detect concurrent membership shifts when active runs leave and enter the status filter in equal numbers between page requests.\n  WHY: _mt_inflight_review_branches can terminate with success without recording the newly active run, leading _mt_release to evaluate the queued PR as having no in-flight review and dispatching a duplicate review run.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_merge_train.sh:487-497 (the new `__mt_runs_first_total` capture and `listing_shifted` check) | severity=MAJOR | confidence=4\n  PROBLEM: The fix only detects a shifted listing when `__mt_runs_total` changes between page 1 and a later page; a same-count membership shift keeps `total_count` unchanged while the listing's membership moves.\n  WHY: The distinct IDs read reach `total_count`, the listing is reported complete, and an active review run for the queued PR can be missed.\n- TASK_GAP\n  Requirement: The conformance fix should make a status-filtered paged listing safe against every shape of shift a run can cause between page reads, not only the shape where `total_count` changes. The original defect (conformance 1/3) was that the listing could appear complete while a still-active run had been skipped; the fix narrows the trigger to `total_count` changes and leaves the same-count membership shift case (one run leaves the status filter and another enters the same status between two page reads, with `total_count` unchanged) unhandled.\n  Expected change site: scripts/review_merge_train.sh lines 487-497 (the new `__mt_runs_first_total` / `listing_shifted` guard), plus a paired regression test in tests/test_review_merge_train.py next to the two new `test_release_leaves_pr_queued_when_listing_shrinks_between_pages` / `\u2026_grows_\u2026` tests.\n  Evidence of absence: The new guard compares only `__mt_runs_total` against `__mt_runs_first_total`; the same-count shift keeps them equal and the loop breaks via the existing `read >= total` path. The two new tests exercise shrink (150 \u2192 140) and grow (150 \u2192 155); no test runs a 200-run listing with one run finishing and another entering between page 1 and page 2. The fake `gh` infrastructure already supports this case (the new `actions_runs_after_page1.json` path serves every later page), and the conformance entry in `docs/implement-plan/issue-5443-merge-train-complete-run-listing.md` documents only the total-count-change fix without naming the same-count gap. AD-7 in the same log poses the question as \"How should the active-run listing treat a `total_count` that changes between pages of one status?\" \u2014 the same-count membership shift was not asked.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_merge_train.sh:492-499 | severity=MAJOR | confidence=5\n  PROBLEM: The pagination guard treats the listing as stable when page 1 and a later page have the same `total_count`, even if the listing\u2019s membership shifted.\n  WHY: `_mt_release` can miss an active review for the queued PR, remove its queue label, and dispatch another review (lines 587-625).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_merge_train.sh:487-500 (the `__mt_runs_first_total` capture and `listing_shifted` check) | severity=BLOCKER | confidence=4\n  PROBLEM: The guard detects a shifted listing only when `total_count` changes between pages; a same-count membership shift leaves `total_count` unchanged while the listing's membership moves.\n  WHY: The distinct IDs read still reach `total_count`, so the listing is reported complete and the active review run for a queued PR can be missed, triggering a duplicate review run.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_merge_train.sh:487-500 (the `__mt_runs_first_total` capture at 492-493 and the `__mt_runs_total != __mt_runs_first_total` check at 494, followed by the `__mt_runs_read >= __mt_runs_total` break at 498) | severity=MAJOR | confidence=4\n  PROBLEM: The new shift guard detects only a `total_count` change between page 1 and later pages; a same-count membership shift evades the guard.\n  WHY: The listing is reported complete, so `_mt_release` can miss the active review and dispatch a duplicate beside it.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2c057b64c748e78cc5378bb429002fed3cf00eb7ce51fd24ab4e4125c6c55720",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5512,
+    "run_id": "36679992886",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36679992886",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930074745_0b0d89f2d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5512,
+    "run_id": "36679992886"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T07:47:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
