@@ -1186,10 +1186,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   agent proxy refuses the search (HTTP 403), and the poller runs there, so
   when the search read fails it checks every `ai:permission-prompt` issue
   instead, newest-updated first (1 read per 100 labelled issues), where
-  `report-now` reports in coding-workflows. It stops at the first hit
-  holding the report and answers `found: false` only after checking every
-  hit, never because a fixed window ran out (issue #5126); a search that
-  answers `incomplete_results: true` without the report exits 2. A
+  `report-now` reports in coding-workflows. It returns the newest report
+  by creation time, not the first one found (an issue that another
+  session's comment bumped can hold an older report), and stops at the
+  first hit last updated before the newest report so far. It answers
+  `found: false` only after checking every hit, never because a fixed
+  window ran out (issue #5126). A search that answers
+  `incomplete_results: true` on any page exits 2, even when its partial
+  hits hold a report, since a newer one may be missing. A
   not-found answer in the fallback costs about one read per labelled issue
   (40 reads for 38 issues on 2026-09-29). Only bodies and comments by an OWNER, MEMBER, or
   COLLABORATOR count. It prints `found`, `issue_url`, `comment_url`,
