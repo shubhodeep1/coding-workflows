@@ -17,6 +17,7 @@ SCRIPT_PATH = ROOT / "scripts" / "claude_session_janitor.py"
 CLAUDE_MD = ROOT / "CLAUDE.md"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PICKUP = ROOT / ".claude" / "commands" / "claude-issue-pickup.md"
+DISPATCH = ROOT / ".claude" / "commands" / "claude-issue-dispatch.md"
 FIX_CLAUDE_PR_TWIN = ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md"
 SETTINGS_TWIN = ROOT / "workflow-templates" / ".claude" / "settings.json"
 
@@ -100,6 +101,12 @@ def _archived_ids(result):
 		("#4750 · PR #4770 — Issue #4750 — implement", "issue_start", {"repo": None, "issue": 4750}),
 		("#4755 · PR #4870 — implement-issue-claude — #4755", "issue_start", {"repo": None, "issue": 4755}),
 		("#4755 · implement-issue-claude — #4755", "issue_start", {"repo": None, "issue": 4755}),
+		# The #4886 forms the dispatcher, pickup, and fixer create today.
+		("#4887 · issue o/r#4887 — implement", "issue_start", {"repo": "o/r", "issue": 4887}),
+		("#4887 · PR #4924 — issue o/r#4887 — implement", "issue_start", {"repo": "o/r", "issue": 4887}),
+		("#4723 · PR o/r#4729 — fix review", "fixer", {"repo": "o/r", "pr": 4729}),
+		("#4723 · PR o/r#4729 — fixed ci", "fixer", {"repo": "o/r", "pr": 4729}),
+		("#4887 · PR #4924 — implement-plan issue-4887-x — conformance 1/3", "stage", {"issue": 4887, "stage": "conformance 1/3"}),
 		("PR #12 merged — no action needed", "report", {"pr": 12}),
 		("PR #12 merged — action needed", "report", {"pr": 12}),
 		("PR #12 closed — decision needed", "report", {"pr": 12}),
@@ -111,6 +118,22 @@ def _archived_ids(result):
 )
 def test_title_recognition(title, kind, fields):
 	assert janitor.classify_title(title) == (kind, fields)
+
+
+def test_titles_the_dispatcher_and_fixer_create_are_recognised():
+	# The session titles come from the command files, so a change there must
+	# not silently take those sessions out of the sweep (issue #4886 prefixes).
+	dispatch = " ".join(DISPATCH.read_text(encoding="utf-8").split())
+	fixer = " ".join(FIX_CLAUDE_PR_TWIN.read_text(encoding="utf-8").split())
+	assert "`#<N> · issue <repo>#<N> — implement`" in dispatch
+	assert "`PR <repo>#<N> — fix <kind>`" in dispatch
+	assert "`#<I> · PR <owner>/<repo>#<N> — fix <kind>`" in fixer
+	assert "`PR <owner>/<repo>#<N> — <fixed <kind> | on hold: <kind>>`, with `#<I> · ` in front" in fixer
+	for title in ("#12 · issue o/r#12 — implement", "#12 · PR #34 — issue o/r#12 — implement"):
+		assert janitor.classify_title(title) == ("issue_start", {"repo": "o/r", "issue": 12}), title
+	for title in ("PR o/r#34 — fix review", "#12 · PR o/r#34 — fix ci", "#12 · PR o/r#34 — fixed conflict",
+		"#12 · PR o/r#34 — on hold: review"):
+		assert janitor.classify_title(title) == ("fixer", {"repo": "o/r", "pr": 34}), title
 
 
 @pytest.mark.parametrize(

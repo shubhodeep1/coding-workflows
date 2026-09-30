@@ -874,7 +874,10 @@ tools (`send_later`, `create_session`, `archive_session`, the trigger tools)
 prompt on every call whatever the allowlist says, and Haiku 4.5 cannot run
 in Auto mode, which is why the checker is Sonnet. Progress between
 stages is persisted in `docs/implement-plan/<slug>.md`
-(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt. Only the chain archives its own sessions: the project checker
+(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt. Only the chain archives its own sessions (one exception: the
+Claude issue pickup's session sweep, CLAUDE.md §26.I, archives an idle
+issue-start session once a later stage session exists or its issue is
+closed; it never touches a checker or a stage session): the project checker
 holds the project's only pending check-in, so archiving it by hand stalls the
 project until the 24h safety net fires. To nudge a stalled project, start the
 next stage session by hand with a `— resume.` block; to stop one, delete its
