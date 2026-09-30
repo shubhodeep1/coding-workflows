@@ -990,6 +990,14 @@ def test_private_model_index_wiring() -> None:
 	assert loop.index("resolver_opencode_cmd=(\n") < loop.index(block)
 	assert loop.index(block) < loop.index('-- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}"')
 	assert 'RESOLVER_MODEL_INDEX_FILE="${RUNTIME_DIR}/resolver_model_index"' in src
+	# The script's own staging stays on the real index: the helper and its
+	# only call site never point GIT_INDEX_FILE at the model's private copy.
+	staging_def = src.index("stage_resolver_touched_path_or_fail() {")
+	staging_fn = src[staging_def:src.index("\n}\n", staging_def)]
+	assert "GIT_INDEX_FILE" not in staging_fn
+	assert "Never call it with\n# GIT_INDEX_FILE pointing at the model's private copy" in src[:staging_def]
+	staging_call = src.index('if ! stage_resolver_touched_path_or_fail "${touched_path}"; then')
+	assert "GIT_INDEX_FILE=" not in src[src.rindex("This staging runs on the real index on purpose", 0, staging_call):staging_call]
 
 
 def main() -> int:

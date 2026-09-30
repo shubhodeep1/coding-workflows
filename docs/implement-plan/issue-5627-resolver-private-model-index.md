@@ -7,14 +7,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5648 (review round 2 or merge)
+- Waiting on: PR #5648 (review round 3 or merge)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01LX3ut8ixr4nKefuuzQVDA4 (reused; new safety net and hand-back recorded in the stage report)
+- Check-in: checker session_01LX3ut8ixr4nKefuuzQVDA4 (reused; safety net and hand-back recorded in the stage report)
 - Last updated: 2026-09-30
-- Last note: review round 1 on PR #5648: fixed 3 findings (same-path guard in `_resolver_model_index_prepare`, duplicate `import os`, staging-contract comment), rejected 2 with reasons
+- Last note: review round 2 on PR #5648: fixed the one task gap (real-index contract comment on `stage_resolver_touched_path_or_fail`, pinned by `test_private_model_index_wiring`)
 
 ## Phases
-1. [ ] Phase 1 — private resolver model index (`GIT_INDEX_FILE` copy per attempt plus OpenCode snapshot opt-out, source repo only; regression tests; agents.md; changelog fragment)   — PR #5648 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — private resolver model index (`GIT_INDEX_FILE` copy per attempt plus OpenCode snapshot opt-out, source repo only; regression tests; agents.md; changelog fragment)   — PR #5648 open (waiting); review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -39,6 +39,7 @@
 
 ## Notes
 - Review round 1 (2026-09-30, head 887d5ef): fixed the inherited-`GIT_INDEX_FILE` same-path deletion risk, the duplicate `import os` (pre-existing), and the staging-contract task gap; rejected the raw f-string regex finding (compiles and is deterministic) and the `TypeError` finding (`sys.argv[1]` is always a string).
+- Review round 2 (2026-09-30, head 96769bb): fixed the consensus task gap (minimax, qwen, glm): `stage_resolver_touched_path_or_fail` now documents that it stages into the real index and must never run with `GIT_INDEX_FILE` on the model's copy; `test_private_model_index_wiring` pins it. No findings rejected.
 - Base branch: the issue named `auto/forward-merge-stable-36694528358-1` (PR #5596's head); the project uses `main` per AD-1.
 - `security_pass_skip.py`: skip=true (label `ai:workflow-heal`).
 - Out of scope: the stale `source_pr_head` comment in `scripts/workflow_failure_heal_intake.sh` that sends source-repo review/autofix heal issues to the PR head branch.

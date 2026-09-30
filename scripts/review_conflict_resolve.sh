@@ -41,6 +41,11 @@
 
 set -euo pipefail
 
+# Stages one accepted resolver path into the real merge index, which the
+# [ai-merge-resolve] commit is written from.  Never call it with
+# GIT_INDEX_FILE pointing at the model's private copy
+# (RESOLVER_MODEL_INDEX_FILE, #5627): that copy is discarded, so the real
+# index would keep its unmerged entries and the commit would carry nothing.
 stage_resolver_touched_path_or_fail() {
   local resolver_staging_path="$1"
   local resolver_staging_exit_code=0
