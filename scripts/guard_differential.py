@@ -43,8 +43,10 @@ Policy format (`LOOSENING_POLICY_PATH`, JSON):
   {"version": 1, "exceptions": [{"hook": "<hook file stem>",
     "shape": "<corpus line, verbatim>", "head_sha": "<40 or 64 hex>",
     "approved_by": "<login>", "reason": "<why>"}]}
-Every field is a required non-empty string; a malformed file is a setup error
-(exit 2) whenever a hook tree is compared.
+`version` must be the integer 1 (a missing, string, or other version is
+rejected rather than read under v1 rules), and every entry field is a
+required non-empty string; a malformed file is a setup error (exit 2)
+whenever a hook tree is compared.
 
 A hook present on only one side runs as "no hook" (decision `none`) on the
 other, so deleting a guard is a loosening, and a new hook is one only where it
@@ -159,6 +161,8 @@ class ShapeResult:
 	# Listed in the PR body's `Intended loosening:` section (data only).
 	pr_body_listed: bool = False
 	approved_by: str = ""
+	# The approving policy entry's `reason` ("" when not approved).
+	approval_reason: str = ""
 
 	@property
 	def regression(self) -> bool:
@@ -287,6 +291,10 @@ def parse_loosening_policy(text: str, source: str) -> list[LooseningApproval]:
 		raise SetupError(f"{source}: invalid JSON ({exc})") from exc
 	if not isinstance(document, dict):
 		raise SetupError(f"{source}: the policy must be a JSON object")
+	version = document.get("version")
+	# `type(...) is int` so `true` (a bool, and == 1) is rejected too.
+	if type(version) is not int or version != 1:
+		raise SetupError(f"{source}: unsupported policy `version` {json.dumps(version)} (expected 1)")
 	entries = document.get("exceptions")
 	if not isinstance(entries, list):
 		raise SetupError(f"{source}: `exceptions` must be a list")
@@ -680,6 +688,7 @@ def compare_hook_dirs(
 					intended=approval is not None,
 					pr_body_listed=loosened and is_intended(shape, listed),
 					approved_by=approval.approved_by if approval else "",
+					approval_reason=approval.reason if approval else "",
 				)
 			)
 	return results
@@ -809,6 +818,8 @@ def print_report(report: Report, as_json: bool) -> None:
 						"loosened": result.loosened,
 						"intended": result.intended,
 						"pr_body_listed": result.pr_body_listed,
+						"approved_by": result.approved_by,
+						"approval_reason": result.approval_reason,
 					}
 				)
 			)

@@ -295,6 +295,12 @@ def test_parse_loosening_policy_accepts_valid_entries() -> None:
 		"[]",
 		json.dumps({"version": 1}),
 		json.dumps({"exceptions": {}}),
+		json.dumps({"exceptions": []}),
+		json.dumps({"version": 2, "exceptions": []}),
+		json.dumps({"version": "1", "exceptions": []}),
+		json.dumps({"version": None, "exceptions": []}),
+		json.dumps({"version": True, "exceptions": []}),
+		json.dumps({"version": 1.0, "exceptions": []}),
 		_policy_text("x"),
 		_policy_text({k: v for k, v in _entry().items() if k != "approved_by"}),
 		_policy_text(_entry(reason="  ")),
@@ -450,6 +456,25 @@ def test_cli_passes_with_a_base_policy_entry_for_the_head_commit(hook_repo: Path
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert 'intended_loosening tree=.claude/hooks hook=fake_guard base=block head=none shape="git push" approved_by="operator"' in proc.stdout
 	assert "status=pass" in proc.stdout and "intended_loosening=1" in proc.stdout
+
+
+def test_cli_json_rows_carry_the_approval_audit_fields(hook_repo: Path) -> None:
+	"""`--json` rows name the approver and reason of a policy-approved shape,
+	as the text `intended_loosening` line does, and leave both empty otherwise."""
+	head_sha = _loosening_pr(hook_repo)
+	unapproved = _cli(hook_repo, "--head-ref", "pr", "--json")
+	assert unapproved.returncode == 1, unapproved.stdout + unapproved.stderr
+	[row] = [json.loads(line) for line in unapproved.stdout.splitlines() if line.startswith("{")]
+	assert (row["loosened"], row["intended"], row["approved_by"], row["approval_reason"]) == (True, False, "", "")
+	_commit_policy(hook_repo, _entry(head_sha=head_sha, reason="retire the old refspec rule"))
+	proc = _cli(hook_repo, "--head-ref", "pr", "--json")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	[row] = [json.loads(line) for line in proc.stdout.splitlines() if line.startswith("{")]
+	assert (row["intended"], row["approved_by"], row["approval_reason"]) == (
+		True,
+		"operator",
+		"retire the old refspec rule",
+	)
 
 
 @pytest.mark.parametrize(

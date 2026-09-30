@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5174-guard-differential-check
 - Project branch: claude/implement-plan-issue-5326-guard-differential-trusted-loosening   Final PR: #5360 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #5389
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: project checker `implement-plan issue-5326-guard-differential-trusted-loosening — checker` (session, safety-net, and hand-back ids are in the phase 1 stage report)
+- Check-in: project checker session_01KsqE28FAB72xsTiHLCUEvX (safety-net and hand-back ids are in the review round 1 stage report)
 - Last updated: 2026-09-30
-- Last note: phase 1 PR #5389 opened (policy-based intended loosening, 97 guard differential tests passing); waiting on its review round or merge.
+- Last note: review round 1 on PR #5389: both findings fixed (policy `version` must be the integer 1; `--json` rows carry `approved_by` / `approval_reason`), 104 guard differential tests passing; waiting on the next review round or merge.
 
 ## Phases
-1. [ ] Phase 1 — base-branch loosening policy (script, policy file, tests, ci.yml step, docs)   — PR #5389 open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — base-branch loosening policy (script, policy file, tests, ci.yml step, docs)   — PR #5389 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -36,8 +36,10 @@
 - AD-6 [plan, 2026-09-30] Update #5174's plan goal G5, which specifies the PR-body exemption? — Picked: A — amend G5 to the policy rule with a pointer to #5326, so #5174's later conformance and activation audits grade the fixed behaviour. Alternatives: B — leave it, and let #5174's audits flag the fix as a regression. Why: the goal is superseded by a security finding filed against that project. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] A versioned JSON config must reject a missing, non-integer (including `true`), or unknown `version` instead of reading it under the current rules, and every audit field the text output prints must also be in the `--json` rows. (files: scripts/guard_differential.py)
 
 ## Notes
+- Review round 1 (2026-09-30): the `— resume.` block named `Checker session: session_22a9c863-2258-5384-b27b-7d08164ff3ae`, which is not a session id in `list_sessions`; the real project checker is this stage's parent, session_01KsqE28FAB72xsTiHLCUEvX, and was reused. The checker's `session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}` apparently yields a UUID form in its environment.
 - Local verification (phase 1): 39 of 40 related suites pass. `tests/test_orchestrate_poll_process.py` (CI-sharded) hit a local 300 s cap with no failure. `tests/test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean` also fails on the unchanged base because this container has no `gawk`.
 - Issue mode (CLAUDE.md §28.A): single-phase plan written by /implement-issue-claude from issue #5326 (security-audit finding on #5174's project branch).
 - Base branch is not the default branch: the issue closes by an explicit close + `ai:merged` at final merge, and steps 12–13 do not run (`Activation: n/a`).

@@ -1214,8 +1214,9 @@ side so that class cannot land unnoticed.
   files as changed.
 - **Intended loosening (base-branch policy, issue #5326).** A loosening
   passes only when `.github/guard_differential/intended_loosening.json`
-  **at the base ref** approves it: `{"version": 1, "exceptions": [...]}`,
-  one entry per shape with the non-empty strings `hook` (the hook file
+  **at the base ref** approves it: `{"version": 1, "exceptions": [...]}`
+  (`version` must be the integer `1`; a missing or other version is
+  malformed), one entry per shape with the non-empty strings `hook` (the hook file
   stem), `shape` (the corpus line verbatim, placeholders included),
   `head_sha` (the PR's full head commit), `approved_by`, and `reason`. The
   file is read from the base ref only, the same trust boundary as the base
@@ -1249,7 +1250,9 @@ side so that class cannot land unnoticed.
   `GUARD_DIFFERENTIAL intended_loosening … approved_by=…` per
   policy-approved shape, `GUARD_DIFFERENTIAL missing_corpus path=…`, and a
   `GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> …` summary; `--json`
-  rows carry `intended` (policy-approved) and `pr_body_listed`. Exit 0 when
+  rows carry `intended` (policy-approved), `pr_body_listed`, and the
+  approving entry's `approved_by` and `approval_reason` (both `""` when
+  not approved). Exit 0 when
   clean or when no hook changed, 1 on a failure, 2 on a bad ref, unreadable
   corpus, unreadable PR body, malformed policy, or malformed `--head-sha`.
 
