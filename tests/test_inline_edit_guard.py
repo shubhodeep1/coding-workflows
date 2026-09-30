@@ -29,6 +29,8 @@ GUARD_PATH = REPO_ROOT / ".claude" / "hooks" / "inline_edit_guard.py"
 TEMPLATE_GUARD_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "inline_edit_guard.py"
 SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
+PROMPTS_SCRIPT_PATH = REPO_ROOT / ".claude" / "scripts" / "permission_prompts.py"
+TEMPLATE_PROMPTS_SCRIPT_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "scripts" / "permission_prompts.py"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 AGENTS_MD = REPO_ROOT / "agents.md"
 README_MD = REPO_ROOT / "README.md"
@@ -154,6 +156,8 @@ def test_observed_prompts_are_denied(name):
 		("ruby -i -pe '$_.upcase!' f", "ruby"),
 		("gawk -i inplace '{print}' f", "awk"),
 		("awk -i inplace '{print}' f", "awk"),
+		("gawk -i inplace.awk '{print}' f", "awk"),
+		("awk -i inplace.awk '{print}' f", "awk"),
 		("python3 -c \"open('x','w').write('y')\"", "python"),
 		("python3 -c \"open('x', mode='a').write('y')\"", "python"),
 		("python -Bc \"import shutil; shutil.copy('a', 'b')\"", "python"),
@@ -349,7 +353,7 @@ def test_hook_process_writes_no_bytecode_beside_the_hooks(tmp_path, hook_path: P
 	)
 	assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
 	assert (tmp_path / ".claude" / "permission-prompts" / "sess-4858.jsonl").exists()
-	assert not (hooks_dir / "__pycache__").exists()
+	assert not any(path.name == "__pycache__" for path in hooks_dir.rglob("*"))
 
 
 @pytest.mark.parametrize("stdin_text", ["", "   \n"])
@@ -511,6 +515,7 @@ def test_other_bash_guards_stay_wired(path):
 def test_template_parity():
 	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(encoding="utf-8")
+	assert TEMPLATE_PROMPTS_SCRIPT_PATH.read_text(encoding="utf-8") == PROMPTS_SCRIPT_PATH.read_text(encoding="utf-8")
 
 
 def test_claude_md_documents_the_guard():
