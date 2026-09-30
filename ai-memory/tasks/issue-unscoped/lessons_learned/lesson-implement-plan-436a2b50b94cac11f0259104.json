@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T13:10:47Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test fake `gh` that returns the whole list for page 1 and `[]` for later pages cannot exercise pagination limits; slice list payloads by `per_page`/`page` so flood cases reach page 11+.",
+  "phase": "implement_plan",
+  "pr_number": 5590,
+  "record_id": "lesson-implement-plan-436a2b50b94cac11f0259104",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5566-stream-merge-gate-comments",
+    "file:tests/test_claude_merge_hold_gate.py"
+  ]
+}
