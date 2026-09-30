@@ -1281,8 +1281,14 @@ def test_lookup_returns_the_exact_hostile_command(tmp_path, monkeypatch):
 	command = HOSTILE_COMMANDS[0]
 	record = _bash_record(command)
 	body = pp_template.immediate_block(_bash_pattern(command), record, SESSION, "")
-	search = {"items": [{"number": 901, "html_url": "https://github.com/x/y/issues/901", "author_association": "OWNER", "body": body}]}
+	search = {"items": [{"number": 901, "html_url": "https://github.com/x/y/issues/901", "author_association": "OWNER", "body": body, "comments": 0}]}
 	monkeypatch.setattr(pp_template.check_in_status, "gh_api", lambda path: search)
+
+	def no_comments_read(path):
+		raise AssertionError(f"unexpected live comments read: {path}")
+
+	# The hit has 0 comments, so lookup must not read any (and never reaches live GitHub).
+	monkeypatch.setattr(pp_template.check_in_status, "gh_api_list", no_comments_read)
 	result = pp_template.lookup(SESSION, FILING)
 	assert result["found"] is True and result["command"] == pp_template.record_example(record)
 
