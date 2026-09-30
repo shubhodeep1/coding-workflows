@@ -88,6 +88,9 @@ def test_project_base_is_verified_and_other_bases_merge_their_own_base(commands)
 	assert "Up to two checks" in section
 	assert "When the default check failed too, run it again after step 4's merge" in section
 	assert "When `git fetch origin <project branch>` itself fails, it is the same stop" in section
+	# PR #5282 review round 3: a moved or missing plan never ends in a raw `git show` error.
+	assert "or `git show origin/<base>:docs/completed/<slug>-plan.md` once its completion PR moved it there" in section
+	assert "both `git show` calls failing means the branch is not a project branch, not a stop" in section
 
 
 def test_claude_conflict_aborts_and_blocks(commands):
@@ -318,3 +321,35 @@ def test_default_drift_left_after_a_base_merge_is_still_detected(directory: Path
 	assert (clone / ".claude/hooks/guard.py").read_text(encoding="utf-8") == "v2\n"
 	assert _exit_code(clone, env, base_check) == 0
 	assert _exit_code(clone, env, default_check) == 1
+
+
+@pytest.mark.parametrize("directory", DIRS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_plan_lookup_finds_a_moved_plan_and_fails_on_a_non_project_branch(directory: Path, tmp_path: Path):
+	"""PR #5282 review round 3: the documented plan lookups, run as written.
+
+	A project branch whose completion PR moved its plan is found at the second path; another pull
+	request's `-phase-<n>` head has a plan at neither path, which routes to "Any other base".
+	"""
+	section = _section(_flat(directory / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	plans = r"`(git show origin/<base>:docs/plans/<slug>-plan\.md)`"
+	completed = r"`(git show origin/<base>:docs/completed/<slug>-plan\.md)`"
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, "README.md", "x\n", "init")
+	_git(origin, env, "checkout", "-q", "-b", "claude/implement-plan-foo")
+	_commit(origin, env, "docs/completed/foo-plan.md", "Base branch: main\n", "completion: move the plan")
+	_git(origin, env, "checkout", "-q", "-b", "claude/implement-plan-foo-phase-1")
+	_commit(origin, env, "work.md", "x\n", "phase work")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "fetch", "-q", "origin", "claude/implement-plan-foo", "claude/implement-plan-foo-phase-1")
+	project = {"base": "claude/implement-plan-foo", "slug": "foo"}
+	assert _exit_code(clone, env, _documented(section, plans, **project)) != 0
+	assert _exit_code(clone, env, _documented(section, completed, **project)) == 0
+	phase_head = {"base": "claude/implement-plan-foo-phase-1", "slug": "foo-phase-1"}
+	assert _exit_code(clone, env, _documented(section, plans, **phase_head)) != 0
+	assert _exit_code(clone, env, _documented(section, completed, **phase_head)) != 0
