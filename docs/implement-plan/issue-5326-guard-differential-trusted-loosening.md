@@ -1,31 +1,35 @@
 # Implement-Plan Log — Guard differential check: accept intended loosening only from a base-branch policy, never from the PR body
 
-- Plan: docs/plans/issue-5326-guard-differential-trusted-loosening-plan.md
+- Plan: docs/completed/issue-5326-guard-differential-trusted-loosening-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5326   Progress comment: 5902380346
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5174-guard-differential-check
 - Project branch: claude/implement-plan-issue-5326-guard-differential-trusted-loosening   Final PR: #5360 draft
-- Status: IN_PROGRESS
-- Stage: conformance 2/3 — review round
-- Activation: not started
-- Waiting on: PR #5494 (conformance 2/3 fix PR, review round 4)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-5174-guard-differential-check) — the base is not the default branch, so steps 12–13 do not run (Issue Mode)
+- Waiting on: completion PR (claude/implement-plan-issue-5326-guard-differential-trusted-loosening-complete → the project branch)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: project checker session_01KsqE28FAB72xsTiHLCUEvX (per-wait safety-net and hand-back ids are in the stage report)
+- Check-in: project checker session_01KsqE28FAB72xsTiHLCUEvX (reused; per-wait safety-net and hand-back ids are in the stage report)
 - Last updated: 2026-09-30
-- Last note: conformance 2/3 review round 3 (workflow round 2 on a49a071): 1 NIT finding from one reviewer, fixed: the corpus-header test built its header from every `#` line in the file, so wording kept only in a later section comment still passed; it now reads only the leading comment block (a mutation moving the clause to a trailing comment fails it).
+- Last note: validation cycle 1 (run 36699650751, target_ref = the project branch) passed 10/10; no validation-fix PR, so no conformance re-run (all 3 runs used). Plan moved to docs/completed/ in the completion PR; next is final-merge (mark final PR #5360 ready, then close #5326 with ai:merged after it merges into the #5174 branch).
 
 ## Phases
 1. [x] Phase 1 — base-branch loosening policy (script, policy file, tests, ci.yml step, docs)   — PR #5389 merged 2026-09-30 (250b29f); review rounds: 1; interventions: 0
 
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT — fix PR #5449 merged 2026-09-30 (stale `--head-sha` exit-code wording in agents.md and plan G5, plus a pinning test) (pre-security)
-- Run 2 — 2026-09-30: CONFORMANT — fix PR (the four `tests/guard_corpus/*.txt` headers still said a PR-body `Intended loosening:` listing passes a shape; now name the base-branch policy, plus a pinning test) (pre-security) — PR #5494; review rounds: 3 (1: no finding; head moved by a `[claude-merge-resolve]` merge of the synced project branch. 2: 1 of 2 low findings fixed in the header test. 3: 1 NIT fixed, the header test now reads only the leading comment block)
+- Run 2 — 2026-09-30: CONFORMANT — fix PR (the four `tests/guard_corpus/*.txt` headers still said a PR-body `Intended loosening:` listing passes a shape; now name the base-branch policy, plus a pinning test) (pre-security) — PR #5494 merged 2026-09-30T09:12:18Z (751b24d); review rounds: 3 (1: no finding; head moved by a `[claude-merge-resolve]` merge of the synced project branch. 2: 1 of 2 low findings fixed in the header test. 3: 1 NIT fixed, the header test now reads only the leading comment block)
+- Run 3 — 2026-09-30: CONFORMANT — no fixes (pre-validation; 112 guard-differential tests pass, yamllint clean, 77 changelog/workflow-size/archival tests pass; inventory parity still fails on the base, the known #5174 gap in Notes)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue), per the plan header.
 
 ## Validation
+- Cycle 1 — run 36699650751 2026-09-30 (target_ref: claude/implement-plan-issue-5326-guard-differential-trusted-loosening; authorized as a stacked target by main's validate.yml, #4746): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 272s); no fix PR
 
 ## Completion
+- Completion PR (branch claude/implement-plan-issue-5326-guard-differential-trusted-loosening-complete) open — doc moved to docs/completed/issue-5326-guard-differential-trusted-loosening-plan.md
+- Final PR #5360 draft (into claude/implement-plan-issue-5174-guard-differential-check)
 
 ## Activation
 
