@@ -3,22 +3,22 @@
 - Plan: docs/plans/issue-5700-edit-comment-own-session-scratchpad-plan.md
 - Source issue: shubhodeep1/coding-workflows#5700
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5700-edit-comment-own-session-scratchpad   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5700-edit-comment-own-session-scratchpad   Final PR: #5713 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5714: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from claude/implement-plan-issue-5452-edit-comment-scratchpad-only; plan and log committed.
+- Last note: phase 1 implemented twin-first (e9bca72); phase PR opened with a hold claim; waiting on the `[claude-twin-sync]` copy of two twins into `.claude/` (blocker on #5700).
 
 ## Phases
-1. [ ] Phase 1 — bind edit_comment.py input files to the caller's own session scratchpad; protected paths: `.claude/scripts/edit_comment.py`, `.claude/commands/implement-plan-claude.md`
-   - [ ] twin `workflow-templates/.claude/scripts/edit_comment.py`: `SESSION_ID_ENV_VAR`, `SESSION_ID_RE`, `_caller_scratchpad_identity`, `is_own_scratchpad_path`, owner check in `read_input_file`
-   - [ ] `tests/test_edit_comment.py`: fixture binds the session id and uid; other-session, other-uid, other-owner, and bad-session-id cases; `is_own_scratchpad_path` table
-   - [ ] CLAUDE.md §23.I, `agents.md`, twin `implement-plan-claude.md` Comment helper
-   - [ ] `changelog.d/5700-edit-comment-own-session-scratchpad.md` (`security`)
+1. [ ] Phase 1 — bind edit_comment.py input files to the caller's own session scratchpad   — PR #5714 open (twin sync pending); review rounds: 0; interventions: 0; protected paths: `.claude/scripts/edit_comment.py`, `.claude/commands/implement-plan-claude.md`
+   - [x] twin `workflow-templates/.claude/scripts/edit_comment.py`: `SESSION_ID_ENV_VAR`, `SESSION_ID_RE`, `_caller_scratchpad_identity`, `is_own_scratchpad_path`, owner check in `read_input_file`
+   - [x] `tests/test_edit_comment.py`: fixture binds the session id and uid; other-session, other-uid, other-owner, and bad-session-id cases; `is_own_scratchpad_path` table
+   - [x] CLAUDE.md §23.I, `agents.md`, twin `implement-plan-claude.md` Comment helper
+   - [x] `changelog.d/5700-edit-comment-own-session-scratchpad.md` (`security`)
    - [ ] `[claude-twin-sync]` copy into `.claude/` (after the phase PR opens)
 
 ## Conformance
@@ -46,3 +46,6 @@
 - Security pass: skip (`security_pass_skip.py`: `ai:security: created and labelled by the issue automation`).
 - Issue base `claude/implement-plan-issue-5452-edit-comment-scratchpad-only`: its final PR #5464 into main is open (draft) as of 2026-09-30.
 - Progress comment: 5912967579 on #5700.
+- Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
+- Phase 1 verification (2026-09-30): `tests/test_edit_comment.py` 80 passed, `test_template_parity` red until the twin sync (expected). 13 related suites: 652 passed, 1 skipped, 4 failed, all twin-parity checks (`test_edit_comment`, `test_implement_plan_claude_command`, `test_implement_issue_claude_command`, `test_ingest_implement_plan_lessons`). With the sync simulated in a scratch copy, the 5 affected suites: 196 passed, 1 skipped. The new cross-session, cross-uid, and foreign-owner tests fail against the pre-change `.claude/` copy (5 failed), reproducing #5700. End to end in this session: `--dry-run` on progress comment 5912967579 with a file in this session's scratchpad succeeds; with a file in a sibling session's scratchpad the patched helper exits 1 and the current `.claude/` copy accepts it.
+- Twin sync pending: `workflow-templates/.claude/scripts/edit_comment.py` (sha256 138e70d02375837267a63a7c8e630fee02380b161bf2802964d2a79fe7e797fb) → `.claude/scripts/edit_comment.py`; `workflow-templates/.claude/commands/implement-plan-claude.md` (sha256 d475ad06ce744150b2d20e97ec3ed4a984eb33b1ee3ea5c0c1d7c2fbd178988b) → `.claude/commands/implement-plan-claude.md`. No `.claude/` path without a twin is touched.
