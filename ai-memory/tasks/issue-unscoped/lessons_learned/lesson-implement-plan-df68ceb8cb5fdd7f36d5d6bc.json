@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T04:50:14Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A coverage gate that triggers on changed code files must also trigger on the config that wires that code: a settings-only change can disable a hook while every file-based check stays skipped, and a substring wiring test accepts a command that merely names the hook.",
+  "phase": "implement_plan",
+  "pr_number": 5369,
+  "record_id": "lesson-implement-plan-df68ceb8cb5fdd7f36d5d6bc",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-5328-settings-guard-wiring-check",
+    "file:scripts/guard_differential.py",
+    "file:.claude/settings.json"
+  ]
+}

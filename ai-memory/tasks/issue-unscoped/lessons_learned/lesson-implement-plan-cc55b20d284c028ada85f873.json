@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T04:50:14Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-closed line that shares an input with other checks (a settings `env` change on a deleted file) reads as a duplicate to reviewers whenever it co-occurs with them; pin the case where it is the only line with a test so the next round cannot argue it away.",
+  "phase": "implement_plan",
+  "pr_number": 5369,
+  "record_id": "lesson-implement-plan-cc55b20d284c028ada85f873",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5328-settings-guard-wiring-check",
+    "file:scripts/guard_differential.py",
+    "file:tests/test_guard_differential.py"
+  ]
+}
