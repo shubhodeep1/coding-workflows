@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T00:32:38Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A reviewer can report the defect a PR fixes as a finding against that PR (a past-tense PROBLEM such as \"still described \u2026 after\"); check the line at the reviewed head before treating it as valid.",
+  "phase": "implement_plan",
+  "pr_number": 5296,
+  "record_id": "lesson-implement-plan-5f05c6582b8f734961776872",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4886-numbered-session-titles",
+    "file:agents.md"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T00:32:38Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a project changes how a check matches (exact \u2192 contains), grep agents.md and CLAUDE.md for every prose summary of that check too, not only the command text and its tests: a summary that says \"the same check\" silently keeps the old rule.",
+  "phase": "implement_plan",
+  "pr_number": 5296,
+  "record_id": "lesson-implement-plan-193e337683826b5cada76d14",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4886-numbered-session-titles",
+    "file:agents.md",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
