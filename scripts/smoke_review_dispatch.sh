@@ -157,7 +157,11 @@ smoke_review_checked_out_sha()
 	fi
 
 	log_file="$(mktemp)"
-	if ! gh api "repos/${repo}/actions/jobs/${job_id}/logs" > "${log_file}" 2>/dev/null; then
+	# Job logs carry ANSI colour codes; without --allow-escape-sequences gh
+	# refuses the body ("the response contains terminal escape sequences")
+	# even when stdout is a file, and every genuine run read as rc=1 (the
+	# same fix as scripts/workflow_failure_heal_intake.sh).
+	if ! gh api --allow-escape-sequences "repos/${repo}/actions/jobs/${job_id}/logs" > "${log_file}" 2>/dev/null; then
 		rm -f "${log_file}"
 		return 1
 	fi

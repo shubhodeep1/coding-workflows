@@ -75,6 +75,11 @@ if chosen is None:
 if os.path.exists(chosen + ".rc"):
 	sys.exit(int(open(chosen + ".rc", encoding="utf-8").read()))
 body = open(chosen, encoding="utf-8", newline="").read()
+if "\x1b" in body and "--allow-escape-sequences" not in args:
+	# Real gh refuses a body with terminal escape sequences (job logs carry
+	# ANSI colour codes) unless the flag is passed, even into a file.
+	sys.stderr.write("the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway\n")
+	sys.exit(1)
 if "--jq" in args:
 	expr = args[args.index("--jq") + 1]
 	result = subprocess.run(["jq", "-r", expr], input=body, capture_output=True, text=True)
@@ -330,6 +335,41 @@ def test_checked_out_sha_accepts_any_single_prefix_token_but_nothing_looser() ->
 			assert _call_helper(stub, "smoke_review_checked_out_sha", REPO, "100") == (0, BAIT), prefix
 		finally:
 			stub.cleanup()
+
+
+def test_checked_out_sha_reads_a_log_with_terminal_escape_sequences() -> None:
+	# A real codex-agent log carries ANSI colour codes (run 36571421143's had
+	# 2,091), and gh refuses such a body without --allow-escape-sequences, so
+	# without the flag every genuine run read as rc=1 forever.
+	stub = GhStub()
+	try:
+		stub.serve(JOBS_PATH, JOBS)
+		stub.serve(
+			LOG_PATH,
+			_log(
+				"2026-09-29T10:00:00.0000000Z \x1b[36;1mgit fetch origin\x1b[0m",
+				f"2026-09-29T10:00:02.1234567Z Captured INITIAL_HEAD_SHA={BAIT} for stale-base detection.",
+				"2026-09-29T10:00:03.0000000Z \x1b[31mreviewer output\x1b[0m",
+			),
+		)
+		assert _call_helper(stub, "smoke_review_checked_out_sha", REPO, "100") == (0, BAIT)
+		log_calls = [call for call in stub.calls() if LOG_PATH in call]
+		assert len(log_calls) == 1 and "--allow-escape-sequences" in log_calls[0], log_calls
+	finally:
+		stub.cleanup()
+
+
+def test_checked_out_sha_treats_a_skipped_codex_agent_job_as_absent() -> None:
+	# GitHub names a job skipped by its `if:` with the unevaluated name
+	# expression (run 36641794664), which the codex-agent match must not take.
+	skipped_name = "review / needs.gate.outputs.claude_branch_review == 'true' && 'codex-agent (claude-branch-review)' || 'codex-agent'"
+	stub = GhStub()
+	try:
+		stub.serve(JOBS_PATH, {"jobs": [{"id": 555, "name": "review / gate"}, {"id": 777, "name": skipped_name}]})
+		assert _call_helper(stub, "smoke_review_checked_out_sha", REPO, "100") == (3, "")
+		assert [call for call in stub.calls() if LOG_PATH in call] == []
+	finally:
+		stub.cleanup()
 
 
 def test_checked_out_sha_return_codes() -> None:
