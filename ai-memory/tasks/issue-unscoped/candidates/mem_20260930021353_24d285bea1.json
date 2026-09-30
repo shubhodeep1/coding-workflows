@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The summary should include `verifier_changes=<n>` whether or not a hook changed.\n  expected_change_site: `scripts/guard_differential.py`, `print_report()`\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: Plan G3 and agents.md \"Output\" bullet specify the count; the `if not report.trees:` early-return branch omits it from the skipped-status summary.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The summary should include `verifier_changes=<n>` \"whether or not a hook changed.\"\n  Expected change site: `scripts/guard_differential.py`, `print_report()`, the `if not report.trees:` branch\n  Evidence of absence: The skipped summary omits the `verifier_changes` count documented in agents.md and plan G3.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "dd481b99bfdca30b13e9ef995186da23e75d06abe9ac1689438253f744f9ff94",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36656954165",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36656954165",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930021353_24d285bea1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36656954165"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T02:13:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
