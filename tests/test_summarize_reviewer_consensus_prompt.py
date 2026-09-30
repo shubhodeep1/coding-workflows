@@ -165,3 +165,60 @@ def test_pass2_cross_pollination_header_does_not_point_at_on_disk_reviews(tmp_pa
 	assert "Do not try to open the raw" in summary
 	assert "=== CONSENSUS FINDINGS ===" in summary
 	assert summary.rstrip().endswith("=== END CROSS-POLLINATION SUMMARY ===")
+
+
+REVIEWERS_SCRIPT = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+
+
+def test_reviewer_path_hints_do_not_point_at_unreadable_dirs(tmp_path: Path) -> None:
+	# PREVIOUS_REVIEWS_DIR and RUNTIME_CONTEXT_DIR sit under /tmp, outside the
+	# checkout the reviewer-role OpenCode config allows, so a pointer to them
+	# only produces rejected reads (runs 36656409877, 36666750539, 36678296691).
+	lines = REVIEWERS_SCRIPT.read_text(encoding="utf-8").splitlines()
+	start = next(i for i, line in enumerate(lines) if line.startswith('PROMPT_ARTIFACT_PATH_HINT="$('))
+	end = next(i for i, line in enumerate(lines) if i > start and line.startswith("PROMPT_RUNTIME_CONTEXT_HINT="))
+	while not lines[end].endswith(')"'):
+		end += 1
+	block = "\n".join(lines[start:end + 1])
+	reviews_dir = tmp_path / "previous_reviews"
+	context_dir = tmp_path / "runtime_context"
+	result = subprocess.run(
+		["bash", "-c", block + '\nprintf "%s\\n---\\n%s\\n" "${PROMPT_ARTIFACT_PATH_HINT}" "${PROMPT_RUNTIME_CONTEXT_HINT}"'],
+		env={
+			"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+			"PREVIOUS_REVIEWS_DIR": str(reviews_dir),
+			"RUNTIME_CONTEXT_DIR": str(context_dir),
+		},
+		capture_output=True,
+		text=True,
+		timeout=30,
+	)
+	assert result.returncode == 0, result.stderr
+	hints = result.stdout
+	assert str(reviews_dir) not in hints
+	assert str(context_dir) not in hints
+	assert "Example file to read" not in hints
+	assert "reads are rejected" in hints
+	assert "WORKING DIRECTORY + ARTIFACT PATH (MANDATORY)" in hints
+
+
+def test_reviewer_prompt_body_does_not_point_at_unreadable_dirs() -> None:
+	lines = REVIEWERS_SCRIPT.read_text(encoding="utf-8").splitlines()
+	bodies = []
+	inside = False
+	for line in lines:
+		if line.strip() == "cat <<__REVIEWER_PROMPT__":
+			inside = True
+			bodies.append([])
+			continue
+		if line == "__REVIEWER_PROMPT__":
+			inside = False
+			continue
+		if inside:
+			bodies[-1].append(line)
+	assert bodies, "reviewer prompt heredocs not found"
+	text = "\n".join("\n".join(body) for body in bodies)
+	assert "${PREVIOUS_REVIEWS_DIR}" not in text
+	assert "${RUNTIME_CONTEXT_DIR}" not in text
+	assert "use the read tool for files such as" not in text
+	assert "USING RUNTIME CONTEXT\n" in text

@@ -1604,7 +1604,9 @@ through `clarify → plan → implement → review`.
   tried to `Read` those files, OpenCode's reviewer config rejected each read
   as outside the checkout, and the session ended with no text. The pass-2
   cross-pollination header (`scripts/review_run_reviewers.sh`) no longer points
-  pass-2 reviewers at the pass-1 files either. Six no-PR
+  pass-2 reviewers at the pass-1 files either, and the reviewer prompt no longer
+  tells reviewers to read `previous_reviews/` or `runtime_context/` files, which
+  they could not open. Six no-PR
   `claude-branch-review` runs failed this way on 2026-09-29 and 2026-09-30,
   each after 10 empty attempts (about 43 minutes). In that no-PR mode the
   `Telegram failure` alert now shows `Branch: <head ref> (no PR)` instead of
