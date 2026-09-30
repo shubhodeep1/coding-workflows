@@ -6,7 +6,7 @@ Security pass: run
 
 ## Summary
 
-Add a deterministic CI check that runs a corpus of adversarial command shapes through the base branch's `.claude/hooks/*_guard.py` hook and the PR's hook. It fails on any shape the PR's hook now treats less strictly with no warning, unless the PR body lists it under `Intended loosening:`. The reviewer panel missed three bypasses in #5144's merge-guard rewrite (PR #5173), and once the master session is retired nothing else would catch them.
+Add a deterministic CI check that runs a corpus of adversarial command shapes through the base branch's `.claude/hooks/*_guard.py` hook and the PR's hook. It fails on any shape the PR's hook now treats less strictly with no warning, unless the loosening is approved (since #5326, by the base branch's `.github/guard_differential/intended_loosening.json`, not by the PR body). The reviewer panel missed three bypasses in #5144's merge-guard rewrite (PR #5173), and once the master session is retired nothing else would catch them.
 
 ## Context
 
@@ -21,7 +21,7 @@ Add a deterministic CI check that runs a corpus of adversarial command shapes th
 - G2: It makes no GitHub API calls: the hooks run with a stub `gh`, no tokens, and `GIT_ALLOW_PROTOCOL=file`.
 - G3: Corpora under `tests/guard_corpus/<hook>.txt` exist for all four guards and hold the issue's seed shapes.
 - G4: `ci.yml` runs the check on every pull request that changes a hook tree, as its own step, plus a unit-test step.
-- G5: A shape listed under `Intended loosening:` in the PR body passes the check and is reported as an intended loosening.
+- G5: A shape approved by the base branch's `.github/guard_differential/intended_loosening.json` for the PR's head commit passes the check and is reported as an intended loosening. A shape listed only under `Intended loosening:` in the PR body still fails and is reported as `pr_body_listed=true` (superseded by security finding #5326: the PR author writes the body).
 - G6: `agents.md` documents the corpus files, the rule, and the `GUARD_DIFFERENTIAL` log prefix.
 
 ## Non-goals
@@ -114,6 +114,7 @@ The check lands with the PR and runs on the next hook-changing pull request. No 
 - On `main`, `gh_api_write_guard.py` answers `allow` for `gh api repos/o/r/issues/1/comments -F body=@/tmp/body.md` and `-F body=@-`. CLAUDE.md §23.D says file-backed fields always prompt under §23.H. The check records this as the baseline and flags no regression, since the base already allows it.
 - On `main` and on #5173, `pr_merge_status_guard.py` gives no decision for `(cd missing-dir && git push)`: the subshell hides the push from its segmenter. The base has the gap too, so it is not a regression.
 - On #4858's branch the root `.claude/hooks/inline_edit_guard.py` lags its twin (`env -i python3 -c …` is denied only by the twin), as `docs/operations/master-session.md` records.
+- Security finding #5326 replaced the PR-body `Intended loosening:` exemption with the base-branch policy file (G5 above), in #5326's own issue-mode project.
 
 ## References
 

@@ -26,10 +26,27 @@ the base and the head:
      and whether the hook emitted a warning (`systemMessage`).
   4. Fails on every shape whose head decision is less strict than its base
      decision (block = deny > ask > none > allow = error) while the head
-     emitted no warning, unless the PR body lists the shape under an
-     `Intended loosening:` section. A listed shape counts as a loosening
-     under the retire-master Q3: A rule, so a sync carrying it waits for the
-     operator.
+     emitted no warning, unless the loosening policy at the BASE ref
+     (`LOOSENING_POLICY_PATH`) approves that hook, that exact shape, and the
+     PR's head commit. An approved shape counts as a loosening under the
+     retire-master Q3: A rule, so a sync carrying it waits for the operator.
+
+The PR body is data, never authorization (issue #5326): its author writes it.
+A shape listed under an `Intended loosening:` section of the body still fails
+without a policy entry; its regression line says `pr_body_listed=true`. The
+policy is read from the base ref only, the same trust boundary as the base
+hooks and base corpus, so a PR cannot approve its own loosening. A run with no
+known head commit (`--head-sha`, else the `--head-ref` commit) matches no
+policy entry.
+
+Policy format (`LOOSENING_POLICY_PATH`, JSON):
+  {"version": 1, "exceptions": [{"hook": "<hook file stem>",
+    "shape": "<corpus line, verbatim>", "head_sha": "<40 or 64 hex>",
+    "approved_by": "<login>", "reason": "<why>"}]}
+`version` must be the integer 1 (a missing, string, or other version is
+rejected rather than read under v1 rules), and every entry field is a
+required non-empty string; a malformed file is a setup error (exit 2)
+whenever a hook tree is compared.
 
 A hook present on only one side runs as "no hook" (decision `none`) on the
 other, so deleting a guard is a loosening, and a new hook is one only where it
@@ -56,7 +73,7 @@ is inherited.
 Output: one `GUARD_DIFFERENTIAL` line per regression, per missing corpus, and
 a summary line. `--json` also prints every shape's result. Exit 0 when clean
 or when no hook changed, 1 on a regression or a missing corpus, 2 on a usage
-or setup error (bad ref, unreadable corpus).
+or setup error (bad ref, unreadable corpus, malformed policy or `--head-sha`).
 
 Wired as the `Guard differential check (issue #5174)` step of the
 `tests-hooks-and-orchestrator` job in `.github/workflows/ci.yml` (reported
@@ -83,6 +100,7 @@ from typing import Callable
 LOG_KEY = "GUARD_DIFFERENTIAL"
 HOOK_TREES = (".claude/hooks", "workflow-templates/.claude/hooks")
 DEFAULT_CORPUS_DIR = "tests/guard_corpus"
+LOOSENING_POLICY_PATH = ".github/guard_differential/intended_loosening.json"
 HOOK_TIMEOUT_SECONDS = 120
 _STRIPPED_ENV_KEYS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST")
 
@@ -102,6 +120,8 @@ INTENDED_LOOSENING_HEADING_RE = re.compile(
 MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
+COMMIT_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+HOOK_STEM_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 @dataclass(frozen=True)
@@ -118,6 +138,17 @@ class Outcome:
 	detail: str = ""
 
 
+@dataclass(frozen=True)
+class LooseningApproval:
+	"""One entry of the base-ref loosening policy (issue #5326)."""
+
+	hook: str
+	shape: str
+	head_sha: str
+	approved_by: str
+	reason: str
+
+
 @dataclass
 class ShapeResult:
 	shape: Shape
@@ -125,7 +156,13 @@ class ShapeResult:
 	base: Outcome
 	head: Outcome
 	loosened: bool = False
+	# Approved by the base-ref loosening policy for the head commit.
 	intended: bool = False
+	# Listed in the PR body's `Intended loosening:` section (data only).
+	pr_body_listed: bool = False
+	approved_by: str = ""
+	# The approving policy entry's `reason` ("" when not approved).
+	approval_reason: str = ""
 
 	@property
 	def regression(self) -> bool:
@@ -137,6 +174,8 @@ class Report:
 	results: list[ShapeResult] = field(default_factory=list)
 	missing_corpus: list[str] = field(default_factory=list)
 	trees: list[str] = field(default_factory=list)
+	# The head commit policy entries must name ("" when unknown).
+	head_sha: str = ""
 
 	@property
 	def regressions(self) -> list[ShapeResult]:
@@ -204,6 +243,10 @@ def merge_corpora(*sources: dict[str, list[Shape]]) -> dict[str, list[Shape]]:
 def intended_loosening(pr_body: str) -> list[tuple[str, str]]:
 	"""Return the `(hook, shape)` pairs listed under `Intended loosening:`.
 
+	The PR body is author-controlled, so these pairs are data only: they mark
+	a regression `pr_body_listed` and never excuse it (issue #5326). Only the
+	base-ref policy (`load_loosening_policy`) approves a loosening.
+
 	`hook` is empty when an item names no hook (it then matches every hook).
 	An item is a list entry; the shape is its backticked text, or the whole
 	item text when it has no backticks. A `<hook>:` prefix before the
@@ -238,6 +281,60 @@ def intended_loosening(pr_body: str) -> list[tuple[str, str]]:
 
 def is_intended(shape: Shape, listed: list[tuple[str, str]]) -> bool:
 	return any(text == shape.text and hook in ("", shape.hook) for hook, text in listed)
+
+
+def parse_loosening_policy(text: str, source: str) -> list[LooseningApproval]:
+	"""Parse and strictly validate the loosening policy's JSON text."""
+	try:
+		document = json.loads(text)
+	except ValueError as exc:
+		raise SetupError(f"{source}: invalid JSON ({exc})") from exc
+	if not isinstance(document, dict):
+		raise SetupError(f"{source}: the policy must be a JSON object")
+	version = document.get("version")
+	# `type(...) is int` so `true` (a bool, and == 1) is rejected too.
+	if type(version) is not int or version != 1:
+		raise SetupError(f"{source}: unsupported policy `version` {json.dumps(version)} (expected 1)")
+	entries = document.get("exceptions")
+	if not isinstance(entries, list):
+		raise SetupError(f"{source}: `exceptions` must be a list")
+	approvals: list[LooseningApproval] = []
+	for index, entry in enumerate(entries):
+		where = f"{source}: exceptions[{index}]"
+		if not isinstance(entry, dict):
+			raise SetupError(f"{where} must be an object")
+		values: dict[str, str] = {}
+		for key in ("hook", "shape", "head_sha", "approved_by", "reason"):
+			value = entry.get(key)
+			if not isinstance(value, str) or not value.strip():
+				raise SetupError(f"{where}: `{key}` must be a non-empty string")
+			values[key] = value
+		if not HOOK_STEM_RE.fullmatch(values["hook"]):
+			raise SetupError(f"{where}: `hook` must be a hook file stem such as `pr_merge_status_guard`")
+		if not COMMIT_SHA_RE.fullmatch(values["head_sha"]):
+			raise SetupError(f"{where}: `head_sha` must be a full lowercase commit SHA")
+		approvals.append(LooseningApproval(**values))
+	return approvals
+
+
+def load_loosening_policy(repo_root: Path, base_ref: str) -> list[LooseningApproval]:
+	"""The loosening policy committed at `base_ref` (empty when absent there).
+
+	Read from the base ref only, never from the head or the working tree, so
+	a PR's own copy of the file cannot approve the PR's loosening.
+	"""
+	listing = _repo_git(repo_root, "ls-tree", base_ref, "--", LOOSENING_POLICY_PATH)
+	if not listing.stdout.strip():
+		return []
+	blob = _repo_git(repo_root, "cat-file", "-p", f"{base_ref}:{LOOSENING_POLICY_PATH}")
+	return parse_loosening_policy(blob.stdout, f"{base_ref}:{LOOSENING_POLICY_PATH}")
+
+
+def approval_for(shape: Shape, approvals: list[LooseningApproval]) -> LooseningApproval | None:
+	for approval in approvals:
+		if approval.hook == shape.hook and approval.shape == shape.text:
+			return approval
+	return None
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -550,8 +647,14 @@ def compare_hook_dirs(
 	scratch: Path,
 	listed: list[tuple[str, str]],
 	tree: str = "",
+	approvals: list[LooseningApproval] | None = None,
 ) -> list[ShapeResult]:
-	"""Run every corpus whose hook exists on either side through both sides."""
+	"""Run every corpus whose hook exists on either side through both sides.
+
+	`approvals` are the base-ref policy entries already filtered to the head
+	commit; only they make a loosening intended. `listed` (the PR body) only
+	marks a loosened shape `pr_body_listed`.
+	"""
 	results: list[ShapeResult] = []
 	for hook, shapes in sorted(corpora.items()):
 		base_hook = base_dir / f"{hook}.py"
@@ -574,6 +677,7 @@ def compare_hook_dirs(
 				outcomes.append(run_hook(hook_file, stdin, scenario.cwd, env))
 			base, head = outcomes
 			loosened = STRICTNESS[head.decision] < STRICTNESS[base.decision] and not head.warned
+			approval = approval_for(shape, approvals or []) if loosened else None
 			results.append(
 				ShapeResult(
 					shape=shape,
@@ -581,7 +685,10 @@ def compare_hook_dirs(
 					base=base,
 					head=head,
 					loosened=loosened,
-					intended=loosened and is_intended(shape, listed),
+					intended=approval is not None,
+					pr_body_listed=loosened and is_intended(shape, listed),
+					approved_by=approval.approved_by if approval else "",
+					approval_reason=approval.reason if approval else "",
 				)
 			)
 	return results
@@ -600,10 +707,25 @@ def run_check(
 	corpus_dir: Path,
 	pr_body: str,
 	all_trees: bool = False,
+	head_sha: str | None = None,
 ) -> Report:
+	"""Compare the base and head hooks; `head_sha` is the PR's head commit.
+
+	The head commit that loosening-policy entries must name is `head_sha`
+	when given (CI passes the event payload's), else the commit `head_ref`
+	resolves to, else unknown, and then no entry matches (fail closed).
+	"""
 	_repo_git(repo_root, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
+	head_revision = ""
+	if head_sha:
+		if not COMMIT_SHA_RE.fullmatch(head_sha):
+			raise SetupError(f"--head-sha {head_sha!r} is not a full lowercase commit SHA")
+		head_revision = head_sha
 	if head_ref:
-		_repo_git(repo_root, "rev-parse", "--verify", f"{head_ref}^{{commit}}")
+		resolved = _repo_git(repo_root, "rev-parse", "--verify", f"{head_ref}^{{commit}}").stdout.strip()
+		if head_revision and resolved != head_revision:
+			raise SetupError(f"--head-sha {head_revision} does not match --head-ref {head_ref} ({resolved})")
+		head_revision = resolved
 	committed: list[dict[str, list[Shape]]] = []
 	try:
 		relative_corpus_dir = corpus_dir.resolve().relative_to(repo_root).as_posix()
@@ -614,11 +736,17 @@ def run_check(
 	corpora = merge_corpora(load_corpora(corpus_dir), *committed)
 	listed = intended_loosening(pr_body)
 	changed = changed_paths(repo_root, base_ref, head_ref)
-	report = Report()
+	report = Report(head_sha=head_revision)
+	approvals: list[LooseningApproval] | None = None
 	for tree in HOOK_TREES:
 		tree_changes = [path for path in changed if path.startswith(f"{tree}/") and path.endswith(".py")]
 		if not tree_changes and not all_trees:
 			continue
+		if approvals is None:
+			# Loaded only once a tree is compared, so a malformed policy never
+			# fails a PR that changes no hook.
+			policy = load_loosening_policy(repo_root, base_ref)
+			approvals = [entry for entry in policy if head_revision and entry.head_sha == head_revision]
 		report.trees.append(tree)
 		with tempfile.TemporaryDirectory(prefix="guard-differential-") as tmp:
 			scratch = Path(tmp)
@@ -639,7 +767,7 @@ def run_check(
 					report.missing_corpus.append(path)
 			# Each tree compares its own hook files (the twin is a separate
 			# file), so rows for the same shape in two trees are not duplicates.
-			report.results += compare_hook_dirs(base_dir, head_dir, corpora, scratch / "runs", listed, tree)
+			report.results += compare_hook_dirs(base_dir, head_dir, corpora, scratch / "runs", listed, tree, approvals)
 	return report
 
 
@@ -667,12 +795,14 @@ def print_report(report: Report, as_json: bool) -> None:
 			f"::error::{LOG_KEY} regression tree={result.tree} hook={result.shape.hook} "
 			f"line={result.shape.line} base={_describe(result.base)} head={_describe(result.head)} "
 			f"shape={json.dumps(result.shape.text)}"
+			+ (" pr_body_listed=true" if result.pr_body_listed else "")
 		)
 	for result in report.results:
 		if result.intended:
 			print(
 				f"{LOG_KEY} intended_loosening tree={result.tree} hook={result.shape.hook} "
-				f"base={_describe(result.base)} head={_describe(result.head)} shape={json.dumps(result.shape.text)}"
+				f"base={_describe(result.base)} head={_describe(result.head)} shape={json.dumps(result.shape.text)} "
+				f"approved_by={json.dumps(result.approved_by)}"
 			)
 	if as_json:
 		for result in report.results:
@@ -687,6 +817,9 @@ def print_report(report: Report, as_json: bool) -> None:
 						"head": {"decision": result.head.decision, "warned": result.head.warned},
 						"loosened": result.loosened,
 						"intended": result.intended,
+						"pr_body_listed": result.pr_body_listed,
+						"approved_by": result.approved_by,
+						"approval_reason": result.approval_reason,
 					}
 				)
 			)
@@ -698,11 +831,15 @@ def print_report(report: Report, as_json: bool) -> None:
 		f"missing_corpus={len(report.missing_corpus)}"
 	)
 	if report.regressions:
+		head = report.head_sha or "<head commit sha>"
 		print(
 			f"{LOG_KEY}: a shape the base hook blocked, denied, or asked (or left to the normal "
 			"permission flow) is now allowed without a warning. Make the new hook fall back with "
-			"a warning, or, if the loosening is intended, list each shape verbatim under an "
-			"`Intended loosening:` section of the PR body (the sync then waits for the operator)."
+			"a warning. A loosening that is intended needs an approval merged into the BASE branch "
+			f"first: one entry per shape in {LOOSENING_POLICY_PATH}, e.g. "
+			f'{{"hook": "<hook>", "shape": "<corpus line, verbatim>", "head_sha": "{head}", '
+			'"approved_by": "<login>", "reason": "<why>"}. The PR body cannot approve its own '
+			"loosening, and each new push needs new entries (the sync then waits for the operator)."
 		)
 
 
@@ -710,7 +847,16 @@ def main(argv: list[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	parser.add_argument("--base-ref", required=True, help="git ref of the base side (e.g. origin/main)")
 	parser.add_argument("--head-ref", default=None, help="git ref of the head side (default: the working tree)")
-	parser.add_argument("--pr-body-file", default=None, help="file holding the PR body (for `Intended loosening:`)")
+	parser.add_argument(
+		"--pr-body-file",
+		default=None,
+		help="file holding the PR body; its `Intended loosening:` list is reported, never trusted",
+	)
+	parser.add_argument(
+		"--head-sha",
+		default=None,
+		help="the PR's head commit, which loosening-policy entries must name (default: the --head-ref commit)",
+	)
 	parser.add_argument("--corpus-dir", default=None, help=f"corpus directory (default: {DEFAULT_CORPUS_DIR})")
 	parser.add_argument("--repo-root", default=".", help="repository root (default: .)")
 	parser.add_argument("--all", action="store_true", help="compare every hook tree even when no hook changed")
@@ -727,7 +873,7 @@ def main(argv: list[str] | None = None) -> int:
 			print(f"::error::{LOG_KEY} status=error reason=unreadable-pr-body detail={json.dumps(str(exc))}")
 			return 2
 	try:
-		report = run_check(repo_root, args.base_ref, args.head_ref, corpus_dir, pr_body, args.all)
+		report = run_check(repo_root, args.base_ref, args.head_ref, corpus_dir, pr_body, args.all, args.head_sha)
 	except SetupError as exc:
 		print(f"::error::{LOG_KEY} status=error detail={json.dumps(str(exc))}")
 		return 2

@@ -2,11 +2,11 @@
 """Behaviour and wiring contract for the guard differential check (issue #5174).
 
 Covers:
-  1. Decision parsing, the strictness order, and the `Intended loosening:`
-     PR-body section.
-  2. The comparison on fake hooks: a silent loosening fails, a warning or an
-     intended listing passes, a deleted guard is a loosening, an added one
-     is not.
+  1. Decision parsing, the strictness order, the `Intended loosening:`
+     PR-body section, and the base-ref loosening policy (issue #5326).
+  2. The comparison on fake hooks: a silent loosening fails, a warning or a
+     base-policy approval passes, a PR-body listing alone does not, a
+     deleted guard is a loosening, an added one is not.
   3. The git side: changed-hook detection, a missing corpus, and the CLI exit
      codes, in a scratch repository.
   4. The shipped corpora and scenarios against the real hooks, the
@@ -197,10 +197,17 @@ def _hook_dirs(tmp_path: Path, base_source: str | None, head_source: str | None)
 	return base_dir, head_dir
 
 
-def _compare(tmp_path: Path, base_source, head_source, listed=None, shapes=("git push",)):
+def _compare(tmp_path: Path, base_source, head_source, listed=None, shapes=("git push",), approvals=None):
 	base_dir, head_dir = _hook_dirs(tmp_path, base_source, head_source)
 	corpora = {"fake_guard": [gd.Shape("fake_guard", text, index + 1) for index, text in enumerate(shapes)]}
-	return gd.compare_hook_dirs(base_dir, head_dir, corpora, tmp_path / "runs", listed or [])
+	return gd.compare_hook_dirs(base_dir, head_dir, corpora, tmp_path / "runs", listed or [], "", approvals)
+
+
+HEAD_SHA = "a" * 40
+
+
+def _approval(hook: str = "fake_guard", shape: str = "git push", head_sha: str = HEAD_SHA):
+	return gd.LooseningApproval(hook=hook, shape=shape, head_sha=head_sha, approved_by="operator", reason="test")
 
 
 @pytest.mark.parametrize(
@@ -226,18 +233,93 @@ def test_loosening_rule(tmp_path: Path, base_source, head_source, regression: bo
 	assert result.regression is regression
 
 
-def test_intended_listing_excuses_only_the_listed_shape(tmp_path: Path) -> None:
+def test_pr_body_listing_alone_excuses_nothing(tmp_path: Path) -> None:
+	"""Issue #5326: the PR author writes the body, so a listing is data only."""
 	results = _compare(
 		tmp_path,
 		FAKE_BLOCKING_HOOK,
 		FAKE_SILENT_HOOK,
-		listed=[("fake_guard", "git push")],
-		shapes=("git push", "git commit -m x"),
+		listed=[("fake_guard", "git push"), ("", "git commit -m x")],
+		shapes=("git push", "git commit -m x", "git status"),
 	)
-	assert [(r.shape.text, r.intended, r.regression) for r in results] == [
-		("git push", True, False),
-		("git commit -m x", False, True),
+	assert [(r.shape.text, r.intended, r.pr_body_listed, r.regression) for r in results] == [
+		("git push", False, True, True),
+		("git commit -m x", False, True, True),
+		("git status", False, False, True),
 	]
+
+
+def test_policy_approval_excuses_only_the_approved_hook_and_shape(tmp_path: Path) -> None:
+	results = _compare(
+		tmp_path,
+		FAKE_BLOCKING_HOOK,
+		FAKE_SILENT_HOOK,
+		shapes=("git push", "git commit -m x", "git status"),
+		approvals=[_approval(), _approval(hook="other_guard", shape="git commit -m x")],
+	)
+	assert [(r.shape.text, r.intended, r.approved_by, r.regression) for r in results] == [
+		("git push", True, "operator", False),
+		("git commit -m x", False, "", True),
+		("git status", False, "", True),
+	]
+
+
+def test_policy_approval_does_not_mark_a_shape_that_did_not_loosen(tmp_path: Path) -> None:
+	[result] = _compare(tmp_path, FAKE_BLOCKING_HOOK, FAKE_BLOCKING_HOOK, approvals=[_approval()])
+	assert (result.loosened, result.intended, result.regression) == (False, False, False)
+
+
+def _policy_text(*entries: dict) -> str:
+	return json.dumps({"version": 1, "exceptions": list(entries)})
+
+
+def _entry(**overrides) -> dict:
+	entry = {"hook": "fake_guard", "shape": "git push", "head_sha": HEAD_SHA, "approved_by": "operator", "reason": "r"}
+	entry.update(overrides)
+	return entry
+
+
+def test_parse_loosening_policy_accepts_valid_entries() -> None:
+	approvals = gd.parse_loosening_policy(_policy_text(_entry(), _entry(head_sha="b" * 64)), "p")
+	assert approvals == [
+		gd.LooseningApproval("fake_guard", "git push", HEAD_SHA, "operator", "r"),
+		gd.LooseningApproval("fake_guard", "git push", "b" * 64, "operator", "r"),
+	]
+	assert gd.parse_loosening_policy(_policy_text(), "p") == []
+
+
+@pytest.mark.parametrize(
+	"text",
+	[
+		"not json",
+		"[]",
+		json.dumps({"version": 1}),
+		json.dumps({"exceptions": {}}),
+		json.dumps({"exceptions": []}),
+		json.dumps({"version": 2, "exceptions": []}),
+		json.dumps({"version": "1", "exceptions": []}),
+		json.dumps({"version": None, "exceptions": []}),
+		json.dumps({"version": True, "exceptions": []}),
+		json.dumps({"version": 1.0, "exceptions": []}),
+		_policy_text("x"),
+		_policy_text({k: v for k, v in _entry().items() if k != "approved_by"}),
+		_policy_text(_entry(reason="  ")),
+		_policy_text(_entry(shape=1)),
+		_policy_text(_entry(head_sha="abc123")),
+		_policy_text(_entry(head_sha="A" * 40)),
+		_policy_text(_entry(hook="fake_guard.py")),
+		_policy_text(_entry(hook="fake_guard\n")),
+		_policy_text(_entry(head_sha=HEAD_SHA + "\n")),
+	],
+)
+def test_parse_loosening_policy_rejects_malformed_policies(text: str) -> None:
+	with pytest.raises(gd.SetupError):
+		gd.parse_loosening_policy(text, "p")
+
+
+def test_shipped_loosening_policy_parses() -> None:
+	path = REPO_ROOT / gd.LOOSENING_POLICY_PATH
+	gd.parse_loosening_policy(path.read_text(encoding="utf-8"), str(path))
 
 
 def test_corpus_without_a_hook_on_either_side_is_skipped(tmp_path: Path) -> None:
@@ -334,14 +416,149 @@ def test_merge_corpora_keeps_the_first_occurrence() -> None:
 	assert [s.text for s in merged["h"]] == ["x"]
 
 
-def test_cli_passes_when_the_pr_body_lists_the_loosening(hook_repo: Path, tmp_path: Path) -> None:
+def test_cli_pr_body_listing_does_not_authorize_a_loosening(hook_repo: Path, tmp_path: Path) -> None:
+	"""Issue #5326's exploit: the author weakens a guard and lists the shape
+	under `Intended loosening:` in their own PR body. The check still fails."""
+	_git(hook_repo, "checkout", "-q", "-b", "pr")
 	(hook_repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_SILENT_HOOK, encoding="utf-8")
+	_git(hook_repo, "commit", "-q", "-am", "loosen")
 	body = tmp_path / "body.md"
 	body.write_text("## Intended loosening:\n- fake_guard: `git push`\n", encoding="utf-8")
-	proc = _cli(hook_repo, "--pr-body-file", str(body))
+	proc = _cli(hook_repo, "--head-ref", "pr", "--pr-body-file", str(body))
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert 'hook=fake_guard line=1 base=block head=none shape="git push" pr_body_listed=true' in proc.stdout
+	assert "intended_loosening tree=" not in proc.stdout
+	assert "status=fail" in proc.stdout and "intended_loosening=0" in proc.stdout
+
+
+def _commit_policy(repo: Path, *entries: dict, message: str = "policy") -> None:
+	path = repo / gd.LOOSENING_POLICY_PATH
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(_policy_text(*entries), encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", message)
+
+
+def _loosening_pr(repo: Path) -> str:
+	"""Commit a silent loosening of `fake_guard` on branch `pr`; return its sha."""
+	_git(repo, "checkout", "-q", "-b", "pr")
+	(repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_SILENT_HOOK, encoding="utf-8")
+	_git(repo, "commit", "-q", "-am", "loosen")
+	sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "-q", "main")
+	return sha
+
+
+def test_cli_passes_with_a_base_policy_entry_for_the_head_commit(hook_repo: Path) -> None:
+	head_sha = _loosening_pr(hook_repo)
+	_commit_policy(hook_repo, _entry(head_sha=head_sha))
+	proc = _cli(hook_repo, "--head-ref", "pr")
 	assert proc.returncode == 0, proc.stdout + proc.stderr
-	assert "intended_loosening tree=.claude/hooks hook=fake_guard" in proc.stdout
-	assert "status=pass" in proc.stdout
+	assert 'intended_loosening tree=.claude/hooks hook=fake_guard base=block head=none shape="git push" approved_by="operator"' in proc.stdout
+	assert "status=pass" in proc.stdout and "intended_loosening=1" in proc.stdout
+
+
+def test_cli_json_rows_carry_the_approval_audit_fields(hook_repo: Path) -> None:
+	"""`--json` rows name the approver and reason of a policy-approved shape,
+	as the text `intended_loosening` line does, and leave both empty otherwise."""
+	head_sha = _loosening_pr(hook_repo)
+	unapproved = _cli(hook_repo, "--head-ref", "pr", "--json")
+	assert unapproved.returncode == 1, unapproved.stdout + unapproved.stderr
+	[row] = [json.loads(line) for line in unapproved.stdout.splitlines() if line.startswith("{")]
+	assert (row["loosened"], row["intended"], row["approved_by"], row["approval_reason"]) == (True, False, "", "")
+	_commit_policy(hook_repo, _entry(head_sha=head_sha, reason="retire the old refspec rule"))
+	proc = _cli(hook_repo, "--head-ref", "pr", "--json")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	[row] = [json.loads(line) for line in proc.stdout.splitlines() if line.startswith("{")]
+	assert (row["intended"], row["approved_by"], row["approval_reason"]) == (
+		True,
+		"operator",
+		"retire the old refspec rule",
+	)
+
+
+@pytest.mark.parametrize(
+	"overrides",
+	[{"head_sha": "c" * 40}, {"hook": "other_guard"}, {"shape": "git push origin HEAD"}],
+)
+def test_cli_a_policy_entry_for_another_commit_hook_or_shape_does_not_match(hook_repo: Path, overrides: dict) -> None:
+	head_sha = _loosening_pr(hook_repo)
+	_commit_policy(hook_repo, _entry(**{"head_sha": head_sha, **overrides}))
+	proc = _cli(hook_repo, "--head-ref", "pr")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "::error::GUARD_DIFFERENTIAL regression" in proc.stdout
+
+
+def test_cli_a_policy_entry_only_on_the_head_side_is_never_read(hook_repo: Path) -> None:
+	"""The PR's own copy of the policy cannot approve the PR's loosening."""
+	_git(hook_repo, "checkout", "-q", "-b", "pr")
+	(hook_repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_SILENT_HOOK, encoding="utf-8")
+	_git(hook_repo, "commit", "-q", "-am", "loosen")
+	loosen_sha = _git(hook_repo, "rev-parse", "HEAD")
+	_commit_policy(hook_repo, _entry(head_sha=loosen_sha))
+	head_sha = _git(hook_repo, "rev-parse", "HEAD")
+	path = hook_repo / gd.LOOSENING_POLICY_PATH
+	path.write_text(_policy_text(_entry(head_sha=loosen_sha), _entry(head_sha=head_sha)), encoding="utf-8")
+	_git(hook_repo, "commit", "-q", "-am", "approve my own head")
+	_git(hook_repo, "checkout", "-q", "main")
+	for extra in (("--head-ref", "pr"), ("--head-ref", "pr~1")):
+		proc = _cli(hook_repo, *extra)
+		assert proc.returncode == 1, proc.stdout + proc.stderr
+		assert "::error::GUARD_DIFFERENTIAL regression" in proc.stdout
+
+
+def test_cli_a_working_tree_run_fails_closed_without_a_head_sha(hook_repo: Path) -> None:
+	"""With no head commit no policy entry can match; `--head-sha` (the CI
+	path, where the checkout is a merge commit) supplies it."""
+	head_sha = "d" * 40
+	_commit_policy(hook_repo, _entry(head_sha=head_sha))
+	(hook_repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_SILENT_HOOK, encoding="utf-8")
+	proc = _cli(hook_repo)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert '"head_sha": "<head commit sha>"' in proc.stdout
+	proc = _cli(hook_repo, "--head-sha", head_sha)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "intended_loosening=1" in proc.stdout
+
+
+def test_cli_failure_hint_names_the_policy_and_the_head_commit(hook_repo: Path) -> None:
+	head_sha = _loosening_pr(hook_repo)
+	proc = _cli(hook_repo, "--head-ref", "pr")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert gd.LOOSENING_POLICY_PATH in proc.stdout
+	assert f'"head_sha": "{head_sha}"' in proc.stdout
+	assert "Intended loosening:` section of the PR body" not in proc.stdout
+
+
+@pytest.mark.parametrize("head_sha", ["abc", "E" * 40, "g" * 40, "d" * 40 + "\n"])
+def test_cli_a_malformed_head_sha_exits_2(hook_repo: Path, head_sha: str) -> None:
+	(hook_repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_SILENT_HOOK, encoding="utf-8")
+	proc = _cli(hook_repo, "--head-sha", head_sha)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "status=error" in proc.stdout
+
+
+def test_cli_a_head_sha_that_contradicts_the_head_ref_exits_2(hook_repo: Path) -> None:
+	_loosening_pr(hook_repo)
+	proc = _cli(hook_repo, "--head-ref", "pr", "--head-sha", "e" * 40)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "does not match --head-ref" in proc.stdout
+
+
+def test_cli_a_malformed_base_policy_exits_2_only_when_a_hook_changed(hook_repo: Path) -> None:
+	path = hook_repo / gd.LOOSENING_POLICY_PATH
+	path.parent.mkdir(parents=True)
+	path.write_text("{not json", encoding="utf-8")
+	_git(hook_repo, "add", "-A")
+	_git(hook_repo, "commit", "-q", "-m", "bad policy")
+	(hook_repo / "README.md").write_text("changed\n", encoding="utf-8")
+	proc = _cli(hook_repo)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "status=skipped" in proc.stdout
+	(hook_repo / ".claude" / "hooks" / "fake_guard.py").write_text(FAKE_BLOCKING_HOOK + "# edit\n", encoding="utf-8")
+	proc = _cli(hook_repo)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "invalid JSON" in proc.stdout
 
 
 def test_cli_compares_committed_refs(hook_repo: Path) -> None:
@@ -607,6 +824,8 @@ def test_ci_runs_the_check_on_pull_requests() -> None:
 	assert "scripts/guard_differential.py" in step
 	assert "--base-ref FETCH_HEAD" in step
 	assert "--pr-body-file" in step
+	assert '--head-sha "${GUARD_DIFFERENTIAL_HEAD_SHA}"' in step
+	assert "GUARD_DIFFERENTIAL_HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in step
 	assert 'git fetch --no-tags --depth=1 origin "${GUARD_DIFFERENTIAL_BASE_REF}"' in step
 	assert "${{ github.base_ref }}" in step
 	assert not re.search(r"\bgh\s+(?:api|pr|issue|run)\b", step) and "api.github.com" not in step
@@ -622,3 +841,5 @@ def test_agents_md_documents_the_corpus() -> None:
 	assert "tests/guard_corpus/<hook>.txt" in text
 	assert "scripts/guard_differential.py" in text
 	assert "Intended loosening:" in text
+	assert ".github/guard_differential/intended_loosening.json" in text
+	assert "pr_body_listed=true" in text
