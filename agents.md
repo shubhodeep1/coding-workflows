@@ -1294,6 +1294,21 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   copies of both, so such a PR can skip or weaken the check and still turn
   `lint` green. A PR that changes a guard path together with either file
   needs the owner's review of those files as well.
+- **Consumers get guard files from `.claude/`, not the twin** (issue
+  #5607): a guard twin can reach `main`, and `stable` by promotion, while its
+  owner-only sync PR is pending, so the consumer sync
+  (`update_workflows.yml`, step "Sync .claude/ assets from upstream") also
+  checks out the `stable` commit's `.claude/` tree and, for
+  `.claude/hooks/**`, `.claude/settings.json`, and
+  `.claude/settings.local.json`, copies that `.claude/` file instead of the
+  twin. When the twin and the `.claude/` copy differ (bytes) and the consumer
+  already has the file, the consumer keeps its file; when the `.claude/` copy
+  is missing at that commit, nothing is installed. Each case logs a
+  `::warning::claude-guard-sync: …` line. Non-guard files still come from the
+  twin. `/seed-repo` follows the same rule. The shell pattern must list the
+  same paths as `GUARD_PATH_PREFIXES` / `GUARD_PATH_FILES`, and
+  `tests/test_update_workflows_guardrails.py` runs the real step body against
+  a fake `stable` checkout.
 - **Credentials:** `GITHUB_TOKEN` (`contents`, `pull-requests`, `checks`,
   `statuses`: read) for reads; `GH_PAT` only in the sync step, for the push
   (passed in `GIT_CONFIG_*` environment variables to that one git command),

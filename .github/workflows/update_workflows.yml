@@ -82,7 +82,10 @@ jobs:
           # directory patterns, which keeps workflow-templates/CLAUDE.md
           # (a symlink to ../CLAUDE.md) readable without passing a bare
           # root-file argument here; modern git rejects that form.
-          git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"
+          # .claude is checked out too: the .claude/ asset sync takes hook
+          # and settings files from this commit's owner-reviewed .claude/
+          # tree, never from their workflow-templates/.claude/ twin (#5607).
+          git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}" ".claude"
           if [[ ! "${UPSTREAM_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::Resolved upstream stable ref is not a 40-character commit SHA."
             exit 1
@@ -206,9 +209,23 @@ jobs:
           #     is a future feature.
           # If upstream has no workflow-templates/.claude/ at this
           # stable ref, log and exit 0 — the sync is additive.
+          #
+          # Guard paths (hooks/**, settings.json, settings.local.json; the
+          # GUARD_PATH_PREFIXES / GUARD_PATH_FILES of
+          # scripts/claude_twin_sync.py) are the exception (issue #5607). A
+          # guard twin can reach main, and stable by promotion, while its
+          # owner-only .claude/ sync PR is still pending, so the twin is not
+          # reviewed content. A guard file is therefore copied from the same
+          # commit's .claude/ tree, never from its twin:
+          #   - .claude/<rel> missing at this commit → nothing is installed;
+          #   - twin and .claude/<rel> differ (bytes) and the consumer has
+          #     the file → the consumer's file is kept;
+          #   - otherwise the .claude/<rel> copy is synced as usual.
+          # Each skipped or kept guard gets a ::warning:: line.
 
           UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
           CLAUDE_UPSTREAM_DIR="${UPSTREAM_DIR}/.claude"
+          CLAUDE_REVIEWED_DIR="${UPSTREAM_DIR}/../.claude"
           CLAUDE_LOCAL_DIR=".claude"
 
           echo "claude_changed=0" >> "$GITHUB_OUTPUT"
@@ -227,14 +244,30 @@ jobs:
             [ -n "${upstream_path}" ] || continue
             rel="${upstream_path#${CLAUDE_UPSTREAM_DIR}/}"
             local_path="${CLAUDE_LOCAL_DIR}/${rel}"
+            claude_source_path="${upstream_path}"
+
+            case "${rel}" in
+              hooks/*|settings.json|settings.local.json)
+                claude_source_path="${CLAUDE_REVIEWED_DIR}/${rel}"
+                if [ ! -f "${claude_source_path}" ]; then
+                  printf '::warning::claude-guard-sync: .claude/%s is not in the stable .claude/ tree (its twin is not synced there yet); nothing installed.\n' "${rel}"
+                  continue
+                fi
+                if ! cmp -s "${upstream_path}" "${claude_source_path}" && [ -e "${local_path}" ]; then
+                  printf '::warning::claude-guard-sync: .claude/%s differs from its workflow-templates twin on stable (owner sync pending); kept the existing file.\n' "${rel}"
+                  continue
+                fi
+                ;;
+            esac
+
             local_dir=$(dirname "${local_path}")
             mkdir -p "${local_dir}"
 
             # Copy if absent or differs (whitespace-tolerant compare,
             # matching the wrapper-update step's diff invocation so
             # CRLF round-trips don't trigger spurious churn).
-            if [ ! -f "${local_path}" ] || ! diff -q --strip-trailing-cr --ignore-space-at-eol "${upstream_path}" "${local_path}" >/dev/null 2>&1; then
-              cp "${upstream_path}" "${local_path}"
+            if [ ! -f "${local_path}" ] || ! diff -q --strip-trailing-cr --ignore-space-at-eol "${claude_source_path}" "${local_path}" >/dev/null 2>&1; then
+              cp "${claude_source_path}" "${local_path}"
               CHANGED_COUNT=$((CHANGED_COUNT + 1))
               printf '%s\n' "${local_path}" >> /tmp/claude_changed_files.txt
             fi

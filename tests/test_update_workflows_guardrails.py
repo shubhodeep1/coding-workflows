@@ -3,12 +3,18 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from claude_twin_sync import GUARD_PATH_FILES, GUARD_PATH_PREFIXES  # noqa: E402
 from workflow_wrapper_refs import pin_reusable_workflow_refs, validate_release_sha
 
 
@@ -138,7 +144,7 @@ def test_guardrail_reason_codes_and_outputs_are_declared() -> None:
 	assert 'if: steps.update.outputs.has_updates == \'true\' || steps.audit_gate.outputs.status == \'applied\'' in wf
 	assert 'Audit-gate assets applied:' in wf
 	assert 'SCRIPTS_DIR="scripts"' in wf
-	assert 'git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"' in wf
+	assert 'git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}" ".claude"' in wf
 
 
 def test_profile_selection_and_non_destructive_downgrade_contracts() -> None:
@@ -284,6 +290,115 @@ def test_seed_commands_require_immutable_wrapper_rendering() -> None:
 		assert "refreshes an existing copy to the current release pin" in command_text
 
 
+def _claude_sync_step_script() -> str:
+	workflow = yaml.safe_load(_workflow_text())
+	for job in workflow["jobs"].values():
+		for step in job.get("steps", []):
+			if step.get("id") == "claude_sync":
+				return step["run"]
+	raise AssertionError("claude_sync step not found")
+
+
+def test_guard_pattern_matches_claude_twin_sync_guard_paths() -> None:
+	"""The shell guard pattern is the same set as claude_twin_sync.py's (issue #5607)."""
+	script = _claude_sync_step_script()
+	pattern = "|".join([f"{prefix}*" for prefix in GUARD_PATH_PREFIXES] + sorted(GUARD_PATH_FILES))
+	assert f"{pattern})" in script, pattern
+
+
+def _run_claude_sync(twins: dict[str, str], reviewed: dict[str, str], local: dict[str, str]) -> tuple[dict[str, str], str, dict[str, str]]:
+	"""Run the real claude_sync step body against a fake stable checkout.
+
+	Returns the consumer .claude/ tree afterwards, the step's stdout, and its outputs.
+	"""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		upstream = root / "upstream"
+		consumer = root / "consumer"
+		for base, files in ((upstream / "workflow-templates" / ".claude", twins), (upstream / ".claude", reviewed), (consumer / ".claude", local)):
+			for rel, body in files.items():
+				path = base / rel
+				path.parent.mkdir(parents=True, exist_ok=True)
+				path.write_text(body, encoding="utf-8")
+		changed_list = root / "changed.txt"
+		output_file = root / "github_output"
+		output_file.write_text("", encoding="utf-8")
+		script = _claude_sync_step_script()
+		script = script.replace("${{ steps.fetch.outputs.upstream_dir }}", str(upstream / "workflow-templates"))
+		script = script.replace("/tmp/claude_changed_files.txt", str(changed_list))
+		assert "${{" not in script
+		result = subprocess.run(
+			["bash", "-c", script],
+			cwd=consumer if consumer.exists() else root,
+			env={**os.environ, "GITHUB_OUTPUT": str(output_file)},
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		outputs = dict(line.split("=", 1) for line in output_file.read_text(encoding="utf-8").splitlines() if "=" in line)
+		consumer_claude = (consumer if consumer.exists() else root) / ".claude"
+		tree = {
+			str(path.relative_to(consumer_claude)): path.read_text(encoding="utf-8")
+			for path in sorted(consumer_claude.rglob("*"))
+			if path.is_file()
+		}
+		return tree, result.stdout, outputs
+
+
+def test_claude_sync_takes_guard_files_from_the_reviewed_claude_tree() -> None:
+	"""Issue #5607: a guard twin that differs from .claude/ never reaches a consumer."""
+	twins = {
+		"commands/foo.md": "twin command\n",
+		"hooks/same.py": "same hook\n",
+		"hooks/pending.py": "UNREVIEWED twin\n",
+		"hooks/new_only.py": "UNREVIEWED new hook\n",
+		"hooks/pending_absent.py": "UNREVIEWED twin 2\n",
+		"settings.json": "{\"twin\": true}\n",
+	}
+	reviewed = {
+		"commands/foo.md": "older reviewed command\n",
+		"hooks/same.py": "same hook\n",
+		"hooks/pending.py": "reviewed hook\n",
+		"hooks/pending_absent.py": "reviewed hook 2\n",
+		"settings.json": "{\"reviewed\": true}\n",
+	}
+	local = {
+		"hooks/pending.py": "consumer hook\n",
+		"settings.json": "{\"consumer\": true}\n",
+		"skills/private.md": "consumer-local\n",
+	}
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, local)
+	# Non-guard files still come from the twin.
+	assert tree["commands/foo.md"] == "twin command\n"
+	# Guard equal on both sides: synced.
+	assert tree["hooks/same.py"] == "same hook\n"
+	# Guard twin differs and the consumer has the file: kept.
+	assert tree["hooks/pending.py"] == "consumer hook\n"
+	assert tree["settings.json"] == "{\"consumer\": true}\n"
+	# Guard twin differs and the consumer lacks the file: the reviewed copy.
+	assert tree["hooks/pending_absent.py"] == "reviewed hook 2\n"
+	# Guard missing from .claude/: nothing installed.
+	assert "hooks/new_only.py" not in tree
+	# Consumer-local extras stay.
+	assert tree["skills/private.md"] == "consumer-local\n"
+	assert "UNREVIEWED" not in "".join(tree.values())
+	assert "::warning::claude-guard-sync: .claude/hooks/new_only.py is not in the stable .claude/ tree" in stdout
+	assert "::warning::claude-guard-sync: .claude/hooks/pending.py differs from its workflow-templates twin" in stdout
+	assert "::warning::claude-guard-sync: .claude/settings.json differs from its workflow-templates twin" in stdout
+	assert outputs["claude_changed"] == "3"
+	assert outputs["claude_has_changes"] == "true"
+
+
+def test_claude_sync_with_matching_guards_behaves_as_before() -> None:
+	"""With every guard twin equal to .claude/, the sync mirrors the twin tree."""
+	twins = {"commands/foo.md": "a\n", "hooks/h.py": "h\n", "settings.json": "{}\n"}
+	tree, stdout, outputs = _run_claude_sync(twins, dict(twins), {"hooks/h.py": "old\n"})
+	assert tree == twins
+	assert "::warning::" not in stdout
+	assert outputs["claude_changed"] == "3"
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
@@ -297,6 +412,9 @@ def main() -> int:
 	test_wrapper_ref_renderer_contract()
 	test_every_wrapper_template_renders_to_an_immutable_ref()
 	test_seed_commands_require_immutable_wrapper_rendering()
+	test_guard_pattern_matches_claude_twin_sync_guard_paths()
+	test_claude_sync_takes_guard_files_from_the_reviewed_claude_tree()
+	test_claude_sync_with_matching_guards_behaves_as_before()
 	return 0
 
 
