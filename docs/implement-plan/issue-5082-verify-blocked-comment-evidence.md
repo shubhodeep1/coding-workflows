@@ -1,17 +1,17 @@
 # Implement-Plan Log — Unattended question guard counts only a verified blocked comment on the marker's issue
 
-- Plan: docs/plans/issue-5082-verify-blocked-comment-evidence-plan.md
+- Plan: docs/completed/issue-5082-verify-blocked-comment-evidence-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5082 (https://github.com/shubhodeep1/coding-workflows/issues/5082)
-- Repo: shubhodeep1/coding-workflows   Default branch: main
+- Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4911-unattended-question-guard
 - Project branch: claude/implement-plan-issue-5082-verify-blocked-comment-evidence   Final PR: #5088 draft
-- Status: BLOCKED
-- Stage: conformance 1/3
-- Activation: not started
-- Waiting on: conformance fix PR (opened by this stage): twin sync
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4911-unattended-question-guard)
+- Waiting on: completion PR (claude/implement-plan-issue-5082-verify-blocked-comment-evidence-complete) into the project branch; then final PR #5088 into the base
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01BYCtt6gNuME2V7HqCYVGKJ (reused; idle, no pending check-in while BLOCKED)   safety net none   hand-back none
+- Check-in: checker session_01BYCtt6gNuME2V7HqCYVGKJ (project checker)   safety net and hand-back: armed by the completion stage (ids in its report)
 - Last updated: 2026-09-30
-- Last note: conformance 1/3 CONFORMANT with one doc CONCERN fixed twin-first in the conformance fix PR; BLOCKED on its Q40 twin sync.
+- Last note: conformance 2/3 CONFORMANT with no fixes (conformance fix PR #5362 and its twin sync #5372 merged); security pass skipped (automation-produced issue); validation skipped under Q17; the completion PR moves the plan to docs/completed/.
 
 ## Phases
 1. [x] Phase 1 — verified blocked-comment evidence (MCP / `gh api` comment on the marker's repo#issue, body starts with the marker, result carries the comment URL, plus the `ai:claude-blocked` label write)   — PR #5099 merged 2026-09-30 (by hand on the operator's approval, #5082 Q1: B; merge `13ffce6`); review rounds: 2; interventions: 0 — protected paths: `.claude/hooks/unattended_question_guard.py` (via its `workflow-templates/.claude/` twin)
@@ -22,14 +22,19 @@
    - Done: every plan Goal has a passing test with the twin synced; related hook suites still pass
 
 ## Conformance
-- Run 1 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED doc CONCERN) — conformance fix PR (branch `claude/implement-plan-issue-5082-verify-blocked-comment-evidence-conformance-fix-1`) (pre-security)
+- Run 1 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 1 EVIDENCE-BASED doc CONCERN) — conformance fix PR #5362 merged 2026-09-30 (`bd8dc42`), its `.claude/` twin sync through PR #5372 merged 2026-09-30 (`0fdac00`) (pre-security)
+- Run 2 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: PASS) — no fixes (pre-security)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue)
 
 ## Validation
+- Skipped (covered by #4964's project validation; operator decision Q17, the final PR targets another project's branch)
 
 ## Completion
+- Completion PR (claude/implement-plan-issue-5082-verify-blocked-comment-evidence-complete) opened 2026-09-30 — doc moved to docs/completed/issue-5082-verify-blocked-comment-evidence-plan.md
+- Merged PRs: phase 1 #5099, conformance fix #5362, conformance-fix twin sync #5372
+- Final PR #5088 draft — marked ready at final-merge; the issue is closed explicitly with `ai:merged` once it merges (base is not the default branch)
 
 ## Activation
 
@@ -62,3 +67,6 @@
 - Conformance 1/3 (2026-09-30): every plan Goal maps to code and tests (G1 `blocked_comment_posted` + `_result_names_comment`; G2 `_blocked_label_targets`; G3 `_and_chain_segments` / `_gh_api_call` negatives; G4 `_instructions`; G5 no network primitives, `run_hook` fail-open, twins byte-identical). Adversarial probes (double-quoted `$(...)`, env prefix, `-X GET`, `{owner}` placeholders, a second `cd`, `-X=POST`) all fail closed. One CONCERN: the Issue Mode guard bullet of `.claude/commands/implement-plan-claude.md:106` still described the old comment-only evidence; fixed twin-first in the conformance fix PR, with `test_plan_command_marks_issue_mode_sessions` pinning the new text.
 - Protected-path: the conformance fix changes `.claude/commands/implement-plan-claude.md`, so it runs under the recorded `Protected-path approval: phase 1 — twin-first per Q40` (later-stage rule of `/implement-plan-claude` step 4): only the `workflow-templates/.claude/` twin is edited, a `hold` claim goes on the fix PR head, and the stage stops BLOCKED with a twin-sync request on #5082.
 - Verification (2026-09-30): real checkout, 5 hook suites plus 6 command-doc suites: 791 passed, and only the 5 twin-parity checks for `implement-plan-claude.md` fail (expected until the sync). Scratch copy with the twin synced into `.claude/`: 795 passed with 1 failure; that failure (`test_section_28_scope_covers_issue_mode`) is a copy artifact (the `workflow-templates/CLAUDE.md` symlink became a file) and passes in the real checkout. `ruff check` clean.
+- 2026-09-30 02:36Z: `/implement-issue-claude` re-dispatched after the operator's `/reclarify` (#5082 comment 5902729013, Q3: A; trigger `trig_014s67jvDmx3yXt5m8HMs15U`) in session `session_01Dd9FW7phDccSaBy9G91bnV` (auto mode). PR #5362 and its `.claude/` twin sync PR #5372 had both merged into the project branch, so this session ran conformance 2/3. `ai:claude-blocked` removed. The base PR #4964 is still open into `main` and no closed PR has the base as its head, so the base has not moved; the project branch was already up to date with it.
+- Conformance 2/3 (2026-09-30, project branch `0fdac00`): CONFORMANT, Correctness PASS, no fixes. Every Goal still maps to code and tests (G1–G5 as in run 1). The run 1 CONCERN is resolved: `.claude/commands/implement-plan-claude.md:106` and its twin describe the verified comment plus the label, byte-identical. The live hook and command match their `workflow-templates/.claude/` twins (`cmp`). Every prose copy of the evidence rule (CLAUDE.md §28.G, `agents.md`, `README.md`, the changelog fragment, both command twins) matches the code. 20 adversarial transcript probes (echo, issue `50820` URL, prefix-owner repo, env prefix, `||`, double-quoted `$(...)`, `-X GET`, `--hostname`, error result, `issue_write` `create`, escaped `;`, newline, boolean issue number; positives: MCP, string issue, `cd; … &&` chain, list result, single-quoted `$(`) all give the expected result.
+- Verification (2026-09-30): `tests/test_unattended_question_guard.py`, `test_gh_api_write_guard.py`, `test_pr_watch_guard.py`, `test_pr_check_in_reminder.py`, `test_update_workflows_guardrails.py`, `test_check_in_session_targeting.py`, `test_implement_issue_claude_command.py`, `test_implement_plan_claude_command.py`, `test_ingest_implement_plan_lessons.py`: 613 passed (twin parity included). `test_assemble_changelog.py`, `test_changelog_fragment_contract.py` and the other changelog suites: 62 passed. `ruff check` clean. `tests/test_workflow_retro.py` does not collect in this container (Python f-string syntax, unrelated to this project).
