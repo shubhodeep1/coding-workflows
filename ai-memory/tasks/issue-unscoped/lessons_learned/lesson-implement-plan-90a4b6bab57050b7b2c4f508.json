@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-30T09:16:55Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Sibling projects that change the same rule on one shared base (#5325 and #5326 both rewrote the guard differential pass condition) conflict in every file that restates it; resolve by composing the rules, then re-grep the restatements and add one test for the combined case.",
+  "phase": "implement_plan",
+  "pr_number": 5494,
+  "record_id": "lesson-implement-plan-90a4b6bab57050b7b2c4f508",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5326-guard-differential-trusted-loosening",
+    "file:scripts/guard_differential.py",
+    "file:tests/guard_corpus/pr_merge_status_guard.txt",
+    "file:tests/test_guard_differential.py"
+  ]
+}

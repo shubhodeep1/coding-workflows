@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T09:16:55Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a rule moves, grep every file that restates it, including data-file header comments such as `tests/guard_corpus/*.txt`, not only the docs the plan lists; pin the new wording with a test.",
+  "phase": "implement_plan",
+  "pr_number": 5494,
+  "record_id": "lesson-implement-plan-9dbe5621518fb1a0d6959ec5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5326-guard-differential-trusted-loosening",
+    "file:tests/guard_corpus/pr_merge_status_guard.txt",
+    "file:tests/test_guard_differential.py"
+  ]
+}

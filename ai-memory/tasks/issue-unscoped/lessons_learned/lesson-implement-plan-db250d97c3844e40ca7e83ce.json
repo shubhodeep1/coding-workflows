@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T09:16:55Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test that pins a file's header must read only the leading comment block (stop at the first non-comment line), or wording kept only in a later section comment still passes.",
+  "phase": "implement_plan",
+  "pr_number": 5494,
+  "record_id": "lesson-implement-plan-db250d97c3844e40ca7e83ce",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5326-guard-differential-trusted-loosening",
+    "file:tests/test_guard_differential.py"
+  ]
+}
