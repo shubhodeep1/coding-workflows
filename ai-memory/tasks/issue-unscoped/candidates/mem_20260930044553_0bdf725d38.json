@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: changelog.d/4701-review-dispatch-default-branch.md\n  Location: last paragraph of \"For contributors\" section, line reading \"fails open to []\"\n  Issue: The changelog fragment says the shared lookup \"fails open to []\" but #4927 changed the implementation to return 1 on incomplete listing (callers skip dispatch/push). The fragment documents the #4701 scope correctly as originally authored, but readers of the assembled changelog will see all four fragments together and this one line will be inconsistent with the #4927 fragment.\n  Suggested minimal fix: Add a parenthetical note \"(The paged listing of issue #4927 later strengthened this to return 1 and skip on incomplete listings.)\" so assembled readers are not confused.\n  Estimated lines changed: 2\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "81b0add89db6972544adc36b55c092f9e1aa2c77db74aaec1260bc7a56591de3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36669534808",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36669534808",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930044553_0bdf725d38",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36669534808"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T04:45:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
