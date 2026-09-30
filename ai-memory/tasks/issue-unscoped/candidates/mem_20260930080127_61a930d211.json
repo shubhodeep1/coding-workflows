@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_check_in_status_hand_back.py:lines 803-817 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test name and docstring imply that the verdict comment alone makes the head non-stalled, but only the matching `_handoff()` comment in the test setup triggers `_head_has_review_trace`.\n  WHY: The test still passes, but its setup can mislead future readers about which comment contributes to the trace check.\n- .claude/scripts/check_in_status.py:lines 709-726 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` is unset, the early-return reason uses a different format from the other exclusion paths.\n  WHY: This is a minor cosmetic inconsistency in reason text operators downstream consume; there is no runtime failure.\n- .claude/scripts/check_in_status.py:lines 729-738 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The head-commit read occurs before the active-run check, so it is unused when `_active_run_count` returns greater than zero.\n  WHY: This adds one wasted `GET /repos/{repo}/commits/{head_sha}` API call per stall check where an active run already exists.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_check_in_status_hand_back.py:lines 803-817 (`test_a_head_whose_handoff_was_answered_is_not_stalled`) | severity=NIT | confidence=3\n  PROBLEM: The test docstring and name imply that the `verdict` comment (by `dedicated-fixer[bot]`) alone is what makes the head non-stalled, but the test only passes because the comments list contains a `_handoff()` whose marker matches the head SHA.\n  WHY: The test still passes, but a future reader will not understand the test setup: they will think the verdict counts as a trace, when really only a hand-off comment does.\n- .claude/scripts/check_in_status.py:lines 709-726 (`_review_stall_verdict`) | severity=NIT | confidence=3\n  PROBLEM: The early-return reason when `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` is unset uses \"PR #N open; review-stall detection is off because...\" (semicolon, no \"no fix due:\" prefix), while every other exclusion path uses the \"PR #N open, no fix due: ...\" format.\n  WHY: No runtime failure \u2014 only log reason-text formatting differs from the documented contract shape used by every other exclusion branch.\n- .claude/scripts/check_in_status.py:lines 729-738 (`_review_stall_verdict` head-commit read ordering) | severity=NIT | confidence=3\n  PROBLEM: The head-commit read at line 729 happens unconditionally before the active-run check at line 735.\n  WHY: When `_active_run_count` returns > 0, the head-commit read at line 729 was wasted \u2014 the function returns the \"still queued, running or pending\" reason without ever using the parsed `committed`/`age` values; this adds one wasted API call per stall check where an active run already exists.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "63299279be8735fb73f771325b1f0fdbe92112f57e7ce3e302750ad0c64e8b52",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36685340990",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36685340990",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930080127_61a930d211",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36685340990"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T08:01:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
