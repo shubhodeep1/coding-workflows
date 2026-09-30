@@ -7,19 +7,19 @@
 - Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: operator twin sync of `.claude/hooks/unattended_question_guard.py` on the phase 1 PR (Q40), then `/reclarify`
+- Waiting on: PR #5104: twin sync (re-sync of `.claude/hooks/unattended_question_guard.py` after the base-merge conflict resolution)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
-- Last updated: 2026-09-29
-- Last note: phase 1 implemented twin-first (Q40): twin hook, tests, docs, changelog pushed as the phase PR with a `hold` claim; stopped BLOCKED on #5083 with the twin-sync request.
+- Last updated: 2026-09-30
+- Last note: phase 1/1 — review round (conflict): merged the project branch (#5088's verified-blocker rewrite) into PR #5104, resolved the conflicts in the twin hook, README.md and the guard tests; `.claude/hooks/unattended_question_guard.py` left at the project branch's version (twin-first), so the twin needs a re-sync; `hold` claim posted, stopped BLOCKED on #5083.
 
 ## Phases
-1. [ ] Phase 1 — cap blocker publish in the unattended question guard — protected paths: `.claude/hooks/unattended_question_guard.py` (twin: `workflow-templates/.claude/hooks/unattended_question_guard.py`) — phase PR open, waiting on the twin sync; review rounds: 0; interventions: 0
+1. [ ] Phase 1 — cap blocker publish in the unattended question guard — protected paths: `.claude/hooks/unattended_question_guard.py` (twin: `workflow-templates/.claude/hooks/unattended_question_guard.py`) — PR #5104 open, waiting on the twin re-sync; review rounds: 1 (conflict); interventions: 0
    - [x] Hook (twin first): `CAP_BLOCKER_MARKER_PREFIX` / `cap_blocker_marker`, fixed template `cap_blocker_body`, `publish_cap_blocker`, `run_gh_api`, injectable `runner` / `sleep` / `clock` on `evaluate`, pending retry at the top of the `Stop` path, `read_state` / `_write_state` (merging), `cap_blocker_*` log lines, docstring
    - [x] `tests/test_unattended_question_guard.py`: 14 new cases (posted, exists, other session's marker, already posted, in-hook retry, label-only retry, pending → retried, no double retry, time budget, `gh` missing, invalid repo, state merge, runner timeout, no calls below the cap); `test_hook_makes_no_network_calls` replaced by `test_hook_network_access_is_only_the_gh_api_runner`
    - [x] CLAUDE.md §28.G (`workflow-templates/CLAUDE.md` is a symlink to it), agents.md, README.md
    - [x] `changelog.d/5083-guard-cap-source-issue-blocker.md`
-   - [ ] `.claude/hooks/unattended_question_guard.py` twin sync (operator, Q40)
+   - [ ] `.claude/hooks/unattended_question_guard.py` twin sync (operator, Q40): synced in `d8619c3`; re-sync needed after the 2026-09-30 conflict merge
    - Done: whole guard test file passes with the twin synced into `.claude/`; docs describe the cap publish
 
 ## Conformance
@@ -52,3 +52,5 @@
 - Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29) (#5083 comment 5886503268, OWNER, answered by the master session under standing decision Q40: A; option D of the #5083 blocked comment 5885866605). The phase edits only the `workflow-templates/.claude/hooks/` twin, pushes the phase PR, posts a `hold` claim, and stops BLOCKED with the twin-sync request.
 - 2026-09-29 08:36Z: resumed by the master's routine `trig_01H6YF1vdFH3cuiPuJXnhjga` (replaces `/reclarify`); `ai:claude-blocked` removed; project branch synced with its base (`7a2fb7f`, clean merge; hook unchanged, sha256 `db5f32ba…`).
 - Plan deviation (naming only): the plan's `CAP_BLOCKER_MARKER` shipped as `CAP_BLOCKER_MARKER_PREFIX` plus `cap_blocker_marker(session)`, because the marker carries the session id.
+- 2026-09-30: resume stage (`session_015pKokfz1CHmpSNQtszyYha`) removed `ai:claude-blocked` after the operator's `[claude-twin-sync]` `d8619c3` and `/reclarify` (#5083 comment 5904021371); project branch synced with its base (`efb0b7c`, merges #5088, which also rewrote `unattended_question_guard.py`); checker `session_01NP7tQbFBJ5V1jmMCjx6W1o` armed on PR #5104.
+- 2026-09-30: the checker saw PR #5104 conflicted on head `d8619c3` and started the phase 1/1 review-round stage (`session_01DFDLhjE51LeRtp2NL1KhyL`). It merged the project branch into the phase branch and resolved the conflicts keeping both sides: the twin hook keeps #5082's verified-blocker check (`blocked_comment_posted(turn, marker)`, `shlex`) and #5083's cap publish (`subprocess`, `retry_message`); README.md and the guard test's source check combine both. `.claude/hooks/unattended_question_guard.py` was resolved to the project branch's version (edits stay in the twin, Q40), so the phase PR needs a second `[claude-twin-sync]`. The round-1 findings hand-off for head `3b5c607` went stale when the twin sync moved the head; the next review round re-reviews the merged head.
