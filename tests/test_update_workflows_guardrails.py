@@ -14,7 +14,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from claude_twin_sync import GUARD_PATH_FILES, GUARD_PATH_PREFIXES  # noqa: E402
+from claude_twin_sync import GUARD_PATH_FILES, GUARD_PATH_PREFIXES, is_guard_path  # noqa: E402
 from workflow_wrapper_refs import pin_reusable_workflow_refs, validate_release_sha
 
 
@@ -304,6 +304,23 @@ def test_guard_pattern_matches_claude_twin_sync_guard_paths() -> None:
 	script = _claude_sync_step_script()
 	pattern = "|".join([f"{prefix}*" for prefix in GUARD_PATH_PREFIXES] + sorted(GUARD_PATH_FILES))
 	assert f"{pattern})" in script, pattern
+	# The literal alone does not prove the same set: run the pattern through a
+	# shell `case` (where `*` also matches `/`) and compare with is_guard_path.
+	samples = [
+		"hooks/a.py",
+		"hooks/lib/b.py",
+		"hooks/a/b/c.sh",
+		"settings.json",
+		"settings.local.json",
+		"commands/settings.json",
+		"hooksx/a.py",
+		"scripts/hooks/a.py",
+		"commands/foo.md",
+	]
+	case_script = f'for rel in "$@"; do case "$rel" in {pattern}) echo "$rel";; esac; done'
+	for shell in ("bash", "sh"):
+		result = subprocess.run([shell, "-c", case_script, shell, *samples], capture_output=True, text=True, check=True)
+		assert result.stdout.split() == [rel for rel in samples if is_guard_path(rel)], shell
 
 
 def _run_claude_sync(twins: dict[str, str], reviewed: dict[str, str], local: dict[str, str]) -> tuple[dict[str, str], str, dict[str, str]]:
@@ -354,6 +371,8 @@ def test_claude_sync_takes_guard_files_from_the_reviewed_claude_tree() -> None:
 		"hooks/pending.py": "UNREVIEWED twin\n",
 		"hooks/new_only.py": "UNREVIEWED new hook\n",
 		"hooks/pending_absent.py": "UNREVIEWED twin 2\n",
+		"hooks/lib/nested_pending.py": "UNREVIEWED nested twin\n",
+		"hooks/lib/nested_new.py": "UNREVIEWED nested new hook\n",
 		"settings.json": "{\"twin\": true}\n",
 	}
 	reviewed = {
@@ -361,10 +380,12 @@ def test_claude_sync_takes_guard_files_from_the_reviewed_claude_tree() -> None:
 		"hooks/same.py": "same hook\n",
 		"hooks/pending.py": "reviewed hook\n",
 		"hooks/pending_absent.py": "reviewed hook 2\n",
+		"hooks/lib/nested_pending.py": "reviewed nested hook\n",
 		"settings.json": "{\"reviewed\": true}\n",
 	}
 	local = {
 		"hooks/pending.py": "consumer hook\n",
+		"hooks/lib/nested_pending.py": "consumer nested hook\n",
 		"settings.json": "{\"consumer\": true}\n",
 		"skills/private.md": "consumer-local\n",
 	}
@@ -380,6 +401,11 @@ def test_claude_sync_takes_guard_files_from_the_reviewed_claude_tree() -> None:
 	assert tree["hooks/pending_absent.py"] == "reviewed hook 2\n"
 	# Guard missing from .claude/: nothing installed.
 	assert "hooks/new_only.py" not in tree
+	# Nested hooks are guards too.
+	assert tree["hooks/lib/nested_pending.py"] == "consumer nested hook\n"
+	assert "hooks/lib/nested_new.py" not in tree
+	assert "::warning::claude-guard-sync: .claude/hooks/lib/nested_pending.py differs from its workflow-templates twin" in stdout
+	assert "::warning::claude-guard-sync: .claude/hooks/lib/nested_new.py is not in the stable .claude/ tree" in stdout
 	# Consumer-local extras stay.
 	assert tree["skills/private.md"] == "consumer-local\n"
 	assert "UNREVIEWED" not in "".join(tree.values())

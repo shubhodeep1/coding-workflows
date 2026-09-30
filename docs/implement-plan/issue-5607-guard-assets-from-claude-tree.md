@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5607-guard-assets-from-claude-tree   Final PR: #5651 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (branch claude/implement-plan-issue-5607-guard-assets-from-claude-tree-phase-1)
+- Waiting on: PR #5654
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01A5rLUxqZWzzL1obW7dTcMW   safety net and hand-back: see the review round 1 stage report
 - Last updated: 2026-09-30
-- Last note: phase 1 implemented and verified (guard files from stable's `.claude/` tree in `update_workflows.yml`, seed-repo twin, tests, docs, changelog); phase PR opened, waiting on its review.
+- Last note: review round 1 on head 45d44f6: fixed the nested-hook test gap (fixtures + a parity test that runs the `case` pattern in bash and sh against `is_guard_path`), the README `settings.local.json` omission, and clarified the step comment; rejected the claimed `hooks/*` nesting bug (a `case` `*` matches `/`), the `claude_twin_sync.py` finding (outside this PR), and the pre-existing `diff` flag (§5).
 
 ## Phases
-1. [ ] Phase 1 — guard assets from the `.claude/` tree at consumer sync and seed (edits the twin `workflow-templates/.claude/commands/seed-repo.md` only; protected paths: none)   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — guard assets from the `.claude/` tree at consumer sync and seed (edits the twin `workflow-templates/.claude/commands/seed-repo.md` only; protected paths: none)   — PR #5654 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -36,6 +36,7 @@
 
 ## Lessons
 - [source:plan-deviation] GNU diff has no `--ignore-space-at-eol` (that is a git diff flag), so a `diff -q --strip-trailing-cr --ignore-space-at-eol` guard exits 2 and every file counts as changed; use `--ignore-trailing-space` (`-Z`) or `cmp` and test the shell step end to end (files: .github/workflows/update_workflows.yml)
+- [source:intervention] In a POSIX shell `case` pattern `*` also matches `/`, so `hooks/*` covers nested paths; pin shell-vs-Python path rules with a test that runs the pattern through `bash` and `sh` against the Python classifier, not just a string match (files: .github/workflows/update_workflows.yml, tests/test_update_workflows_guardrails.py)
 
 ## Notes
 - Security pass: skip (`security_pass_skip.py` → `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`).
@@ -43,3 +44,4 @@
 - Pre-existing, not fixed here (§5): the three `diff -q --strip-trailing-cr --ignore-space-at-eol` calls in `update_workflows.yml` (the `.claude/` sync, the CLAUDE.md sync, and the wrapper compare) fail with `unrecognized option` on GNU diffutils 3.10, so they always count a file as changed and copy it. Content stays correct (the commit step skips an empty index), but `claude_changed` is inflated. Candidate for its own issue.
 - Phase 1 evidence: `tests/test_update_workflows_guardrails.py` passes (the new behavioural test fails on the pre-fix step); `tests/test_changelog_fragment_contract.py` and `tests/test_workflow_file_size_limit.py` pass; `claude_twin_sync.py check` is ok; ruff shows only the file's existing E402.
 - Final PR #5651 (draft) opened 2026-09-30 into claude/implement-plan-issue-4785-twin-first-claude-sync.
+- Review round 1 (2026-09-30, head 45d44f6): the `scripts/claude_twin_sync.py:436-449` finding (a stable backport of a `.claude/` guard file without its twin fails the twin-at-head compare) is outside this PR's diff and a plan non-goal; sibling finding #5609 covers that file. Not fixed here.

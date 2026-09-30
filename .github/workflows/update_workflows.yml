@@ -221,7 +221,9 @@ jobs:
           #   - twin and .claude/<rel> differ (bytes) and the consumer has
           #     the file → the consumer's file is kept;
           #   - otherwise the .claude/<rel> copy is synced as usual.
-          # Each skipped or kept guard gets a ::warning:: line.
+          # Each skipped or kept guard gets a ::warning:: line. In a shell
+          # `case` pattern `*` also matches `/`, so `hooks/*` below covers
+          # nested hooks (hooks/lib/x.py) like the Python startswith check.
 
           UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
           CLAUDE_UPSTREAM_DIR="${UPSTREAM_DIR}/.claude"
