@@ -7,18 +7,18 @@
 - Status: IN_PROGRESS
 - Stage: conformance 2/3 — review round
 - Activation: not started
-- Waiting on: PR #5494 (conformance 2/3 fix PR, review round 2)
+- Waiting on: PR #5494 (conformance 2/3 fix PR, review round 3)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: project checker session_01KsqE28FAB72xsTiHLCUEvX (per-wait safety-net and hand-back ids are in the stage report)
 - Last updated: 2026-09-30
-- Last note: conformance 2/3 review round 1: the panel reported no finding on b08f927, but the project branch had to absorb sibling project #5325 (a warning no longer excuses a loosening; PR #5363 into the issue base), so PR #5494 conflicted; merged the project branch into it, combining both rules in the four corpus headers (112 guard differential tests pass).
+- Last note: conformance 2/3 review round 2 (workflow round 1 on 38bccbd): 2 low findings from one reviewer; fixed 1 (the header test now also requires the "PR-body `Intended loosening:` listing never does" clause), rejected 1 (an `AttributeError` on a renamed `gd.LOOSENING_POLICY_PATH` already names the attribute, and §6 forbids that rename).
 
 ## Phases
 1. [x] Phase 1 — base-branch loosening policy (script, policy file, tests, ci.yml step, docs)   — PR #5389 merged 2026-09-30 (250b29f); review rounds: 1; interventions: 0
 
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT — fix PR #5449 merged 2026-09-30 (stale `--head-sha` exit-code wording in agents.md and plan G5, plus a pinning test) (pre-security)
-- Run 2 — 2026-09-30: CONFORMANT — fix PR (the four `tests/guard_corpus/*.txt` headers still said a PR-body `Intended loosening:` listing passes a shape; now name the base-branch policy, plus a pinning test) (pre-security) — PR #5494; review rounds: 1 (no finding; head moved by a `[claude-merge-resolve]` merge of the synced project branch)
+- Run 2 — 2026-09-30: CONFORMANT — fix PR (the four `tests/guard_corpus/*.txt` headers still said a PR-body `Intended loosening:` listing passes a shape; now name the base-branch policy, plus a pinning test) (pre-security) — PR #5494; review rounds: 2 (1: no finding; head moved by a `[claude-merge-resolve]` merge of the synced project branch. 2: 1 of 2 low findings fixed in the header test)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue), per the plan header.

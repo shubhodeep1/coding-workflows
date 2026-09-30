@@ -748,6 +748,7 @@ def test_corpus_headers_name_the_base_policy_not_the_pr_body() -> None:
 		header = " ".join(line.lstrip("# ").strip() for line in lines if line.startswith("#"))
 		assert "PR body lists it" not in header, corpus
 		assert gd.LOOSENING_POLICY_PATH in header, corpus
+		assert "PR-body `Intended loosening:` listing never does" in header, corpus
 
 
 def test_every_guard_hook_has_a_corpus() -> None:
