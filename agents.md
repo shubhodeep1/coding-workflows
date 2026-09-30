@@ -1226,18 +1226,44 @@ side so that class cannot land unnoticed.
   #5174)` and, on pull requests only, `Guard differential check (issue
   #5174)`: it fetches the base branch with git and runs `--base-ref
   FETCH_HEAD --pr-body-file <body from GITHUB_EVENT_PATH>` against the
-  checked-out merge commit. `ci.yml` runs on pull requests into `main` and
+  checked-out merge commit, using the base branch's copy of the verifier
+  (next bullet). `ci.yml` runs on pull requests into `main` and
   `stable`, so it gates a project's final PR and every #4785 twin-sync PR,
   whose auto-merge waits for green checks. Phase PRs into a project branch
   do not run `ci.yml`. Run it by hand with `python3
   scripts/guard_differential.py --base-ref origin/main [--head-ref <ref>]
   [--pr-body-file <file>] [--all] [--json]`.
+- **Pinned verifier (issue #5327).** The step does not run the PR's
+  `scripts/guard_differential.py`. It copies that file out of the fetched
+  base commit (`git show FETCH_HEAD:scripts/guard_differential.py`) into
+  `$RUNNER_TEMP/guard-differential-verifier/` and runs the copy. A PR can
+  therefore not weaken a guard and edit the verifier to pass in the same
+  change. The PR's hooks, corpora, and body are the data the copy reads from
+  the workspace and the event payload. It logs `GUARD_DIFFERENTIAL
+  verifier=base source=<sha>:scripts/guard_differential.py`. A base that
+  does not carry the script yet (`main` and `stable` before #5174's final
+  PR and release) runs the PR's copy instead and prints
+  `::warning::GUARD_DIFFERENTIAL verifier=head
+  reason=base-has-no-verifier`. A change to the verifier therefore applies
+  to PRs opened after it merges, and **the step may pass only flags the
+  base copy already accepts**: land a new flag in the script first and use
+  it in the step in a later PR, or the step fails with exit 2. The verifier
+  also reports every change to itself or to a `ci.yml` step whose name
+  starts with `Guard differential` (below). A PR that rewrites the step
+  itself still controls what that run executes, which is inherent to
+  `pull_request` workflows: the edit is visible in the diff the reviewer
+  panel reads, and once it is on the base the next PR's verifier reports
+  any further step change.
 - **Output.** `GUARD_DIFFERENTIAL regression tree=… hook=… line=… base=…
   head=… shape=…` per failing shape (as `::error::`), `GUARD_DIFFERENTIAL
   intended_loosening …` per listed shape, `GUARD_DIFFERENTIAL missing_corpus
-  path=…`, and a `GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> …`
-  summary. Exit 0 when clean or when no hook changed, 1 on a failure, 2 on a
-  bad ref, unreadable corpus, or unreadable PR body.
+  path=…`, `GUARD_DIFFERENTIAL verifier_change path=<scripts/guard_differential.py
+  | .github/workflows/ci.yml>: …` (as `::warning::`, printed even when no
+  hook changed, never failing), and a `GUARD_DIFFERENTIAL
+  status=<pass|fail|skipped> … verifier_changes=<n>` summary (a
+  `status=error` line, printed when the check could not run, carries no
+  count). Exit 0 when clean or when no hook changed, 1 on a failure, 2 on
+  a bad ref, unreadable corpus, or unreadable PR body.
 
 ---
 

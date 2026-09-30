@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5327-pin-guard-differential-verifier-plan.md
 - Source issue: shubhodeep1/coding-workflows#5327   Progress comment: 5902400503
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5174-guard-differential-check
-- Project branch: claude/implement-plan-issue-5327-pin-guard-differential-verifier   Final PR: (opened after this commit)
+- Project branch: claude/implement-plan-issue-5327-pin-guard-differential-verifier   Final PR: #5364 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5368
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01QvzxwDiVmtxwS9giV5Ro4Q   safety net and hand-back: see the latest stage report
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; phase 1 starting.
+- Last note: review round 3 on PR #5368: the low finding (`_outer_comment` rebuilt on every loop pass) fixed by hoisting it to `_is_outer_comment`; the critical tab-vs-space finding and its task gap rejected (`textwrap.dedent` strips the shared tab margin; the test passed and now asserts the text has no tab). tests/test_guard_differential.py 78 passed.
 
 ## Phases
-1. [ ] Phase 1 — pin the verifier to the base branch and report verifier changes (ci.yml step, scripts/guard_differential.py, tests, agents.md, changelog)
+1. [ ] Phase 1 — pin the verifier to the base branch and report verifier changes (ci.yml step, scripts/guard_differential.py, tests, agents.md, changelog) — PR #5368 open (waiting); review rounds: 3; interventions: 0
 
 ## Conformance
 
@@ -34,6 +34,8 @@
 - AD-4 [plan, 2026-09-30] Which `ci.yml` changes count as verifier changes? — Picked: A — only steps whose name starts with `Guard differential`, compared as text. Alternatives: B — any change to `ci.yml`. Why: unrelated `ci.yml` edits are frequent and would drown the warning. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] A field added to a script's `status=` summary line belongs on every status line the script prints, early-return paths included, and its docs must not claim it on lines printed before the value exists (for example `status=error`). (files: scripts/guard_differential.py, agents.md)
+- [source:intervention] A line-based cutter for YAML steps must not end a step at a comment line indented at or left of the step (valid YAML, but not a boundary), and must drop such trailing comments, or edits to the step's later keys slip past the comparison. (files: scripts/guard_differential.py)
 
 ## Notes
 - Issue mode: single-phase plan; security pass skipped per the plan header.
