@@ -923,7 +923,8 @@ checker (`PR #<n> <merged | closed> — handed to <session id>`), deletes the
 Routine, writes the action-needed report because it holds the context,
 renames itself `PR #<n> merged — …`, and sends one `PushNotification`. Only
 if the hand-back fails (`auto_disabled_session_gone` because the pushing
-session was archived, or the Routine is gone) does the checker write the
+session was archived, or the Routine is gone and `get_session` shows the
+pushing session archived or not found) does the checker write the
 report itself, from the fallback next steps in its instructions, with
 ` (pushing session unreachable)` in its title. If the checker dies, the
 unrenewed hand-back fires within 7 days, the pushing session's own read
@@ -936,6 +937,32 @@ by that command's own checker. Without `create_session` the session falls
 back to a `send_later` self check-in with a Sonnet subagent doing the read.
 The checker itself never fixes anything; outside `claude/*` PRs, CI,
 reviews, comments, and conflicts stay a direct §12 request.
+- Session targeting (CLAUDE.md §26.C step 5, §26.D; issue #4787):
+  `set_session_title` and `archive_session` accept any session id in the
+  account, so each rename or archive names where its id comes from. The
+  checker takes its own id from Bash
+  (`echo "session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}"`), renames only
+  that id, never archives itself, and never passes a subscriber's id to
+  either call. Before the fixer renames and archives the checker it calls
+  `get_session` on it and acts only when the title is exactly
+  `PR #<n> status check-in` (or already `PR #<n> <merged | closed> —
+  handed to …`), the session is not archived, and it is not the fixer's
+  own; otherwise it skips and says so in one line. "Archived" is reported
+  only after `archive_session` returned success. `/implement-plan-claude`
+  applies the same check (title `implement-plan <slug> — checker`) before
+  it archives its project checker, and its checker renames and archives no
+  existing session (its one `archive_session` call is the cleanup of a
+  stage session it just created whose start trigger failed).
+- Delivered or gone (CLAUDE.md §26.C step 5): a `SUCCEEDED` hand-back
+  whose `last_run.session_id` is the subscriber's counts as delivered even
+  before the fixer claims the head. A missing Routine alone is not a gone
+  subscriber, because the §26.G sweep deletes fired hand-backs: the
+  checker calls `get_session` on the subscriber and drops it only when it
+  is archived or not found (or on `FAILED` / `auto_disabled_session_gone`).
+  Before starting a fresh fixer it re-runs `check_in_status.py
+  --hand-back` and starts one only while `action` is still
+  `hand_back_fixer`. `/implement-plan-claude`'s checker step 4b uses the
+  same not-found rule for its stage session.
 - Session depth (CLAUDE.md §26.B step 1c): the claude-code-remote tools
   refuse `create_session`, `create_trigger`, `update_trigger`, and
   `send_later` from a session 8 parent links below its root (`caller
@@ -1135,10 +1162,20 @@ reviews, comments, and conflicts stay a direct §12 request.
 - **`Stop`:** blocks (`{"decision": "block"}`) when both of these hold:
   - the final message has a §2 question (`Q<n>:` plus two or more lettered
     choice lines, or `Q<n>: A/B`) or a fixed-phrase permission ask;
-  - no tool call in the current turn carried
-    `<!-- ai:claude-blocked:v1 -->` with a non-error result. The hook reads
-    this from `transcript_path`. `last_assistant_message` is preferred for
-    the final text.
+  - the current turn has no verified blocker on the marker's issue (issue
+    #5082). Both must succeed in the turn, on the marker's `owner/repo`
+    (case-insensitive) and issue number: a comment whose body starts with
+    `<!-- ai:claude-blocked:v1 -->` (`mcp__*__add_issue_comment`, or a
+    `gh api` POST to `repos/<owner>/<repo>/issues/<N>/comments` whose
+    output carries the comment's `html_url` or `issue_url`), and a write
+    adding `ai:claude-blocked` to that issue (`mcp__*__issue_write` with
+    `method: "update"` and `labels`, or a `gh api` POST to
+    `…/issues/<N>/labels`). A `Bash` call
+    counts only when it holds `gh api` calls alone, joined by `&&` at most,
+    after an optional leading `cd <path>;`. An `echo` of the marker, a
+    comment on another issue or repository, or a failed or unverifiable
+    call never counts. The hook reads this from `transcript_path`.
+    `last_assistant_message` is preferred for the final text.
 
   The per-session count lives in `<id>.state.json`, with a cap of 2 blocks.
   After the cap the stop is allowed with a

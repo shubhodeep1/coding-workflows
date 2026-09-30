@@ -1086,11 +1086,15 @@ not delete wrappers that are already present in `.github/workflows/`.
 > mark themselves at the start of `/implement-issue-claude` and of every
 > issue-mode `/implement-plan-claude` stage.
 > - A marked session cannot end its turn on an in-session Q/A question or a
->   request for permissions unless it posted the `ai:claude-blocked` comment
->   on the issue. At most 2 blocks per session, then the stop is allowed with
->   a `cap reached` system message, and the hook posts the `ai:claude-blocked`
->   comment and label on the issue itself: once per session, retried when
->   GitHub is unreachable (#5083).
+>   request for permissions unless, in that turn, it posted the
+>   `ai:claude-blocked` comment on its own issue and added the
+>   `ai:claude-blocked` label there. The hook checks the posting call's
+>   target and the comment URL in its result, so an `echo` of the marker or
+>   a comment on another issue does not count (issue #5082). At most 2
+>   blocks per session, then the stop is allowed with a `cap reached` system
+>   message, and the hook posts the `ai:claude-blocked` comment and label on
+>   the issue itself: once per session, retried when GitHub is unreachable
+>   (#5083).
 > - `AskUserQuestion` is denied in a marked session.
 > - Interactive sessions are never marked, so the hook never affects them.
 
