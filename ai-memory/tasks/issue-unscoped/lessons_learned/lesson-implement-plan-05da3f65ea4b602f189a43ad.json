@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-30T10:00:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Check a title-matching sweep against a live `list_sessions` page, not only against the command files: the low-effort pickup names sessions after the command it starts (`#<N> \u00b7 implement-issue-claude`) rather than the title its instructions give, so doc-pinned patterns alone matched nothing in production.",
+  "phase": "implement_plan",
+  "pr_number": 5543,
+  "record_id": "lesson-implement-plan-05da3f65ea4b602f189a43ad",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4887-archive-finished-sessions",
+    "file:scripts/claude_session_janitor.py",
+    "file:tests/test_claude_session_janitor.py",
+    "file:.claude/commands/claude-issue-pickup.md"
+  ]
+}
