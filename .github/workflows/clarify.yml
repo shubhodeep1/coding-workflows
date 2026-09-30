@@ -456,10 +456,11 @@ jobs:
               jq -e '[(.labels // [])[]?.name] | any(. == "ai:claude-blocked" or . == "ai:claude-handoff-failed" or . == "ai:blocked") and (any(. == "ai:orchestrator-tracking" or . == "ai:orchestrator-managed") | not)' "${ISSUE_META_FILE}" >/dev/null; then
               # CommonMark fences: an opening line of 0-3 spaces and 3+
               # backticks or tildes; the closing line uses the same
-              # character, at least as many, and nothing else. An unclosed
-              # fence runs to the end of the comment.
+              # character, at least as many, and nothing else but trailing
+              # spaces or tabs. An unclosed fence runs to the end of the
+              # comment.
               RECLARIFY_FENCE_OPEN_RE='^ {0,3}(`{3,}|~{3,})'
-              RECLARIFY_FENCE_CLOSE_RE='^ {0,3}(`{3,}|~{3,}) *$'
+              RECLARIFY_FENCE_CLOSE_RE='^ {0,3}(`{3,}|~{3,})[[:blank:]]*$'
               RECLARIFY_OPEN_FENCE=""
               RECLARIFY_LINE_NO=0
               while IFS= read -r RECLARIFY_SCAN_LINE || [ -n "${RECLARIFY_SCAN_LINE}" ]; do

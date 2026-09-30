@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5309-reclarify-fail-closed-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5309
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5309-reclarify-fail-closed   Final PR: #5324 draft
+- Project branch: claude/implement-plan-issue-5309-reclarify-fail-closed   Final PR: #5324 ready — review rounds: 1
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-5243-reclarify-any-line)
-- Waiting on: completion PR (the PR carrying this log update)
+- Waiting on: PR #5324 (final PR, review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_013xGq4H3mHhMuXa8UkuLynY (project checker)   safety net / hand-back: named in the stage report and the next `— resume.` block
 - Last updated: 2026-09-30
-- Last note: validation cycle 1 passed (10/10 tests, run 36697949682 on project head ebf24d1); completion PR moves the plan to docs/completed/; final PR #5324 is marked ready once it merges. Activation n/a: the base is project #5243's branch, so the final-merge stage closes #5309 and labels it `ai:merged`.
+- Last note: final PR #5324 review round 1 (head 7920d71): 1 consensus finding fixed (closing-fence regex in `Decide clarify route` now accepts trailing tabs, as CommonMark and cmark-gfm do), 1 task gap rejected (already covered by the centralized marker test); project branch synced with its base. Activation n/a: the base is project #5243's branch, so the final-merge stage closes #5309 and labels it `ai:merged`.
 
 ## Phases
 1. [x] Phase 1 — fail-closed later-line `/reclarify` gate   — PR #5439 merged 2026-09-30 (merge commit 2e8e39e); review rounds: 0; interventions: 0
@@ -36,7 +36,8 @@
 ## Completion
 - Completion PR (this log update) — doc moved to docs/completed/issue-5309-reclarify-fail-closed-plan.md
 - Merged PRs: phase 1 #5439, conformance fix #5485
-- Final PR #5324 draft into claude/implement-plan-issue-5243-reclarify-any-line (marked ready in the final-merge stage)
+- Completion PR #5663 merged 2026-09-30 (7920d71)
+- Final PR #5324 into claude/implement-plan-issue-5243-reclarify-any-line: ready 2026-09-30 — review rounds: 1 (round 1, head 7920d71: fence-close tab finding fixed; task gap rejected)
 
 ## Activation
 - n/a (base claude/implement-plan-issue-5243-reclarify-any-line): the change goes live with project #5243's final PR #5266 into main.
