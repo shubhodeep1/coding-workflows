@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `changelog.d/4813-close-sweep-target-branch-merges.md`:line 11 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The \u201cBranches that count\u201d row is stale because it says any base for an orchestrator-managed child counts, while the later #4957 change narrows that rule.\n  WHY: Documentation drift does not change the code, but misleads readers about which merges count for a managed child.\n- `.github/workflows/issue_pr_status.yml`:function `record_issue_integration_branches` (around the \"Update linked issue labels when PR closes\" step, lines ~218-243 in the diff) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The helper interpolates `jq_nodes` into a jq filter without constraining its accepted values, leaving a future caller that supplies attacker-influenced input exposed to shell or jq injection.\n  WHY: The two current callers use fixed literals, so there is no current exposure; an attacker-influenced future caller could execute jq in a workflow context with `GH_TOKEN` available.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The aggregate PR delivery covers all six security findings \u2014 issue #4813 (target-branch gate on sweep and workflow), #4955 (stdin-fed jq queue build), #4956 (linear-time body parser), #4957 (label-only managed status), #5226 (automation-head identity on non-default merges), and #5227 (lineage allow-list for accepted merges only).\n  expected_change_site: scripts/gh_helpers.sh, scripts/orchestrate_poll_process.sh, .github/workflows/issue_pr_status.yml, tests/\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: Every finding is present in the full PR diff. The three helpers (issue_body_integration_branch, issue_body_orchestrator_project_branch, pr_head_ref_is_issue_automation_branch) are in gh_helpers.sh. The sweep changes, stdin-fed queue, target-branch and identity rules are in orchestrate_poll_process.sh. The workflow gate, label check, lineage allow-list export, and lineage step change are in issue_pr_status.yml. All six changelog fragments, five completed plans, six progress logs, and 28 test additions across six test files confirm delivery.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: The aggregate PR delivery covers all six security findings \u2014 issue #4813 (target-branch gate on sweep and workflow), #4955 (stdin-fed jq queue build), #4956 (linear-time body parser), #4957 (label-only managed status), #5226 (automation-head identity on non-default merges), and #5227 (lineage allow-list for accepted merges only).\n  Expected change site: scripts/gh_helpers.sh, scripts/orchestrate_poll_process.sh, .github/workflows/issue_pr_status.yml, tests/\n  Evidence of absence: Every finding is present in the full PR diff. The three helpers (issue_body_integration_branch, issue_body_orchestrator_project_branch, pr_head_ref_is_issue_automation_branch) are in gh_helpers.sh. The sweep changes, stdin-fed queue, target-branch and identity rules are in orchestrate_poll_process.sh. The workflow gate, label check, lineage allow-list export, and lineage step change are in issue_pr_status.yml. All six changelog fragments, five completed plans, six progress logs, and 28 test additions across six test files confirm delivery.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/4813-close-sweep-target-branch-merges.md\n  Line or code reference: line 11, the \"The numbers that matter\" table row \"Branches that count\"\n  Problem: The row claims a merged PR counts as the issue's finished work on the default branch, the issue's `Integration branch:` / `Target branch:` line, or \"any base for an orchestrator-managed child\". The later #4957 change narrowed that third bucket so a managed child only closes on the default branch, its declared integration branch, or `orchestrator/project-<T>`; PR #5272 / changelog.d/4957-documented update reflects this. The #4813 changelog was not updated alongside, so the row is stale relative to the code and the README.\n  Why it fails at runtime: Documentation drift only \u2014 it does not change the code, but it misleads a reader who consults the #4813 fragment instead of the README or the #4957 fragment when reasoning about which merges count for a managed child.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- .github/workflows/issue_pr_status.yml\n  Line or code reference: function `record_issue_integration_branches` (around the \"Update linked issue labels when PR closes\" step, lines ~218-243 in the diff)\n  Problem: The helper interpolates its `jq_nodes` argument straight into a jq filter that is then assembled and run via `printf '%s' \"${payload}\" | jq -r --argjson n \"${_rib_num}\" \"[${jq_nodes} | select(.number == \\$n) | ...]\"`. The two current callers pass fixed string literals from the workflow itself, so this is not user-input injection today, but the helper's documented contract is \"two calls with fixed string literals\" while its surface accepts any string, and a future caller that pulls `jq_nodes` from `${{ ... }}` interpolation, a label, or a comment body would turn this into shell/jq injection. Bash globbing on the unquoted `${jq_nodes}` and `${payload}` is the immediate concern; quote-injection through the `printf '%s' ... | jq` pipe is the next.\n  Why it fails at runtime: A future caller that passes an attacker-influenceable string (a PR body, an issue body, a label name that becomes a jq path) executes arbitrary jq inside the workflow's context, which has `GH_TOKEN` available, so the blast radius is \"issue writer with `GH_TOKEN` privileges\". Today, the blast radius is zero because both callers are hard-coded literals.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ecb91774d47d243fa2dcc5b8508c341c539a58b2cea6a0bdad9594e9c543c345",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36669335452",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36669335452",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930044736_a9239aa9d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36669335452"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T04:47:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
