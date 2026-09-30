@@ -1,20 +1,20 @@
 # Implement-Plan Log — Bind the env-requeue watchdog's control markers to the watchdog's own identity
 
-- Plan: docs/plans/issue-5135-bind-watchdog-markers-to-author-plan.md
+- Plan: docs/completed/issue-5135-bind-watchdog-markers-to-author-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5135
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4938-environment-blocker-self-heal
-- Project branch: claude/implement-plan-issue-5135-bind-watchdog-markers-to-author   Final PR: pending
-- Status: IN_PROGRESS
-- Stage: phase 1/1
-- Activation: not started
-- Waiting on: none
+- Project branch: claude/implement-plan-issue-5135-bind-watchdog-markers-to-author   Final PR: #5158 draft
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4938-environment-blocker-self-heal)
+- Waiting on: completion PR (this PR, into the project branch)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
-- Last updated: 2026-09-29
-- Last note: project branch opened from the issue base; phase 1 in progress.
+- Check-in: checker session_01Vsm4aMQkgH9rtSvqrWytab (project checker)
+- Last updated: 2026-09-30
+- Last note: validation cycle 1 passed (run 36723476692, project head 9bce148); completion PR opened to move the plan to docs/completed/. Next: final-merge 1/1 marks final PR #5158 ready.
 
 ## Phases
-1. [ ] Phase 1 — bind the watchdog's control markers (`ai:claude-env-requeue:v1`, `ai:claude-env-requeue-exhausted:v1`) to the watchdog's own login
+1. [x] Phase 1 — bind the watchdog's control markers (`ai:claude-env-requeue:v1`, `ai:claude-env-requeue-exhausted:v1`) to the watchdog's own login   — PR #5176 merged 2026-09-29 (merge 9bce148); review rounds: 0; interventions: 0
    - `scripts/claude_issue_route.py`: `watchdog_login` in `env_requeue_decision` / `env_requeue_plan`, `--watchdog-login` on `env-requeue-plan`
    - `scripts/claude_issue_queue_watchdog.sh`: resolve the login with `gh api user`, fail closed with `env_requeue_skipped reason=watchdog_login_unknown`
    - `tests/test_claude_issue_route.py`: forged-marker, case-insensitive, fail-closed, CLI, and watchdog-script tests
@@ -22,13 +22,18 @@
    - done: every plan Goal holds; `pytest tests/test_claude_issue_route.py` passes; `bash -n` passes on the watchdog script
 
 ## Conformance
+- Run 1 — 2026-09-30: CONFORMANT — no fixes (pre-validation; security skipped)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue; verified by `.claude/scripts/security_pass_skip.py`)
 
 ## Validation
+- Cycle 1 — run 36723476692 2026-09-30 (target_ref: project branch, head 9bce148): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 259s); no fixes
 
 ## Completion
+- Completion PR: this PR (`claude/implement-plan-issue-5135-bind-watchdog-markers-to-author-complete` into the project branch) — doc moved to docs/completed/issue-5135-bind-watchdog-markers-to-author-plan.md
+- Merged PRs: phase 1 #5176
+- Final PR #5158 draft (into claude/implement-plan-issue-4938-environment-blocker-self-heal)
 
 ## Activation
 - n/a (base claude/implement-plan-issue-4938-environment-blocker-self-heal)
@@ -47,3 +52,5 @@
 - Issue mode: started by the Claude issue dispatcher routine; permission mode auto.
 - The session's GitHub MCP tools were not available; `gh` was installed by re-running `.claude/hooks/session-start.sh` (the repo was attached after session start), and GitHub writes use `gh api` routine calls.
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5135#issuecomment-5890525455
+- 2026-09-29: the first checker stalled after one check-in, and the conformance stage was started by the safety net.
+- 2026-09-30: validation 1/3 read-result stage: issue base branch not merged (its PR #5000 is an open draft), project branch already up to date with it.
