@@ -282,7 +282,29 @@ Phases of the unattended pipeline (each is a separate workflow file under
     none | failed>`. The pickup
     starts one Opus session per target issue via `claude-issue-dispatch.md`
     step 2, and closes the queue issues with a `Dispatched:` line (no
-    comment). A claude.ai routine run cannot do this: it gets no
+    comment). Each wake's step 3b restarts dead `/implement-plan-claude`
+    checkers (#4910, operator rule Q63). `scripts/claude_checker_restart.py
+    scan` reads the newest `list_sessions` page and step 1's `list_triggers`
+    page (`limit: 100`; `has_more` restarts nothing). It also reads the open
+    `ai:claude` issues (one REST call per 100) and their progress logs over git (one
+    `git ls-remote` and one shallow `git fetch`), then prints at most 8
+    `get_session` lookups. Those cover checkers named by pending safety nets
+    or logs that are not on the page. `decide` then prints `restart` and
+    `requeue` entries. A restart needs all five conditions: no enabled
+    trigger bound to the checker or to a sibling checker of the same slug;
+    the issue open and not `ai:claude-blocked`; the checker idle and not
+    `need_input`; no active project session (membership by
+    `parent_session_id`, `current_branches`, or title; active means
+    `RUNNING`, `REQUIRES_ACTION`, `need_input`, or created or updated within
+    90 minutes); and no `ai-checker-restart:<YYYYMMDDTHHMMZ>` tag younger
+    than 3 hours. For a restart, the pickup creates a one-shot
+    `implement-plan <slug>: check-in` trigger with the fixed prompt, then
+    calls `set_session_tags`. A requeue covers a logged checker that
+    `get_session` reports as not found: the pickup posts one
+    `mcp__github__add_issue_comment` starting `/reclarify` with the marker
+    `<!-- ai:claude-checker-requeue:v1 checker=… slug=… -->`, at most once
+    per 24 hours, counting any trusted `/reclarify` (one comment read).
+    Failed reads keep the checker and are listed under `errors`. A claude.ai routine run cannot do this: it gets no
     claude-code-remote tools (#4525), so `CLAUDE_ISSUE_ROUTINE_ID` /
     `CLAUDE_ISSUE_ROUTINE_TOKEN` / `CLAUDE_ISSUE_ROUTINE_BETA` are deprecated
     and unused. `claude-issue-queue-watchdog.yml` (hourly :17) labels items

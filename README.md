@@ -1280,6 +1280,39 @@ mode).
    issue and labels it `ai:merged`. Verify-activation and `/deploy-activate`
    run only for projects based on the default branch.
 
+**Dead checkers (#4910).** An `/implement-plan-claude` project checker keeps
+its chain alive by re-arming itself with `send_later`. When a re-arm fails, the
+project stalls with nothing pending. On every hourly wake, the pickup's step
+3b runs `scripts/claude_checker_restart.py` (`scan`, then `decide`), which
+applies the operator's restart rule (Q63). A checker is restarted only when
+all five conditions hold:
+
+1. no enabled trigger is bound to it;
+2. for an `issue-<N>-…` project, the issue is open and not `ai:claude-blocked`;
+3. it is idle, and neither `need_input` nor waiting on a permission prompt;
+4. no other session of the project is running, waiting, or was created or
+   updated in the last 90 minutes. A session belongs to the project by
+   lineage, branch, or title;
+5. it was not restarted in the last 3 hours.
+
+A restart is one trigger, `implement-plan <slug>: check-in`, two minutes out.
+The pickup then tags the checker `ai-checker-restart:<YYYYMMDDTHHMMZ>`, which
+is the 3-hour marker. The script finds checkers in three places:
+
+- checker titles on the newest `list_sessions` page;
+- the checker each pending `implement-plan <slug>: safety net` names;
+- the `Check-in:` line of each open, non-blocked `ai:claude` issue's
+  progress log.
+
+A checker that is not on the page gets one `get_session`, at most 8 per wake.
+When that lookup says a logged checker no longer exists, the pickup comments
+`/reclarify` on the issue, with a hidden `ai:claude-checker-requeue:v1`
+marker. That re-queues the issue, and the resumed session arms a new checker.
+This happens at most once per 24 hours, counting any trusted `/reclarify`.
+
+Budget: one open-issue list, plus one issue or comment read per candidate. The
+logs are read over git. Every failed read or missing input keeps the checker.
+
 **No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
 poller's standalone stall recovery skip issues that carry `ai:claude` without
 `ai:codex` (`AI_PHASE_GATE_V1 … reason=claude_routed`,

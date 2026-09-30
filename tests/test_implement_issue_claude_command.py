@@ -264,7 +264,7 @@ def test_pickup_schedules_one_self_bound_catch_up_wake(pickup_cmd):
 	assert "never by a catch-up wake, and bound to the pickup session itself" in pickup_cmd
 	assert "If it fails, do not retry: report `catch_up=failed`" in pickup_cmd
 	assert "delete every such trigger and every enabled `Claude issue pickup: catch-up` trigger" in pickup_cmd
-	assert "`set_session_title`, `send_later` (load them with ToolSearch when deferred)" in pickup_cmd
+	assert "`set_session_title`, `send_later`, `list_sessions`, `set_session_tags` (load them with ToolSearch when deferred)" in pickup_cmd
 	# The catch-up adds no session, so the create_session count is unchanged.
 	assert pickup_cmd.count("`create_session` with") == 2
 	assert pickup_cmd.index("**Start one session per pending entry.**") < pickup_cmd.index("**Catch-up wake.**") < pickup_cmd.index("**Arm a check-in**")
@@ -329,6 +329,39 @@ def test_pickup_tools_are_allowlisted():
 	for tool in ("create_session", "create_trigger", "list_triggers", "delete_trigger", "archive_session", "get_session", "set_session_title"):
 		assert f"mcp__Claude_Code_Remote__{tool}" in allow
 	assert "mcp__github__issue_write" in allow
+
+
+def test_pickup_restarts_dead_checkers(pickup_cmd):
+	"""Issue #4910: the Q63 dead-checker restart runs from the pickup's hourly wake, decided by a script."""
+	assert "3b. **Restart dead project checkers** (issue #4910, operator rule Q63)." in pickup_cmd
+	assert "`list_triggers` (`enabled: true`, `limit: 100`; step 3b reuses this result)" in pickup_cmd
+	assert "An empty `pending` → go to step 3b." in pickup_cmd
+	assert "report it and go to step 3b" in pickup_cmd
+	assert "Call `list_sessions` with `mine: true` and `limit: 100`: the newest page, never an `after_id`." in pickup_cmd
+	assert "scripts/claude_checker_restart.py scan --sessions-file <sessions file> --triggers-file <triggers file> --repo shubhodeep1/coding-workflows --self <your session id> --state-out <scratchpad>/checker-restart-state.json" in pickup_cmd
+	assert "scripts/claude_checker_restart.py decide --state <scratchpad>/checker-restart-state.json --lookup-file <scratchpad>/checker-restart-lookup.json" in pickup_cmd
+	assert "`\"not_found\"` when `get_session` answered that the resource was not found" in pickup_cmd
+	assert "`name` = its `trigger_name`, `initiation` `own_followup`, and `prompt` = its `prompt`, unchanged" in pickup_cmd
+	assert "`set_session_tags` with `session_ids` = [its `checker`], `add` = [its `tag_add`], and `remove` = its `tag_remove`" in pickup_cmd
+	assert "`mcp__github__add_issue_comment` on its `repo` and `issue`, with `body` = its `comment_body`, unchanged" in pickup_cmd
+	assert "Never restart, tag, or comment on anything the script did not print." in pickup_cmd
+	assert "restarted <x> (<slug> → <checker id>, …); requeued <q> (<repo>#<N>, …)" in pickup_cmd
+	assert "<x> restarted (<slug>, …), <q> requeued (#<N>, …)" in pickup_cmd
+	# The step never creates a session (the depth argument above), and it runs after
+	# the sessions are started so they count as project activity.
+	assert pickup_cmd.count("`create_session` with") == 2
+	assert pickup_cmd.index("**Start one session per pending entry.**") < pickup_cmd.index("3b. **Restart dead project checkers**") < pickup_cmd.index("4. **Catch-up, then report.**")
+
+
+def test_pickup_restart_tools_are_allowlisted():
+	import json as _json
+
+	allow = _json.loads((ROOT / ".claude" / "settings.json").read_text())["permissions"]["allow"]
+	for subcommand in ("scan", "decide"):
+		assert f"Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_checker_restart.py {subcommand} *)" in allow
+	assert "mcp__Claude_Code_Remote__set_session_tags" in allow
+	assert "mcp__Claude_Code_Remote__list_sessions" in allow
+	assert "mcp__github__add_issue_comment" in allow
 
 
 def test_pickup_starts_fixer_sessions_for_pr_fix_items(pickup_cmd):
