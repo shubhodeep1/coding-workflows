@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5148-pending-checks-newer-review-race-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5148
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
-- Project branch: claude/implement-plan-issue-5148-pending-checks-newer-review-race   Final PR: #5178 draft
+- Project branch: claude/implement-plan-issue-5148-pending-checks-newer-review-race   Final PR: #5178 ready — review rounds: 1
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge)
-- Waiting on: completion PR (branch claude/implement-plan-issue-5148-pending-checks-newer-review-race-complete; number in the completion stage report)
+- Waiting on: PR #5178 (final PR into the #4900 project branch), review round 2
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01HRuW9tokc4gWgq1vPau85k   safety net and hand-back: ids in the completion stage report
-- Last updated: 2026-09-29
-- Last note: completion (session session_01EX7gtVLBEQGKSYrTHAwCPg, resumed on `/reclarify` after Q1: A): conformance run 3 CONFORMANT with no fix PR, security skipped, validation skipped (covered by #4900's project validation); plan doc moved to docs/completed/.
+- Check-in: checker session_01HRuW9tokc4gWgq1vPau85k   safety net and hand-back: ids in the final-merge review round 1 report
+- Last updated: 2026-09-30
+- Last note: final-merge review round 1 (session session_01VznM9KgfJr4YKCJ87mQM5X): the one consensus finding (NIT, `check_review_runs` docstring) fixed in one `[claude-autofix]` commit; waiting on review round 2 of PR #5178.
 
 ## Phases
 1. [x] Phase 1 — defer the pending-checks merge while a newer review is active or unsettled   — PR #5183 merged 2026-09-29; review rounds: 1; interventions: 0
@@ -33,9 +33,9 @@
 - Skipped (covered by #4900's project validation). `validate.yml` authorizes a `target_ref` only when its open PR targets the default branch, and final PR #5178 targets the #4900 project branch (#4734). Asked as Q1 on #5148 (§28.C stop); answered `Q1: A` by the repository owner on 2026-09-29 (standing decision Q17 in `docs/operations/master-session.md`).
 
 ## Completion
-- Completion PR (branch claude/implement-plan-issue-5148-pending-checks-newer-review-race-complete) open — doc moved to docs/completed/issue-5148-pending-checks-newer-review-race-plan.md
+- Completion PR #5302 merged 2026-09-29 — doc moved to docs/completed/issue-5148-pending-checks-newer-review-race-plan.md
 - Merged PRs: phase 1 #5183, conformance fix 1 #5209, conformance fix 2 #5253
-- Final PR #5178 draft (into the #4900 project branch)
+- Final PR #5178 ready (into the #4900 project branch) — review rounds: 1
 
 ## Activation
 
@@ -57,6 +57,7 @@
 - [source:conformance] When a module's API budget grows, update every caller that restates it too: a batching contract (CLAUDE.md §15) in the calling script's docstring goes stale silently, because no test reads it. (files: scripts/claude_pr_sweep.py, scripts/claude_fixer_pending_checks.py)
 
 ## Notes
+- Final-merge review round 1 (2026-09-30, head 88d6751, PR #5178): the one consensus finding (gemini-3.1-flash-lite and grok-4.20, NIT, confidence 2) was valid: `check_review_runs()`'s docstring put the `(…)` aside between "the latest completed review run" and "with an id above `marker_run_id`", so it read as if the id filter were redundant. Reworded to say only runs newer than the marker's run count and why the filter is required, plus a one-line comment on the filter; no behaviour change. Checks: the five project suites (282 passed, Python 3.12), `ruff check --select E,F --ignore E501` (pass).
 - Conformance run 3 (2026-09-29, project head ee5b568): checks run: `pytest tests/test_claude_fixer_pending_checks.py tests/test_claude_pr_sweep.py tests/test_check_in_status_hand_back.py tests/test_review_autofix_claude_fixer_mode.py tests/test_check_in_session_targeting.py` (282 passed, Python 3.11), `ruff check --select E,F --ignore E501` on the footprint (pass). CI on PR #5253's head: 11 success, 19 skipped, 0 failures.
 - Validation 1/3 stopped before dispatch (blocker https://github.com/shubhodeep1/coding-workflows/issues/5148#issuecomment-5900459323); answered `Q1: A` in https://github.com/shubhodeep1/coding-workflows/issues/5148#issuecomment-5900544726 and resumed by the Claude issue dispatcher in session session_01EX7gtVLBEQGKSYrTHAwCPg. Long-term fix for stacked validation targets: #4734.
 - Conformance run 2 (2026-09-29, project head 660568d): checks run: `pytest tests/test_claude_fixer_pending_checks.py tests/test_claude_pr_sweep.py tests/test_check_in_status_hand_back.py tests/test_review_autofix_claude_fixer_mode.py tests/test_check_in_session_targeting.py` (282 passed, Python 3.11), `ruff check --select E,F --ignore E501` on the footprint (pass). Audited against `internal-review.yml`'s triggers and concurrency groups: no normal event produces a newer head-branch or dispatched review run that concludes other than `success` on an unchanged head, so `review_superseded` cannot block a clean PR in steady state.

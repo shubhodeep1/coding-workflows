@@ -340,12 +340,15 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	"reason": str}. `review_active`: a run on the head branch, an
 	internal-review.yml dispatch titled for this PR
 	(`check_in_status.DISPATCHED_REVIEW_TITLE`), or any unbound review dispatch
-	is in any status but `completed`. `review_superseded`: the latest completed
-	review run bound to this PR (a head-branch run of
+	is in any status but `completed`. `review_superseded`: of the completed
+	review runs bound to this PR (a head-branch run of
 	`check_in_status.FIXER_WORKFLOW_PATHS`, or an internal-review.yml dispatch
-	titled for it) with an id above `marker_run_id` did not conclude
-	`success`. Gate-skipped dispatches conclude `success`; a newer review that
-	posted findings or a newer marker is caught by `find_pending_marker`.
+	titled for it), only those with an id above `marker_run_id` count, and the
+	newest of them did not conclude `success`. The id filter is required: the
+	marker's own run is the review it records, and older runs came before
+	that review, so neither can supersede it. Gate-skipped dispatches
+	conclude `success`; a newer review that posted findings or a newer marker
+	is caught by `find_pending_marker`.
 	"""
 	branch_runs = _read_review_run_listing(
 		f"repos/{repo}/actions/runs?branch={quote(head_ref, safe='/')}&per_page={REVIEW_RUNS_PER_PAGE}"
@@ -366,6 +369,8 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 		names = ", ".join(sorted({f"{_run_path(run) or 'unknown workflow'} run {run.get('id')} ({run.get('status')})" for run in active}))
 		return {"state": "review_active", "reason": f"a newer review of this PR may still be running: {names}"}
 	bound_reviews = [run for run in branch_runs if _run_path(run) in check_in_status.FIXER_WORKFLOW_PATHS] + bound_dispatches
+	# Keep the id filter: the marker's own run is the review it records and
+	# older runs came before it, so only a strictly newer run can supersede it.
 	newer = [run for run in bound_reviews if run["id"] > marker_run_id]
 	if newer:
 		latest = max(newer, key=lambda run: run["id"])
