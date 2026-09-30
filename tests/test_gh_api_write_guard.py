@@ -488,6 +488,85 @@ def test_ask_reason_names_the_offending_call():
 
 
 # ──────────────────────────────────────────────────────────────────
+# jq command-line options passed to --jq are denied (#4891)
+# ──────────────────────────────────────────────────────────────────
+
+# Verbatim from #4891 (permission-prompt sig a5be406f8c21): `--arg` became the
+# `--jq` value, so `gh` would reject the call before sending any request.
+ISSUE_4891_COMMAND = (
+	'for r in 36242690892 36224773465 36205375333 36078283644 35966436009; do gh api '
+	'"repos/shubhodeep1/coding-workflows/actions/runs/$r/jobs?per_page=50" --jq --arg r "$r" '
+	"'.jobs[] | select(.name|test(\"validate-scripts\")) | [$r, .name, .conclusion, .started_at, .completed_at] | @tsv'; done"
+)
+
+
+def test_issue_4891_command_is_denied():
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": ISSUE_4891_COMMAND}})
+	assert decision == guard.DECISION_DENY
+	assert '"--arg"' in reason
+	assert "§23.H" in reason
+	assert "Nothing ran" in reason
+
+
+def test_issue_4891_loop_written_correctly_gets_no_decision():
+	command = (
+		'for r in 1 2; do gh api "repos/shubhodeep1/coding-workflows/actions/runs/$r/jobs?per_page=50" '
+		"--jq '.jobs[].name'; done"
+	)
+	assert _decide(command) is None
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"gh api repos/a/b --jq -r .default_branch",
+		"gh api repos/a/b --jq=--raw-output",
+		"gh api repos/a/b -q -c",
+		"gh api repos/a/b -q-r",
+		"gh api repos/a/b --jq --arg x 1 .x",
+		"gh api -X DELETE repos/a/b/git/refs/heads/x --jq -r",
+		"gh api repos/shubhodeep1/coding-workflows/issues/1 --jq -r .title",
+	],
+)
+def test_jq_cli_option_as_jq_value_is_denied(command):
+	assert _decide(command) == guard.DECISION_DENY
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"gh api repos/shubhodeep1/coding-workflows --jq '-.size'",
+		"gh api repos/shubhodeep1/coding-workflows --jq '(-.size)'",
+		"gh api repos/shubhodeep1/coding-workflows --jq -1",
+		"gh api repos/shubhodeep1/coding-workflows --jq .a",
+		"gh api repos/shubhodeep1/coding-workflows -q .a",
+	],
+)
+def test_valid_jq_programs_are_not_denied(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+def test_deny_wins_over_ask_for_another_call():
+	command = "gh api -X DELETE repos/a/b/git/refs/heads/x; gh api repos/a/b --jq -r .name"
+	assert _decide(command) == guard.DECISION_DENY
+
+
+def test_hidden_call_still_asks_before_the_deny():
+	command = 'echo "$(gh api repos/a/b --jq -r .name)"'
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_hook_process_emits_deny_json_for_a_jq_option():
+	payload = {"tool_name": "Bash", "tool_input": {"command": "gh api repos/a/b --jq -r .name"}}
+	result = _run_hook(json.dumps(payload))
+	assert result.returncode == 0
+	output = json.loads(result.stdout)["hookSpecificOutput"]
+	assert output["hookEventName"] == "PreToolUse"
+	assert output["permissionDecision"] == "deny"
+	assert '"-r"' in output["permissionDecisionReason"]
+
+
+# ──────────────────────────────────────────────────────────────────
 # Parsing helpers
 # ──────────────────────────────────────────────────────────────────
 
