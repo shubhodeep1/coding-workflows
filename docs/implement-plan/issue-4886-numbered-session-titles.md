@@ -1,17 +1,17 @@
 # Implement-Plan Log — Name every automation session with its issue and PR number first
 
-- Plan: docs/plans/issue-4886-numbered-session-titles-plan.md
+- Plan: docs/completed/issue-4886-numbered-session-titles-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4886 (https://github.com/shubhodeep1/coding-workflows/issues/4886)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4886-numbered-session-titles   Final PR: #4943 draft
-- Status: IN_PROGRESS
-- Stage: conformance 1/3 — review round
-- Activation: not started
-- Waiting on: PR #5296
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (claude/implement-plan-issue-4886-numbered-session-titles-complete)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01Jerzz1RypxcPKdHChsnJMZ (reused)   safety net and hand-back armed by the conformance 1/3 review round 1 stage (session_01JfbeJJwHPz554Kc4gn6VHL); ids in its report
+- Check-in: checker session_01Jerzz1RypxcPKdHChsnJMZ (reused)   safety net and hand-back armed by the validation 1/3 — read result stage (session_01XW3NxcyM3ky4FJsUDryfyu); ids in its report
 - Last updated: 2026-09-30
-- Last note: PR #5296 review round 1 (head 3664c27): the one finding and task gap restate the defect this PR already fixes; rejected. Project branch synced with main (#4874) and merged in as the new head (AD-18).
+- Last note: Validation cycle 1 passed (run 36656330126, 10/10 tests, project branch head 9a8b63c). Project branch synced with main (efdee26, #4746, clean); completion PR moves the plan to docs/completed/.
 
 ## Phases
 1. [x] Phase 1 — numbered session titles and dual-form matchers   — PR #5009 merged 2026-09-29 (by the master session under Q46 / Q47: A); review rounds: 7; interventions: 0 — protected paths: `.claude/commands/implement-plan-claude.md`, `.claude/commands/implement-issue-claude.md`, `.claude/commands/claude-issue-dispatch.md`, `.claude/commands/fix-claude-pr.md` (edited through their `workflow-templates/.claude/commands/` twins), `.claude/commands/claude-issue-pickup.md` (no twin; the edit is listed for the supervising session)
@@ -24,13 +24,19 @@
    - Done: every plan goal present; new tests pass against the twins; with the twins copied and the pickup edit applied, the related suites pass; ruff clean
 
 ## Conformance
-- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS) — conformance fix 1 PR #5296 (agents.md:972 stale exact-title wording for the checker archive check; review rounds: 1) (pre-security)
+- Run 1 — 2026-09-29: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS) — conformance fix 1 PR #5296 (agents.md:972 stale exact-title wording for the checker archive check; review rounds: 1; merged 2026-09-30) (pre-security)
+- Run 2 — 2026-09-30: CONFORMANT — no fix PR (pre-security)
 
 ## Security pass
+- Cycle 1 — run 36655742469 2026-09-30 (ref: project branch, head 9a8b63c, 18 files): clean — tracker #3576 findings=0 followups_created=0
 
 ## Validation
+- Cycle 1 — run 36656330126 2026-09-30 (target_ref: project branch, pinned head 9a8b63c): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 295s); no fix issues
 
 ## Completion
+- Merged PRs into the project branch: #5009 (phase 1/1, merged 2026-09-29), #5296 (conformance fix 1/3, merged 2026-09-30)
+- Completion PR (this PR) — doc moved to docs/completed/issue-4886-numbered-session-titles-plan.md
+- Final PR #4943 draft (marked ready at final-merge 1/1)
 
 ## Activation
 
@@ -54,6 +60,7 @@
 - AD-16 [conformance 1/3, 2026-09-29] `/implement-issue-claude` step 4: the log names checker session_01Jerzz1RypxcPKdHChsnJMZ (idle, not archived) and `Status: IN_PROGRESS`, which would mean "already in progress — stop". But the log lagged: round 7 stopped BLOCKED on Q47 (issue comment 5893202080), which was answered (Q47: A, PR #5009 merged) with `/reclarify`, and no stage session or enabled trigger for this project was live. How does this dispatch proceed? — Picked: A — resume at conformance 1/3 and reuse the idle checker. Alternatives: B — report `already in progress` and stop. Why: B would strand the project, because nothing else resumes it; the gate exists to stop duplicate chains, and none is running. Applied in: no code change. Status: pending review
 - AD-17 [conformance 1/3, 2026-09-29] `main`'s `/implement-plan-claude` reuses a checker only when its title is exactly `implement-plan <slug> — checker`, and this project's checker is titled `#4886 · PR #4943 — implement-plan … — checker`. Which rules govern this project's remaining stages? — Picked: A — the project branch's command (Session titles, title-contains matchers), which this project's merged phase ships. Alternatives: B — `main`'s command, which would create a second checker and never archive the first. Why: A keeps one checker per project, and earlier stages already ran under the numbered-title rules. Applied in: no code change. Status: pending review
 - AD-18 [conformance 1/3 — review round, 2026-09-30] PR #5296 review round 1 (head 3664c27) has one finding and one task gap, both from one reviewer (grok), and both restate the agents.md:972 defect that this PR already fixes; `CLAUDE_FIXER_VERDICT_BOT_LOGIN` is unset, so no verdict can be posted. How does the round close? — Picked: A — post the finding-by-finding reply and push a real change: `main`'s #4874, merged into the project branch at this stage's sync and then into the fix branch, which starts a fresh review round. Alternatives: B — hold the PR and stop BLOCKED until a verdict bot exists; C — add an unneeded agents.md edit to force a new head. Why: the base merge is due at every stage anyway (step 2), as in AD-12 and AD-15, and B stays available if the fresh round repeats the same item. Applied in: PR #5296 (merge commit). Status: pending review
+- AD-19 [conformance 2/3, 2026-09-30] A fresh fixer the §26 checker starts for a PR with a source issue is titled `#<issue> · PR #<n> — fix <kind>` (CLAUDE.md §26.C step 5), but when the head is not `claude/implement-plan-issue-<I>-…`, `/fix-claude-pr` step 8 renames it to `PR <owner>/<repo>#<N> — …` without that prefix (AD-3 strips it, AD-4 finds no issue in the head ref). Change it in this project? — Picked: A — leave it as AD-3/AD-4 decided and list it for review. Alternatives: B — make step 8 keep an existing `#<n> · ` prefix (a twin edit and another twin-sync stop). Why: the loss is cosmetic, the behaviour follows the recorded decisions the human reviews at the end, and B needs a human twin-sync stop. Applied in: no code change. Status: pending review
 
 ## Lessons
 - [source:intervention] When one qualifier applies to every item of an `A or B` list in a spec, state it once for all of them ("either title with …") rather than as a parenthetical after the last item, and pin every item in the test; reviewers and readers attach a trailing parenthetical to the last item only. (files: CLAUDE.md, tests/test_session_titles.py)
@@ -81,3 +88,5 @@
 - Review round 7 (2026-09-29, head a233b09, workflow round 2, run 36578649763): four findings from one reviewer (gemini), all repeats of rejected or already-fixed items (reply: PR comment 5893197318). No base merge and no verdict bot, so the head was held (hold claim comment 5893199212) and the stage stopped BLOCKED with Q47 (issue comment 5893202080). The master session answered Q47: A and merged PR #5009 into the project branch at 16:52Z (comment 5894719806); the `/reclarify` was re-posted at 20:47Z because the first one did not start its comment.
 - Conformance 1/3 (2026-09-29, session_01BhjNuxG31MS1berNn3Ezxr, started by the dispatcher routine `dispatch shubhodeep1/coding-workflows#4886: start`): project branch synced with main (5c45115, clean merge of 35 commits incl. #4990's pickup changes, which kept this project's pickup title; twin parity kept; 581 passed across the ten title/command/check-in suites). Audit surface: the project diff against main (18 files). Every acceptance criterion maps to merged code: numbered creation titles and rename-on-PR-open (`.claude/commands/implement-plan-claude.md` Session titles, steps 3a/6/13, Stage Sessions, checker prompt step 5, Hand-back step 2), issue sessions (`claude-issue-dispatch.md:41`, `claude-issue-pickup.md:56`), fixer titles (`fix-claude-pr.md:45,63`, CLAUDE.md §26.C step 5), dual-form matchers with tests (`tests/test_session_titles.py`), `check_in_status.py`/`stale_routines.py` unchanged (Routine names only), changelog fragment present. One finding: agents.md:972 still described the project checker archive check as the §26 exact-title check (sibling path of AD-14) — fixed with a regression test. Checks, run per file on this branch and on main with the same results: 30 suites that read the changed files all pass except `test_implement_post_codex_recovery.py` (1 failure on both: `gawk` missing) and `test_orchestrate_poll_process.py` (exceeds 120 s on both); `test_session_titles.py` 24 passed with the fix.
 - Conformance 1/3 review round 1 (2026-09-30, session_01JfbeJJwHPz554Kc4gn6VHL, PR #5296 head 3664c27, run 36643824863, ledger 6215f7dc…): 4 ledger entries from 6 reviewers; one finding and one task gap, both from grok. (1) agents.md:972 "still described the project-checker archive check as an exact-title match": rejected. At 3664c27, agents.md:972–975 already reads "the title must contain `implement-plan <slug> — checker` … rather than equal it", and `test_agents_md_describes_the_checker_archive_check_as_contains` pins it. The finding describes the defect this PR fixes. (2) The task gap asks for every other prose summary of the check to be updated; its own evidence says none remain. A grep of CLAUDE.md, agents.md, README.md, and both command trees confirms that: agents.md:854–857 names only the reuse check and the zombie cleanup, which are already title-contains. Head claimed (comment 5901570097). The project branch was synced with main (440b023, #4874, a clean merge that splits the CI lint job; the `test_session_titles.py` wiring at ci.yml:514 is kept) and merged into the fix branch as the new head (AD-18). 304 passed, 1 skipped across the title, command, check-in, CI-split, and section-number suites.
+- Conformance 2/3 (2026-09-30, session_01LtgC4ViudvV7ibLWD7Qzxw): CONFORMANT with no fix PR after #5296 merged; recorded AD-19. Security cycle 1 (session_01HWKkKdrQyT3TZ4by5f3Vzq): run 36655742469 audited the project branch at 9a8b63c (18 files), clean. Validation cycle 1: run 36656330126 checked out and authorized the project branch head 9a8b63c (`VALIDATE_AUTHORIZED_SHA`), status=pass, raw_status=pass, 10/10 tests.
+- Validation 1/3 — read result (2026-09-30, session_01XW3NxcyM3ky4FJsUDryfyu): main moved 2 commits after validation (#4746, which widens `validate.yml` target authorization to project branches and `stable`, and a self-test status update); merged into the project branch as efdee26 (a clean merge; its README.md and agents.md edits are in the validation sections, apart from this project's title rules). 128 passed, 1 skipped across the title, command, check-in targeting, section-number, workflow-size, and validate-target suites. The final PR's whole-project review covers the merged main code.
