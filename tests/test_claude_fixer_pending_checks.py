@@ -24,6 +24,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -606,6 +607,21 @@ def test_the_run_reads_come_only_after_a_ready_snapshot(fake_gh):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=RUNNING)
 	assert _evaluate()["state"] == "waiting"
 	assert not [call for call in fake_gh.calls() if "/actions/runs?" in " ".join(call) or "/actions/workflows/" in " ".join(call)]
+
+
+def test_the_stated_run_read_budget_matches_the_listings_read(fake_gh):
+	# PR #5178 review round 1: the §15 budget is restated in three docstrings,
+	# and no other test reads them, so a new review workflow would leave the
+	# counts stale.
+	unbound = len(pending_checks.UNBOUND_DISPATCH_REVIEW_WORKFLOWS)
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN)
+	assert _evaluate()["state"] == "merge_enabled"
+	listings = [call for call in fake_gh.calls() if "/actions/runs?" in " ".join(call) or "/actions/workflows/" in " ".join(call)]
+	assert len(listings) == 2 + unbound
+	assert f"Reads, {2 + unbound} calls in all" in pending_checks.check_review_runs.__doc__
+	assert f"each of the {unbound} UNBOUND_DISPATCH_REVIEW_WORKFLOWS entries" in pending_checks.check_review_runs.__doc__
+	for doc in (pending_checks.__doc__, sweeper.__doc__):
+		assert re.search(rf"1\s+head-branch runs read,?(?: and)?\s+{1 + unbound}\s+workflow_dispatch runs reads", doc)
 
 
 @pytest.mark.parametrize("label, later_comments", [

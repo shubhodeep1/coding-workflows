@@ -363,14 +363,14 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	checks; enabling auto-merge then would skip whatever it finds. Input: the
 	PR's head branch and the id of the review run the marker links.
 
-	Reads: `actions/runs?branch=<head_ref>` (1 call, newest 100 runs), then the
-	workflow_dispatch runs of internal-review.yml
-	(`check_in_status.DISPATCHED_REVIEW_RUNS_PATH`) and of each
-	UNBOUND_DISPATCH_REVIEW_WORKFLOWS entry (1 call each, newest 100 runs; a
-	404 there, the workflow not existing in that repo, is no runs). Any other
-	failed read, a 404 on the head-branch listing included, and a listing
-	with a run that has no integer `id` or string `status` raise
-	`check_in_status.ReadError`.
+	Reads, 5 calls in all, each the newest 100 runs:
+	`actions/runs?branch=<head_ref>` (1 call), then the workflow_dispatch runs
+	of internal-review.yml (`check_in_status.DISPATCHED_REVIEW_RUNS_PATH`, 1
+	call) and of each of the 3 UNBOUND_DISPATCH_REVIEW_WORKFLOWS entries (1
+	call each; a 404 there, the workflow not existing in that repo, is no
+	runs). Any other failed read, a 404 on the head-branch listing included,
+	and a listing with a run that has no integer `id` or string `status`
+	raise `check_in_status.ReadError`.
 
 	Output: None, or {"state": "review_active" | "review_superseded",
 	"reason": str}. `review_active`: a run on the head branch, an

@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5148-pending-checks-newer-review-race-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5148
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
-- Project branch: claude/implement-plan-issue-5148-pending-checks-newer-review-race   Final PR: #5178 ready — review rounds: 1
+- Project branch: claude/implement-plan-issue-5148-pending-checks-newer-review-race   Final PR: #5178 ready — review rounds: 2
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge)
-- Waiting on: PR #5178 (final PR into the #4900 project branch), review round 2 after the conflict merge
+- Waiting on: PR #5178 (final PR into the #4900 project branch), the review of the final-merge review round 2 push
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01HRuW9tokc4gWgq1vPau85k   safety net and hand-back: ids in the final-merge review round 1 report
 - Last updated: 2026-09-30
-- Last note: final-merge conflict (session session_01DNQJSZggP2R47qL5nYzfQz): merged the #4900 project branch (#5179, issue #5147 base binding) into the project branch; two docstring conflicts resolved keeping both sides; waiting on the next review round of PR #5178.
+- Last note: final-merge review round 2 (session session_01ANZa1C4uLuZy57fWqS3vzj): `check_review_runs()` docstring now states its 5-call total, and a test ties every restated run-read count to `UNBOUND_DISPATCH_REVIEW_WORKFLOWS`; waiting on the next review of PR #5178.
 
 ## Phases
 1. [x] Phase 1 — defer the pending-checks merge while a newer review is active or unsettled   — PR #5183 merged 2026-09-29; review rounds: 1; interventions: 0
@@ -35,7 +35,7 @@
 ## Completion
 - Completion PR #5302 merged 2026-09-29 — doc moved to docs/completed/issue-5148-pending-checks-newer-review-race-plan.md
 - Merged PRs: phase 1 #5183, conformance fix 1 #5209, conformance fix 2 #5253
-- Final PR #5178 ready (into the #4900 project branch) — review rounds: 1
+- Final PR #5178 ready (into the #4900 project branch) — review rounds: 2
 
 ## Activation
 
@@ -56,8 +56,10 @@
 - [source:security] Before an automated job enables auto-merge from an earlier review's result, it must check for newer reviews of the same PR that are still running (including dispatches from the default branch, whose check runs never attach to the PR head) and re-read the result after that check; nothing disables auto-merge once a later review finds a problem. (files: scripts/claude_fixer_pending_checks.py)
 - [source:conformance] When a guard lists workflow runs by workflow file, list the wrapper workflows too: a `workflow_dispatch` wrapper that calls a reusable workflow (such as `review_rb_judge_dispatch.yml` calling `review_autofix.yml`) records its runs under the wrapper's own path, not the reusable workflow's. (files: scripts/claude_fixer_pending_checks.py, .github/workflows/review_rb_judge_dispatch.yml)
 - [source:conformance] When a module's API budget grows, update every caller that restates it too: a batching contract (CLAUDE.md §15) in the calling script's docstring goes stale silently, because no test reads it. (files: scripts/claude_pr_sweep.py, scripts/claude_fixer_pending_checks.py)
+- [source:intervention] When an API budget is restated in several docstrings, pin each count with a test that derives it from the constant the code iterates over (and counts the calls the code makes); reviewers flag the wording round after round otherwise. (files: scripts/claude_fixer_pending_checks.py, tests/test_claude_fixer_pending_checks.py)
 
 ## Notes
+- Final-merge review round 2 (2026-09-30, head 5c453c4, PR #5178; the workflow labels it round 1 because the conflict merge reset its count): the one consensus finding (minimax-m3, NIT, confidence 2) was valid: `check_review_runs()`'s docstring listed each run read with its own "(1 call …)" and gave no total, while the module and sweep docstrings give one. It now says "5 calls in all" and names the 3 unbound dispatch listings; `test_the_stated_run_read_budget_matches_the_listings_read` counts the listings `evaluate()` actually reads and checks all three docstrings against `UNBOUND_DISPATCH_REVIEW_WORKFLOWS` (it fails when either count is edited out of step). The earlier hand-off on the same head (gemini-3.1-flash-lite: the docstring "claims 1 call") misread the per-listing wording; the newer run's ledger replaced it. Checks: the five project suites (330 passed, Python 3.11), `ruff check --select E,F --ignore E501` (pass). No behaviour change.
 - Final-merge conflict (2026-09-30, head 78d1298, PR #5178): the base branch gained #5179 (issue #5147, pending-checks marker bound to the reviewed base), which conflicted in two docstrings only (`evaluate()` state list in `scripts/claude_fixer_pending_checks.py`, the module docstring of `tests/test_claude_fixer_pending_checks.py`); both sides kept. The code merged cleanly and stays coherent: the base-binding checks return before the check-run snapshot, and the #5148 re-read compares the same marker comment id, so it re-confirms the binding. Checks: the five project suites (329 passed, Python 3.12), `ruff check --select E,F --ignore E501` (pass). The previous stage session's summary said PR #5178 had merged; it had not (open, `mergeable_state: dirty`), yet it had closed #5148 and labelled it `ai:merged`; reopened under AD-11.
 - Final-merge review round 1 (2026-09-30, head 88d6751, PR #5178): the one consensus finding (gemini-3.1-flash-lite and grok-4.20, NIT, confidence 2) was valid: `check_review_runs()`'s docstring put the `(…)` aside between "the latest completed review run" and "with an id above `marker_run_id`", so it read as if the id filter were redundant. Reworded to say only runs newer than the marker's run count and why the filter is required, plus a one-line comment on the filter; no behaviour change. Checks: the five project suites (282 passed, Python 3.12), `ruff check --select E,F --ignore E501` (pass).
 - Conformance run 3 (2026-09-29, project head ee5b568): checks run: `pytest tests/test_claude_fixer_pending_checks.py tests/test_claude_pr_sweep.py tests/test_check_in_status_hand_back.py tests/test_review_autofix_claude_fixer_mode.py tests/test_check_in_session_targeting.py` (282 passed, Python 3.11), `ruff check --select E,F --ignore E501` on the footprint (pass). CI on PR #5253's head: 11 success, 19 skipped, 0 failures.
