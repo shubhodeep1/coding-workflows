@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T06:00:57Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "While `main` still runs the plain substring skip-AI check, a PR title or body that quotes the literal skip-AI marker text makes the review gate skip the PR with no log line (`AUTOFIX_GATE_CLAUDE_FIXER \u2026 should_run=false`); PR bodies that discuss the marker must describe it in words.",
+  "phase": "implement_plan",
+  "pr_number": 5400,
+  "record_id": "lesson-implement-plan-f22e3631023d60c764156979",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5377-nested-fence-skip-marker",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}
