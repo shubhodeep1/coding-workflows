@@ -37,32 +37,41 @@ These are in force until the operator changes them. Cite them by Q-number when a
 | **Q3: A** (hook and `settings.json` changes, 2026-09-29) | Once #4785 lands, its Actions sync PR merges `.claude/hooks/**` and `settings.json` changes after the full review, security and validation passes, with no human. A change that **loosens** a guard (removes a deny, widens an allow rule, deletes a hook) still waits for the operator. |
 | **Q4: A** (failure escalations, 2026-09-29) | On a §28.C failure escalation (a cap reached, a failed security or validation run), an escalation judge (a fresh Opus session) reads the evidence and picks from a fixed menu: one more budget round with a narrower fix, de-scope the failing part as an auto-decision, or close as not planned with a report. It never skips the security pass, never merges past a failing required check, never repeats a choice for the same failure, and notifies the operator of its decision. To be built by the "Retire the master" plan. |
 | **Q5: A** (the poller, 2026-09-29) | The poller's checks (blocked-issue sweep, dead-checker restarts, waking sessions after an answer) fold into the hourly Claude issue pickup and an Actions job, which act on what they find. The operator is alerted only for §22.B / §23.C / §24.D operations. Then the poller session is retired. To be built by the "Retire the master" plan. |
-| **Q17: A** (stacked-project validation skip, 2026-09-29) | When a project's runtime validation cannot be dispatched only because its final PR targets **another project's branch** (`validate.yml` answers `Explicit validation target is not authorized`), the master answers the §28.C blocker with A: record `Validation: skipped (covered by #<parent>'s project validation)` and comment `/reclarify`. The parent project re-runs its security audit and runtime validation on a branch that contains the fix before anything reaches `main`. It never applies to a project whose final PR targets `main` or `stable`, or to a validation run that was dispatched and failed. Lasts until #4734 (validate stacked and `stable` targets) is on `main`. |
+| **Q17: A** (stacked-project validation skip, 2026-09-29; **superseded 2026-09-30**) | #4734 reached `main` at 2026-09-30T02:46Z (PR #4746): `validate.yml` now authorizes a final PR into a project branch or `stable`, so stacked and `stable` projects dispatch validation normally and Q17 no longer applies. Former rule: When a project's runtime validation cannot be dispatched only because its final PR targets **another project's branch** (`validate.yml` answers `Explicit validation target is not authorized`), the master answers the §28.C blocker with A: record `Validation: skipped (covered by #<parent>'s project validation)` and comment `/reclarify`. The parent project re-runs its security audit and runtime validation on a branch that contains the fix before anything reaches `main`. It never applies to a project whose final PR targets `main` or `stable`, or to a validation run that was dispatched and failed. Lasts until #4734 (validate stacked and `stable` targets) is on `main`. |
 | **Q15–Q18: A** (2026-09-29) | Q15: merge #4891's PR #5033 (a hook change that only adds a `deny`) after verification. Q16: merge PR #4810 despite a stale 403 gate check (done, `401e349`). Q17b: merge #4619's PR #5004 (a hook change that only adds asks) after review (done, `964bc01`). Q18: Q17 holds for every master session. |
 | **Operator delegation** (2026-09-29, 16:1xZ, for 12 hours) | While the operator is away, the master takes the RECOMMENDED option on every pending question and makes every decision itself, including held merges of hook or `settings.json` changes that only tighten a guard after the master's own adversarial review (a loosening change still waits, per Q3: A). Every issue found gets a long-term fix issue. |
+| **15-minute cadence** (operator, 2026-09-30) | The master sweeps every 15 minutes (a `send_later` chain named `Master: 15-min sweep`), and the Claude issue pickup wakes every 15 minutes. Routines refuse a cron more often than hourly, so the pickup session has three extra hourly Routines, `Claude issue pickup: quarter :01/:16/:46`, next to `Claude issue pickup: hourly` (`:31`). When the pickup moves to a new session, move those three Routines with it. #5423 replaces them with a self-wake. |
+| **Q1: A** (`gh api --help`, 2026-09-30) | Loosen the `gh api` guard only for a bare `gh api --help` / `-h` (no request is sent); every other unreadable call still asks. Fix filed as #5405. Broader "allow every read" (option B) was declined. |
+| **Q1–Q5: A** (one-off approvals, 2026-09-30) | Auto-off window: the #5144 and #5083 hook syncs (done). Merges of `settings.json`-changing held PRs #4937 (#4887) and #4984 (#4910) (done). Update PR #4546's branch so it re-reviews and auto-merges (done). #5018 in a watched session (started). |
 
-## Current priorities (operator, 2026-09-29)
+## Current priorities (operator, 2026-09-29; state 2026-09-30 04:45Z)
 
-The operator wants these three landed first, so the automation can be synced to consumer repos and used for projects there (Q9: A):
+The operator wants these landed first, so the automation can be synced to consumer repos and used for projects there (Q9: A):
 
-| Priority | What it fixes | Where it stands (2026-09-29 11:20Z) |
+| Priority | What it fixes | Where it stands (2026-09-30 04:45Z) |
 |---|---|---|
-| **GPT judge**: convergence project `claude-fixer-unattended-convergence`, integration PR #4648 | A `claude/*` PR whose findings were all rejected converges without a verdict bot or a human. It replaces most Q46 merges. | Phases 1–3 merged. Phase 4 (session janitor, Q11: A) runs in `session_014AiXYFTM8rS3ZvbqtCXSWe`: it syncs `main` on `claude/implement-plan-claude-fixer-unattended-convergence-sync-main` first and was told at 11:11Z to merge `main` again for `ce1db50` (#4948) and to pass `--reason` on the new twin-first hold call (#5058). Next come two twin-sync stops. **Sync stop:** `.claude/**` twins, then fast-forward the project branch. **Phase 4 stop:** `stale_sessions.py`, the `fix-claude-pr.md` twin, a `settings.json` change (needs an approval window), and a `claude-issue-pickup.md` diff (no twin). Project checker: `session_01CUoZtWt9aXXvwPvx9QwhAx`. |
-| **#4785**: automatic `.claude/` sync via Actions | Removes every twin-sync stop and, under Q3: A, every approval window except guard-loosening changes. | Phase 1 PR #4807 merged into the project branch. Conformance fix 1 is PR #5108 (in review at 11:00Z). Final PR #4804 comes after the conformance, security, and validation passes. |
-| **#4948**: automatic twin-first default | Removes the "how should phase N run?" stop until #4785 lands. | **On `main`**: final PR #4989 merged under Q46 at 10:4xZ as `ce1db50`. Its stage session was woken at 11:18Z for verify-activation. |
+| **GPT judge**: convergence project `claude-fixer-unattended-convergence`, integration PR #4648 | A `claude/*` PR whose findings were all rejected converges without a verdict bot or a human. It replaces the Q46 merges and the operator's yes for hook and `settings.json` PRs. | Phase 4 PR #5215 got its round-1 twin sync `0bee67e` (03:23Z); review round 2 runs in stage `session_01M8FkonHxzc7E2GnGBFgqdS`. Project checker `session_01CUoZtWt9aXXvwPvx9QwhAx`. After phase 4: conformance, security, validation, final PR #4648. |
+| **#4785**: automatic `.claude/` sync via Actions | Removes every twin-sync stop and, under Q3: A, every approval window except guard-loosening changes. | Final PR #4804 is clean and waits on security follow-ups #5246 and #5247 (both resumed 03:07Z; told at 04:02Z to dispatch validation normally, since #4734 landed). |
+| **Retire the master session**: plan `docs/plans/retire-master-session-plan.md`, final PR #5132 (no source issue) | Escalation judge (phase 1), blocked-issue sweep and automatic resume (phase 2), guard-change classifier (phase 3, waits on #4785), poller retirement (phase 4). | Phase 1 PR #5164 was held 12 h on an unseen twin-sync blocker (posted on #5132, which has no issue); synced as `ba70679` at 03:29Z; review round in stage `session_01WxpmE7bZjiqP6dwYFuqiUK`. Project checker `session_01PxYwa7Rwnpb7RYbmsURfQ9`. |
+| **#4948**: automatic twin-first default | Removes the "how should phase N run?" stop until #4785 lands. | Done, on `main` (`ce1db50`). |
 
-**When all three are on `main`:** release once (Q10: B). Dispatch `test-and-mark-stable.yml` on `main`, which tags `@stable` and notifies the 13 consumer repos in `.github/ai/consumer_repos.json`. The operator approved releasing at that point (Q10: B). Because the dispatch is billed and reaches 13 repos (§23.C), confirm with the operator in one line before running it. Then confirm the run concluded `success` and tell the operator the consumers are synced.
+**When #4648 and #4785 are on `main`:** release once (Q10: B). Dispatch `promote-main-to-stable.yml` on `main`. It fast-forwards `stable` to `main`, then dispatches `test-and-mark-stable.yml` on `stable`, which runs the release gate, tags `@stable`, and notifies the 13 consumer repos in `.github/ai/consumer_repos.json`.
+- Never dispatch `test-and-mark-stable.yml` on `main`. Outside `gate_only` mode it fails unless it runs on `stable` (its `Validate dispatch ref` step).
+- `stable` must be an ancestor of `main`. If the fast-forward is refused, fix the divergence first.
+- Never dispatch while another gate, promote run or release is active: the gate's E2E job cancels concurrent siblings.
+- Check first whether the daily `cycle` job of `promote-main-to-stable.yml` (00:00 UTC) has already promoted the tip.
 
-**Also pending (2026-09-29 11:20Z):**
-- **Next approval window** (Auto mode off, one `cp` command): the convergence phase 4 `settings.json` change when its stop comes, and the #4858 hook: PR #5103 merged into #4858's project branch at 09:28Z without its twin sync, so the root `.claude/hooks/inline_edit_guard.py` still lags the twin there.
-- **#5012:** the Q17 answer is posted on the issue (comment 5888990079), but the classifier denied the master's wake of `session_01Lzaupq8ei4eKF33CFQEpzH` with no reason given. It needs the operator's `/reclarify` or a wake (fix: #4734).
-- **PR #4810** (#4798): the fixer rejected every finding and held it. `lint` failed on the flaky stall-guard test (#5119), and the failed job was re-run at 11:15Z (run 36529220329, attempt 2). Merge it under Q46 if the re-run passes. The classifier denied a scheduled self-check that would merge it, so check it on a poller cycle.
-- **Stage sessions woken after a master answer, to confirm on the next cycle:** #4886 (twin sync `566aa5a`, 11:05Z), #4755 and #4723 (11:15Z), #4948 (11:18Z). #4867 and #4919 got `/reclarify` (pickup, up to an hour).
-- **Watch (no wake confirmed after the 10:03Z twin syncs):** #4891 (label still on, round-1 hand-off on PR #5033 at 10:38Z), #4619 (PR #5004), #4786 (PR #5049), #4952 (PR #5010).
-- **#5018** (classifier "Auto-Mode Bypass" on master-answered resumes) is parked until the operator runs it in a watched session (Q3: A of 2026-09-28).
-- **`hooks/session-start.sh` conflict:** #4938 and #4952 both edit the hook on separate branches. Whichever final PR reaches `main` second needs a conflict check.
-- **Operator-only permission prompts:** #4934, #4734, #5063 (fix: #5068).
-- **Q46 merges done 2026-09-29:** 10:24Z PR #5060 (#4975), #4963 (#4926), #5027 (#4976), #4918 (#4885); 10:4xZ #4989 (#4948) `ce1db50`; 11:0xZ #5081 (#4755) `025da10`, #4992 (#4919) `f70b262`, #5035 (#4723) `f56843b`.
+Confirm with the operator in one line before running it (a billed dispatch reaching 13 repos, §23.C). Then confirm that both the promote run and the `test-and-mark-stable.yml` run it dispatched concluded `success`, and tell the operator the consumers are synced.
+
+**Also pending (2026-09-30 04:45Z):**
+- **#5417** (recover a chain stuck behind a prompt-blocked session) answered Q1: A: when PR #5215 merges into the convergence project branch, add `Integration branch: claude/implement-plan-claude-fixer-unattended-convergence` to #5417's body and comment `/reclarify` (or `/reclarify` alone if #4648 is already on `main`).
+- **#5018** runs in the operator-watched session `session_01C59sT24KSrN1NWq6v9G8tQ` (default permission mode, started 04:38Z).
+- **#4545 / PR #4546 belong to the other account.** With the operator's Q3: A the master updated #4546's branch with `main` at 04:26Z so it re-reviews and auto-merges. Do not start any session for #4545 yourself.
+- **#5126** waits on recovery PR #5433 (its phase PR #5165 merged before its twin sync, the #5316 race).
+- **Resumed at 04:02–04:40Z, confirm on the next sweeps:** #4619, #4909, #4723, #4665, #5016, #5068, #5144, #5083, #4887, #4910, #5127, #5259, #5376, #5377, #5124, #4867, #5258, #4786 (restarted after a prompt-stuck stage swallowed its hand-back).
+- **New fix issues filed 2026-09-30:** #5405 (`gh api --help`), #5417 (prompt-stall recovery), #5423 (pickup 15-minute self-wake).
+- **Pickup cost:** the pickup session `session_01ArxJDkmfCGHBaW5Ph9zoHN` was at 708k context tokens (about $98) at 04:20Z and now wakes 4 times an hour. Its command file says to restart it from a fresh app session when wakes grow expensive (`/claude-issue-pickup start — restart`), and the three quarter Routines must move with it.
+- **`@stable` release** after #4648 and #4785 (above).
 
 ## Routines
 
@@ -119,7 +128,6 @@ Each duty below is done by hand today and moves into the automation through the 
 | Held merges with every finding rejected (Q46) | #4648 (GPT judge) |
 | Twin syncs of commands and scripts (Q40) | #4785 (Actions sync PR); #4948 in the meantime |
 | Hook and `settings.json` syncs (approval windows) | #4785 under Q3: A; guard-loosening changes stay with the operator |
-| Stacked-project validation skips (Q17) | #4734 |
 | Closing duplicate prompt reports (Q58) | #4867 |
 | Numbered titles and archiving finished sessions (Q60/Q61) | #4886, #4887 |
 | Restarting dead checkers (Q63) | #4910 |
@@ -127,7 +135,9 @@ Each duty below is done by hand today and moves into the automation through the 
 | Replacing sessions started without a repository checkout | #4938 |
 | Resumes the classifier refuses after a master answer | #5018 |
 | Operator-only permission prompts | #5068, #4786, #4909, #4891, #4858, #4678 |
-| Waking a session after its blocker is answered (`/reclarify` waits up to an hour) | #4990 |
+| A chain stalls when its stage or fixer session sits on a permission prompt and swallows the hand-back | #5417 |
+| Waking the pickup early / 15-minute pickup cadence (quarter Routines) | #5423 |
+| Answering blockers posted on final PRs of projects with no source issue | retire-master plan phase 2 (G3b) |
 | Flaky CI that holds an otherwise mergeable PR | #5119 (the stall-guard test); file one issue per flake |
 | Failure escalations: caps, failed security or validation runs (§28.C) | gap: escalation judge (Q4: A) |
 | The poller session: blocked-issue sweeps, hand-offs, operator alerts | gap: fold into the hourly pickup and an Actions job (Q5: A) |
@@ -136,9 +146,12 @@ Each duty below is done by hand today and moves into the automation through the 
 
 | What | ID |
 |---|---|
+| Master session (current, since 2026-09-30 04:50Z; sweep is a `send_later` chain named `Master: 15-min sweep`) | `session_01RNCnXFXVviFXqJaopAD78D` |
 | Master poller session | `session_012fZCZUmcWNdWwcdSsuDAGu` |
 | Claude issue pickup session (hourly, trigger `Claude issue pickup: hourly`) | `session_01ArxJDkmfCGHBaW5Ph9zoHN` |
 | Deprecated Routine the **operator** must delete by hand | `trig_01GykbNLA7znHCJGWRetq4Ye` |
+| Pickup quarter Routines (bound to the pickup session) | `trig_013dcats82A3kkwS3NAgdtHJ` (:01), `trig_0129nL2exMLdVs1PpnqQM6sL` (:16), `trig_0128GDwzYzk3F4pMPopnxz7N` (:46); hourly `trig_01Nus8YLq8teoETKP2CzmjVN` (:31) |
+| Previous master session (retired 2026-09-30) | `session_011d3MdW6DqBqM9SgLWwfRXQ` |
 | `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` | `shubhodeep1` |
 | `CLAUDE_FIXER_VERDICT_BOT_LOGIN` | unset (no verdict bot; this is why all-rejected rounds hold) |
 
@@ -156,6 +169,8 @@ Each duty below is done by hand today and moves into the automation through the 
 | Checkers die when a re-arm fails | #4910, #4750 |
 | Unattended sessions ask in-session or via `AskUserQuestion` | #4911 |
 | Blocked sessions replaced by `/reclarify` stay open | #4817 |
+| An answer with `/reclarify` on a later line is never routed | #5243 |
+| `/reclarify` on an issue its own final PR merge closed is skipped | #5222 |
 | Finished sessions pile up; titles hide numbers | #4887, #4886 |
 | Duplicate permission-prompt issues | #4867 |
 | Parallel security follow-ups change the same code | #4934 |
@@ -166,7 +181,7 @@ Each duty below is done by hand today and moves into the automation through the 
 | Protected-path phases stop to ask a question Q40 already answers | #4948 |
 | Long-running branches run outdated hooks (guard fixes on `main` not merged in) | #4952 |
 | Review gate silently skips a PR whose body quotes the skip-AI marker; checker waits forever | #4985 |
-| Pickup starts only 10 sessions per hourly wake, so resumes wait hours | #4990 |
+| Pickup starts only 10 sessions per hourly wake, so resumes wait hours | fixed by #4990 (merged: limit 20, resumes first, one 30-minute catch-up wake) |
 | Auto-mode classifier refuses a resume the master answered ("Auto-Mode Bypass") | #5018 |
 | Stacked projects cannot run runtime validation | #4734 (Q17 covers it until then) |
 | Checker given an empty `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` never sees review hand-offs and waits forever | #5057 |
@@ -174,6 +189,10 @@ Each duty below is done by hand today and moves into the automation through the 
 | Classifier refuses optional cleanup (`delete_trigger` "Interfere With Workloads") three times, forcing a human prompt | #5068 |
 | A flaky required check (`test_codex_stall_guard_scripts.py` timing race) holds an all-rejected PR | #5119 |
 | Pickup-started fixer has no repository checkout and cannot find `/fix-claude-pr` (PR #4810, 10:33Z) | #4938 |
+| `gh api --help` is an unknown flag, so the guard asks | #5405 |
+| A prompt-stuck session swallows its chain's hand-back; nothing restarts the stage | #5417 |
+| Resumes wait up to an hour for the pickup | #5423 (interim: quarter Routines) |
+| `timeout <n> python3 -m pytest` does not match the pytest allow rule; read-only `python3` heredocs still prompt after #4678/#4858 | #4678 (notes added 2026-09-30) |
 
 ## Gotchas
 
@@ -183,7 +202,7 @@ Each duty below is done by hand today and moves into the automation through the 
 - **Never use `fire_trigger`** for hand-backs: it starts a fresh session with no context.
 - **GitHub access through the proxy.** Search endpoints and GraphQL are blocked. Use `mcp__github__search_issues` and repo-scoped REST.
 - **§21 merged-PR guard.** After your PR merges, start new work on a fresh branch from `origin/main`: `claude/magical-edison-7pkk3t-<n+1>`.
-- **Protected-path writes.** Writes to `.claude/**` via `cp` work in Auto mode for commands and scripts, but hooks and `settings.json` are denied (Q62/Q64).
+- **Protected-path writes.** Writes to `.claude/**` via `cp` usually work in Auto mode for commands and scripts. Hooks and `settings.json` are denied (Q62/Q64). A command sync that also patches a `.claude/` file with no twin can be denied as "Self-Modification" too (#5068, 2026-09-30). Once denied, don't retry it in Auto mode; ask the operator for a non-Auto window, the same as Q62/Q64.
 - **Session-status fields.** A session in `REQUIRES_ACTION` with "Waiting on permission: Bash" is a permission prompt only the operator can answer in that session's view. **Always give the operator a direct link to every session waiting on a permission prompt** (`https://claude.ai/code/<session id>`), with its issue and PR numbers, whenever you report one (operator, 2026-09-29). Find them yourself instead of repeating an older list: `list_sessions` (`mine: true`, `limit: 100`, paging with `after_id` back two days), keeping non-archived sessions whose `session_status` is `SESSION_STATUS_REQUIRES_ACTION` or whose `post_turn_summary` says "Waiting on permission". Then check that each one's issue is still open. The poller follows the same rule.
 - **Rate limits.** Watch the master's own `rate_limit_info`. A `seven_day` `allowed_warning` means restart the master, or trim its work, before hitting the cap.
 - **Context size.** Every turn re-reads the whole conversation, poller hand-offs included. Past about 700k tokens (`get_session` → `context_usage`), hand over to a fresh master. Have the **operator** start it in the app, so it sits at depth 0; a master you create yourself lands one link deeper each time. Then send it a handover message listing the in-flight items, re-point the poller, and archive yourself.
@@ -191,7 +210,8 @@ Each duty below is done by hand today and moves into the automation through the 
 Learned 2026-09-29:
 - **Read the whole blocker before a twin sync.** Blockers can list a `.claude/` file that has **no twin** (for example `.claude/commands/claude-issue-pickup.md`), with an exact edit and the expected sha256. A truncated read misses it: #4886's `72273b8` did, and `d0520f7` fixed it. Check every listed sha256 after copying.
 - **Consumer-variant commands differ on purpose.** `validate-consumer-issue`, `verify-activation`, `analyze-log`, `investigate-issue` and `deploy-activate` never match their twins, so never sync them.
-- **Wake a stage session directly** when you know its id. A one-shot trigger that says "answered on the issue (comment …); continue" costs one message. `/reclarify` goes through the pickup queue, which can take an hour (#4990) and can start a session with **no repository checkout** (#4938). Use `/reclarify` only when you don't know the session.
+- **Wake a stage session directly** when you know its id. A one-shot trigger that says "answered on the issue (comment …); continue" costs one message. `/reclarify` goes through the pickup queue, which waits for the next pickup wake (#5423) and can start a session with **no repository checkout** (#4938). Use `/reclarify` only when you don't know the session.
+- **`/reclarify` must be the first text of the comment.** `clarify.yml` starts the job only when the comment body starts with `/reclarify`. An answer that puts `/reclarify` on its last line is skipped silently: no `ai:claude-issue-routed` comment, and the project stays stalled. On 2026-09-29, 13 answered projects sat unrouted for 3–14 h this way (#5243). Put `/reclarify` on the first line and the answer below it. Within 5 minutes, check that the `ai:claude-issue-routed` comment appeared. `/reclarify` on a **closed** issue is always skipped (#5222): after merging an issue-mode final PR, start the next stage yourself with the two-step `create_session` + `— resume.` trigger.
 - **Pickup-started sessions sometimes have no `sources`** (`get_session` → `session_context` has no `sources`). They ask about push access or skill locations. Archive the session and start a replacement yourself with `create_session` and `source_url` (#4938).
 - **A session's `post_turn_summary` is frozen at its last turn.** Before acting on a "blocked" item, read the issue's newest comment and the PR head. The poller was told the same on 2026-09-29 (rule update "verify on GitHub").
 - **Q46 excludes hook changes.** A held PR whose diff touches `.claude/hooks/**` or `settings.json` needs the operator's explicit yes, even when every finding was rejected (#4870, Q16: A).
@@ -205,3 +225,15 @@ Learned 2026-09-29:
 - **GitHub MCP outages recover by themselves.** From 14:40Z to 15:25Z on 2026-09-29, every GitHub MCP call returned HTTP 502 "builtin injection failed (github)" after a session resume, then recovered with no action. Retry once, then work from `gh api` REST reads (they go through the git proxy's own credential) and retry the MCP tools on the next cycle; do not restart sessions over it.
 - **Blockers posted on a PR are invisible to the poller.** Outside issue mode a stage posts its `ai:claude-blocked:v1` comment on the project's final PR (the convergence project's stops on PR #4648 sat unseen for hours). Read the final PRs of the priority projects on every cycle until the retire-master plan's phase 2 sweep covers them (plan amended 2026-09-29).
 - **The master's own branch can't be reused after its PR squash-merges.** Resetting to `origin/main` clears the §21 guard. But pushing that reset to the old branch name is a force push, which the repository rules decline. Stacking on the old head is blocked by §21. Put the next handbook change on a new branch (ask the operator for the name) and open a new PR. The stop hook then reports `main`'s squash commit as one "unpushed" commit on the old branch; that is expected and carries no work.
+
+Learned 2026-09-30:
+- **Unanswered blockers hide by age.** Sweep every open `ai:claude-blocked` issue by comparing its newest `<!-- ai:claude-blocked:v1 -->` comment with its newest comment: any blocker with nothing after it is unhandled, whatever its age. On 2026-09-30 the sweep found 11 blockers unanswered, some since the day before: twin syncs (#5016, #5068, #5126), all-rejected holds (#5127, #4887, #4910), and dependencies that had already landed (#4909, #4723, #4665). The poller files twin-sync and verdict-bot blockers as "routine, not escalating"; routine still means the master acts.
+- **Check final PRs of projects with no source issue.** The retire-master project posted its phase 1 twin-sync blocker on final PR #5132 at 15:39Z, and it sat 12 h. Scan every open `claude/implement-plan-*` PR into `main` for a blocker newer than its last reply.
+- **A dependency landing does not wake anyone.** When a blocker says "wait for X", nothing posts `/reclarify` when X lands. Check waiting blockers on every sweep (#4734 landed at 02:46Z; #4723 and #4665 had waited since the day before for it).
+- **Obsolete interim rules.** Before adding an interim rule, check whether its sunset condition has already happened: #5370 (interim Q17 for stage sessions) was closed unmerged because #4734 had landed an hour earlier.
+- **A pasted blocker patch may need `git apply --recount`.** Markdown can drop a trailing blank context line; check the resulting sha256 against the blocker.
+- **Session lists go stale fast.** Re-read each session's live state with `get_session` right before telling the operator it needs approval; the operator may have answered it already.
+- **Routines slip under load.** On 2026-09-30 ~04:15Z scheduled fires ran about 6 minutes late; a quarter Routine's `next_run_at` can show a later time than its cron minute. By ~05:10Z a one-shot trigger set for 04:54Z showed `next_run_at` 05:27Z (33 minutes late). Don't assume a rule update or wake has landed until the target session replies, and don't send a second one because the first is late.
+- **Blockers on closed issues are invisible to the sweep.** The close sweep closes an issue when its completion PR merges into a **project branch**, not `main` (#4813). The project goes on: its final PR is still open. A later twin-sync blocker posted on that closed issue never appears in the open `ai:claude-blocked` list, and `/reclarify` there is skipped (#5222). #5012's blocker for final PR #5028 sat 11 h that way. Also check the hold claims on every open `claude/*` PR (`check_in_status.py --hand-back`, state `held`) and read the linked issue even when it is closed.
+- **Restarting a checker whose issue the close sweep closed early.** Q63 condition 2 (issue open) is there so finished projects aren't restarted. When the issue was closed only by the #4813 sweep and the project's final PR is still open, the project isn't finished. Answer on the issue, then wake the project checker directly with the `implement-plan <slug>: check-in` trigger, and tell it the closed issue isn't terminal (done for #5012 on 2026-09-30).
+- **Poller reports can be wrong.** At 03:07Z it reported PR #5370 as fixed while the PR was open. Verify anything it claims before acting or relaying it.
