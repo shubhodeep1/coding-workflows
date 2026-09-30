@@ -129,6 +129,8 @@ def test_every_checkout_runs_the_sync(commands):
 	# Step 2's merge stands in for the sync's step 4 and keeps its own subject.
 	assert "It takes the place of that section's step 4 and keeps the command and subject above" in step2
 	assert "the `[claude-asset-sync]` subject marks only the sync merge into a PR head" in step2
+	# Issue #5259: step 2 pushes its merge itself, so the settings check must come first.
+	assert "When the merge changed `.claude/settings.json`, run the sync's step 6 check right after the merge commit, before the repo's checks and before this push; when it ends in a [Settings restart](#settings-restart), nothing is pushed." in step2
 	section = _section(plan, "### Claude-asset sync", "### Permission prompt report")
 	step7 = _section(plan, "- **Blocked**", "7a. **Review round")
 	assert "run the [Claude-asset sync](#claude-asset-sync) on it" in step7
