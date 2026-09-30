@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-09-30T00:59:02Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A check that runs on `pull_request` executes the PR's own workflow file and scripts, so docs must not claim that requiring it enforces a rule against a PR that can also edit that check.",
+  "phase": "implement_plan",
+  "pr_number": 5322,
+  "record_id": "lesson-implement-plan-de45a8d32a99eb9da82effa4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5246-guard-sync-provenance",
+    "file:.github/workflows/ci.yml",
+    "file:scripts/claude_twin_sync.py",
+    "file:agents.md"
+  ]
+}
