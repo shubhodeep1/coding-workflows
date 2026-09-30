@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5376 (https://github.com/shubhodeep1/coding-workflows/issues/5376)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4985-skip-marker-review-stall
 - Project branch: claude/implement-plan-issue-5376-verify-stall-redispatch-run   Final PR: #5387 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: PR #5408: twin sync
+- Waiting on: PR #5408
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01Nr1eDxdAgRNU9mhy74VqNH   safety net trig_011ZV4AjWQhgu8k5dWfWcRZd   hand-back trig_017NXQRTkRZMYKFGYhnE5pB5
 - Last updated: 2026-09-30
-- Last note: phase 1 PR #5408 opened (twin-first); hold claim posted; blocked for the `[claude-twin-sync]` copy of `check_in_status.py` and `fix-claude-pr.md` into `.claude/` (blocker comment on #5376). The stage that `/reclarify` resumes arms the wait on #5408.
+- Last note: `/reclarify` resume (session_01DYKF4onPHPSJafUNdeYYH5): the `[claude-twin-sync]` copy `e18fa4a` matches the blocker's sha256 for both files; project branch synced with its base (`162ccb8`); review wait armed on #5408 with project checker session_01Nr1eDxdAgRNU9mhy74VqNH.
 
 ## Phases
-1. [ ] Phase 1 — verified-run re-dispatch rule — PR #5408 open (blocked: twin sync); review rounds: 0; interventions: 0; protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/fix-claude-pr.md` (edited through their `workflow-templates/.claude/` twins)
+1. [ ] Phase 1 — verified-run re-dispatch rule — PR #5408 open (waiting on review; twin sync `e18fa4a` landed); review rounds: 0; interventions: 0; protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/fix-claude-pr.md` (edited through their `workflow-templates/.claude/` twins)
    - checker twin: `_dispatched_review_runs`, `_head_arrival_time`, `_verified_review_redispatch`; `stall_redispatched` from a verified run; `_active_run_count` shares the listing
    - consumer wrapper: `workflow-templates/ai-review.yml` dispatch-only `run-name`
    - fixer twin: `fix-claude-pr.md` step 3 wording
@@ -49,3 +49,4 @@
 - Invoking session: session_01GokLJ6bAqCLubeWsfg7Zch (permission mode auto).
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
 - 2026-09-30, phase 1 (session_01GokLJ6bAqCLubeWsfg7Zch): the new hand-back tests (loading the twin) pass: 131 passed, with only the 2 twin-parity checks failing. Related suites (71 files): 2502 passed, 1 skipped. The 5 failures are 4 twin-parity checks and 1 missing `gawk`; the validation-template renderer suites need `jsonschema` and `jinja2`, which are not installed here. With the twins copied into `.claude/` (simulated sync), the 8 affected suites pass (427). ruff and yamllint are clean.
+- 2026-09-30, `/reclarify` resume (session_01DYKF4onPHPSJafUNdeYYH5): the operator answered A on #5376. `[claude-twin-sync]` `e18fa4a` copies both twins; `.claude/` and twin sha256 match the blocker (`66e9b051…3aaf`, `736d160b…dc81`). The project branch took 4 base commits in a clean merge (`162ccb8`), and #5408 still merges cleanly on it. On that merge: 972 passed, 1 skipped across the 19 suites that reference the changed files, and 857 passed, 1 skipped in the 13 twin-parity suites. ruff (`--select E,F --ignore E501`) and yamllint are clean.
