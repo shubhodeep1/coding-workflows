@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4887-archive-finished-sessions
 - Project branch: claude/implement-plan-issue-5664-archived-stage-disables-recovery   Final PR: #5674 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5694
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: phase 1/1 (session_01AZY542gSPU8zpztp9mNUSh): project branch and draft final PR #5674 opened; phase 1 implemented (supersede rule removed, 6 new/updated tests fail on the old script and pass on the new one).
+- Last note: phase 1/1 review round 1 (session_01T5DbH6macowKZTrr6tHxa3): 1 valid finding (5 reviewers, same task gap) fixed: docs/operations/master-session.md Q61 now states the closed-issue-only rule.
 
 ## Phases
 1. [ ] Phase 1 — issue-start sessions archive only on a closed issue
@@ -19,6 +19,7 @@
    - `tests/test_claude_session_janitor.py`: failed-start and live-stage keep tests; pickup-titles test
    - CLAUDE.md §26.I, `README.md`, `agents.md`, `changelog.d/4887-archive-finished-sessions.md`
    - `docs/plans/issue-4887-archive-finished-sessions-plan.md`: one Notes line
+   - PR #5694 open; review rounds: 1; interventions: 0
    - Done: janitor suite, changelog fragment contract, and section-number tests pass; ruff clean
 
 ## Conformance
@@ -39,6 +40,7 @@
 - AD-4 [plan, 2026-09-30] Does project #4887's plan learn about the narrowed rule? — Picked: A — one `## Notes` line. Alternatives: B — leave it. Why: stops a later #4887 conformance run from restoring the rule. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:intervention] When a rule changes, grep every operator-facing doc for its old wording, including docs/operations/master-session.md standing decisions, not only the files the plan lists. (files: docs/operations/master-session.md)
 
 ## Notes
 - Security pass skip reason: `security_pass_skip.py` → `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`.
