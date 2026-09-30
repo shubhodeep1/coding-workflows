@@ -1062,6 +1062,13 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_phantom_review_run_filter.py
 
+      - name: Smoke gate default-branch review dispatch tests
+        run: |
+          set -euo pipefail
+          # Phase 3c / 4 / 4b dispatch and correlate review runs from the
+          # default branch (issue #5093).
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_review_dispatch.py
+
       - name: Mark-stable release-tag refspec contract test
         run: |
           set -euo pipefail
