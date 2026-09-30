@@ -302,6 +302,11 @@ def test_escalation_comments_end_with_automation_markers() -> None:
 	The marker sits after the model text, so the later-line /reclarify form
 	never treats a /reclarify line inside that text as a command.
 	"""
+	clarify_blocked_block = _step_block(CLARIFY_WF, "Handle blocked clarification output")
+	_assert_before(clarify_blocked_block, "--add-label 'ai:blocked'", '"<!-- ai:clarify-blocked:v1 -->"')
+	_assert_before(clarify_blocked_block, '"Reason: ${BLOCKED_REASON}"', '"<!-- ai:clarify-blocked:v1 -->"')
+	_assert_before(clarify_blocked_block, '"<!-- ai:clarify-blocked:v1 -->"', '} > "${BLOCKED_COMMENT_FILE}"')
+
 	blocked_block = _step_block(PLAN_WF, "Handle blocked planning output")
 	_assert_before(blocked_block, '"Reason: ${BLOCKED_REASON}"', '"<!-- ai:plan-blocked:v1 -->"')
 	_assert_before(blocked_block, '"<!-- ai:plan-blocked:v1 -->"', '} > "${PLAN_COMMENT_FILE}"')

@@ -1305,6 +1305,10 @@ jobs:
             printf '%s\n' "Provide the required input, then run /reclarify or continue with /answer as appropriate."
             printf '\n'
             printf '%s\n' "Run: ${RUN_URL}"
+            # Automation marker, last and outside the model's blocked reason
+            # (issue #5309): clarify never treats a /reclarify line here as
+            # a command.
+            printf '\n%s\n' "<!-- ai:clarify-blocked:v1 -->"
           } > "${BLOCKED_COMMENT_FILE}"
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
