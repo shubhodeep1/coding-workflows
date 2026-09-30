@@ -919,7 +919,8 @@ its own id, `run_once_at` = now + 7 days, named `PR #<n> hand-back`, with
 the PR URL in its prompt). The checker runs
 `.claude/scripts/check_in_status.py --hand-back` (one REST read for a
 non-`claude/*` head; on a `claude/*` head also the comment and check-run
-pages and at most six further reads) and routes on its `action` field
+pages, at most six further reads, and the review wrappers' active-run
+listings when no run is active on the head branch) and routes on its `action` field
 (`wait`, `retry`, `hand_back_fixer`, `hand_back_all`), renews every
 subscriber's hand-back 7 days ahead, and re-arms itself with `send_later`
 every 60 minutes while nothing is due. A PR has one checker: a second interested
@@ -1069,9 +1070,17 @@ reviews, comments, and conflicts stay a direct §12 request.
   (workflow, run name) pair, `internal-review.yml` /
   `Internal: AI Review & Autofix [pr:<N>]` (issue #4618) or `ai-review.yml`
   / `AI Review [pr:<N>]` (issues #4701, #4926): such a run is accepted as a
-  hand-off's review run, and an active one holds a hand-off back, counted
-  from one repo-wide `workflow_dispatch` listing (newest 100 runs) read
-  only when the head-branch reads found nothing.
+  hand-off's review run, and an active one holds a hand-off back. The
+  active ones are counted only when the head-branch reads found nothing,
+  from each wrapper's own `workflow_dispatch` runs in each active status
+  (`actions/workflows/<wrapper>/runs?event=workflow_dispatch&status=<s>`),
+  read page by page up to the listing's `total_count` (issue #5442). A
+  wrapper whose first read answers 404 is absent from the repo; any other
+  incomplete listing (a failed or malformed page, no `total_count`, more
+  runs than 10 pages hold, fewer distinct run ids than `total_count`)
+  raises a read error, so the checker reports `retry` and hands nothing
+  back. The single repo-wide newest-100 page read before #5442 let 100
+  newer unrelated dispatches hide a live review.
 - Stale Routine sweep (CLAUDE.md §26.G): `.claude/scripts/stale_routines.py`
   reads a `list_triggers` result (`include_completed: true`) from a file (the
   harness usually saves that large result to a file itself) and
