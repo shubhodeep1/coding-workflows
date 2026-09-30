@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:437-441 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The fallback uses `GH_RETRY_MAX_ATTEMPTS` in an integer comparison without validating that it is numeric.\n  WHY: The highest source severity was MAJOR (x-ai_grok-4_20); other reviewers rated it NIT, and reviewers disagree whether a comparison error aborts the step or prevents the retry cap from terminating the loop.\n- .github/workflows/clarify.yml:426-450 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The fallback retries all non-zero `gh api` exits, including permanent 4xx errors.\n  WHY: The highest source severity was MAJOR (x-ai_grok-4_20); other reviewers rated it NIT, and permanent failures therefore incur avoidable retries and backoff before the fallback fails.\n- .github/workflows/clarify.yml:432-450 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The retry loop has no upper bound on cumulative backoff when `GH_RETRY_MAX_ATTEMPTS` is increased.\n  WHY: The highest source severity was MAJOR (x-ai_grok-4_20); other reviewers rated it NIT, and a higher configured attempt count can cause lengthy waits on persistent errors.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/clarify.yml:437 | severity=NIT | confidence=2\n  PROBLEM: The inline fallback reads `GH_RETRY_MAX_ATTEMPTS` without numeric validation.\n  WHY: A non-numeric value makes the integer comparison fail under `set -euo pipefail`, aborting the `Decide clarify route` step before its warning path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/clarify.yml:426-444 | confidence=4\n  PROBLEM: The fallback retries on any non-zero exit status, including permanent 4xx HTTP errors.\n  WHY: On a fatal 4xx, retries waste time and potential rate-limit quota before the inevitable failure.\n- .github/workflows/clarify.yml:437 | confidence=3\n  PROBLEM: `GH_RETRY_MAX_ATTEMPTS` is not validated as numeric before the Bash comparison.\n  WHY: A non-numeric value can cause a syntax error and abort the clarify step under `set -e`.\n- .github/workflows/clarify.yml:426-444 | confidence=3\n  PROBLEM: The fallback's cumulative backoff has no upper bound when `GH_RETRY_MAX_ATTEMPTS` is increased.\n  WHY: A high retry count can cause lengthy cumulative sleeps on persistent transient errors.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/clarify.yml:432-450 | severity=NIT | confidence=4\n  PROBLEM: The fallback does not validate `GH_RETRY_MAX_ATTEMPTS` before using it as an integer.\n  WHY: With a non-numeric value and persistent command failure, the comparison error skips the `then` branch on every iteration, so the loop continues sleeping until job timeout.\n- .github/workflows/clarify.yml:432-450 | severity=NIT | confidence=3\n  PROBLEM: The fallback retries any non-zero `gh api --paginate \u2026` exit, including permanent 4xx errors.\n  WHY: A definitive 4xx incurs retry attempts and backoff before the fallback returns failure.\n- .github/workflows/clarify.yml:432-450 | severity=NIT | confidence=3\n  PROBLEM: The fallback has no upper bound on cumulative retry backoff.\n  WHY: Increasing `GH_RETRY_MAX_ATTEMPTS` can result in minutes of sleep on a persistent transient error.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/clarify.yml:434-449 | severity=NIT | confidence=4\n  PROBLEM: The fallback retries on every non-zero `gh api` exit, including non-retryable 4xx errors.\n  WHY: A persistent 404 or 401 wastes retry backoff before failing.\n- .github/workflows/clarify.yml:437 | severity=NIT | confidence=4\n  PROBLEM: `GH_RETRY_MAX_ATTEMPTS` is not validated as a positive integer before the comparison.\n  WHY: A non-numeric, zero, or negative value can cause an arithmetic error and abort the step under `set -e`.\n- .github/workflows/clarify.yml:432-450 | severity=NIT | confidence=4\n  PROBLEM: The cumulative retry backoff has no upper bound when `GH_RETRY_MAX_ATTEMPTS` is increased.\n  WHY: A higher configured attempt count can make the fallback consume several minutes and delay the workflow.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/clarify.yml: fallback gh_retry_to_file() (~436-450) | severity=MAJOR | confidence=4\n  PROBLEM: The fallback retries every non-zero exit (including permanent 4xx), does not validate `GH_RETRY_MAX_ATTEMPTS`, and has unbounded cumulative sleep.\n  WHY: 404/401 wastes retries; an invalid/0 value breaks arithmetic under `set -euo pipefail`; a high attempt count can consume minutes.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/clarify.yml:437-449\n  TASK_GAP: A non-numeric `GH_RETRY_MAX_ATTEMPTS` can make the comparison return 2, which the `if` treats as false, so the loop keeps sleeping until job timeout. `${GH_RETRY_MAX_ATTEMPTS:-3}` defaults unset/empty values but not non-numeric values.\n  Suggested minimal fix: Validate once at definition time: `local max_attempts=\"${GH_RETRY_MAX_ATTEMPTS:-3}\"; case \"${max_attempts}\" in ''|*[!0-9]*) max_attempts=3 ;; esac` then reference the validated value.\n  HARDENING_RISK_SCORE: 2\n- .github/workflows/clarify.yml:434-449\n  TASK_GAP: The fallback retries unconditionally on any non-zero exit, including non-retryable 4xx errors; a persistent 4xx incurs backoff before failing.\n  Suggested minimal fix: After a failed attempt, inspect the last line of stderr for `HTTP 4\\d\\d`; on a definitive 4xx, log a distinct warning and return 1 immediately without further retries. Keep the catch-all retry when status parsing fails.\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bfacb26ebcd37ba4a5443aea858ceb4b2643f89c81d4efe5e832798a33abd6e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5271,
+    "run_id": "36653277834",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36653277834",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930012127_ac2b371487",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5271,
+    "run_id": "36653277834"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T01:21:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
