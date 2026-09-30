@@ -3999,8 +3999,13 @@ jobs:
     # even after sharding, and shards can be slower on a cold runner than
     # on a warm one. At 30 the serial suite was cancelled mid-run (release
     # v1.27.0, run 33073743283), which skipped `validate`/`release` and
-    # failed the release. Mirrors the `CI / lint` budget from #3844.
-    timeout-minutes: 45
+    # failed the release. It mirrored the `CI / lint` budget from #3844 until #4707 split that job.
+    # 60, not 45 (#4707): the job measured 37 minutes on 2026-09-28
+    # (test-and-mark-stable run 36374918973: orchestrate-poll 21 minutes,
+    # unit tests 14.5 minutes), too close to 45. `CI` splits the same
+    # suite into parallel jobs instead; this job keeps one runner because
+    # it is not the release's critical path.
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -4129,7 +4134,14 @@ jobs:
 
           shard_failures=0
           for shard in $(seq 0 "$((shards - 1))"); do
-            [ -f "/tmp/poll_shard_${shard}.log" ] || continue
+            [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
+            # A shard with tests but no log died before its runner started, so
+            # its tests never ran: count it as failed instead of skipping it.
+            if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
+              echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
+              shard_failures=$((shard_failures + 1))
+              continue
+            fi
             echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
             cat "/tmp/poll_shard_${shard}.log"
             echo "::endgroup::"

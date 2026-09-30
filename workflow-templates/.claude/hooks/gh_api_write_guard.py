@@ -38,6 +38,13 @@ otherwise) and classifies the call:
              (`git commit -m`, `grep`, `echo`) is data and is ignored.
 
 Decision for the whole Bash call (a hook decides once per tool call):
+  - any call whose `-q` / `--jq` value is one of jq's own command-line
+    options (matches `^--?[A-Za-z]`: `--arg`, `-r`, `--raw-output`, `-c`)
+    → `permissionDecision: deny`, with a reason that says how to fix the
+    command. `gh api` has no such flags, so the call could never work; a
+    deny runs nothing and needs no human (#4891). It wins over ask and
+    allow, and is checked after the unparseable-command and hidden-call
+    asks, which are unchanged;
   - any `write` → `permissionDecision: ask`;
   - every call is `read` or `routine` and the command contains nothing else
     but safe helpers: items joined by `;` / `&&`, each a `gh api` call
@@ -79,6 +86,7 @@ SETTINGS_MATCHER = "Bash"
 
 DECISION_ASK = "ask"
 DECISION_ALLOW = "allow"
+DECISION_DENY = "deny"
 
 KIND_READ = "read"
 KIND_ROUTINE = "routine"
@@ -136,6 +144,12 @@ _BOOL_FLAGS = frozenset(
 	{"-i", "--include", "--paginate", "--silent", "--slurp", "--verbose", "--allow-escape-sequences"}
 )
 _SHORT_VALUE_FLAGS = frozenset(flag for flag in _VALUE_FLAGS if len(flag) == 2)
+
+# A `-q` / `--jq` value that is one of jq's own command-line options
+# (`--arg`, `-r`, `--raw-output`, `-c`, ...), not a jq program. `gh api` has no
+# such flags, so the call can never work (#4891). A program that starts with
+# `-` but not a letter (`-.size`, `-1`) is valid and does not match.
+_JQ_CLI_OPTION_RE = re.compile(r"^--?[A-Za-z]")
 
 _READ_METHODS = frozenset({"GET", "HEAD"})
 _KNOWN_METHODS = frozenset({"GET", "HEAD", "POST", "PATCH", "PUT", "DELETE"})
@@ -247,6 +261,14 @@ _GIT_TIMEOUT_SECONDS = 5
 
 class Unreadable(Exception):
 	"""A `gh api` call whose effect the guard cannot determine."""
+
+
+class MalformedJq(Unreadable):
+	"""A `gh api` call that passes a jq command-line option to `-q`/`--jq`."""
+
+	def __init__(self, value: str):
+		super().__init__(f"`--jq` value `{value}` is a jq command-line option, not a jq program")
+		self.value = value
 
 
 def strip_heredoc_bodies(command: str) -> tuple[str, list[tuple[str, bool, str]]]:
@@ -544,6 +566,8 @@ def parse_gh_api_args(args: list[str]) -> dict:
 			parsed["headers"].append(value)
 		elif role == "input":
 			parsed["input"] = value
+		elif role == "jq" and _JQ_CLI_OPTION_RE.match(value):
+			raise MalformedJq(value)
 	if len(parsed["endpoints"]) != 1:
 		raise Unreadable(f"expected one endpoint, found {len(parsed['endpoints'])}")
 	if parsed["method"] is None:
@@ -769,8 +793,8 @@ def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 def evaluate(payload: dict) -> tuple[str | None, str]:
 	"""Decide the permission outcome for one PreToolUse payload.
 
-	Returns `(decision, reason)`: decision is "ask", "allow", or None (no
-	decision; the normal permission flow applies).
+	Returns `(decision, reason)`: decision is "deny", "ask", "allow", or None
+	(no decision; the normal permission flow applies).
 	"""
 	if payload.get("tool_name", "Bash") != "Bash":
 		return None, ""
@@ -803,11 +827,26 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		return slug_cache[0]
 
 	results: list[tuple[str, str]] = []
+	malformed_jq_values: list[str] = []
 	for args in invocations:
 		try:
 			results.append(classify(parse_gh_api_args(args), command, repo_slug_lookup))
+		except MalformedJq as exc:
+			malformed_jq_values.append(exc.value)
 		except Unreadable as exc:
 			results.append((KIND_WRITE, f"unreadable call ({exc})"))
+
+	if malformed_jq_values:
+		# A deny runs nothing, so it is narrower than the ask it replaces, and
+		# the session can fix the command in the same turn instead of waiting
+		# at a prompt nobody answers (#4891). It wins over ask and allow.
+		got = ", ".join(f'"{value}"' for value in malformed_jq_values)
+		return DECISION_DENY, (
+			"gh api guard (CLAUDE.md §23.H): gh api --jq takes a jq program, not jq's command-line options "
+			f"(got {got}). gh api has no --arg, -r, or -c: put the value into the jq program itself, or pipe "
+			"the output to jq with its own options. A program that starts with a minus sign goes in "
+			"parentheses, e.g. --jq '(-length)'. Nothing ran."
+		)
 
 	writes = [description for kind, description in results if kind == KIND_WRITE]
 	if writes:

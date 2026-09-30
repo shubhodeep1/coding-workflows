@@ -6,10 +6,10 @@ GitHub evaluates a `workflow_dispatch` run's name from the workflow file at the 
 | The numbers that matter | Value |
 | --- | --- |
 | PR-named match sites in the poller that check workflow path and default-branch head | 4 of 4 (was 0) |
-| API calls per PR-named lookup | still 1: REST `actions/runs?event=workflow_dispatch&branch=<default>&per_page=100` replaces `gh run list --event workflow_dispatch --limit 100` |
+| API calls per PR-named lookup | unchanged from the paged per-wrapper listing of issue #4927; the head-branch and path checks run on the rows it already returns |
 | New calls per poller run | at most 1 `GET repos/<repo>` for the default branch |
 
-What this means for operators: legitimate review dispatches are unaffected, because they all run from the default branch through the wrappers. A PR-named run started on a pull request's own branch is still seen through the head-branch lookups. If the default branch cannot be read, the poller logs `PR_NAMED_REVIEW_PROVENANCE outcome=default_branch_unresolved` and ignores PR-named runs for that poll, as it did before PR-named runs existed.
+What this means for operators: legitimate review dispatches are unaffected, because they all run from the default branch through the wrappers. A PR-named run started on a pull request's own branch is still seen through the head-branch lookups. If the default branch cannot be read, the poller logs `PR_NAMED_REVIEW_PROVENANCE outcome=default_branch_unresolved`: the cached-run checks ignore PR-named runs for that poll, and the PR-named listing counts as incomplete (`PR_NAMED_REVIEW_RUNS … reason=default_branch_unavailable`), so the poller skips that PR's review dispatch and empty-commit push until the next poll.
 
 ### For contributors
 
