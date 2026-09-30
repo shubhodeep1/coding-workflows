@@ -22,7 +22,7 @@ The guard differential check (`scripts/guard_differential.py`, issue #5174) pass
 - G2: A shape passes as an intended loosening only when `.github/guard_differential/intended_loosening.json` **at the base ref** has an entry whose `hook`, `shape`, and `head_sha` match the loosened shape's hook, its verbatim corpus line, and the PR's head commit. Entries in the PR's own copy of the file are never read.
 - G3: A run with no known head revision (a working-tree run without `--head-sha` or `--head-ref`) matches no policy entry, so it fails closed.
 - G4: `ci.yml` passes the PR head commit from the event payload (`github.event.pull_request.head.sha`, through `env:`) as `--head-sha`; still no GitHub API calls (§15).
-- G5: A malformed policy file at the base ref, or a malformed `--head-sha`, exits 2 (setup error) when a hook tree is compared; a PR that changes no hook still skips.
+- G5: A malformed policy file at the base ref exits 2 (setup error) when a hook tree is compared; a PR that changes no hook still skips. A malformed `--head-sha` is a usage error and always exits 2, before the skip (AD-7).
 - G6: The docstring, `agents.md`, the `ci.yml` comment, the unreleased #5174 changelog fragment, and #5174's plan goal G5 describe the new rule.
 
 ## Non-goals

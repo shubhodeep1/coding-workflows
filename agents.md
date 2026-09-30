@@ -1225,7 +1225,9 @@ side so that class cannot land unnoticed.
   CI job. Each new push to the PR needs new entries. The head commit is
   `--head-sha` (CI passes `github.event.pull_request.head.sha`), else the
   `--head-ref` commit; a working-tree run with neither matches no entry. A
-  malformed policy or `--head-sha` exits 2 once a hook tree is compared. An
+  malformed `--head-sha` (or one that contradicts `--head-ref`) always
+  exits 2, even when no hook changed; a malformed policy exits 2 once a
+  hook tree is compared, so a PR that changes no hook still skips. An
   approved shape counts as a loosening under the retire-master Q3: A rule,
   so a sync that carries it waits for the operator.
 - **`Intended loosening:` in the PR body is data, not authorization.** The
