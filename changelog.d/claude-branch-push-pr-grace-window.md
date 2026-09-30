@@ -14,4 +14,4 @@ What this means for operators: every reviewer model on the panel runs about once
 
 ### For contributors
 
-Values that are not an integer from 0 to 3600 fall back to 300 with a `::warning::`. A failed PR lookup counts as "no PR yet" and is logged as `RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED`, so the review still runs once the window ends. A newer push to the same branch cancels the waiting run through the existing push concurrency group. `tests/test_internal_review_push_pr_grace.py` runs the step's real shell body against stubbed `gh` and `sleep`.
+Values that are not an integer from 0 to 3600 fall back to 300 with a `::warning::`. A failed PR lookup counts as "no PR yet" and is logged as `RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED` with gh's error text (`error="..."`, one line, at most 200 characters; a `GH_PAT` rate limit shows up here), so the review still runs once the window ends. A newer push to the same branch cancels the waiting run through the existing push concurrency group. `tests/test_internal_review_push_pr_grace.py` runs the step's real shell body against stubbed `gh` and `sleep`.

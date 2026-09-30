@@ -46,6 +46,11 @@ case "$*" in
     answer="${responses[${idx}]}"
     case "${answer}" in
       fail) echo "HTTP 502" >&2; exit 1 ;;
+      silentfail) exit 1 ;;
+      ratelimit)
+        printf 'gh: API rate limit exceeded for user ID 11442166. "quoted"\tpart %s\nsecond line\n' "$(printf 'x%.0s' $(seq 1 300))" >&2
+        exit 1
+        ;;
       none) exit 0 ;;
       *) echo "${answer}"; exit 0 ;;
     esac
@@ -209,6 +214,7 @@ def test_lookup_failures_keep_polling_then_skip():
 	assert result["outputs"]["proceed"] == "false"
 	assert result["sleeps"] == [60, 60]
 	assert result["stdout"].count("RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED") == 2
+	assert result["stdout"].count('error="HTTP 502"') == 2
 	assert "existing_pr=42" in result["stdout"]
 
 
@@ -218,6 +224,29 @@ def test_lookup_failures_fail_open_after_window():
 	assert result["outputs"]["proceed"] == "true"
 	assert result["sleeps"] == [60, 60, 60, 60, 60]
 	assert "lookup_failures=6" in result["stdout"]
+
+
+def test_lookup_failure_logs_sanitized_one_line_error():
+	result = _run("ratelimit,7")
+	assert result["rc"] == 0, result["stderr"]
+	assert result["outputs"]["proceed"] == "false"
+	failed = [line for line in result["stdout"].splitlines() if line.startswith("RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED")]
+	assert len(failed) == 1
+	line = failed[0]
+	assert 'error="gh: API rate limit exceeded for user ID 11442166. quoted part xxx' in line
+	assert "second line" not in line
+	error_text = line.split('error="', 1)[1]
+	assert error_text.endswith('"')
+	error_text = error_text[:-1]
+	assert len(error_text) <= 200
+	assert '"' not in error_text
+	assert "\t" not in error_text
+
+
+def test_lookup_failure_without_error_text_says_so():
+	result = _run("silentfail,7")
+	assert result["outputs"]["proceed"] == "false"
+	assert 'error="no error text"' in result["stdout"]
 
 
 def test_missing_default_branch_falls_back_to_repo_lookup():

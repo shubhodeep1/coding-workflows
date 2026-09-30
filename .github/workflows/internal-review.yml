@@ -127,13 +127,20 @@ jobs:
           # already does this — and consider only OPEN PRs (closed/merged
           # PRs do not double-fire, but the API call returns them too if
           # state filter is omitted).
+          # A failed lookup logs gh's error text (one line, printable
+          # characters only, no double quotes, at most 200 chars) so the
+          # cause is visible: PR #5462's first live run failed every re-check
+          # on a GH_PAT "API rate limit exceeded" that stderr had hidden.
+          pr_lookup_err_file="$(mktemp)"
           lookup_open_pr() {
+            local pr_lookup_error
             if ! existing_pr="$(gh api \
               "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${encoded_head_ref}" \
-              --jq '[.[] | .number] | first // empty' 2>/dev/null)"; then
+              --jq '[.[] | .number] | first // empty' 2>"${pr_lookup_err_file}")"; then
               existing_pr=""
               pr_lookup_failures=$((pr_lookup_failures + 1))
-              echo "RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED head_ref=${HEAD_REF} waited_secs=${pr_waited_secs} failures=${pr_lookup_failures}"
+              pr_lookup_error="$(tr -c '[:print:]' ' ' < "${pr_lookup_err_file}" | tr -d '"' | tr -s ' ' | sed 's/^ //; s/ $//' | cut -c1-200)"
+              echo "RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED head_ref=${HEAD_REF} waited_secs=${pr_waited_secs} failures=${pr_lookup_failures} error=\"${pr_lookup_error:-no error text}\""
             fi
           }
           lookup_open_pr
