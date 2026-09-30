@@ -321,6 +321,32 @@ def test_check_before_an_undecodable_revision_is_null(claude_dir: Path, tmp_path
 	assert verdict["reason"].startswith("no record for this session")
 
 
+def test_check_before_decodes_a_revision_as_utf8_whatever_the_locale(claude_dir: Path, tmp_path: Path):
+	"""A UTF-8 settings.json is read the same under an ASCII locale (PR #5511)."""
+	repo = tmp_path / "repo"
+	(repo / ".claude").mkdir(parents=True)
+	_git(repo, "init", "-q", "-b", "work")
+	wiring = dict(RECORDER_WIRING, _note="café — non-ASCII")
+	(repo / ".claude" / "settings.json").write_text(json.dumps(wiring, ensure_ascii=False) + "\n", encoding="utf-8")
+	_git(repo, "add", ".")
+	_git(repo, "commit", "-q", "-m", "utf-8 wiring")
+	(repo / ".claude" / "settings.json").write_text('{"hooks": {}}\n', encoding="utf-8")
+	_git(repo, "commit", "-q", "-am", "later")
+	assert b"\xc3\xa9" in subprocess.run(["git", "show", "HEAD^1:.claude/settings.json"], cwd=repo, capture_output=True, check=True).stdout
+	env = {
+		"HOME": str(tmp_path / "home"), "PATH": "/usr/bin:/bin", "CLAUDE_CODE_SESSION_ID": "s-1",
+		"LC_ALL": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0",
+	}
+	result = subprocess.run(
+		[sys.executable, str(claude_dir / CHECK), "--before", "HEAD^1"], cwd=repo, env=env,
+		capture_output=True, text=True, timeout=30, check=False,
+	)
+	assert result.returncode == 1, result.stderr
+	verdict = json.loads(result.stdout)
+	assert verdict["before_recorder_wired"] is True
+	assert verdict["reason"].startswith("no record for this session")
+
+
 def test_check_with_a_recorder_wired_before_keeps_the_plain_reason(claude_dir: Path, tmp_path: Path):
 	home = tmp_path / "home"
 	repo = _merged_repo(tmp_path / "repo", RECORDER_WIRING)
