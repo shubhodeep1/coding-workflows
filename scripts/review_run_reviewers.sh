@@ -4890,9 +4890,9 @@ build_cross_pollination_summary() {
     echo ""
     echo "The consolidated ledger below was produced by ${XPOLL_SUMMARISER_MODEL:-openai/gpt-6-luna}"
     echo "from all pass-1 reviewer outputs (CONSENSUS FINDINGS + CONSENSUS TASK GAPS blocks + per-reviewer sections)."
-    echo "The raw per-reviewer outputs remain on disk at:"
-    echo "  ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt"
-    echo "Read a raw file only if a ledger entry is ambiguous or lacks detail."
+    echo "This ledger is the only pass-1 input you get. Do not try to open the raw"
+    echo "pass-1 outputs: they sit outside the checkout, where reads are rejected."
+    echo "If a ledger entry is ambiguous, verify it against the code instead."
     echo ""
     if [ -s "${ledger_file}" ]; then
       cat "${ledger_file}"

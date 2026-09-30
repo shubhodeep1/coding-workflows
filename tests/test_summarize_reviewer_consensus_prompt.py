@@ -127,3 +127,41 @@ def test_telegram_failure_names_branch_when_no_pr() -> None:
 	assert 'if [ -n "${PR_NUMBER:-}" ]; then' in step
 	assert 'MSG+="PR: ${PR_URL}"' in step
 	assert 'MSG+="Branch: ${TARGET_BRANCH:-${HEAD_REF_OVERRIDE_INPUT:-unknown}} (no PR)"' in step
+
+
+def _extract_shell_function(path: Path, name: str) -> str:
+	lines = path.read_text(encoding="utf-8").splitlines()
+	start = lines.index(f"{name}() {{")
+	end = lines.index("}", start)
+	return "\n".join(lines[start:end + 1]) + "\n"
+
+
+def test_pass2_cross_pollination_header_does_not_point_at_on_disk_reviews(tmp_path: Path) -> None:
+	# Pass-2 reviewers use the same reviewer-role OpenCode config, so a read of
+	# the pass-1 files under PREVIOUS_REVIEWS_DIR (/tmp) is rejected the same way.
+	reviewers_script = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+	function_src = _extract_shell_function(reviewers_script, "build_cross_pollination_summary")
+	reviews_dir = tmp_path / "previous_reviews"
+	runtime_dir = tmp_path / "runtime"
+	reviews_dir.mkdir()
+	runtime_dir.mkdir()
+	ledger = tmp_path / "ledger.txt"
+	ledger.write_text("=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n", encoding="utf-8")
+	result = subprocess.run(
+		["bash", "-c", function_src + 'cat "$(build_cross_pollination_summary "$1")"', "harness", str(ledger)],
+		env={
+			"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+			"RUNTIME_DIR": str(runtime_dir),
+			"PREVIOUS_REVIEWS_DIR": str(reviews_dir),
+		},
+		capture_output=True,
+		text=True,
+		timeout=30,
+	)
+	assert result.returncode == 0, result.stderr
+	summary = result.stdout
+	assert str(reviews_dir) not in summary
+	assert "remain on disk" not in summary
+	assert "Do not try to open the raw" in summary
+	assert "=== CONSENSUS FINDINGS ===" in summary
+	assert summary.rstrip().endswith("=== END CROSS-POLLINATION SUMMARY ===")
