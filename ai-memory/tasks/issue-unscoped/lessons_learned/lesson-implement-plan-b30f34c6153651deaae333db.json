@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T06:18:16Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A new stable `AI_PHASE_GATE_V1` telemetry line must also be pinned in tests/test_phase_skip_gate_telemetry_contract.py, and a workflow step's inline fallback for a gh_helpers.sh function should keep bounded retries and warn when it is used.",
+  "phase": "implement_plan",
+  "pr_number": 5271,
+  "record_id": "lesson-implement-plan-b30f34c6153651deaae333db",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5222-final-merge-resume-closed-issue",
+    "file:.github/workflows/clarify.yml",
+    "file:tests/test_phase_skip_gate_telemetry_contract.py"
+  ]
+}

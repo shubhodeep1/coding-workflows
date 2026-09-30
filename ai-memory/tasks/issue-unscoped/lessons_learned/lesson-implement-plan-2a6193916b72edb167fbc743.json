@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T06:18:16Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Once a `[claude-twin-sync]` copy lands on a twin-first phase PR, update the PR body's twin-first section in the same stage; a body that still says the sync is pending makes reviewers flag the synced `.claude/` diff as a task gap.",
+  "phase": "implement_plan",
+  "pr_number": 5271,
+  "record_id": "lesson-implement-plan-2a6193916b72edb167fbc743",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5222-final-merge-resume-closed-issue",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}

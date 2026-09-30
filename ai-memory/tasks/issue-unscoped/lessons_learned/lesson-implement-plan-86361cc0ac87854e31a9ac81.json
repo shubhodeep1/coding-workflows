@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T06:18:16Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An inline fallback for a shared shell helper must keep the helper's termination guarantees: validate any env-var loop bound before an integer test (a failed `[ -ge ]` inside `if` is just false, so `while :` never ends) and stop on the helper's permanent-failure patterns.",
+  "phase": "implement_plan",
+  "pr_number": 5271,
+  "record_id": "lesson-implement-plan-86361cc0ac87854e31a9ac81",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5222-final-merge-resume-closed-issue",
+    "file:.github/workflows/clarify.yml",
+    "file:scripts/gh_helpers.sh"
+  ]
+}

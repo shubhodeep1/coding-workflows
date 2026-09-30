@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T06:18:16Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A full local `pytest tests` run does not finish within 40 minutes on a cloud session runner; verify a phase by running each test file that references the changed paths separately with a per-file timeout, and leave the full suite to CI.",
+  "phase": "implement_plan",
+  "pr_number": 5271,
+  "record_id": "lesson-implement-plan-7666467278971f83dcd14686",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5222-final-merge-resume-closed-issue",
+    "file:tests/test_orchestrate_poll_process.py"
+  ]
+}
