@@ -62,8 +62,12 @@ def test_sync_only_merges_into_branches_that_land_in_the_default_branch(commands
 	section = _section(commands["implement-plan-claude.md"], "### Claude-asset sync", "### Permission prompt report")
 	assert "skip the merge" in section
 	assert "claude_assets=stale (base <base>)" in section
-	# PR #5282 review round 1: the project-branch sync names the procedure's step 2 and its sequence.
-	assert "sync the project branch first, as the procedure's step 2 (**Sync the project branch**) does" in section
+	# PR #5282 review rounds: the project-branch sync names the Procedure's step 2 bullet, not the sync's own
+	# step 2 (the drift check), and spells out its sequence.
+	assert "sync the project branch first with the **Sync the project branch** bullet of [Procedure](#procedure) step 2 (not this section's step 2, which is the drift check)" in section
+	assert "merge the default branch into it with that bullet's command and subject, resolve and push as that bullet says" in section
+	assert "the procedure's step 2" not in section
+	assert "step 2's merge" not in section
 	assert "check the PR head branch out again (`git checkout <PR head branch>`). Then merge `origin/<project branch>` into the PR head" in section
 	assert "exactly as step 2 does" not in section
 
@@ -111,7 +115,8 @@ def test_every_checkout_runs_the_sync(commands):
 	assert "It takes the place of that section's step 4 and keeps the command and subject above" in step2
 	assert "the `[claude-asset-sync]` subject marks only the sync merge into a PR head" in step2
 	section = _section(plan, "### Claude-asset sync", "### Permission prompt report")
-	assert "on the project branch itself, step 2's merge is the sync merge and keeps step 2's command and subject" in section
+	assert "on the project branch itself, the merge in the **Sync the project branch** bullet of [Procedure](#procedure) step 2 is the sync merge and keeps that bullet's command and subject" in section
+	assert "The project branch itself needs only the default check: the merge in the **Sync the project branch** bullet of [Procedure](#procedure) step 2 already brings its own base in" in section
 	step7 = _section(plan, "- **Blocked**", "7a. **Review round")
 	assert "run the [Claude-asset sync](#claude-asset-sync) on it" in step7
 	step7a = _section(plan, "7a. **Review round", "- **`kind=conflict`**")
@@ -128,6 +133,8 @@ def test_resume_and_fixer_run_the_sync(commands):
 	assert "<!-- ai:claude-blocked:v1 -->" in fixer
 	assert "PushNotification" in fixer
 	assert "When its project-base check fails" in fixer
+	# PR #5282 review round: a failed fetch of the project branch has no paths to name.
+	assert "the paths it lists (or, when fetching the project branch failed, the failed fetch and its error line)" in fixer
 	assert "on the default branch or on the PR's own base" in fixer
 	# PR #5282 review round 1: the conflict notice names the branch the sync merged.
 	assert ".claude/ conflict with <source> — decision needed" in fixer
