@@ -192,3 +192,42 @@ No `TODO`, `FIXME`, or `HACK` marker was found in scoped files. The inspected `v
 | Code modularization | Approximately 9 existing files, plus shared modules | Large |
 | Expression size reduction | 1 workflow, a new script, and contract tests | Medium |
 | Medium/Low fixes | Approximately 4–6 additional existing files | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-30)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is proven safe for direct implementation; `NEEDS_VERIFICATION` requires the stated checks; `RISKY_SKIP` identifies a possible saving that must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — `RISKY_SKIP`.** **Calls:** `scripts/orchestrate_poll_process.sh:10441` and `scripts/orchestrate_poll_process.sh:10442`, in `finalize_integration_merge_if_needed`. **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{final_pr}`. **Current → proposed:** two reads → one read when the final-PR snapshot is unavailable. **Evidence:** Adjacent calls request `.state` and `.merged_at != null` from the same PR; the preceding branch already derives both from one snapshot at `scripts/orchestrate_poll_process.sh:10436-10439`. **Proposed fix:** On the snapshot-miss branch, fetch one PR object and derive both fields locally, retaining the existing snapshot-hit branch. **Safety rationale:** This is an orchestration path explicitly guarding against changing merge state; consolidating its independently fail-soft reads could alter race and error behavior. **Downstream signal:** Do not auto-implement; manually test snapshot misses, a PR changing state between reads, and either read failing before changing the guard.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — `RISKY_SKIP`.** **Calls:** `scripts/review_merge_train.sh:260-261` and `scripts/review_merge_train.sh:283`, in `_mt_find_marker_comment_id` and `_mt_upsert_comment`. **Endpoints:** paginated `GET /repos/{owner}/{repo}/issues/{pr}/comments?per_page=100`; then `GET /repos/{owner}/{repo}/issues/comments/{id}`. **Current → proposed:** *P* comment-page reads plus one detail read → *P* page reads when a marker exists; *P* is the actual page count. **Evidence:** The first call filters comments by `.body` but returns only `.id`; the second fetches the selected comment’s `.body` to decide whether a PATCH is needed. **Proposed fix:** Have `_mt_find_marker_comment_id` return the selected ID and body together, and let `_mt_upsert_comment` use that body while retaining its optional pre-looked-up-ID contract and failure handling. **Safety rationale:** The first call implements pagination, and removing the detail read could change freshness or failure behavior around comment updates. **Downstream signal:** Do not auto-implement; manually verify selection across page boundaries, concurrent comment edits, optional-ID callers, and fail-open behavior on page or parse failure.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- BATCH-001: `RISKY_SKIP` — The per-blocker read is in `orchestrate_poll_process.sh`; manually validate cycle-cache freshness and fallback before batching.
+- BATCH-002: `RISKY_SKIP` — The orchestration path also depends on complete paginated comments for marker verification; retain that read.
+- BATCH-003: `NEEDS_VERIFICATION` — GraphQL mutation permissions, partial failures, and per-item alert behavior are not established.
+- BATCH-004: `RISKY_SKIP` — The checker’s comment read is paginated; a bounded GraphQL snapshot has not established page-boundary parity.
+
+### Summary Counts
+
+Net-new findings only; cross-references are excluded.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| `SAFE_TO_MERGE` | 0 | — |
+| `NEEDS_VERIFICATION` | 0 | — |
+| `RISKY_SKIP` | 2 | MERGE-001, REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
