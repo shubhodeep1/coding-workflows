@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:903-904 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `occurrences` and `target_occurrences` verdict fields are extracted from raw issue bodies instead of the fenced-example-stripped bodies.\n  WHY: A command example inside a fenced block can supply arbitrary marker values and bypass the intended trust boundary.\n- .claude/scripts/permission_prompts.py:123 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_FENCED_EXAMPLE_RE` only strips fences opened by exactly four backticks followed by the literal `text\\n`.\n  WHY: Other fence styles can leave marker text visible to the metadata parser and bypass the intended trust boundary.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/permission_prompts.py:903-904 | severity=high | confidence=5\n  PROBLEM: The `occurrences` and `target_occurrences` verdict fields are extracted from the raw issue `body` / `target_body` strings using `_first_match(OCCURRENCES_RE, ...)`.\n  WHY: This bypasses the fenced-example stripping applied to other marker reads. A prompted command example inside a fenced block containing `**Occurrences:** 5` or similar can populate the verdict with arbitrary, untrusted data, violating the trust boundary the PR establishes.\n- .claude/scripts/permission_prompts.py:123 | severity=low | confidence=4\n  PROBLEM: The regex matches only fences opened by exactly four backticks followed by the literal `text\\n`.\n  WHY: Other fence styles (e.g., three backticks, different language specifiers like `bash`, or indented fences) bypass the stripping, leaving marker text inside them visible to the metadata parser and bypassing the intended trust boundary. While `issue_body()` currently writes four-backtick `text` fences, this is an incomplete implementation of the \"strip quoted blocks first\" principle for an untrusted input.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "380dcb3f0acaa3351e6d80e750432c5319690b7de61b463f738eeae417c9e967",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5403,
+    "run_id": "36673743141",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36673743141",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930070510_c865fc274e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5403,
+    "run_id": "36673743141"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T07:05:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
