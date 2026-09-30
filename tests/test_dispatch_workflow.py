@@ -21,14 +21,18 @@ TEMPLATE_SCRIPT_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "scripts" 
 SETTINGS_PATHS = [REPO_ROOT / ".claude" / "settings.json", REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"]
 
 
-def _load():
-	spec = importlib.util.spec_from_file_location("dispatch_workflow", SCRIPT_PATH)
+def _load(path=SCRIPT_PATH, name="dispatch_workflow"):
+	spec = importlib.util.spec_from_file_location(name, path)
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return module
 
 
 dw = _load()
+# The default-branch pin for internal-review.yml (issue #5375) is tested against
+# the workflow-templates twin, which is edited first; test_template_parity keeps
+# the live copy equal to it.
+dw_twin = _load(TEMPLATE_SCRIPT_PATH, "dispatch_workflow_twin")
 
 
 class FakeGitHub:
@@ -57,6 +61,17 @@ def fake(monkeypatch):
 		github = FakeGitHub(run_lists, **kwargs)
 		monkeypatch.setattr(dw.check_in_status, "gh_api", github.gh_api)
 		monkeypatch.setattr(dw, "_post_dispatch", github.post_dispatch)
+		return github
+
+	return install
+
+
+@pytest.fixture
+def fake_twin(monkeypatch):
+	def install(run_lists, **kwargs):
+		github = FakeGitHub(run_lists, **kwargs)
+		monkeypatch.setattr(dw_twin.check_in_status, "gh_api", github.gh_api)
+		monkeypatch.setattr(dw_twin, "_post_dispatch", github.post_dispatch)
 		return github
 
 	return install
@@ -251,16 +266,100 @@ def test_main_reports_invalid_workflow_with_exit_1(capsys):
 	assert json.loads(capsys.readouterr().out)["dispatched"] is False
 
 
-@pytest.mark.parametrize("path", SETTINGS_PATHS)
-def test_allowlist_matches_the_gh_workflow_run_allow_rules(path):
+@pytest.mark.parametrize("path,script_path", list(zip(SETTINGS_PATHS, [SCRIPT_PATH, TEMPLATE_SCRIPT_PATH])))
+def test_allowlist_matches_the_gh_workflow_run_allow_rules(path, script_path):
+	module = _load(script_path, f"dispatch_workflow_{script_path.parent.parent.parent.name}")
 	allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]
 	allowlisted = {
 		rule[len("Bash(gh workflow run ") : -len(" *)")]
 		for rule in allow
 		if rule.startswith("Bash(gh workflow run ") and rule.endswith(" *)")
 	}
-	assert allowlisted == set(dw.DISPATCHABLE_WORKFLOWS)
+	# A default-branch-only workflow has no allow rule: `gh workflow run` takes
+	# any `--ref`, so the helper is its only pre-approved path (issue #5375).
+	assert module.DEFAULT_BRANCH_ONLY_WORKFLOWS <= module.DISPATCHABLE_WORKFLOWS
+	assert allowlisted == set(module.DISPATCHABLE_WORKFLOWS - module.DEFAULT_BRANCH_ONLY_WORKFLOWS)
+	assert not any("internal-review.yml" in rule for rule in allow)
 	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/dispatch_workflow.py *)" in allow
+
+
+# ──────────────────────────────────────────────────────────────────
+# internal-review.yml: default branch only, numeric pr_number (issue #5375)
+# ──────────────────────────────────────────────────────────────────
+
+
+def test_internal_review_dispatches_on_the_default_branch(fake_twin):
+	github = fake_twin([[_run(1)], [_run(1), _run(2)]], default_branch="trunk")
+	code, result = dw_twin.dispatch("o/r", "internal-review.yml", None, {"pr_number": "123"}, 90, sleep=lambda _s: None)
+	assert code == 0 and result["run_id"] == 2 and result["ref"] == "trunk"
+	assert github.dispatches == [("o/r", "internal-review.yml", "trunk", {"pr_number": "123"})]
+	assert github.reads[0] == "repos/o/r"
+
+
+def test_internal_review_accepts_the_default_branch_as_explicit_ref(fake_twin):
+	github = fake_twin([[], [_run(7)]])
+	code, result = dw_twin.dispatch("o/r", "internal-review.yml", "main", {"pr_number": "5"}, 90, sleep=lambda _s: None)
+	assert code == 0 and result["ref"] == "main"
+	# The default branch is always read from the API, even when --ref names it.
+	assert github.reads[0] == "repos/o/r"
+	assert github.dispatches == [("o/r", "internal-review.yml", "main", {"pr_number": "5"})]
+
+
+@pytest.mark.parametrize("ref", ["claude/unreviewed-head", "refs/heads/main", "Main", "main ", "stable"])
+def test_internal_review_refuses_any_other_ref_before_the_post(fake_twin, ref):
+	github = fake_twin([[]])
+	with pytest.raises(ValueError, match="only from the default branch"):
+		dw_twin.dispatch("o/r", "internal-review.yml", ref, {"pr_number": "5"}, 90, sleep=lambda _s: None)
+	assert github.dispatches == []
+	assert github.reads == ["repos/o/r"]
+
+
+@pytest.mark.parametrize(
+	"inputs",
+	[
+		{},
+		{"pr_number": ""},
+		{"pr_number": "0"},
+		{"pr_number": "007"},
+		{"pr_number": "-5"},
+		{"pr_number": "+5"},
+		{"pr_number": "5 "},
+		{"pr_number": "5\n"},
+		{"pr_number": "12345678901"},
+		{"pr_number": "5; rm -rf /"},
+		{"pr_number": "${{ secrets.GH_PAT }}"},
+		{"pr_number": "5", "allow_workflow_edits": "true"},
+		{"pr_number": "5", "ref": "claude/x"},
+	],
+)
+def test_internal_review_refuses_bad_inputs_before_any_call(fake_twin, inputs):
+	github = fake_twin([[]])
+	with pytest.raises(ValueError, match="pr_number"):
+		dw_twin.dispatch("o/r", "internal-review.yml", None, inputs, 90, sleep=lambda _s: None)
+	assert github.reads == [] and github.dispatches == []
+
+
+def test_other_workflows_keep_an_explicit_ref(fake_twin):
+	github = fake_twin([[], [_run(3)]])
+	code, result = dw_twin.dispatch("o/r", "review_autofix.yml", "claude/x", {"pr_number": "5"}, 90, sleep=lambda _s: None)
+	assert code == 0 and result["ref"] == "claude/x"
+	assert not any(read == "repos/o/r" for read in github.reads)
+
+
+def test_main_reports_a_refused_internal_review_ref_with_exit_1(fake_twin, capsys):
+	github = fake_twin([[]])
+	argv = ["--repo", "o/r", "--workflow", "internal-review.yml", "--ref", "claude/x", "--input", "pr_number=5"]
+	assert dw_twin.main(argv) == 1
+	result = json.loads(capsys.readouterr().out)
+	assert result["dispatched"] is False and "default branch" in result["error"]
+	assert github.dispatches == []
+
+
+def test_internal_review_unreadable_default_branch_is_not_dispatched(fake_twin):
+	github = fake_twin([[]], default_branch="")
+	with pytest.raises(dw_twin.check_in_status.ReadError):
+		dw_twin.dispatch("o/r", "internal-review.yml", None, {"pr_number": "5"}, 90, sleep=lambda _s: None)
+	assert github.dispatches == []
 
 
 def test_template_parity():

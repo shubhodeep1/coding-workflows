@@ -35,8 +35,8 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 LOCAL_SLUG = "shubhodeep1/coding-workflows"
 
 
-def _load_guard():
-	spec = importlib.util.spec_from_file_location("gh_api_write_guard", GUARD_PATH)
+def _load_guard(path=GUARD_PATH, name="gh_api_write_guard"):
+	spec = importlib.util.spec_from_file_location(name, path)
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
@@ -44,11 +44,16 @@ def _load_guard():
 
 
 guard = _load_guard()
+# The internal-review.yml dispatch rule (issue #5375) is tested against the
+# workflow-templates twin, which is edited first; the parity test keeps the
+# live hook equal to it.
+guard_twin = _load_guard(TEMPLATE_GUARD_PATH, "gh_api_write_guard_twin")
 
 
 @pytest.fixture(autouse=True)
 def _fixed_local_slug(monkeypatch):
 	monkeypatch.setattr(guard, "local_repo_slug", lambda cwd: LOCAL_SLUG)
+	monkeypatch.setattr(guard_twin, "local_repo_slug", lambda cwd: LOCAL_SLUG)
 
 
 def _decide(command: str) -> str | None:
@@ -377,15 +382,33 @@ def test_other_dispatches_ask(command):
 	assert _decide(command) == guard.DECISION_ASK
 
 
-@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
-def test_dispatchable_workflows_match_the_gh_workflow_run_allow_rules(path):
+@pytest.mark.parametrize("path,guard_path", [(SETTINGS_PATH, GUARD_PATH), (TEMPLATE_SETTINGS_PATH, TEMPLATE_GUARD_PATH)])
+def test_dispatchable_workflows_match_the_gh_workflow_run_allow_rules(path, guard_path):
+	module = _load_guard(guard_path, f"gh_api_write_guard_{guard_path.parent.parent.parent.name}")
 	allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]
 	allowlisted = {
 		rule[len("Bash(gh workflow run ") : -len(" *)")]
 		for rule in allow
 		if rule.startswith("Bash(gh workflow run ") and rule.endswith(" *)")
 	}
-	assert allowlisted == set(guard.DISPATCHABLE_WORKFLOWS)
+	assert allowlisted == set(module.DISPATCHABLE_WORKFLOWS)
+	assert "internal-review.yml" not in module.DISPATCHABLE_WORKFLOWS
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		# Issue #5375: a raw dispatch could run a pushable branch's copy of the
+		# workflow with its secrets; only dispatch_workflow.py pins the ref.
+		"gh api -X POST repos/shubhodeep1/coding-workflows/actions/workflows/internal-review.yml/dispatches -f ref=main -f 'inputs[pr_number]=5'",
+		"gh api repos/shubhodeep1/coding-workflows/actions/workflows/internal-review.yml/dispatches -f ref=claude/unreviewed-head -f 'inputs[pr_number]=5'",
+		"gh api -X POST 'repos/{owner}/{repo}/actions/workflows/internal-review.yml/dispatches' -f ref=main",
+	],
+)
+def test_internal_review_dispatch_asks(command):
+	decision, reason = guard_twin.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == guard_twin.DECISION_ASK
+	assert "internal-review.yml" in reason
 
 
 def test_non_bash_tools_get_no_decision():

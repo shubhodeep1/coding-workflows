@@ -14,13 +14,23 @@ Usage:
   dispatch_workflow.py --repo OWNER/REPO --workflow FILE [--ref REF]
                        [--input KEY=VALUE ...] [--timeout-seconds N]
 
-FILE must be one of DISPATCHABLE_WORKFLOWS, the same seven files
+FILE must be one of DISPATCHABLE_WORKFLOWS: the six files
 `.claude/settings.json` pre-approves as `Bash(gh workflow run <file> *)`
-(CLAUDE.md §23.C command-invoked carve-out); any other file is refused
-without an API call. `--ref` defaults to the repository's default branch.
+(CLAUDE.md §23.C command-invoked carve-out), plus DEFAULT_BRANCH_ONLY_WORKFLOWS;
+any other file is refused without an API call. `--ref` defaults to the
+repository's default branch.
+
+DEFAULT_BRANCH_ONLY_WORKFLOWS (`internal-review.yml`) have no allow rule: this
+helper is their only pre-approved dispatch path, and it never runs a pushable
+branch's copy of them with the workflow's secrets (issue #5375, the same rule
+review_autofix_sweep.yml follows since issue #4618). For them it always reads
+the default branch from the API and dispatches on it, refuses any other
+`--ref`, and accepts only `pr_number`, as a positive decimal integer. Those
+refusals exit 1 before any POST.
 
 API calls (CLAUDE.md §15), all REST:
-  - one read of the repository when `--ref` is omitted;
+  - one read of the repository when `--ref` is omitted, or the workflow is in
+    DEFAULT_BRANCH_ONLY_WORKFLOWS;
   - one read of the workflow's recent `workflow_dispatch` runs before the
     dispatch, to know which runs already existed;
   - one POST to `actions/workflows/<file>/dispatches`;
@@ -57,7 +67,8 @@ check_in_status = importlib.util.module_from_spec(_checker_spec)
 _checker_spec.loader.exec_module(check_in_status)
 
 # Keep equal to the `Bash(gh workflow run <file> *)` allow rules in
-# `.claude/settings.json`; tests/test_dispatch_workflow.py asserts it.
+# `.claude/settings.json` plus DEFAULT_BRANCH_ONLY_WORKFLOWS;
+# tests/test_dispatch_workflow.py asserts it.
 DISPATCHABLE_WORKFLOWS = frozenset(
 	{
 		"security-audit.yml",
@@ -71,6 +82,12 @@ DISPATCHABLE_WORKFLOWS = frozenset(
 		"internal-review.yml",
 	}
 )
+# Dispatched only from the default branch the API reports, with a numeric
+# `pr_number` and no other input (issue #5375). They have no allow rule, so
+# this helper is their only pre-approved path; the gh api guard asks on them.
+DEFAULT_BRANCH_ONLY_WORKFLOWS = frozenset({"internal-review.yml"})
+DEFAULT_BRANCH_ONLY_INPUT_KEYS = frozenset({"pr_number"})
+PR_NUMBER_INPUT_RE = re.compile(r"^[1-9][0-9]{0,9}$")
 POLL_INTERVAL_SECONDS = 5
 DEFAULT_TIMEOUT_SECONDS = 90
 RECENT_RUNS_PER_PAGE = 20
@@ -154,6 +171,15 @@ def parse_inputs(pairs: list[str]) -> dict[str, str]:
 	return inputs
 
 
+def validate_default_branch_only_inputs(workflow: str, inputs: dict[str, str]) -> None:
+	"""Raise ValueError unless `inputs` is exactly a numeric `pr_number` (issue #5375)."""
+	extra = sorted(set(inputs) - DEFAULT_BRANCH_ONLY_INPUT_KEYS)
+	if extra:
+		raise ValueError(f"{workflow} accepts only --input pr_number=<N>, not {', '.join(extra)}")
+	if not PR_NUMBER_INPUT_RE.fullmatch(inputs.get("pr_number", "")):
+		raise ValueError(f"{workflow} needs --input pr_number=<N> with N a positive decimal integer")
+
+
 def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], timeout_seconds: int, sleep=time.sleep) -> tuple[int, dict]:
 	"""Dispatch `workflow` on `repo` and wait for its new run."""
 	if not REPO_RE.fullmatch(repo or ""):
@@ -162,10 +188,16 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 		raise ValueError(f"{workflow} is not one of the dispatchable workflows: {', '.join(sorted(DISPATCHABLE_WORKFLOWS))}")
 	if timeout_seconds < 0:
 		raise ValueError("--timeout-seconds must not be negative")
-	if not ref:
-		ref = check_in_status.gh_api(f"repos/{repo}").get("default_branch") or ""
-		if not ref:
+	default_branch_only = workflow in DEFAULT_BRANCH_ONLY_WORKFLOWS
+	if default_branch_only:
+		validate_default_branch_only_inputs(workflow, inputs)
+	if not ref or default_branch_only:
+		default_branch = check_in_status.gh_api(f"repos/{repo}").get("default_branch") or ""
+		if not isinstance(default_branch, str) or not default_branch:
 			raise check_in_status.ReadError(f"could not read the default branch of {repo}")
+		if ref and ref != default_branch:
+			raise ValueError(f"{workflow} is dispatched only from the default branch {default_branch!r}, not --ref {ref!r}")
+		ref = default_branch
 	known_ids = recent_run_ids(repo, workflow)
 	try:
 		_post_dispatch(repo, workflow, ref, inputs)
