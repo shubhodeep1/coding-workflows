@@ -197,6 +197,11 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
           REF_NAME: ${{ github.ref_name }}
           BASE_REF: ${{ github.base_ref }}
+          # PR context for the guard-path rule (issue #5246); read from env,
+          # never expanded into the script text.
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
           # Only for the promotion lookup on a push to stable (read-only);
           # empty on pull_request events, whose checkout is PR content.
           GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
@@ -206,10 +211,16 @@ jobs:
           # claude-twin-sync.yml PR is pending, but it may never move anywhere
           # but the twin: the check fails when this PR or push changes a
           # .claude/ file to content that differs from its twin at HEAD.
-          # On stable (issue #5247) a changed guard path (.claude/hooks/**,
-          # .claude/settings*.json) must also equal main's copy: on main a
-          # guard reaches .claude/ only through the owner-reviewed sync PR,
-          # and a PR into stable must not be a way around it.
+          # On main (issue #5246), guard paths (.claude/hooks/**,
+          # .claude/settings*.json) fail closed: they may only become the twin
+          # already on the base commit, are never deleted, and on a PR change
+          # only from a same-repository claude/claude-twin-sync-* head, which
+          # only the owner merges.
+          # On stable (issue #5247) a changed guard path must instead equal
+          # main's copy: on main a guard reaches .claude/ only through the
+          # owner-reviewed sync PR, and a PR into stable must not be a way
+          # around it.
+          event_args=(--event push)
           twin_on_stable="false"
           if [ "${EVENT_NAME}" = "pull_request" ] && { [ "${BASE_REF}" = "main" ] || [ "${BASE_REF}" = "stable" ]; }; then
             # The checkout is the PR's merge commit; its first parent is the
@@ -217,6 +228,8 @@ jobs:
             base="$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')"
             if [ "${BASE_REF}" = "stable" ]; then
               twin_on_stable="true"
+            else
+              event_args=(--event pull_request "--pr-head-ref=${PR_HEAD_REF:-}" "--pr-head-repo=${PR_HEAD_REPO:-}" "--repo=${REPOSITORY}")
             fi
           elif [ "${EVENT_NAME}" = "push" ] && [ "${REF_NAME}" = "main" ]; then
             # One merged PR per push, so the range is that PR's net change.
@@ -263,7 +276,7 @@ jobs:
           if [ "${twin_on_stable}" = "true" ]; then
             PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD --guard-provenance-ref "${twin_provenance}"
           else
-            PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_twin_sync.py check --base "${base}" --head HEAD "${event_args[@]}"
           fi
 
       - name: Setup Python
