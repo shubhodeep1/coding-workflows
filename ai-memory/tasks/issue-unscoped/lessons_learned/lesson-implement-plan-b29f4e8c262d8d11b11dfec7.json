@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T01:14:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Every new awk program in a review_autofix step script needs its own mawk and gawk test run; a parametrised test that covers another awk program in the same script does not cover it.",
+  "phase": "implement_plan",
+  "pr_number": 5306,
+  "record_id": "lesson-implement-plan-b29f4e8c262d8d11b11dfec7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5297-ledger-must-cover-reviewer-roster",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh",
+    "file:tests/test_review_autofix_claude_fixer_mode.py"
+  ]
+}
