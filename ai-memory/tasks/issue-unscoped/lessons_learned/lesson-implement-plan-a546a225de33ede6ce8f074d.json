@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T14:24:18Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Before stopping a stacked project on a workflow's authorization step, read that step and the standing decisions on `origin/<default>`, not the project branch's older copies: `main`'s `validate.yml` already accepted one level of stacking (#4734) and had superseded the standing skip decision, so the stale copies turned a runnable validation into a blocker.",
+  "phase": "implement_plan",
+  "pr_number": 5717,
+  "record_id": "lesson-implement-plan-a546a225de33ede6ce8f074d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:validation",
+    "plan:issue-5260-asset-sync-pr-base-drift",
+    "file:.github/workflows/validate.yml",
+    "file:docs/operations/master-session.md"
+  ]
+}
