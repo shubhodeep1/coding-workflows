@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T11:53:15Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a shell helper's bound or filter reads a REST field (such as `created_at`), the test fixtures must carry that field as the real API returns it; fixtures that omit it can pass only through a fallback input and hide the dependency.",
+  "phase": "implement_plan",
+  "pr_number": 5573,
+  "record_id": "lesson-implement-plan-f226e1b25d0154cd59ea8b08",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5523-retry-budget-trusted-push-bound",
+    "file:tests/test_editor_changes_lost_redispatch_budget.py",
+    "file:tests/test_gh_helpers_list_runs_method.py"
+  ]
+}
