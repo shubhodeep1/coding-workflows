@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4910-restart-dead-checkers   Final PR: #4965 draft
 - Status: IN_PROGRESS
-- Stage: conformance 1/3
+- Stage: conformance 1/3 — review round
 - Activation: not started
-- Waiting on: conformance fix PR (opened by this stage)
+- Waiting on: PR #5498
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01PUk3sYkLpwZZR6nKcaXnx9   safety net and hand-back: see the conformance 1/3 stage report (session_01J6b4YSBpHQpjYpfaTYC1Tg)
+- Check-in: checker session_01PUk3sYkLpwZZR6nKcaXnx9   safety net and hand-back: see the conformance 1/3 — review round stage report (session_01GtzhzPXPz5nDoZKNzp5SxL)
 - Last updated: 2026-09-30
-- Last note: conformance 1/3 (session_01J6b4YSBpHQpjYpfaTYC1Tg, 2026-09-30): CONFORMANT (correctness CONCERNS) — one EVIDENCE-BASED CONCERN (the missing-checker re-queue ignored an incomplete `list_triggers` page); fixed in the conformance fix PR. Earlier: review round 5 (workflow round 2 on b36b423) rejected all 9 findings and 2 task gaps, blocked on the missing verdict bot; the operator answered Q1: A and merged PR #4984 as db80775.
+- Last note: review round 1 on PR #5498 (head 1ea2d2e, session_01GtzhzPXPz5nDoZKNzp5SxL): fixed the consensus finding (the incomplete-page test now also puts a project trigger on the page, so a guard reordering fails it); rejected the 5 task gaps (all shipped by phase 1, PR #4984). Earlier: conformance 1/3 (session_01J6b4YSBpHQpjYpfaTYC1Tg, 2026-09-30): CONFORMANT (correctness CONCERNS) — one EVIDENCE-BASED CONCERN (the missing-checker re-queue ignored an incomplete `list_triggers` page); fixed in the conformance fix PR. Earlier: review round 5 (workflow round 2 on b36b423) rejected all 9 findings and 2 task gaps, blocked on the missing verdict bot; the operator answered Q1: A and merged PR #4984 as db80775.
 
 ## Phases
 1. [x] Phase 1 — restart script, pickup step 3b, settings twin, docs   — PR #4984 merged 2026-09-30 (db80775, by the operator on Q1: A, bound to b36b423); review rounds: 5 (round 3 stale, not pushed; round 5 all rejected, no verdict bot); interventions: 0   — protected paths: `.claude/settings.json` (edited through its `workflow-templates/.claude/` twin), `.claude/commands/claude-issue-pickup.md` (no twin; exact edit in the blocked comment)
@@ -22,7 +22,7 @@
    - Done: new tests pass; ruff clean; existing pickup and settings contract tests pass on the synced copy
 
 ## Conformance
-- Run 1 — 2026-09-30: CONFORMANT (correctness CONCERNS) — fix PR (conformance-fix-1): the re-queue path skipped the `has_more` guard (pre-security)
+- Run 1 — 2026-09-30: CONFORMANT (correctness CONCERNS) — fix PR #5498 (conformance-fix-1): the re-queue path skipped the `has_more` guard (pre-security); review rounds: 1
 
 ## Security pass
 
@@ -58,6 +58,7 @@
 - [source:intervention] A listing read that feeds a "which items to check" set must paginate; a single `per_page=100` page silently drops every item past the first page. (files: scripts/claude_checker_restart.py)
 - [source:conformance] A fail-safe guard that one decision path honours (an incomplete listing page keeps the item) must also gate every sibling path that relies on the same listing; here the re-queue path read the trigger page without its `has_more` guard. (files: scripts/claude_checker_restart.py)
 - [source:intervention] A resume gate that reads the committed progress log can see a stale `Status:`, because a blocked stage cannot commit its log without moving a PR head; the blocker comment and the operator's answer are the fresher source. (files: .claude/commands/implement-issue-claude.md)
+- [source:intervention] A test for an early-exit guard must also make the later guards' conditions true, so the expected skip reason fails if the guards are reordered; an otherwise-empty fixture passes either way. (files: tests/test_claude_checker_restart.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first per Q40 (issue #4910 body: "Protected paths: `.claude/**`, so use the interim twin-first rule (Q40: A)", 2026-09-29). `.claude/settings.json` changes through its twin; the `claude-issue-pickup.md` diff goes in the blocked comment; the phase PR carries a `hold` claim and the stage stops BLOCKED for the supervising session's `[claude-twin-sync]`.

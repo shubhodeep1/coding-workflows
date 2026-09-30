@@ -472,9 +472,18 @@ def test_re_queue_guards(no_api, kwargs, reason):
 	assert _reasons(result)[CHECKER] == reason
 
 
-def test_an_incomplete_trigger_page_re_queues_nothing(no_api):
+@pytest.mark.parametrize(
+	"triggers",
+	[
+		[],
+		[_trigger("trig_other", "PR #12 status check-in", "session_s")],
+		# A project trigger on the page too: the incomplete-page guard runs first, so a reordering is caught.
+		[_trigger("trig_x", "implement-plan issue-7-fix-th…", "session_s")],
+	],
+)
+def test_an_incomplete_trigger_page_re_queues_nothing(no_api, triggers):
 	"""A project trigger on the next page (a stage start, a hand-back) cannot be ruled out (§1, AD-8)."""
-	result = _decide(_requeue_state(has_more=True), {CHECKER: "not_found"})
+	result = _decide(_requeue_state(triggers=triggers, has_more=True), {CHECKER: "not_found"})
 	assert result["requeue"] == []
 	assert _reasons(result)[CHECKER] == "triggers_page_incomplete"
 
