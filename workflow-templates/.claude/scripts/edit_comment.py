@@ -27,7 +27,9 @@ temp dir being `tempfile.gettempdir()` or `/tmp`, `<uid>` this process's
 `os.getuid()`, and `<session>` the `CLAUDE_CODE_SESSION_ID` the harness
 exports), and only when the path resolves, after symlinks, to a regular file
 owned by this uid, with a single hard link and at most `MAX_INPUT_FILE_BYTES`
-bytes (issues #5452, #5700). The helper is allowlisted, so without this check
+bytes (issues #5452, #5700). The checked path is then opened one directory at
+a time without following symlinks, so a directory swapped for a symlink after
+the check fails the open. The helper is allowlisted, so without this check
 one command could publish any local file, such as a credential file or
 another session's scratchpad file, as a comment with no prompt. When
 `CLAUDE_CODE_SESSION_ID` is unset or malformed, the caller's scratchpad cannot
@@ -143,6 +145,34 @@ def is_own_scratchpad_path(resolved: Path, roots: list[Path], identity: tuple[st
 	return False
 
 
+def _open_scratchpad_file(resolved: Path) -> int:
+	"""Open the already-validated `resolved` path without following any symlink.
+
+	`resolved` has no symlink in it (`Path.resolve`), but a same-uid process
+	could swap one of its directories for a symlink between the check and a
+	plain `os.open`, which honours `O_NOFOLLOW` only on the last component
+	(issue #5700 review). Each directory is opened relative to its parent's
+	descriptor with `O_NOFOLLOW | O_DIRECTORY`, so the file opened is the one
+	under the checked names, or the open fails. Raises OSError, or ValueError
+	on a platform without `dir_fd` / `O_NOFOLLOW` support (fail closed).
+	"""
+	nofollow = getattr(os, "O_NOFOLLOW", 0)
+	if not nofollow or os.open not in os.supports_dir_fd:
+		raise ValueError("this platform cannot open the file without following symlinks; not read")
+	dir_flags = os.O_RDONLY | nofollow | getattr(os, "O_DIRECTORY", 0)
+	parts = resolved.parts
+	dir_fd = os.open(parts[0], dir_flags)
+	try:
+		for name in parts[1:-1]:
+			next_fd = os.open(name, dir_flags, dir_fd=dir_fd)
+			os.close(dir_fd)
+			dir_fd = next_fd
+		# O_NONBLOCK keeps a FIFO from blocking the open; fstat rejects it later.
+		return os.open(parts[-1], os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0), dir_fd=dir_fd)
+	finally:
+		os.close(dir_fd)
+
+
 def read_input_file(flag: str, path: str) -> str:
 	"""Read a `--replacements` / `--body-file` file from the caller's own session scratchpad only.
 
@@ -166,10 +196,9 @@ def read_input_file(flag: str, path: str) -> str:
 			f"{flag} {path}: only files in this Claude Code session scratchpad (<temp dir>/{identity[0]}/<project>/{identity[1]}/scratchpad/) are read; "
 			"write the file there with the Write tool, or rewrite the comment with mcp__github__update_issue_comment"
 		)
-	# O_NONBLOCK keeps a FIFO from blocking the open; fstat rejects it below.
 	try:
-		fd = os.open(resolved, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-	except OSError as exc:
+		fd = _open_scratchpad_file(resolved)
+	except (OSError, ValueError) as exc:
 		raise ValueError(f"{flag} {path}: {exc}") from exc
 	try:
 		info = os.fstat(fd)

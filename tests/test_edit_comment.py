@@ -372,6 +372,58 @@ def test_file_owned_by_another_uid_is_rejected(monkeypatch, github, reads, scrat
 	assert "owned by uid" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", "--body-file", str(body_file)], github, reads)
 
 
+def test_fixture_session_id_is_a_valid_session_id():
+	# Every own-scratchpad test depends on the fixture passing the identity check.
+	assert ec.SESSION_ID_RE.fullmatch(SESSION_ID)
+
+
+@pytest.mark.parametrize("flag", ["--body-file", "--replacements"])
+def test_directory_swapped_for_a_symlink_after_the_check_is_not_followed(monkeypatch, github, reads, scratchpad, tmp_path, capsys, flag):
+	# A same-uid process replaces the scratchpad directory with a symlink to an
+	# outside directory between the path check and the open (issue #5700 review).
+	body_file = scratchpad / "body.md"
+	body_file.write_text(json.dumps([{"old": "run 1", "new": "run 2"}]), encoding="utf-8")
+	outside = tmp_path / "outside"
+	outside.mkdir()
+	# Valid for both flags, so the pre-fix helper would have used it and leaked SECRET.
+	(outside / "body.md").write_text(json.dumps([{"old": SECRET, "new": "x"}]), encoding="utf-8")
+	real_check = ec.is_own_scratchpad_path
+
+	def check_then_swap(resolved, roots, identity):
+		result = real_check(resolved, roots, identity)
+		scratchpad.rename(scratchpad.with_name("scratchpad.moved"))
+		scratchpad.symlink_to(outside, target_is_directory=True)
+		return result
+
+	monkeypatch.setattr(ec, "is_own_scratchpad_path", check_then_swap)
+	_rejected(capsys, ["--repo", "o/r", "--comment-id", "5", flag, str(body_file)], github, reads)
+
+
+def test_open_scratchpad_file_refuses_a_symlinked_parent(scratchpad, tmp_path):
+	body_file = scratchpad / "body.md"
+	body_file.write_text("mine\n", encoding="utf-8")
+	fd = ec._open_scratchpad_file(body_file.resolve())
+	try:
+		assert os.read(fd, 16) == b"mine\n"
+	finally:
+		os.close(fd)
+	outside = tmp_path / "outside"
+	outside.mkdir()
+	(outside / "body.md").write_text(SECRET, encoding="utf-8")
+	resolved = body_file.resolve()
+	scratchpad.rename(scratchpad.with_name("scratchpad.moved"))
+	scratchpad.symlink_to(outside, target_is_directory=True)
+	with pytest.raises(OSError):
+		ec._open_scratchpad_file(resolved)
+
+
+def test_platform_without_dir_fd_support_rejects_every_file(monkeypatch, github, reads, scratchpad, capsys):
+	body_file = scratchpad / "body.md"
+	body_file.write_text(SECRET, encoding="utf-8")
+	monkeypatch.setattr(ec.os, "supports_dir_fd", set())
+	assert "without following symlinks" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", "--body-file", str(body_file)], github, reads)
+
+
 def test_caller_scratchpad_identity(monkeypatch):
 	monkeypatch.setenv(ec.SESSION_ID_ENV_VAR, "884f673e-3156-5ccb-a763-8feb64e7b7e4")
 	assert ec._caller_scratchpad_identity() == (f"claude-{os.getuid()}", "884f673e-3156-5ccb-a763-8feb64e7b7e4")

@@ -5,21 +5,23 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5700-edit-comment-own-session-scratchpad   Final PR: #5713 draft
 - Status: BLOCKED
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5714: twin sync
+- Waiting on: PR #5714: twin sync (review round 1 fix)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01S21tY9dpFN43vkHR6vDw4H   safety net none   hand-back none (no wait armed while the twin sync is pending)
 - Last updated: 2026-09-30
-- Last note: phase 1 implemented twin-first (e9bca72); phase PR opened with a hold claim; waiting on the `[claude-twin-sync]` copy of two twins into `.claude/` (blocker on #5700).
+- Last note: twin sync fdb3cdb landed and the chain resumed (IN_PROGRESS, `ai:claude-blocked` removed, waiting on PR #5714); review round 1 on fdb3cdb fixed the parent-directory symlink race in the twin `edit_comment.py` (`[claude-autofix]`), so the `.claude/` copy needs a second `[claude-twin-sync]` (blocker on #5700).
 
 ## Phases
-1. [ ] Phase 1 — bind edit_comment.py input files to the caller's own session scratchpad   — PR #5714 open (twin sync pending); review rounds: 0; interventions: 0; protected paths: `.claude/scripts/edit_comment.py`, `.claude/commands/implement-plan-claude.md`
+1. [ ] Phase 1 — bind edit_comment.py input files to the caller's own session scratchpad   — PR #5714 open (twin sync pending after review round 1); review rounds: 1; interventions: 0; protected paths: `.claude/scripts/edit_comment.py`, `.claude/commands/implement-plan-claude.md`
    - [x] twin `workflow-templates/.claude/scripts/edit_comment.py`: `SESSION_ID_ENV_VAR`, `SESSION_ID_RE`, `_caller_scratchpad_identity`, `is_own_scratchpad_path`, owner check in `read_input_file`
    - [x] `tests/test_edit_comment.py`: fixture binds the session id and uid; other-session, other-uid, other-owner, and bad-session-id cases; `is_own_scratchpad_path` table
    - [x] CLAUDE.md §23.I, `agents.md`, twin `implement-plan-claude.md` Comment helper
    - [x] `changelog.d/5700-edit-comment-own-session-scratchpad.md` (`security`)
-   - [ ] `[claude-twin-sync]` copy into `.claude/` (after the phase PR opens)
+   - [x] `[claude-twin-sync]` copy into `.claude/` (after the phase PR opens) — fdb3cdb, 2026-09-30
+   - [x] review round 1 (head fdb3cdb): open each directory of the checked path with `O_NOFOLLOW` (`_open_scratchpad_file`), fixture-id and race tests, log update
+   - [ ] `[claude-twin-sync]` of the round-1 `edit_comment.py` into `.claude/`
 
 ## Conformance
 
@@ -40,6 +42,7 @@
 - AD-6 [plan, 2026-09-30] Changelog: new fragment or edit #5452's? — Picked: A — a new `changelog.d/5700-edit-comment-own-session-scratchpad.md` (`security`). Alternatives: B — edit `changelog.d/5452-edit-comment-scratchpad-only.md`. Why: §20 is one fragment per PR, and never reuse another PR's file. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] A helper that checks a resolved path and then opens it by name must open each directory relative to its parent descriptor with `O_NOFOLLOW`; `O_NOFOLLOW` on the final open protects only the last component, so a same-uid process can swap a parent for a symlink after the check. (files: .claude/scripts/edit_comment.py)
 
 ## Notes
 - Permission mode: auto (issue mode records it; §28.A).
@@ -48,4 +51,6 @@
 - Progress comment: 5912967579 on #5700.
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
 - Phase 1 verification (2026-09-30): `tests/test_edit_comment.py` 80 passed, `test_template_parity` red until the twin sync (expected). 13 related suites: 652 passed, 1 skipped, 4 failed, all twin-parity checks (`test_edit_comment`, `test_implement_plan_claude_command`, `test_implement_issue_claude_command`, `test_ingest_implement_plan_lessons`). With the sync simulated in a scratch copy, the 5 affected suites: 196 passed, 1 skipped. The new cross-session, cross-uid, and foreign-owner tests fail against the pre-change `.claude/` copy (5 failed), reproducing #5700. End to end in this session: `--dry-run` on progress comment 5912967579 with a file in this session's scratchpad succeeds; with a file in a sibling session's scratchpad the patched helper exits 1 and the current `.claude/` copy accepts it.
-- Twin sync pending: `workflow-templates/.claude/scripts/edit_comment.py` (sha256 138e70d02375837267a63a7c8e630fee02380b161bf2802964d2a79fe7e797fb) → `.claude/scripts/edit_comment.py`; `workflow-templates/.claude/commands/implement-plan-claude.md` (sha256 d475ad06ce744150b2d20e97ec3ed4a984eb33b1ee3ea5c0c1d7c2fbd178988b) → `.claude/commands/implement-plan-claude.md`. No `.claude/` path without a twin is touched.
+- Twin sync 1 (done, fdb3cdb, 2026-09-30; answered Q1: A by the owner, sha256s matched, 208 passed, 1 skipped, ruff clean): `workflow-templates/.claude/scripts/edit_comment.py` (sha256 138e70d02375837267a63a7c8e630fee02380b161bf2802964d2a79fe7e797fb) → `.claude/scripts/edit_comment.py`; `workflow-templates/.claude/commands/implement-plan-claude.md` (sha256 d475ad06ce744150b2d20e97ec3ed4a984eb33b1ee3ea5c0c1d7c2fbd178988b) → `.claude/commands/implement-plan-claude.md`. No `.claude/` path without a twin is touched.
+- Review round 1 (2026-09-30, head fdb3cdb, ledger 4bffd2c1…): fixed the parent-directory symlink race (consensus, 4–5 reviewers) with `_open_scratchpad_file`, which opens each directory of the checked path relative to its parent with `O_NOFOLLOW | O_DIRECTORY` and fails closed without `dir_fd` support; added the fixture session-id assertion and the progress-log task gap; rejected the second-`os.getuid()` finding (one reviewer, confidence 2: `read_input_file` only reaches that call after `_caller_scratchpad_identity` has called `os.getuid()` successfully, and POSIX `getuid` cannot fail). Verification: `tests/test_edit_comment.py` 85 passed, `test_template_parity` red until the twin sync; the 4 new race / fail-closed tests fail against the pre-fix helper; with the sync simulated in a scratch copy, 17 twin-related suites 1198 passed, 1 skipped; `ruff check` clean; end to end, `--dry-run` on comment 5912967579 from this session's scratchpad succeeds and from a sibling session's scratchpad exits 1.
+- Twin sync 2 pending: `workflow-templates/.claude/scripts/edit_comment.py` (sha256 03adfb4840fd49f7350bce2747f400ca5872ce29ccb1f23a9d1aa54518d2c442) → `.claude/scripts/edit_comment.py` (currently 138e70d0…). `implement-plan-claude.md` is unchanged and already in sync (d475ad06…). No `.claude/` path without a twin is touched.
