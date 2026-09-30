@@ -245,9 +245,21 @@ Phases of the unattended pipeline (each is a separate workflow file under
     it carries `ai:claude` + `ai:claude-blocked` and routes to Claude, its
     latest trusted-`User` `<!-- ai:claude-blocked:v1 -->` comment has a
     `Stage:` line starting `final-merge`, and a trusted `/reclarify` follows
-    it. clarify runs the same check (one paginated comments read, only for a
-    closed `/reclarify` issue carrying both labels; a read failure keeps the
-    skip) and logs `AI_PHASE_GATE_V1 phase=clarify gate=route
+    it. The resume is bound to one `/reclarify` by ID (#5514): the payload
+    must be `trigger: reclarify` with `reclarify_comment_id` (optional
+    `claude_issue.v1` key, sent by the handoff from
+    `CLAUDE_ISSUE_RECLARIFY_COMMENT_ID` = `github.event.comment.id`, default
+    empty), and that comment must be a trusted `User` `/reclarify` after the
+    blocked comment, created strictly after the issue's `closed_at`. An
+    `opened` / `manual` payload or one without the ID is refused
+    `issue_closed` before any comments read. clarify runs the same check
+    against its own event comment (`RECLARIFY_COMMENT_ID`, `final-merge-resume
+    --reclarify-comment-id`; ineligible reasons `no_reclarify_comment`,
+    `reclarify_not_trusted`, `no_reclarify_after_block`,
+    `reclarify_before_close` in its `final_merge_resume … eligible=false`
+    notice), with one paginated comments read, only for a closed
+    `/reclarify` issue carrying both labels (a read failure keeps the skip),
+    and logs `AI_PHASE_GATE_V1 phase=clarify gate=route
     reason=final_merge_resume outcome=handoff`, with outputs
     `final_merge_resume=true` and `issue_implementer_reason=final_merge_resume`.
     The handoff posts a resume-specific routed comment, and the intake

@@ -1341,7 +1341,13 @@ closed issue as `final_merge_resume` only when the issue carries `ai:claude`
 and `ai:claude-blocked`, its latest trusted `ai:claude-blocked:v1` comment
 names a `final-merge` stage, and the `/reclarify` comes after that comment
 (`AI_PHASE_GATE_V1 phase=clarify gate=route reason=final_merge_resume
-outcome=handoff`). The issue stays closed. The resumed session removes
+outcome=handoff`). The resume is bound to that one `/reclarify` (#5514): clarify
+checks its own event comment, the handoff sends its ID as the
+`reclarify_comment_id` payload key, and the comment must be created after the
+issue closed (a `/reclarify` in the same second as the close is refused, so
+comment again). The intake refuses a closed issue whose payload is `opened`,
+`manual`, or a `reclarify` without that ID, and a re-run of a clarify run from
+before the closure does not resume. The issue stays closed. The resumed session removes
 `ai:claude-blocked` and continues with verify-activation. Every other comment
 on a closed issue is still skipped (`reason=issue_closed outcome=skip`), and
 the intake refuses it with `issue_closed`. The check reads the comments once,
