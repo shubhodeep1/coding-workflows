@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T10:08:24Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Before accepting a paging-completeness fix, test the membership swap that keeps total_count unchanged (one run leaves, one enters mid-list): count checks alone never detect it.",
+  "phase": "implement_plan",
+  "pr_number": 5512,
+  "record_id": "lesson-implement-plan-4150d272d15d04b2baa466a8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5443-merge-train-complete-run-listing",
+    "file:tests/test_review_merge_train.py"
+  ]
+}
