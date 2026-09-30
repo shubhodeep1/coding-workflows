@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_enable_auto_merge.sh:221 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The helper script uses `${GITHUB_REPOSITORY}` for the gate call, whereas the `deterministic-skip-merge` job at `.github/workflows/review_autofix.yml` (line 1919) defines and passes a custom `REPOSITORY` environment variable for the same value.\n  WHY: While both variables resolve to the same value in current deployments, this inconsistency poses a maintenance risk. A future caller that sets `REPOSITORY` but not `GITHUB_REPOSITORY` (or vice-versa) could unintentionally misconfigure the gate evaluation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Any new merge path for `claude/*` PRs, such as the pending-checks merge of #4900, must call the gate before `gh pr merge`.\"\n  expected_change_site: pending-checks merge path of issue #4900 in `review_autofix.yml` or `scripts/review_enable_auto_merge.sh`\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: No diff hunk adds or introduces a gate call for #4900; AD-5 explicitly records this as a future requirement, not a deliverable of this PR: \"The #4900 pending-checks merge path must call the gate; this is documented in agents.md.\" The PR description's Verification checklist does not include #4900. The agents.md prose is documentation of a constraint on the future implementer of #4900, not a claim that this PR implements it. AD-5 explicitly records this as deferred, and the gate script docstring and agents.md prose document it as a forward-looking requirement for when #4900 lands.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"Any new merge path for claude/* PRs, such as the pending-checks merge of #4900, must call the gate before gh pr merge\" (agents.md prose, lines 1021-1023; PR description AD-5).\n  Expected change site: The future pending-checks merge path of issue #4900 in review_autofix.yml or review_enable_auto_merge.sh.\n  Evidence of absence: No diff hunk adds a gate call for #4900. AD-5 explicitly records this as a future requirement, not a deliverable of this PR: \"The #4900 pending-checks merge path must call the gate; this is documented in agents.md.\" The PR description's Verification checklist does not include #4900. The agents.md prose is documentation of a constraint on the future implementer of #4900, not a claim that this PR implements it. Per the TASK COMPLETENESS lens rule, requirements explicitly deferred to a future PR are not gaps; this is cited as acknowledged and deferred.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n  Classification: Deferred, not a gap. AD-5 and the agents.md prose both acknowledge #4900 as a future merge path that must call the gate; this PR documents that obligation without implementing it. No code change is missing from the current deliverable.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_enable_auto_merge.sh:221 | confidence=2\n  PROBLEM: The helper script uses `${GITHUB_REPOSITORY}` for the gate call, whereas the `deterministic-skip-merge` job at `.github/workflows/review_autofix.yml` (line 1919) defines and passes a custom `REPOSITORY` environment variable for the same value.\n  WHY: While both variables resolve to the same value in current deployments, this inconsistency poses a maintenance risk. A future caller that sets `REPOSITORY` but not `GITHUB_REPOSITORY` (or vice-versa) could unintentionally misconfigure the gate evaluation.\n- TASK_GAP\n  Requirement: The PR description (Changes section, last bullet) and the agents.md prose at lines 1021-1023 both state that \"Any new merge path for `claude/*` PRs, such as the pending-checks merge of #4900, must call the gate before `gh pr merge`.\"\n  Expected change site: The pending-checks merge path of issue #4900 in `review_autofix.yml` or `scripts/review_enable_auto_merge.sh`\n  Evidence of absence: No diff hunk introduces a gate call site for #4900; AD-5 explicitly records this as deferred (\"`review_rb_judge.sh` is not gated, because it never runs in Claude-fixer mode. The merge train is covered through its re-dispatched review. The #4900 pending-checks merge path must call the gate; this is documented in `agents.md`.\"); the PR description's Verification checklist also does not include #4900.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The consensus task gap from pass 1 reviewers states: \"The PR description and agents.md state that 'Any new merge path for claude/* PRs, such as the pending-checks merge of #4900, must call the gate before gh pr merge.' No diff hunk introduces a gate call site for #4900.\"\n  Expected change site: pending-checks merge path of issue #4900 in review_autofix.yml or scripts/review_enable_auto_merge.sh\n  Evidence of absence: No diff hunk introduces a gate call for #4900. However, AD-5 in the progress log explicitly records this as deferred: \"The #4900 pending-checks merge path must call the gate; this is documented in agents.md.\" The gate script docstring and agents.md prose both document this as a forward-looking requirement for when #4900 lands. This is not a gap \u2014 it is a documented future change outside this phase's scope.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "99c8a7e6c521dda3213bddbcaf0d44b348c537f42e776330dc4c9e3357610c49",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5382,
+    "run_id": "36665997124",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36665997124",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930040556_b7fded87e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5382,
+    "run_id": "36665997124"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T04:05:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
