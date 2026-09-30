@@ -939,18 +939,61 @@ def test_cap_blocker_body_never_contains_model_text(tmp_path):
 	assert "ghp_SHOULDNOTLEAK" not in body and "Q1: A/B" not in body
 
 
+def _comments_read(*comments: tuple[str, str]) -> str:
+	"""The comments GET stdout: one `{author_association, body}` JSON line per comment."""
+	return "".join(json.dumps({"author_association": association, "body": body}) + "\n" for association, body in comments)
+
+
+def _cap_blocker_comment(session: str = SESSION) -> str:
+	return guard.BLOCKED_COMMENT_MARKER + "\n" + guard.cap_blocker_marker(session) + "\n🛑 ..."
+
+
 def test_cap_blocker_is_idempotent_when_the_comment_exists(tmp_path):
 	directory = _reach_cap(tmp_path)
-	fake = FakeGh(existing="older comment\n" + guard.cap_blocker_marker(SESSION) + "\n🛑 ...")
+	fake = FakeGh(existing=_comments_read(("OWNER", "older comment"), ("OWNER", _cap_blocker_comment())))
 	result = _evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
 	assert fake.kinds() == ["get", "label"]
+	assert fake.calls[0][1][2:] == ["--jq", guard.CAP_BLOCKER_COMMENTS_JQ]
 	assert "already on shubhodeep1/coding-workflows#4911" in result["systemMessage"]
 	assert _cap_log(directory)[-1]["event"] == "cap_blocker_exists"
 
 
+@pytest.mark.parametrize("association", ["MEMBER", "COLLABORATOR"])
+def test_a_trusted_collaborators_blocker_counts_as_existing(tmp_path, association):
+	_reach_cap(tmp_path)
+	fake = FakeGh(existing=_comments_read((association, _cap_blocker_comment())))
+	_evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	assert fake.kinds() == ["get", "label"]
+
+
 def test_another_sessions_cap_marker_does_not_suppress_the_post(tmp_path):
 	_reach_cap(tmp_path)
-	fake = FakeGh(existing=guard.cap_blocker_marker("cse_01OTHERSESSION"))
+	fake = FakeGh(existing=_comments_read(("OWNER", _cap_blocker_comment("cse_01OTHERSESSION"))))
+	_evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	assert fake.kinds() == ["get", "post_comment", "label"]
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", None])
+def test_an_untrusted_comment_with_the_marker_does_not_suppress_the_post(tmp_path, association):
+	directory = _reach_cap(tmp_path)
+	fake = FakeGh(existing=_comments_read((association, _cap_blocker_comment())))
+	_evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	assert fake.kinds() == ["get", "post_comment", "label"]
+	assert _cap_log(directory)[-1]["event"] == "cap_blocker_posted"
+
+
+def test_a_comment_only_quoting_the_cap_marker_does_not_suppress_the_post(tmp_path):
+	_reach_cap(tmp_path)
+	quoting = "See the guard's marker " + guard.cap_blocker_marker(SESSION) + "\n" + guard.BLOCKED_COMMENT_MARKER
+	fake = FakeGh(existing=_comments_read(("OWNER", quoting), ("OWNER", guard.cap_blocker_marker(SESSION))))
+	_evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
+	assert fake.kinds() == ["get", "post_comment", "label"]
+
+
+def test_unparseable_comment_lines_are_skipped(tmp_path):
+	_reach_cap(tmp_path)
+	raw = _cap_blocker_comment() + "\n[1, 2]\n" + _comments_read(("OWNER", "older comment"))
+	fake = FakeGh(existing=raw)
 	_evaluate(_stop(SECTION_2_QUESTION), tmp_path, runner=fake)
 	assert fake.kinds() == ["get", "post_comment", "label"]
 

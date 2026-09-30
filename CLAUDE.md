@@ -2386,11 +2386,16 @@ enforces §28.B and §28.C in those sessions. It is wired in
   carrying `<!-- ai:unattended-guard-cap:v1 session=<id> -->`, from a fixed
   template with no model-written text, plus the `ai:claude-blocked` label.
   It reads the issue's comments first and skips the post when this
-  session's cap marker is already there. It tries up to 3 times within the
-  hook (1 s and 2 s backoff, a 24 s budget inside the 30 s wiring timeout);
-  a publish that still fails is stored as `cap_blocker: pending` and retried
-  at every later `Stop` in the session. Each outcome adds a
-  `cap_blocker_<posted|exists|failed|invalid>` line to `stop-guard.jsonl`.
+  session's blocker is already there: a comment by an owner, member, or
+  collaborator that starts with `<!-- ai:claude-blocked:v1 -->` and carries
+  this session's cap marker. A comment that only quotes the marker never
+  suppresses the post. It tries up to 3 times within the hook (1 s and 2 s
+  backoff, each `gh api` call capped at 6 s, a 24 s budget inside the 30 s
+  wiring timeout); a publish that still fails is stored as
+  `cap_blocker: pending` and retried at every later `Stop` in the session.
+  Each publish adds a `cap_blocker_<posted|exists|failed|invalid>` line to
+  `stop-guard.jsonl`; once the state says `posted`, later stops make no call
+  and add no line.
   The session still sends its own `PushNotification`; a hook cannot.
 - **`AskUserQuestion`.** Always denied in a marked session, with the same
   §28 reason.

@@ -1188,8 +1188,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   `<!-- ai:unattended-guard-cap:v1 session=<id> -->`) on the marker's issue
   and adds `ai:claude-blocked`, all through `gh api` (`run_gh_api`, no
   shell). Idempotent: a paginated comments read skips the post when this
-  session's cap marker exists, and `cap_blocker: posted` in `<id>.state.json`
-  stops further calls. Up to 3 attempts (1 s, 2 s backoff, 6 s per call,
+  session's blocker exists (an `OWNER` / `MEMBER` / `COLLABORATOR` comment
+  starting with `<!-- ai:claude-blocked:v1 -->` that carries this session's
+  cap marker; a comment that only quotes the marker does not count), and
+  `cap_blocker: posted` in `<id>.state.json` stops further calls (no call,
+  no log line). Up to 3 attempts (1 s, 2 s backoff, 6 s per call,
   24 s budget); a failure is stored as `cap_blocker: pending` and retried at
   every later `Stop`. An invalid marker repo or issue makes no call
   (`cap_blocker: invalid`). Log lines: `cap_blocker_posted`,

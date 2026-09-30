@@ -56,7 +56,10 @@ carries `<!-- ai:unattended-guard-cap:v1 session=<id> -->`, and adds the
 `ai:claude-blocked` label. Its only calls, all through `gh api` against the
 marker's validated `<owner>/<repo>` and issue number:
   - GET  repos/<repo>/issues/<N>/comments (paginated, 100 per page), to skip
-    the POST when this session's cap marker is already there (idempotent);
+    the POST when this session's blocker is already there (idempotent): a
+    comment by an OWNER, MEMBER, or COLLABORATOR whose body starts with
+    BLOCKED_COMMENT_MARKER and carries this session's cap marker. Any other
+    comment quoting the marker never suppresses the post;
   - POST repos/<repo>/issues/<N>/comments with a fixed template that never
     contains model-written text;
   - POST repos/<repo>/issues/<N>/labels with `ai:claude-blocked`.
@@ -65,8 +68,10 @@ CAP_BLOCKER_BACKOFF_SECONDS, each call bounded by CAP_BLOCKER_CALL_TIMEOUT
 and the run by CAP_BLOCKER_BUDGET_SECONDS (inside the 30 s wiring timeout).
 A publish that still fails leaves `cap_blocker: pending` in the state file
 and is retried at the start of every later `Stop` in the session, question
-or not. Every outcome appends one `cap_blocker_*` line to the cap log. A
-failed publish never blocks the stop and never raises.
+or not. Every publish outcome (`posted`, `exists`, `failed`, `invalid`)
+appends one `cap_blocker_*` line to the cap log; a call skipped because the
+state already says `posted` makes no API call and writes no line. A failed
+publish never blocks the stop and never raises.
 
 It fails open with a
 `systemMessage` on an unreadable, invalid, or non-object payload, an
@@ -122,6 +127,10 @@ CAP_BLOCKER_BUDGET_SECONDS = 24.0
 CAP_BLOCKER_POSTED = "posted"
 CAP_BLOCKER_PENDING = "pending"
 CAP_BLOCKER_INVALID = "invalid"
+# Only a comment by one of these can stand in for the guard's own blocker.
+CAP_BLOCKER_TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
+# One compact JSON object per comment, so a multi-line body stays one line.
+CAP_BLOCKER_COMMENTS_JQ = ".[] | {author_association, body} | tojson"
 
 # A `gh api` runner: (args after `gh api`, timeout) -> (returncode, stdout, stderr).
 GhRunner = Callable[[list, float], "tuple[int, str, str]"]
@@ -759,6 +768,26 @@ def publish_cap_blocker(
 	return outcome
 
 
+def _cap_blocker_on_issue(comments_out: str, cap_marker: str) -> bool:
+	"""True when the comments read (one JSON object per line) holds this session's blocker.
+
+	The comment must be by a trusted author association and start with
+	BLOCKED_COMMENT_MARKER, so a comment that only quotes the cap marker
+	cannot suppress the post. Unparseable lines are skipped.
+	"""
+	for line in comments_out.splitlines():
+		try:
+			comment = json.loads(line)
+		except ValueError:
+			continue
+		if not isinstance(comment, dict) or comment.get("author_association") not in CAP_BLOCKER_TRUSTED_ASSOCIATIONS:
+			continue
+		body = comment.get("body")
+		if _starts_with_marker(body) and cap_marker in body:
+			return True
+	return False
+
+
 def _publish_attempts(repo: str, issue: int, body: str, cap_marker: str, runner: GhRunner, sleep, clock) -> dict:
 	base = f"repos/{repo}/issues/{issue}"
 	deadline = clock() + CAP_BLOCKER_BUDGET_SECONDS
@@ -774,11 +803,11 @@ def _publish_attempts(repo: str, issue: int, body: str, cap_marker: str, runner:
 			sleep(delay)
 		attempts += 1
 		if not comment_done:
-			code, out, err = runner(["--paginate", f"{base}/comments?per_page=100", "--jq", ".[].body"], CAP_BLOCKER_CALL_TIMEOUT)
+			code, out, err = runner(["--paginate", f"{base}/comments?per_page=100", "--jq", CAP_BLOCKER_COMMENTS_JQ], CAP_BLOCKER_CALL_TIMEOUT)
 			if code != 0:
 				error = f"reading comments failed: {_gh_error(err, code)}"
 				continue
-			if cap_marker in out:
+			if _cap_blocker_on_issue(out, cap_marker):
 				comment_done = found_existing = True
 			else:
 				code, _out, err = runner([f"{base}/comments", "-f", f"body={body}"], CAP_BLOCKER_CALL_TIMEOUT)
@@ -900,6 +929,10 @@ def evaluate(
 					"blocks": blocks,
 				},
 			)
+			# A pending retry above already was this stop's publish of this
+			# session's one blocker (same marker, same calls); running it again
+			# would repeat calls that just failed and could overrun the 30 s
+			# hook timeout. A failure stays pending for the next stop.
 			outcome = retried or publish_cap_blocker(marker, session, kind, blocks, directory, now, runner, sleep, clock)
 			return {
 				"systemMessage": (
