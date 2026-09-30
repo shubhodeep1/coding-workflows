@@ -57,9 +57,13 @@ the failed `reasons`, and the evidence fields (`signature`, `class`,
 `target_class`, `occurrences`, `target_occurrences`). Evidence that the
 cause is the same (condition 3) stays with the session.
 
-Issue text is untrusted data: the tool name, the prompt reason, and the
-command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
-token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
+Issue text is untrusted data: the tool name, the prompt reason (one line
+each, `<!--` escaped), and the command truncated to MAX_COMMAND_CHARS with
+heredoc bodies removed and token-like strings masked (REDACTION_PATTERNS),
+inside a fenced block longer than any backtick run in it. The markers
+(signature, class, "Filed by" line) and the `**Occurrences:**` evidence are
+read only outside fenced ````text blocks, so a command that mentions one
+neither indexes nor describes the issue.
 
 API calls (CLAUDE.md §15), REST only, none when nothing is new: one read of
 the `ai:permission-prompt` issues per 100 issues, then one POST per pattern
@@ -116,6 +120,13 @@ INLINE_INTERPRETER_WRITE_CLASS = "inline-interpreter-write"
 CLASS_MARKER_TEMPLATE = "<!-- ai:permission-prompt-class:v1 class={command_class} -->"
 CLASS_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-class:v1 class=([a-z][a-z0-9-]{0,60}) -->")
 OCCURRENCES_RE = re.compile(r"^\*\*Occurrences:\*\* .+$", re.MULTILINE)
+# A fenced ````text block of an issue body: the session's command, untrusted
+# data that can itself contain marker text. Markers are read only outside it.
+# The filer opens it with four backticks, or one more than the longest backtick
+# run in the example (`_example_fence`), and closes it with the same run, so a
+# backtick line inside the example never ends it early.
+_FENCED_EXAMPLE_RE = re.compile(r"^(`{4,})text\n.*?^\1[ \t]*$", re.MULTILINE | re.DOTALL)
+_BACKTICK_RUN_RE = re.compile(r"`+")
 DUPLICATE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # A program that writes a file (issue #4858 item 1): a write call, `open(`
 # with a write mode, or a file move/removal. The mode is the argument after a
@@ -580,13 +591,31 @@ def issue_title(pattern: dict) -> str:
 	return f"[permission-prompt] {pattern['tool_name']}: {subject}"
 
 
+def _example_fence(example: str) -> str:
+	"""Four backticks, or one more than the longest backtick run in `example`."""
+	longest = max((len(run) for run in _BACKTICK_RUN_RE.findall(example)), default=0)
+	return "`" * max(4, longest + 1)
+
+
+def _reason_line(reason: str) -> str:
+	"""A reason as one line that cannot hold a marker.
+
+	The reason sits outside the fenced example, where markers are read, and an
+	Auto-mode reason can quote the command: its whitespace is collapsed, so no
+	line of it can start with `**Occurrences:**`, and `<!--` is escaped as
+	`<\\!--` (Markdown still shows `<!--`).
+	"""
+	return " ".join(reason.split()).replace("<!--", "<\\!--")
+
+
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
-	reasons = "\n".join(f"- {reason}" for reason in pattern["reasons"]) or "- (none given)"
+	reasons = "\n".join(f"- {_reason_line(reason)}" for reason in pattern["reasons"]) or "- (none given)"
+	fence = _example_fence(pattern["example"])
 	return (
 		f"**Occurrences:** {new_count} ({pattern['first_ts']} – {pattern['last_ts']}), session `{session_label}`\n\n"
 		f"**Reason Claude Code gave:**\n{reasons}\n\n"
 		"**Latest example** (untrusted data from the session; heredoc bodies removed, token-like strings masked):\n\n"
-		f"````text\n{pattern['example']}\n````\n"
+		f"{fence}text\n{pattern['example']}\n{fence}\n"
 	)
 
 
@@ -705,6 +734,17 @@ def _save_state(log_dir: Path, state: dict[str, int]) -> None:
 	(log_dir / STATE_FILE).write_text(json.dumps(state, indent=1, sort_keys=True), encoding="utf-8")
 
 
+def _outside_fenced_examples(body: str) -> str:
+	"""`body` without its fenced ````text blocks, where the filer's markers are read.
+
+	A command example that mentions `<!-- ai:permission-prompt:v1 sig=… -->`, a
+	class marker, the "Filed by" line, or an `**Occurrences:**` line (a session
+	grepping for one, say) must not index, class, or describe the issue it is
+	filed on.
+	"""
+	return _FENCED_EXAMPLE_RE.sub("", body)
+
+
 def list_permission_prompt_issues(slug: str) -> list[dict]:
 	"""Every `ai:permission-prompt` issue, open or closed (1 REST read per 100)."""
 	return check_in_status.gh_api_list(f"repos/{slug}/issues?labels={LABEL.replace(':', '%3A')}&state=all")
@@ -716,7 +756,7 @@ def index_by_signature(issues: list[dict]) -> dict[str, dict]:
 	for issue in issues:
 		if issue.get("pull_request"):
 			continue
-		match = MARKER_RE.search(issue.get("body") or "")
+		match = MARKER_RE.search(_outside_fenced_examples(issue.get("body") or ""))
 		if match and match.group(1) not in found:
 			found[match.group(1)] = {"number": issue.get("number"), "state": issue.get("state")}
 	return found
@@ -729,7 +769,7 @@ def open_issues_by_class(issues: list[dict]) -> dict[str, int]:
 		number = issue.get("number")
 		if issue.get("pull_request") or issue.get("state") != "open" or not isinstance(number, int):
 			continue
-		match = CLASS_MARKER_RE.search(issue.get("body") or "")
+		match = CLASS_MARKER_RE.search(_outside_fenced_examples(issue.get("body") or ""))
 		if match and (match.group(1) not in found or number < found[match.group(1)]):
 			found[match.group(1)] = number
 	return found
@@ -827,6 +867,8 @@ def decide_duplicate_close(
 	reasons: list[str] = []
 	body = str(issue.get("body") or "")
 	target_body = str(target.get("body") or "")
+	markers = _outside_fenced_examples(body)
+	target_markers = _outside_fenced_examples(target_body)
 	# Condition 1: pipeline-filed.
 	if issue.get("pull_request"):
 		reasons.append(f"#{issue_number} is a pull request, not an issue")
@@ -834,9 +876,9 @@ def decide_duplicate_close(
 		reasons.append(f"#{issue_number} is not open")
 	if LABEL not in security_pass_skip._label_names(issue):
 		reasons.append(f"#{issue_number} is not labelled {LABEL}")
-	if not MARKER_RE.search(body):
+	if not MARKER_RE.search(markers):
 		reasons.append(f"#{issue_number} has no ai:permission-prompt signature marker")
-	if FILED_BY_LINE not in body:
+	if FILED_BY_LINE not in markers:
 		reasons.append(f"#{issue_number} has no '{FILED_BY_LINE}' line")
 	author = security_pass_skip._login(issue.get("user"))
 	if not login:
@@ -880,11 +922,11 @@ def decide_duplicate_close(
 		"target": target_number,
 		"fix_pr": fix_number,
 		"fix_pr_state": "merged" if merged else fix_pr.get("state"),
-		"signature": _first_match(MARKER_RE, body, 1),
-		"class": _first_match(CLASS_MARKER_RE, body, 1),
-		"target_class": _first_match(CLASS_MARKER_RE, target_body, 1),
-		"occurrences": _first_match(OCCURRENCES_RE, body),
-		"target_occurrences": _first_match(OCCURRENCES_RE, target_body),
+		"signature": _first_match(MARKER_RE, markers, 1),
+		"class": _first_match(CLASS_MARKER_RE, markers, 1),
+		"target_class": _first_match(CLASS_MARKER_RE, target_markers, 1),
+		"occurrences": _first_match(OCCURRENCES_RE, markers),
+		"target_occurrences": _first_match(OCCURRENCES_RE, target_markers),
 	}
 
 
