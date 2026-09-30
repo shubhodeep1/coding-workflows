@@ -3,22 +3,22 @@
 - Plan: docs/plans/issue-5520-e2e-dispatch-default-branch-plan.md
 - Source issue: shubhodeep1/coding-workflows#5520 (https://github.com/shubhodeep1/coding-workflows/issues/5520)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch
-- Project branch: claude/implement-plan-issue-5520-e2e-dispatch-default-branch   Final PR: pending
+- Project branch: claude/implement-plan-issue-5520-e2e-dispatch-default-branch   Final PR: #5550 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (opened after this commit; its number is in the stage report and the checker instructions)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; phase 1 in progress
+- Last note: phase 1 implemented and verified locally (22 new tests, 548 tests over every module that references test-and-mark-stable.yml, actionlint, yamllint, shellcheck without new warnings); phase PR opened
 
 ## Phases
-1. [ ] Phase 1 — default-branch E2E review dispatches with reviewed-head correlation
-   - [ ] Phase 3c and Phase 4b `gh workflow run "${REVIEW_WORKFLOW_FILE}"` calls carry no `--ref`
-   - [ ] Phase 4 matches default-branch dispatch runs (workflow-scoped listing, provenance, exact PR run name) and accepts a completed one only when its trusted reviewed head equals `PIN_SHA`
-   - [ ] Phase 4b adopts or registers matched dispatch runs and requires a reviewed head on a dispatched retry
-   - [ ] tests (new `tests/test_test_and_mark_stable_e2e_dispatch_default_branch.py`, updated Phase 4b contract), `ci.yml` step, agents.md, `changelog.d/5520-e2e-dispatch-default-branch.md`
+1. [ ] Phase 1 — default-branch E2E review dispatches with reviewed-head correlation   — PR open (waiting); review rounds: 0; interventions: 0
+   - [x] Phase 3c and Phase 4b `gh workflow run "${REVIEW_WORKFLOW_FILE}"` calls carry no `--ref`
+   - [x] Phase 4 matches default-branch dispatch runs (workflow-scoped listing, provenance, exact PR run name) and accepts a completed one only when its trusted reviewed head equals `PIN_SHA`
+   - [x] Phase 4b adopts or registers matched dispatch runs and requires a reviewed head on a dispatched retry
+   - [x] tests (new `tests/test_test_and_mark_stable_e2e_dispatch_default_branch.py`, updated Phase 4b contract), `ci.yml` step, agents.md, `changelog.d/5520-e2e-dispatch-default-branch.md`
 
 ## Conformance
 
@@ -41,6 +41,8 @@
 - AD-8 [plan, 2026-09-30] May Phase 4b adopt an active dispatch run instead of dispatching another? — Picked: A — yes, the oldest matched active run created at or after `BAIT_CREATED_AT`. Alternatives: B — never adopt dispatch runs. Why: it mirrors the existing branch adoption, and a duplicate run would only queue behind it in the `pr-autofix` concurrency group. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] When a shell step passes a GitHub run listing to jq, feed it on stdin, never through `--argjson`: a 100-run page can be several hundred KB, above Linux's 128 KB limit for one argument, and the step then fails with E2BIG. (files: .github/workflows/test-and-mark-stable.yml)
+- [source:plan-deviation] A workflow step that adds a second source of candidate runs must also gate the loop's early-accept shortcuts (failed steps, log markers) on the new source, or a run whose correlation is only checked at completion can be accepted while it is still in flight. (files: .github/workflows/test-and-mark-stable.yml)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #5520; start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
@@ -48,3 +50,5 @@
 - Issue base `claude/implement-plan-issue-4898-retrigger-dispatch-default-branch` has not merged (its final PR #4923 is a draft into #4701's project branch).
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5520#issuecomment-5906530022 (id 5906530022).
 - Stale Routine sweep (2026-09-30): 8 ended Routines deleted.
+- Phase 1: the plan's Goals did not name the Phase 4 in-progress shortcuts (the failed-step and editor-no-op early accepts). They are gated on `E2E_REVIEW_DISPATCH_WATCHING`, so a watched dispatch run is accepted only at completion with a matching reviewed head, as the Goals require. The `review_workflow_file` input description now says which wrappers can be matched. Phase 6's poller dispatch (`--ref "${POLLER_DISPATCH_REF}"`) is unchanged, per the plan's non-goals.
+- Local test environment: `pytest`, `pyyaml`, `yamllint`, `actionlint-py`, `shellcheck-py` installed with pip, and `gawk` with apt (`tests/test_implement_post_codex_recovery.py` needs it; it failed with `gawk: command not found` before, unrelated to this change).
