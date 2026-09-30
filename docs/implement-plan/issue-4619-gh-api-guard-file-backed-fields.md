@@ -4,14 +4,14 @@
 - Source issue: shubhodeep1/coding-workflows#4619
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4619-gh-api-guard-file-backed-fields   Final PR: #4641 ready — review rounds: 1
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: final-merge — review round
 - Activation: pending verify-activation
-- Waiting on: PR #4641: twin sync
+- Waiting on: PR #4641 (review round 2 on the synced head)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01SdjPMQ5uLDRMKgrHa86Men   safety net none (twin-sync hold)   hand-back none
+- Check-in: checker session_01SdjPMQ5uLDRMKgrHa86Men   safety net trig_01J4wW6oGKBSxdJJq5mu9tiY   hand-back trig_01AMuJojYNNX1vn3qLJjk8mh
 - Last updated: 2026-09-30
-- Last note: final-merge review round 1 fixed the shell-expansion bypass of the file-backed check in the hook twin (`[claude-autofix]` commit on the project branch); `hold` claim posted and the twin-sync blocker is on #4619. After the `[claude-twin-sync]` copy and `/reclarify`, re-arm the wait on PR #4641 (next stages `verify-activation 1/3`, `final-merge — review round`, `final-merge — blocked PR`).
+- Last note: twin sync 70b5493 verified (root hook byte-identical to the twin, sha256 8817dae5…); main merged into the project branch; wait on PR #4641 re-armed with the project checker (next stages `verify-activation 1/3`, `final-merge — review round`, `final-merge — blocked PR`).
 
 ## Phases
 1. [x] Phase 1 — file-backed `-F` values and `--input` always prompt in the gh api guard — protected paths: `.claude/hooks/gh_api_write_guard.py` — PR #5004 merged 2026-09-29 (964bc01); twin sync 73ad50e landed 2026-09-29; review rounds: 2; interventions: 0
@@ -28,7 +28,7 @@
 ## Completion
 - Completion PR (claude/implement-plan-issue-4619-gh-api-guard-file-backed-fields-complete) open 2026-09-30 — doc moved to docs/completed/issue-4619-gh-api-guard-file-backed-fields-plan.md
 - Completion PR #5506 merged 2026-09-30
-- Final PR #4641 ready 2026-09-30 — review rounds: 1 (round 1: fixed the shell-expansion bypass of the file-backed check and named every file-backed field; waiting on the twin sync)
+- Final PR #4641 ready 2026-09-30 — review rounds: 1 (round 1: fixed the shell-expansion bypass of the file-backed check and named every file-backed field; twin sync 70b5493 landed 2026-09-30)
 
 ## Activation
 
@@ -59,3 +59,4 @@
 - Main sync 2026-09-30: ce8a06d (`[claude-merge-resolve]`, CLAUDE.md §23.H table conflict: kept both the #4619 write row and main's malformed-jq row), then a clean merge d843ca7 at the validation read stage.
 - Validation read stage 2026-09-30 (session session_01Rz4Dy2CxU4zUatadVRmXQN): run 36669567556 concluded success, `validation_status.json` status=pass; no validation-fix PR, so no conformance re-run; opened the completion PR.
 - Final-merge review round 1 (2026-09-30, session session_012NzwJpgecSs3KdhDR8g9hp): all 10 ledger entries addressed. Fixed: the consensus shell-expansion bypass (`-F body=$'@f'`, `$F`, `${X:-@f}`, `~`, globs; reproduced as no-decision, and `-F{'q=1','x=@/tmp/a b'}` plus a brace endpoint as outright allows), the task gap, and the multi-field reason (every file-backed field is named). Proactive (§12.B, same flow): ANSI-C `$'\''` and word-initial `#` comments desync the tokenizer (a comment hid `gh api -X DELETE` behind an allow); both now ask. Twin-first under the phase 1 approval: only `workflow-templates/.claude/hooks/gh_api_write_guard.py` changed (sha256 8817dae51118babfe1569d42259521565b4b3410f9f13e6bd9192472be474013); in a scratch copy with the twin at `.claude/hooks/`, the four hook suites pass (441 passed). Word splitting and quoted heredoc markers filed as #5558 (AD-9).
+- Resumed 2026-09-30 by the Claude issue dispatcher after the owner's `/reclarify` (session session_01GB8UWpGJj3ZKeySr3HQV5v, permission mode auto): twin sync 70b5493 (master session, Q40 option A) verified — `.claude/hooks/gh_api_write_guard.py` is byte-identical to its twin (sha256 8817dae51118babfe1569d42259521565b4b3410f9f13e6bd9192472be474013); `ai:claude-blocked` removed from #4619; main (d1e530e, #5304) merged cleanly into the project branch; hook and command suites pass (512 passed, 1 skipped). Re-armed the wait on PR #4641 with the existing project checker.
