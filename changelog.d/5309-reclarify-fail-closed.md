@@ -5,7 +5,7 @@ Automation posts issue comments as the same trusted `User` account a maintainer 
 
 | The numbers that matter | Value |
 | --- | --- |
-| New comment markers | `<!-- ai:clarify-escalation:v1 -->` (`scripts/orchestrate_parse_and_post_answer.sh`), `<!-- ai:plan-blocked:v1 -->` and `<!-- ai:clarification-required:v1 -->` (`plan.yml`), `<!-- ai:implement-blocked:v1 -->` (`implement.yml`) |
+| New comment markers | `<!-- ai:clarify-escalation:v1 -->` (`scripts/orchestrate_parse_and_post_answer.sh`), `<!-- ai:clarify-blocked:v1 -->` (`clarify.yml`), `<!-- ai:plan-blocked:v1 -->` and `<!-- ai:clarification-required:v1 -->` (`plan.yml`), `<!-- ai:implement-blocked:v1 -->` (`implement.yml`) |
 | Later-line `/reclarify` never counts on | `ai:orchestrator-tracking`, `ai:orchestrator-managed` |
 | Comment starting with `/reclarify` | unchanged, on every issue |
 | Extra GitHub API calls | 0 per route; 2 more label deletions only when a Codex route releases a Claude claim |
