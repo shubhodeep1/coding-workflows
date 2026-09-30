@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_claude_fixer_mode.py:lines 528-547, with the alias at line 548-549 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The legacy alias causes pytest to collect and run the same test twice.\n  WHY: The duplicate run is not incorrect but adds a duplicate test entry and doubles the wall-clock time for this test.\n- tests/test_review_claude_fixer_nonblocking.py:line ~191-197 in the diff | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `_kept`, `_run`, and `_diagnostics` helpers default `disproof_check` to `_proved`, which could cause future tests that omit the argument to demote entries after all vote conditions pass.\n  WHY: No current test failure was identified; the concern is that a future test could get a false-negative on a vote-condition regression.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_autofix_claude_fixer_mode.py:lines 528-547, with the alias at line 548-549 | severity=NIT | confidence=3\n  PROBLEM: The test name `test_handoff_rejected_singleton_is_handed_off_not_auto_merged` is accurate, and the old name `test_handoff_rejected_singleton_auto_merges_and_stays_visible` is preserved as an alias bound to the new function. This honours CLAUDE.md \u00a76 (no in-place rename). However, the alias causes pytest to collect and run the same test twice \u2014 once under each name \u2014 which is wasteful in CI but not incorrect.\n  WHY: Does not fail; pytest runs the same assertions twice. The cost is a duplicate entry in the collected test list and doubled wall-clock time for this one test. The progress log already documents this as AD-5 with the note \"the only cost is pytest running the same test twice.\"\n- tests/test_review_claude_fixer_nonblocking.py: `_kept` helper (line ~191-197 in the diff) now defaults `disproof_check=_proved`, where `_proved` is a new function returning `True` unconditionally. `_run` and `_diagnostics` similarly default to `_proved`. | severity=NIT | confidence=2\n  PROBLEM: Every existing test that calls `_kept`, `_run`, or `_diagnostics` without passing `disproof_check` will now use `_proved` as the default. For entries that pass every vote condition, the finding is now demoted instead of kept with a reason. This is correct for the mechanics tests (they exercise the vote conditions, and `_proved` kicks in only after all conditions pass), but any future test that adds a single-reviewer entry to the ledger WITHOUT also testing the vote conditions will silently see it demoted, which could mask a regression in vote-condition logic.\n  WHY: Does not fail today; every existing test that calls these helpers either expects demotion or checks entries that fail on an earlier vote condition. The risk is latent: a future test that adds the default `_proved` without intending to exercise the disproof path could get a false-negative on a vote-condition regression.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "da75dc1afd8fe2a5e377ec494cf8455fcb730b34319dc6cfa9347af7eb00db24",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5611,
+    "run_id": "36722924281",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36722924281",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930143009_377f32170c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5611,
+    "run_id": "36722924281"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T14:30:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
