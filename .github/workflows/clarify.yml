@@ -428,17 +428,47 @@ jobs:
           # plain attempts with backoff (no rate-limit handling), announced so
           # the run log tells a degraded read from an ineligible issue. Each
           # failed attempt logs a warning, as the real helper does, so a read
-          # that recovers on a retry is visible too.
+          # that recovers on a retry is visible too. GH_RETRY_MAX_ATTEMPTS is
+          # validated (non-numeric or 0 → 3) and capped at 5, so the loop
+          # always ends and sleeps at most 20s in total; a permanent failure
+          # (the real helper's _is_gh_permanent_failure patterns) is not
+          # retried.
           if ! type gh_retry_to_file >/dev/null 2>&1; then
-            echo "::warning::scripts/gh_helpers.sh did not load; gh_retry_to_file falls back to ${GH_RETRY_MAX_ATTEMPTS:-3} plain attempts without rate-limit handling"
+            GH_RETRY_FALLBACK_MAX_ATTEMPTS="${GH_RETRY_MAX_ATTEMPTS:-3}"
+            case "${GH_RETRY_FALLBACK_MAX_ATTEMPTS}" in
+              ''|*[!0-9]*) GH_RETRY_FALLBACK_MAX_ATTEMPTS=3 ;;
+              ????*) GH_RETRY_FALLBACK_MAX_ATTEMPTS=5 ;;
+            esac
+            if [ "${GH_RETRY_FALLBACK_MAX_ATTEMPTS}" -lt 1 ]; then
+              GH_RETRY_FALLBACK_MAX_ATTEMPTS=3
+            elif [ "${GH_RETRY_FALLBACK_MAX_ATTEMPTS}" -gt 5 ]; then
+              GH_RETRY_FALLBACK_MAX_ATTEMPTS=5
+            fi
+            echo "::warning::scripts/gh_helpers.sh did not load; gh_retry_to_file falls back to $((10#${GH_RETRY_FALLBACK_MAX_ATTEMPTS})) plain attempts without rate-limit handling"
             gh_retry_to_file()
             {
               local out="$1"; shift
-              local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-3}"
+              local max_attempts=$((10#${GH_RETRY_FALLBACK_MAX_ATTEMPTS}))
               local attempt=1
+              local err_file
+              err_file="$(mktemp "${RUNNER_TEMP:-/tmp}/gh_retry_fallback_stderr.XXXXXX" 2>/dev/null)" || err_file=""
               while :; do
-                "$@" > "${out}" && return 0
+                if [ -n "${err_file}" ]; then
+                  if "$@" > "${out}" 2> "${err_file}"; then
+                    rm -f "${err_file}"
+                    return 0
+                  fi
+                  cat "${err_file}" >&2
+                  if grep -qiE "['\"][^'\"]+['\"] not found|gh: Not Found|HTTP 404|404 Not Found|status code 404|HTTP 422|Resource not accessible by (integration|personal access token)" "${err_file}"; then
+                    echo "::warning::gh_retry_to_file fallback: gh command failed with a non-retryable error (attempt ${attempt}/${max_attempts}); not retrying"
+                    rm -f "${err_file}"
+                    return 1
+                  fi
+                else
+                  "$@" > "${out}" && return 0
+                fi
                 if [ "${attempt}" -ge "${max_attempts}" ]; then
+                  [ -z "${err_file}" ] || rm -f "${err_file}"
                   echo "::warning::gh_retry_to_file fallback: gh command failed after ${max_attempts} attempts"
                   return 1
                 fi

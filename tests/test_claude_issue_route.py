@@ -267,7 +267,7 @@ if [[ "$*" == *"/collaborators/"*"/permission"* ]]; then
   exit 0
 fi
 if [[ "$*" == "api --paginate "*"/comments?per_page=100" ]]; then
-  [ -z "${{GH_STUB_FAIL_COMMENTS:-}}" ] || {{ echo "HTTP 500" >&2; exit 1; }}
+  [ -z "${{GH_STUB_FAIL_COMMENTS:-}}" ] || {{ echo "${{GH_STUB_FAIL_COMMENTS_ERR:-HTTP 500}}" >&2; exit 1; }}
   printf '%s' "${{GH_STUB_COMMENTS_JSON:-[]}}"
   exit 0
 fi
@@ -2115,6 +2115,57 @@ def test_clarify_fallback_retries_and_warns_without_gh_helpers(stubs):
 	assert "::warning::gh_retry_to_file fallback: gh command failed (attempt 1/2), retrying in 2s" in result.stdout
 	assert "::warning::gh_retry_to_file fallback: gh command failed after 2 attempts" in result.stdout
 	assert "(attempt 2/2)" not in result.stdout
+	assert "final_merge_resume check failed for closed issue #9" in result.stdout
+	assert outputs["final_merge_resume"] == "false"
+
+
+@pytest.mark.parametrize(
+	("max_attempts", "expected"),
+	[
+		# Not a positive integer: the default 3, so the loop always ends.
+		("abc", 3),
+		("0", 3),
+		("", 3),
+		# Above the cap: at most 5 attempts, 20s of backoff in total.
+		("9", 5),
+		("12345", 5),
+	],
+)
+def test_clarify_fallback_validates_and_caps_max_attempts(stubs, max_attempts, expected):
+	# The backoff sleeps are not what this test checks; skip them.
+	sleep_stub = stubs["tmp"] / "sleep_bin"
+	sleep_stub.mkdir(exist_ok=True)
+	(sleep_stub / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n")
+	(sleep_stub / "sleep").chmod(0o755)
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		route_cwd=_clarify_cwd_without_gh_helpers(stubs),
+		GH_STUB_FAIL_COMMENTS="1",
+		GH_RETRY_MAX_ATTEMPTS=max_attempts,
+		PATH=f"{sleep_stub}:{stubs['env']['PATH']}",
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"gh_retry_to_file falls back to {expected} plain attempts" in result.stdout
+	assert stubs["log"].read_text().count("api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100") == expected
+	assert f"::warning::gh_retry_to_file fallback: gh command failed after {expected} attempts" in result.stdout
+	assert "integer expression expected" not in result.stdout + result.stderr
+	assert outputs["final_merge_resume"] == "false"
+
+
+def test_clarify_fallback_does_not_retry_a_permanent_failure(stubs):
+	result, outputs = _run_clarify_route(
+		stubs,
+		_closed_blocked_issue(title="Fix", body=""),
+		route_cwd=_clarify_cwd_without_gh_helpers(stubs),
+		GH_STUB_FAIL_COMMENTS="1",
+		GH_STUB_FAIL_COMMENTS_ERR="HTTP 404: Not Found",
+		GH_RETRY_MAX_ATTEMPTS="3",
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert stubs["log"].read_text().count("api --paginate repos/shubhodeep1/digital_pa/issues/9/comments?per_page=100") == 1
+	assert "gh_retry_to_file fallback: gh command failed with a non-retryable error (attempt 1/3); not retrying" in result.stdout
+	assert "retrying in" not in result.stdout
 	assert "final_merge_resume check failed for closed issue #9" in result.stdout
 	assert outputs["final_merge_resume"] == "false"
 
