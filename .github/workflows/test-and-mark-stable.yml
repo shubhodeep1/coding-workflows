@@ -614,6 +614,10 @@ jobs:
         id: wait-clarify
         env:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          # ISSUE_TITLE scopes the run lookup to OUR issue's run (display_title
+          # equals the issue title for issues / issue_comment events). Release
+          # run 36374918973 recorded another issue's Clarify run without it.
+          ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
         run: |
           set -euo pipefail
           echo "Waiting for clarify to finish on issue #${ISSUE_NUMBER}..."
@@ -622,11 +626,20 @@ jobs:
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
+
+          # An empty title turns off the lookup's title filter and brings
+          # back the unscoped lookup of run 36374918973; fail like Plan does.
+          if [ -z "${ISSUE_TITLE}" ]; then
+            echo "::error::Missing issue title for Clarify run scoping"
+            echo "status=clarify_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           # Robust workflow run-ID capture — retries on empty results to ride out
           # the brief race window where the matching run isn't yet indexed by the
-          # API, and widens pagination to per_page=100 in case of high concurrent
+          # API, and pages past the first 100 runs (find_latest_scoped_run_field) in case of high concurrent
           # workflow run volume on the target repo. Returns the run id on stdout
           # (empty string if all attempts fail).
           capture_run_id() {
@@ -634,8 +647,7 @@ jobs:
             local result=""
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
+              result=$(find_latest_scoped_run_field "${TEST_REPO}" "${{ steps.create-issue.outputs.created_after }}" "${name_re}" "${ISSUE_TITLE:-}" "id" || echo "")
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
                 return 0
@@ -749,19 +761,18 @@ jobs:
             gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}"
           }
 
+          # Pages past the first 100 runs when needed; see
+          # find_latest_scoped_run_field in
+          # scripts/comprehensive_test_and_release_gh_api.sh.
           latest_scoped_run_field() {
             local name_re="$1"
             local field="$2"
-            local runs_json=""
-            runs_json=$(fetch_plan_runs_json || echo "")
-            [ -n "$runs_json" ] || return 1
-            printf '%s' "$runs_json" \
-              | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" --arg field "$field" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .[$field] // empty' 2>/dev/null
+            find_latest_scoped_run_field "${TEST_REPO}" "${{ steps.create-issue.outputs.created_after }}" "$name_re" "$ISSUE_TITLE" "$field"
           }
 
           # Robust workflow run-ID capture — retries on empty results to ride out
           # the brief race window where the matching run isn't yet indexed by the
-          # API, and widens pagination to per_page=100 in case of high concurrent
+          # API, and pages past the first 100 runs (find_latest_scoped_run_field) in case of high concurrent
           # workflow run volume on the target repo. Filters by display_title so we
           # only pick up the Plan run that fired for OUR issue (display_title for
           # issue_comment events is the issue title). Returns the run id on stdout
@@ -934,6 +945,10 @@ jobs:
         id: wait-implement
         env:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          # ISSUE_TITLE scopes the run lookup to OUR issue's run (display_title
+          # equals the issue title for issues / issue_comment events). Release
+          # run 36374918973 recorded another issue's Clarify run without it.
+          ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
         run: |
           set -euo pipefail
           echo "Waiting for implementation PR on issue #${ISSUE_NUMBER}..."
@@ -949,11 +964,20 @@ jobs:
           MIN_GRACE_SECONDS=60
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
+
+          # An empty title turns off the lookup's title filter and brings
+          # back the unscoped lookup of run 36374918973; fail like Plan does.
+          if [ -z "${ISSUE_TITLE}" ]; then
+            echo "::error::Missing issue title for Implement run scoping"
+            echo "status=implement_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           # Robust workflow run-ID capture — retries on empty results to ride out
           # the brief race window where the matching run isn't yet indexed by the
-          # API, and widens pagination to per_page=100 in case of high concurrent
+          # API, and pages past the first 100 runs (find_latest_scoped_run_field) in case of high concurrent
           # workflow run volume on the target repo. Returns the run id on stdout
           # (empty string if all attempts fail).
           # Use approval timestamp to filter implement runs so we exclude
@@ -967,8 +991,7 @@ jobs:
             local result=""
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${IMPL_CREATED_AFTER}" \
-                --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
+              result=$(find_latest_scoped_run_field "${TEST_REPO}" "${IMPL_CREATED_AFTER}" "${name_re}" "${ISSUE_TITLE:-}" "id" || echo "")
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
                 return 0
@@ -3364,6 +3387,28 @@ jobs:
           set -euo pipefail
           BRANCH="ai/issue-${ISSUE_NUMBER}"
 
+          # List internal-cancel-on-pr-close runs into PHASE7_CANCEL_RUNS_JSON.
+          # One transient GitHub error must not fail Phase 7: run 36389883126
+          # got a single HTTP 502 while the cancel run it was polling was
+          # already in progress, and the step exited lookup_failed. Retry up to
+          # 3 times, 5 s apart; only 3 consecutive failures return 1, and the
+          # caller then reports lookup_failed as before.
+          phase7_list_cancel_runs() {
+            local per_page="$1"
+            local _attempt
+            for _attempt in 1 2 3; do
+              if PHASE7_CANCEL_RUNS_JSON=$(gh api \
+                "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=${per_page}"); then
+                return 0
+              fi
+              if [ "${_attempt}" -lt 3 ]; then
+                echo "::warning::Listing internal-cancel-on-pr-close runs failed (attempt ${_attempt}/3); retrying in 5s."
+                sleep 5
+              fi
+            done
+            return 1
+          }
+
           # The PR may already be closed/merged by the time Phase 7 runs —
           # earlier phases (orchestrator auto-merge after review approval)
           # can close it asynchronously. PATCH-ing state=closed on an
@@ -3397,12 +3442,12 @@ jobs:
               echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
               exit 1
             fi
-            if ! EXISTING_RUNS_JSON=$(gh api \
-              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=50"); then
+            if ! phase7_list_cancel_runs 50; then
               echo "::error::Could not list internal-cancel-on-pr-close runs for already-closed PR #${PR_NUMBER}."
               echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
               exit 1
             fi
+            EXISTING_RUNS_JSON="${PHASE7_CANCEL_RUNS_JSON}"
             EXISTING=$(printf '%s' "${EXISTING_RUNS_JSON}" | jq -c \
               --arg head_sha "${PR_HEAD_SHA}" \
               --arg closed_at "${PR_CLOSED_AT}" \
@@ -3611,12 +3656,12 @@ jobs:
 
           # Snapshot the most recent cancel-on-close run BEFORE we close the
           # PR so we can detect a fresh run by monotonic ID after the close.
-          if ! PRE_RUNS_JSON=$(gh api \
-            "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=1"); then
+          if ! phase7_list_cancel_runs 1; then
             echo "::error::Could not snapshot internal-cancel-on-pr-close runs before closing PR #${PR_NUMBER}."
             echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          PRE_RUNS_JSON="${PHASE7_CANCEL_RUNS_JSON}"
           PRE_RUN_ID=$(printf '%s' "${PRE_RUNS_JSON}" | jq -r '.workflow_runs[0].id // 0')
           echo "Pre-close cancel run head: ${PRE_RUN_ID}"
 
@@ -3652,12 +3697,12 @@ jobs:
           NEW_RUN_ID=""
           NEW_CONCLUSION=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            if ! CANDIDATE_RUNS_JSON=$(gh api \
-              "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=10"); then
+            if ! phase7_list_cancel_runs 10; then
               echo "::error::Could not list internal-cancel-on-pr-close runs after closing PR #${PR_NUMBER}."
               echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
               exit 1
             fi
+            CANDIDATE_RUNS_JSON="${PHASE7_CANCEL_RUNS_JSON}"
             CANDIDATE=$(printf '%s' "${CANDIDATE_RUNS_JSON}" | jq -c \
               --argjson pre_run_id "${PRE_RUN_ID}" \
               --arg closed_at "${PR_CLOSED_AT}" \
