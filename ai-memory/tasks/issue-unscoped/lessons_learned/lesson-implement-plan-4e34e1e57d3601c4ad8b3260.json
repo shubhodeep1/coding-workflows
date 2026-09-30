@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T14:51:29Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change alters behaviour a doc describes, grep every summary of it too (the Quickstart variables table row, not only the detailed section): a stale one-line summary contradicts the new rule.",
+  "phase": "implement_plan",
+  "pr_number": 5611,
+  "record_id": "lesson-implement-plan-4e34e1e57d3601c4ad8b3260",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5582-rejection-votes-need-automated-proof",
+    "file:README.md"
+  ]
+}

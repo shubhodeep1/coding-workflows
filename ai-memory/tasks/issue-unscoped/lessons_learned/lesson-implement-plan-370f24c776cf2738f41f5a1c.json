@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T14:51:29Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A reviewer vote is model output from PR-influenced input: verifying its fields (IDs, quotes, ranges) proves the reviewer copied text, never that a finding is false, so an unattended gate must not let votes alone clear a finding.",
+  "phase": "implement_plan",
+  "pr_number": 5611,
+  "record_id": "lesson-implement-plan-370f24c776cf2738f41f5a1c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-5582-rejection-votes-need-automated-proof",
+    "file:scripts/review_claude_fixer_nonblocking.py"
+  ]
+}
