@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T09:09:59Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Once an API response names the object a call created, reads taken only to find that object afterwards become fallback-only: make their failure non-fatal instead of letting them block the call",
+  "phase": "implement_plan",
+  "pr_number": 5059,
+  "record_id": "lesson-implement-plan-7f3b9bdcdd3d14ed92e92beb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5016-dispatch-exact-run-id",
+    "file:.claude/scripts/dispatch_workflow.py"
+  ]
+}
