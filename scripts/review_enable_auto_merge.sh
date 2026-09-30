@@ -14,6 +14,16 @@
 #   ORCH_INTEGRATION_BRANCH_PATTERN
 #   INITIAL_HEAD_SHA
 #   GH_TOKEN
+#   CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN — optional; the one login besides the
+#     PR author whose `hold` claims the claude/* merge gate counts
+#   CLAUDE_MERGE_HOLD_GATE_SCRIPT — optional; path of
+#     claude_merge_hold_gate.py (default: the verified support checkout,
+#     ${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/claude_merge_hold_gate.py)
+#
+# Log keys: AUTOFIX_AUTO_MERGE_HEAD_BOUND (merge enabled for a head),
+# AUTOFIX_AUTO_MERGE_SKIPPED reason=hold_claim|twin_parity|gate_unavailable
+# (a claude/* head the merge hold gate refused, issue #5316), and
+# AUTOFIX_MERGE_HOLD_GATE action=allow (the gate passed a claude/* head).
 #
 # Outputs (via GITHUB_ENV):
 #   AUTO_MERGE_READY_LABELS_ALLOWED — true only when the reviewed head may
@@ -188,6 +198,37 @@ fi
 if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then
 	echo "::warning::PR #${PR_NUMBER} no longer points at reviewed head ${INITIAL_HEAD_SHA}. Failing closed: refusing auto-merge enablement and merge-authorization labels for current head ${_orch_pr_head_sha:-unknown}."
 	exit 0
+fi
+
+# Hold-claim and twin-parity gate for claude/* heads (issue #5316). The
+# stage session can post its `hold` claim after this run started, so the
+# claims are re-read here, immediately before the merge is enabled, by
+# scripts/claude_merge_hold_gate.py with check_in_status.py's trust rules.
+# It also refuses a PR that took a workflow-templates/.claude/** twin pair
+# out of parity (a twin-first phase whose stage died before its hold). The
+# gate reuses the PR object fetched above and fails closed: exit 2 or a
+# missing gate script refuses the merge like the guards above.
+if [[ "${_orch_pr_head_ref}" == claude/* ]]; then
+	_hold_gate_script="${CLAUDE_MERGE_HOLD_GATE_SCRIPT:-${GITHUB_WORKSPACE:-.}/.codex-workflow-src/scripts/claude_merge_hold_gate.py}"
+	_hold_gate_rc=0
+	_hold_gate_json=""
+	if [ ! -f "${_hold_gate_script}" ]; then
+		_hold_gate_rc=2
+		_hold_gate_json="{\"skip_reason\":\"gate_unavailable\",\"reason\":\"gate script ${_hold_gate_script} not found\"}"
+	else
+		_hold_gate_pr_file="$(mktemp 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/review-hold-gate-pr-${PR_NUMBER}-$$.json")"
+		printf '%s' "${_ORCH_PR_META_JSON}" > "${_hold_gate_pr_file}"
+		_hold_gate_json="$(PYTHONDONTWRITEBYTECODE=1 python3 "${_hold_gate_script}" --repo "${GITHUB_REPOSITORY}" --pr "${PR_NUMBER}" --head "${INITIAL_HEAD_SHA}" --pr-json "${_hold_gate_pr_file}")" || _hold_gate_rc=$?
+		rm -f "${_hold_gate_pr_file}"
+	fi
+	if [ "${_hold_gate_rc}" -ne 0 ]; then
+		_hold_gate_skip_reason="$(printf '%s' "${_hold_gate_json}" | jq -r '.skip_reason // empty' 2>/dev/null || true)"
+		_hold_gate_reason="$(printf '%s' "${_hold_gate_json}" | jq -r '.reason // empty' 2>/dev/null || true)"
+		echo "AUTOFIX_AUTO_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} reason=${_hold_gate_skip_reason:-gate_unavailable}"
+		echo "::warning::Auto-merge not enabled on PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}'): ${_hold_gate_reason:-merge hold gate exited ${_hold_gate_rc}}. A push to the head (the [claude-twin-sync] copy, or the session resuming) starts a new review run that re-checks the gate."
+		exit 0
+	fi
+	echo "AUTOFIX_MERGE_HOLD_GATE pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=allow"
 fi
 
 # Scoped opt-out for forward-merge fallback PRs opened by
