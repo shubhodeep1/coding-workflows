@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-09-30T03:14:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a base-branch merge adds a new rejection path to a gate that fills a positive allow-list, extend the allow-list tests to that path in the same project; the code can be right by construction while no test pins it.",
+  "phase": "implement_plan",
+  "pr_number": 5390,
+  "record_id": "lesson-implement-plan-f1588e27b430522e25efec98",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5227-lineage-only-target-branch-merges",
+    "file:.github/workflows/issue_pr_status.yml",
+    "file:tests/test_issue_pr_status_target_branch_gate.py"
+  ]
+}
