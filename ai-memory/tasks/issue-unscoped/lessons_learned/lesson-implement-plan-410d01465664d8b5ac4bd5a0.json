@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T09:09:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A paged GitHub listing whose 404 means \"absent\" only on the first page needs its own page loop: the shared paginator's error cannot say which page failed.",
+  "phase": "implement_plan",
+  "pr_number": 5471,
+  "record_id": "lesson-implement-plan-410d01465664d8b5ac4bd5a0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5442-page-checker-review-dispatch-runs",
+    "file:workflow-templates/.claude/scripts/check_in_status.py"
+  ]
+}
