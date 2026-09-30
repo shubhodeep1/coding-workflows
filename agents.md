@@ -1203,12 +1203,29 @@ reviews, comments, and conflicts stay a direct §12 request.
     - Each non-merge commit in the range that touches the set passes when
       one of its merged PRs (`commits/{sha}/pulls`) has the owner's comment
       for that PR's merged `head.sha`.
+    - A merge commit that makes a protected change of its own is checked the
+      same way: a conflict resolution or a hand-edited merge, found with
+      `git log --remerge-diff` (git 2.36 or later), or an octopus merge that
+      differs on the set from every parent. A clean merge only brings in
+      commits that are checked themselves, so it is not listed. Without
+      this, wrapping a protected edit in a merge commit (for example one
+      pushed straight to `main`) would hide it from the check.
     - Commits reachable from the gate's arrival commit are grandfathered.
       The arrival commit is the oldest first-parent commit that changed the
       script.
+    - A shallow checkout fails the check: its boundary commit would stand in
+      for the arrival commit and be grandfathered.
     - A commit with no merged PR is blocked.
     - To unblock a release, the owner posts the command with the merged head
       SHA on each listed PR and re-runs the release.
+    - `scripts/mark-stable.sh`, the manual release path, runs the same check
+      before any tag moves. Its base is the remote's `stable` tag, fetched
+      into `refs/mark-stable/previous-stable`. Its head is the commit the
+      version tag names. The repository is `GITHUB_REPOSITORY`, else the
+      last two parts of the origin URL. It needs `gh` authenticated and a
+      full clone. It exits 6 when the check refuses or cannot run, and 7
+      when `origin/stable` moved after the check. No tag moves in either
+      case.
   - **Residual risk (accepted).** A `GH_PAT` workflow comment also has no
     app attribution. Only a comment whose entire body is the command counts,
     and every workflow comment path wraps its text in headers or markers.

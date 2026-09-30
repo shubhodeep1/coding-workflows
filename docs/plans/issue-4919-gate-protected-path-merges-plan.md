@@ -176,7 +176,13 @@ rejected.
    - `release --repo R --base REF --head REF` exits `0` = pass, `3` = blocked,
      `2` = error.
    - **Release mode:**
-     - It lists `git rev-list --no-merges <base>..<head> -- <protected pathspecs>`.
+     - It lists `git rev-list --no-merges <base>..<head> -- <protected pathspecs>`,
+       plus the merge commits that make a protected change of their own
+       (`git log --remerge-diff`, and octopus merges that differ from every
+       parent), so a protected edit inside a merge commit is checked too.
+       It refuses a shallow checkout (conformance run 2).
+     - `scripts/mark-stable.sh`, the manual release path, runs the same
+       check before it moves any tag (conformance run 2, AD-17).
      - Each commit is authorized when one of its merged PRs
        (`commits/{sha}/pulls`) has an authorizing comment at that PR's
        `head.sha`.
