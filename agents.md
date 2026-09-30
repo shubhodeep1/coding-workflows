@@ -1018,7 +1018,22 @@ reviews, comments, and conflicts stay a direct §12 request.
   (default 3) and a `hold`
   as live until the head moves, and reports `hand_backs` (distinct
   head/kind pairs of conflict, ci, and blocked claims) against
-  `CLAUDE_FIX_HAND_BACK_CAP` (default 3). The `claude-pr-catch-all` job of
+  `CLAUDE_FIX_HAND_BACK_CAP` (default 3). `review_autofix.yml` honours a
+  hold too (issue #5316): `scripts/claude_merge_hold_gate.py` runs
+  immediately before every merge enablement a `claude/*` head reaches
+  (`scripts/review_enable_auto_merge.sh` after its head-freshness check,
+  and the `deterministic-skip-merge` job, which sparse-checks out the gate
+  and `check_in_status.py` from the verified support commit for
+  `claude/*` heads). It imports `read_fix_claims` /
+  `_fix_claim_trusted_logins` by path (the `claude_pr_sweep.py` pattern)
+  and refuses on a `held` claim, or when a changed
+  `workflow-templates/.claude/<p>` twin was in blob parity with
+  `.claude/<p>` at the merge base and is not at the head. Exit 0 allows,
+  1 refuses, 2 (read error, truncated tree, head moved, missing gate)
+  refuses too. The log key is
+  `AUTOFIX_AUTO_MERGE_SKIPPED reason=hold_claim|twin_parity|gate_unavailable`.
+  Any new merge path for `claude/*` PRs, such as the pending-checks merge
+  of #4900, must call the gate before `gh pr merge`. The `claude-pr-catch-all` job of
   `.github/workflows/review_autofix_sweep.yml` (cron `17 * * * *`; the
   review-dispatch `sweep` job skips that tick) runs
   `scripts/claude_pr_sweep.py` over this repo and every repo in
@@ -1782,6 +1797,8 @@ and shipped:
 - `CLAUDE_FIXER_HANDOFF`
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
+- `AUTOFIX_AUTO_MERGE_SKIPPED`
+- `AUTOFIX_MERGE_HOLD_GATE`
 - `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -1974,6 +1991,8 @@ LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
 LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
 LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
+LOG_PREFIX.name=AUTOFIX_AUTO_MERGE_SKIPPED
+LOG_PREFIX.name=AUTOFIX_MERGE_HOLD_GATE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---

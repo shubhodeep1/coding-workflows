@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5316-gate-auto-merge-on-hold-claims-plan.md
 - Source issue: shubhodeep1/coding-workflows#5316
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims   Final PR: pending
+- Project branch: claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims   Final PR: #5323 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5382
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01BtNVKXov4PLM6UsWo5KkSK (reused; per-wait trigger ids in the stage report)
 - Last updated: 2026-09-30
-- Last note: project branch opened by the /implement-issue-claude session session_01Smb4yuBUDeNfFkefpx5ari
+- Last note: review round 1 on head 7ba2481 (session_01Vxjiyt81uvFdNj1QfewT6Z): fixed the stable log-prefix registry gap; rejected the GITHUB_REPOSITORY/REPOSITORY consistency finding and the pipeline-contract test-file task gap with reasons on the PR
 
 ## Phases
-1. [ ] Phase 1 — merge gate on hold claims and twin parity (scripts/claude_merge_hold_gate.py, review_enable_auto_merge.sh, review_autofix.yml deterministic-skip-merge, tests, docs)
+1. [ ] Phase 1 — merge gate on hold claims and twin parity (scripts/claude_merge_hold_gate.py, review_enable_auto_merge.sh, review_autofix.yml deterministic-skip-merge, tests, docs) — PR #5382 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -37,7 +37,10 @@
 - AD-8 [plan, 2026-09-30] Update CLAUDE.md §26.H to mention the merge gate? — Picked: A — no; README and `agents.md` only. Alternatives: B — edit CLAUDE.md and its twin. Why: §26.H makes no claim the gate contradicts (§5). Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:intervention] A PR that adds a new log key must register it in agents.md "Stable log prefixes (contractual)" in both the bullet list and the `LOG_PREFIX.name=` block, with a test that pins it. (files: agents.md)
 
 ## Notes
 - Security pass: run (`security_pass_skip.py`: no skip label).
 - Phase 1 has no protected paths (no `.claude/**` edit, AD-6).
+- Local verification env (2026-09-30): Python 3.11 container; `tests/test_workflow_retro.py` cannot be collected (3.12 f-string syntax in scripts/workflow_retro.py) and 74 validation-template / validation-runner / workflow-retro-fanout tests fail identically on origin/main (missing toolchain). Not caused by this project.
+- Plan deviation (phase 1): the plan put the `review_enable_auto_merge.sh` shell cases in `tests/test_review_autofix_review_pipeline_contract.py`. They live in `tests/test_claude_merge_hold_gate.py` (`test_helper_*`, `test_deterministic_skip_*`) with their own fake-`gh` harness, which also drives the gate. The coverage the plan specifies is complete; only the file differs.

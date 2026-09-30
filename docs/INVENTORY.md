@@ -126,6 +126,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/claude_issue_intake.sh` — Validate one `claude-issue` payload and queue it as an `ai:claude-issue-queue` issue for the Claude issue pickup.
 - `scripts/claude_issue_queue_watchdog.sh` — Flag queued Claude issues the pickup left open past `CLAUDE_ISSUE_QUEUE_STALE_HOURS` and send one Telegram alert.
 - `scripts/claude_issue_route.py` — Route standalone issues to the Claude issue implementer or the Codex pipeline, and build/validate the handoff payload.
+- `scripts/claude_merge_hold_gate.py` — Merge gate for `claude/*` PRs: refuse review-workflow auto-merge while the head carries a live `hold` claim or breaks `workflow-templates/.claude/` twin parity (issue #5316).
 - `scripts/claude_pr_sweep.py` — Catch-all sweep: queue a fresh Claude fixer (`/fix-claude-pr`) for `claude/*` PRs whose fix is overdue with no live claim.
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
