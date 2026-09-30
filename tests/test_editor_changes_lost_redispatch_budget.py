@@ -49,8 +49,11 @@ GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 HEAD = "8390b53323a827f77494ef8665cc5e7ea7159e9f"
 OTHER_HEAD = "964ef81e5d8cf12bc8793f2906b7a8b63e6885a1"
 CURRENT_RUN = "32659591000"
-# Head commit time the step passes as the fifth argument (issue #4898).
+# Head commit time the step passes as the fifth argument (issue #4898). The
+# helper ignores it since issue #5523; the bound is the head's first run.
 HEAD_COMMIT_EPOCH = "1790000000"
+# created_at of every fixture run: the REST API always returns it.
+RUN_CREATED_AT = "2026-09-20T12:00:00Z"
 
 
 def _workflow_text() -> str:
@@ -163,6 +166,7 @@ def _run(run_id: int, head_sha: str, status: str, conclusion: str | None, path: 
 		"status": status,
 		"conclusion": conclusion,
 		"path": path,
+		"created_at": RUN_CREATED_AT,
 	}
 
 
@@ -196,11 +200,13 @@ def test_budget_consumed_by_prior_completed_run_on_same_head() -> None:
 
 def test_budget_ignores_completed_runs_on_other_heads() -> None:
 	# Earlier iterations that pushed commits ran on earlier head SHAs;
-	# they must not consume the current head's budget.
+	# they must not consume the current head's budget. The head's own push
+	# left its cancelled pull_request twin, which bounds the PR-named count.
 	payload = _runs_payload(
 		[
 			_run(1, OTHER_HEAD, "completed", "success", ".github/workflows/ai-review.yml"),
 			_run(2, OTHER_HEAD, "completed", "success", ".github/workflows/internal-review.yml"),
+			_run(3, HEAD, "completed", "cancelled", ".github/workflows/ai-review.yml"),
 		]
 	)
 	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD, HEAD_COMMIT_EPOCH)

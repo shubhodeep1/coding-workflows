@@ -516,8 +516,30 @@ def test_budget_bound_ignores_a_future_dated_commit() -> None:
 	assert "pr_named_completed=1" in proc.stdout
 
 
-def test_budget_uses_the_commit_time_when_no_branch_run_is_on_the_head() -> None:
-	proc, _ = _run_probe(
+def test_budget_ignores_a_backdated_commit() -> None:
+	# Issue #5523: the committer time is set by the PR author. A head
+	# committed a day before its push must not pull the completed PR-named
+	# review of an earlier head (run 309, an hour before the push) into its
+	# budget: the head's first GitHub-recorded run bounds it.
+	proc, calls = _run_probe(
+		BUDGET,
+		[_branch_run(300, HEAD, "completed", "cancelled", PUSH_EPOCH)],
+		[_pr_named(309, "completed", "success", PUSH_EPOCH - 3600)],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		HEAD,
+		str(PUSH_EPOCH - 86400),
+	)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	assert "prior_completed=0 pr_named_completed=0" in proc.stdout
+	assert len(calls) == 2, calls
+
+
+def test_budget_fails_closed_when_only_the_commit_time_is_known() -> None:
+	# No run on the head in the branch page: the author-controlled commit
+	# time is never used as the bound, so the budget fails closed.
+	proc, calls = _run_probe(
 		BUDGET,
 		[_branch_run(305, "e" * 40, "completed", "success", PUSH_EPOCH - 7200)],
 		[_pr_named(301, "completed", "success", PUSH_EPOCH + 600)],
@@ -528,7 +550,9 @@ def test_budget_uses_the_commit_time_when_no_branch_run_is_on_the_head() -> None
 		str(PUSH_EPOCH),
 	)
 	assert proc.returncode == 0, (proc.stdout, proc.stderr)
-	assert "pr_named_completed=1" in proc.stdout
+	assert "reason=missing_head_time" in proc.stderr
+	assert "AUTOFIX_CHANGES_LOST_BUDGET " not in proc.stdout
+	assert len(calls) == 1, calls
 
 
 def test_budget_fails_closed_without_a_push_bound() -> None:
@@ -539,7 +563,17 @@ def test_budget_fails_closed_without_a_push_bound() -> None:
 
 
 def test_budget_fails_closed_when_the_pr_named_call_fails() -> None:
-	proc, _ = _run_probe(BUDGET, [], [], PR, BRANCH, CURRENT_RUN, HEAD, str(PUSH_EPOCH), pr_named_fail=True)
+	proc, _ = _run_probe(
+		BUDGET,
+		[_branch_run(300, HEAD, "completed", "cancelled", PUSH_EPOCH)],
+		[],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		HEAD,
+		str(PUSH_EPOCH),
+		pr_named_fail=True,
+	)
 	assert proc.returncode == 0
 	assert "reason=pr_named_api_error" in proc.stderr
 

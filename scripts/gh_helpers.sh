@@ -1434,9 +1434,11 @@ autofix_retrigger_has_inflight_peer()
 #   $2 head_branch    — PR head branch name (required for filtering)
 #   $3 current_run_id — github.run_id of the CURRENT run (excluded)
 #   $4 head_sha       — the PR head commit this run reviewed (required)
-#   $5 head_commit_epoch — optional: the head commit's committer time in
-#                       epoch seconds (`git log -1 --format=%ct`); one
-#                       input to the push-time bound below
+#   $5 head_commit_epoch — optional, accepted and ignored: the head
+#                       commit's committer time (`git log -1 --format=%ct`).
+#                       The PR author sets it, so it is never used as the
+#                       push-time bound (issue #5523); it stays in the
+#                       signature so existing callers keep working
 #   $6 event_name     — optional: the current run's event
 #                       (GITHUB_EVENT_NAME, the caller's event inside a
 #                       reusable workflow); see "Unnamed dispatch runs"
@@ -1447,13 +1449,14 @@ autofix_retrigger_has_inflight_peer()
 #   branch lookup counts nothing, the helper also counts completed,
 #   non-cancelled workflow_dispatch runs named for the PR
 #   (_autofix_pr_named_review_runs), excluding the current run, that were
-#   created at or after the head's push-time bound: the earlier of
-#   head_commit_epoch and the created_at of the first branch run on this
-#   head (the push's pull_request run, cancelled twins included). The
-#   earlier value keeps a future-dated commit from moving the bound past
-#   the push; an early bound only counts more runs, which consumes the
-#   budget sooner (fail closed), never loops. No bound, an invalid PR
-#   number, or a failed call fails closed.
+#   created at or after the head's push-time bound: the earliest
+#   created_at of any run in the branch page whose head_sha is this head
+#   (the push's pull_request run, cancelled twins included, and any other
+#   workflow the push triggered). GitHub records both fields, so neither
+#   can be set by the PR author. The head commit's committer time is not
+#   used (issue #5523): a backdated commit would pull earlier heads'
+#   reviews into this head's count and suppress its retry. No run on the
+#   head, an invalid PR number, or a failed call fails closed.
 #
 # Unnamed dispatch runs (issue #4898, conformance audit):
 #   A retry dispatched from the default branch under a name the PR-named
@@ -1500,6 +1503,7 @@ autofix_changes_lost_head_retry_consumed()
 	local head_branch="${2:-}"
 	local current_run_id="${3:-}"
 	local head_sha="${4:-}"
+	# Accepted for caller compatibility and not used (issue #5523).
 	local head_commit_epoch="${5:-}"
 	local run_event_name="${6:-}"
 
@@ -1563,16 +1567,16 @@ autofix_changes_lost_head_retry_consumed()
 			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=invalid_pr_number" >&2
 			return 0
 		fi
+		# Push-time bound: GitHub-recorded run times on this head only,
+		# never the author-set commit time (issue #5523).
 		local push_bound
 		if ! push_bound=$(printf '%s' "${response}" | jq -r \
-			--arg head "${head_sha}" \
-			--arg commit_epoch "${head_commit_epoch}" '
+			--arg head "${head_sha}" '
 			[
-				(.workflow_runs[]?
-					| select((.head_sha // "") == $head)
-					| (.created_at // "")
-					| (try fromdateiso8601 catch empty)),
-				($commit_epoch | select(test("^[0-9]+$")) | tonumber)
+				.workflow_runs[]?
+				| select((.head_sha // "") == $head)
+				| (.created_at // "")
+				| (try fromdateiso8601 catch empty)
 			]
 			| if length == 0 then "" else (min | floor | tostring) end
 		' 2>/dev/null) || [ -z "${push_bound}" ]; then
