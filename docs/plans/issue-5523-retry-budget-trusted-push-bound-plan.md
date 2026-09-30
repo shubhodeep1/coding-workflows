@@ -89,7 +89,7 @@ This is a single-phase plan: issue mode (CLAUDE.md §28.A) authorises it, and th
 ## Risks & Mitigations
 
 - The head's first run falls off the 30-run branch page, so the earliest visible run on the head is later than the push — ACCEPTED: every run a push creates is on the head, so the push's runs would need 30 newer runs on the same branch before the retry check. The result is at most one extra retry, never an unbounded loop, because each retry run counts the one before it.
-- No run on the head at all (a push that triggers no workflow on the branch) — the budget now fails closed where the commit time used to supply a bound. This means no automated retry and the existing terminal blocked comment, which is the behaviour before #4898. ACCEPTED: failing closed is the helper's documented contract.
+- No run on the head at all (a push that triggers no workflow on the branch) — the budget now fails closed where the commit time used to supply a bound. This means no automated retry and the existing terminal blocked comment. ACCEPTED: failing closed is the helper's documented contract.
 
 ## Rollout
 
