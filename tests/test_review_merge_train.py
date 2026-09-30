@@ -19,6 +19,7 @@ import json
 import os
 import stat
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -54,19 +55,21 @@ for ((i=0; i<${#args[@]}; i++)); do
 done
 path="${endpoint%%\?*}"
 # actions/runs is served like the REST listing: filtered by the status query
-# parameter, paged by page/per_page, with total_count (issue #5443). A
-# fixture may set total_count_override: {"<status>": <n>} to report more runs
-# than it holds. fail_runs_get fails the call; malformed_runs returns an
-# object with no total_count.
+# parameter and by a URL-encoded created=<=<timestamp> bound (runs without a
+# created_at never match a bound), paged by page/per_page, with total_count
+# (issue #5443). A fixture may set total_count_override: {"<status>": <n>} to
+# report more runs than it holds. fail_runs_get fails the call;
+# malformed_runs returns an object with no total_count.
 if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
   if [ -f "${FAKE_GH_DIR}/fail_runs_get" ] || [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
   query=""
   [[ "${endpoint}" == *\?* ]] && query="${endpoint#*\?}"
-  run_status=""; run_page=1; run_per_page=30
+  run_status=""; run_page=1; run_per_page=30; run_created_max=""
   IFS='&' read -ra query_parts <<< "${query}"
   for part in "${query_parts[@]}"; do
     case "${part}" in
       status=*) run_status="${part#status=}" ;;
+      created=%3C%3D*) run_created_max="${part#created=%3C%3D}" ;;
       page=*) run_page="${part#page=}" ;;
       per_page=*) run_per_page="${part#per_page=}" ;;
     esac
@@ -76,13 +79,15 @@ if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
   else
     runs_source='{"workflow_runs":[]}'
     [ -f "${FAKE_GH_DIR}/actions_runs.json" ] && runs_source="$(cat "${FAKE_GH_DIR}/actions_runs.json")"
-    # actions_runs_after_page1.json, when present, serves every later page:
-    # runs changed status between two page reads.
-    if [ "${run_page}" -gt 1 ] && [ -f "${FAKE_GH_DIR}/actions_runs_after_page1.json" ]; then
+    # actions_runs_after_page1.json, when present, serves every later page
+    # and every created-bounded follow-up query: runs changed status between
+    # two reads.
+    if { [ "${run_page}" -gt 1 ] || [ -n "${run_created_max}" ]; } && [ -f "${FAKE_GH_DIR}/actions_runs_after_page1.json" ]; then
       runs_source="$(cat "${FAKE_GH_DIR}/actions_runs_after_page1.json")"
     fi
-    page_json="$(printf '%s' "${runs_source}" | jq -c --arg st "${run_status}" --argjson pg "${run_page}" --argjson pp "${run_per_page}" '
-      ((.workflow_runs // []) | map(select($st == "" or .status == $st))) as $r
+    page_json="$(printf '%s' "${runs_source}" | jq -c --arg st "${run_status}" --arg cm "${run_created_max}" --argjson pg "${run_page}" --argjson pp "${run_per_page}" '
+      ((.workflow_runs // []) | map(select($st == "" or .status == $st))
+        | map(select($cm == "" or ((.created_at // "") != "" and .created_at <= $cm)))) as $r
       | {total_count: ((.total_count_override // {})[$st] // ($r | length)),
          workflow_runs: $r[(($pg - 1) * $pp):($pg * $pp)]}')"
   fi
@@ -669,22 +674,32 @@ def test_release_queries_each_active_status_in_lifecycle_order(tmp_path: Path) -
 	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
 
 
+def _run_created_at(index: int) -> str:
+	"""created_at for the run at listing position index: newest first, one second apart."""
+	return (datetime(2026, 9, 30, 8, 0, 0, tzinfo=timezone.utc) - timedelta(seconds=index)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def test_release_reads_every_page_before_deciding(tmp_path: Path) -> None:
-	"""A review run on page 2 of a status still holds its PR."""
+	"""A review run past the first 100 of a status still holds its PR.
+
+	The follow-up query is bounded by the oldest created_at read so far, never
+	an offset page (issue #5443, AD-8).
+	"""
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	_queued_pr_4077(fixtures)
 	runs = [
 		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
-		 "path": ".github/workflows/ci.yml"}
+		 "path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
 		for i in range(150)
 	]
 	runs.append({"id": 5000, "status": "in_progress", "head_branch": "ai/issue-4064",
-		"event": "pull_request", "path": ".github/workflows/ai-review.yml"})
+		"event": "pull_request", "path": ".github/workflows/ai-review.yml", "created_at": _run_created_at(150)})
 	_write_runs(fixtures, runs)
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
-	assert "actions/runs?status=in_progress&per_page=100&page=2" in log_text
-	assert "page=3" not in log_text
+	assert f"actions/runs?status=in_progress&per_page=100&page=1&created=%3C%3D{_run_created_at(99)}" in log_text
+	assert "page=2" not in log_text
+	assert log_text.count("actions/runs?status=in_progress") == 2
 	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 
@@ -748,20 +763,21 @@ def test_release_leaves_pr_queued_when_listing_shifts(tmp_path: Path) -> None:
 def _in_progress_runs_with_review_at(count: int, review_index: int) -> list[dict]:
 	runs = [
 		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
-		 "path": ".github/workflows/ci.yml"}
+		 "path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
 		for i in range(count)
 	]
 	runs[review_index] = {"id": 5000, "status": "in_progress", "head_branch": "ai/issue-4064",
-		"event": "pull_request", "path": ".github/workflows/ai-review.yml"}
+		"event": "pull_request", "path": ".github/workflows/ai-review.yml", "created_at": _run_created_at(review_index)}
 	return runs
 
 
-def test_release_leaves_pr_queued_when_listing_shrinks_between_pages(tmp_path: Path) -> None:
-	"""Runs that finish after page 1 shift unread runs onto it; page 2's smaller total must not look complete.
+def test_release_holds_pr_when_listing_shrinks_between_pages(tmp_path: Path) -> None:
+	"""Runs that finish after the first read must not hide a still-active review run.
 
-	150 runs, the review run at position 105. After page 1, ten page-1 runs finish:
-	page 2 (offset 100 of 140) starts at the old position 110, so the review run is
-	never read, and read (140) reaches page 2's total_count (140).
+	150 runs, the review run at position 105. After the first query, ten of its
+	runs finish. An offset page 2 (offset 100 of 140) would start at the old
+	position 110 and never read the review run; the created-bounded follow-up
+	query still returns it.
 	"""
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	_queued_pr_4077(fixtures)
@@ -769,43 +785,102 @@ def test_release_leaves_pr_queued_when_listing_shrinks_between_pages(tmp_path: P
 	_write_runs(fixtures, runs, runs_after_page1=runs[10:])
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
-	assert "reason=listing_shifted status=in_progress page=2" in result.stderr
-	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 
 
-def test_release_leaves_pr_queued_when_listing_grows_between_pages(tmp_path: Path) -> None:
-	"""A total_count that changes between pages means the listing moved while it was read."""
+def test_release_holds_pr_when_listing_grows_between_pages(tmp_path: Path) -> None:
+	"""Runs created after the first read push older runs down; the bounded query still reads them."""
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	_queued_pr_4077(fixtures)
 	runs = _in_progress_runs_with_review_at(150, 120)
 	newer = [
 		{"id": 9000 + i, "status": "in_progress", "head_branch": f"hotfix/{i}", "event": "push",
-		 "path": ".github/workflows/ci.yml"}
+		 "path": ".github/workflows/ci.yml", "created_at": "2026-09-30T08:05:00Z"}
 		for i in range(5)
 	]
 	_write_runs(fixtures, runs, runs_after_page1=newer + runs)
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
-	assert "reason=listing_shifted status=in_progress page=2" in result.stderr
-	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_holds_pr_when_listing_membership_shifts_at_same_count(tmp_path: Path) -> None:
+	"""PR #5512 review round 1: one run leaves and another enters, total_count unchanged.
+
+	200 runs, the review run at position 100. After the first query, the run at
+	position 50 finishes and an older run enters in_progress at position 150
+	(it was queued). The positions between shift up by one, so an offset page 2
+	(offset 100 of 200) would start at the old position 101: the review run is
+	skipped while the runs read (200) reach the unchanged total_count (200).
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = _in_progress_runs_with_review_at(200, 100)
+	for index in range(150, 200):
+		runs[index]["created_at"] = _run_created_at(index + 1)
+	entering = {"id": 7000, "status": "in_progress", "head_branch": "feature/entering", "event": "push",
+		"path": ".github/workflows/ci.yml", "created_at": _run_created_at(150)}
+	after_first_read = runs[:50] + runs[51:150] + [entering] + runs[150:]
+	assert len(after_first_read) == len(runs)
+	_write_runs(fixtures, runs + [dict(entering, status="queued")], runs_after_page1=after_first_read)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert f"created=%3C%3D{_run_created_at(99)}" in log_text
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 
 
 def test_release_leaves_pr_queued_when_listing_exceeds_ten_pages(tmp_path: Path) -> None:
-	"""GitHub serves at most 1,000 filtered results; more active runs cannot be proven absent."""
+	"""More active runs than 10 queries read cannot be proven absent."""
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	_queued_pr_4077(fixtures)
 	_write_runs(fixtures, [
 		{"id": 10000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
-		 "path": ".github/workflows/ci.yml"}
+		 "path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
 		for i in range(1001)
 	])
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
-	assert "reason=truncated status=in_progress page=11 read=1000 total=1001" in result.stderr
-	assert "actions/runs?status=in_progress&per_page=100&page=10" in log_text
-	assert "page=11" not in log_text
+	# The inclusive bound reads the oldest run of each query again: 100 + 9 * 99.
+	assert "reason=truncated status=in_progress page=11 read=991 total=110" in result.stderr
+	assert log_text.count("actions/runs?status=in_progress") == 10
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_bounded_query_adds_no_run(tmp_path: Path) -> None:
+	"""More than 100 runs created in one second return the same page again: never loop, never release."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 10000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
+		 "path": ".github/workflows/ci.yml", "created_at": "2026-09-30T08:00:00Z"}
+		for i in range(150)
+	])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=truncated status=in_progress page=2 read=100 total=150" in result.stderr
+	assert log_text.count("actions/runs?status=in_progress") == 2
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_full_page_has_no_created_at(tmp_path: Path) -> None:
+	"""A page that needs a follow-up query but carries no usable created_at bound is malformed."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = _in_progress_runs_with_review_at(150, 120)
+	del runs[40]["created_at"]
+	_write_runs(fixtures, runs)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=in_progress page=1 read=100 total=150" in result.stderr
+	assert log_text.count("actions/runs?status=in_progress") == 1
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 
