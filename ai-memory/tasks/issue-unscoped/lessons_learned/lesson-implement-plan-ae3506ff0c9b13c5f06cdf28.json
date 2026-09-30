@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T07:43:17Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A resume gate that reads the committed progress log can see a stale `Status:`, because a blocked stage cannot commit its log without moving a PR head; the blocker comment and the operator's answer are the fresher source.",
+  "phase": "implement_plan",
+  "pr_number": 5498,
+  "record_id": "lesson-implement-plan-ae3506ff0c9b13c5f06cdf28",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:.claude/commands/implement-issue-claude.md"
+  ]
+}

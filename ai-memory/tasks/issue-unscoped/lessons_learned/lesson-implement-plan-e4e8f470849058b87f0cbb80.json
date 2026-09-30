@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T07:43:17Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test for an early-exit guard must also make the later guards' conditions true, so the expected skip reason fails if the guards are reordered; an otherwise-empty fixture passes either way.",
+  "phase": "implement_plan",
+  "pr_number": 5498,
+  "record_id": "lesson-implement-plan-e4e8f470849058b87f0cbb80",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:tests/test_claude_checker_restart.py"
+  ]
+}

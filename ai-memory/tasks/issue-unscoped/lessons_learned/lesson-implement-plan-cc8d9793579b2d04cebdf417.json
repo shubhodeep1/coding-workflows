@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-09-30T07:43:17Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-safe guard that one decision path honours (an incomplete listing page keeps the item) must also gate every sibling path that relies on the same listing; here the re-queue path read the trigger page without its `has_more` guard.",
+  "phase": "implement_plan",
+  "pr_number": 5498,
+  "record_id": "lesson-implement-plan-cc8d9793579b2d04cebdf417",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py"
+  ]
+}
