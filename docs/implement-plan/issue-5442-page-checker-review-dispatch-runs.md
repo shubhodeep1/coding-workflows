@@ -1,35 +1,40 @@
 # Implement-Plan Log — Page through the review wrappers' active dispatch runs in the §26 checker, and defer a hand-back when the listing is incomplete
 
-- Plan: docs/plans/issue-5442-page-checker-review-dispatch-runs-plan.md
+- Plan: docs/completed/issue-5442-page-checker-review-dispatch-runs-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5442 (https://github.com/shubhodeep1/coding-workflows/issues/5442)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4701-review-dispatch-default-branch
 - Project branch: claude/implement-plan-issue-5442-page-checker-review-dispatch-runs   Final PR: #5453 draft
-- Status: BLOCKED
-- Stage: phase 1/1
-- Activation: not started
-- Waiting on: PR #5471: twin sync
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending final merge — n/a while the base is `claude/implement-plan-issue-4701-review-dispatch-default-branch` (issue mode: steps 12–13 run only if the base moves onto `main` first)
+- Waiting on: completion PR (this PR)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01GoBiesiKrDTtnVG3iojnNw   safety net and hand-back: see the validation 1/3 stage report
 - Last updated: 2026-09-30
-- Last note: phase 1 PR #5471 opened twin-first (twin verified in a scratch mirror, 277 passed); hold claim posted and the twin-sync blocker is on #5442. Resume with `/reclarify` after the `[claude-twin-sync]` push; that stage arms the wait on #5471 (step 7).
+- Last note: validation cycle 1 (run 36697460144, target_ref project branch at c610ce5) passed 10/10; completion PR opened, next stage final-merge 1/1.
 
 ## Phases
-1. [ ] Phase 1 — per-wrapper, paginated, completeness-checked active dispatch count in `check_in_status.py` — protected paths: `.claude/scripts/check_in_status.py` — PR #5471 open (waiting on twin sync); review rounds: 0; interventions: 0
+1. [x] Phase 1 — per-wrapper, paginated, completeness-checked active dispatch count in `check_in_status.py` — protected paths: `.claude/scripts/check_in_status.py` — PR #5471 merged 2026-09-30 into the project branch as c610ce5 (head 8055fd8); review rounds: 1; interventions: 0
    - [x] `PR_NAMED_REVIEW_WORKFLOW_RUNS_PATH` (`:157`), `_pr_named_active_review_run_count` (`:326`) and `_complete_dispatch_run_listing` (`:365`) added in the twin; `_active_run_count` (`:303`) uses them; old constants kept (§6, `:136`, `:153`)
    - [x] a first-read 404 is an absent wrapper; every other incomplete listing raises `ReadError` (`test_absent_wrapper_is_read_once_and_the_other_wrapper_still_counts`, `test_incomplete_dispatch_listing_defers_the_hand_back` × 9)
    - [x] docstrings (module API budget, `_active_run_count`, both new helpers) updated
    - [x] tests: `tests/test_check_in_status.py`, `tests/test_check_in_status_hand_back.py`; `tests/test_claude_pr_sweep.py` unchanged — 277 passed against the twin in a scratch mirror
    - [x] `agents.md`, `CLAUDE.md` §26.C wording (`workflow-templates/CLAUDE.md` is a symlink to it); `changelog.d/5442-page-checker-review-dispatch-runs.md`
-   - [ ] `[claude-twin-sync]` copy into `.claude/scripts/check_in_status.py` (supervising session; twin sha256 `31fee86aa4153632795c76b2b95a73d8c35cb36aa7212bfbccfeaa18fd753712`)
+   - [x] `[claude-twin-sync]` copy into `.claude/scripts/check_in_status.py` — pushed as 8055fd8 by the supervising session (twin sha256 `31fee86aa4153632795c76b2b95a73d8c35cb36aa7212bfbccfeaa18fd753712` verified; Q1: A)
+   - Review round 1 (head 8055fd8e20a4, ledger c6bdf109…ff73): 0 valid of 2 findings + 1 task gap, all rejected (PR comment 5906571371); verdict not posted (no dedicated-bot credentials); hold claim 5906576120; Q2: A answered by the master session (Q46: A) on #5442.
 
 ## Conformance
+- Run 1 — 2026-09-30: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — no fixes (pre-security); 277 + 262 tests passed, ruff clean, py_compile clean. One CONCERN (HYPOTHESIS), not fixed: `_pr_named_active_review_run_count` reads statuses in the order queued, in_progress, pending, so a run that moves pending→queued/in_progress between those sequential reads is missed (same order as the pre-existing head-branch reads).
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue)
 
 ## Validation
+- Cycle 1 — run 36697460144 2026-09-30 (target_ref: claude/implement-plan-issue-5442-page-checker-review-dispatch-runs, validated c610ce5): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 292s).
 
 ## Completion
+- Completion PR (this PR) — doc moved to docs/completed/issue-5442-page-checker-review-dispatch-runs-plan.md
+- Final PR #5453 draft (into `claude/implement-plan-issue-4701-review-dispatch-default-branch`)
 
 ## Activation
 
@@ -45,9 +50,12 @@
 
 ## Lessons
 - [source:plan-deviation] A paged GitHub listing whose 404 means "absent" only on the first page needs its own page loop: the shared paginator's error cannot say which page failed. (files: workflow-templates/.claude/scripts/check_in_status.py)
+- [source:conformance] Reading several status-filtered run listings one after another can miss a run that changes status between the reads; read them in lifecycle order (pending, queued, in_progress) so a forward transition lands in a later read. (files: .claude/scripts/check_in_status.py)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude for #5442; start-up checks auto-decided (CLAUDE.md §28.A). Permission mode auto.
 - Security pass: `security_pass_skip.py` returned skip (`ai:security`: created and labelled by the issue automation).
 - Base branch check (2026-09-30): the base's PR #4709 (into `main`) is open, not merged.
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
+- Project branch synced with its base as 7bcdfd9 (2026-09-30); base re-checked at the validation 1/3 stage (2026-09-30): PR #4709 still open, project branch already up to date.
+- Issue progress comment id 5904114209.
