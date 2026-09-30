@@ -121,7 +121,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    prefixed spelling of the path counts, `docs/README.md` included for
    `README.md`, and a range or list of
    lines covers every line it names) keeps the entry
-   blocking (`flagger_citation_mismatch`, `ambiguous_flagger_nearby`; issue
+   blocking, and so does any other paragraph of the flagger's raw output
+   (fenced blocks included) that names that file with a number within 3
+   lines or with no number, whatever its spelling (`README.md#L1262`,
+   `*File:*`, a quoted or table-row finding, prose)
+   (`flagger_citation_mismatch`, `ambiguous_flagger_nearby`; issue
    #4975). Task
    gaps and multi-reviewer findings never move, and a missing or failing
    filter keeps the original ledger. The filtered copy is what the step counts, digests,

@@ -497,6 +497,53 @@ def test_issue_4975_a_distant_flagger_finding_does_not_block_demotion(tmp_path, 
 	assert [record["path"] for record in demoted] == ["README.md"]
 
 
+@pytest.mark.parametrize("other_finding", [
+	# Conformance run 3: spellings of a second finding the record parser does
+	# not read. The fail-closed scan still sees the file named near the entry.
+	"File: README.md#L1262\nProblem: injection\n",
+	"File: `README.md#L1261-L1262`\nProblem: injection\n",
+	"File: README.md?plain=1#L1262\nProblem: injection\n",
+	"File: README.md@L1262\nProblem: injection\n",
+	"*File:* README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"_File:_ README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"`File:` README.md\nLine or code reference: 1262\nProblem: injection\n",
+	"> File: README.md\n> Line or code reference: 1262\n> Problem: injection\n",
+	"```\nFile: README.md\nLine or code reference: 1262\nProblem: injection\n```\n",
+	"| File | Line | Problem |\n| README.md | 1262 | injection |\n",
+	"Location: README.md:1262\nProblem: injection\n",
+	"File: README.MD\nLine or code reference: 1262\nProblem: injection\n",
+	"File: .\\README.md\nLine or code reference: 1262\nProblem: injection\n",
+	# The file named with no line at all is unreadable, as for a record (AD-3).
+	"Also: README.md interpolates an untrusted title into a shell line.\n",
+])
+def test_issue_4975_a_second_finding_the_record_parser_misses_keeps_the_entry_blocking(tmp_path, other_finding):
+	ledger = _ledger(README_FINDING)
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=CITING_RECORD + "\n" + other_finding)
+	text, demoted = _run(tmp_path, ledger, reviews)
+	assert demoted == [] and text == ledger
+	assert _kept(ledger, reviews) == {"README.md:1261": "ambiguous_flagger_nearby"}
+
+
+@pytest.mark.parametrize("other_text", [
+	"Location: README.md:1400\nProblem: stale link\n",
+	"README.md lines 1400 to 1410 also need a refresh.\n",
+	"File: scripts/foo.sh#L1261\nProblem: unquoted variable\n",
+	"File: docs/README.md.bak#L1261\nProblem: stale copy\n",
+	"README install notes look fine; version 1261 of nothing.\n",
+	f"REJECTED_FINDING: RF-00000000000000aa | scripts/foo.sh:1261 | flagged_by: {OTHERS[0]} | reason: quoted.\n",
+])
+def test_issue_4975_the_fail_closed_scan_ignores_other_files_and_distant_lines(tmp_path, other_text):
+	reviews = _reviews(tmp_path, rejecters=OTHERS, flagger_output=CITING_RECORD + "\n" + other_text)
+	_text, demoted = _run(tmp_path, _ledger(README_FINDING), reviews)
+	assert [record["path"] for record in demoted] == ["README.md"]
+
+
+def test_issue_4975_finding_records_report_their_line_spans_on_request():
+	output = f"SECURITY\n{CITING_RECORD}SEVERITY: MAJOR\n\nFile: a.py:4\nProblem: x\nREJECTED_FINDING: none\n"
+	assert [record["span"] for record in nonblocking.flagger_finding_records(output, with_spans=True)] == [(1, 6), (7, 9)]
+	assert all("span" not in record for record in nonblocking.flagger_finding_records(output))
+
+
 @pytest.mark.parametrize("flagger_output", [
 	CITING_RECORD,
 	f"- **File:** `README.md:1261`\n- **Problem:** lost its backtick\n- **consensus_id:** `{RID}`\n",

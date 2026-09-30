@@ -1515,8 +1515,11 @@ entry of either pass lies within 3 lines of it, the flagger reported another
 finding in that file within 3 lines (or without a readable line; a quoted,
 bolded, or prefixed spelling of the path is that file, `docs/README.md`
 included for `README.md`, and
-`1250 to 1262` or `1250, 1262` covers every line it names), or its
-`consensus_id` is duplicated, so a rejection of one finding can never demote
+`1250 to 1262` or `1250, 1262` covers every line it names), or the
+flagging reviewer's raw output names that file anywhere outside the cited
+finding with a line number within 3 lines or with no line number at all
+(any spelling, such as `README.md#L1262`, a quoted, fenced, or table-row
+finding, or prose), or its `consensus_id` is duplicated, so a rejection of one finding can never demote
 a distinct one next to it. A round left with only non-blocking
 entries still posts the ledger and then takes the zero-findings auto-merge
 path (fresh ready checks still required); a mixed round hands off the rest,
