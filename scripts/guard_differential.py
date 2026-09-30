@@ -73,7 +73,10 @@ through the `CI / lint` aggregate), which runs on every pull request into
 runs the base branch's copy of this script, not the PR's (issue #5327), so
 a PR cannot weaken a guard and edit the verifier to pass in the same change.
 Only a base that does not carry the script yet runs the PR's copy, with a
-warning. The step may pass only flags the base copy already accepts.
+warning. The step may pass only flags the base copy already accepts. It
+runs right after the job's dependency install, before any step that runs
+code from the checkout, which could otherwise plant a `.pth` file in the
+Python install this script runs under.
 """
 
 from __future__ import annotations

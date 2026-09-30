@@ -1229,9 +1229,10 @@ side so that class cannot land unnoticed.
   waits for the operator. CI reads the body from the event payload of the
   push, so a body edited later needs another push to count.
 - **Wiring.** `ci.yml`'s `tests-hooks-and-orchestrator` job (reported
-  through the `CI / lint` aggregate) runs `Guard differential tests (issue
-  #5174)` and, on pull requests only, `Guard differential check (issue
-  #5174)`: it fetches the base branch with git and runs `--base-ref
+  through the `CI / lint` aggregate) runs, on pull requests only, `Guard
+  differential check (issue #5174)` right after its dependency install,
+  and `Guard differential tests (issue #5174)` later with the other test
+  steps. The check fetches the base branch with git and runs `--base-ref
   FETCH_HEAD --pr-body-file <body from GITHUB_EVENT_PATH>` against the
   checked-out merge commit, using the base branch's copy of the verifier
   (next bullet). `ci.yml` runs on pull requests into `main` and
@@ -1259,11 +1260,18 @@ side so that class cannot land unnoticed.
   base copy already accepts**: land a new flag in the script first and use
   it in the step in a later PR, or the step fails with exit 2. The verifier
   also reports every change to itself or to a `ci.yml` step whose name
-  starts with `Guard differential` (below). A PR that rewrites the step
-  itself still controls what that run executes, which is inherent to
-  `pull_request` workflows: the edit is visible in the diff the reviewer
-  panel reads, and once it is on the base the next PR's verifier reports
-  any further step change.
+  starts with `Guard differential` (below). **The check runs before any
+  code from the checkout** (only the checkout, the Python setup, and the
+  fixed `pip install` of package names come first): PR code in an earlier
+  step (a test, a shell script) runs as the same user and could plant a
+  `.pth` file in the Python install the verifier runs under and decide its
+  exit code, with no change to the script or the step. Keep it there;
+  `tests/test_guard_differential.py` fails when a step is added before it.
+  A PR that rewrites `ci.yml` (the step, or a step before it) still
+  controls what that run executes, which is inherent to `pull_request`
+  workflows: the edit is visible in the diff the reviewer panel reads, and
+  once it is on the base the next PR's verifier reports any further change
+  to the step.
 - **Output.** `GUARD_DIFFERENTIAL regression tree=… hook=… line=… base=…
   head=… shape=…` per failing shape (as `::error::`), `GUARD_DIFFERENTIAL
   intended_loosening …` per listed shape, `GUARD_DIFFERENTIAL missing_corpus

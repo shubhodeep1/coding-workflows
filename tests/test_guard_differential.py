@@ -659,11 +659,11 @@ def test_guard_differential_steps_find_the_shipped_ci_steps() -> None:
 	steps = gd.guard_differential_steps(CI_WORKFLOW.read_text(encoding="utf-8"))
 	names = [step.splitlines()[0].strip() for step in steps]
 	assert names == [
-		'- name: "Guard differential tests (issue #5174)"',
 		'- name: "Guard differential check (issue #5174)"',
+		'- name: "Guard differential tests (issue #5174)"',
 	]
-	assert "FETCH_HEAD:scripts/guard_differential.py" in steps[1]
-	assert "check-in reminder" not in steps[1]
+	assert "FETCH_HEAD:scripts/guard_differential.py" in steps[0]
+	assert "Event mirror shell tests" not in steps[0]
 
 
 def test_cli_reports_a_verifier_script_change_without_failing(verifier_repo: Path) -> None:
@@ -956,6 +956,31 @@ def test_ci_step_falls_back_to_the_prs_verifier_with_a_warning(tmp_path: Path) -
 	assert proc.returncode == 3, proc.stdout + proc.stderr
 	assert "VERIFIER=head" in proc.stdout
 	assert "::warning::GUARD_DIFFERENTIAL verifier=head reason=base-has-no-verifier base=main" in proc.stdout
+
+
+def test_ci_check_runs_before_any_pr_code() -> None:
+	"""Issue #5327 conformance run 3: PR code that runs earlier in the same
+	job runs as the same user, so it could plant a `.pth` file in the
+	interpreter's site-packages and decide the pinned verifier's exit code.
+	Only the checkout, the Python setup, and the fixed dependency install may
+	run before the check."""
+	yaml = pytest.importorskip("yaml")
+	workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+	for job in workflow["jobs"].values():
+		names = [step.get("name") for step in job.get("steps", [])]
+		if "Guard differential check (issue #5174)" in names:
+			before = job["steps"][: names.index("Guard differential check (issue #5174)")]
+			break
+	else:
+		raise AssertionError("step 'Guard differential check (issue #5174)' not found")
+	assert [step.get("uses", "").split("@")[0] for step in before[:2]] == ["actions/checkout", "actions/setup-python"]
+	assert "with" not in before[0] or not set(before[0]["with"]) - {"fetch-depth"}
+	assert set(before[1].get("with", {})) == {"python-version"}
+	assert [step.get("name") for step in before[2:]] == ["Install Python CI dependencies"]
+	install = before[2]["run"]
+	assert "python3 -m pip install" in install
+	# Package names only: no requirements file, local path, or script from the checkout.
+	assert not re.search(r"(?:^|\s)(?:-r|-e|-c|\.{0,2}/|tests/|scripts/|\.claude/)", install.replace("set -euo pipefail", ""))
 
 
 def test_ci_runs_the_unit_tests() -> None:
