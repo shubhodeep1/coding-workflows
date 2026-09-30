@@ -294,15 +294,38 @@ def test_each_pr_is_read_once(monkeypatch):
 # --- issue-start sessions ----------------------------------------------------
 
 
-def test_issue_start_superseded_by_a_later_stage_is_archived_without_a_read(monkeypatch):
-	calls = _stub(monkeypatch, {})
+@pytest.mark.parametrize(
+	("stage_status", "stage_bucket"),
+	[
+		# The checker archives a stage whose start trigger failed (issue #5664).
+		("SESSION_STATUS_ARCHIVED", "SESSION_STATUS_BUCKET_COMPLETED"),
+		# A live stage may not have run its step 0 yet, so the issue-start
+		# session's safety net may still be its only recovery.
+		(IDLE, "SESSION_STATUS_BUCKET_REVIEW_READY"),
+		("SESSION_STATUS_RUNNING", "SESSION_STATUS_BUCKET_WORKING"),
+	],
+)
+def test_issue_start_is_kept_while_its_issue_is_open_even_after_a_later_stage(monkeypatch, stage_status, stage_bucket):
+	calls = _stub(monkeypatch, {"repos/o/r/issues/7": {"state": "open"}})
 	sessions = [
 		_session("session_i", "Issue #7 — implement", bucket="SESSION_STATUS_BUCKET_BLOCKED", category="need_input", created_hours=10),
-		_session("session_s", "implement-plan issue-7-fix-thing — phase 1/1 — review round", status="SESSION_STATUS_ARCHIVED", created_hours=4),
+		_session("session_s", "implement-plan issue-7-fix-thing — phase 1/1 — review round", status=stage_status,
+			bucket=stage_bucket, created_hours=4),
 	]
 	result = janitor.classify(sessions, NOW)
-	assert _archived_ids(result) == ["session_i"] and calls == []
-	assert result["archive"][0]["reason"] == "issue-start: superseded by session_s (implement-plan issue-7-fix-thing — phase 1/1 — review round)"
+	assert result["archive"] == [] and result["kept"] == 1 and result["not_ours"] == 1 and result["errors"] == []
+	assert calls == ["repos/o/r/issues/7"]
+
+
+def test_issue_start_after_a_failed_stage_start_is_archived_only_once_its_issue_closes(monkeypatch):
+	_stub(monkeypatch, {"repos/o/r/issues/7": {"state": "closed"}})
+	sessions = [
+		_session("session_i", "Issue #7 — implement", created_hours=10),
+		_session("session_s", "implement-plan issue-7-fix-thing — phase 1/1", status="SESSION_STATUS_ARCHIVED", created_hours=4),
+	]
+	result = janitor.classify(sessions, NOW)
+	assert _archived_ids(result) == ["session_i"]
+	assert result["archive"][0]["reason"] == "issue-start: o/r#7 closed"
 
 
 @pytest.mark.parametrize(
@@ -329,20 +352,21 @@ def test_issue_start_is_not_superseded_by_checkers_earlier_stages_other_issues_o
 	assert "repos/o/r/issues/7" in calls
 
 
-def test_issue_start_superseded_through_the_prefixed_stage_title(monkeypatch):
-	_stub(monkeypatch, {})
+def test_issue_start_is_not_superseded_through_the_prefixed_stage_title(monkeypatch):
+	calls = _stub(monkeypatch, {"repos/o/r/issues/7": {"state": "open"}})
 	sessions = [
 		_session("session_i", "#7 · PR #9 — Issue #7 — implement", created_hours=10),
 		_session("session_s", "#7 · PR #9 — implement-plan issue-7-fix-thing — conformance 1/3", created_hours=2),
 	]
-	assert _archived_ids(janitor.classify(sessions, NOW)) == ["session_i"]
+	result = janitor.classify(sessions, NOW)
+	assert result["archive"] == [] and result["not_ours"] == 1 and calls == ["repos/o/r/issues/7"]
 
 
 def test_pickup_named_sessions_are_swept(monkeypatch):
 	# Live titles the pickup gave its sessions (issue #4887, conformance run 2):
 	# the number sits only in the prefix, and the repository comes from the source.
 	calls = _stub(monkeypatch, {"repos/o/r/pulls/4546": _merged(5), "repos/o/r/issues/5068": {"state": "closed"},
-		"repos/o/r/issues/5070": {"state": "open"}})
+		"repos/o/r/issues/5070": {"state": "open"}, "repos/o/r/issues/5126": {"state": "open"}})
 	sessions = [
 		_session("session_s", "#5126 · PR #5130 — implement-plan issue-5126-x — phase 1/1 — review round", created_hours=2),
 		_session("session_f", "PR#4546 · fix-claude-pr", created_hours=10),
@@ -351,9 +375,11 @@ def test_pickup_named_sessions_are_swept(monkeypatch):
 		_session("session_c", "#5070 · implement-issue-claude", created_hours=10),
 	]
 	result = janitor.classify(sessions, NOW)
-	assert _archived_ids(result) == ["session_f", "session_a", "session_b"]
-	assert result["kept"] == 1 and result["not_ours"] == 1 and result["errors"] == []
-	assert sorted(calls) == ["repos/o/r/issues/5068", "repos/o/r/issues/5070", "repos/o/r/pulls/4546"]
+	# session_a's stage is live, but only a closed issue ends an issue-start
+	# session (issue #5664).
+	assert _archived_ids(result) == ["session_f", "session_b"]
+	assert result["kept"] == 2 and result["not_ours"] == 1 and result["errors"] == []
+	assert sorted(calls) == ["repos/o/r/issues/5068", "repos/o/r/issues/5070", "repos/o/r/issues/5126", "repos/o/r/pulls/4546"]
 
 
 @pytest.mark.parametrize(("state", "archived"), [("closed", True), ("open", False)])

@@ -1286,8 +1286,8 @@ mode).
      `scripts/claude_session_janitor.py`. Across wakes it walks older pages
      with a cursor, back 30 days. It archives:
      - fixer and hold sessions whose PR merged or closed 2 hours ago or more;
-     - issue-start sessions that a later stage session superseded, or whose
-       issue is closed;
+     - issue-start sessions whose issue is closed. A later stage session
+       does not count, because it may be one whose start failed (#5664);
      - §26.D report sessions idle for 7 days.
    - Sessions that are running, waiting on a permission prompt, or holding
      an unanswered report question are left alone. So are checkers, stage

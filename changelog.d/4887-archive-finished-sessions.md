@@ -9,7 +9,7 @@ Until now, three kinds of automation session were never archived: `/fix-claude-p
 | --- | --- |
 | Fixer / hold session archived | 2 h after its PR merged or closed (`--fixer-grace-hours`) |
 | Report session archived | after 7 idle days (`--report-days`) |
-| Issue-start session archived | when a later stage session exists, or its issue is closed |
+| Issue-start session archived | when its issue is closed (a later stage session does not count, #5664) |
 | Sessions read per wake | one `list_sessions` page of 100, cursor back 30 days (`--horizon-days`) |
 | GitHub API | one REST read per distinct PR or issue, never GraphQL |
 
