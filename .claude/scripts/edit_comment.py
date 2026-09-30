@@ -22,12 +22,13 @@ whole body with the file's text instead. `--dry-run` prints the new body and
 writes nothing.
 
 Both files are read only from a Claude Code session scratchpad
-(`<temp dir>/claude-<…>/…/scratchpad/`, the temp dir being
+(`<temp dir>/claude-<…>/<project>/<session>/scratchpad/`, the temp dir being
 `tempfile.gettempdir()` or `/tmp`), and only when the path resolves, after
-symlinks, to a regular file with a single hard link (issue #5452). The helper
-is allowlisted, so without this check one command could publish any local
-file, such as a credential file, as a comment with no prompt. Any other path
-exits 1 before the comment is read, and its content is never printed.
+symlinks, to a regular file with a single hard link and at most
+`MAX_INPUT_FILE_BYTES` bytes (issue #5452). The helper is allowlisted, so
+without this check one command could publish any local file, such as a
+credential file, as a comment with no prompt. Any other path exits 1 before
+the comment is read, and its content is never printed.
 
 API calls (CLAUDE.md §15), REST only: one read of the comment and, unless
 `--dry-run` or the body is unchanged, one PATCH.
@@ -63,6 +64,10 @@ MAX_BODY_CHARS = 65536
 # <temp dir>/claude-<uid>/<project>/<session>/scratchpad/.
 SCRATCHPAD_DIR_NAME = "scratchpad"
 SESSION_TEMP_DIR_PREFIX = "claude-"
+# Input files larger than this are rejected before they are read, so a huge
+# file never reaches memory. A body over MAX_BODY_CHARS is rejected later
+# anyway; 16x leaves room for JSON escaping in a --replacements file.
+MAX_INPUT_FILE_BYTES = 16 * MAX_BODY_CHARS
 
 
 def _temp_roots() -> list[Path]:
@@ -79,13 +84,18 @@ def _temp_roots() -> list[Path]:
 
 
 def is_scratchpad_path(resolved: Path, roots: list[Path]) -> bool:
-	"""True when `resolved` is a file below `<root>/claude-<…>/…/scratchpad/`."""
+	"""True when `resolved` is a file below `<root>/claude-<…>/<project>/<session>/scratchpad/`.
+
+	The scratchpad must be the fourth component below the root, exactly where
+	Claude Code puts it; a shallower `claude-*/scratchpad/` or a `scratchpad`
+	directory at any other depth does not count.
+	"""
 	for root in roots:
 		try:
 			parts = resolved.relative_to(root).parts
 		except ValueError:
 			continue
-		if len(parts) >= 3 and parts[0].startswith(SESSION_TEMP_DIR_PREFIX) and SCRATCHPAD_DIR_NAME in parts[1:-1]:
+		if len(parts) >= 5 and parts[0].startswith(SESSION_TEMP_DIR_PREFIX) and parts[3] == SCRATCHPAD_DIR_NAME:
 			return True
 	return False
 
@@ -94,7 +104,8 @@ def read_input_file(flag: str, path: str) -> str:
 	"""Read a `--replacements` / `--body-file` file from the session scratchpad only.
 
 	Raises ValueError, without reading the file, when the path does not
-	resolve to a regular, singly-linked file inside a session scratchpad.
+	resolve to a regular, singly-linked file inside a session scratchpad, or
+	when the file is larger than MAX_INPUT_FILE_BYTES.
 	"""
 	try:
 		resolved = Path(path).resolve(strict=True)
@@ -102,7 +113,7 @@ def read_input_file(flag: str, path: str) -> str:
 		raise ValueError(f"{flag} {path}: {exc}") from exc
 	if not is_scratchpad_path(resolved, _temp_roots()):
 		raise ValueError(
-			f"{flag} {path}: only files in the Claude Code session scratchpad (<temp dir>/claude-*/.../scratchpad/) are read; "
+			f"{flag} {path}: only files in the Claude Code session scratchpad (<temp dir>/claude-*/<project>/<session>/scratchpad/) are read; "
 			"write the file there with the Write tool, or rewrite the comment with mcp__github__update_issue_comment"
 		)
 	# O_NONBLOCK keeps a FIFO from blocking the open; fstat rejects it below.
@@ -116,9 +127,17 @@ def read_input_file(flag: str, path: str) -> str:
 			raise ValueError(f"{flag} {path}: not a regular file")
 		if info.st_nlink != 1:
 			raise ValueError(f"{flag} {path}: has {info.st_nlink} hard links; only a file with one link is read")
+		if info.st_size > MAX_INPUT_FILE_BYTES:
+			raise ValueError(f"{flag} {path}: {info.st_size} bytes; files over {MAX_INPUT_FILE_BYTES} bytes are not read")
 		with os.fdopen(fd, encoding="utf-8") as handle:
 			fd = -1
-			return handle.read()
+			# Bounded read: a file that grew after fstat is still never read in full.
+			# A character takes at least one byte, so more characters than the
+			# byte limit means more bytes than the limit.
+			text = handle.read(MAX_INPUT_FILE_BYTES + 1)
+		if len(text) > MAX_INPUT_FILE_BYTES:
+			raise ValueError(f"{flag} {path}: larger than {MAX_INPUT_FILE_BYTES} bytes; not read")
+		return text
 	except (OSError, UnicodeDecodeError) as exc:
 		raise ValueError(f"{flag} {path}: {exc}") from exc
 	finally:
