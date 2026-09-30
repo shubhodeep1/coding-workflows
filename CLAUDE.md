@@ -1358,7 +1358,7 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
 
   | Helper | Does | API calls |
   |---|---|---|
-  | `.claude/scripts/dispatch_workflow.py` | dispatches one of the six workflows allowed as `gh workflow run <file> *` and prints the id of the run it started (never the previous run) | 1 read, 1 POST, 1 read per 5 s poll (90 s max) |
+  | `.claude/scripts/dispatch_workflow.py` | dispatches one of the six workflows allowed as `gh workflow run <file> *` and prints the id of the run it started (never the previous run) | 1 read, 1 POST, 1 read of the run GitHub names; only when GitHub returns no run id, 1 read per 5 s poll (90 s max) instead |
   | `.claude/scripts/edit_comment.py` | edits one issue or PR comment in place from a JSON list of exact-once `old`/`new` pairs, or replaces its body | 1 read, 1 PATCH |
   | `.claude/scripts/permission_prompts.py` | reports and files the prompts below | 1 read per 100 labelled issues, 1 POST per new pattern |
 
