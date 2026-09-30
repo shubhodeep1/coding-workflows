@@ -113,11 +113,54 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 				assert "reason=untrusted_issue_author" in result.stdout
 
 
-def test_clarify_route_gates_reclarify_comment_like_the_job_predicate() -> None:
-	"""Issue #5243: the route step repeats the job-level /reclarify rule.
+def _run_clarify_route(step: dict, root: Path, body: str, labels: list[str], implementer: str = "codex") -> tuple[str, str]:
+	"""Run the real `Decide clarify route` body for one issue comment; return (stdout, outputs)."""
+	meta_path = root / "issue.json"
+	output_path = root / "output"
+	payload = {
+		"number": 123,
+		"title": "Fix it",
+		"body": "",
+		"state": "open",
+		"user": {"type": "User", "login": "maintainer"},
+		"author_association": "OWNER",
+		"labels": [{"name": label} for label in labels],
+	}
+	meta_path.write_text(json.dumps(payload), encoding="utf-8")
+	output_path.write_text("", encoding="utf-8")
+	env = os.environ.copy()
+	for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(name, None)
+	env.update({
+		"ISSUE_META_FILE": str(meta_path),
+		"GITHUB_OUTPUT": str(output_path),
+		"EVENT_NAME": "issue_comment",
+		"EVENT_ACTION": "created",
+		"COMMENT_BODY": body,
+		"RUN_ID": "1",
+		"ISSUE_NUMBER": "123",
+		"AI_ISSUE_IMPLEMENTER": implementer,
+	})
+	result = subprocess.run(["bash", "-c", step["run"]], env=env, text=True, capture_output=True, check=True, cwd=REPO_ROOT)
+	return result.stdout, output_path.read_text(encoding="utf-8")
 
-	A comment that is not a /reclarify command must do nothing, even on an
-	orchestrator-managed issue whose fast path would otherwise post /answer.
+
+NOT_RECLARIFY_SKIP_LINE = "AI_PHASE_GATE_V1 phase=clarify gate=route reason=not_reclarify_command outcome=skip issue=123"
+
+# Issue #5309: automation quotes model output and untrusted excerpts in fenced
+# code blocks (the permission-prompt "Seen again" example uses a ```` fence).
+FENCED_PERMISSION_EXAMPLE = (
+	"Seen again.\n\n**Latest example** (untrusted data from the session):\n\n"
+	"````text\ngh api repos/o/r/issues/1/comments -f body='done\n```\n/reclarify'\n````\n"
+)
+
+
+def test_clarify_route_gates_reclarify_comment_like_the_job_predicate() -> None:
+	"""Issues #5243 / #5309: the route step repeats the job-level /reclarify rule.
+
+	A comment that is not a /reclarify command must do nothing. On an
+	orchestrator-managed issue only a first-line /reclarify counts, so model
+	text in an escalation can never trigger the fast path's automatic /answer.
 	"""
 	workflow = yaml.safe_load(_read(CLARIFY_WF))
 	step = next(step for step in workflow["jobs"]["clarify"]["steps"] if step.get("name") == "Decide clarify route")
@@ -135,46 +178,69 @@ def test_clarify_route_gates_reclarify_comment_like_the_job_predicate() -> None:
 		("indented line", "Answer\n  /reclarify", ["ai:claude-blocked"], False),
 		("blocked comment", "<!-- ai:claude-blocked:v1 -->\nReply, then comment:\n\n/reclarify", ["ai:claude-blocked"], False),
 		("plan comment", "Implementation Plan\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:implementation-plan:v1 -->", ["ai:blocked"], False),
+		# Issue #5309 cases.
+		("heal marker without the ai: prefix", "<!-- workflow-failure-heal:occurrence -->\nAnother occurrence\n/reclarify", ["ai:claude-blocked"], False),
+		("escalation with its marker", "Autonomous resolution not possible.\n\nESCALATION: pick one\n/reclarify\n\n<!-- ai:clarify-escalation:v1 -->", ["ai:blocked"], False),
+		("trailing line on a tracking issue", "Judge: retry.\n/reclarify", ["ai:orchestrator-tracking", "ai:blocked"], False),
+		("fenced line, backticks", "Log:\n```\n/reclarify\n```", ["ai:claude-blocked"], False),
+		("fenced line, tildes", "Log:\n~~~text\n/reclarify\n~~~", ["ai:claude-blocked"], False),
+		("fenced line, shorter inner fence", FENCED_PERMISSION_EXAMPLE, ["ai:claude-blocked"], False),
+		("fenced line, unclosed fence", "Log:\n```\nerror\n/reclarify", ["ai:claude-blocked"], False),
+		("fenced line, tilde does not close a backtick fence", "Log:\n```\n~~~\n/reclarify\n```", ["ai:claude-blocked"], False),
+		("line after a closed fence", "Log:\n```\nerror\n```\nAnswer A.\n/reclarify", ["ai:claude-blocked"], True),
+		("line after an indented closing fence", "Log:\n```\nerror\n   ```\n/reclarify", ["ai:claude-blocked"], True),
 	]
 	with tempfile.TemporaryDirectory() as workdir:
 		root = Path(workdir)
-		meta_path = root / "issue.json"
-		output_path = root / "output"
 		for description, body, labels, is_command in cases:
-			payload = {
-				"state": "open",
-				"user": {"type": "User", "login": "maintainer"},
-				"author_association": "OWNER",
-				"labels": [{"name": "ai:orchestrator-managed"}] + [{"name": label} for label in labels],
-			}
-			meta_path.write_text(json.dumps(payload), encoding="utf-8")
-			output_path.write_text("", encoding="utf-8")
-			env = os.environ.copy()
-			for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
-				env.pop(name, None)
-			env.update({
-				"ISSUE_META_FILE": str(meta_path),
-				"GITHUB_OUTPUT": str(output_path),
-				"EVENT_NAME": "issue_comment",
-				"EVENT_ACTION": "created",
-				"COMMENT_BODY": body,
-				"RUN_ID": "1",
-				"ISSUE_NUMBER": "123",
-			})
-			result = subprocess.run(["bash", "-c", step["run"]], env=env, text=True, capture_output=True, check=True, cwd=REPO_ROOT)
-			outputs = output_path.read_text(encoding="utf-8")
-			skip_line = "AI_PHASE_GATE_V1 phase=clarify gate=route reason=not_reclarify_command outcome=skip issue=123"
+			stdout, outputs = _run_clarify_route(step, root, body, labels)
 			assert "issue_implementer=codex" in outputs, description
 			if is_command:
-				assert skip_line not in result.stdout, description
-				assert "orchestrator_fast_path=true" in outputs, description
-				assert "reclarify_command=true" in result.stdout, description
+				assert NOT_RECLARIFY_SKIP_LINE not in stdout, description
+				assert "reclarify_command=true" in stdout, description
 			else:
-				assert skip_line in result.stdout, description
+				assert NOT_RECLARIFY_SKIP_LINE in stdout, description
 				assert "skip_codex=true" in outputs, description
 				assert "issue_implementer_reason=not_routed" in outputs, description
 				assert "orchestrator_fast_path=false" in outputs, description
-				assert "reclarify_command=false" in result.stdout, description
+				assert "reclarify_command=false" in stdout, description
+		# Orchestrator-managed issues: a first-line /reclarify keeps the fast
+		# path; a later line never counts, even on ai:blocked (issue #5309).
+		for description, body, is_command in (
+			("first line", "/reclarify", True),
+			("first line, later lines too", "/reclarify\nmore\n/reclarify", True),
+			("trailing line", "Use v2.\n/reclarify", False),
+			("unmarked escalation model text", "Autonomous resolution not possible.\n\nESCALATION: pick one\n/reclarify\n\n- Cycle: 3/3", False),
+		):
+			stdout, outputs = _run_clarify_route(step, root, body, ["ai:orchestrator-managed", "ai:blocked"])
+			if is_command:
+				assert NOT_RECLARIFY_SKIP_LINE not in stdout, description
+				assert "orchestrator_fast_path=true" in outputs, description
+			else:
+				assert NOT_RECLARIFY_SKIP_LINE in stdout, description
+				assert "skip_codex=true" in outputs, description
+				assert "orchestrator_fast_path=false" in outputs, description
+				assert "reclarify_command=false" in stdout, description
+
+
+def test_clarify_route_releases_stale_claude_labels_on_switch_to_codex() -> None:
+	"""Issue #5309: a Codex route clears the Claude "waiting on an answer" labels too."""
+	workflow = yaml.safe_load(_read(CLARIFY_WF))
+	step = next(step for step in workflow["jobs"]["clarify"]["steps"] if step.get("name") == "Decide clarify route")
+	with tempfile.TemporaryDirectory() as workdir:
+		root = Path(workdir)
+		for labels, release in (
+			(["ai:codex", "ai:claude-blocked"], True),
+			(["ai:codex", "ai:claude-handoff-failed"], True),
+			(["ai:codex", "ai:claude"], True),
+			(["ai:codex"], False),
+		):
+			_, outputs = _run_clarify_route(step, root, "/reclarify", labels, implementer="")
+			assert "issue_implementer=codex" in outputs, labels
+			assert f"release_claude_claim={str(release).lower()}" in outputs, labels
+	release_block = _step_block(CLARIFY_WF, "Release Claude claim on switch to Codex")
+	for encoded in ("ai%3Aclaude\"", "ai%3Aclaude-blocked\"", "ai%3Aclaude-handoff-failed\""):
+		assert f"/labels/{encoded}" in release_block, encoded
 
 
 def test_clarify_route_hands_trailing_reclarify_answer_to_claude() -> None:
@@ -228,6 +294,28 @@ def test_plan_comment_marks_its_reclarify_line_as_automation() -> None:
 	block = _step_block(PLAN_WF, "Post implementation plan")
 	_assert_before(block, 'echo "/reclarify"', 'echo "<!-- ai:implementation-plan:v1 -->"')
 	_assert_before(block, 'echo "<!-- ai:implementation-plan:v1 -->"', '} > "${PLAN_COMMENT_FILE}"')
+
+
+def test_escalation_comments_end_with_automation_markers() -> None:
+	"""Issue #5309: comments that embed model text close with an `<!-- ai:` marker.
+
+	The marker sits after the model text, so the later-line /reclarify form
+	never treats a /reclarify line inside that text as a command.
+	"""
+	blocked_block = _step_block(PLAN_WF, "Handle blocked planning output")
+	_assert_before(blocked_block, '"Reason: ${BLOCKED_REASON}"', '"<!-- ai:plan-blocked:v1 -->"')
+	_assert_before(blocked_block, '"<!-- ai:plan-blocked:v1 -->"', '} > "${PLAN_COMMENT_FILE}"')
+
+	clarification_block = _step_block(PLAN_WF, "Post clarification questions")
+	_assert_before(clarification_block, 'cat "${CODEX_OUTPUT_FILE}"', 'echo "<!-- ai:clarification-required:v1 -->"')
+	_assert_before(clarification_block, 'echo "<!-- ai:clarification-required:v1 -->"', '} > "${PLAN_COMMENT_FILE}"')
+
+	script = _read(ORCH_PARSE_ANSWER_SCRIPT)
+	variants = script.split('} > "${RUNTIME_DIR}/loop_break_comment.md"')
+	assert len(variants) == 3, "expected the ESCALATE and loop-guard comment variants"
+	assert "${ESCALATION_SECTION}" in variants[0]
+	for variant in variants[:2]:
+		assert variant.rstrip().endswith('echo "<!-- ai:clarify-escalation:v1 -->"'), variant[-400:]
 
 
 def test_plan_gate_steps_emit_stable_skip_and_defer_telemetry() -> None:

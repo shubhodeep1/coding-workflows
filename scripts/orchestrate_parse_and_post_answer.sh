@@ -197,6 +197,10 @@ if [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
 			echo
 			echo "- Clarify comment ID: ${CLARIFICATION_COMMENT_ID}"
 			echo "- Cycle: ${CYCLE}/${MAX_CYCLES}"
+			echo
+			# Automation marker, last and outside the model text (issue #5309):
+			# clarify never treats a /reclarify line in this comment as a command.
+			echo "<!-- ai:clarify-escalation:v1 -->"
 		} > "${RUNTIME_DIR}/loop_break_comment.md"
 	else
 		{
@@ -209,6 +213,10 @@ if [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
 			echo "- Previous auto-answer comment ID: ${PREVIOUS_ANSWER_COMMENT_ID}"
 			echo "- Loop reason: ${LOOP_REASON}"
 			echo "- Cycle: ${CYCLE}/${MAX_CYCLES}"
+			echo
+			# Automation marker, last and outside the model text (issue #5309):
+			# clarify never treats a /reclarify line in this comment as a command.
+			echo "<!-- ai:clarify-escalation:v1 -->"
 		} > "${RUNTIME_DIR}/loop_break_comment.md"
 	fi
 

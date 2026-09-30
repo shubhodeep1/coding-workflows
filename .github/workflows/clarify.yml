@@ -18,7 +18,7 @@ jobs:
   clarify:
     if: >-
       ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
-      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && (contains(toJson(github.event.issue.labels.*.name), '"ai:claude-blocked"') || contains(toJson(github.event.issue.labels.*.name), '"ai:claude-handoff-failed"') || contains(toJson(github.event.issue.labels.*.name), '"ai:blocked"')))))
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!--') && !contains(toJson(github.event.issue.labels.*.name), '"ai:orchestrator-tracking"') && !contains(toJson(github.event.issue.labels.*.name), '"ai:orchestrator-managed"') && (contains(toJson(github.event.issue.labels.*.name), '"ai:claude-blocked"') || contains(toJson(github.event.issue.labels.*.name), '"ai:claude-handoff-failed"') || contains(toJson(github.event.issue.labels.*.name), '"ai:blocked"')))))
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
@@ -436,11 +436,15 @@ jobs:
           # case-insensitive like startsWith/contains. A comment is a
           # /reclarify command when it starts with `/reclarify`, or when a
           # later line starts with `/reclarify`, the comment carries no
-          # `<!-- ai:` automation marker (automation posts as the same
-          # trusted User and often says "comment `/reclarify`"), and the
-          # issue is waiting on a human answer (`ai:claude-blocked`,
-          # `ai:claude-handoff-failed`, or `ai:blocked`), so model text in an
-          # unmarked automation comment elsewhere cannot start clarify. Any
+          # `<!--` HTML comment (automation posts as the same trusted User,
+          # and every automation marker is one), and the issue is waiting on
+          # a human answer (`ai:claude-blocked`, `ai:claude-handoff-failed`,
+          # or `ai:blocked`) and is not an orchestrator tracking or managed
+          # issue, so model text in an unmarked automation comment cannot
+          # start clarify. Issue #5309: this step also ignores a `/reclarify`
+          # line inside a fenced code block (``` or ~~~), where automation
+          # quotes model output and untrusted excerpts; the expression
+          # language cannot see fences, so only this step checks them. Any
           # other comment that reaches this step does nothing.
           IS_RECLARIFY_COMMAND="true"
           if [ "${EVENT_NAME}" = "issue_comment" ]; then
@@ -448,9 +452,32 @@ jobs:
             COMMENT_BODY_LC="${COMMENT_BODY,,}"
             if [[ "${COMMENT_BODY_LC}" == /reclarify* ]]; then
               IS_RECLARIFY_COMMAND="true"
-            elif [[ "${COMMENT_BODY_LC}" == *$'\n'/reclarify* && "${COMMENT_BODY_LC}" != *'<!-- ai:'* ]] && \
-              jq -e '[(.labels // [])[]?.name] | any(. == "ai:claude-blocked" or . == "ai:claude-handoff-failed" or . == "ai:blocked")' "${ISSUE_META_FILE}" >/dev/null; then
-              IS_RECLARIFY_COMMAND="true"
+            elif [[ "${COMMENT_BODY_LC}" == *$'\n'/reclarify* && "${COMMENT_BODY_LC}" != *'<!--'* ]] && \
+              jq -e '[(.labels // [])[]?.name] | any(. == "ai:claude-blocked" or . == "ai:claude-handoff-failed" or . == "ai:blocked") and (any(. == "ai:orchestrator-tracking" or . == "ai:orchestrator-managed") | not)' "${ISSUE_META_FILE}" >/dev/null; then
+              # CommonMark fences: an opening line of 0-3 spaces and 3+
+              # backticks or tildes; the closing line uses the same
+              # character, at least as many, and nothing else. An unclosed
+              # fence runs to the end of the comment.
+              RECLARIFY_FENCE_OPEN_RE='^ {0,3}(`{3,}|~{3,})'
+              RECLARIFY_FENCE_CLOSE_RE='^ {0,3}(`{3,}|~{3,}) *$'
+              RECLARIFY_OPEN_FENCE=""
+              RECLARIFY_LINE_NO=0
+              while IFS= read -r RECLARIFY_SCAN_LINE || [ -n "${RECLARIFY_SCAN_LINE}" ]; do
+                RECLARIFY_SCAN_LINE="${RECLARIFY_SCAN_LINE%$'\r'}"
+                RECLARIFY_LINE_NO=$((RECLARIFY_LINE_NO + 1))
+                if [ -z "${RECLARIFY_OPEN_FENCE}" ]; then
+                  if [[ "${RECLARIFY_SCAN_LINE}" =~ ${RECLARIFY_FENCE_OPEN_RE} ]]; then
+                    RECLARIFY_OPEN_FENCE="${BASH_REMATCH[1]}"
+                  elif [ "${RECLARIFY_LINE_NO}" -gt 1 ] && [[ "${RECLARIFY_SCAN_LINE}" == /reclarify* ]]; then
+                    IS_RECLARIFY_COMMAND="true"
+                    break
+                  fi
+                elif [[ "${RECLARIFY_SCAN_LINE}" =~ ${RECLARIFY_FENCE_CLOSE_RE} ]] && \
+                  [ "${BASH_REMATCH[1]:0:1}" = "${RECLARIFY_OPEN_FENCE:0:1}" ] && \
+                  [ "${#BASH_REMATCH[1]}" -ge "${#RECLARIFY_OPEN_FENCE}" ]; then
+                  RECLARIFY_OPEN_FENCE=""
+                fi
+              done <<< "${COMMENT_BODY_LC}"
             fi
           fi
 
@@ -519,7 +546,7 @@ jobs:
           fi
           RELEASE_CLAUDE_CLAIM="false"
           if [ "${ISSUE_IMPLEMENTER}" = "codex" ] && [ "${ISSUE_IMPLEMENTER_REASON}" != "not_routed" ] && [ "${IS_CLOSED}" != "true" ] && \
-            jq -e '[(.labels // [])[]?.name] | index("ai:claude") != null' "${ISSUE_META_FILE}" >/dev/null; then
+            jq -e '[(.labels // [])[]?.name] | any(. == "ai:claude" or . == "ai:claude-blocked" or . == "ai:claude-handoff-failed")' "${ISSUE_META_FILE}" >/dev/null; then
             RELEASE_CLAUDE_CLAIM="true"
           fi
 
@@ -551,8 +578,12 @@ jobs:
           # A Codex route on an issue that still carries the ai:claude claim
           # (the user added `ai:codex` and commented /reclarify) hands it back
           # to Codex: drop the claim so plan / implement / stall recovery act
-          # on it again.
+          # on it again. Issue #5309: the Claude "waiting on a human answer"
+          # labels go too, or the later-line /reclarify form would stay open
+          # while the Codex pipeline posts unmarked model text on the issue.
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai%3Aclaude" >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai%3Aclaude-blocked" >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai%3Aclaude-handoff-failed" >/dev/null 2>&1 || true
           echo "CLAUDE_ISSUE_HANDOFF released issue=${ISSUE_NUMBER} reason=${{ steps.clarify_route.outputs.issue_implementer_reason }}"
 
       - name: Claude issue handoff
