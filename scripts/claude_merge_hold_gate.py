@@ -174,7 +174,8 @@ def _read_comment_page(check_in_status, path: str, page: int) -> list:
 		if not isinstance(page_items, list) or any(not isinstance(item, dict) for item in page_items):
 			raise GateUnavailable(f"{path} page {page} is not an array of objects")
 		return page_items
-	raise GateUnavailable(f"{path} page {page} unreadable after {COMMENT_READ_ATTEMPTS} attempts: {last_error}")
+	raise GateUnavailable(
+		f"{path} page {page} unreadable after {COMMENT_READ_ATTEMPTS} attempts: {last_error or 'no read attempted'}")
 
 
 def _stream_claim_comments(check_in_status, repo: str, number: int, trusted_logins: tuple[str, ...]) -> list:

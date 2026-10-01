@@ -378,6 +378,14 @@ def test_a_page_that_stays_unreadable_fails_closed_after_three_attempts(tmp_path
 	assert sleeps == [1, 2]
 
 
+def test_zero_read_attempts_fail_closed_with_a_clear_reason(monkeypatch):
+	check_in_status = gate._load_check_in_status()
+	monkeypatch.setattr(gate, "COMMENT_READ_ATTEMPTS", 0)
+	with pytest.raises(gate.GateUnavailable) as raised:
+		gate._read_comment_page(check_in_status, COMMENTS_PATH, 1)
+	assert str(raised.value).endswith("after 0 attempts: no read attempted")
+
+
 def test_a_malformed_page_fails_closed_without_a_retry(tmp_path, monkeypatch, capsys):
 	fixture = _fixture()
 	fixture[COMMENTS_PATH] = {"message": "not a list"}
