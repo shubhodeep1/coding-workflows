@@ -1162,6 +1162,11 @@ reviews, comments, and conflicts stay a direct §12 request.
     the check (a PR merged into the project branch) counts as a mismatch.
     They wait for every recorded candidate, count every matching run, and
     re-dispatch once per cycle on a mismatch.
+    After the gates (the completion and final-merge stages, their review
+    rounds and blocked-PR stages included), a base-branch merge that
+    conflicts is never resolved: the stage aborts it and stops at
+    `Status: BLOCKED`, because the resolution would reach the default
+    branch with the final PR without a security audit or validation.
     A failed pre-dispatch run-list read no longer cancels the dispatch: with
     a returned id the result is exact, and without one it is exit 2 with
     `dispatched: true` and no polling, since every recent run would look new.

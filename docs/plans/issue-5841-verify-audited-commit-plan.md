@@ -26,6 +26,7 @@ When `dispatch_workflow.py` cannot name a dispatch's run exactly, `/implement-pl
 - G3. A validation read-result stage applies the same rule to `VALIDATE_TARGET_REF` and `HEAD commit:`.
 - G4. With several recorded candidates, the stage decides only once every one has completed. Every candidate matching both ref and commit counts: the security pass is clean only when all of them are, and validation acts on the worst verdict among them.
 - G5. A read-result stage runs no step 2 sync merge (AD-7, PR #5860 review round 1: a clean sync advances the branch too), so the stage never moves the project branch itself; before it uses a clean verdict it re-reads the project head with `git ls-remote`, and a head that moved since the check (a PR merged into the project branch) is a mismatch (AD-9, PR #5860 review round 1 on head `630dd6c`). A mismatch (no candidate matches) never yields a verdict. The stage re-dispatches once in the cycle, and a second mismatch stops at `Status: BLOCKED` (#5016's existing bound).
+- G6. After the gates, a completion or final-merge stage of steps 11–11a (their review-round and blocked-PR stages included) never resolves a conflict when it merges the base into the project branch: it aborts and stops at `Status: BLOCKED`, because the resolution would reach the default branch with the final PR without a security audit or validation (AD-10, PR #5860 review round 1 on head `d5c9264`).
 
 ## Non-goals
 

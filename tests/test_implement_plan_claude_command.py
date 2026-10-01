@@ -506,3 +506,15 @@ def test_clean_verdicts_re_check_the_project_head_before_use():
 	assert "the pass is clean; go to step 10." not in step_9
 	step_10 = _step_twin("10. **Runtime validation", "11. **Completion PR")
 	assert "**`status=pass`** → in project mode, first re-check the project head as in step 9's clean pass: a head that moved since the pre-sync head is a mismatch, handled as in step 9 with the `validation <k>/3 — read result — re-dispatched` name." in step_10
+
+
+# PR #5860 review round 1 (head d5c9264): a stage after the gates (steps
+# 11-11a) that resolved a base-branch conflict would put code no security
+# audit or validation covered on the final PR, so it stops instead.
+def test_stages_after_the_gates_never_resolve_a_base_branch_conflict():
+	step_2 = _step_twin("2. **Pick the mode", "3. **Build the phase checklist")
+	assert "**After the gates** — a `completion` or `final-merge` stage of steps 11–11a, their review-round and blocked-PR stages included — a conflict is never resolved" in step_2
+	assert "Run `git merge --abort`, stop with `Status: BLOCKED`, and ask; the RECOMMENDED answer is to set the final PR back to draft with auto-merge disabled when it is already ready, resolve the conflict, and go back through steps 9 and 10 before step 11a marks the final PR ready again." in step_2
+	assert "A clean merge is pushed the same way, after the gates too (it adds only default-branch commits, which a branch audit's merge-base range excludes);" in step_2
+	step_7a = _step_twin("7a. **Review round", "8. **Conformance audit")
+	assert "On the final PR (step 11a) the merge brings the base into the project branch after the gates, so step 2's after-the-gates rule applies instead: abort, `Status: BLOCKED`, ask." in step_7a
