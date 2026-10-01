@@ -262,6 +262,8 @@ _PHASE4B_REACHED = "PHASE4B_REACHED_ATTEMPT_2"
 # shape). `run_statuses` is consumed one entry per pinned-run read. With
 # `dispatch`, no run is active before the retry, so the step dispatches one
 # (`gh workflow run`) and the run list shows a new run only after that.
+# `rate_limit_latency` advances the fake clock by that many seconds on each
+# `GET /rate_limit`, the way a slow request uses up time before the wait.
 # Every call is appended to calls.log.
 _STUB_GH = r'''#!/usr/bin/env python3
 import json
@@ -331,6 +333,9 @@ if endpoint == "rate_limit":
 		core = {"remaining": 0 if limited_now else 5000, "reset": scenario["limited_until"] if limited_now else now + 3600}
 	else:
 		core = {"remaining": 4999, "reset": now + 3600}
+	if scenario["rate_limit_latency"]:
+		with open(os.environ["FAKE_CLOCK_FILE"], "w", encoding="utf-8") as fh:
+			fh.write(str(now + scenario["rate_limit_latency"]))
 	emit({"resources": {"core": core}})
 if endpoint.endswith("/pulls/" + os.environ["PR_NUMBER"]):
 	rate_limited("pulls")
@@ -374,7 +379,7 @@ date() {
 	fi
 }
 sleep() {
-	echo "SLEEP ${1:-0}" >> "${SLEEP_LOG}"
+	echo "SLEEP ${1:-0} $(cat "${FAKE_CLOCK_FILE}")" >> "${SLEEP_LOG}"
 	echo $(( $(cat "${FAKE_CLOCK_FILE}") + ${1:-0} )) > "${FAKE_CLOCK_FILE}"
 }
 '''
@@ -388,12 +393,14 @@ def _run_phase4b_retry(
 	limit_kind: str = "primary",
 	limited_endpoints: tuple[str, ...] = ("pulls",),
 	dispatch: bool = False,
+	rate_limit_latency: int = 0,
 ) -> dict:
 	"""Run the real Phase 4b helpers and retry block against a stub `gh`.
 
 	The reads in `limited_endpoints` are rate-limited for the first
-	`limited_for` seconds of fake time. Returns the exit code, transcript, `$GITHUB_OUTPUT` text, gh
-	calls, sleeps, and the fake clock's final epoch.
+	`limited_for` seconds of fake time, and each `GET /rate_limit` takes
+	`rate_limit_latency` seconds. Returns the exit code, transcript, `$GITHUB_OUTPUT` text, gh
+	calls, sleeps, the epoch each sleep ended at, and the fake clock's final epoch.
 	"""
 	workflow = _read_workflow()
 	script = (
@@ -418,6 +425,7 @@ def _run_phase4b_retry(
 			"limit_kind": limit_kind,
 			"limited_endpoints": list(limited_endpoints),
 			"dispatch": dispatch,
+			"rate_limit_latency": rate_limit_latency,
 			"dispatched_run": _PHASE4B_DISPATCHED_RUN,
 			"adopted_run": _PHASE4B_ADOPTED_RUN,
 			"prior_run": _PHASE4B_PRIOR_RUN,
@@ -453,6 +461,7 @@ def _run_phase4b_retry(
 			"output": output.read_text(encoding="utf-8"),
 			"calls": calls_log.read_text(encoding="utf-8").splitlines() if calls_log.exists() else [],
 			"sleeps": [int(line.split()[1]) for line in sleep_log.read_text(encoding="utf-8").splitlines()],
+			"sleep_ends": [int(line.split()[1]) + int(line.split()[2]) for line in sleep_log.read_text(encoding="utf-8").splitlines()],
 			"clock": int(clock.read_text(encoding="utf-8").strip()),
 		}
 
@@ -532,6 +541,31 @@ def test_phase4b_rate_limit_until_the_deadline_fails_closed_with_retry_timeout()
 	# wait) and one run read before the loop ends.
 	assert result["sleeps"] == [15, _PHASE4B_DEADLINE - _PHASE4B_START_EPOCH - 15, 0], result["sleeps"]
 	assert len(_calls_to(result, f"repos/example/repo/actions/runs/{_PHASE4B_ADOPTED_RUN}")) == 1
+
+
+def test_phase4b_slow_rate_limit_read_never_carries_the_wait_past_the_deadline() -> None:
+	"""The wait is measured from when `GET /rate_limit` returned, not when it started.
+
+	PR #5874 (review round 1 after intervention 1): with the clock read
+	before the request, a 5s request made the wait capped at the deadline
+	end 5s past it, and the loop then read again after its deadline.
+	"""
+	latency = 5
+	result = _run_phase4b_retry(
+		pr_states=["open"],
+		run_statuses=["in_progress"],
+		limited_for=3600,
+		rate_limit_latency=latency,
+	)
+	assert result["rc"] == 1, result["transcript"]
+	assert result["output"] == "status=retry_timeout\n", result["output"]
+	# First PR-state read at +15s; its wait starts after the 5s request and
+	# ends exactly at the deadline. The read it owes there is limited again
+	# and has nothing left to wait.
+	budget = _PHASE4B_DEADLINE - _PHASE4B_START_EPOCH
+	assert result["sleeps"] == [15, budget - 15 - latency, 0], result["sleeps"]
+	assert result["sleep_ends"][1] == _PHASE4B_DEADLINE, result["sleep_ends"][1] - _PHASE4B_DEADLINE
+	assert max(result["sleep_ends"]) == _PHASE4B_DEADLINE + latency
 
 
 def test_phase4b_closed_pr_is_still_detected_after_rate_limits() -> None:

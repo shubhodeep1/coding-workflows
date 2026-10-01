@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5874
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01LmB1TgVqo23aKNYHw34Stg   safety net (re-armed by the intervention 1 stage, see its report)   hand-back (re-armed by the intervention 1 stage)
+- Check-in: checker session_01LmB1TgVqo23aKNYHw34Stg   safety net and hand-back re-armed by the review round 6 stage (session_014xXdWyjf43W86dysqpMVqX), see its report
 - Last updated: 2026-10-01
-- Last note: blocked-PR intervention 1 on PR #5874: the workflow labelled it `ai:review-blocked` at the 5-round autofix cap right after the round 5 fix (2aebc32) was pushed, without reviewing that head; both round 5 findings were already fixed and no check failed, so this `[claude-intervention]` commit restarts the round count and the label is removed so the reviewer panel reviews the fix.
+- Last note: review round 6 (the workflow's round 1 after intervention 1) on PR #5874: the one consensus finding was valid. `phase4b_rate_limit_wait_seconds` read the clock before `GET /rate_limit`, so a slow request carried a deadline-capped wait past the deadline. The clock is now read after the request returns, with a regression test that adds latency to the stub's `GET /rate_limit`.
 
 ## Phases
-1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 5; interventions: 1 (2026-10-01: `ai:review-blocked` from the `MAX_AUTOFIX_ITERATIONS`=5 cap right after round 5's fix 2aebc32, with no new findings and no failing check on that head; label removed so the reviewers run on the round-5 fix) (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
+1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 6; interventions: 1 (2026-10-01: `ai:review-blocked` from the `MAX_AUTOFIX_ITERATIONS`=5 cap right after round 5's fix 2aebc32, with no new findings and no failing check on that head; label removed so the reviewers run on the round-5 fix) (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
    - [x] `gh_api_with_retry` returns `GH_API_RATE_LIMITED_RC` (75) on a rate-limited attempt without the short retries
    - [x] `fetch_pr_state` reports `rate_limited` separately from `unknown`
    - [x] `phase4b_rate_limit_wait_seconds` derives the wait from `GET /rate_limit`, capped at the deadline
@@ -26,6 +26,7 @@
    - [x] review round 3: a PR-state wait that slept is followed by a PR-state read, not a run read (`PR_STATE_RATE_LIMIT_READ_OWED`)
    - [x] review round 4: a completed run ends the loop only after a PR-state read in that poll that was not rate-limited (`RETRY_RUN_COMPLETION_ACCEPTED`)
    - [x] review round 5: that PR-state read must confirm the PR `open`; `unknown` no longer accepts a completed run
+   - [x] review round 6 (round 1 after intervention 1): `phase4b_rate_limit_wait_seconds` reads the clock after `GET /rate_limit` returns, so the request's latency never carries a wait past its deadline
    - Done when: the plan's Phase 1 "done" condition holds.
 
 ## Conformance
@@ -59,6 +60,7 @@
 - [source:intervention] A long wait inside a poll loop makes every guard checked before it stale: after the wait, go back to the loop top so the guards run again before any later read can end the loop, and clear a carried-over "read owed" flag before the wait so a zero wait cannot keep the loop alive. (files: .github/workflows/test-and-mark-stable.yml)
 - [source:intervention] In a poll loop that waits on two reads, let the success exit check that the guard read in the same iteration actually answered; a guard read that was rate-limited at a deadline must not let the other read end the loop. (files: .github/workflows/test-and-mark-stable.yml)
 - [source:intervention] A guard that must confirm a state should test for the confirming value (`!= "open"`), not exclude the known-bad values one at a time: every new failure value (`rate_limited`, `unknown`) otherwise slips through until a reviewer finds it. (files: .github/workflows/test-and-mark-stable.yml)
+- [source:intervention] When a sleep is capped at a deadline, read the clock after every blocking call that comes before the sleep (an API request, a subprocess), not before it; otherwise the call's latency is added past the deadline. (files: .github/workflows/test-and-mark-stable.yml)
 
 ## Notes
 - Issue mode: started by the Claude issue dispatcher (routine "PR dispatch: #5858", trigger trig_01Mjrhnyrr1MrJ7ar8r3ViaM) in session session_01KSbUQQrXpu9Y6S3y5WG4mb, permission mode auto.

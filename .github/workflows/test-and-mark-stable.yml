@@ -2281,17 +2281,24 @@ jobs:
           # was a secondary one (or the read failed), so wait 60s, the
           # minimum GitHub documents for secondary limits. The source of
           # the wait goes to stderr (the step log), so an operator can
-          # tell a reset-derived wait from the 60s fallback.
+          # tell a reset-derived wait from the 60s fallback. The clock is
+          # read after GET /rate_limit returns, so the request's latency
+          # never carries the sleep past the deadline (PR #5874, review
+          # round 1 after intervention 1).
           phase4b_rate_limit_wait_seconds() {
             local wait_deadline="$1"
             local now_epoch
             local limits=""
+            local rate_limit_read_ok=0
             local core_remaining=""
             local core_reset=""
             local wait_seconds=60
             local wait_source="60s fallback: GET /rate_limit unreadable"
-            now_epoch=$(date +%s)
             if limits=$(gh api rate_limit --jq '"\(.resources.core.remaining) \(.resources.core.reset)"' 2>/dev/null); then
+              rate_limit_read_ok=1
+            fi
+            now_epoch=$(date +%s)
+            if [ "${rate_limit_read_ok}" -eq 1 ]; then
               read -r core_remaining core_reset <<< "${limits}"
               if [[ "${core_remaining}" =~ ^[0-9]+$ ]] && [[ "${core_reset}" =~ ^[0-9]+$ ]]; then
                 if [ "${core_remaining}" -eq 0 ] && [ "${core_reset}" -gt "${now_epoch}" ]; then
