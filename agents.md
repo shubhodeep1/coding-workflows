@@ -1170,9 +1170,20 @@ reviews, comments, and conflicts stay a direct §12 request.
   `git diff --quiet HEAD...origin/<default> -- .claude/hooks .claude/settings.json`
   right after checkout and, when it reports a change the default branch
   holds and the branch lacks, merge the default branch in with a
-  `[claude-asset-sync]` merge commit (no rebase, no force-push). Only
-  branches that land in the default branch are synced; a PR head on a
-  lagging project branch syncs the project branch first. A conflict under
+  `[claude-asset-sync]` merge commit (no rebase, no force-push). A PR head
+  whose base is not the default branch is also checked against that base
+  (`git diff --quiet HEAD...origin/<base> -- .claude/hooks .claude/settings.json`,
+  issue #5260), because the base can hold a guard change the head lacks
+  while the default branch holds nothing newer. The default branch is
+  merged only into branches that land in it. A PR head on such a project
+  branch syncs the project branch first, verifies the pushed project branch
+  holds every default-branch guard change
+  (`git diff --quiet origin/<project branch>...origin/<default> -- .claude/hooks .claude/settings.json`;
+  a failure stops like a `.claude/` conflict), then merges the project
+  branch. A PR head on any other base merges its own base when the base is
+  ahead on guards; default drift there that the base merge does not
+  clear (the default check is re-run after it) is recorded as
+  `claude_assets=stale (base <base>)`. A conflict under
   `.claude/` aborts the merge and stops with the `ai:claude-blocked:v1`
   blocker (a `hold` claim in `/fix-claude-pr`). On a PR head, a conflict
   only outside `.claude/` is resolved inside the sync merge
@@ -1183,10 +1194,16 @@ reviews, comments, and conflicts stay a direct §12 request.
   with `--before HEAD` before anything is resolved.
   When that resolution is not evident, the session aborts and stops as it
   does on any conflict it cannot resolve, and never continues the fix on
-  the unsynced head (issue #5258). A merged `settings.json`
+  the unsynced head (issue #5258). A failed `git fetch` of the default
+  branch or the PR's base also stops with that blocker, because a drift
+  check against a ref the fetch did not refresh can report a stale head
+  as fresh. Only exit 1 from a drift check counts as drift: an exit above
+  1 (`git diff` could not compare, for example `no merge base` in a
+  shallow clone) stops with the same blocker. A merged `settings.json`
   change is confirmed by the settings check below before anything is
   pushed. Local git only, no GitHub API
-  calls. The SessionStart hook logs the drift as
+  calls. The SessionStart hook logs the drift against the default branch
+  only (it cannot learn a PR's base without an API call) as
   `[session-start] claude_assets=stale …`, or `claude_assets=diverged …`
   when shallow history has no merge base (stable log prefixes). Tests:
   `tests/test_claude_asset_sync_command.py`,
