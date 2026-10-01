@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:592-598 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: marker_run_attempt_problem() accepts the marker-producing attempt without checking its conclusion, allowing a later successful gate-skipped rerun to authorize auto-merge after that attempt failed or was cancelled.\n  WHY: The marker-producing attempt can post the marker and then fail; returning success without validating its conclusion lets the old marker authorize auto-merge. Severity is critical (source BLOCKER); z-ai_glm-5_2 disagreed that this is an actionable defect.\n- scripts/claude_fixer_pending_checks.py:908-922 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: evaluate() reads the marker run before check_review_runs(), which excludes that run by ID, so a failed same-ID rerun can be missed while marker_run_attempt_problem() uses stale run data.\n  WHY: A rerun can fail after the marker run is read but before the run listings are fetched; the listing excludes that run ID and the stale successful object can allow auto-merge. Severity is critical (source BLOCKER); deepseek_deepseek-v4-pro and google_gemini-3_8-flash rated it MAJOR, while openai_gpt-6-luna and qwen_qwen3_7-plus rated it BLOCKER; z-ai_glm-5_2 disagreed that this is an actionable defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_fixer_pending_checks.py:909-919 | severity=critical | confidence=5\n  PROBLEM: evaluate() reads the marker run before check_review_runs(), which excludes that run by ID, so a failed same-ID rerun can be missed while marker_run_attempt_problem() uses stale run data.\n  WHY: A rerun can fail between the run read and listings read; the failed attempt is excluded by ID and stale successful data can authorize auto-merge.\n- scripts/claude_fixer_pending_checks.py:592-595 | severity=high | confidence=4\n  PROBLEM: marker_run_attempt_problem() returns success upon reaching an earlier attempt that started before the marker, without checking whether that attempt succeeded.\n  WHY: A marker-producing attempt can fail after posting the marker, while a later gate-skipped rerun succeeds and enables auto-merge.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/claude_fixer_pending_checks.py:592-598 | severity=critical | confidence=5\n  PROBLEM: marker_run_attempt_problem() returns success upon reaching an earlier attempt that started before the marker, without checking whether that attempt succeeded.\n  WHY: A failed marker-producing attempt followed by a successful gate-skipped rerun can cause auto-merge without a successful review attempt.\n- scripts/claude_fixer_pending_checks.py:909-922 | severity=high | confidence=4\n  PROBLEM: evaluate() reads marker_run before check_review_runs(), which excludes that run by ID.\n  WHY: A same-ID rerun can fail during the listings fetch, leaving marker_run_attempt_problem() to evaluate stale successful run data.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 2 (cheaper reasoning medium).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_fixer_pending_checks.py:592\u2013595 | severity=critical | confidence=5\n  PROBLEM: marker_run_attempt_problem() returns success upon reaching an earlier attempt that started before the marker, without checking whether that attempt succeeded.\n  WHY: The marker-producing attempt can fail after posting its comment, and a later successful gate-skipped rerun can let the old marker authorize auto-merge.\n- scripts/claude_fixer_pending_checks.py:909\u2013919; check_review_runs(), lines 685\u2013691 | severity=critical | confidence=5\n  PROBLEM: The marker run is verified before the run listings, but check_review_runs() excludes that run by ID and the later attempt check uses the earlier run object.\n  WHY: A same-ID rerun can fail after the successful attempt is read; the listing excludes it and the stale object can allow auto-merge.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_fixer_pending_checks.py: the loop at lines 592-595 (`if _attempt_started_at(earlier, ...) < posted_at: return \"\"`) | severity=critical | confidence=5\n  PROBLEM: The function returns success upon reaching an earlier attempt that started before the marker without checking that attempt's conclusion.\n  WHY: If the marker-producing attempt failed after posting the marker, a later gate-skipped successful rerun can cause auto-merge without a successful attempt having produced the marker.\n- scripts/claude_fixer_pending_checks.py:908-919 | severity=critical | confidence=5\n  PROBLEM: evaluate() reads marker_run before check_review_runs(), so a failed same-ID rerun between those calls can be missed.\n  WHY: check_review_runs() excludes the marker run ID and marker_run_attempt_problem() can use the stale successful run object to authorize auto-merge.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a8f819af6f468d583866324f4626306e969c9d17c4e53e703e575e1bbba6482e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5914,
+    "run_id": "36912230201",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36912230201",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001200858_d0bd3aedd6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5914,
+    "run_id": "36912230201"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T20:08:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
