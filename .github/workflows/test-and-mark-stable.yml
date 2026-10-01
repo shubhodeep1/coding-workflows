@@ -4279,6 +4279,36 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_auto_release_stable.py tests/test_orchestrate_poll_promote_cycle.py tests/test_implement_blocked_verdict_terminalizes.py
 
+      # The @stable sync (update_workflows.yml) ships CLAUDE.md and
+      # workflow-templates/.claude/ (hooks, scripts, commands, settings.json)
+      # to every consumer together with the workflow wrappers, so the release
+      # gate runs the same Claude asset suites CI runs on every PR.
+      - name: Claude asset tests (CLAUDE.md, .claude hooks, scripts, commands)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_pr_merge_status_guard.py \
+            tests/test_pr_watch_guard.py \
+            tests/test_gh_api_write_guard.py \
+            tests/test_pr_check_in_reminder.py \
+            tests/test_check_in_status.py \
+            tests/test_stale_routines.py \
+            tests/test_dispatch_workflow.py \
+            tests/test_edit_comment.py \
+            tests/test_permission_prompts.py \
+            tests/test_check_in_status_hand_back.py \
+            tests/test_claude_pr_sweep.py \
+            tests/test_check_in_session_targeting.py \
+            tests/test_implement_plan_claude_command.py \
+            tests/test_session_titles.py \
+            tests/test_claude_issue_route.py \
+            tests/test_implement_issue_claude_command.py \
+            tests/test_security_pass_skip.py \
+            tests/test_claude_md_section_numbers.py \
+            tests/test_audit_plans_command.py \
+            tests/test_ingest_implement_plan_lessons.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
+
       - name: Prompt files integrity
         run: |
           set -euo pipefail
