@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T09:01:22Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A note that marks superseded plan text as history must name every section that still states the old rule (summary, goals, tests, risks, auto-decisions), or annotate those lines inline; reviewers and later conformance runs read each section on its own.",
+  "phase": "implement_plan",
+  "pr_number": 5674,
+  "record_id": "lesson-implement-plan-764c6774e2cade0602c3f5fb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5664-archived-stage-disables-recovery",
+    "file:docs/plans/issue-4887-archive-finished-sessions-plan.md"
+  ]
+}
