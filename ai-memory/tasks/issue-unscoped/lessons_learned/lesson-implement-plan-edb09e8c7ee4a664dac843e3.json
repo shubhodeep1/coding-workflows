@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T01:45:06Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When an API budget is restated in several docstrings, pin each count with a test that derives it from the constant the code iterates over (and counts the calls the code makes); reviewers flag the wording round after round otherwise.",
+  "phase": "implement_plan",
+  "pr_number": 5178,
+  "record_id": "lesson-implement-plan-edb09e8c7ee4a664dac843e3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5148-pending-checks-newer-review-race",
+    "file:scripts/claude_fixer_pending_checks.py",
+    "file:tests/test_claude_fixer_pending_checks.py"
+  ]
+}

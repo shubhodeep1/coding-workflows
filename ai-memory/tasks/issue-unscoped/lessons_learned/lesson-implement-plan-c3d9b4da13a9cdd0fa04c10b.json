@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T01:45:06Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a guard binds runs (or comments) to a PR by one field, such as a run title, a record missing that field, or carrying a blank one, must fail the read like any other malformed record; skipping it as \"not ours\" is the one place a fail-closed guard quietly fails open.",
+  "phase": "implement_plan",
+  "pr_number": 5178,
+  "record_id": "lesson-implement-plan-c3d9b4da13a9cdd0fa04c10b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5148-pending-checks-newer-review-race",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}
