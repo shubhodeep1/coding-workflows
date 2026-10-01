@@ -1893,25 +1893,34 @@ jobs:
 
           deterministic_skip_head_is_current()
           {
-            local ready_label_current_head_sha=""
+            local ready_label_current_head_sha="" ready_label_head_snapshot="" ready_label_current_head_ref=""
             if [ -z "${PR_HEAD_SHA}" ]; then
               return 1
             fi
             # The gate snapshot cannot prove freshness on paths that
-            # intentionally skip gh pr merge, so those paths refresh only the
-            # head SHA instead of adding another call to the normal merge path.
-            if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null)"; then
+            # intentionally skip gh pr merge, so those paths refresh the head
+            # SHA and ref in one read instead of adding another call to the
+            # normal merge path.
+            if ! ready_label_head_snapshot="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '"\(.head.sha // "") \(.head.ref // "")"' 2>/dev/null)"; then
               echo "::warning::Could not refresh the current head for PR #${PR_NUMBER}; refusing deterministic-skip merge-authorization labels."
               return 1
             fi
+            read -r ready_label_current_head_sha ready_label_current_head_ref <<< "${ready_label_head_snapshot}" || true
             if [ -z "${ready_label_current_head_sha}" ] || [ "${ready_label_current_head_sha}" != "${PR_HEAD_SHA}" ]; then
               echo "::warning::PR #${PR_NUMBER} no longer points at gate-observed head ${PR_HEAD_SHA}; refusing deterministic-skip merge-authorization labels for current head ${ready_label_current_head_sha:-unknown}."
               return 1
             fi
+            if [ -z "${ready_label_current_head_ref}" ]; then
+              echo "::warning::Could not determine the head ref of PR #${PR_NUMBER}; refusing deterministic-skip merge-authorization labels."
+              return 1
+            fi
             # A ready label is a merge authorization (the orchestrator poller
             # merges ready PRs), so claude/* heads pass the hold gate here too
-            # (issue #5564).
-            if [[ "${PR_HEAD_REF}" == claude/* ]] && ! merge_hold_gate_allows "Merge-authorization labels withheld"; then
+            # (issue #5564). The current ref decides, not the gate job's
+            # snapshot, so a branch renamed to claude/* without a new commit
+            # still meets the gate; its support checkout was skipped, so the
+            # missing gate script refuses (fail closed).
+            if { [[ "${ready_label_current_head_ref}" == claude/* ]] || [[ "${PR_HEAD_REF}" == claude/* ]]; } && ! merge_hold_gate_allows "Merge-authorization labels withheld"; then
               return 1
             fi
             return 0

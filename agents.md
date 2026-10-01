@@ -1041,7 +1041,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   helper's `reviewed_head_is_current_for_labels` (the `ENABLE_AUTO_MERGE`-off
   and `e2e-smoke-test` exits, which set `AUTO_MERGE_READY_LABELS_ALLOWED`
   without `gh pr merge`) and the job's `deterministic_skip_head_is_current`
-  run it for `claude/*` heads, because the orchestrator poller merges the PR
+  run it for `claude/*` heads, classified on the head ref read together with
+  the fresh head SHA (one `pulls/{n}` read; the job also keeps the gate job's
+  snapshot ref, so a branch renamed to `claude/*` without a new commit still
+  meets the gate, which refuses when its support checkout was skipped),
+  because the orchestrator poller merges the PR
   of every `ai:ready-to-merge` issue. The poller
   (`_orch_claude_merge_hold_gate_allows` in
   `scripts/orchestrate_poll_process.sh`) runs it right before its two

@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5564-hold-gate-ready-labels-and-poller-merge-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5564
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims
-- Project branch: claude/implement-plan-issue-5564-hold-gate-ready-labels-and-poller-merge   Final PR: #5572 draft
+- Project branch: claude/implement-plan-issue-5564-hold-gate-ready-labels-and-poller-merge   Final PR: #5572 ready
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round
 - Activation: pending verify-activation (n/a if the base is still claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims when the final PR merges; Issue Mode)
-- Waiting on: completion PR (claude/implement-plan-issue-5564-hold-gate-ready-labels-and-poller-merge-complete)
+- Waiting on: PR #5572 (final PR, review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01AAqS3J7LAS52a77brRnGm3   safety net and hand-back re-armed at the end of the completion stage
-- Last updated: 2026-09-30
-- Last note: validation cycle 1 (run 36746066439) passed 10/10 against the project branch; conformance run 1 CONFORMANT; security skipped; completion PR moves the plan to docs/completed/
+- Check-in: checker session_01AAqS3J7LAS52a77brRnGm3   safety net and hand-back re-armed at the end of the final-merge review round 1 stage
+- Last updated: 2026-10-01
+- Last note: final PR #5572 review round 1 (head 6b993aa): fixed the stale-ref classification in deterministic_skip_head_is_current; rejected the missing-checkout finding (the job checks out .codex-workflow-src) and the reviewer-step failure (OpenRouter `Insufficient credits`, infrastructure)
 
 ## Phases
 1. [x] Phase 1 — hold gate before ready labels and at the poller's ready-to-merge merges (scripts/review_enable_auto_merge.sh, review_autofix.yml deterministic-skip-merge, scripts/orchestrate_poll_process.sh, orchestrate_poll.yml, tests, docs) — PR #5589 merged 2026-09-30 (c50c928, by hand per Q1: A); review rounds: 2; interventions: 0
@@ -27,7 +27,7 @@
 
 ## Completion
 - Completion PR (branch claude/implement-plan-issue-5564-hold-gate-ready-labels-and-poller-merge-complete) open — doc moved to docs/completed/issue-5564-hold-gate-ready-labels-and-poller-merge-plan.md
-- Final PR #5572 draft (base claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims)
+- Final PR #5572 ready — review rounds: 1 (base claude/implement-plan-issue-5316-gate-auto-merge-on-hold-claims)
 
 ## Activation
 
@@ -45,6 +45,7 @@
 ## Lessons
 - [source:plan-deviation] A gate on merge enablement must also guard every path that sets merge-authorization labels without merging (auto-merge disabled, e2e opt-outs), because the orchestrator poller merges the PR of any ai:ready-to-merge issue. (files: scripts/review_enable_auto_merge.sh, .github/workflows/review_autofix.yml, scripts/orchestrate_poll_process.sh)
 - [source:intervention] A support-checkout fallback in a poller-side script must be checked against the workflow's staging step: `orchestrate_poll.yml` deletes `.codex-workflow-src-main` before the poller runs, so only `.codex-workflow-src` (or a staged copy) is reachable at runtime. (files: scripts/orchestrate_poll_process.sh, .github/workflows/orchestrate_poll.yml)
+- [source:intervention] A freshness re-read that guards a ref-scoped gate (`claude/*` heads) must re-read the head ref in the same call as the head SHA: a branch rename keeps the SHA, so a SHA-only check passes on a stale ref classification. (files: .github/workflows/review_autofix.yml, scripts/review_enable_auto_merge.sh)
 
 ## Notes
 - Security pass: skip (`security_pass_skip.py`: `ai:security: created and labelled by the issue automation`).
@@ -53,3 +54,4 @@
 - Phase 1 found a third label bypass the finding did not name: the helper's `e2e-smoke-test` exit also authorized labels without the gate. It is covered by the same change (the gate runs inside `reviewed_head_is_current_for_labels`, which both early exits use), within AD-1.
 - Q1 (blocker after phase 1's review rounds): answered A on the source issue; PR #5589 merged by hand (c50c928) and the project resumed via `/reclarify` at conformance 1/3 (AD-9).
 - Local verification env (2026-09-30): Python 3.11 container; pytest, pytest-xdist, yamllint, shellcheck-py installed locally; actionlint 1.7.12 (CI's pinned sha256) run on the two changed workflows.
+- Final PR #5572 review round 1 (2026-10-01): the reviewer step failed three times on head 6b993aa because every OpenRouter reviewer returned `Insufficient credits` (run 36755842819); the failure cap then labelled #5564 `ai:review-blocked`. Not a code defect; the operator needs to top up OpenRouter credits for later full-panel runs.

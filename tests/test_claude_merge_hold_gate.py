@@ -662,8 +662,30 @@ def test_deterministic_skip_label_freshness_check_runs_the_gate_for_claude_heads
 	run = _step(_jobs()["deterministic-skip-merge"], "Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")["run"]
 	start = run.index("deterministic_skip_head_is_current()")
 	body = run[start:run.index("\n}\n", start)]
-	assert 'if [[ "${PR_HEAD_REF}" == claude/* ]] && ! merge_hold_gate_allows "Merge-authorization labels withheld"; then' in body
+	assert 'if { [[ "${ready_label_current_head_ref}" == claude/* ]] || [[ "${PR_HEAD_REF}" == claude/* ]]; } && ! merge_hold_gate_allows "Merge-authorization labels withheld"; then' in body
 	assert body.index("no longer points at gate-observed head") < body.index("merge_hold_gate_allows")
+	# One pulls/{n} read refreshes both the SHA and the ref (CLAUDE.md §15).
+	assert body.count("gh api ") == 1
+	assert '.head.ref // ""' in body
+
+
+def test_deterministic_skip_with_auto_merge_disabled_gates_a_head_renamed_to_claude(tmp_path):
+	# PR #5572 review round 1: the gate job saw a non-claude/* ref, the branch
+	# was renamed to claude/* without a new commit, and the head carries a hold.
+	# The refreshed ref decides, so the labels are withheld.
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(comments=[_claim(1, "hold")]), head_ref="ai/issue-42", enable_auto_merge="false")
+	assert proc.returncode == 0, proc.stderr
+	assert merges == []
+	assert f"AUTOFIX_AUTO_MERGE_SKIPPED pr=42 head_sha={HEAD} reason=hold_claim" in proc.stdout, proc.stdout
+	assert _label_posts(tmp_path) == []
+
+
+def test_deterministic_skip_with_auto_merge_disabled_refuses_labels_without_a_head_ref(tmp_path):
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(pr=_pr(ref="")), enable_auto_merge="false")
+	assert proc.returncode == 0, proc.stderr
+	assert merges == []
+	assert "Could not determine the head ref of PR #42" in proc.stdout + proc.stderr
+	assert _label_posts(tmp_path) == []
 
 
 # --- scripts/orchestrate_poll_process.sh ready-to-merge merges (#5564) -----
