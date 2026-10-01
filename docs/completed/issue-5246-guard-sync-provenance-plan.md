@@ -51,7 +51,7 @@ The CI step "Claude twin sync state (CLAUDE.md §28.C)" accepts any `.claude/` c
 
 1. Missing at head → violation `guard path deleted; hooks and settings are never deleted through a sync, so the repository owner merges this by hand (CLAUDE.md §28.C)`.
 
-   > **Extended by #5609** (2026-10-01): `.claude/scripts/**` is a guard path too (`GUARD_PATH_PREFIXES = ("hooks/", "scripts/")`, `scripts/claude_twin_sync.py:95`), and the violation now reads `guard path deleted; hooks, scripts, and settings are never deleted through a sync, so the repository owner merges this change by hand` (`scripts/claude_twin_sync.py:378`). The text above records what #5246 shipped.
+   > **Extended by #5609** (2026-10-01): `.claude/scripts/**` is a guard path too (`GUARD_PATH_PREFIXES = ("hooks/", "scripts/")`, `scripts/claude_twin_sync.py:95`), and the violation now reads `guard path deleted; hooks, scripts, and settings are never deleted through a sync, so the repository owner merges this change by hand` (`scripts/claude_twin_sync.py:384`). The text above records what #5246 shipped.
 
 2. `event == "pull_request"` and the PR is not a sync PR (`is_sync_pr_head(pr_head_ref, pr_head_repo, base_repo)` is false: wrong prefix, other repo, or empty values) → violation `guard path changed outside a claude-twin-sync PR; edit only workflow-templates/.claude/<rel> and let the owner merge the sync PR`.
 3. Head blob or mode differs from the twin at `base`, or either side is not a regular file → violation `guard path differs from workflow-templates/.claude/<rel> on the base commit; only a copy of the twin already on the default branch may change it`.
