@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5776-ignore-comment-url-issue-links-plan.md
 - Source issue: shubhodeep1/coding-workflows#5776
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5776-ignore-comment-url-issue-links   Final PR: pending
+- Project branch: claude/implement-plan-issue-5776-ignore-comment-url-issue-links   Final PR: #5790 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5825
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: project branch opened from claude/implement-plan-issue-4813-close-sweep-target-branch-merges (AD-1).
+- Last note: phase 1 implemented and verified; phase PR #5825 opened against the project branch; waiting on its review round or merge.
 
 ## Phases
-1. [ ] Phase 1 — narrow `extract_repo_scoped_issue_refs_from_text` so `/issues/N#…` URLs are not linked issues; runtime tests pinning the target-branch gate for Claude project PRs; ci.yml, README row, changelog fragment
+1. [ ] Phase 1 — narrow `extract_repo_scoped_issue_refs_from_text` so `/issues/N#…` URLs are not linked issues; runtime tests pinning the target-branch gate for Claude project PRs; ci.yml, README row, changelog fragment   — PR #5825 open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -23,6 +23,7 @@
 ## Validation
 
 ## Completion
+- Final PR #5790 draft
 
 ## Activation
 
@@ -39,5 +40,6 @@
 
 ## Notes
 - Issue progress comment: 5922355476.
+- Local verification (2026-10-01): of the sweep of tests that load `gh_helpers.sh`, 542 passed and 1 failed: `test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean`, failing with `gawk: command not found` in the container, identical with the old helper.
 - `security_pass_skip.py`: `{"skip": false, "label": null, "reason": "no skip label"}` → `Security pass: run`.
 - Base check (2026-10-01): no merged PR with head `claude/implement-plan-issue-4813-close-sweep-target-branch-merges`; its final PR #4826 is an open draft into `main`.
