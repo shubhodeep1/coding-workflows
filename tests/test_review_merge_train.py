@@ -785,11 +785,18 @@ def test_release_holds_pr_for_review_run_that_changes_status_twice_mid_listing(t
 	{"event": "push"},
 	{"head_branch": None, "event": "workflow_dispatch", "display_title": "AI Review"},
 	{"head_branch": "", "event": "workflow_dispatch", "display_title": "Internal: AI Review & Autofix [pr:0]"},
+	# PR #5451 review round 2 (AD-16): a dispatch run's head_branch is the ref
+	# the workflow ran from, so it never attributes the run to a PR.
+	{"head_branch": "main", "event": "workflow_dispatch", "display_title": "Codex PR Self-Healing Semantic Agent"},
+	{"head_branch": "main", "event": "workflow_dispatch", "display_title": "Codex PR Self-Healing Semantic Agent",
+	 "path": ".github/workflows/review_autofix.yml"},
+	{"head_branch": "ai/issue-9999", "event": "workflow_dispatch", "display_title": "AI Review"},
 ])
 def test_release_leaves_pr_queued_when_a_review_run_has_no_key(tmp_path: Path, run_fields: dict) -> None:
 	"""PR #5451, review of head fd3ad67 (AD-14): a review run with no non-empty
 	head_branch and no PR-named dispatch title could be running for any queued
-	PR, so the listing is incomplete and nothing is released."""
+	PR, so the listing is incomplete and nothing is released. A workflow_dispatch
+	run with no PR-named title is unattributed whatever its head_branch (AD-16)."""
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	_queued_pr_4077(fixtures)
 	_write_runs(fixtures, [dict({"id": 5000, "status": "in_progress",

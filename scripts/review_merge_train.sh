@@ -412,10 +412,10 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # lookup covers every queued PR and avoids a per-PR API call inside the loop.
 # Each active review run prints its head branch. A review run dispatched from
 # the default branch (issues #4618, #4701) has the default branch as its
-# head, so a workflow_dispatch run named for its PR
-# ("Internal: AI Review & Autofix [pr:<N>]" / "AI Review [pr:<N>]") also
-# prints "pr:<N>". Git refs cannot contain ":", so the two kinds of key never
-# collide, and _mt_release checks both.
+# head, so a workflow_dispatch run prints "pr:<N>" from the name the wrappers
+# give it ("Internal: AI Review & Autofix [pr:<N>]" / "AI Review [pr:<N>]")
+# and never its head branch. Git refs cannot contain ":", so the two kinds of
+# key never collide, and _mt_release checks both.
 #
 # Listing (security, issue #5443): every run in each active status is read,
 # page by page. The previous single page of the newest 100 runs of every
@@ -429,9 +429,10 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #
 # Input:     none (MT_REPO).
 # Output:    one key per line on stdout, sorted and unique: the head branch
-#            of each active review run, plus "pr:<N>" for a workflow_dispatch
-#            run named for PR <N>. Every run an active-status query returned
-#            counts as active, whatever its own status field says.
+#            of each active review run that is not a workflow_dispatch run,
+#            and "pr:<N>" for a workflow_dispatch run named for PR <N>.
+#            Every run an active-status query returned counts as active,
+#            whatever its own status field says.
 # Returns:   0 = the listing is complete: a PR with no key has no active run.
 #            1 = the listing is incomplete. Stdout carries nothing; the caller
 #            must not release on it, and the next invocation retries.
@@ -486,9 +487,11 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            before its total_count (the listing shifted while it was read),
 #            more runs than 10 queries read or a query that adds no new run
 #            (more than 100 runs created in one second), a review run that
-#            yields no key (no non-empty head_branch and no PR-named dispatch
-#            title, so it could belong to any queued PR; PR #5451, review of
-#            head fd3ad67), or a failed key filter. Each is logged once on stderr
+#            yields no key (a non-dispatch run with no non-empty head_branch,
+#            or a workflow_dispatch run with no PR-named title, whatever its
+#            head_branch, so it could belong to any queued PR; PR #5451,
+#            review of head fd3ad67 and review round 2), or a failed key
+#            filter. Each is logged once on stderr
 #            (CLAUDE.md §8):
 #            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|unattributed_run|filter_failed> status=<s> page=<p> read=<n> total=<n>
 _mt_inflight_review_branches()
@@ -571,7 +574,12 @@ _mt_inflight_review_branches()
 		# One array of keys per review run. A review run with no key at all (no
 		# non-empty head_branch and no PR-named dispatch title) could belong to
 		# any queued PR, so the listing is incomplete (PR #5451, review of head fd3ad67).
-		if ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_all}" | jq -c '[.[]? | select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | [(.head_branch | select(type == "string" and length > 0)), (if (.event // "") == "workflow_dispatch" then ((.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)") else empty end)]]' 2>/dev/null)"; then
+		# A workflow_dispatch run is keyed only by its PR-named title: its
+		# head_branch is the ref the workflow ran from (the default branch since
+		# issue #4701), never the PR it reviews, so a dispatch without a
+		# PR-named title (review_autofix.yml has no run-name and re-dispatches
+		# itself) is unattributed (PR #5451 review round 2, AD-16).
+		if ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_all}" | jq -c '[.[]? | select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | if (.event // "") == "workflow_dispatch" then [(.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)"] else [.head_branch | select(type == "string" and length > 0)] end]' 2>/dev/null)"; then
 			__mt_runs_reason="filter_failed"
 		elif ! printf '%s' "${__mt_runs_keyed}" | jq -e 'all(.[]; length > 0)' >/dev/null 2>&1; then
 			__mt_runs_reason="unattributed_run"
