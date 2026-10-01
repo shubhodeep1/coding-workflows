@@ -1484,8 +1484,12 @@ dispatch titled for the PR, or any `review_autofix.yml` / `ai-review.yml` /
 `review_rb_judge_dispatch.yml` dispatch that has not completed (`review_active`),
 older runs included: a listing that may go on past the pages it read is
 also listed by run status, and it never merges when
-the latest newer completed review of the PR did not succeed or the marker
-changed while it checked (`review_superseded`). A runs listing that holds
+any newer completed review of the PR did not succeed or the marker
+changed while it checked (`review_superseded`). A later run that concluded
+`success` does not clear the failure (issue #5904): a dispatch the review
+gate skipped also concludes `success`. Only a newer marker from a successful
+full review clears it, so after a failed review a push, a base change, or the
+`force-review` label sends the head through a new review. A runs listing that holds
 1,000 or more runs newer than the marker's run is a failed read
 (`pending_checks_failed`), repeated every hour until a push, a base change,
 or a forced review sends the head through a new review. A check that fails

@@ -14,7 +14,10 @@ Issue #5147: the marker is bound to the reviewed base (the v2 line's
 is never merged on it.
 
 Issue #5148: no merge while a newer review of the PR may still be running,
-or when the latest newer one did not succeed.
+or when a newer one did not succeed.
+
+Issue #5904: any newer review that did not succeed blocks, not only the
+latest one, so a later gate-skipped `success` cannot mask a failed review.
 """
 
 from __future__ import annotations
@@ -512,6 +515,10 @@ def test_an_active_review_defers_a_dry_run_too(fake_gh):
 	("newer sweep dispatch for this PR failed", [], {"internal-review.yml": [_dispatch(RUN_ID + 2, conclusion="failure")]}),
 	("the latest of several newer reviews failed",
 		[_run(RUN_ID + 1, conclusion="success")], {"internal-review.yml": [_dispatch(RUN_ID + 2, conclusion="failure")]}),
+	# Issue #5904: a later success (a gate-skipped dispatch concludes
+	# `success` without reviewing) does not clear an earlier failure.
+	("a failed newer review then a successful one",
+		[_run(RUN_ID + 1, conclusion="failure")], {"internal-review.yml": [_dispatch(RUN_ID + 2)]}),
 ])
 def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -524,8 +531,6 @@ def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, bran
 @pytest.mark.parametrize("label, branch_runs, listings", [
 	("the marker's run itself on the head branch", [_run(RUN_ID)], {}),
 	("newer gate-skipped sweep dispatch succeeded", [], {"internal-review.yml": [_dispatch(RUN_ID + 2)]}),
-	("a failed newer review then a successful one",
-		[_run(RUN_ID + 1, conclusion="failure")], {"internal-review.yml": [_dispatch(RUN_ID + 2)]}),
 	("an older review failed", [_run(RUN_ID - 1, conclusion="failure")], {}),
 	("a newer non-review run failed on the head branch", [_run(RUN_ID + 1, workflow="ci.yml", conclusion="failure")], {}),
 	("an active sweep dispatch for another PR", [], {"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, status="in_progress")]}),
@@ -545,6 +550,48 @@ def test_settled_reviews_let_the_merge_through(fake_gh, label, branch_runs, list
 	result = _evaluate()
 	assert result["state"] == "merge_enabled", (label, result)
 	assert fake_gh.merges() == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]], label
+
+
+# ---- issue #5904: a later gate-skipped success must not mask a failed review ----
+
+@pytest.mark.parametrize("label, branch_runs, listings, failed_ids", [
+	# The audit's scenario: a forced re-review dispatched for this PR fails
+	# without posting a hand-off, then routine sweep dispatches are skipped by
+	# the review gate (they conclude `success`) while the checks turn green.
+	("forced dispatch failed, then gate-skipped dispatches succeeded", [],
+		{"internal-review.yml": [_dispatch(RUN_ID + 30), _dispatch(RUN_ID + 20), _dispatch(RUN_ID + 10, conclusion="failure")]},
+		[RUN_ID + 10]),
+	("head-branch review failed, then a gate-skipped dispatch succeeded",
+		[_run(RUN_ID + 1, conclusion="failure")], {"internal-review.yml": [_dispatch(RUN_ID + 2)]}, [RUN_ID + 1]),
+	("cancelled review, then a gate-skipped dispatch succeeded",
+		[_run(RUN_ID + 1, conclusion="cancelled")], {"internal-review.yml": [_dispatch(RUN_ID + 5)]}, [RUN_ID + 1]),
+	("several newer reviews failed among successes",
+		[_run(RUN_ID + 3, conclusion="timed_out"), _run(RUN_ID + 1, conclusion="failure")],
+		{"internal-review.yml": [_dispatch(RUN_ID + 4), _dispatch(RUN_ID + 2, conclusion="failure")]},
+		[RUN_ID + 1, RUN_ID + 2, RUN_ID + 3]),
+])
+def test_a_later_success_does_not_mask_a_failed_newer_review(fake_gh, label, branch_runs, listings, failed_ids):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
+		dispatch_runs=_dispatch_runs(**listings))
+	result = _evaluate()
+	assert result["state"] == "review_superseded", (label, result)
+	assert fake_gh.merges() == [], label
+	named = [int(match) for match in re.findall(r"\b([0-9]+) \(\.github/workflows/", result["reason"])]
+	assert named == failed_ids, (label, result["reason"])
+
+
+def test_a_failed_review_is_cleared_by_a_newer_marker_from_a_full_review(fake_gh):
+	# The way out of the block above: a successful full review of the head
+	# posts its own marker, whose run is newer than the failed one.
+	new_run_id = RUN_ID + 3
+	new_run_url = f"https://github.com/{REPO}/actions/runs/{new_run_id}"
+	fake_gh.set(comments=[_comment(5, _pending_body()), _comment(9, _pending_body(round_number=2, run_url=new_run_url))],
+		check_runs=GREEN, review_run=_review_run(id=new_run_id, html_url=new_run_url),
+		branch_runs=[_run(new_run_id), _run(RUN_ID + 1, conclusion="failure")],
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": [_dispatch(RUN_ID + 2)]}))
+	result = _evaluate()
+	assert result["state"] == "merge_enabled", result
+	assert fake_gh.merges() == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
 
 
 def test_a_failed_run_listing_read_raises_for_the_sweep_to_log(fake_gh):

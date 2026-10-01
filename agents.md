@@ -1073,9 +1073,13 @@ reviews, comments, and conflicts stay a direct §12 request.
   listing is paged down to the marker's run; when its last page read was
   full, older runs may lie past it, so it is also listed with `status=`
   for each run status but `completed`, and an older queued or running
-  review counts too. The latest newer completed review
+  review counts too. Any newer completed review
   of the PR that did not conclude `success`, or a marker that is no longer
   the live one on a re-read of the comments, returns `review_superseded`.
+  A later `success` does not clear a failed one (issue #5904: gate-skipped
+  dispatches conclude `success`); only a newer marker, whose run is newer
+  than the failure, does. After a failed review, a push, a base change, or
+  the `force-review` label sends the head through a new review.
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
   running); a failed read, or a snapshot whose temp directory cannot be

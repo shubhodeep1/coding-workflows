@@ -52,9 +52,10 @@ Fail closed. Auto-merge is enabled only when ALL of these hold:
     review_autofix.yml / ai-review.yml / review_rb_judge_dispatch.yml dispatch
     (those carry no PR binding)
     is in any status but `completed`, older runs included (each listing is
-    also read with `status=` when it may go on past the pages read); the
-    latest completed review run bound
-    to this PR that is newer than the marker's run concluded `success`; and
+    also read with `status=` when it may go on past the pages read); every
+    completed review run bound to this PR that is newer than the marker's
+    run concluded `success` (issue #5904: a later gate-skipped `success`
+    does not clear an earlier failure; only a newer marker does); and
     a re-read of the comments, after those run reads, still finds the same
     marker (a newer review that finished in between has posted its own
     comment by then);
@@ -468,12 +469,16 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	is in any status but `completed`. `review_superseded`: of the completed
 	review runs bound to this PR (a head-branch run of
 	`check_in_status.FIXER_WORKFLOW_PATHS`, or an internal-review.yml dispatch
-	titled for it), only those with an id above `marker_run_id` count, and the
-	newest of them did not conclude `success`. The id filter is required: the
-	marker's own run is the review it records, and older runs came before
-	that review, so neither can supersede it. Gate-skipped dispatches
-	conclude `success`; a newer review that posted findings or a newer marker
-	is caught by `find_pending_marker`.
+	titled for it), only those with an id above `marker_run_id` count, and
+	any one of them did not conclude `success` (issue #5904: the newest alone
+	is not enough, because a gate-skipped dispatch concludes `success`
+	without reviewing anything and would hide an earlier failed review). The
+	id filter is required: the marker's own run is the review it records,
+	and older runs came before that review, so neither can supersede it. A
+	newer review that posted findings or a newer marker is caught by
+	`find_pending_marker`; a newer marker also moves `marker_run_id` past
+	every run before it, which is how a successful full review clears a
+	failed one.
 	"""
 	branch_path = f"repos/{repo}/actions/runs?branch={quote(head_ref, safe='/')}&per_page={REVIEW_RUNS_PER_PAGE}"
 	branch_runs = _read_review_runs_to_marker(branch_path, marker_run_id)
@@ -500,11 +505,16 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	# Keep the id filter: the marker's own run is the review it records and
 	# older runs came before it, so only a strictly newer run can supersede it.
 	newer = [run for run in bound_reviews if run["id"] > marker_run_id]
-	if newer:
-		latest = max(newer, key=lambda run: run["id"])
-		if latest.get("conclusion") != "success":
-			return {"state": "review_superseded", "reason": f"the latest review run of this PR, {latest['id']} "
-				f"({_run_path(latest)}), is newer than the marker's run {marker_run_id} and concluded {latest.get('conclusion')}"}
+	# Every newer run counts, not just the latest (issue #5904): a later
+	# gate-skipped dispatch concludes `success` without reviewing anything,
+	# so it must not hide an earlier failed review. Only a successful full
+	# review clears a failure, by posting a newer marker (whose run id then
+	# passes the failed run), a hand-off, or enabling auto-merge itself.
+	unsuccessful = sorted((run for run in newer if run.get("conclusion") != "success"), key=lambda run: run["id"])
+	if unsuccessful:
+		names = ", ".join(f"{run['id']} ({_run_path(run)}) concluded {run.get('conclusion')}" for run in unsuccessful)
+		return {"state": "review_superseded", "reason": f"a review run of this PR newer than the marker's run "
+			f"{marker_run_id} did not succeed: {names}; only a newer marker from a successful full review clears it"}
 	return None
 
 
