@@ -1067,7 +1067,7 @@ def test_stale_hold_reason_names_the_blocking_labels(monkeypatch, capsys):
 	assert "30.0h old" in out["reason"] and out["reason"].endswith("; labels: ai:needs-human")
 
 
-@pytest.mark.parametrize("created_at", [None, "", "not-a-time", 12345])
+@pytest.mark.parametrize("created_at", [None, "", "not-a-time", 12345, "2026-09-22T12:00:00", "2026-09-23T11:00:00"])
 def test_hold_with_an_unreadable_time_is_handed_back(monkeypatch, capsys, created_at):
 	claim = _claim()
 	if created_at is None:
@@ -1078,6 +1078,16 @@ def test_hold_with_an_unreadable_time_is_handed_back(monkeypatch, capsys, create
 	_, out = _twin_run(["--pr", "7"], capsys)
 	assert out["done"] is True and out["state"] == "blocked" and out["action"] == "hand_back"
 	assert "of unknown age" in out["reason"]
+
+
+def test_claim_with_a_timezone_less_time_is_not_live():
+	# A time with no offset is unreadable, not a TypeError: the lease check
+	# reports the claim expired instead of crashing into `action: retry`.
+	claim = _claim(kind="review")
+	claim["created_at"] = "2026-09-23T11:00:00"
+	summary = twin_checker.read_fix_claims([claim], FIXER_HEAD, NOW, trusted_logins=(HOLD_PR_AUTHOR.casefold(),))
+	assert summary["claim"]["state"] == "expired" and summary["claim"]["kind"] == "review"
+	assert twin_checker._hours_since("2026-09-23T11:00:00", NOW) is None
 
 
 def test_hold_limit_is_configurable(monkeypatch, capsys):

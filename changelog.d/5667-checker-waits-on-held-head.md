@@ -6,7 +6,7 @@ A twin-first stage ends by posting a `hold` claim on the head it pushed and a tw
 | The numbers that matter | Value |
 | --- | --- |
 | New plain-mode verdict | `{"done": false, "state": "held", "action": "wait", "head_sha", "claim"}` |
-| What outranks a hold | merged or closed (labels, hand-offs, conflicts, and failed checks do not); a hold at least `CLAUDE_FIX_HOLD_MAX_HOURS` old (default 24) reports `blocked` instead (issue #5927) |
+| What outranks a hold | merged or closed only (labels, hand-offs, conflicts, and failed checks do not) |
 | What lifts a hold | any push that moves the head, or a newer trusted claim on the same head (a stage resuming on an answer) |
 | Heads covered | `claude/implement-plan-*` (other PRs never read comments in plain mode) |
 | Extra GitHub API calls, `claude/implement-plan-*` PR without a blocking label | 0 (its one comment listing now comes before the label check and is reused for the hand-off check) |
