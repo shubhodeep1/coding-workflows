@@ -191,6 +191,10 @@ def test_clarify_route_gates_reclarify_comment_like_the_job_predicate() -> None:
 		("line after an indented closing fence", "Log:\n```\nerror\n   ```\n/reclarify", ["ai:claude-blocked"], True),
 		("line after a closing fence with trailing blanks", "Log:\n```\nerror\n``` \t\n/reclarify", ["ai:claude-blocked"], True),
 		("fenced line, fence line with text does not close", "Log:\n```\nerror\n``` x\n/reclarify", ["ai:claude-blocked"], False),
+		("line after inline code, not a fence", "```make test``` first.\n/reclarify", ["ai:claude-blocked"], True),
+		("line after a backtick in the info string", "Log:\n```js`x`\n/reclarify", ["ai:claude-blocked"], True),
+		("fenced line, tilde info string may hold a backtick", "Log:\n~~~js`x`\n/reclarify\n~~~", ["ai:claude-blocked"], False),
+		("fenced line, longer opener needs a longer close", "Log:\n````text\n```\n/reclarify\n````", ["ai:claude-blocked"], False),
 	]
 	with tempfile.TemporaryDirectory() as workdir:
 		root = Path(workdir)
