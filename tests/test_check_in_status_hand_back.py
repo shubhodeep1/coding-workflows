@@ -489,7 +489,8 @@ def test_hold_reason_strips_nested_comment_openers(reason):
 
 def test_held_retry_minutes_survive_an_infinite_value(monkeypatch):
 	template_checker = _load_template("check_in_status")
-	for raw in ("inf", "-inf", "1e999"):
+	# "nan" parses as a float but int() raises ValueError, so it falls back too.
+	for raw in ("inf", "-inf", "1e999", "nan", "-NaN"):
 		monkeypatch.setenv("CLAUDE_CHECK_IN_HELD_RETRY_MINUTES", raw)
 		assert template_checker.retry_after_minutes({"state": "held"}) == 180
 

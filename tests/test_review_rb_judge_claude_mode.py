@@ -262,6 +262,16 @@ def test_prior_rulings_ignore_markers_from_non_collaborators():
 	assert [r["run"] for r in result["rulings"]] == ["11"]
 
 
+def test_prior_ruling_trust_set_matches_the_rejection_comment_filter():
+	# The judge's prior-ruling authors and the gate's rejection-comment authors are one trust set
+	# kept in two languages; editing only one would let a stranger's marker through on one side.
+	step = (REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_judge.sh").read_text(encoding="utf-8")
+	filters = re.findall(r'\(\.author_association // ""\) \| IN\(([^)]*)\)', step)
+	assert filters, "rejection-comment author filter not found"
+	for listed in filters:
+		assert tuple(re.findall(r'"([A-Z_]+)"', listed)) == judge.TRUSTED_COMMENT_ASSOCIATIONS
+
+
 # ---- verdict and follow-up text ----
 
 def test_verdict_body_carries_the_marker_and_every_ruling():

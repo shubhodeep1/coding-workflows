@@ -81,7 +81,8 @@ STICKY_LINE_WINDOW = 3
 RULINGS = ("invalid", "upheld")
 CATEGORIES = ("security", "data-loss", "correctness", "other")
 HOLD_CATEGORIES = ("security", "data-loss")
-# Comment authors whose judge markers prior_rulings follows (the same set the rejection comment needs).
+# Comment authors whose judge markers prior_rulings follows: the same set the rejection comment
+# needs in scripts/review_autofix_step_claude_fixer_judge.sh (a test keeps the two equal).
 TRUSTED_COMMENT_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 MODEL_ACTIONS = ("merge", "fix", "merge_with_followup", "hold", "close_and_reissue")
 DECISIONS = ("merge", "fix", "merge_with_followup", "hold")
