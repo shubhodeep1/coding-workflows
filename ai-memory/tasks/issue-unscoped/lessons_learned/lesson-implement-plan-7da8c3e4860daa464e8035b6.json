@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T12:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In a POSIX shell `case` pattern `*` also matches `/`, so `hooks/*` covers nested paths; pin shell-vs-Python path rules with a test that runs the pattern through `bash` and `sh` against the Python classifier, not just a string match",
+  "phase": "implement_plan",
+  "pr_number": 5654,
+  "record_id": "lesson-implement-plan-7da8c3e4860daa464e8035b6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5607-guard-assets-from-claude-tree",
+    "file:.github/workflows/update_workflows.yml",
+    "file:tests/test_update_workflows_guardrails.py"
+  ]
+}

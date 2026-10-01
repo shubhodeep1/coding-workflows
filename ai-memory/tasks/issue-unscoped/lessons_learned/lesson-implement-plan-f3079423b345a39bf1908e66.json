@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T12:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`! cmp -s a b` treats a read error (exit 2) like a difference; capture the status (`cmp -s a b || st=$?`) and branch on 1 vs 2+, and test the error path with a stub `cmp` on PATH, since root in CI can read chmod-000 files",
+  "phase": "implement_plan",
+  "pr_number": 5654,
+  "record_id": "lesson-implement-plan-f3079423b345a39bf1908e66",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5607-guard-assets-from-claude-tree",
+    "file:.github/workflows/update_workflows.yml",
+    "file:tests/test_update_workflows_guardrails.py"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T12:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a step gains a second pass over a different tree, re-check every early `exit 0` above it: an exit keyed on the first tree's absence silently skips the second pass; guard the first loop instead, and test the step with the first tree missing",
+  "phase": "implement_plan",
+  "pr_number": 5654,
+  "record_id": "lesson-implement-plan-8ff536057b7aa2eefd6a0722",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5607-guard-assets-from-claude-tree",
+    "file:.github/workflows/update_workflows.yml",
+    "file:tests/test_update_workflows_guardrails.py"
+  ]
+}

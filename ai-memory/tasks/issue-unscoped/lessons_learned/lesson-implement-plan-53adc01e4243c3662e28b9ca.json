@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T12:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A boundary check for owner-reviewed files must allow only the reviewed paths inside the tree, not the whole tree: other files there may be merged without the owner, so a symlink into them launders content. And a pass that should skip \"what the other loop handled\" must record what that loop handled, not re-test the path, because `-f` follows parent-directory symlinks that `find` never descends",
+  "phase": "implement_plan",
+  "pr_number": 5654,
+  "record_id": "lesson-implement-plan-53adc01e4243c3662e28b9ca",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5607-guard-assets-from-claude-tree",
+    "file:.github/workflows/update_workflows.yml",
+    "file:tests/test_update_workflows_guardrails.py"
+  ]
+}

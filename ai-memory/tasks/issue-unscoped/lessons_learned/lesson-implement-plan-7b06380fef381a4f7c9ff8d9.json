@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T12:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A reviewed tree that ships symlinks must check where each one resolves, not only that it resolves to a regular file: a link into the unreviewed twin passes `-f` and `cmp` (same file on both sides) and `cp` installs the twin; resolve with `realpath -e` and require the physical reviewed root as a prefix, so a link on a parent directory is caught too",
+  "phase": "implement_plan",
+  "pr_number": 5654,
+  "record_id": "lesson-implement-plan-7b06380fef381a4f7c9ff8d9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5607-guard-assets-from-claude-tree",
+    "file:.github/workflows/update_workflows.yml",
+    "file:tests/test_update_workflows_guardrails.py"
+  ]
+}

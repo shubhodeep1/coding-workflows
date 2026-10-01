@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T12:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A `find -type f` enumeration skips symlinks, while `[ -f ]`, `cmp`, and `cp` follow them; when one pass of a sync accepts symlinked sources, every other pass over the same tree must list `\\( -type f -o -type l \\)` and skip a link that does not resolve to a regular file, or `cp` aborts the step",
+  "phase": "implement_plan",
+  "pr_number": 5654,
+  "record_id": "lesson-implement-plan-6c94ab20c82dc6fb1fd969f5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5607-guard-assets-from-claude-tree",
+    "file:.github/workflows/update_workflows.yml",
+    "file:tests/test_update_workflows_guardrails.py"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T12:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A sync that picks a reviewed source per file must also enumerate the reviewed tree: a loop driven only by the unreviewed tree cannot see the reviewed files that tree lost",
+  "phase": "implement_plan",
+  "pr_number": 5654,
+  "record_id": "lesson-implement-plan-f3baf1227f1d9efbd0b0a847",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5607-guard-assets-from-claude-tree",
+    "file:.github/workflows/update_workflows.yml",
+    "file:workflow-templates/.claude/commands/seed-repo.md"
+  ]
+}

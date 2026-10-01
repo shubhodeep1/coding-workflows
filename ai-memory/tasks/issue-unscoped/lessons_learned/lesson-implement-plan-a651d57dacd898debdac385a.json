@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T12:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "GNU diff has no `--ignore-space-at-eol` (that is a git diff flag), so a `diff -q --strip-trailing-cr --ignore-space-at-eol` guard exits 2 and every file counts as changed; use `--ignore-trailing-space` (`-Z`) or `cmp` and test the shell step end to end",
+  "phase": "implement_plan",
+  "pr_number": 5654,
+  "record_id": "lesson-implement-plan-a651d57dacd898debdac385a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5607-guard-assets-from-claude-tree",
+    "file:.github/workflows/update_workflows.yml"
+  ]
+}
