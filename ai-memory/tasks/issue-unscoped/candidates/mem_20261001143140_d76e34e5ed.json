@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/inline_edit_guard.py:389-528 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Command substitutions inside an unquoted heredoc body are not inspected, allowing shell commands such as `sed -i` to edit files during Bash expansion without the inline-edit guard denying the command.\n  WHY: Bash executes substitutions in unquoted heredocs before Python receives the body, but the hook strips the body before substitution scanning and its Python write-pattern check does not match the shell command.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/inline_edit_guard.py: inline_edit_kind() heredoc body loop (around lines 490-510, the `for (_prefix, _quoted, body), offset in zip(...)` block) | severity=high | confidence=5\n  PROBLEM: When a `python3 -` command receives its program from an unquoted heredoc whose body contains a command substitution (e.g. `python3 - <<EOF\\n$(sed -i 's/a/b/' f; echo 1)\\nEOF`), Bash expands the substitution before Python reads the body. The hook strips the body with `tokenizer.strip_heredoc_bodies` and only checks `program_writes(body)` against the unexpanded text. The `$(...)` text matches none of the write patterns, so `program_writes` returns False and `segment_kind` returns \"\" \u2014 the guard gives no decision even though the inline `sed -i` will modify `f` during Bash's own expansion, before Python starts.\n  WHY: For the command `python3 - <<EOF\\n$(sed -i 's/a/b/' f; echo 1)\\nEOF`, Bash runs `sed -i 's/a/b/' f` while expanding the unquoted heredoc body. By the time Python reads the body, only `1\\n` remains, but the side effect (the file edit) has already happened. The guard fails to detect this, so the inline edit proceeds to the permission flow instead of being denied and redirected to the Edit/Write tools.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/inline_edit_guard.py: inline_edit_kind(), lines 486, 500\u2013516, 520\u2013525 | severity=high | confidence=5\n  PROBLEM: Substitutions in an unquoted heredoc body are not inspected. The heredoc scan checks the body only with program_writes(), while substitution scanning recurses over the heredoc-stripped command.\n  WHY: For `python3 - <<EOF` followed by `$(sed -i 's/a/b/' f)` in the body, Bash executes the substitution while expanding the unquoted heredoc, before Python receives its input. The hook strips that body, does not match the sed command as a Python write, and returns no deny.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/inline_edit_guard.py: inline_edit_kind function, lines 389-417 (heredoc body check and substitution check) | severity=high | confidence=5\n  PROBLEM: Substitutions inside an unquoted heredoc body are not inspected. For `python3 - <<EOF\\n$(sed -i 's/a/b/' f)\\nEOF`, Bash expands the substitution before passing the heredoc to Python, so `sed -i` runs and edits the file. The hook strips the heredoc body, checks it for Python write patterns (which don't match `$(sed -i ...)`), then checks for substitutions in the stripped command (where the heredoc body is already removed), so the inline edit proceeds with no decision.\n  WHY: The heredoc body check at lines 389-407 only looks for Python write patterns in the body text, not for Bash substitutions. The substitution check at lines 409-417 operates on the stripped command, where heredoc bodies have already been removed. An unquoted heredoc with a substitution like `$(sed -i ...)` bypasses both checks.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/inline_edit_guard.py: inline_edit_kind, lines 500-528 (heredoc body check at 500-516 and substitution scan at 522-528) | severity=high | confidence=4\n  PROBLEM: Command substitutions inside an unquoted heredoc body are never inspected. The hook strips heredoc bodies via `tokenizer.strip_heredoc_bodies`, which returns a `(prefix, quoted, body)` tuple per heredoc. The `_quoted` field is unpacked at line 500 but unused. The body is only checked for Python write patterns via `program_writes(body)` at line 515. The substitution scan at lines 522-528 calls `tokenizer.substitution_bodies(marked)` on the stripped command only \u2014 the heredoc body (which was removed during stripping) is never scanned for `$(...)` or backtick substitutions. For an unquoted heredoc like `python3 - <<EOF\\n$(sed -i 's/a/b/' f)\\nEOF`, Bash expands `$(sed -i ...)` during heredoc expansion before Python receives the body, so `sed -i` runs as a shell command. The hook returns no decision because `program_writes(\"$(sed -i 's/a/b/' f)\")` is False and the stripped command `python3 - <<EOF\\nEOF` contains no substitution bodies.\n  WHY: A session can run `python3 - <<EOF\\n$(sed -i 's/a/b/' f; echo done)\\nEOF` to edit a file through an unquoted heredoc substitution. Bash runs `sed -i` during heredoc expansion (before Python sees the body), but the hook returns no decision, so the command reaches the normal permission flow instead of being denied. The `strip_heredoc_bodies` return value already carries the `quoted` bool (line 312 of `gh_api_write_guard.py`: `bool(match.group(2))`), so the hook has the information to distinguish quoted from unquoted heredocs but does not use it. For quoted heredocs (`<<'EOF'`), Bash does not expand substitutions in the body, so the current behavior is correct. The gap is specific to unquoted heredocs. No test case covers an unquoted heredoc with a command substitution \u2014 all heredoc deny/no-decision tests use quoted forms (`<<'EOF'`, `<<'PY'`, `<<\"PY\"`).\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1314443e1a3b738275b6b53622f0b7c72e0948d106dd655dc1aa15bebb52477f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4877,
+    "run_id": "36874463672",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36874463672",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001143140_d76e34e5ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4877,
+    "run_id": "36874463672"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T14:31:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
