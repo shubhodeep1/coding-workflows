@@ -1274,7 +1274,11 @@ side so that class cannot land unnoticed.
   `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` at workflow level) or the check step
   one beyond `GUARD_DIFFERENTIAL_BASE_REF` (so no `BASH_ENV`, `LD_PRELOAD`,
   `PATH`, `PIP_*`, `PYTHON*`, ...), when workflow or job `defaults`, a job
-  `container`, or a job `continue-on-error` is set, when the check step
+  `container` or `services`, or a job `continue-on-error` is set, when the
+  check step's `run:` body differs from the copy pinned in the test
+  (`CI_CHECK_STEP_RUN`: an allowed command still runs anything, such as
+  `python3 -P -c '<code>'` or `git -c alias.x='!sh' x`, so a step edit
+  updates that copy in the same diff), when the check step
   carries a key beyond `name`, `if`, `env`, and `run` (no `shell`,
   `working-directory`, or `continue-on-error`) or an `if` other than
   `github.event_name == 'pull_request'`, when its `run:` body assigns a

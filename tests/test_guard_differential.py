@@ -1082,6 +1082,30 @@ def _python_invocation_problems(run: str, script_dir_prefix: str) -> list[str]:
 # Extend a list only with a name that runs no code from the checkout.
 _CHECK_STEP_ASSIGNMENTS = frozenset({"guard_differential_verifier_dir", "guard_differential_base_verifier", "PYTHONDONTWRITEBYTECODE"})
 _CHECK_STEP_COMMANDS = frozenset({"set", "git", "python3", "mkdir", "cp", "echo", "["})
+# The check step's whole `run:` body (issue #5327 review round 6). Every
+# scan above works one word at a time, and an allowed word still runs
+# anything: `python3 -P -c '<code>'`, `git -c alias.x='!sh' x`, or `cp` of
+# a checkout file into site-packages. Pinning the text closes that class:
+# a change to the step is a change to this copy too, in the same diff, and
+# the scans still state the rules a new body must follow.
+CI_CHECK_STEP_RUN = "\n".join((
+	'set -euo pipefail',
+	'git fetch --no-tags --depth=1 origin "${GUARD_DIFFERENTIAL_BASE_REF}"',
+	'python3 -P -c \'import json, os, sys; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); sys.stdout.write((event.get("pull_request") or {}).get("body") or "")\' > "${RUNNER_TEMP}/guard-differential-pr-body.md"',
+	'guard_differential_verifier_dir="${RUNNER_TEMP}/guard-differential-verifier"',
+	'mkdir -p "${guard_differential_verifier_dir}"',
+	'guard_differential_base_verifier="$(git ls-tree --name-only FETCH_HEAD -- scripts/guard_differential.py)"',
+	'if [ -n "${guard_differential_base_verifier}" ]; then',
+	'  git show "FETCH_HEAD:scripts/guard_differential.py" > "${guard_differential_verifier_dir}/guard_differential.py"',
+	'  echo "GUARD_DIFFERENTIAL verifier=base source=$(git rev-parse FETCH_HEAD):scripts/guard_differential.py"',
+	'else',
+	'  cp scripts/guard_differential.py "${guard_differential_verifier_dir}/guard_differential.py"',
+	'  echo "::warning::GUARD_DIFFERENTIAL verifier=head reason=base-has-no-verifier base=${GUARD_DIFFERENTIAL_BASE_REF}"',
+	'fi',
+	'PYTHONDONTWRITEBYTECODE=1 python3 "${guard_differential_verifier_dir}/guard_differential.py" \\',
+	'  --base-ref FETCH_HEAD \\',
+	'  --pr-body-file "${RUNNER_TEMP}/guard-differential-pr-body.md"',
+))
 # Words that keep the shell at a command position.
 _SHELL_RESERVED_WORDS = frozenset({"if", "then", "elif", "else", "fi", "!", "{", "}", "while", "until", "do", "done"})
 
@@ -1279,10 +1303,10 @@ def test_ci_check_runs_before_any_pr_code() -> None:
 		env = scope.get("env") or {}
 		assert isinstance(env, dict), env
 		assert set(env) <= allowed, sorted(set(env) - allowed)
-	# No default shell or working directory, no job container, and nothing
-	# that lets the job pass when the check fails.
+	# No default shell or working directory, no job or service container, and
+	# nothing that lets the job pass when the check fails.
 	assert "defaults" not in workflow
-	assert not {"defaults", "container", "continue-on-error"} & set(job)
+	assert not {"defaults", "container", "services", "continue-on-error"} & set(job)
 	# The check step itself: no `shell` (a checkout script as the shell runs
 	# before the body), `working-directory`, `continue-on-error`, or other
 	# key, and it runs on every pull request (review round 5).
@@ -1315,6 +1339,9 @@ def test_ci_check_runs_before_any_pr_code() -> None:
 	# directory is the RUNNER_TEMP copy, never the checkout (review round 4).
 	assert _shell_command_problems(check["run"], _CHECK_STEP_ASSIGNMENTS, _CHECK_STEP_COMMANDS) == []
 	assert re.findall(r"guard_differential_verifier_dir=.*", check["run"]) == ['guard_differential_verifier_dir="${RUNNER_TEMP}/guard-differential-verifier"']
+	# The body itself is pinned, so no allowed command can carry new code
+	# (review round 6).
+	assert check["run"] == CI_CHECK_STEP_RUN + "\n", check["run"]
 
 
 def test_ci_runs_the_unit_tests() -> None:
