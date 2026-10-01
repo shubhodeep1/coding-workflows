@@ -1139,6 +1139,36 @@ def test_security_audit_codex_path_diagnostic_masks_secrets_on_path_error_line()
 		assert secret_fragment not in proc.stderr, secret_fragment
 
 
+def test_security_audit_codex_path_diagnostic_drops_prompt_echo_lines() -> None:
+	# Review round 4 on PR #5816: `codex exec` echoes the prompt, project spec
+	# included, so a spec line with a path-error phrase must not reach
+	# captured_path_error= (which prints before the tail's prompt filter).
+	spec_line = "Spec note: the vault said No such file or directory for confidential-plan-zeta"
+	with tempfile.TemporaryDirectory(prefix="security-audit-path-prompt-") as td:
+		spec_path = Path(td) / "project-spec.md"
+		spec_path.write_text(spec_line + "\n", encoding="utf-8")
+		proc, _ = _run_security_audit(
+			{},
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(Path(td) / "findings.json"),
+				"MOCK_CODEX_EXIT_CODE": "5",
+				"MOCK_CODEX_STDERR": f"{spec_line}\nError: open config.toml: ENOENT\n",
+			},
+			script_args=(str(spec_path),),
+		)
+	assert proc.returncode == 5, proc.stderr
+	path_error_lines = [
+		stderr_line
+		for stderr_line in proc.stderr.splitlines()
+		if stderr_line.startswith("security-audit: captured_path_error=")
+	]
+	assert len(path_error_lines) == 1, proc.stderr
+	assert "ENOENT" in path_error_lines[0], path_error_lines
+	assert "confidential" not in proc.stderr
+	assert "vault" not in proc.stderr
+
+
 def test_security_audit_codex_stderr_tail_byte_cap_holds_for_multibyte_text() -> None:
 	# The sanitizer keeps printable ASCII only, so the 4096 budget is in bytes.
 	proc, _ = _run_security_audit(

@@ -68,8 +68,22 @@ security_audit_emit_path_diagnostic() {
 	# selected lines. Only the codex-execution call passes it, because Codex
 	# stderr can carry provider keys (#5785); other phases print as before.
 	local diagnostic_mask_mode="${2:-}"
+	# Optional: the rendered prompt. With it, lines that echo the prompt
+	# verbatim are dropped first, as the codex-stderr-tail does, because
+	# `codex exec` echoes the prompt (project spec included) to stderr.
+	local diagnostic_prompt_file="${3:-}"
 	local path_diagnostic
-	path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
+	if [ -n "${diagnostic_prompt_file}" ]; then
+		if [ ! -r "${diagnostic_prompt_file}" ]; then
+			diagnostic_prompt_file="/dev/null"
+		fi
+		path_diagnostic="$(LC_ALL=C tr -d '\000\r' 2>/dev/null < "${diagnostic_file}" \
+			| LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' \
+			| LC_ALL=C grep -vxF -f "${diagnostic_prompt_file}" \
+			| tail -n 20 || true)"
+	else
+		path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
+	fi
 	if [ -n "${path_diagnostic}" ]; then
 		if [ "${diagnostic_mask_mode}" = "mask" ]; then
 			path_diagnostic="$(security_audit_mask_stderr_line "${path_diagnostic}")"
@@ -1346,7 +1360,7 @@ if codex --ask-for-approval never \
 	:
 else
 	CODEX_EXECUTION_STATUS=$?
-	security_audit_emit_path_diagnostic "${CODEX_ERROR_FILE}" mask
+	security_audit_emit_path_diagnostic "${CODEX_ERROR_FILE}" mask "${RENDERED_PROMPT_FILE}"
 	security_audit_emit_codex_stderr_tail "${CODEX_ERROR_FILE}" "${RENDERED_PROMPT_FILE}" || true
 	security_audit_emit_failure "codex-execution" "codex" "Codex exited nonzero" "${SECURITY_AUDIT_CODEX_PROVIDER:-unknown}"
 	exit "${CODEX_EXECUTION_STATUS}"
