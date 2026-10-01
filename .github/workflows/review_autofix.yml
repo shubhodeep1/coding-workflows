@@ -1559,8 +1559,8 @@ jobs:
           # dispatched run reviewed the default branch's files against the
           # PR's diff (issue #5824). Same-repository heads only: a fork head
           # is never checked out next to this run's secrets, so it keeps the
-          # event SHA and logs a warning. Rides the /pulls/{n} fetch above
-          # (§15).
+          # event SHA and logs a warning, and "Checkout PR head branch" skips
+          # the review. Rides the /pulls/{n} fetch above (§15).
           review_checkout_sha_gate=""
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
             if [ -n "${pr_head_repo_gate}" ] && [ "${pr_head_repo_gate}" = "${REPOSITORY}" ]; then
@@ -1568,7 +1568,7 @@ jobs:
               echo "AUTOFIX_GATE_REVIEW_CHECKOUT pr=${PR_NUMBER} event=${EVENT_NAME:-unknown} head_sha=${pr_head_sha_gate} head_repo=${pr_head_repo_gate} checkout=pr_head"
             elif [ "${EVENT_NAME:-}" != "pull_request" ]; then
               echo "AUTOFIX_GATE_REVIEW_CHECKOUT pr=${PR_NUMBER} event=${EVENT_NAME:-unknown} head_sha=${pr_head_sha_gate} head_repo=${pr_head_repo_gate:-unknown} checkout=event_sha reason=cross_repo_head"
-              echo "::warning::PR #${PR_NUMBER} head is in ${pr_head_repo_gate:-an unknown repository}, not ${REPOSITORY}; this ${EVENT_NAME:-unknown} run checks out the event SHA, so reviewers read the base files, not the PR head."
+              echo "::warning::PR #${PR_NUMBER} head is in ${pr_head_repo_gate:-an unknown repository}, not ${REPOSITORY}; this ${EVENT_NAME:-unknown} run checks out the event SHA, not the PR head, so it skips the review."
             fi
           fi
           echo "review_checkout_sha=${review_checkout_sha_gate}" >> "${GITHUB_OUTPUT}"
@@ -3542,14 +3542,24 @@ jobs:
           # that head with the checked-out commit before any exit below, so a
           # fork head or a rejected branch name (which exit before the fetch)
           # cannot pair old files with a newer diff (PR #5857 review round 4).
-          # A dispatched run on a fork head checked out github.sha on purpose
-          # (the gate's checkout=event_sha warning, AD-2) and is not compared.
+          # A dispatched run (no pull_request payload) on a head outside this
+          # repository checked out github.sha on purpose (the gate's
+          # checkout=event_sha warning, AD-2), so GITHUB_WORKSPACE never holds
+          # the PR head: skip the review instead of comparing (PR #5857 review
+          # round 5). CAN_PUSH=false alone does not gate the reviewers.
           review_metadata_head_sha=""
-          if [ -n "${PR_NUMBER:-}" ] && [ -s "${PR_PAYLOAD_FILE:-}" ] \
-            && { [ -n "${{ github.event.pull_request.head.sha }}" ] || [ "${HEAD_REPO}" = "${{ github.repository }}" ]; }; then
+          review_cross_repo_dispatch="false"
+          if [ -n "${PR_NUMBER:-}" ] && [ -z "${{ github.event.pull_request.head.sha }}" ] \
+            && [ "${HEAD_REPO}" != "${{ github.repository }}" ]; then
+            review_cross_repo_dispatch="true"
+          elif [ -n "${PR_NUMBER:-}" ] && [ -s "${PR_PAYLOAD_FILE:-}" ]; then
             review_metadata_head_sha="$(jq -r '.head.sha // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo "")"
           fi
-          if [ -n "${review_metadata_head_sha}" ] && [ "${review_metadata_head_sha}" != "${review_workspace_sha}" ]; then
+          if [ "${review_cross_repo_dispatch}" = "true" ]; then
+            echo "AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP pr=${PR_NUMBER} workspace_sha=${review_workspace_sha:-unknown} head_repo=${HEAD_REPO:-unknown} target_branch=${HEAD_REF} action=soft_exit"
+            echo "::warning::PR #${PR_NUMBER} head is in ${HEAD_REPO:-an unknown repository}, not ${{ github.repository }}; this run checked out ${review_workspace_sha:-an unknown commit}, not the PR head, so it skips the review instead of reviewing those files against the PR's diff."
+            echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+          elif [ -n "${review_metadata_head_sha}" ] && [ "${review_metadata_head_sha}" != "${review_workspace_sha}" ]; then
             echo "AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED pr=${PR_NUMBER:-} workspace_sha=${review_workspace_sha:-unknown} head_sha=${review_metadata_head_sha} target_branch=${HEAD_REF} source=pr_metadata action=soft_exit"
             echo "::warning::PR #${PR_NUMBER:-} head moved from ${review_workspace_sha:-unknown} to ${review_metadata_head_sha} before its metadata and diff were read; skipping this run so no review or auto-merge pairs the new head with the old files."
             echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"

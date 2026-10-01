@@ -254,6 +254,7 @@ def test_dispatch_cross_repo_head_keeps_event_sha_and_warns(tmp_path):
 	assert sha == ""
 	assert "checkout=event_sha reason=cross_repo_head" in stdout
 	assert "::warning::PR #5097 head is in someone/fork" in stdout
+	assert "not the PR head, so it skips the review." in stdout
 	assert _resolve_checkout_ref(event_head_sha="", gate_checkout_sha=sha, github_sha=EVENT_SHA) == EVENT_SHA
 
 
@@ -475,13 +476,60 @@ def test_same_repo_dispatch_with_moved_head_soft_exits(tmp_path):
 	assert "source=pr_metadata action=soft_exit" in stdout
 
 
-def test_fork_dispatch_keeps_event_sha_without_skip(tmp_path):
-	"""AD-2: a dispatched fork run checked out github.sha on purpose and keeps running."""
+def test_fork_dispatch_skips_the_review(tmp_path):
+	"""AD-2 keeps github.sha for a dispatched fork head, so the run must not review it (round 5).
+
+	The fork exit only sets CAN_PUSH=false, which no reviewer step checks, so
+	without the skip the reviewers read the default branch's files against the
+	fork PR's diff.
+	"""
 	env_text, stdout = _run_metadata_check(
 		tmp_path, workspace_sha=EVENT_SHA, metadata_head_sha=HEAD, event_head_sha="", head_repo=FORK_REPOSITORY
 	)
-	assert env_text == ""
-	assert stdout == ""
+	assert env_text == "AUTOFIX_STALE_BASE_SKIP=true\n"
+	assert (
+		f"AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP pr=5857 workspace_sha={EVENT_SHA} "
+		f"head_repo={FORK_REPOSITORY} target_branch=feature action=soft_exit"
+	) in stdout
+	assert f"::warning::PR #5857 head is in {FORK_REPOSITORY}, not {REPOSITORY};" in stdout
+	assert "AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED" not in stdout
+
+
+def test_fork_dispatch_skips_without_payload_or_head_repo(tmp_path):
+	"""The skip does not depend on the PR payload, and a deleted fork (null head repo) skips too."""
+	(tmp_path / "no_payload").mkdir()
+	(tmp_path / "deleted_fork").mkdir()
+	env_text, stdout = _run_metadata_check(
+		tmp_path / "no_payload", workspace_sha=EVENT_SHA, metadata_head_sha=None, event_head_sha="", head_repo=FORK_REPOSITORY
+	)
+	assert env_text == "AUTOFIX_STALE_BASE_SKIP=true\n"
+	assert "AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP pr=5857" in stdout
+	env_text, stdout = _run_metadata_check(
+		tmp_path / "deleted_fork", workspace_sha=EVENT_SHA, metadata_head_sha=HEAD, event_head_sha="", head_repo="null"
+	)
+	assert env_text == "AUTOFIX_STALE_BASE_SKIP=true\n"
+	assert "head_repo=null" in stdout
+
+
+def test_same_repo_dispatch_with_unmoved_head_keeps_running(tmp_path):
+	env_text, stdout = _run_metadata_check(
+		tmp_path, workspace_sha=HEAD, metadata_head_sha=HEAD, event_head_sha="", head_repo=REPOSITORY
+	)
+	assert (env_text, stdout) == ("", "")
+
+
+def test_cross_repo_dispatch_skip_runs_before_every_exit():
+	run = _codex_agent_step("Checkout PR head branch")["run"]
+	skip = run.index('echo "AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP pr=')
+	first_exit = re.search(r"^\s*exit \d", run, re.MULTILINE).start()
+	assert skip < first_exit
+
+
+def test_cross_repo_dispatch_log_prefix_is_registered_in_agents_md():
+	assert "AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP pr=" in _workflow_text()
+	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	assert "\n- `AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP`\n" in agents_text
+	assert "\nLOG_PREFIX.name=AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP\n" in agents_text
 
 
 def test_no_pr_path_and_missing_payload_are_not_compared(tmp_path):
