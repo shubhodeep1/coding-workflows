@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The test passes `comments=None` as a failed lookup, but the mock serializes it as JSON null and the workflow treats it as a successful empty response, so the test does not exercise the fail-closed path.\n  WHY: `gate_marker_fetch_state` resolves to `\"ok\"`, so the unverified-handoff guard does not fire and the test's assertions for `claude_fixer_handoff_unverified` and `deterministic_skip == false` fail.\n- tests/test_review_autofix_claude_fixer_mode.py:486-489 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The mock gh comments branch has no mechanism to simulate a failed comments API call.\n  WHY: Tests cannot produce a non-`ok` `gate_marker_fetch_state` through this mock, preventing them from verifying fail-closed behavior.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Claude-fixer PRs (claude/* heads) take the same doc-only and small-diff routes as every other PR. ... A head that already has a hand-off never skips either ... the fail-closed comment lookup log reason=claude_fixer_handoff_unverified and also runs it.\"\n  expected_change_site: tests/test_review_autofix_claude_fixer_mode.py \u2014 `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  EVIDENCE: The test exists but does not exercise the fail-closed path because `comments=None` is treated as a successful empty response; GATE_MOCK_GH (lines 467-494) has no comments-failure path, so the test cannot produce `gate_marker_fetch_state=\"api_error\"`.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=high | confidence=5\n  PROBLEM: The test passes comments=None to simulate a failed comment lookup, but the mock gh script serializes None as JSON null, and jq processes null as empty input (.[] on null yields nothing, filter outputs [], exit 0), so the mock always succeeds for the /comments endpoint.\n  WHY: The test does not exercise the fail-closed path it claims to verify. The assertions at lines 652-653 require `claude_fixer_handoff_unverified` and `deterministic_skip == false`, but the skip proceeds instead.\n\n- Requirement: \"Claude-fixer PRs (claude/* heads) take the same doc-only and small-diff routes as every other PR. ... A head that already has a hand-off never skips either ... the fail-closed comment lookup log reason=claude_fixer_handoff_unverified and also runs it.\" (PR description, agents.md lines 94-101)\n  Expected change site: tests/test_review_autofix_claude_fixer_mode.py (test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails at line 647)\n  Evidence of absence: The test exists and is named correctly, but it does not actually exercise the fail-closed path. The mock gh script always succeeds for the /comments endpoint, so the test never reaches the claude_fixer_handoff_unverified branch.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=high | confidence=5\n  PROBLEM: The test passes `comments=None` expecting a failed lookup, but the mock serializes None as JSON `null` and the gate treats that as a successful empty response.\n  WHY: `gate_marker_fetch_state` resolves to `\"ok\"` instead of `\"api_error\"`, so the fail-closed branch is not taken and the test's assertions fail.\n\n- tests/test_review_autofix_claude_fixer_mode.py:486-489 | severity=high | confidence=5\n  PROBLEM: The mock gh has no mechanism to simulate a failed comments API call.\n  WHY: Any test relying on `gate_marker_fetch_state` resolving to anything other than `\"ok\"` is silently broken because the mock always emits a well-formed JSON value.\n\n- Requirement: \"A failed comment lookup must suppress the deterministic skip (claude_fixer_handoff_unverified). The new test `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails` is supposed to verify this, but the test cannot exercise the failure path because the mock has no `comments_fail` simulation.\" (Derived from PR description's \"fail closed\" requirement and the new gate logic at review_autofix.yml lines 1472-1495.)\n  Expected change site: tests/test_review_autofix_claude_fixer_mode.py \u2014 either (a) extend GATE_MOCK_GH to honour a `comments_fail` flag in the comments branch (mirroring `tests/test_workflow_failure_heal.py:2168-2169`), or (b) rewire the new test to set a flag the mock detects.\n  Evidence of absence: GATE_MOCK_GH (lines 467-494) has no comments-failure path. The new test's `comments=None` is the only mechanism offered, but Python None \u2192 JSON null \u2192 jq output `[]` \u2192 empty file \u2192 fetch_state=\"ok\".\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=high | confidence=5\n  PROBLEM: The test passes `comments=None` to simulate a failed comment lookup, but `None` is serialized as JSON null and the mock's jq filter produces `[]` on null input, so the workflow sees an empty successful lookup (`gate_marker_fetch_state=\"ok\"`).\n  WHY: The fail-closed path is never exercised, so the assertions for `claude_fixer_handoff_unverified` and `deterministic_skip == \"false\"` fail.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_review_autofix_claude_fixer_mode.py:647 | severity=high | confidence=4\n  PROBLEM: The mock succeeds with an empty list, so the test never exercises the `!=ok` or invalid-SHA branch that sets `CLAUDE_HANDOFF_SKIP_SUPPRESSED=true` and logs the unverified reason.\n  WHY: The assertions for `reason=claude_fixer_handoff_unverified` and `deterministic_skip=false` never trigger.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3dcac200f08340af9249f4e1e04abe98479a0f40a7d86fd2d8b8b09f4f568e3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36367526153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36367526153",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928021912_ca6ebe382d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36367526153"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T02:19:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

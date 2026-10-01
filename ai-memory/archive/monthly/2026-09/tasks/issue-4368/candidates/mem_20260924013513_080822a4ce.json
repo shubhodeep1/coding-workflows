@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan\n\nPlanning ref: `main` at `5c0e5aa3b1a0196605942d012c09b4077cf14a84`  \nClarification mapping: no Q-IDs were required; the automatic answer confirms the issue is implementation-ready.\n\nScope-mode: Hold Scope  \nReuse-audit: extends Phase 4b retry run registration  \nScope-mode justification: The planning ref already contains the complete requested hardening and focused regression coverage. Per \u00a76 priorities\u2014correctness and safety before speed\u2014the safest plan is to verify the existing implementation and avoid duplicate polling logic, extra API calls, or artificial edits.\n\n## Automation and wiring\n\n- Extends the existing `.github/workflows/test-and-mark-stable.yml` `workflow_dispatch` release gate.\n- Introduces no script, dependency, scheduler, database operation, or long-running supervisor.\n- No `docs/scripts-pending-removal.md` entry is required.\n- Existing release/promotion automation will exercise the change without operator-run commands.\n\n## Conflict detected\n\nThe issue describes Phase 4b repeatedly selecting the newest matching run, but current `main` already:\n\n- Adopts the oldest eligible active review run.\n- Dispatches only when no eligible run exists.\n- Records a pre-dispatch run-ID baseline.\n- Registers the oldest new run above that baseline.\n- Polls only `actions/runs/${RETRY_RUN_ID}`.\n- Preserves existing fail-closed status outputs.\n\nTherefore, no competing implementation should be added.\n\n## Files likely to change\n\nNo repository changes are expected on the planning ref.\n\nVerification targets:\n\n- `.github/workflows/test-and-mark-stable.yml`\n- `tests/test_test_and_mark_stable_review_blocked_budget.py`\n- `changelog.d/4350-adopt-active-review-run.md`\n\nIf branch drift removes the existing contract before implementation, restore it only in the first two files; do not add another helper or duplicate changelog fragment.\n\n## Functions or modules\n\n- Preserve the inline Phase 4b retry block beginning with `Retry: adopt active work or redispatch`.\n- Preserve focused contracts:\n  - `test_phase4b_adopts_the_oldest_eligible_active_review_run`\n  - `test_phase4b_dispatches_only_without_active_work_and_pins_one_run`\n- Do not migrate this path to `scripts/dispatch_and_watch_workflow_run.sh`; that helper always dispatches and lacks Phase 4b\u2019s active-run adoption semantics.\n\n## Data structures affected\n\nNo schema changes.\n\nExisting shell state remains authoritative:\n\n- `RETRY_RUNS_JSON`\n- `RETRY_BASELINE_ID`\n- `RETRY_ACTIVE_RUN`\n- `RETRY_RUN_ID`\n- `RETRY_STATUS`\n- `RETRY_CONCL`\n- `RETRY_REGISTRATION_DEADLINE`\n\nExisting `$GITHUB_OUTPUT` status values must remain backward compatible.\n\n## API/interface changes\n\nNone.\n\nThe existing GitHub Actions API flow remains:\n\n1. Resolve the branch head.\n2. List and validate branch review runs.\n3. Adopt eligible active work or dispatch once.\n4. Register one run ID above the baseline.\n5. Poll that exact run through `actions/runs/${RETRY_RUN_ID}`.\n6. Re-run canary verification only after successful completion.\n\n## Decisions\n\n### D1 \u2014 Treat the issue as already satisfied\n\n- **Chosen:** Verify the current implementation and produce no source edit when it remains intact.\n- **Alternatives considered:** Add duplicate registration logic, refactor into a shared helper, or increase the timeout.\n- **Why:** The requested root-cause fix and regression contracts already exist; additional logic would increase race and API-budget risk.\n\n### D2 \u2014 Keep exact-run polling fail-closed\n\n- **Chosen:** Preserve payload validation, positive run-ID checks, registration timeout, PR-state guard, and existing status outputs.\n- **Alternatives considered:** Fall back to broad run-list polling after registration errors.\n- **Why:** Broad polling recreates the moving-candidate defect and may attribute another run\u2019s result to the canary retry.\n\n## Security considerations\n\n- GitHub API payloads remain untrusted and must retain strict `jq` shape/type validation.\n- No new endpoint, authorization surface, or workflow permission is introduced.\n- Reject malformed run IDs, SHAs, run lists, and exact-run responses.\n- Abuse cases include branch movement, concurrent dispatches, malformed API responses, and unrelated newer runs; baseline registration and exact-ID polling contain these cases.\n- Do not log tokens or authentication material.\n- No money-handling surface is affected.\n\n## Failure modes\n\n- **Malformed prior run, branch SHA, or run list:** emit `retry_dispatch_failed`; do not dispatch blindly.\n- **Dispatched run does not register:** emit `retry_dispatch_failed`.\n- **Exact run remains pending:** emit `retry_timeout` after the existing budget.\n- **PR closes during polling:** emit `pr_closed_during_retry`.\n- **Repeated PR-state lookup failures:** emit `pr_state_check_failed`.\n- **Pinned run completes unsuccessfully:** emit `retry_workflow_failed`.\n- **Recovery:** existing release automation retries from a later eligible commit; no fallback to moving-candidate selection.\n\n## Risks and edge cases\n\n- An adopted run may still wait behind serialized concurrency, but adopting it avoids adding more queued work.\n- Branch advancement after dispatch must not cause selection to switch to a newer run.\n- The historical failed SHA is unavailable in the local checkout, so local ancestry to the fix cannot be established.\n- Static contract tests do not replace the next live release-gate execution.\n\n## Testing considerations\n\n- Run:\n  `PYTHONDONTWRITEBYTECODE=1 uv run --frozen --with pytest python -m pytest -q tests/test_test_and_mark_stable_review_blocked_budget.py`\n- Confirm contracts cover active-run adoption, conditional dispatch, baseline registration, oldest-new-run selection, exact-ID polling, and preserved timeout outputs.\n- Let the existing release/promotion workflow provide the live serialized-concurrency verification.\n- Planning-time focused result: `13 passed`.\n\n## Assumptions and missing context\n\n- Assumes implementation runs against the same `main` contract observed at planning time.\n- Failed run logs omitted retry run IDs, but the existing implementation addresses the diagnosed race without needing them.\n\n## Pre-execution self-check\n\n- Target and checked-out branches both resolve to `main`.\n- No clarification, external credential, scheduler, database, or supervisor decision is missing.\n- The requested behavior, tests, and changelog entry already exist.\n- Minimal safe outcome is verification with no duplicate edit.\n\nPLAN_SELF_CHECK: WARNING: The historical failed SHA is absent locally, so fix ancestry cannot be proven; current-main behavior and focused tests verify the requested contract.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "bc6ccfb618f181d1f7dd4d75a9d2c3f1b89a45821542ed5232114be71b172188",
+  "lineage": {
+    "issue_number": 4368,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35943110854",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35943110854",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4368"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924013513_080822a4ce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4368,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35943110854"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4368",
+  "timestamps": {
+    "created_at": "2026-09-24T01:35:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

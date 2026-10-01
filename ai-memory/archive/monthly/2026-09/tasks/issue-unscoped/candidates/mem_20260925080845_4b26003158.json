@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6366-6388 | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The function now reads the full `security_pass_advisory_backlog` and attempts every eligible row in a single poll cycle, with no batching, pacing, or per-call API budget.\n  WHY: A large backlog can issue many sequential `gh issue create` calls and retries in one tick, potentially exhausting GitHub\u2019s secondary rate limit and stalling later label reconciliation and `SECURITY_PASS_*` logs.\n- scripts/orchestrate_poll_process.sh: security_pass_file_advisory_findings(), the `attempt_key=\"$(printf '%s' \"${row_json}\" | sha256sum | cut -d' ' -f1)` line inside the while loop | severity=low | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Each backlog row spawns a three-process pipeline (printf | sha256sum | cut) to compute a dedup key.\n  WHY: For a backlog of N rows, this is N subprocess invocations per tracking issue per tick, a measurable regression vs. the old single-jq-call cap slice.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: security_pass_file_advisory_findings (lines 6366-6388) | severity=high | confidence=[3]\n  PROBLEM: The function now reads the full `security_pass_advisory_backlog` and attempts every eligible row in a single poll cycle, with no batching, pacing, or per-call API budget.\n  WHY: A backlog of N findings now triggers N sequential `gh issue create` calls inside one orchestrator poll tick; retries may hit the GitHub secondary rate limit, lengthen the tick, and stall later label reconciliation and `SECURITY_PASS_*` logs.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: security_pass_file_advisory_findings(), the `attempt_key=\"$(printf '%s' \"${row_json}\" | sha256sum | cut -d' ' -f1)` line inside the while loop | severity=low | confidence=[3]\n  PROBLEM: Each backlog row spawns a three-process pipeline (printf | sha256sum | cut) to compute a dedup key.\n  WHY: For a backlog of N rows, this is N subprocess invocations per tracking issue per tick. Bash associative arrays accept arbitrary string keys, so the raw `row_json` (already compact from `jq -c`) could serve as the key directly, avoiding the subprocess. This is a NIT-level observation, not a blocker.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0c378682265d5ddf1d60f6fdf91439f370b00d9929fb06090c6fa2cc80b97c9d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4449,
+    "run_id": "36108318005",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36108318005",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925080845_4b26003158",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4449,
+    "run_id": "36108318005"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-25T08:08:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

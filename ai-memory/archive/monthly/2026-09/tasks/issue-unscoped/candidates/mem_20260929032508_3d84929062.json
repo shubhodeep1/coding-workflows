@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/comprehensive_test_and_release_gh_api.sh:105-128 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A jq failure while calculating the page count is converted to 0, causing the scan to stop before checking later pages.\n  WHY: This can mask matches on later pages; the reviewer rated it NIT.\n- .github/workflows/test-and-mark-stable.yml:743-747, 761 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The Plan step passes \"$ISSUE_TITLE\" without the ${:-} default used by the Clarify and Implement call sites.\n  WHY: The current pre-flight guard makes this safe, but removing that guard would leave the Plan step vulnerable under set -euo pipefail; the reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/comprehensive_test_and_release_gh_api.sh:105-128 | severity=NIT | confidence=2\n  PROBLEM: When the jq call on the page count (line 126) fails, page_count is forced to 0 via `|| echo 0`, the page_count < 100 check then returns from the loop even though nothing matched and the runs endpoint may have further pages available. A transient jq failure on a single page prematurely terminates the scan.\n  WHY: If jq exits non-zero on a successfully-fetched runs JSON (e.g. malformed `.workflow_runs | length` invocation in some future shell environment), the function returns no match instead of moving to page 2. This is fail-closed, but it can mask matches that exist on later pages.\n- .github/workflows/test-and-mark-stable.yml:743-747, 761 | severity=NIT | confidence=3\n  PROBLEM: The wait-plan step has an explicit pre-flight check `if [ -z \"${ISSUE_TITLE}\" ]; then exit 1; fi` (line 743), but the call site at line 761 passes `\"$ISSUE_TITLE\"` without the `${:-}` default that the new wait-clarify and wait-implement call sites use (lines 641, 976). The pre-flight makes this safe today, but the inconsistency means a future refactor that drops the pre-flight would silently break the Plan step under `set -euo pipefail`, while Clarify/Implement would keep working.\n  WHY: Inconsistent safety semantics between the three call sites; not a regression because the Plan step's pre-flight guard catches it, but a latent fragility.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8bd9804aa3764366a2184927b79e1fee362cebf2c01442cce8ed7c0876365684",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4970,
+    "run_id": "36514425682",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36514425682",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929032508_3d84929062",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4970,
+    "run_id": "36514425682"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T03:25:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

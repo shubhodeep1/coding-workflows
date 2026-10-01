@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/stateless-pr-status-master-checker-plan.md: A.5 step 2 lines 383-392 and A.6 pickup lines 456-460 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `--ensure` and `--revive-scan` inputs do not include the disabled tick Routine's trigger id, so they cannot produce the specified `enable <trig id>` output for a dormant master.\n  WHY: Since dormant tick Routines are absent from the enabled-only input, revival cannot reliably identify the existing master and may fail or create a duplicate; severity differed, with minimax_minimax-m3 rating this BLOCKER and the other reviewers rating it MAJOR.\n- docs/plans/stateless-pr-status-master-checker-plan.md: A.4 step 6, line 369-370 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The plan does not specify error handling if `stale_routines.classify` raises while processing the ended file.\n  WHY: An unhandled classifier exception can prevent the tick from emitting its action list and may trigger the dead-man switch for subscribers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/plans/stateless-pr-status-master-checker-plan.md: A.5 step 2 lines 383-392 and A.6 pickup lines 456-460 | severity=high | confidence=[4]\n  PROBLEM: --enable output enable <tridg id> but the script's inputs (--enabled file from list_triggers with enabled: true and include_completed: true from the stal sweep, plus --sessions file) do not contain the disabled tick Routine's trigger id. When the master is dormant its tick Routine has enabled: false and is absent from the --enabled file. The same gap exists in --revive-scan which takes --enabled from pickup step 1's list_triggers (enabled: true only).\n  WHY: An arming session or the pickup that gets enable <trig id> from the script would receive the instruction to re-enable a dormant master but without a usable trigger id to feed to update_trigger. The implementer coding --ensure and --revive-scan against this spec will discover they cannot produce the enable output from the specified inputs.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/plans/stateless-pr-status-master-checker-plan.md: A.5 step 2, lines 383-392 (`check_in_master.py --ensure`); cross-reference A.3 step 3 line 252 (dormant \u2192 `update_trigger enabled: false`) and A.4 step 5 line 367 (dormancy trigger). | severity=critical | confidence=[4]\n  PROBLEM: The `--ensure` script is specified to output `enable <trig id>` for a dormant master (line 391) so the model can call `update_trigger` with `enabled: true`, but its only inputs are `--enabled <file>` (a `list_triggers enabled: true` snapshot) and `--sessions <list_sessions file>`, which cannot supply the disabled tick Routine's id.\n  WHY: The first arm after a master goes dormant either cannot produce the required trigger id or may return `create` and create a duplicate master session, so the documented dormancy-revival contract cannot be satisfied.\n- docs/plans/stateless-pr-status-master-checker-plan.md: A.4 step 6, line 369-370 (`Call stale_routines.classify on the ended file`). | severity=low | confidence=[2]\n  PROBLEM: The plan says the master invokes `stale_routines.classify` on the ended file and emits its `delete` ids as `stale_delete`, but does not document behavior when `classify` raises.\n  WHY: An exception inside the classifier can prevent the tick from emitting action output or make the master's reply `done` with no actions, causing the dead-man switch to fire for every subscriber.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/plans/stateless-pr-status-master-checker-plan.md: A.5 step 2, `--ensure` command signature and `enable <trig id>` output (around line 384 of the plan) | severity=high | confidence=[4]\n  PROBLEM: `--ensure` accepts `--enabled <file>` (from `list_triggers` with `enabled: true`) and `--sessions <file>`, but neither input contains the disabled tick's trigger id needed for the specified `enable <trig id>` output.\n  WHY: The dormancy-reenable path requires the trigger id to re-enable the tick; as specified, `--ensure` cannot produce that output.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/plans/stateless-pr-status-master-checker-plan.md: A.5 step 2, `check_in_master.py --ensure --repo <r> --enabled <file> --sessions <list_sessions file>`; same inputs for `--revive-scan` in A.6 | severity=high | confidence=[4]\n  PROBLEM: `--ensure` and `--revive-scan` are specified to output `enable <trig id>` when the master exists but is dormant, but their enabled-only trigger input and sessions input do not carry the disabled tick's trigger id.\n  WHY: The script cannot produce the promised enable output and, without an enabled tick or the disabled trigger id, may treat a dormant master as absent and create a duplicate.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7eac4ee62f7330e2fd2f5a18cdc4e0a1f6309bbd174dadae70de58d7f07d00e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4604,
+    "run_id": "36296348810",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36296348810",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927052527_71fc60490f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4604,
+    "run_id": "36296348810"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T05:25:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

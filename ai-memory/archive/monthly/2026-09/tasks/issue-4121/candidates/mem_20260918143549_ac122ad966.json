@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which repository area should be improved?\nChoices:\nA. Clarify, plan, or implement pipeline\nB. Review/autofix pipeline\nC. Orchestrator, poller, or validation pipeline\nD. Documentation or consumer setup\nE. Name the exact workflow, script, prompt, or file (RECOMMENDED)\nQ2: What specific improvement is required?\nChoices:\nA. Fix a reproducible defect; provide current behavior, evidence, and expected behavior (RECOMMENDED)\nB. Improve reliability or performance; provide the measurable target\nC. Add or change behavior; describe the required before/after behavior\nD. Improve documentation or usability; identify the audience and current difficulty",
+  "fingerprint": "1d256c89bd889650f0dcdb98b7df5167c8588d928432fc9e9112071ab3abe2e2",
+  "lineage": {
+    "issue_number": 4121,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35356881255",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35356881255",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260918143549_ac122ad966",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4121,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35356881255"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #4121 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-18T14:35:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ingest_implement_plan_lessons.py:lines 108-112 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: `lesson_record_id` hand-rolls a new stable-ID format (`lesson-implement-plan-<24hex>`) outside `scripts/ai_memory_lib.py`, violating the documented stable-ID convention in agents.md.\n  WHY: There is no runtime failure because the IDs are deterministic and schema-safe, but the format diverges from the contractual `<prefix>_<YYYYMMDDHHMMSS>_<10hex>` shape and lacks the required alongside helper/alias in `ai_memory_lib.py` and contract-test update; severity was reported as NIT by deepseek_deepseek-v4-pro and MAJOR by the other reviewers, so the highest severity is used.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/ingest_implement_plan_lessons.py:lesson_record_id (lines 110-112) | severity=low | confidence=4\n  PROBLEM: The function creates IDs with the format `lesson-implement-plan-{sha256_hex[:24]}` which does not match the contractual stable-ID format `{prefix}_{YYYYMMDDHHMMSS}_{10hex_uuid4}` documented in agents.md:178.\n  WHY: No runtime failure; the IDs work correctly as deterministic deduplication keys, but the helper is outside `ai_memory_lib.py` and the contract test was not updated to cover the new format.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ingest_implement_plan_lessons.py:lines 108-110 | severity=high | confidence=4\n  PROBLEM: `lesson_record_id` hand-rolls a new ID format outside of `scripts/ai_memory_lib.py`, violating the documented stable-ID convention in agents.md.\n  WHY: No runtime failure, but the contract violation means the ID generation is not centralized and does not follow the `<prefix>_<UTC timestamp>_<10hex>` format, potentially breaking future maintenance and ID-format-aware tools.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ingest_implement_plan_lessons.py:lines 110-112, function `lesson_record_id` | severity=high | confidence=4\n  PROBLEM: The PR hand-rolls a new record-id format (`lesson-implement-plan-<24hex>`) outside `scripts/ai_memory_lib.py`, violating the contractual stable-ID convention documented in agents.md \"Stable-ID convention\" (lines 171-193).\n  WHY: No runtime crash because the ID is schema-valid and deterministic, but the contract requires an alongside helper or alias in `ai_memory_lib.py` and a contract-test update, neither of which is present.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/ingest_implement_plan_lessons.py:`lesson_record_id` function (lines 108-110) | severity=high | confidence=4\n  PROBLEM: The helper hand-rolls a new stable-ID format (`lesson-implement-plan-<24hex>`) outside `scripts/ai_memory_lib.py`, violating the documented stable-ID convention in agents.md.\n  WHY: No runtime failure because the IDs are deterministic, unique, and schema-safe, but the format diverges from the contractual `<prefix>_<YYYYMMDDHHMMSS>_<10hex>` shape without the required alongside-helper and contract-test discipline.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/ingest_implement_plan_lessons.py:110 | severity=high | confidence=4\n  PROBLEM: `lesson_record_id` hand-rolls a custom ID and violates the agents.md stable-ID contract; use `make_record_id` in `ai_memory_lib.py`.\n  WHY: The custom ID format is outside the documented canonical ID-generation mechanism.\n\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/ingest_implement_plan_lessons.py:lines 110-112, `lesson_record_id` function | severity=high | confidence=4\n  PROBLEM: `lesson_record_id` hand-rolls a new stable-ID format (`lesson-implement-plan-{digest[:24]}`) in a separate script rather than adding an alongside helper to `scripts/ai_memory_lib.py`, violating the documented stable-ID convention in `agents.md`.\n  WHY: No runtime failure because the IDs work correctly as filenames, but the format uses hyphens and a 24-hex suffix instead of the contractual `<prefix>_<UTC timestamp>_<10hex>` shape, lives outside `ai_memory_lib.py`, and lacks the required contract-test coverage.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "08fbe34a7ef2122ed1854d7c79847ac1622480d85319f460513657e44399e210",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4367,
+    "run_id": "35943802394",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35943802394",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924042328_8d6f922f03",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4367,
+    "run_id": "35943802394"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T04:23:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

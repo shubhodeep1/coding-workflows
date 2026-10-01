@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:354-368 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `check_review_runs()` docstring describes the API reads per listing but does not state their combined total, which may mislead contributors auditing the per-PR cost.\n  WHY: The function-level wording may require readers to count the dispatch entries, although the module and caller docstrings state the total explicitly and other reviewers considered the wording accurate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/claude_fixer_pending_checks.py\n  Line or code reference: check_review_runs docstring \"Reads:\" paragraph (around lines 354-368)\n  Problem: The function-level docstring describes each API call with its own parenthetical \"(1 call, newest 100 runs)\" rather than stating a single total budget. A quick reader can miscount (the cross-pollination summary shows gemini-3.1-flash-lite flagged this in the most recent review round with confidence 5; the implementation makes 5 calls per ready PR: 1 head-branch + 1 internal-review.yml dispatch + 3 unbound workflow dispatches, but the docstring parses as separate \"(1 call \u2026)\" groups with no total).\n  Why it fails at runtime: Does not fail at runtime. The module-level docstring (around line 70-75) and the caller docstring in scripts/claude_pr_sweep.py both state the totals clearly (\"1 head-branch runs read and 4 workflow_dispatch runs reads\"), so the API-hygiene contract is preserved at those surfaces. But the function-level docstring is the API-hygiene anchor for future contributors reasoning about the sweep's per-PR cost, and the latest round's reading of it shows the wording can mislead a \u00a715 audit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4004984858a113f85f82a8ce9f13c04892997154c1299b1145c51c8e1062d257",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5178,
+    "run_id": "36653834692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36653834692",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930013624_8be03621ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5178,
+    "run_id": "36653834692"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T01:36:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

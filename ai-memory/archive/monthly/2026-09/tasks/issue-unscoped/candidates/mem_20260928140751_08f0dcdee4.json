@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:1104 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The 50-position cap on bracket candidates may prevent `parse_sessions_listing` from locating the JSON payload if a future harness preamble contains many `[` or `{` characters.\n  WHY: A preamble that consumes the cap could make the CLI exit 2 without archiving any session, although the current harness preamble is unlikely to trigger this.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_route.py:1104 | severity=NIT | confidence=2\n  PROBLEM: The 50-position truncation on the bracket-brace starts list is an arbitrary bound that could make `parse_sessions_listing` fail to locate the JSON after a future harness preamble containing many `[` or `{` characters.\n  WHY: A future harness wrapping that adds many `[\u2026]` data segments before the JSON would consume the 50-position budget; the actual JSON's `{` would never be tried, and the CLI exits 2 without archiving any session. The function's own docstring acknowledges it accepts the harness-saved format, so the contract is real even if no current harness exercises the boundary.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "79dac585956b7ce9ee667b857b837ff0315a46defc90cd8491eaae33ef272088",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4846,
+    "run_id": "36430634563",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36430634563",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928140751_08f0dcdee4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4846,
+    "run_id": "36430634563"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T14:07:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

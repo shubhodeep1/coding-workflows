@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:~169 / 170 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: `${ISSUE_BODY}` is undefined in the implement.yml precheck step, so the orchestrator-child parent lookup produces an empty `SMOKE_TRACKING_NUM`.\n  WHY: This would leave `IS_SMOKE_PARENT=false` and prevent necessary labeling and alert-silencing; deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, and z-ai_glm-5_2 explicitly dispute the finding because `ISSUE_BODY` is defined at line 129 in the same `run:` block.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: review_autofix.yml now classifies smoke PRs from the `e2e-smoke-test` label rather than scanning title/body prose, and the PR description claims manual jq verification against a synthesized no-`.labels` payload\n  expected_change_site: tests/test_smoke_alert_silencing_contract.py \u2014 `test_review_autofix_uses_label_as_primary_smoke_signal` / test matrix\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20]\n  EVIDENCE: `test_review_autofix_uses_label_as_primary_smoke_signal` only asserts that the `SMOKE_LABEL_JQ` substring is present; `tests/test_smoke_alert_silencing_contract.py` does not exercise or pin the synthesized no-`.labels` payload path.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:170 (within the else block for SMOKE_TRACKING_NUM) | severity=critical | confidence=4\n  PROBLEM: The code attempts to use `${ISSUE_BODY}` inside a `run` block within `implement.yml`, but `ISSUE_BODY` is not defined in that job context.\n  WHY: The shell script will fail to expand `${ISSUE_BODY}`, resulting in an empty string being passed to `sed`; the orchestrator-child parent lookup will always produce an empty `SMOKE_TRACKING_NUM`, causing `IS_SMOKE_PARENT` to incorrectly remain `false`.\n\n- review_autofix.yml detect step (and test) | severity=high | confidence=3\n  PROBLEM: The test suite lacks a test case that exercises the synthesized `no-.labels` payload path cited as a reason for the label-based classification change.\n  WHY: Robust handling of missing label data in the new classification logic remains unverified.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_smoke_alert_silencing_contract.py:231 | severity=low | confidence=3\n  PROBLEM: The contract test only asserts that the `SMOKE_LABEL_JQ` substring is present and does not exercise a payload that omits `.labels`.\n  WHY: The safe-navigation behavior relied on by the PR description's manual verification is not pinned by a test.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/implement.yml:~169 (SMOKE_TRACKING_NUM line in precheck else) | severity=high | confidence=5\n  PROBLEM: `${ISSUE_BODY}` is undefined in precheck step env, so the orchestrator-child parent lookup always produces an empty `SMOKE_TRACKING_NUM`.\n  WHY: `IS_SMOKE_PARENT=false`, labels, and `ALERT_MSG_LEVEL=SILENT` never apply for decomposed children.\n\n- tests/test_smoke_alert_silencing_contract.py:~200-220 (test matrix) | severity=low | confidence=3\n  PROBLEM: `test_implement_resolves_orchestrator_parent_for_label_reliability` does not exercise the synthesized no-.labels payload path cited as motivation for label-primary change.\n  WHY: The label jq can silently misclassify no-label PRs under real gate conditions.\n\n- .github/workflows/implement.yml (precheck else branch, SMOKE_TRACKING_NUM sed) | confidence=1\n  PROBLEM: The greedy `.*` pattern on both sides of the tracking regex can match the last occurrence on malformed bodies.\n  WHY: A malformed body with multiple tracking markers could produce an unintended parent tracking issue number.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "efdeac586d8399484b3d3688665486a46c868b1c7e89c1d89b291aba05446d19",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4257,
+    "run_id": "35680202840",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35680202840",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922041323_2d4ddb1d3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4257,
+    "run_id": "35680202840"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-22T04:13:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

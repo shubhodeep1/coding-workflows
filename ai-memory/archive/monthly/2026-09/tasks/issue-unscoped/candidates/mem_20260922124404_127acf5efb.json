@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:~4102 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: The review dependency proxy is started with `docker run --detach` without a readiness check before the installer uses it via `HTTP_PROXY=http://dependency-proxy:8080`.\n  WHY: On slow or cold-cache runners, the installer may connect before the proxy binds port 8080, causing intermittent dependency-install failures; severity was reported as MAJOR by minimax_minimax-m3 and NIT by x-ai_grok-4_20.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml: dependency install block, `docker run --detach --rm --name \"${review_dependency_proxy}\" ... python /package_download_proxy.py` (LAST RUN DIFF hunk at review_autofix.yml:4102-4154) | severity=MAJOR | confidence=3\n  PROBLEM: The proxy container is launched with `docker run --detach --rm` and the chain immediately runs `docker network connect` and then `docker run ... \"${review_dependency_installer}\"` without a readiness wait.\n  WHY: `docker run --detach` returns before the Python proxy has opened port 8080, so pip can fail with connection refused or EOF during cold-cache or slow-runner startup.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:~4102 (docker run --detach for review_dependency_proxy + immediate network connect/installer) | severity=NIT | confidence=3\n  PROBLEM: proxy started detached; no readiness probe, sleep, or poll before network connect and installer (which sets HTTP_PROXY to it).\n  WHY: installer may connect before proxy binds port/initializes, causing fallback/failure on internal network.\n\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "82bfa2291c96b6e2113e7194e06a736e4b98b250aec03a0fc036082f1a183f3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4273,
+    "run_id": "35719464733",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35719464733",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922124404_127acf5efb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4273,
+    "run_id": "35719464733"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-22T12:44:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

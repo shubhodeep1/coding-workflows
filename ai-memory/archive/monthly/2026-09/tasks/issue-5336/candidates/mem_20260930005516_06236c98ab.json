@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"E2E orchestrator parallel-decomposition smoke 36652165265\",\"issues\":[{\"id\":\"canary-a\",\"title\":\"Update E2E smoke canary A\",\"priority\":1},{\"id\":\"canary-b\",\"title\":\"Update E2E smoke canary B\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "b1fd64480c5efa3bb7b1f6020d65048edb7d4ec597eaa6c5950d6eb4c801ffc4",
+  "lineage": {
+    "issue_number": 5336,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36652264874",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36652264874",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260930005516_06236c98ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5336,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36652264874"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'E2E orchestrator parallel-decomposition smoke 36652165265' into 2 issues (tracking #5336)",
+  "timestamps": {
+    "created_at": "2026-09-30T00:55:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

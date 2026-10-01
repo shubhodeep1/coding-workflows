@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:check_review_runs(), bound_dispatches filter\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `display_title == title` filter rejects `internal-review.yml` dispatches whose `display_title` is `None` or an empty string, so those dispatches silently pass through the active/bound branches as if they were not bound to this PR.\n  WHY: Older GitHub responses or runs predating the workflow run-name change may have no `display_title`; the reviewer suggests matching the `[pr:<N>]` substring as a fallback while retaining exact-match as the primary path.\n- scripts/claude_fixer_pending_checks.py:_read_review_run_listing(), validation predicate\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: For branch-listing queries, the validator does not reject runs whose `head_branch` is missing or differs from the requested branch, so an unrelated run returned by a prefix-matching branch filter could be treated as a head-branch review.\n  WHY: The reviewer suggests requiring `run.get(\"head_branch\") == <head_ref>` for `branch_runs` paths, while leaving dispatch listings unchanged.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/claude_fixer_pending_checks.py\n  Location: check_review_runs(), bound_dispatches filter\n  Issue: The `display_title == title` filter rejects `internal-review.yml` dispatches whose `display_title` is `None` or an empty string (older GitHub responses before run-name was set, or runs that pre-date the workflow run-name change). Such dispatches silently pass through the active/bound branches as if they were not bound to this PR.\n  Suggested minimal fix: After fetching the dispatch runs, attempt to match by the `[pr:<N>]` substring inside `display_title` as a fallback when the exact match fails, using a single `in` check on the title segment. Keep the exact-match primary path so non-PR-titled runs do not over-block.\n  Estimated lines changed: ~5\n\n- File: scripts/claude_fixer_pending_checks.py\n  Location: _read_review_run_listing(), validation predicate\n  Issue: The validator rejects runs whose `id` is `bool` (Python's `True`/`False`) by the `type(run.get(\"id\")) is not int` check, which is correct, but does not reject runs whose `head_branch` is missing for branch-listing queries. A run from an unrelated branch that lands in the head-branch listing (which can happen when GitHub returns a \"branch\" filter as a prefix match on long branch names, e.g. `feature/foo` matching `feature`) would be treated as a head-branch review.\n  Suggested minimal fix: When the query asks for a specific branch, additionally require `run.get(\"head_branch\") == <head_ref>` for branch_runs paths before treating a run as \"on the head branch\". For dispatch listings, no change.\n  Estimated lines changed: ~4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2251afd0d4a0f6f9878b91647e1b3b786b08b871c26459ae9f9fe91180bfadce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5178,
+    "run_id": "36659597915",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36659597915",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930023811_102c05c5e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5178,
+    "run_id": "36659597915"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T02:38:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

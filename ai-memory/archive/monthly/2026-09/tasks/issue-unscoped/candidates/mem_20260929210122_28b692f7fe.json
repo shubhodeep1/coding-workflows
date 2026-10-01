@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:673-677 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Iterating over all hook trees and running comparisons for the union of all corpora can report the same shape comparison multiple times.\n  WHY: The finding claims redundant comparisons inflate regression counts and produce duplicate CI annotations.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/guard_differential.py:673-677 | confidence=5\n  PROBLEM: Redundant corpus comparisons leading to duplicate entries in ShapeResult.\n  WHY: The script iterates over all hook trees (HOOK_TREES) and for each tree, it runs comparisons for the union of all corpora. If the same guard exists in both trees or if a corpus is applied to multiple trees redundantly, the same shape comparison is performed and reported multiple times, inflating regression counts and producing redundant CI annotations.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/guard_differential.py, Location: run_check missing_corpus loop, ~line 670\n  PROBLEM: When both hook trees contain a changed `*_guard.py` with no corpus, the same path is reported once per tree, overstating `missing_corpus` and producing duplicate CI error lines.\n  WHY: Suggested minimal fix: Deduplicate by hook stem before appending and report each missing corpus once with both tree paths joined into the `::error::` message (or just the live tree). HARDENING_RISK_SCORE: 1\n- scripts/guard_differential.py, Location: materialize at ref is None, ~line 514\n  PROBLEM: `for item in source.iterdir(): if item.is_file():` silently drops subdirectories of `.claude/hooks/` or `workflow-templates/.claude/hooks/`.\n  WHY: A guard importing a sibling module in a subdirectory would not have that module copied by `materialize`; suggested minimal fix is to log a one-line `GUARD_DIFFERENTIAL notice tree=<\u2026> skipped_subdir=<path>`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7e7dd3a30cafd597a6cf369a8863d150cb792f01668ce710412e189709fd570d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5187,
+    "run_id": "36626041068",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36626041068",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929210122_28b692f7fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5187,
+    "run_id": "36626041068"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T21:01:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

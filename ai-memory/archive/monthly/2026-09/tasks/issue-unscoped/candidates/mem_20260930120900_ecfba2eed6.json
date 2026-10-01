@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:628 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `issue_body` renders the raw pattern shape in the `**Pattern:**` line without the `_pattern_line` guard, allowing marker text in a command shape to replace the issue's signature marker.\n  WHY: A later occurrence of the real signature can be deduplicated onto an issue indexed under the forged signature.\n- .claude/scripts/permission_prompts.py:662 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `class_comment_body` renders the raw pattern shape without `_pattern_line`.\n  WHY: This does not corrupt state because comments are not read for markers, but readers may mistake marker-shaped command text for a real marker.\n- workflow-templates/.claude/scripts/permission_prompts.py:class_comment_body | severity=low | confidence=[2]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: `class_comment_body` renders the raw pattern shape in the `**Pattern:**` line without the `_reason_line`/`_pattern_line` guard.\n  WHY: Marker text in a comment cannot re-index or re-class the issue, but the sibling line remains inconsistent with the guard applied to `issue_body`.\n- .claude/scripts/permission_prompts.py:33-51 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The docstring does not explicitly say that the `**Pattern:**` shape is guarded.\n  WHY: A contributor may believe the pattern shape is already guarded and miss the defect at line 628.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The `**Pattern:**` shape is written as one line with `<!--` escaped (the signature is taken from the shape before it is escaped)\" \u2014 from the twin's docstring and the plan's conformance fix 3b description.\n  expected_change_site: .claude/scripts/permission_prompts.py, `issue_body` function line 628, plus the `_pattern_line` function\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: `.claude/scripts/permission_prompts.py` line 628 renders `f\"**Pattern:** \\`{pattern['shape'] or pattern['tool_name']}\\`\"` with no `_pattern_line` call; `_pattern_line` exists in the twin (lines 615-622) but is absent from `.claude/scripts/`; the implement-plan log confirms fix 3b is on branch `claude/implement-plan-issue-4867-close-permission-prompt-duplicates-conformance-fix-3b` waiting for twin sync.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py:628 | severity=high | confidence=5\n  PROBLEM: The `**Pattern:**` line in `issue_body` renders `{pattern['shape'] or pattern['tool_name']}` without the `_pattern_line` guard that the twin applies.\n  WHY: A command shape containing a sig marker can replace the issue's own signature marker, causing later occurrences of the real signature to be deduplicated onto the issue indexed under the foreign signature.\n- .claude/scripts/permission_prompts.py:662 | severity=low | confidence=3\n  PROBLEM: `class_comment_body` renders the raw `pattern['shape']` without `_pattern_line` in both the `.claude/scripts/` and `workflow-templates/.claude/scripts/` copies.\n  WHY: No state corruption occurs because comments are not read for markers, but a reader may mistake marker-shaped command text for a real marker.\n- .claude/scripts/permission_prompts.py:33-51 | severity=low | confidence=4\n  PROBLEM: The docstring does not explicitly name the `**Pattern:**` shape as unguarded.\n  WHY: A contributor editing the `.claude/` copy under twin-first may rely on the docstring claim and miss the defect at line 628.\n- TASK_GAP\n  Requirement: \"The `**Pattern:**` shape is written as one line with `<!--` escaped (the signature is taken from the shape before it is escaped)\" \u2014 from the twin's docstring and the plan's conformance fix 3b description.\n  Expected change site: .claude/scripts/permission_prompts.py, `issue_body` function line 628, plus the `_pattern_line` function.\n  Evidence of absence: The `.claude/scripts/permission_prompts.py` file at line 628 renders `f\"**Pattern:** \\`{pattern['shape'] or pattern['tool_name']}\\`\"` with no `_pattern_line` call. The `_pattern_line` function exists in the twin (lines 615-622) but is absent from the `.claude/scripts/` copy. The implement-plan log confirms fix 3b is on branch `claude/implement-plan-issue-4867-close-permission-prompt-duplicates-conformance-fix-3b` waiting for twin sync.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py:class_comment_body | severity=low | confidence=2\n  PROBLEM: `class_comment_body` renders the raw `pattern['shape']` into the `**Pattern:**` line outside the fenced example, without the `_reason_line`/`_pattern_line` guard that fix 3b applied to the identical line in `issue_body`.\n  WHY: No runtime mis-classification occurs because `index_by_signature`, `open_issues_by_class`, and `decide_duplicate_close` read issue bodies, not comments; the impact is consistency only.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0983546e04e32ab6681c4744e8b65f075c7f016a772e50a9ebd4738e8a0c93ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36711409672",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36711409672",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930120900_ecfba2eed6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36711409672"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T12:09:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a regression assertion comparing default-mode output against a frozen pre-Phase-A fixture.\"\n  expected_change_site: tests/test_security_audit_workflow_contract.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The new test `test_security_audit_default_findings_json_wire_format` validates against a fixture created within this PR (`tests/fixtures/security_audit_default_findings.json`). This does not constitute a regression test against historical, \"frozen pre-Phase-A\" data as requested by the issue.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Add a regression assertion comparing default-mode output against a frozen pre-Phase-A fixture.\"\n  Expected change site: tests/test_security_audit_workflow_contract.py\n  Evidence of absence: The new test `test_security_audit_default_findings_json_wire_format` validates against a fixture created within this PR (`tests/fixtures/security_audit_default_findings.json`). This does not constitute a regression test against historical, \"frozen pre-Phase-A\" data as requested by the issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d2018a794b008dececa0f26ef75ee0dade820670a935e0f05620eeea255639b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4444,
+    "run_id": "36102200602",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36102200602",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925064157_f74a7f77d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4444,
+    "run_id": "36102200602"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-25T06:41:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

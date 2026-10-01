@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing `JobBudgetTest` and memory-maintenance workflow contract tests  \nScope-mode justification: Apply the complete four-file repair rather than only changing timeout literals. Updating relational contract tests and synchronized budget comments adds minimal effort while preventing recurrence, following \u00a76 priorities: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Planning context\n\n- Planning ref: `main` at `e604e5418f6984e601c1d0315b7ea68678ba9303`\n- Integration metadata: `main`; branch match confirmed.\n- Clarification: no Q-ID questions were issued; the automatic `/answer` confirms the diagnosis is sufficient.\n- The failed run used an older SHA, but both reported defects remain present on the planning ref.\n\n## Automation and lifecycle\n\n- Modify existing workflows only; no new scripts or dependencies.\n- Production entry point: `.github/workflows/internal-memory-maintenance.yml`, monthly cron `0 3 1 * *` and manual dispatch.\n- Release verification entry point: `.github/workflows/test-and-mark-stable.yml`, existing `orphan-workflows-test` dispatch.\n- No new supervisor, database operation/gate, or removal-registry entry.\n\n## Files likely to change\n\n1. `.github/workflows/memory_maintenance.yml`\n   - Increase `jobs.memory_maintenance.timeout-minutes` from 10 to 20.\n\n2. `.github/workflows/test-and-mark-stable.yml`\n   - Increase the memory-maintenance completion watcher above the 20-minute child limit while retaining headroom below its 25-minute step cap.\n   - Update the orphan-workflow aggregate-budget comment to match the new watcher value.\n\n3. `tests/test_ci_poll_test_sharding.py`\n   - Replace the obsolete `180` assertion with a comparison between the E2E job timeout and its `E2E_JOB_TIMEOUT_MINUTES` contract value.\n\n4. `tests/test_memory_maintenance_contract_noop.py`\n   - Add workflow-budget contract coverage for the child timeout, watcher timeout, and outer step cap.\n\nNo README change is required because no operator-facing variable or interface changes.\n\n## Functions or modules to implement\n\n- Extend `JobBudgetTest.test_e2e_smoke_job_has_headroom_for_all_phase_budgets` to derive both compared values from workflow configuration.\n- Add focused YAML/workflow parsing helpers or assertions in `test_memory_maintenance_contract_noop.py`.\n- Preserve extraction-before-compaction ordering and extraction\u2019s fail-open behavior.\n\n## Data structures affected\n\n- GitHub Actions job field: `jobs.memory_maintenance.timeout-minutes`.\n- Release watcher arguments:\n  - `--completion-timeout-secs`\n  - dispatch step `timeout-minutes`\n- E2E job environment contract: `E2E_JOB_TIMEOUT_MINUTES`.\n\nNo persisted schemas, labels, memory-record formats, or API payloads change.\n\n## API/interface changes\n\nNo public API, workflow input, environment-variable name, log prefix, or reusable-workflow interface changes. Only internal execution budgets change.\n\n## Failure modes\n\n- **Child exceeds 20 minutes:** GitHub cancels it; release watcher reports failure rather than hanging indefinitely.\n- **Watcher expires before child:** prevented by asserting watcher seconds exceed child timeout seconds.\n- **Outer dispatch step expires first:** prevented by keeping the watcher below the 25-minute step cap with polling/registration headroom.\n- **Future E2E timeout change:** tests compare the job timeout to `E2E_JOB_TIMEOUT_MINUTES` instead of retaining another stale literal.\n\n## Decisions\n\n### D1 \u2014 Use relational timeout contracts\n\n- **Chosen:** Assert timeout ordering and equality from workflow-defined values rather than duplicating literals.\n- **Alternatives considered:** Replace `180` with another hard-coded `300`, or update workflows without contract tests.\n- **Why:** Relational checks prevent the same drift while preserving intentional timeout changes.\n\n### D2 \u2014 Preserve extraction and compaction behavior\n\n- **Chosen:** Increase the bounded job budget to 20 minutes without skipping or reordering repository-learning extraction or required compaction.\n- **Alternatives considered:** Disable extraction during release smoke or move compaction ahead of extraction.\n- **Why:** The failure is insufficient execution headroom, not incorrect workflow behavior; suppressing extraction would only hide the defect.\n\n## Security considerations\n\n- Trust boundary remains GitHub Actions dispatch and reusable-workflow execution.\n- Existing `GH_PAT` permissions and secret handling remain unchanged; no secret values should be added to comments or test diagnostics.\n- No new endpoint or surface requires authorization.\n- Timeout inputs remain static repository-controlled integers; tests should reject ordering drift rather than consuming untrusted runtime values.\n- Abuse case: a stuck maintenance run could consume runner capacity. Preserve the 20-minute child cap, 25-minute dispatch-step cap, and 90-minute aggregate orphan-workflow cap.\n- No money-handling surface is involved.\n\n## Risks and edge cases\n\n- Leave enough margin between the child limit and outer step cap for GitHub conclusion propagation and polling.\n- Update the aggregate-duration comment using the actual selected watcher value to avoid misleading future maintainers.\n- The unavailable parent log is missing context, but the exact assertion and cancelled child run provide deterministic evidence.\n- Do not weaken the release gate\u2019s failure propagation or permit cancelled child conclusions.\n\n## Testing considerations\n\nRun on the repository\u2019s pinned Python environment:\n\n1. `pytest -q tests/test_ci_poll_test_sharding.py`\n2. `pytest -q tests/test_memory_maintenance_contract_noop.py`\n3. `pytest -q tests/test_test_and_mark_stable_review_blocked_budget.py`\n\nVerify the new contracts establish:\n\n- E2E job timeout equals `E2E_JOB_TIMEOUT_MINUTES`.\n- Memory-maintenance child timeout is 20 minutes.\n- Completion watcher exceeds the child timeout.\n- Completion watcher remains below the 25-minute dispatch-step cap.\n- Both edited workflows continue to parse as valid YAML.\n\n## Assumptions and missing context\n\n- The duplicated 300-minute E2E values are intentional, as stated by the failure diagnosis.\n- No behavior beyond the four identified budget defects requires modification.\n- Parent-run logs remain unavailable; planning relies on reproduced contract failure and child-run annotations.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b33a090f57fef3d5ba541dcd0e0b063a446d3698e998659ca26bc367144e854e",
+  "lineage": {
+    "issue_number": 4190,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35554229243",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35554229243",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4190"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260921023256_70ab632168",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4190,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35554229243"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4190",
+  "timestamps": {
+    "created_at": "2026-09-21T02:32:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

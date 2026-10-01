@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/issue-4542-merge-train-smoke-bypass-plan.md:Lines 126, 145-149 | severity=low | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The plan says there are 21 existing tests and expects 22 after adding one, but `tests/test_review_merge_train.py` currently has 20 tests.\n  WHY: An implementer following the plan's test-count verification gate would expect 22 passing tests, while the suite would contain 21 after the new test.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/plans/issue-4542-merge-train-smoke-bypass-plan.md:Lines 126, 145-149 | severity=low | confidence=5\n  PROBLEM: The plan states the existing test suite has 21 tests (\"21 \u2192 22 tests\", \"all 22 tests (21 existing + 1 new) pass\"), but tests/test_review_merge_train.py currently contains exactly 20 `def test_` functions.\n  WHY: An implementer or downstream reviewer checking the Done condition (\"the full suite (21 \u2192 22 tests) passes\") would find 20 existing tests, not 21. The test will still be added correctly (one new test), but the count assertion in the plan is off by one.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d061eae95cb87b1dc13b0497fe75292c7ed99e782cfe2ec9e7aec3926c6b9036",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36227657731",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36227657731",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260926075718_e12628d811",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36227657731"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-26T07:57:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

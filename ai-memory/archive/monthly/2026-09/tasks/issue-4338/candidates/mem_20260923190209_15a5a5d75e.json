@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4338,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4338\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4348\",\"pr_number\":4348,\"branch\":\"ai/issue-4338\",\"run_id\":\"35904536532\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35904536532\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"agents.md\",\"changelog.d/4338-review-editor-sandbox-init.md\",\"probably_unnecessary_but_read_if_stuck.md\",\"scripts/review_apply_fixes.sh\",\"tests/test_agent_process_isolation.py\",\"tests/test_review_autofix_editor_noop_cascade_contract.py\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "78bebedd990338076104100433b489af955d2fb43aef4b2b8bbd7e38b5863a3d",
+  "lineage": {
+    "issue_number": 4338,
+    "parent_ids": [],
+    "pr_number": 4348,
+    "run_id": "35904536532",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35904536532",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4348"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260923190209_15a5a5d75e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4338,
+    "level": "run",
+    "pr_number": 4348,
+    "run_id": "35904536532"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4338: https://github.com/shubhodeep1/coding-workflows/pull/4348",
+  "timestamps": {
+    "created_at": "2026-09-23T19:02:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

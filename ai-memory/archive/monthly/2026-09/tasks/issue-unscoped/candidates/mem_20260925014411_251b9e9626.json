@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_agent_process_isolation.py:478-483 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The test extracts the validation block using fragile string-splitting sentinels, so benign formatting or comment changes can cause it to exercise a different code path than the runtime.\n  WHY: The test may silently validate a stale or re-anchored block and mask regressions in the actual staging logic.\n- scripts/review_conflict_resolve.sh:2478-2484 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The compound check explicitly verifies regular-file existence only for `RESOLVER_TOUCHED_FILE`, while the other three manifests receive only symlink checks.\n  WHY: The earlier boundary check and trailing `install` commands catch missing files, so this is a maintainability inconsistency rather than a current correctness defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_agent_process_isolation.py:479-483 | severity=NIT | confidence=[2]\n  PROBLEM: The test extracts the validation block using fragile string splitting on sentinel substrings (if [ ! -f ... and # Stage ...).\n  WHY: If the script is reformatted or comments are changed, the test might silently test a stale code block, hiding potential bugs in the actual script.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_agent_process_isolation.py:478-482 | severity=NIT | confidence=[2]\n  PROBLEM: The new test extracts the runtime validation block by string-splitting the script source on two sentinel substrings (`    if [ ! -f \"${CONFLICTED_PATHS_FILE:-/nonexistent}\" ]` and `    # Stage the editor's conflict resolutions`). The exact 4-space indentation, the `${VAR:-/nonexistent}` default expression, and the literal comment text are all hard-coded into the test.\n  WHY: A future maintainer who reformats the boundary check can silently re-anchor the extracted block, leaving the test green while exercising a different code path than the runtime sees.\n- scripts/review_conflict_resolve.sh:2478-2484 | severity=NIT | confidence=[2]\n  PROBLEM: The new compound `if` performs an explicit regular-file existence check (`[ ! -f \"${RESOLVER_TOUCHED_FILE}\" ]`) only for `RESOLVER_TOUCHED_FILE`; the three other manifests (`CONFLICTED_PATHS_FILE`, `CONFLICT_SPANS_FILE`, `CLEAN_MERGE_MANIFEST_FILE`) only get a `[ -L ]` (symlink) check.\n  WHY: The boundary check immediately above (lines 2439-2441) already verified all four are regular files, and the trailing `install` commands catch the missing-file case for the other three, so this is a maintainability signal rather than a correctness defect.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_agent_process_isolation.py:479-483 | severity=NIT | confidence=[3]\n  PROBLEM: validation_block extraction uses fragile string-split on two sentinels that can shift with whitespace/comment edits.\n  WHY: test may validate stale block after script refactor, masking regressions.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_agent_process_isolation.py:479-483 | severity=NIT | confidence=[2]\n  PROBLEM: The test's string-splitting extraction anchor is fragile.\n  WHY: A benign reformat of `review_conflict_resolve.sh` could silently re-anchor the extracted block; this is a test-maintenance concern, not a runtime defect.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "01d6e019757f3581f826be69d73f4bd992d7257797154ff8eeafd3ce9d83aec4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4415,
+    "run_id": "36081906602",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36081906602",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925014411_251b9e9626",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4415,
+    "run_id": "36081906602"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T01:44:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

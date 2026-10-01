@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3965` at `3f48e382a4a09132f45b43da40ea67867c8bf1b8`; it matches the issue\u2019s integration-branch metadata. The `/answer [auto-answered-by-orchestrator]` comment supplies no design choice, but the finding and mitigation are specific enough to plan.\n\nScope-mode: Selective Expansion  \nReuse-audit: extends `scripts/clarify_isolated_run.sh` and the existing sanitized-launch pattern  \nScope-mode justification: Fix the cited snapshot and the observed sibling host-side Python launches in `scripts/review_untrusted_sandbox.sh` that run before or around its sandbox boundary. This is a small extension of the same control, with no new dependency or interface. Choosing the complete mitigation over a one-line-only shortcut follows `unattended_system_instructions.md` \u00a76: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and wiring\n\n- **Change type:** Extend existing scripts and tests; introduce no new script.\n- **Entry points:** `.github/workflows/internal-clarify.yml` runs on issue open or `/reclarify`; `.github/workflows/internal-orchestrate-clarify-respond.yml` runs on issue comments; `.github/workflows/internal-review.yml` runs on PR events and dispatch. Their existing reusable workflows already invoke the affected helpers. No scheduler or workflow edit is expected.\n- **Supervisor / DB gate / future-removal registry:** None required; no long-running or database operation is added.\n\n## Files likely to change\n\n- `scripts/clarify_isolated_run.sh` \u2014 isolate the host-side source-snapshot interpreter at line 37.\n- `scripts/review_untrusted_sandbox.sh` \u2014 apply the same control to its host-side snapshot, refresh, config-rendering, and transfer Python launches; retain their existing arguments and failure behavior.\n- Existing contract tests, preferably `tests/test_plan_clarify_header_prompt_staging.py` and `tests/test_model_provider_broker.py` \u2014 cover launch isolation and credential separation. Do not create a standalone test script.\n\n## Functions or modules to implement\n\nKeep the existing inline snapshot and review workspace logic. Launch each affected host-side Python process with an empty environment, an explicitly supplied trusted executable `PATH`, and `python3 -I -B`; pass file paths as arguments rather than environment variables. Do **not** pass `OPENROUTER_API_KEY`, GitHub tokens, `PYTHONPATH`, or checkout-controlled Python startup settings to these processes. Preserve the later, separately launched broker\u2019s existing explicit credential and budget-variable allowlist. Python documents that `-I` excludes unsafe import paths and ignores `PYTHON*` variables; `-B` prevents bytecode writes. ([docs.python.org](https://docs.python.org/3/using/cmdline.html?utm_source=openai))\n\n## Data structures affected\n\nNone. Preserve snapshot contents, review baseline/config formats, file limits, and broker request budgets.\n\n## API/interface changes\n\nNone: helper arguments, workflow calls, environment-variable names, and log contracts remain unchanged.\n\n## Decisions\n\n### D1 \u2014 Isolate the interpreter rather than filtering filenames\n- **Chosen:** Sanitize the process environment and use `-I -B` at the host-side Python launch sites.\n- **Alternatives considered:** Exclude `pathlib.py` from the snapshot; move the snapshot into Docker; change only the cited line.\n- **Why:** The malicious import occurs before snapshot filtering or Docker startup. The same launch boundary also occurs in the review helper; filtering one filename would not address `PYTHONPATH` or other import-hijack names. ([docs.python.org](https://docs.python.org/3/using/cmdline.html?utm_source=openai))\n\n## Security considerations\n\nThe trust boundary is the privileged runner executing Python while handling an untrusted checkout and holding workflow credentials. Existing workflow permissions and caller authorization remain unchanged; no endpoint or new privileged surface is added. Validate that only trusted `PATH` and positional paths reach the host-side interpreters, and that malformed or inaccessible source/config paths still fail closed before broker/container continuation. Regression cases should include a tracked root `pathlib.py` and hostile `PYTHONPATH`/`sitecustomize.py` attempting to read a sentinel credential; neither must execute. Never print credential values in test output or failure diagnostics.\n\n## Risks and edge cases\n\n- `env -i` can remove an environment setting an existing Git operation implicitly needs. Exercise normal tracked-file snapshot and review baseline creation, not just command-text assertions.\n- Keep the broker launch distinct: it requires the provider key and its existing budget variables; the snapshot and config-rendering processes do not.\n- **Codebase check:** The cited line matches the checkout. A sibling inline `python3 -` exists at `scripts/review_untrusted_sandbox.sh:112`; its workspace helper is also launched on the host without interpreter isolation. No issue/code conflict was found. The local checkout has no `main` ref for a project-diff comparison, so the sibling scope is based on inspected code, not an asserted merge-base diff.\n\n## Testing considerations\n\nExtend existing tests with an executable hostile-import fixture, successful benign snapshot/review paths, and assertions that secrets reach only the broker launch. Check `bash -n` for edited scripts, then run the affected pinned-environment pytest subset and relevant CI contract checks. No validator was run in this planning phase.\n\n## Pre-execution self-check\n\nThe plan identifies existing entry points, preserves interfaces, covers the cited defect and observed sibling boundary, and requires no private scalar or new external API contract. Pre-existing worktree modifications were not changed or treated as part of this plan.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: WARNING: The checkout lacks a local `main` ref; confirm project-diff scope before editing the sibling review helper.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c8e65adac18982e5397d13a635a4ea9c2ad4027e2cf9c1a5f272ee1a171557f2",
+  "lineage": {
+    "issue_number": 4568,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36244138971",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36244138971",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4568"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260926131447_271b418329",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4568,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36244138971"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4568",
+  "timestamps": {
+    "created_at": "2026-09-26T13:14:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

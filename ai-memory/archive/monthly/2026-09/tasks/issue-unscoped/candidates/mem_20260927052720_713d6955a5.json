@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:796-811, 1104 | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A `pull_request` event with a hand-off comment whose SHA matches the current head can bypass the pending hand-off check and take the deterministic skip.\n  WHY: The awaiting-session check is limited to `workflow_dispatch`, so the matching hand-off is not re-handed-off and `deterministic-skip-merge` can enable auto-merge; the reviewer notes this is a low-likelihood, intent-aligned edge case.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Clarify that a Claude session must fix only a `claude/*` PR that does not auto-merge via the deterministic skip or a clean review.\n  expected_change_site: CLAUDE.md \u00a726.H\n  confidence=2\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: CLAUDE.md lines 1882-1891 use \u201cThese PRs\u201d ambiguously after describing the deterministic skip for qualifying `claude/*` PRs.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml: lines 796-811 (the `claude_fixer_awaiting_session` check) interacting with line 1104 (the deterministic-skip condition) | confidence=2\n  PROBLEM: The `claude_fixer_awaiting_session` check is gated on `[ \"${EVENT_NAME}\" = \"workflow_dispatch\" ]`, so a `pull_request` event (e.g., `synchronize`) with a hand-off comment whose SHA matches the new head SHA can fall through to the deterministic-skip block, bypassing the pending findings.\n  WHY: In the edge case where a `synchronize` event lands on the same head SHA (force-push of identical content, or any same-SHA push GitHub still emits `synchronize` for), the hand-off comment's `<!-- ai:claude-fixer-handoff:v1 kind=findings head=<sha> round=N -->` matches the current `pr_head_sha_gate`, but the awaiting-session branch is skipped because the event is `pull_request`, not `workflow_dispatch`. SHOULD_RUN stays \"true\" and the doc-only/small-diff route fires \u2014 findings are never re-handed-off, and `deterministic-skip-merge` enables auto-merge on the head. The reviewer notes this is consistent with the PR description's stated intent (\"the next push is evaluated for the skip\") and is flagging it as a documented assumption rather than a defect.\n- Requirement: Clarify that a Claude session must fix only a `claude/*` PR that does not auto-merge via the deterministic skip or a clean review.\n  Expected change site: CLAUDE.md lines 1882-1891\n  Evidence of absence: The added sentence \"A `claude/*` PR that qualifies for the deterministic doc-only or small-diff skip takes it like any other PR ... So a Claude session must fix these PRs\" reads ambiguously. \"These PRs\" sits at the start of the new sentence, but the previous sentence just said the skip path applies to `claude/*` PRs that qualify. A reader could parse \"these PRs\" as referring to all `claude/*` PRs, which would contradict the auto-merge claim.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ba474ae32fded120a484ce6529d15ce7cb94c7c5a177717f8ae4e4bbf89903c2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36295346815",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36295346815",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927052720_713d6955a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36295346815"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T05:27:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

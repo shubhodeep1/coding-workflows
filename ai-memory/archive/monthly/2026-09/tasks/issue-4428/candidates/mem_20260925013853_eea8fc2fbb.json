@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `prompts/_templates/mode-workflow-failure-heal.txt` and the existing assembly contract test.  \nScope-mode justification: Restore the complete ownership guidance rather than weakening the byte-equivalence check. The two missing paragraphs are a small, local change; completeness supports Correctness & safety ahead of Speed under `unattended_system_instructions.md` \u00a76.\n\n**Planning ref:** `main` at `3c05e629c1c28a321d79fd4136814c4464b692e6`; it matches the integration-branch metadata. The auto-answer indicates no clarification was needed.\n\n**Automation and wiring:** Extend an existing prompt template; add no script, workflow, supervisor, or database operation. The existing `.github/workflows/workflow-failure-heal-intake.yml` entry points (`repository_dispatch: workflow-failure-heal` and `workflow_run: completed`) remain unchanged. No removal-registry entry or DB gate applies.\n\n### Files likely to change\n- `prompts/_templates/mode-workflow-failure-heal.txt` \u2014 insert the two paragraphs missing from the legacy prompt, verbatim and in the same positions.\n- `changelog.d/4428-workflow-heal-prompt-parity.md` \u2014 one `fixed` fragment for the changed assembled prompt. Do not edit `CHANGELOG.md`.\n\n### Functions or modules to implement\nNo new function. Preserve `scripts/assemble_prompt.sh` and `prompts/mode-workflow-failure-heal.txt`; the existing `tests/test_assemble_prompt.py::test_assembled_templates_match_legacy_prompt_bytes` is the regression check. A read-only assembly diff on this ref showed exactly the two omitted paragraphs.\n\n### Data structures affected\nNone. No classification tokens, payload fields, or ownership-facts format change.\n\n### API/interface changes\nNo external API or workflow interface change. The assembled diagnosis prompt regains its existing legacy guidance: a PR/base path match does not establish ownership when `script_ref` is the trusted workflow commit; `Ownership basis: pipeline files` requires evidence of a pipeline-wide failure before `pr-self-inflicted` is selected.\n\n## Decisions\n\n### D1 \u2014 Restore template parity without changing the legacy prompt\n- **Chosen:** Copy the two missing paragraphs verbatim from the legacy prompt into the template.\n- **Alternatives considered:** Change the legacy prompt; relax or skip the assembly assertion.\n- **Why:** The legacy text already states the intended ownership safeguards. Restoring the template preserves that contract and addresses the release-test failure directly.\n\n## Security considerations\nThe prompt informs classification of failure reports, an untrusted-evidence boundary; it adds no endpoint or authorization surface. Retain the requirement for corroborating ownership facts so a reported path match or pipeline-files claim alone cannot misroute a heal. Do not interpolate report content into executable code or expose credentials in prompt changes.\n\n## Risks and edge cases\n- Placement or whitespace drift can still fail byte-for-byte assembly; compare the full assembled output with the legacy prompt after editing.\n- Do not broaden self-inflicted classification for partial reviewer-slot failures.\n- **Conflict check:** The issue\u2019s described missing text matches the local assembly diff; no planning-ref or integration-branch mismatch was found. The linked release run is reported as failed, but its logs require sign-in, so local reproduction\u2014not an independent log read\u2014grounds the proposed edit. ([github.com](https://github.com/shubhodeep1/coding-workflows/actions/runs/36078283644))\n\n## Testing considerations\nRun the focused assembly parity test, then the release gate\u2019s `python3 tests/test_assemble_prompt.py` command and applicable CI checks. Do not skip or weaken the assertion. The local interpreter lacks `pytest`, so the pytest invocation was **unverified** here; verify with the repository\u2019s installed test dependencies or CI.\n\n## Pre-execution self-check\nScope, target ref, exact edit, existing automation entry point, and regression check are identified. No clarification answer or required scalar is missing.\n\nPLAN_SELF_CHECK: WARNING: Local pytest verification is unavailable (`No module named pytest`); require the pinned-dependency CI result.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9aa8f3eb0ed73a5d9e2c519108f227796e2c6b7e8b7398639dffe7b578a8fbe7",
+  "lineage": {
+    "issue_number": 4428,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36082558518",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36082558518",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4428"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925013853_eea8fc2fbb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4428,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36082558518"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4428",
+  "timestamps": {
+    "created_at": "2026-09-25T01:38:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

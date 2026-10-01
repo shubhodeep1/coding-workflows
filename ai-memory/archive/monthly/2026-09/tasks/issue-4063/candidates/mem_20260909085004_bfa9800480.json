@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: The complete implementation is a precise one-file replacement. Expanding into workflow generators, tests, or documentation would violate the declared file scope without improving correctness.\n\n## Planning ref\n\n- Commit: `0192df4b687ebc2b24c7bb5038f7262b88b0d845`\n- Branch: `orchestrator/project-4062`\n- Integration metadata matches the checked-out branch.\n\n## Automation and lifecycle\n\n- Modify an existing fixture only; introduce no scripts.\n- Existing entry point: `internal-implement.yml` invoking the reusable `implement.yml` workflow after approval.\n- No scheduler wiring, supervisor, database gate, or removal-registry entry is required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace its current three lines with exactly:\n    1. `status: ok`\n    2. `decompose-run: 34330370848`\n  - Retain a trailing newline.\n- No other files may change.\n\n## Functions or modules\n\nNo functions or modules are affected. This is a plain-text fixture update.\n\n## Data structures affected\n\nThe canary changes from a three-line `status/run_id/updated-by` record to the requested two-line `status/decompose-run` record.\n\n## API/interface changes\n\nNo runtime API, CLI, environment variable, workflow interface, or external service changes.\n\n## Decisions\n\n### D1 \u2014 Replace the complete fixture\n\n- **Chosen:** Overwrite the file with the exact two-line payload.\n- **Alternatives considered:** Edit only the identifier line while retaining `updated-by`, or modify workflow generators.\n- **Why:** Retaining any existing extra line fails the acceptance criteria, while generator changes exceed the declared scope.\n\n## Security considerations\n\n- Trust boundary: the issue-provided run identifier becomes repository fixture content.\n- Validate it through an exact byte comparison so additional lines, CRLF characters, or injected content cannot pass.\n- No endpoint or authorization surface is introduced.\n- Abuse case: accidental or malicious edits outside the allowlisted file; detect by checking the complete changed-path set.\n- No secrets, credentials, payments, or money-handling behavior are involved.\n\n## Risks and edge cases\n\n- The existing third line must be removed, not preserved.\n- Preserve ordering and exact spacing.\n- Ensure the final newline does not create a third logical content line.\n- Other smoke workflows may rewrite this fixture for separate scenarios; those workflow contracts are intentionally outside this issue.\n- Avoid changelog, documentation, generated-file, or formatting changes.\n\n## Testing considerations\n\n1. Compare exact bytes against `status: ok\\ndecompose-run: 34330370848\\n`.\n2. Confirm the file has exactly two logical lines.\n3. Run `git diff --check`.\n4. Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n5. No dependency installation or broader test suite is necessary for this fixture-only change.\n\n## Pre-execution self-check\n\n- Requirements are complete and unambiguous.\n- Target file exists and its current content confirms the required replacement.\n- Branch metadata matches the planning ref.\n- The plan remains within the declared one-file scope.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "bfe5675be0cca02361471f118793c75ef0b4c557323009060ee31f9553b3d199",
+  "lineage": {
+    "issue_number": 4063,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34330846469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34330846469",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4063"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260909085004_bfa9800480",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4063,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34330846469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4063",
+  "timestamps": {
+    "created_at": "2026-09-09T08:50:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `.github/workflows/security-audit.yml` and its existing `SECURITY_AUDIT_FP_EXCLUSIONS` input.  \nScope-mode justification: This is a trust-boundary fix, not a new audit mechanism. Keep the existing override name, but resolve it only to a catalog in the verified support checkout. Under the Core Priorities\u2014Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed\u2014preventing a falsely clean audit takes precedence over preserving audited-branch catalog precedence.\n\n## Planning and automation context\n\nPlanning ref: `main` at `56fcde470cc07280e4dfb22b2280be27a34d9d27`. The clarification phase asked no questions; `/answer [auto-answered-by-clarify]` confirms the issue is ready to plan. No integration branch was supplied, so no branch mismatch is established.\n\nExtend the existing `.github/workflows/security-audit.yml` entry point, invoked by its weekly schedule, manual dispatch, or consumer wrapper. No new script, supervisor, database operation, or future-removal registry entry is needed.\n\n## Files likely to change\n\n- `.github/workflows/security-audit.yml` \u2014 resolve the configured exclusion catalog against the SHA-verified support checkout before launching the audit; pass its absolute path to the existing script.\n- `tests/test_security_audit_workflow_contract.py` \u2014 replace the assertion that pins the vulnerable relative-path handoff and add resolution and filtering regressions.\n- `README.md` \u2014 document the changed trust rule for `SECURITY_AUDIT_FP_EXCLUSIONS`.\n- `changelog.d/<issue-number>-trusted-security-audit-exclusions.md` \u2014 record the security fix using the repository\u2019s fragment convention.\n\nLeave `workflow-templates/ai-security-audit.yml` unchanged: it already calls the reusable workflow. Leave `scripts/security_audit.sh`\u2019s relative-path behavior unchanged for other callers, including the orchestrator security pass.\n\n## Functions or modules to implement\n\nAdd a workflow resolution step that accepts the existing repo-variable value or its default, resolves it to an **absolute, existing regular catalog file in the verified support checkout**, and exports that path as `SECURITY_AUDIT_FP_EXCLUSIONS` for \u201cRun security audit.\u201d Reject missing files, paths escaping the support checkout, and paths into the nested `audit-data` checkout\u2014including traversal and symlink variants. Do not fall back to a catalog in `audit-data`. Keep the configured path out of executable workflow source by passing it through `env:`.\n\nThe representative pattern is the workflow\u2019s existing \u201cCreate Codex config\u201d step, which passes an absolute catalog path from `${GITHUB_WORKSPACE}` while the audit data remains in a separate checkout.\n\n## Data structures affected\n\nNo schema or finding format changes. The existing `SECURITY_AUDIT_FP_EXCLUSIONS` environment variable changes from a potentially relative path to a validated absolute support-catalog path at this workflow\u2019s script invocation.\n\n## API/interface changes\n\nNo new endpoint or GitHub API call. Retain the repo-variable name and default. For weekly/manual audits, an override must identify a catalog in the trusted support checkout; an override pointing to the audited repository or elsewhere fails closed.\n\n## Decisions\n\n### D1 \u2014 Bind exclusion rules to verified support\n\n- **Chosen:** Resolve and validate the existing override in the reusable workflow, then pass an absolute support-checkout path.\n- **Alternatives considered:** Make the audit script prefer support for every caller; remove the override and hard-code the default catalog.\n- **Why:** The workflow owns the separate trusted-support and untrusted-data checkouts. This fixes that boundary without changing orchestrator callers or removing an existing identifier.\n\n## Security considerations\n\nThe audited branch is untrusted input; the support checkout is pinned to the workflow-approved commit and verified before audit execution. A branch author could otherwise add a valid catch-all exclusion and suppress every finding. Validate both the configured path and its resolved destination so `../audit-data`, absolute paths, and symlinks cannot reintroduce branch-controlled rules. A rejected catalog must fail the run before findings are published, not silently select another file. No new authorization surface is introduced; existing GitHub permissions and target-ref validation remain in force. Do not print credentials or catalog contents in errors.\n\n## Risks and edge cases\n\nExisting consumer configurations that intentionally selected a catalog from the audited repository will now fail until the catalog is placed in trusted support; document this security-driven compatibility change. Test missing and malformed trusted catalogs as failures, and ensure default-branch and explicit-branch audits use the same rule.\n\n**Issue/code conflict:** the issue cites `.github/workflows/security-audit.yml:229`, which is the start of \u201cRun security audit\u201d on this ref; the vulnerable relative exclusion value is passed at line 238. The finding itself is supported by the code.\n\n## Testing considerations\n\nExtend the workflow contract tests to cover the default and a valid trusted override; reject audited-checkout, traversal, outside-absolute, symlink-escape, and missing paths. Add a regression in which `audit-data` contains a valid catch-all catalog but a finding survives filtering with the trusted catalog. Run the focused tests, workflow YAML validation, and the repository\u2019s workflow-file-size guard.\n\nPre-execution self-check: scope, entry point, trust boundary, compatibility impact, and regression cases are specified; no required scalar input is missing.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e17aee3b07754b5e3371a05fc1802d305d726efea005da49c6d629c86c65f559",
+  "lineage": {
+    "issue_number": 4470,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36142311126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36142311126",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4470"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925134536_cbae4799b6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4470,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36142311126"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4470",
+  "timestamps": {
+    "created_at": "2026-09-25T13:45:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

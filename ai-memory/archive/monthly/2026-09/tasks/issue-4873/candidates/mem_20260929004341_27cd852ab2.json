@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should be improved?\nChoices:\nA. A specific workflow or pipeline behavior \u2014 name it and describe the desired outcome. (RECOMMENDED)\nB. A specific bug \u2014 provide the observed behavior and expected behavior.\nC. Documentation or developer experience \u2014 name the page or task and the improvement you want.",
+  "fingerprint": "bc218787ffec7eaf303a1dfc0081bbb72ae63214fa3242e4393ae550c9dfa990",
+  "lineage": {
+    "issue_number": 4873,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36504172485",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36504172485",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260929004341_27cd852ab2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4873,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36504172485"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4873 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-29T00:43:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

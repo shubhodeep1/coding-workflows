@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:2082-2120 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The guard-report parser does not explicitly handle encoding errors or non-UTF-8 characters.\n  WHY: Unexpected malformed input can make the parser exit nonzero, reporting the guard report as unreadable and exiting with 78.\n- scripts/review_apply_fixes.sh:2086-2091 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Failures while copying editor-attempt evidence are silently swallowed.\n  WHY: A missing or unwritable staging directory, or absent source paths, can leave the failure artifact without evidence or a log explaining the loss.\n- scripts/review_apply_fixes.sh:2091-2095 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: The guard-report parser uses `python3 -I -S -` without the full environment reset used by `opencode_strip_ansi`.\n  WHY: Reviewers flagged this as latent policy drift; `-I -S` already blocks the startup mechanisms cited by one reviewer, but does not provide the same isolation pattern.\n- .github/workflows/review_autofix.yml:4631-4639 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Guard rejection exits before the noop short-circuit, while review-blocked steps still key on `!AUTOFIX_EDITOR_EMPTY_NOOP`.\n  WHY: Guard rejections may bypass review-blocked labeling or escalation.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Report guard rejections distinctly, preserving the rejected-path diagnosis and editor-attempt evidence for investigation.\"\n  expected_change_site: .github/workflows/review_autofix.yml, scripts/review_apply_fixes.sh\n  confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implementation adds guard-rejection logging and reporting, but does not ensure the failure artifact (e.g., the `editor_attempt_*_guard_report.json` file) is consistently captured and available if a transient error occurs during post-guard cleanup or artifact staging.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_apply_fixes.sh:2082-2120 | severity=NIT | confidence=2\n  PROBLEM: The Python script used to parse the guard report does not explicitly handle potential encoding errors or non-UTF-8 characters in the report file beyond a basic try-except.\n  WHY: If the workspace guard report contains malformed JSON or unexpected non-UTF-8 characters that bypass initial checks, the parser might exit with code 1, causing the script to emit `EDITOR_WORKSPACE_GUARD_REPORT=unreadable_or_invalid` and exit with 78, treating a reporting issue as a safety guard rejection.\n- scripts/review_apply_fixes.sh:2095 | severity=NIT | confidence=3\n  PROBLEM: The Python interpreter used for parsing the guard report is invoked as `python3 -I -S -` without the full `env -i HOME=/tmp PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8` isolation pattern.\n  WHY: While `-I -S` prevents the loading of `sitecustomize.py`, `usercustomize.py`, and site-packages, it does not provide the same degree of protection as the full environment reset against potential future Python version differences or environment-driven startup behaviors that the hardened `opencode_strip_ansi` uses.\n- TASK_GAP\n  Requirement: \"Report guard rejections distinctly, preserving the rejected-path diagnosis and editor-attempt evidence for investigation.\"\n  Expected change site: .github/workflows/review_autofix.yml, scripts/review_apply_fixes.sh\n  Evidence of absence: The implementation introduces the necessary mechanics to log and report guard rejections, but it does not ensure that the failure artifact (e.g., the `editor_attempt_*_guard_report.json` file) is consistently captured and available if a transient error occurs during the post-guard cleanup or artifact staging phase.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_apply_fixes.sh:2086-2091 | severity=NIT | confidence=3\n  PROBLEM: The `cp` calls that archive `${tmp_output}`, `${tmp_err}`, and the guard report all use `2>/dev/null || true`.\n  WHY: If `PREVIOUS_REVIEWS_DIR` is missing, unwritable, or the source paths are absent, the script silently drops evidence; a transient misconfiguration produces an empty failure artifact with no log trace explaining why the editor attempt transcript was lost.\n- scripts/review_apply_fixes.sh: around line 2085 | severity=low | confidence=3\n  PROBLEM: The Python heredoc parser runs `python3 -I -S - ... <<'PY'` without the `env -i HOME=/tmp PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 ...` wrapper used by `opencode_strip_ansi`.\n  WHY: The reviewer identifies this as a latent policy-drift risk; `-I -S` is functionally sufficient today, but a future Python release or local environment-driven startup hook could affect the guard-report parser.\n- scripts/review_apply_fixes.sh: Python heredoc around line 2091-2111\n  PROBLEM: The `except (OSError, UnicodeError, ValueError, TypeError):` tuple does not cover `RecursionError` or `MemoryError.\n  WHY: A pathological 1 MiB guard report with deeply nested arrays could produce a hard traceback instead of the planned `EDITOR_WORKSPACE_GUARD_REPORT=unreadable_or_invalid` marker; the outer handler would catch the non-zero exit, but the `EDITOR_WORKSPACE_GUARD_REJECTED` lines would never print.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:4631, 4639 | severity=MAJOR | confidence=4\n  PROBLEM: Guard-failure path sets AUTOFIX_EDITOR_WORKSPACE_GUARD_FAILED and exits 1 before noop short-circuit; review-blocked steps still key on !AUTOFIX_EDITOR_EMPTY_NOOP.\n  WHY: Guard rejections may bypass review-blocked label/escalation.\n- scripts/review_apply_fixes.sh:2091 | severity=NIT | confidence=3\n  PROBLEM: The heredoc Python parser (`PYTHONDONTWRITEBYTECODE=1 python3 -I -S`) lacks the full env -i + cd /tmp isolation used by opencode_strip_ansi.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d558c3ec964de2fc602a3fb5154ed5b99cb240eddd39e6be31df447be523121c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4418,
+    "run_id": "36065459446",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36065459446",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924225401_e8c153877f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4418,
+    "run_id": "36065459446"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T22:54:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/check_in_status.py:356-361 | severity=medium | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The helper skips to the next workflow source in DISPATCHED_REVIEW_SOURCES for any error other than HTTP 404.\n  WHY: If the primary workflow exists but returns a transient error (e.g., 500, 403), it skips to the fallback workflow, which could cause an incorrect stall_redispatched verdict.\n- workflow-templates/.claude/scripts/check_in_status.py:_head_arrival_time function, within the loop over head_check_runs | severity=medium | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Potential TypeError in _parse_time if run.get(\"started_at\") returns None or empty string.\n  WHY: If a check run has no started_at (e.g., pending or queued), _parse_time may receive None/empty, causing a TypeError before the try-except can handle it.\n- workflow-templates/.claude/scripts/check_in_status.py:around line 833 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The defensive fallback after _active_run_count returns is unreachable in the current call path.\n  WHY: It does not fail today, but a future refactor could leave callers with an empty listing and a silent None from _verified_review_redispatch.\n- workflow-templates/.claude/scripts/check_in_status.py:_review_stall_verdict signature around line 791 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: ignore_claim_by: tuple[str, ...] = () is retained on the public helper but no longer influences the verdict.\n  WHY: It does not fail at runtime; the docstring documents this, and retaining the parameter avoids a call-site change and preserves compatibility.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: workflow-templates/.claude/scripts/check_in_status.py\n  Line or code reference: _dispatched_review_runs function, lines 356-361\n  Problem: The helper skips to the next workflow source in DISPATCHED_REVIEW_SOURCES for any error other than HTTP 404.\n  Why it fails at runtime: If the primary workflow exists but returns a transient error (e.g., 500, 403), it skips to the fallback workflow. This could cause the script to misidentify the source of review runs, leading to an incorrect stall_redispatched verdict.\n  ISSUE_CONFIDENCE: 4\n- File: workflow-templates/.claude/scripts/check_in_status.py\n  Line or code reference: _head_arrival_time function, within the loop over head_check_runs\n  Problem: Potential TypeError in _parse_time if run.get(\"started_at\") returns None or empty string.\n  Why it fails at runtime: If a check run has no started_at (e.g., pending or queued), _parse_time may receive None/empty, causing a TypeError before the try-except can handle it.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: workflow-templates/.claude/scripts/check_in_status.py\n  Line or code reference: around line 833 (if \"runs\" not in dispatched_listing: dispatched_listing.update(_dispatched_review_runs(repo)))\n  Problem: The defensive fallback after _active_run_count returns is unreachable in the current call path. _active_run_count populates dispatched_listing whenever pr_number is not None and active == 0, which is the only configuration _review_stall_verdict ever invokes it with; when active > 0, the function returns before the fallback is reached.\n  Why it fails at runtime: It does not fail. The branch is dead code today and harmless, but it suggests a future refactor of _active_run_count could leave callers with an empty listing and a silent None from _verified_review_redispatch (which checks not workflow_path or not title and returns None). Not a blocker.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- File: workflow-templates/.claude/scripts/check_in_status.py\n  Line or code reference: `_review_stall_verdict` signature around line 791\n  Problem: `ignore_claim_by: tuple[str, ...] = ()` is retained on the public helper but no longer influences the verdict. The docstring at lines 794-805 documents this, and `check_pr_hand_back` (line ~902) still passes `ignore_claim_by`. No external callers depend on the parameter; the live twin is the only consumer in this repo.\n  Why it fails at runtime: It does not fail. Keeping the parameter avoids a call-site change in `tests/test_check_in_status_hand_back.py` and any third-party import. Acceptable per \u00a76 backward-compat rules.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "906cac6e77aa5258a49a8087d0a18561a6be7a7f9c1e93fa52912bc6a9762fdb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5408,
+    "run_id": "36664451173",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36664451173",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930035946_35e02d27b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5408,
+    "run_id": "36664451173"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T03:59:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

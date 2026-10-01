@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:12 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The added instruction for issue-mode resume in Step 0 creates a logical contradiction regarding execution timing.\n  WHY: Step 0 runs before Step 1, so the plan header containing the source issue ID needed for the cleanup's label check has not yet been read.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The lint check must pass for the PR to merge; scripts/claude_pr_sweep.py must be documented in the inventory or explicitly exempted.\n  expected_change_site: docs/INVENTORY.md Scripts section\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not touch docs/INVENTORY.md to include scripts/claude_pr_sweep.py; tests/inventory_parity.py continues to fail on this PR head, blocking the merge.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/implement-plan-claude.md:12 | severity=BLOCKER | confidence=5\n  PROBLEM: The added instruction for issue-mode resume in Step 0 creates a logical contradiction regarding execution timing.\n  WHY: The instruction is added as a bullet in Step 0 (Preflight), but the text says \"once step 1 has read the plan, run the Zombie-checker cleanup\". Step 0 is executed before Step 1, meaning at the time of execution, the plan header (which contains the source issue ID needed for the cleanup's label check) has not been read yet. Attempting to run the cleanup in step 0 will either fail due to missing issue ID or operate on stale/incorrect data if a previous project's plan doc is still in the checkout.\n- TASK_GAP\n  Requirement: The lint check must pass for the PR to merge; scripts/claude_pr_sweep.py must be documented in the inventory or explicitly exempted.\n  Expected change site: docs/INVENTORY.md Scripts section\n  Evidence of absence: The PR diff does not touch docs/INVENTORY.md to include scripts/claude_pr_sweep.py; tests/inventory_parity.py continues to fail on this PR head, blocking the merge.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8c9ac9051863af169751a5187bde8295f7ff168b26717c0d2cc0b59e94ec7e1d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4594,
+    "run_id": "36365776209",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36365776209",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928014239_0ca198ee48",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4594,
+    "run_id": "36365776209"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T01:42:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

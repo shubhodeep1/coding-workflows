@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:_fix_claim_trusted_logins | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If `pr` is `None`, `pr.get(\"user\")` raises an `AttributeError`.\n  WHY: `check_pr_hand_back` currently ensures `pr` is a dict before calling this function, but relying on the caller for this guarantee is brittle in a fail-closed security context.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: .claude/scripts/check_in_status.py\n  Line or code reference: _fix_claim_trusted_logins function\n  Problem: The function correctly handles cases where pr.get(\"user\") is None or malformed, but if pr itself is None (e.g., due to an API failure elsewhere), pr.get(\"user\") will raise an AttributeError.\n  Why it fails at runtime: While check_pr_hand_back ensures pr is a dict by the time it calls this, relying on the caller for this guarantee in a fail-closed security context is slightly brittle.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "138f2674047cb06a2431c3e38eae821a32c0f4fbeddf74f6c5bda7db2906e710",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4644,
+    "run_id": "36312859569",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36312859569",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927105121_680e942fee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4644,
+    "run_id": "36312859569"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T10:51:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

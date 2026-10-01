@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_commit_changes.sh:231-233 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The tracked-path restoration logic is incomplete \u2014 it only restores `pre_assembled_static.txt` but not other tracked artifacts like `agents.md`, `ai_pipeline.md`, or `unattended_system_instructions.md`.\n  WHY: Consumer repos may track these root-level files, and the cleanup block should restore all tracked artifacts overwritten by workflow-generated content before staging commits the overwrite.\n- tests/test_consumer_artifact_cleanup_preserves_tracked.py:246-249 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test `test_review_cleanup_restores_tracked_static_context` only verifies restoration for `pre_assembled_static.txt`, but the review editor cleanup block should also restore tracked `agents.md`, `ai_pipeline.md`, and `unattended_system_instructions.md` artifacts.\n  WHY: The test misses coverage for other tracked root-level artifacts that the cleanup block claims to preserve, leaving a regression-coverage gap.\n- changelog.d/255-artifact-cleanup-preserves-tracked.md:12 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The changelog documents 1, 4, 5, 8, 13, and 16 guarded paths per cleanup site, but the order does not match the script list order in the PR description.\n  WHY: The arbitrary order may confuse readers mapping the counts to the actual cleanup blocks.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR must ensure that consumer-repo artifact cleanup never deletes or overwrites files the repo actually tracks, including restoration of tracked artifacts before staging passes commit them.\n  expected_change_site: scripts/review_commit_changes.sh should restore all tracked root-level artifacts (`agents.md`, `ai_pipeline.md`, `unattended_system_instructions.md`, `pre_assembled_static.txt`) before the staging pass.\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: scripts/review_commit_changes.sh:231-233 only restores `pre_assembled_static.txt`; other tracked artifacts are skipped without restoration.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_commit_changes.sh:231-233 | confidence=5\n  PROBLEM: The tracked-path restoration logic is incomplete \u2014 it only restores `pre_assembled_static.txt` but not other tracked artifacts like `agents.md`, `ai_pipeline.md`, or `unattended_system_instructions.md`.\n  WHY: Consumer repos may track any of these root-level files (CLAUDE.md \u00a722.C / \u00a724.F), and the cleanup block should restore all tracked artifacts that were overwritten by workflow-generated content before the staging pass commits the overwrite.\n\n- tests/test_consumer_artifact_cleanup_preserves_tracked.py:246-249 | confidence=4\n  PROBLEM: The test `test_review_cleanup_restores_tracked_static_context` only verifies restoration for `pre_assembled_static.txt`, but the review editor cleanup block (scripts/review_commit_changes.sh) should also restore tracked `agents.md`, `ai_pipeline.md`, and `unattended_system_instructions.md` artifacts.\n  WHY: The test misses coverage for the other tracked root-level artifacts that the cleanup block claims to preserve, leaving a gap in regression coverage.\n\n- changelog.d/255-artifact-cleanup-preserves-tracked.md:12 | confidence=3\n  PROBLEM: The changelog documents 1, 4, 5, 8, 13, and 16 guarded paths per cleanup site, but the order does not match the script list order in the PR description and may confuse readers.\n  WHY: The table order is arbitrary and not aligned with the script order, making it harder for reviewers to map the counts to the actual cleanup blocks.\n\n- TASK_GAP\n  Requirement: The PR must ensure that consumer-repo artifact cleanup never deletes or overwrites files the repo actually tracks, including restoration of tracked artifacts before staging passes commit them.\n  Expected change site: scripts/review_commit_changes.sh should restore all tracked root-level artifacts (`agents.md`, `ai_pipeline.md`, `unattended_system_instructions.md`, `pre_assembled_static.txt`) before the staging pass.\n  Evidence of absence: scripts/review_commit_changes.sh:231-233 only restores `pre_assembled_static.txt`; other tracked artifacts are skipped without restoration.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "991885b9878d14de2de9115e3746479fe5be42faa59dd4b600c8be091a0f91fd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4033,
+    "run_id": "34127574354",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34127574354",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260907153450_e7660f3c93",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4033,
+    "run_id": "34127574354"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-07T15:34:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

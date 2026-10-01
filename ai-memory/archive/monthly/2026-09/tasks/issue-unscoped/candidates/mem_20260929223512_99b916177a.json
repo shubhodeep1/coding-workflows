@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:232 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The promotion-skip logic treats `ahead` as a promotion and misses `behind`, although `identical|behind` are the compare statuses for a promotion.\n  WHY: A non-promotion push with status `ahead` can skip the guard-provenance check, while a promotion with status `behind` runs the check over an already-verified push range and can produce a false CI failure.\n- .github/workflows/ci.yml:246 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When `twin_on_stable` is true, an empty or all-zero `PUSH_BEFORE` causes the step to skip the guard provenance check on the first push to a new stable branch.\n  WHY: Recreating or onboarding a stable branch makes this skip path reachable without running the provenance check.\n- agents.md:1250 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The new stable-rule text runs into the pre-existing \u201cTests load the twin and call\u201d sentence, collapsing the paragraph boundary.\n  WHY: The merged paragraph reduces documentation readability and scannability.\n- scripts/claude_twin_sync.py:348-354, 377-382 | severity=low | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Added explanatory comments.\n  WHY: Violates CLAUDE.md \u00a79 / \u00a711 \"DO NOT ADD ANY COMMENTS unless asked\" and repo hygiene contract; comments are not enforced by tests and drift from the no-comment style used elsewhere in the file.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml | severity=high | confidence=[5]\n  PROBLEM: The promotion-skip case matches `ahead|identical`, but the GitHub compare API semantics are reversed for this endpoint. `compare/${twin_head}...main` returns `identical` when both are the same commit, `behind` when `twin_head` is an ancestor of `main`, `ahead` when `twin_head` has commits `main` does not, and `diverged` when both have unique commits.\n  WHY: A push to stable from a non-promotion source whose HEAD carries a new guard change would return status ahead and skip the twin sync-state check; a promotion where main has advanced between the promote and the CI step would return behind and run the check over a wide `PUSH_BEFORE..HEAD` range filled with already-verified PRs, risking a false CI failure.\n- .github/workflows/ci.yml:232 | severity=high | confidence=[5]\n  PROBLEM: The compare order is `twin_head` (stable tip) as base and `main` as head. For a promotion that fast-forwards stable to a main commit, the compare of `stable_sha...main` returns `identical` or `behind`; the skip only fires for `ahead|identical`, missing the behind case.\n  WHY: A promotion CI step running with behind status would not skip, execute check over the full push range, and potentially emit false `::error` outputs for intermediate commits whose twins were later updated; ahead would only occur on a non-promotion push, which can skip the check.\n- .github/workflows/ci.yml:246 | severity=low | confidence=[2]\n  PROBLEM: When `twin_on_stable` is true and the push has an all-zero `PUSH_BEFORE`, the step exits 0 with \u201cNo base commit for this event; skipping.\u201d\n  WHY: If a repository is freshly onboarded or stable is recreated, the first push to it bypasses the twin check.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:1250 | severity=low | confidence=[5]\n  PROBLEM: Missing newline separating sentences, causing a run-on sentence in the documentation.\n  WHY: Not runtime, but reduces documentation readability and scannability, making it harder for operators to understand the new check behavior.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:1250 | severity=low | confidence=[5]\n  PROBLEM: The rewritten \"Sync-state check\" bullet appends new `stable` content into the pre-existing sentence. The diff removed the line break that originally separated \"...checks the range (fail closed).\" from \"Tests load the twin and call\", so the new paragraph reads as one long run-on ending with \"Every PR into `stable` is checked. Tests load the twin and call\".\n  WHY: No runtime defect \u2014 only the markdown bullet loses its paragraph boundary.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.md:1250 | severity=low | confidence=[5]\n  PROBLEM: The new content ends mid-line with \"Every PR into `stable` is checked. Tests load the twin and call\" \u2014 the sentence boundary between the new stable-branch documentation and the pre-existing \"Tests load the twin and call\" prose was collapsed into one paragraph. Before the edit, \"Tests load the twin and call\" started on its own line.\n  WHY: Documentation only \u2014 no runtime impact. The long technical bullet is harder to scan because the thought boundary between the stable-branch rules and the test-description sentence is lost.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/claude_twin_sync.py:348-354, 377-382 | severity=low | confidence=[5]\n  PROBLEM: Added explanatory comments.\n  WHY: Violates CLAUDE.md \u00a79 / \u00a711 \"DO NOT ADD ANY COMMENTS unless asked\" and repo hygiene contract; comments are not enforced by tests and drift from the no-comment style used elsewhere in the file.\n- agents.md:~1248-1252 | severity=low | confidence=[4]\n  PROBLEM: New stable rules text appended without line break, creating run-on paragraph that merges with following \"Tests load the twin...\" sentence.\n  WHY: N/A (docs), but reduces operational clarity of the contract.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- agents.md:1250 | severity=low | confidence=[5]\n  PROBLEM: The new content collapses into the pre-existing sentence \"Tests load the twin and call\" that previously began on its own line, producing a run-on paragraph.\n  WHY: No runtime impact; this is an operator-facing documentation contract (agents.md \"Sync-state check\" bullet) where the pre-existing line break before \"Tests load the twin and call\" was removed by the hunk.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "303b7375fd9fce20eb2b71a1187eaef242909247197482584a221b9e8c21d231",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5270,
+    "run_id": "36636321961",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36636321961",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929223512_99b916177a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5270,
+    "run_id": "36636321961"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T22:35:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

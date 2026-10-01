@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:115 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Missing error check for `mktemp` command when creating `POST_AGENT_ARTIFACT_DIR`.\n  WHY: If `mktemp` fails, `POST_AGENT_ARTIFACT_DIR` might be empty or invalid, leading to dangerous `rm -rf -- \"${POST_AGENT_ARTIFACT_DIR}\"` at the end of the script or artifact creation failures.\n- scripts/orchestrate_poll_process.sh:172 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Missing error check for `mktemp` command when creating `POST_AGENT_ARTIFACT_DIR`.\n  WHY: If `mktemp` fails, `POST_AGENT_ARTIFACT_DIR` might be empty or invalid, leading to dangerous `rm -rf -- \"${POST_AGENT_ARTIFACT_DIR}\"` at the end of the script or artifact creation failures.\n- scripts/review_apply_fixes.sh:5 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `cd \"${WORKSPACE_PATH}\"` is executed without verifying the directory actually exists.\n  WHY: If `WORKSPACE_PATH` is invalid, the script might run in an incorrect directory, causing failures or file operation errors in a critical cleanup/commit script.\n- scripts/review_conflict_resolve.sh:45 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `cd \"${WORKSPACE_PATH}\"` is executed without verifying the directory actually exists.\n  WHY: If `WORKSPACE_PATH` is invalid, the script might run in an incorrect directory, causing failures or file operation errors in a critical cleanup/commit script.\n- scripts/review_rb_judge.sh:22 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `cd \"${WORKSPACE_PATH}\"` is executed without verifying the directory actually exists.\n  WHY: If `WORKSPACE_PATH` is invalid, the script might run in an incorrect directory, causing failures or file operation errors in a critical cleanup/commit script.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In scripts/review_apply_fixes.sh, before its first use of POST_AGENT_ARTIFACT_DIR, provide a mode-0700, per-run fallback under RUNNER_TEMP when the variable is unset...\"\n  expected_change_site: scripts/review_apply_fixes.sh\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implementation initializes `POST_AGENT_ARTIFACT_DIR` using `mktemp` but fails to robustly verify the success of the creation, which is essential for a \"mode-0700, per-run fallback\" as requested. Without checking `mktemp` return code, the fallback cannot be guaranteed secure or functional.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_apply_fixes.sh:115 | confidence=4\n  PROBLEM: Missing error check for `mktemp` command when creating `POST_AGENT_ARTIFACT_DIR`.\n  WHY: If `mktemp` fails, `POST_AGENT_ARTIFACT_DIR` might be empty or invalid, leading to dangerous `rm -rf -- \"${POST_AGENT_ARTIFACT_DIR}\"` at the end of the script or artifact creation failures.\n- scripts/orchestrate_poll_process.sh:172 | confidence=4\n  PROBLEM: Missing error check for `mktemp` command when creating `POST_AGENT_ARTIFACT_DIR`.\n  WHY: If `mktemp` fails, `POST_AGENT_ARTIFACT_DIR` might be empty or invalid, leading to dangerous `rm -rf -- \"${POST_AGENT_ARTIFACT_DIR}\"` at the end of the script or artifact creation failures.\n- scripts/review_apply_fixes.sh:5 | confidence=4\n  PROBLEM: `cd \"${WORKSPACE_PATH}\"` is executed without verifying the directory actually exists.\n  WHY: If `WORKSPACE_PATH` is invalid, the script might run in an incorrect directory, causing failures or file operation errors in a critical cleanup/commit script.\n- scripts/review_conflict_resolve.sh:45 | confidence=4\n  PROBLEM: `cd \"${WORKSPACE_PATH}\"` is executed without verifying the directory actually exists.\n  WHY: If `WORKSPACE_PATH` is invalid, the script might run in an incorrect directory, causing failures or file operation errors in a critical cleanup/commit script.\n- scripts/review_rb_judge.sh:22 | confidence=4\n  PROBLEM: `cd \"${WORKSPACE_PATH}\"` is executed without verifying the directory actually exists.\n  WHY: If `WORKSPACE_PATH` is invalid, the script might run in an incorrect directory, causing failures or file operation errors in a critical cleanup/commit script.\n- TASK_GAP\n  Requirement: \"In scripts/review_apply_fixes.sh, before its first use of POST_AGENT_ARTIFACT_DIR, provide a mode-0700, per-run fallback under RUNNER_TEMP when the variable is unset...\"\n  Expected change site: scripts/review_apply_fixes.sh\n  Evidence of absence: The implementation initializes `POST_AGENT_ARTIFACT_DIR` using `mktemp` but fails to robustly verify the success of the creation, which is essential for a \"mode-0700, per-run fallback\" as requested. Without checking `mktemp` return code, the fallback cannot be guaranteed secure or functional.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_apply_fixes.sh, scripts/review_conflict_resolve.sh, scripts/review_rb_judge.sh, scripts/review_run_reviewers.sh: Lines 4-7\n  PROBLEM: When WORKSPACE_PATH is set but the directory does not exist, `cd` fails and the script exits due to `set -e`. This is correct behavior, but the error message from `cd` alone does not clearly indicate that the worktree is missing.\n  WHY: The reviewer suggests adding an explicit existence check with a clear error message before the cd.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c686353786051ffbbedad22de3d0b1afe3570ef784f74f19121dbf798cd445dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4397,
+    "run_id": "36082355879",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36082355879",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925014316_958da8b6d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4397,
+    "run_id": "36082355879"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-25T01:43:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

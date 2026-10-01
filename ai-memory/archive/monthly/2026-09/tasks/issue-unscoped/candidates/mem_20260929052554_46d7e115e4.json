@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1724-1749 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: `integration_value` and `target_value` can return `\"\"` for empty or whitespace-only parsed values, which the main loop accepts as a match.\n  WHY: Because the main loop checks `if value is not None`, an empty result can terminate parsing before a later valid Target branch is found.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh: `integration_value` (line 1724) and `target_value` (line 1743) and the main loop | confidence=4\n  PROBLEM: The new parser functions `integration_value` and `target_value` return an empty string `\"\"` when the input does not match a valid, non-empty branch name (e.g., `Integration branch: \\` \\``). In the main loop, the check `if value is not None:` evaluates `\"\"` as true, causing the parser to incorrectly accept the empty string as a match and terminate before checking subsequent lines or labels.\n  WHY: For a body like `\"Integration branch: \\`\\nTarget branch: \\`real/branch\\`\\n\"`, the parser incorrectly identifies the first line as a match (returning `\"\"`), prints the empty string, and exits. It fails to find the valid `Target branch` defined on the next line, leading to incorrect integration branch resolution for the issue.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/gh_helpers.sh: `integration_value` return at line ~1731 (`return region.strip()`) and the `core == \"\\`\"` branch at line ~1724 (`return \"\" if (lead or trail) else None`) | severity=NIT | confidence=4\n  PROBLEM: `integration_value` returns empty string `\"\"` (not `None`) for label lines whose parsed value is empty after stripping -- e.g. `Integration branch: \\`` (lone backtick with surrounding whitespace) or `Integration branch:   ` (whitespace-only rest). The main loop checks `if value is not None`, so `\"\"` is treated as a valid match: the helper prints the empty string and exits before checking subsequent lines or falling through to the Target branch label set.\n  WHY: For a body like `\"Integration branch: \\`\\nTarget branch: \\`real/branch\\`\\n\"`, the new parser returns `\"\"` while the line-bounded reference (and the Python `extract_integration_branch` in `orchestrate_lib.py`, which uses `re.search` over the whole body) returns `\"real/branch\"`. The existing `test_shell_parser_matches_python_parser` test does not catch this because `BODIES` does not include a case where an invalid Integration branch line precedes a valid Target branch line. The same issue exists in `target_value` when the backtick-delimited region is whitespace-only (`return region.strip()` at line ~1749), though the regex also matches that case so the discrepancy is narrower.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/gh_helpers.sh:1729 (integration_value/target_value) | severity=NIT | confidence=4\n  PROBLEM: returns \"\" for some empty-backtick cases (not None), early-exits main loop and can hide later valid Target line.\n  WHY: Empty-string results are accepted as matches, preventing discovery of a later valid Target line.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d3204f89ee50f2e5483412530c0acdb7587cc78207802a8db4e7c79979afb612",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5005,
+    "run_id": "36519412004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36519412004",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929052554_46d7e115e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5005,
+    "run_id": "36519412004"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T05:25:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

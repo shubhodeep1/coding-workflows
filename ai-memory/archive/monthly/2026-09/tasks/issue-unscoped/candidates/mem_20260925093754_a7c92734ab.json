@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:7466-7471 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The file-mode audit failure uses `engine_unavailable` when a successful audit returns advisory findings, misclassifying the condition as an engine failure.\n  WHY: This misdirects operator triage toward an engine outage instead of unexpected advisory output; severity ranged from MAJOR to NIT, so the highest severity is reported.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh: lines 7466-7471 | severity=high | confidence=4\n  PROBLEM: The fail-closed reason \"engine_unavailable\" is used when a file-ownership audit returns non-blocking advisory findings in \"file\" mode.\n  WHY: This incorrectly classifies a successful audit that returned advisory reports as an engine failure, misleading operator triage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: 7471 (security_pass_fail_closed call after advisory detection in file mode) | severity=low | confidence=4\n  PROBLEM: The fail-closed reason `engine_unavailable` mislabels a successful file-ownership audit that returned non-blocking advisory findings.\n  WHY: The CRITICAL Telegram alert and SECURITY_PASS_FAILED log line direct operators toward engine infrastructure rather than the file-mode invariant violation.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: 7471 | severity=low | confidence=4\n  PROBLEM: The fail-closed reason `engine_unavailable` mislabels a successful file-ownership audit that returned advisory findings.\n  WHY: Operators will investigate an engine outage instead of the unexpected advisory findings in file mode.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:7471 | severity=low | confidence=4\n  PROBLEM: The fail-closed reason \"engine_unavailable\" is used for advisory-in-file-mode, not an engine failure.\n  WHY: It mislabels the successful audit outcome.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh: Line or code reference: 7471 \u2014 `security_pass_fail_closed \"engine_unavailable\" \"The file-ownership audit returned non-blocking advisories.\" \"${prior_security_status}\"` | severity=low | confidence=4\n  PROBLEM: The fail-closed reason `engine_unavailable` mislabels a successful audit that returned advisory findings in file mode.\n  WHY: The alert and log direct operators toward an engine outage instead of advisory output under a mode that forbids it.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7cc96da09838f7304135339d1d060e1e4d000fa80010c353224adfb53f32f70f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4458,
+    "run_id": "36116021378",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36116021378",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925093754_a7c92734ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4458,
+    "run_id": "36116021378"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T09:37:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:819-851 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The non-terminal phase swap path adds the target label via POST but doesn't validate the POST succeeded before proceeding to delete old phases.\n  WHY: A failed POST means the target label wasn't added, but the script proceeds to remove old phase labels, potentially leaving the issue with no valid phase label at all.\n- scripts/review_rb_judge.sh:837-846 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: After adding the target label and deleting old phases, the code re-reads labels but doesn't check if the re-read succeeded before checking for terminal labels.\n  WHY: A failed GET after the POST/DELETE sequence could cause incorrect terminal label detection and prevent proper cleanup of the non-terminal target.\n- scripts/review_rb_judge.sh:2354-2363 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The lineage output logic checks `if [ -n \"${RB_FOLLOWUP_INTEGRATION_BRANCH}\" ]` but then echoes a message that includes `${RB_FOLLOWUP_INTEGRATION_BRANCH:-none}` which would show \"none\" even when the variable is set.\n  WHY: The output is misleading and could confuse operators debugging follow-up issue routing.\n- tests/test_review_rb_judge_label_propagation.py:339-350 | severity=critical | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The mock state parsing logic now checks `api_response_sequences` first, but the fallback to `api_responses` uses `matched is None and pattern and pattern in path` which means if a pattern matches in `api_response_sequences` but the response is empty/None, it won't fall back to `api_responses`.\n  WHY: The mock state parsing could fail to provide a response when it should, causing tests to fail unexpectedly.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\" The PR needs to resolve the merge conflicts in README.md, .github/workflows/review_autofix.yml, scripts/orchestrate_poll_process.sh, scripts/review_rb_judge.sh, tests/test_orchestrate_poll_process.py, and tests/test_review_rb_judge_label_propagation.py.\n  expected_change_site: These files should have conflict markers resolved and clean merges\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The PR diff shows these files still have conflict markers (<<<<<<<, =======, >>>>>>>) in the original PR diff section\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_rb_judge.sh:819-851 | severity=critical | confidence=5\n  PROBLEM: The non-terminal phase swap path adds the target label via POST but doesn't validate the POST succeeded before proceeding to delete old phases.\n  WHY: A failed POST means the target label wasn't added, but the script proceeds to remove old phase labels, potentially leaving the issue with no valid phase label at all.\n- scripts/review_rb_judge.sh:837-846 | severity=critical | confidence=5\n  PROBLEM: After adding the target label and deleting old phases, the code re-reads labels but doesn't check if the re-read succeeded before checking for terminal labels.\n  WHY: A failed GET after the POST/DELETE sequence could cause incorrect terminal label detection and prevent proper cleanup of the non-terminal target.\n- scripts/review_rb_judge.sh:2354-2363 | severity=high | confidence=4\n  PROBLEM: The lineage output logic checks `if [ -n \"${RB_FOLLOWUP_INTEGRATION_BRANCH}\" ]` but then echoes a message that includes `${RB_FOLLOWUP_INTEGRATION_BRANCH:-none}` which would show \"none\" even when the variable is set.\n  WHY: The output is misleading and could confuse operators debugging follow-up issue routing.\n- tests/test_review_rb_judge_label_propagation.py:339-350 | severity=critical | confidence=4\n  PROBLEM: The mock state parsing logic now checks `api_response_sequences` first, but the fallback to `api_responses` uses `matched is None and pattern and pattern in path` which means if a pattern matches in `api_response_sequences` but the response is empty/None, it won't fall back to `api_responses`.\n  WHY: The mock state parsing could fail to provide a response when it should, causing tests to fail unexpectedly.\n- TASK_GAP\n  Requirement: The PR description states \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\" The PR needs to resolve the merge conflicts in README.md, .github/workflows/review_autofix.yml, scripts/orchestrate_poll_process.sh, scripts/review_rb_judge.sh, tests/test_orchestrate_poll_process.py, and tests/test_review_rb_judge_label_propagation.py.\n  Expected change site: These files should have conflict markers resolved and clean merges\n  Evidence of absence: The PR diff shows these files still have conflict markers (<<<<<<<, =======, >>>>>>>) in the original PR diff section\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "7178f11d233eaddd43b8c309653be1d0f6f01ae67294d965e88dc20ea2c6eeaa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4120,
+    "run_id": "35340583444",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35340583444",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260918125816_dd307982b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4120,
+    "run_id": "35340583444"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-18T12:58:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

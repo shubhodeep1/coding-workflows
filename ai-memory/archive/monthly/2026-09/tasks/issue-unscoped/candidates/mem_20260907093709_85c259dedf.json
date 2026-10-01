@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ledger_emit_substate.sh: lines 198-206 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, qwen_qwen3_7-plus]\n  PROBLEM: `read_tokens_log_tail()` unconditionally drops everything up to and including the first newline, so a complete first line is lost when the seek point lands on a line boundary; the comment still incorrectly describes this as dropping only a partial line, and the claimed alignment fix from commit b999c06 is absent.\n  WHY: A usage/token line at the start of an aligned tail window is silently omitted, causing ledger entries to lack token counts without an error.\n- scripts/ledger_emit_substate.sh: lines 210-214 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The function reads `LEDGER_TOKENS_LOG_MAX_BYTES` from the environment without validating that it is a non-negative integer before using it in the seek calculation.\n  WHY: A negative or non-numeric value can make the seek fail or use an incorrect file offset.\n- scripts/ledger_emit_substate.sh: lines 219-221 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: When the tail window contains no newline, the code keeps the entire chunk rather than discarding it.\n  WHY: A split UTF-8 sequence at the end of the file could cause decoding errors or replacement characters, corrupting extracted token data.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/ledger_emit_substate.sh: lines 199-206 | severity=MAJOR | confidence=4\n  PROBLEM: The function unconditionally drops everything before the first newline in the read window, so when the seek point lands exactly after a newline it discards a complete first line and may lose the only usage/token line in that tail slice.\n  WHY: When the seek lands on a line boundary, the first line containing the usage/token match is omitted from the parse, and the ledger entry silently omits token data.\n- scripts/ledger_emit_substate.sh: lines 201-206 | severity=MAJOR | confidence=4\n  PROBLEM: The comment still says \"Drop the partial first line\" without the alignment guard that would distinguish partial from complete lines; the claimed line-alignment fix from commit b999c06 is absent from the code.\n  WHY: The misleading comment suggests the code drops only partial lines, but it actually drops complete lines when the seek lands on a boundary, causing silent data loss.\n- scripts/ledger_emit_substate.sh: lines 210-214 | severity=MAJOR | confidence=4\n  PROBLEM: The function reads LEDGER_TOKENS_LOG_MAX_BYTES from environment but doesn't validate it's a non-negative integer before using it in the seek calculation.\n  WHY: If the environment variable contains a negative value or non-numeric string, the seek operation will fail or produce incorrect results, potentially reading from the wrong file offset.\n- scripts/ledger_emit_substate.sh: lines 219-221 | severity=MAJOR | confidence=4\n  PROBLEM: When the tail window contains no newline at all, the code keeps the entire chunk rather than discarding it, which could include split UTF-8 sequences that cause decode errors.\n  WHY: A split UTF-8 sequence at the end of the file could cause the decode to fail or produce replacement characters, corrupting the token data being extracted.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/ledger_emit_substate.sh\n  Line or code reference: lines 198-206, `read_tokens_log_tail()`\n  Problem: The function seeks to `tokens_log_size - tail_max_bytes` and unconditionally drops everything up to and including the first newline in the window. When the seek point lands exactly after a newline (the file size modulo window size produces a line-aligned boundary), the first line in the window is complete, but the code drops it anyway. The commit message for b999c06 claims to fix this by reading one byte ahead to detect line alignment, but the code does not implement that logic: no preceding byte is read, no alignment check exists, and the comment at line 201 still says \"Drop the partial first line\" without the alignment guard.\n  Why it fails at runtime: When the seek coincidentally lands on a line boundary, the first line containing the usage/token match is omitted from the parse. The helper returns metadata without token counts, and since the helper's last-match heuristic found nothing, the mismatch is silent \u2014 no error is raised, and the ledger entry simply omits token data. The test described in commit b999c06 (\"a 4096-byte window whose first line is the only usage line, placed so the seek lands exactly on its boundary\") is not present in the test file.\n  Severity: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "1d443464890b660c6a6fbcd9404b298a78f7585fd123a06f87b6180e76b3d77e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4028,
+    "run_id": "34102306621",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34102306621",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260907093709_85c259dedf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4028,
+    "run_id": "34102306621"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-07T09:37:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

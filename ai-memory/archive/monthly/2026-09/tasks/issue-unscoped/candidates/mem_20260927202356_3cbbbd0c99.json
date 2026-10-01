@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2712 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `git ls-tree` checks whether the path exists in the tree but does not explicitly check whether it is a file or directory.\n  WHY: If the path exists as a directory, `ls-tree` returns success and the name, potentially allowing it to be misidentified as a new file if the validator does not catch it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:2712 | severity=high | confidence=3\n  PROBLEM: `git ls-tree` as implemented checks only the existence of the file in the tree, but does not explicitly check if the path is a file or a directory within that tree.\n  WHY: If the path provided in `new_output_paths` exists in the tree as a directory rather than a file, `ls-tree` will return success (exit 0) and the name. Although the validator later checks for a trailing `/` in the path, this logic could potentially allow existing directory paths to be misidentified as \"new files\" if they are not caught by the validator.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "033ab92cbe7819ad74848af8e1bc0f33d60cef6373e00c1460ceaa86c7680ef6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4668,
+    "run_id": "36345105163",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36345105163",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927202356_3cbbbd0c99",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4668,
+    "run_id": "36345105163"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T20:23:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

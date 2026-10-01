@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/resolve_integration_ref.sh:99,109 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: Origin marker extraction relies on fixed line positions, so changes to the triage body layout can make a valid header appear malformed and block issue triage.\n  WHY: Both reviewers report that extra whitespace or comments can break extraction; the severity is high based on the highest report, though deepseek_deepseek-v4-pro rates the issue NIT.\n- scripts/resolve_integration_ref.sh:99 | severity=low | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The origin marker regex may fail to match CRLF issue-body lines because its end-of-line anchor encounters a carriage return.\n  WHY: The shell resolver can then fall through to the legacy empty-return path while the Python resolver extracts the marker; practical risk is low because GitHub issue bodies consistently use LF.\n- .claude/scripts/check_in_status.py:545-551 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A failed audit run whose project branch head moved is classified as `moved-target` rather than `failed`.\n  WHY: deepseek_deepseek-v4-pro reports this as intended behavior because the stale result does not apply to the current HEAD and triggers a re-audit; the concern was rated NIT, not a runtime failure.\n- .github/workflows/validate.yml:242-246 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Triage marker extraction reads fixed array positions without applying the `authoritative_lines` filter.\n  WHY: deepseek_deepseek-v4-pro says this is not a defect because the markers are generated consecutively, uniqueness is checked, and an independent PR fetch and base verification bind the result.\n- scripts/check_failure_triage.sh:186-189 | severity=low | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The fork PR skip block is unreachable because the earlier identity/base verification exits for fork PRs.\n  WHY: The earlier block intentionally changes fork handling from a silent skip to an error, leaving this old skip block as confusing dead code.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/check_in_status.py:545-551 | severity=NIT | confidence=[5]\n  PROBLEM: The restructured `_audit_result` checks branch-head movement before the run conclusion, so a failed audit with a moved branch returns `moved-target` rather than `failed`.\n  WHY: This is not a runtime failure and is intended: stale output does not apply to the current HEAD, `moved-target` triggers a re-audit, and the cycle cap prevents unbounded looping; a failed run with an unchanged head returns `failed`, and the test at `test_check_in_status.py:609-612` asserts the combined case.\n- scripts/resolve_integration_ref.sh:99 and 109 | severity=NIT | confidence=[4]\n  PROBLEM: The triage origin-pr extraction uses `sed -n '2s/...'`, so whitespace or an extra comment line between the dual machine-generated headers makes `origin_pr` empty.\n  WHY: The code enters the malformed-header error path and exits 1; the Python and jq paths also use fixed positions and fail closed, and the reviewer says no attacker-controlled input can exploit this to select a spoofed base.\n- .github/workflows/validate.yml:242-246 | severity=NIT | confidence=[3]\n  PROBLEM: Triage marker extraction reads `$lines[0]` and `$lines[1]` without applying the `authoritative_lines` filter.\n  WHY: This is not a defect according to the reviewer: the machine headers are generated consecutively, exact-count uniqueness is checked, and independent PR fetch and base verification bind the result.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/resolve_integration_ref.sh:99 | severity=MAJOR | confidence=[4]\n  PROBLEM: Extraction of the triage origin marker relies on a hardcoded line number (`sed -n '2s/...'`).\n  WHY: Extra comments, line-order changes, or whitespace in the triage issue body can make extraction fail and cause `check_failure_triage.sh` to report a malformed header, blocking issue triage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/check_failure_triage.sh:lines 186-189 (the fork_pr skip block after the new identity/base check at lines 175-183) | severity=NIT | confidence=[5]\n  PROBLEM: The fork PR skip block is unreachable because the new identity/base verification block already rejects fork PRs.\n  WHY: The old block silently skipped fork PRs with exit 0, while the new block exits 1; the behavior change is intentional security hardening, but the leftover block may confuse maintainers.\n- scripts/resolve_integration_ref.sh:line 99, `sed -n '2s/^<!-- check-failure-triage:origin-pr=...$/\\1/p'` | severity=NIT | confidence=[3]\n  PROBLEM: The shell resolver hard-codes line 2 to extract the origin-pr marker, and its anchored regex may not match an issue body with CRLF endings.\n  WHY: The shell resolver may fall through to the legacy empty-return path and default branch while the Python resolver at `scripts/orchestrate_lib.py:2888` correctly extracts the marker; practical risk is low because GitHub issue bodies consistently use LF.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "23ba8d070afec617a61b56d30a853e4ff99699112077d00fac3261ac247f3ad3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4607,
+    "run_id": "36295946711",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36295946711",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927052238_8cf6527665",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4607,
+    "run_id": "36295946711"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T05:22:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:929-1003 | severity=critical | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The root guard can auto-approve an unclassified quoted `gh api -X DELETE` call inside a read loop because `_is_approvable_read_loop` does not verify that the `gh api` body-item count matches the classified results.\n  WHY: The fast path calls `_is_approvable_read_loop(command, [])`, and the missing `api_items` check lets the quoted destructive call bypass classification and the required approval prompt.\n- .claude/hooks/gh_api_write_guard.py:929-930; workflow-templates/.claude/hooks/gh_api_write_guard.py:930-938 | severity=critical | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The root and template guard files are not byte-identical, causing the parity assertion and four new `READ_LOOP_NO_DECISION` cases to fail against the root guard.\n  WHY: The root file lacks the `api_items` check present in the twin, so `test_template_parity` and the quoted-call tests fail, contrary to G4 and the changelog claim.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: G4 from the plan: \"The `.claude/hooks/` file and its `workflow-templates/` twin are byte-identical.\" Plan Implementation Step 2: \"Copy the file byte-for-byte to `workflow-templates/.claude/hooks/gh_api_write_guard.py`.\" Plan Done criteria: \"both twins `cmp` identical.\"\n  expected_change_site: `.claude/hooks/gh_api_write_guard.py`\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The root file (line 929-930) jumps from `body[0][0] = body[0][0][1:]` directly to `for pipeline in body:` with no `api_items` block; The last commit (47f09f4) added the `api_items` check only to `workflow-templates/.claude/hooks/gh_api_write_guard.py`, not to `.claude/hooks/gh_api_write_guard.py`; the implement-plan log acknowledges this: \"the root `.claude/` copy waits for the operator's `[claude-twin-sync]`.\"; The PR as it stands does not satisfy G4.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/gh_api_write_guard.py, line 929-930 | severity=BLOCKER | confidence=5\n  PROBLEM: The root guard's `_is_approvable_read_loop` does not verify that the number of `gh api` body items equals the number of calls `evaluate` classified. The fast path in `evaluate` (line 1003) calls `_is_approvable_read_loop(command, [])` with an empty results list when the command has no unquoted `gh api` text. A quoted call like `gh 'api' -X DELETE repos/o/r/issues/1` never matches `_RAW_GH_API_RE`, so it is never classified, but shlex dequotes it to `[\"gh\", \"api\", \"-X\", \"DELETE\", ...]` in the body. Without the `api_items` check, `_is_loop_gh_api_read` sees no loop variable in the endpoint and returns True, so the loop is auto-approved. The command `for r in 1; do gh run view $r; gh 'api' -X DELETE repos/o/r/issues/1; done` evaluates to `allow` on the root guard but `None` on the twin.\n  WHY: The root guard is the live hook loaded from `.claude/hooks/gh_api_write_guard.py`. Any Claude Code session on this branch would have its `gh 'api' -X DELETE` loop auto-approved, bypassing the ask-first rule for destructive writes (CLAUDE.md \u00a723.C). The twin at `workflow-templates/.claude/hooks/gh_api_write_guard.py` has the fix (lines 930-938) but is not the file that runs.\n- .claude/hooks/gh_api_write_guard.py and workflow-templates/.claude/hooks/gh_api_write_guard.py, Root lines 929-930 vs twin lines 930-938 | severity=BLOCKER | confidence=5\n  PROBLEM: The plan's G4 requires the two guard files to be byte-identical, and `test_template_parity` (tests/test_gh_api_write_guard.py:710) asserts `TEMPLATE_GUARD_PATH.read_text() == GUARD_PATH.read_text()`. The root file is missing the `api_items` block, so the files diverge and the test fails. Additionally, the tests load the root guard via `GUARD_PATH` (line 25), so the new `READ_LOOP_NO_DECISION` cases `\"single-quoted api DELETE beside a read\"`, `\"double-quoted gh DELETE beside a read\"`, `\"split api word mutation beside a read\"`, and `\"quoted api read beside a read\"` (lines 415-423) expect `None` but the root guard returns `allow` for each, causing four test failures. The changelog also claims quoted `gh api` calls \"keep the old no-decision result,\" which is false for the root guard.\n  WHY: `pytest tests/test_gh_api_write_guard.py` fails with at least 5 failures (1 parity + 4 no-decision cases) against the root guard. CI cannot pass.\n- .claude/hooks/gh_api_write_guard.py, `evaluate` line 1003 | severity=BLOCKER | confidence=5\n  PROBLEM: The twin's `api_items` check (lines 930-938) is the guard that prevents an unclassified, quoted `gh api` call from being auto-approved inside a read loop. The root guard lacks this check, creating a declared-vs-effective capability gap: CLAUDE.md \u00a723.H (root, lines 1327-1341) documents that \"a quoted `gh api` call in the body ... keep the old no-decision result,\" but the root guard's effective behavior auto-approves such calls.\n  WHY: The guard's declared behavior (no decision on quoted calls) does not match its effective behavior (allow), so a session relying on the documented guard boundary would get auto-approval instead of a prompt for a quoted destructive call.\n- Requirement: G4 from the plan: \"The `.claude/hooks/` file and its `workflow-templates/` twin are byte-identical.\" Plan Implementation Step 2: \"Copy the file byte-for-byte to `workflow-templates/.claude/hooks/gh_api_write_guard.py`.\" Plan Done criteria: \"both twins `cmp` identical.\"\n  Expected change site: `.claude/hooks/gh_api_write_guard.py` should contain the same `api_items` check as `workflow-templates/.claude/hooks/gh_api_write_guard.py` lines 930-938.\n  Evidence of absence: The root file (line 929-930) jumps from `body[0][0] = body[0][0][1:]` directly to `for pipeline in body:` with no `api_items` block. The last commit (47f09f4) added the `api_items` check only to `workflow-templates/.claude/hooks/gh_api_write_guard.py`, not to `.claude/hooks/gh_api_write_guard.py`. The implement-plan log acknowledges this: \"the root `.claude/` copy waits for the operator's `[claude-twin-sync]`.\" The PR as it stands does not satisfy G4.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5a285082635bb665031af4e1e11abf0f0d2f8c2ab3d397ab2de58b9ae01403e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36527190577",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36527190577",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929055447_63f7c8037d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36527190577"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T05:54:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:549 | severity=low | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: _resolver_scope_state reads every tracked and untracked file's full content and computes SHA-256 on each call, adding overhead that scales linearly with checkout size.\n  WHY: There is no failure today, but the per-attempt scans could consume a meaningful fraction of the resolver's time budget if the gate is widened or consumer repos grow large binary assets.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_conflict_resolve.sh:549 (hashlib.sha256(target.read_bytes()).hexdigest() inside entries())\n  Problem: The _resolver_scope_state helper reads every tracked and untracked file's full content and computes SHA-256 on each call. entries() runs at least twice per attempt (capture before model invocation, check after), and a third time on verify after a scope-drift restore. On the current source repo (~1000 files) this adds roughly 30 seconds per attempt \u2014 well within the 50-minute per-attempt budget. But the cost scales linearly with checkout size, and the IS_WORKFLOW_SOURCE_REPO gate is the only thing keeping this off consumer-repo checkouts that can be 10x larger.\n  Why it fails at runtime: No failure today. If the gate is ever widened or a consumer repo grows large binary assets, the per-attempt overhead could consume a meaningful fraction of the resolver's time budget. The existing cross-pollination consensus already flagged this as a NIT; confirming with the concrete call count (2-3 full scans per attempt, 6-9 across a 3-attempt loop).\n  Severity: NIT\n  Issue confidence: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "93a22e1503daeec3e9942ca077b8c1502e6fe057d9897643725875ff2c694dfb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4448,
+    "run_id": "36111269863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36111269863",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925085744_b0bae64c23",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4448,
+    "run_id": "36111269863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-25T08:57:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

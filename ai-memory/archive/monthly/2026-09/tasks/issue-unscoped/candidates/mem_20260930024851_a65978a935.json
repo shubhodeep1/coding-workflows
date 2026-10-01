@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/unattended_question_guard.py:lines ~700-710 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: `marker_dir()` can raise `RuntimeError` when `HOME` is unset, escaping `run_mark()` and producing a traceback instead of the documented JSON failure line.\n  WHY: `Path.home()` may raise `RuntimeError`, which the `except OSError` handler does not catch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/unattended_question_guard.py | severity=NIT | confidence=2\n  PROBLEM: `marker_dir()` calls `Path.home()` which raises `RuntimeError` (not `OSError`) when `HOME` is unset. The `except OSError` handler does not catch `RuntimeError`, so the exception propagates uncaught from `run_mark`, producing a traceback instead of the documented `{\"marked\": false, ...}` JSON line.\n  WHY: In a cloud session where HOME is somehow unset, the `mark` command crashes with a Python traceback rather than a clean JSON failure. The marker is not written, so the hook never activates \u2014 that part is safe (fail-open). But the calling command (implement-issue-claude step 0) expects a JSON line on stdout, and a traceback is not valid JSON.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0f4afbe066497c1cc7bc0bf31c01f7b36e2d52975c510d6e99a9103ec649405b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36660884737",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36660884737",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930024851_a65978a935",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36660884737"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T02:48:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

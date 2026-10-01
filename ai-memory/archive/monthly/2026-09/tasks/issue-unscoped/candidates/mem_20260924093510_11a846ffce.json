@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:1946-1958 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The pre-loop workspace-guard initialization failure path does not call `emit_editor_substate \"Failed\"` for attempt 1.\n  WHY: The run-substate ledger omits this sandbox initialization failure, making it harder to distinguish from a failure that occurred before the editor logic; reviewers did not disagree on severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Capture workspace-guard snapshot failures in review_apply_fixes.sh, preserve sanitized stderr, and classify them as sandbox_initialization_failure through the existing fail-closed partial-finalize path rather than exiting with an empty summary.\"\n  expected_change_site: scripts/review_apply_fixes.sh\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The proposed changes do not explicitly log the sanitized stderr to the final summary file when a pre-loop sandbox initialization failure occurs; the current code only writes the error to `editor_attempt_1.err` and breaks, but `Validate editor no-op disposition` requires the `EDITOR_SUMMARY_FILE` to contain the failure details to classify the error properly in the final report.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_apply_fixes.sh:1949-1954 | severity=NIT | confidence=5\n  PROBLEM: The pre-loop `initialize_editor_workspace_guard_runtime` failure path writes `editor_attempt_1.err` and sets `editor_partial_finalize_reason=\"sandbox_initialization_failure\"` but does not call `emit_editor_substate \"Failed\"`.\n  WHY: The run-substate ledger has no `Failed` entry for attempt 1 when sandbox initialization fails before the editor loop starts. Operators inspecting the ledger see no attempt recorded, making it indistinguishable from a script exit that never reached the editor logic at all. The per-attempt path already records this substate consistently; the pre-loop path should add the same call after line 1952 to keep the two sandbox-failure paths aligned.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_apply_fixes.sh:1946-1958 | severity=NIT | confidence=4\n  PROBLEM: The pre-loop sandbox initialization failure path sets `editor_partial_finalize_reason` but does not call `emit_editor_substate \"Failed\"`.\n  WHY: The run-substate ledger (used for observability) will miss the \"Failed\" entry for attempt 1 when the failure occurs before the editor loop starts, leading to inconsistent ledger telemetry compared to failures detected within the editor loop.\n- Requirement: \"Capture workspace-guard snapshot failures in review_apply_fixes.sh, preserve sanitized stderr, and classify them as sandbox_initialization_failure through the existing fail-closed partial-finalize path rather than exiting with an empty summary.\"\n  Expected change site: scripts/review_apply_fixes.sh\n  Evidence of absence: The proposed changes do not explicitly log the sanitized stderr to the final summary file when a pre-loop sandbox initialization failure occurs. The current code only writes the error to `editor_attempt_1.err` and breaks, but `Validate editor no-op disposition` requires the `EDITOR_SUMMARY_FILE` to contain the failure details to classify the error properly in the final report. The current fix misses appending this diagnostic into the summary block.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_apply_fixes.sh:1949-1955 | severity=NIT | confidence=4\n  PROBLEM: The pre-loop `initialize_editor_workspace_guard_runtime` failure path writes `editor_attempt_1.err` and sets `editor_partial_finalize_reason=\"sandbox_initialization_failure\"`, but does not call `emit_editor_substate \"Failed\"`.\n  WHY: The run-substate ledger will have no \"Failed\" entry for attempt 1 when the workspace-guard runtime cannot be initialized before the editor loop starts. Operators inspecting the ledger for a pre-loop sandbox failure will see no attempt recorded, making it harder to distinguish \"guard failed before loop\" from \"loop never started for another reason.\" The two failure paths produce inconsistent ledger output.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_apply_fixes.sh:lines 1949-1955 (pre-loop initialize_editor_workspace_guard_runtime failure path) | severity=NIT | confidence=4\n  PROBLEM: The pre-loop initialization failure path writes the error file and sets editor_partial_finalize_reason but does not call emit_editor_substate \"Failed\", while the per-attempt snapshot failure path at line 2032 does call emit_editor_substate \"Failed\" \"${attempt}\" \"${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err\" before breaking.\n  WHY: When initialize_editor_workspace_guard_runtime fails before the editor loop, the run-substate ledger will have no \"Failed\" entry for attempt 1, creating inconsistent telemetry between the two sandbox failure paths. Operators inspecting the ledger for a pre-loop sandbox failure would see no attempt recorded, making it harder to distinguish \"guard failed before loop\" from \"loop never started for another reason.\"\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "617f17a975577a92dbcaffed68a3d1f06732609623e1f06b36fa7a2127f1a8f8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4348,
+    "run_id": "35976613459",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35976613459",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924093510_11a846ffce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4348,
+    "run_id": "35976613459"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T09:35:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

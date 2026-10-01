@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1583-1590 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR-named check returns 0 on failure, which the reviewer believes the caller interprets as success.\n  WHY: The reviewer says returning 0 may let execution continue when processing should halt.\n- scripts/gh_helpers.sh:1578 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer says `run_event_name` is not used for meaningful error logging or validation beyond the `if` block.\n  WHY: The reviewer says unexpected or empty event names may not be detected or logged, making it harder to identify why the check failed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changes-lost budget should stay bounded for runs dispatched under fallback names.\n  expected_change_site: scripts/gh_helpers.sh\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The implementation relies on the caller passing the correct `GITHUB_EVENT_NAME`. If a caller fails to pass this, or passes an incorrect value, the bound might not be enforced as intended, leaving the loop unbounded; The added logic fails closed for unnamed runs (reason=unnamed_dispatch_run) when the run's event is workflow_dispatch, but the check is gated on a non-empty $6. The header comment at scripts/gh_helpers.sh:1471 explicitly states \"An empty $6 (a caller that predates it) skips this check.\" Only one caller exists today (scripts/review_autofix_step_changes_lost_redispatch.sh, which passes \"${GITHUB_EVENT_NAME:-}\"), so the gap is latent. A future caller that omits the sixth argument would silently lose the fail-closed guarantee. The cross-pollination finding flags this as a blocker, but the explicit comment and single-caller reality make it a NIT \u2014 the budget is the only mechanism that could be weakened, and the new guard is opt-in for new callers rather than enforced structurally.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:1583-1590 | severity=MAJOR | confidence=4\n  PROBLEM: The PR-named check inside `autofix_changes_lost_head_retry_consumed` performs an early `return 0` on failure, which is interpreted as success by the caller.\n  WHY: The caller assumes a successful exit code (0) from this helper indicates that the budget was consumed or checked, while failure (non-zero) should signal an error or a halt in processing. By returning 0 on failure, the script continues its execution flow when it should have stopped, potentially leading to incorrect logic downstream.\n- scripts/gh_helpers.sh:1578 | severity=NIT | confidence=2\n  PROBLEM: The `run_event_name` parameter is passed but not utilized for meaningful error logging or validation beyond the `if` block.\n  WHY: If an unexpected or empty `run_event_name` is passed, the script may fail to detect or log the context correctly, making debugging harder in scenarios where the event name is crucial for identifying why a check failed (e.g., `reason=unnamed_dispatch_run`).\n- TASK_GAP\n  Requirement: The changes-lost budget must be bounded for runs dispatched under fallback names.\n  Expected change site: scripts/gh_helpers.sh\n  Evidence of absence: The implementation relies on the caller passing the correct `GITHUB_EVENT_NAME`. If a caller fails to pass this, or passes an incorrect value, the bound might not be enforced as intended, leaving the loop unbounded.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The changes-lost budget should stay bounded for runs dispatched under fallback names.\n  Expected change site: scripts/gh_helpers.sh\n  Evidence of absence: The added logic fails closed for unnamed runs (reason=unnamed_dispatch_run) when the run's event is workflow_dispatch, but the check is gated on a non-empty $6. The header comment at scripts/gh_helpers.sh:1471 explicitly states \"An empty $6 (a caller that predates it) skips this check.\" Only one caller exists today (scripts/review_autofix_step_changes_lost_redispatch.sh, which passes \"${GITHUB_EVENT_NAME:-}\"), so the gap is latent. A future caller that omits the sixth argument would silently lose the fail-closed guarantee. The cross-pollination finding flags this as a blocker, but the explicit comment and single-caller reality make it a NIT \u2014 the budget is the only mechanism that could be weakened, and the new guard is opt-in for new callers rather than enforced structurally.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ec36c2845f3129448cf27bf6782a4fbea9f10de6283019ce1c398917332807e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5036,
+    "run_id": "36524054479",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36524054479",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929051930_ade38e1670",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5036,
+    "run_id": "36524054479"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T05:19:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

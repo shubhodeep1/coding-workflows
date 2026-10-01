@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_workflow_contract.py:249-260 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The two new regression tests, `test_post_checkout_helpers_are_resolved_only_from_verified_support` (line 209) and `test_telegram_helper_does_not_source_checkout_rate_limit_helper` (line 233), are defined but never called by `main()`.\n  WHY: CI runs this file via `python3 tests/test_orchestrate_poll_workflow_contract.py`, which relies on `main()` to enumerate tests, so the trusted-support wiring checks do not execute; severity was rated MAJOR and BLOCKER, and the highest rating is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add regression coverage for hostile checkout content and missing or symlinked support assets.\"\n  expected_change_site: tests/test_orchestrate_poll_workflow_contract.py main() function, lines 249-260\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: test_post_checkout_helpers_are_resolved_only_from_verified_support at line 209 and test_telegram_helper_does_not_source_checkout_rate_limit_helper at line 233 are not in the main() call list; CI runs this file directly via python3 tests/test_orchestrate_poll_workflow_contract.py, which relies on main() to enumerate tests.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_workflow_contract.py:249-260 | severity=high | confidence=5\n  PROBLEM: Two new regression tests, test_post_checkout_helpers_are_resolved_only_from_verified_support (line 209) and test_telegram_helper_does_not_source_checkout_rate_limit_helper (line 233), are defined but never called by main().\n  WHY: This file is invoked in CI as python3 tests/test_orchestrate_poll_workflow_contract.py (ci.yml:569), which relies on main() to enumerate every test; the trusted-support checks are not exercised.\n\n- TASK_GAP\n  Requirement: The linked issue explicitly requires \"Add regression coverage for hostile checkout content and missing or symlinked support assets.\"\n  Expected change site: tests/test_orchestrate_poll_workflow_contract.py main() function, lines 249-260.\n  Evidence of absence: The two regression tests added for hostile-checkout defences (test_post_checkout_helpers_are_resolved_only_from_verified_support at line 209 and test_telegram_helper_does_not_source_checkout_rate_limit_helper at line 233) are not in the main() call list. CI runs this file directly via python3 tests/test_orchestrate_poll_workflow_contract.py, which relies on main() to enumerate tests. The regression coverage deliverable is present in source but never executed, so the task requirement is unmet.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Add regression coverage for hostile checkout content and missing or symlinked support assets.\"\n  Expected change site: tests/test_orchestrate_poll_workflow_contract.py main() function.\n  Evidence of absence: The two new regression tests introduced to verify hostile checkout defenses (test_post_checkout_helpers_are_resolved_only_from_verified_support at line 209 and test_telegram_helper_does_not_source_checkout_rate_limit_helper at line 233) are not included in the main() function's call list. Consequently, these critical security tests do not execute in CI.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_workflow_contract.py:249-260 | severity=high | confidence=5\n  PROBLEM: Both new regression tests are defined but never called from main().\n  WHY: CI invokes this file as `python3 tests/test_orchestrate_poll_workflow_contract.py` (ci.yml:569), which relies on main() enumerating every test; the trusted-support checks never execute.\n\n- TASK_GAP\n  Requirement: \"Add regression coverage for hostile checkout content and missing or symlinked support assets\" (linked issue #4479 summary, entry[0] in PR comments).\n  Expected change site: tests/test_orchestrate_poll_workflow_contract.py main() function at lines 249-260.\n  Evidence of absence: test_post_checkout_helpers_are_resolved_only_from_verified_support (line 209) and test_telegram_helper_does_not_source_checkout_rate_limit_helper (line 233) are defined in the diff but not wired into main(). Every sibling test file in this PR (test_task_state.py, test_state_snapshot.py, test_security_audit_workflow_contract.py, test_orchestrate_poll_process.py) either auto-discovered its new tests via globals() or updated its main() call list. The hostile-checkout regression coverage the PR summary cites is defined but not executed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_orchestrate_poll_workflow_contract.py:249-260 | severity=critical | confidence=5\n  PROBLEM: The two new regression tests \u2014 `test_post_checkout_helpers_are_resolved_only_from_verified_support` (line 209) and `test_telegram_helper_does_not_source_checkout_rate_limit_helper` (line 233) \u2014 are defined but never invoked by `main()`.\n  WHY: CI runs this file as `python3 tests/test_orchestrate_poll_workflow_contract.py` (.github/workflows/ci.yml:569), which calls `main()`; the tests are absent from its explicit call list and silently never execute.\n\n- TASK_GAP\n  Requirement: \"Add regression coverage for hostile checkout content and missing or symlinked support assets.\" (from the PR summary / linked issue #4479 mitigation policy)\n  Expected change site: tests/test_orchestrate_poll_workflow_contract.py main() function (lines 249-260)\n  Evidence of absence: The two regression tests introduced for the hostile-checkout defences (`test_post_checkout_helpers_are_resolved_only_from_verified_support` at line 209 and `test_telegram_helper_does_not_source_checkout_rate_limit_helper` at line 233) are not in the `main()` call list, while every sibling regression-test file in the PR (test_task_state.py, test_state_snapshot.py, test_security_audit_workflow_contract.py, test_orchestrate_poll_process.py) was either auto-discovered via `globals()` or had its `main()` updated. Without `main()` invoking them, the \"regression coverage for hostile checkout content\" deliverable is not actually exercised by CI.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ca06a4d77797b9e54893c773ad9de6ba7e85fcd12b7209929ae1794900c97b5f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4480,
+    "run_id": "36164857407",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36164857407",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925173207_f34bf8871c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4480,
+    "run_id": "36164857407"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T17:32:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

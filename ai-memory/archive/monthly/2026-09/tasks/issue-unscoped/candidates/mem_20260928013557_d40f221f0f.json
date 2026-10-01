@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_claude_fixer_merge_check.sh:108-113 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When evidence verification fails, the merge-check step posts a findings hand-off with no reviewer finding, so a transient failure can leave the PR blocked and generate repeated unhelpful comments.\n  WHY: The user-facing comment does not explain the verification failure or its remediation, while the sweep can repeat the hand-off every 30 minutes.\n- scripts/review_autofix_step_claude_fixer_merge_check.sh:138-147 | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The merge-check can enable auto-merge when a check is cancelled rather than successful.\n  WHY: The readiness conditions do not reject cancelled checks, which may be counted as neither failed nor incomplete, allowing a PR to merge without that validation.\n- scripts/review_autofix_step_claude_fixer_merge_check.sh:95-105 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: If the evidence helper is missing from the staged support bundle, the step posts a generic findings hand-off instead of identifying the missing helper.\n  WHY: Consumers on an older `@stable` pin can receive repeated empty hand-offs from the sweep without learning that upgrading the support bundle is the remediation.\n- scripts/review_claude_fixer_judge.py:76-81 | severity=low | confidence=[3]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: `_parse_location` rejects valid root-level file locations when the filename has no extension.\n  WHY: Findings about files such as `Makefile` or `Dockerfile` lose location metadata, preventing sticky-ruling matching and degrading the location shown to the judge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_claude_fixer_merge_check.sh:108-113 | severity=high | confidence=[4]\n  PROBLEM: When evidence verification fails for a transient reason, the merge-check posts a findings hand-off that tells the Claude session to fix a finding even though the comment contains no reviewer finding.\n  WHY: The generic user-facing comment does not identify the cause or remediation, and repeated sweep dispatches can flood the PR with unhelpful comments.\n- scripts/review_autofix_step_claude_fixer_merge_check.sh:138-147 | severity=high | confidence=[3]\n  PROBLEM: The merge-check can enable auto-merge when a check is cancelled rather than successful.\n  WHY: The readiness conditions do not reject cancelled checks, which may be counted as neither failed nor incomplete, allowing a PR to merge without that validation.\n- scripts/review_autofix_step_claude_fixer_merge_check.sh:95-105 | severity=high | confidence=[4]\n  PROBLEM: If `review_claude_fixer_evidence.py` is missing from the staged support bundle, the step posts a generic findings hand-off instead of identifying the missing helper.\n  WHY: Consumers on an older `@stable` pin can receive repeated empty hand-offs from the sweep without learning that upgrading the support bundle is the remediation.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_claude_fixer_judge.py:76-81 | severity=low | confidence=[3]\n  PROBLEM: `_parse_location` rejects valid root-level file locations when the filename has no extension.\n  WHY: Findings about files such as `Makefile` or `Dockerfile` lose location metadata, preventing sticky-ruling matching and degrading the location shown to the judge.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3ae35e316131846770bae809103b7585d80c6d00a53a363e60e8a74027165772",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36365709730",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36365709730",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928013557_d40f221f0f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36365709730"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T01:35:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

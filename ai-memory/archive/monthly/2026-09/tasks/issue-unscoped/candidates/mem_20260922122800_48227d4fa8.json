@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Identical to #4138\" \u2014 the backport must produce a faithful, runnable port of the byte-cap fix that exercises the wave-judge byte cap and the review-blocked-judge byte cap.\n  expected_change_site: tests/test_orchestrate_poll_process.py wave-judge tests `test_judge_prompt_caps_embedded_pr_diffs_by_bytes` and `test_judge_prompt_keeps_small_pr_diffs_intact_under_default_byte_caps`; the mock PR payload field used to drive `gh api ... -H 'Accept: application/vnd.github.diff'`.\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The two wave-judge tests use `\"body\": huge_line` / `\"body\": \"ordinary small diff\"` (tests/test_orchestrate_poll_process.py:12693-12695 and :12801) for the mock PR payload, but the new mock parser branch in `parse_api` (tests/test_orchestrate_poll_process.py:2178-2180) only fires when the PR dict literally contains a `'diff'` key (`if any('application/vnd.github.diff' in arg for arg in args) and 'diff' in pr`). The review-blocked test (line 7860) does it correctly with `\"diff\": huge_line`. Because the wave-judge mocks lack `diff`, `parse_api` falls through to the JSON dump at line 2227, which embeds the body field in the JSON. The byte-cap assertions pass only because the body (5007 bytes) inflates the JSON past the 2000-byte cap and the JSON happens to contain the substring \"bundle-\" and the expected x-run patterns. The mock thus exercises the byte-cap logic on JSON content rather than on a real diff payload, and a future JSON-shape change (field reorder, removal of `body`, rewrap of long bodies) would silently break the truncation/elision/log assertions even though the production code is correct.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Identical to #4138\" \u2014 the backport must produce a faithful, runnable port of the byte-cap fix that exercises the wave-judge byte cap and the review-blocked-judge byte cap.\n  Expected change site: tests/test_orchestrate_poll_process.py wave-judge tests `test_judge_prompt_caps_embedded_pr_diffs_by_bytes` and `test_judge_prompt_keeps_small_pr_diffs_intact_under_default_byte_caps`; the mock PR payload field used to drive `gh api ... -H 'Accept: application/vnd.github.diff'`.\n  Evidence of absence: The two wave-judge tests use `\"body\": huge_line` / `\"body\": \"ordinary small diff\"` (tests/test_orchestrate_poll_process.py:12693-12695 and :12801) for the mock PR payload, but the new mock parser branch in `parse_api` (tests/test_orchestrate_poll_process.py:2178-2180) only fires when the PR dict literally contains a `'diff'` key (`if any('application/vnd.github.diff' in arg for arg in args) and 'diff' in pr`). The review-blocked test (line 7860) does it correctly with `\"diff\": huge_line`. Because the wave-judge mocks lack `diff`, `parse_api` falls through to the JSON dump at line 2227, which embeds the body field in the JSON. The byte-cap assertions pass only because the body (5007 bytes) inflates the JSON past the 2000-byte cap and the JSON happens to contain the substring \"bundle-\" and the expected x-run patterns. The mock thus exercises the byte-cap logic on JSON content rather than on a real diff payload, and a future JSON-shape change (field reorder, removal of `body`, rewrap of long bodies) would silently break the truncation/elision/log assertions even though the production code is correct.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9424799fa07b60a7bb00820c80a4a74fc9341876f33c4cc8daa6a17e57383b64",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4275,
+    "run_id": "35717770409",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35717770409",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922122800_48227d4fa8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4275,
+    "run_id": "35717770409"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-22T12:28:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

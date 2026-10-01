@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:_read_review_runs_to_marker() stop condition; check_review_runs() active-run filtering | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: Paging stops at the marker run, so an older active review on a later page can be omitted from the active-run check, allowing auto-merge while that review is still running.\n  WHY: The reviewers rate this MAJOR; other reviewers consider the older-run limitation an explicitly accepted risk or a false alarm.\n- scripts/claude_fixer_pending_checks.py:_read_review_runs_to_marker() dispatch-listing paging | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Dispatch listings can exhaust 10 pages without reaching the marker and raise ReadError, leaving the PR pending_checks_failed instead of auto-merging.\n  WHY: The reviewer states this is documented, deliberate fail-closed behavior; the PR can proceed only through one of the documented exits, so no code change is warranted.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_fixer_pending_checks.py:_read_review_runs_to_marker() stop condition | severity=low | confidence=[5]\n  PROBLEM: The reviewer says the concern that paging can omit an older active run is a false alarm.\n  WHY: Runs are returned newest-first, so after reaching the marker, later runs have lower IDs and predate it; the function contract concerns a newer review.\n- scripts/claude_fixer_pending_checks.py:check_review_runs() dispatch-listing paging | severity=low | confidence=[5]\n  PROBLEM: Dispatch listings can exhaust 10 pages without reaching the marker and raise ReadError, leaving the PR pending_checks_failed.\n  WHY: The reviewer says this fail-closed behavior is documented and deliberate, and no code change is warranted.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_fixer_pending_checks.py:_read_review_runs_to_marker (around lines 380-410, condition `if len(page) < REVIEW_RUNS_PER_PAGE or any(run[\"id\"] <= marker_run_id for run in page):`); check_review_runs head-branch list (around lines 442-448) | severity=high | confidence=[3]\n  PROBLEM: Paging can stop when a page contains a run at or below the marker, omitting older active runs on later pages from the `active` list.\n  WHY: If a head branch has enough runs, an older still-running review can be missed and `evaluate()` can enable auto-merge before that review posts findings; the reviewer says the docstring's age framing conflicts with the \u201cany\u201d head-branch / unbound-dispatch contract.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_fixer_pending_checks.py:`_read_review_runs_to_marker()` stops paging when a page contains any run with `id <= marker_run_id`; `check_review_runs()` then checks active runs only in the returned pages. | severity=high | confidence=[4]\n  PROBLEM: The listing can omit older active runs because the paging rule assumes runs older than the marker no longer matter.\n  WHY: If a later page contains an active queued or running review, `check_review_runs()` returns no blocker and `evaluate()` can enable auto-merge from the unchanged marker.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.md:lines 1047-1048 | PROBLEM: The article \"a\" before \"latest newer completed review\" is grammatically incorrect. WHY: README.md line 1472 correctly uses \"the latest newer completed review\"; the code computes a unique maximum via `max(newer, key=lambda run: run[\"id\"])`, so \"the\" is correct.\n- agents.md:lines 1047-1050 | PROBLEM: The line wrap separates the workflow list (`review_autofix.yml` / `ai-review.yml` / `review_rb_judge_dispatch.yml`) from \"dispatch (no PR binding)\". WHY: README.md lines 1469-1470 keep the workflow list and \"dispatch\" qualifier together more cleanly.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "aa268ed81438bff35580ec48f7345cb2e4bbe2dfd40414e5606bf92a37b93793",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5178,
+    "run_id": "36719373247",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36719373247",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930143134_aae0112c84",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5178,
+    "run_id": "36719373247"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T14:31:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

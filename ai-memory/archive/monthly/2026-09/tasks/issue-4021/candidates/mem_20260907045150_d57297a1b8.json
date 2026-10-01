@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing `tests/e2e_smoke_canary.txt` fixture  \nScope-mode justification: The requirement is fully specified and explicitly limits changes to one existing file. No broader implementation is needed.\n\n## Planning reference\n\n- Commit: `ebb86862965e73a25ac18586605ecf78021d5737`\n- Branch: `main`\n- Integration metadata: not provided; no mismatch is established.\n\n## Automation and lifecycle\n\n- Modifies existing content only; introduces no script.\n- No scheduler or PR-push wiring changes.\n- No supervisor, database gate, or removal-registry entry required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 replace the existing `run_id` while preserving exactly three required lines.\n\n## Implementation steps\n\n1. Replace the file contents with:\n   ```text\n   status: ok\n   run_id: alt-34084178579\n   updated-by: ai-pipeline\n   ```\n2. Ensure there are no extra blank lines or whitespace.\n3. Confirm no other tracked file changed.\n\n## Functions or modules\n\nNone.\n\n## Data structures affected\n\nThe three-line smoke-canary text fixture only. Its `run_id` value changes from `26151428977` to `alt-34084178579`.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Perform an exact fixture replacement\n\n- **Chosen:** Write the three specified lines exactly and modify no other file.\n- **Alternatives considered:** Replace only the second line or update related tests/documentation.\n- **Why:** Exact replacement directly satisfies the issue and its single-file constraint with minimal risk.\n\n## Security considerations\n\n- No trust boundary, endpoint, authorization surface, secret, money flow, or external input is introduced.\n- Verify the requested identifier is treated as plain fixture text and no unrelated sensitive data enters the file.\n\n## Risks and edge cases\n\n- Extra whitespace, a missing final newline, or additional lines would violate the exact-content requirement.\n- Unrelated workspace changes must not be included.\n- The referenced file exists; no issue/codebase conflict was found.\n\n## Testing considerations\n\n- Compare the complete file against the specified three-line payload.\n- Verify `git diff --name-only` reports only `tests/e2e_smoke_canary.txt`.\n- No broader test suite is necessary for this data-only canary update.\n\n## Assumptions and missing context\n\n- No assumptions beyond the literal issue requirements.\n- Missing integration-branch metadata is non-blocking because the checkout is explicitly resolved to `main`.\n\n## Pre-execution self-check\n\n- Scope is complete and restricted to the required file.\n- Exact target content and verification criteria are specified.\n- No implementation blocker remains.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d61152313353a85e243db496c9dfc4ca23e96a6cdefbddd4add1091b77990fcf",
+  "lineage": {
+    "issue_number": 4021,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34084415665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34084415665",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4021"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260907045150_d57297a1b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4021,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34084415665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4021",
+  "timestamps": {
+    "created_at": "2026-09-07T04:51:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

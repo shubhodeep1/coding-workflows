@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py:798-818 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The retry deadline check reserves time for only one 6-second API call, but an attempt can make up to three sequential calls without intermediate budget checks.\n  WHY: Slow API calls can push the hook past its 30-second timeout before it records pending state or completes the publish; severity assessments disagree (MAJOR versus NIT, while z-ai_glm-5_2 describes a hardening concern rather than a runtime defect), and reviewers disagree whether the interrupted attempt is retried or may go unrecorded.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py:798-803 | severity=high | confidence=[3]\n  PROBLEM: Each attempt can execute up to three sequential gh api calls (GET comments, POST comment, POST label), each bounded by CAP_BLOCKER_CALL_TIMEOUT = 6.0 s. The budget check reserves time for only one of those calls, so a successful attempt whose calls each approach but do not exceed the 6 s timeout can consume up to 18 s without the budget check recalculating mid-attempt.\n  WHY: If GitHub API latency is unusually high (say three calls at 5 s each in attempt 0, the second attempt's label retry at 4 s, and the third attempt's label retry at 4 s \u2014 all within the per-call timeout but totalling over 30 s), the hook process is killed before it writes the pending state or returns its system message. The next Stop retries idempotently, so no data is lost, but the publish is delayed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py and .claude/hooks/unattended_question_guard.py:801-818; Stop hook timeout in workflow-templates/.claude/settings.json:215\u2013222 | severity=high | confidence=[5]\n  PROBLEM: The retry deadline check reserves time for only one 6-second API call, but an attempt can make three sequential calls.\n  WHY: After a first attempt spends about 12 seconds on a successful comments GET and a timed-out comment POST, the next attempt is allowed because the check reserves only 1 second of backoff plus 6 seconds for one call. If that attempt then spends about 6 seconds on the GET, 6 seconds on a successful comment POST, and 6 seconds on a label timeout, total runtime reaches about 31 seconds. The Stop hook\u2019s 30-second timeout can terminate it before it records pending state or completes the label write; if the following Stop has no question, the absent pending state means no retry occurs.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py:801 | severity=low | confidence=[3]\n  PROBLEM: The per-attempt budget check reserves time for only one 6-second API call, but an attempt can execute up to three sequential calls (comments GET, comment POST, label POST) without intermediate budget checks.\n  WHY: When GitHub is slow, the hook can be killed by the 30-second process timeout before persisting publish state. The `cap_blocker: pending` state from a prior failure is not updated, and the outcome is not recorded. The retry-at-next-Stop mechanism handles this (the state remains pending and the next Stop retries), so the blocker is delayed rather than lost, but the budget check does not accurately enforce the stated 24-second bound.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py: _publish_attempts, budget check at `if clock() + delay + CAP_BLOCKER_CALL_TIMEOUT > deadline:` | confidence=1\n  PROBLEM: The budget check reserves time for only one 6s API call, but a single attempt can make up to 3 sequential calls (GET comments, POST comment, POST label).\n  WHY: In the worst case, the hook spends ~25s in API calls, leaving only ~5s of margin against the 30s wiring timeout. If the hook is killed, state stays `pending` and retries idempotently on the next Stop, so the consequence is a delayed retry, not data loss.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "68faac6d893cebda88ecb8cfa1012ec37be10278ca653dd4a4ba38756902746e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5104,
+    "run_id": "36694465071",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36694465071",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930095323_0df9aa35a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5104,
+    "run_id": "36694465071"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T09:53:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

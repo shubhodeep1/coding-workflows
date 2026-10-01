@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `026189a94065d4b993490595b46f3a401d3b7934` on `orchestrator/project-4139`; this matches the issue\u2019s integration branch. The `/answer [auto-answered-by-orchestrator]` comment supplies no additional constraints. Plan both security-pass findings.\n\nScope-mode: Hold Scope\nReuse-audit: extends `validate_rendered_shell_inputs` and `validate_driver.sh::wait_for_health`\nScope-mode justification: Both defects cross the existing manifest-to-trusted-driver boundary. Extending its renderer validation and runtime probe is safer than adding a competing probe or manual approval. This follows `unattended_system_instructions.md` \u00a76: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and entry point\n\nExtend existing code; introduce no script or long-running supervisor. The controls run automatically through `.github/workflows/internal-validate.yml` (`workflow_dispatch`) and its reusable `.github/workflows/validate.yml` job when the orchestrator dispatches validation. No database gate or future-removal registry entry applies.\n\n## Files likely to change\n\n- `scripts/render_validation_templates.py` \u2014 reject manifest overrides that influence host curl; validate any nonempty `env_overrides.APP_URL`.\n- `scripts/validate_driver.sh` \u2014 validate the effective URL from `validation/validate.env` or the environment before probing; bind the probe to the selected app container\u2019s published loopback port; harden the curl invocation.\n- `tests/test_render_validation_templates.py`, `tests/test_render_validation_templates_node_runtime_regressions.py`, and an existing driver test module \u2014 cover rejection, permitted rendering, and runtime behavior.\n- `README.md` \u2014 document the narrower opt-in `APP_URL` contract.\n\n## Functions and data structures\n\nIn `validate_rendered_shell_inputs`, extend the existing `env_overrides` denylist to include curl configuration controls, notably `CURL_HOME` and related curl configuration keys. For nonempty `APP_URL`, require an explicit HTTP(S) URL with a permitted loopback authority and numeric port; reject credentials, fragments, malformed or ambiguous authorities, control characters, and non-loopback destinations. Keep an empty value as the existing \u201cno probe\u201d signal.\n\nIn the driver, apply the same destination restriction to the **effective** `APP_URL`, not just the manifest: `load_env_file` can also supply it. Before any host request, verify that the requested port is published by the selected `APP_SERVICE` container using its Docker port bindings; unavailable or mismatched binding data fails the probe closed. Docker exposes these bindings under `.NetworkSettings.Ports`. ([docs.docker.com](https://docs.docker.com/reference/cli/docker/inspect/?utm_source=openai))\n\nInvoke host curl with `-q` as its first argument, an HTTP(S)-only `--proto` restriction, proxy-disabled/cleaned environment, a bounded timeout, and no redirect following. Curl documents that first-argument `-q` prevents loading curlrc and that `--proto =http,https` limits transfer protocols. ([curl.se](https://curl.se/docs/manpage.html))\n\n**Data structures affected:** existing manifest `env_overrides`, rendered `validation/validate.env`, and the driver\u2019s `APP_URL`/`APP_URL_EXPLICIT` values. No schema field, endpoint, credential, or new configuration variable is needed.\n\n**API/interface changes:** Explicit host-probed `APP_URL` values become restricted to an approved local published service endpoint. Unset and empty values retain their current behavior.\n\n## Decisions\n\n### D1 \u2014 Keep the host probe, with two validation boundaries\n- **Chosen:** Reject unsafe manifest inputs early and independently validate the effective URL and container binding immediately before host curl.\n- **Alternatives considered:** Manifest-only filtering; moving the probe into the app container.\n- **Why:** Manifest-only checks miss direct driver inputs; an in-container probe could require curl in consumer images. The existing driver can enforce both boundaries without a new runtime component.\n\n## Security considerations\n\nThe untrusted manifest and rendered env file must not configure a privileged host process or select an arbitrary runner-origin destination. Reject curl configuration overrides and isolate curl from proxy/configuration environment; do not log URL credentials or file contents. An attacker-supplied link-local URL, deceptive loopback spelling, proxy setting, curlrc, redirect, or port belonging to another local service must not cause a host request. The existing workflow authorizes validation dispatch; this change adds no exposed endpoint or authorization surface.\n\n## Risks and edge cases\n\n- **Codebase conflict:** `tests/test_render_validation_templates_node_runtime_regressions.py` currently expects `https://example.invalid/app` to render. Update that fixture to an allowed local URL and test the external URL as rejected.\n- Keep library consumers\u2019 unset/empty `APP_URL` path free of a host HTTP probe.\n- Reject unavailable Docker binding metadata rather than treating it as permission to probe. Preserve bounded health-timeout diagnostics without echoing an untrusted URL.\n- Check the other rendered families and direct-driver path for the same defect class; do not limit tests to the cited node-runtime example.\n\n## Testing considerations\n\nAdd renderer cases for `CURL_HOME` and other curl configuration overrides; valid local and invalid external, link-local, malformed, credential-bearing, and empty `APP_URL` values. Add driver tests with stubbed Docker/curl that assert **zero curl calls** for invalid URLs or unverified ports, and assert the first curl argument is `-q`, protocols are restricted, proxies are disabled, and redirects are not followed on a valid binding. Run pinned-dependency renderer tests and shell syntax checks; use the branch\u2019s CI for any checks whose pinned dependencies are unavailable locally.\n\nPLAN_SELF_CHECK: WARNING: An existing regression fixture explicitly accepts an external `APP_URL`; the planned security contract requires changing that expectation.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "bcebb34a9b7cf169a9407f3a158f7fc015c6f9acdbd08bae6b2be210bda73a28",
+  "lineage": {
+    "issue_number": 4577,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36250908137",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36250908137",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4577"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260926151602_bb1e58b944",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4577,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36250908137"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4577",
+  "timestamps": {
+    "created_at": "2026-09-26T15:16:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

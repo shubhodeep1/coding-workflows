@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4559` at `85e1f972c26364aabac22c62fb835693bea52154`; matches the issue\u2019s integration branch. The `/answer` continuation had no Q-ID questions to resolve.\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/e2e_smoke_canary.txt`\nScope-mode justification: This is a single-file fixture correction. A broader change would not improve completeness; the existing file and the acceptance criterion in `.github/workflows/test-and-mark-stable.yml:4634` provide the needed pattern. No shortcut-versus-complete trade-off applies.\n\n## Automation and entry point\n- Modify only existing code; introduce no script or supervisor.\n- Existing entry point: `.github/workflows/test-and-mark-stable.yml`, whose orchestrate smoke run specifies this canary\u2019s content. No scheduler wiring or database gate is needed.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` only.\n\n## Implementation\n- Keep `status: ok` on line 1. Replace the current line 2, `run_id: 26151428977`, with `decompose-run: 36242690892`. Preserve line 3, `updated-by: ai-pipeline`, and the trailing newline.\n\n## Data structures affected\n- The canary\u2019s plain-text lines only.\n\n## API/interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Replace the stale second line\n- **Chosen:** Replace line 2 in place and preserve every other line.\n- **Alternatives considered:** Append a fourth line or edit the smoke workflow.\n- **Why:** The issue requires the run marker specifically on line 2 and limits changes to the canary file.\n\n## Security considerations\n- No new endpoint, authorization surface, credential, or external input is introduced. Treat the requested run ID as literal fixture data; do not interpolate it into commands. Verify the path-limited diff to prevent an unintended change to the independent second canary.\n\n## Risks and edge cases\n- The current line 2 is an older `run_id:` value, not an existing `decompose-run:` line; replacement, rather than insertion above it, is necessary to preserve the other lines while meeting the line-2 requirement.\n- A concurrent change to the canary should be reviewed before applying the replacement; do not overwrite new unrelated lines.\n\n## Testing and pre-execution self-check\n- Confirm lines 1\u20132 are exactly `status: ok` and `decompose-run: 36242690892`.\n- Confirm line 3 remains unchanged and `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`. No toolchain-dependent test is needed for this text-only change.\n- Self-check: the requested value, target file, current contents, and matching planning ref are available. No implementation blocker found.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a6119e4971ec555621bf0df9e0d143cc950a214446990a8809ab0f59b222f482",
+  "lineage": {
+    "issue_number": 4563,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36243352008",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36243352008",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4563"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260926125811_54e363f58f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4563,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36243352008"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4563",
+  "timestamps": {
+    "created_at": "2026-09-26T12:58:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2696-2717 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Fork and read-only paths capture INITIAL_HEAD_SHA from live PR metadata before CAN_PUSH=false exits, allowing auto-merge of a newer unreviewed head.\n  WHY: The worktree reviews the event SHA while PR_PAYLOAD_FILE and the helper can both observe a later live head SHA, authorizing merge for code that was never reviewed.\n- .github/workflows/review_autofix.yml:1389-1395 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The SHA validation regex is too strict and refuses the merge when PR_HEAD_SHA is empty.\n  WHY: PRs with an unavailable gate head SHA cannot proceed through the claimed fallback path, preventing legitimate auto-merge.\n- .github/workflows/review_autofix.yml:1407-1413 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The refusal branch logs that the head SHA is unavailable or malformed but continues to the merge calls without exiting.\n  WHY: The merge can proceed unbound, defeating the head-binding safeguard.\n- scripts/review_enable_auto_merge.sh:42-46 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The refusal branch exits successfully after logging that INITIAL_HEAD_SHA is unavailable, allowing downstream label advancement.\n  WHY: ai:ready-to-merge may be applied even though the bound merge was refused.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Unknown or malformed SHAs must refuse the merge with a warning rather than issuing it unbound, and linked issues must not receive ai:ready-to-merge when a bound merge is refused or fails.\n  expected_change_site: All refusal branches in .github/workflows/review_autofix.yml and scripts/review_enable_auto_merge.sh\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The refusal branches print audit lines but do not prevent subsequent merge calls or label advancement from occurring.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:2696-2697 (seed from PR_PAYLOAD_FILE), exits at 2706/2711/2717 (CAN_PUSH=false) | severity=MAJOR | confidence=4\n  PROBLEM: Fork and read-only paths capture INITIAL_HEAD_SHA from PR_PAYLOAD_FILE, which contains live API data, before CAN_PUSH=false exits; the helper can authorize merge for an unreviewed head.\n  WHY: The worktree reviews event SHA A while live metadata may record newer head B, and both live values can match when the helper checks them.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/review_autofix.yml:1389-1395 | confidence=4\n  PROBLEM: The SHA validation regex is too strict and fails when PR_HEAD_SHA is empty.\n  WHY: The workflow refuses to merge PRs when the gate head SHA is unavailable, preventing legitimate fallback auto-merge.\n- .github/workflows/review_autofix.yml:1407-1413 | confidence=5\n  PROBLEM: The refusal branch logs head_sha_unavailable but continues to the merge calls without exiting.\n  WHY: The merge can execute when the SHA is unavailable or malformed, defeating head binding.\n- scripts/review_enable_auto_merge.sh:42-46 | confidence=5\n  PROBLEM: The refusal branch logs head_sha_unavailable but exits with code 0.\n  WHY: The downstream label advancement step can still apply ai:ready-to-merge even though the merge was refused.\n- TASK_GAP\n  Requirement: The PR description states that unknown or malformed SHAs must refuse the merge with a warning rather than issuing it unbound, and linked issues must not receive ai:ready-to-merge when a bound merge is refused or fails.\n  Expected change site: All refusal branches in .github/workflows/review_autofix.yml and scripts/review_enable_auto_merge.sh\n  Evidence of absence: The refusal branches print audit lines but do not prevent subsequent merge calls or label advancement from occurring.\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "44851e5120f0f00007fa51f847bd68bd929ed0217204541f3caace75dcc7a7e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4110,
+    "run_id": "35099445153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35099445153",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260916145150_0c31eba8d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4110,
+    "run_id": "35099445153"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-16T14:51:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

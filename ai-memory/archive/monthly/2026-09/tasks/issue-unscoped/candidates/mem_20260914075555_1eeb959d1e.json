@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4585-4592 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The refusal sentinel check in Check 1b does not set `EDITOR_NOOP_SUSPICIOUS=\"true\"` before setting `EDITOR_NOOP_REFUSAL=\"true\"`, which means the refusal-specific alert chain may not fire when `REVIEWERS_SUCCESSFUL=0`.\n  WHY: The Check 1 regex and warning literal are relied upon by the e2e poller in `test-and-mark-stable.yml`; other reviewers state that Check 1b sets `EDITOR_NOOP_SUSPICIOUS` at `.github/workflows/review_autofix.yml:4594`, so this finding is disputed.\n\n- .github/workflows/review_autofix.yml:4616-4630 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The recoverable-failure sentinel check in Check 1c does not set `EDITOR_NOOP_SUSPICIOUS=\"true\"` before setting `EDITOR_NOOP_RECOVERABLE_FAILURE=\"true\"`, which means the recoverable-failure alert chain may not fire when `REVIEWERS_SUCCESSFUL=0`.\n  WHY: The Check 1 regex and warning literal are relied upon by the e2e poller in `test-and-mark-stable.yml`; other reviewers state that Check 1c sets `EDITOR_NOOP_SUSPICIOUS` at `.github/workflows/review_autofix.yml:4627`, so this finding is disputed.\n\n- .github/workflows/review_autofix.yml:7880-7900 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The editor_slot classification logic does not check `EDITOR_NOOP_REFUSAL` first before checking `EDITOR_NOOP_RECOVERABLE_FAILURE`, creating a precedence bug that could misclassify refusal as recoverable_failure.\n  WHY: The refusal flag should take precedence over recoverable_failure; deepseek, minimax, moonshotai, and qwen reviewers state that the actual logic checks refusal first, so this finding is disputed.\n\n- .github/workflows/review_autofix.yml:8046-8056 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `determine_finalize_reason` function has incorrect ordering \u2014 the recoverable_failure check is placed after refusal but before the generic case, which could cause incorrect classification when both flags are set.\n  WHY: The precedence should be refusal first, then recoverable_failure, then generic editor_noop_suspicious; deepseek, minimax, moonshotai, and qwen reviewers state that the actual ordering is correct, so this finding is disputed.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"refusal / editor_noop_refusal keep precedence and every existing value is unchanged\"\n  expected_change_site: .github/workflows/review_autofix.yml:7880-7900 and .github/workflows/review_autofix.yml:8046-8056\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The diff shows the new recoverable_failure branch is added but does not maintain proper refusal precedence in the editor_slot classification logic and determine_finalize_reason function.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/review_autofix.yml\n  Line or code reference: 4585-4592\n  Problem: The refusal sentinel check in Check 1b does not set `EDITOR_NOOP_SUSPICIOUS=\"true\"` before setting `EDITOR_NOOP_REFUSAL=\"true\"`, which means the refusal-specific alert chain may not fire when `REVIEWERS_SUCCESSFUL=0`.\n  Why it fails at runtime: The Check 1 regex and warning literal are relied upon by the e2e poller in `test-and-mark-stable.yml`. Without setting `EDITOR_NOOP_SUSPICIOUS=\"true\"` first, the refusal-specific branch of the operator alert never triggers, leaving the zero-reviewer blind spot partially unfixed.\n  ISSUE_CONFIDENCE: 5\n\n- .github/workflows/review_autofix.yml\n  Line or code reference: 4616-4630\n  Problem: The recoverable-failure sentinel check in Check 1c does not set `EDITOR_NOOP_SUSPICIOUS=\"true\"` before setting `EDITOR_NOOP_RECOVERABLE_FAILURE=\"true\"`, which means the recoverable-failure alert chain may not fire when `REVIEWERS_SUCCESSFUL=0`.\n  Why it fails at runtime: The Check 1 regex and warning literal are relied upon by the e2e poller in `test-and-mark-stable.yml`. Without setting `EDITOR_NOOP_SUSPICIOUS=\"true\"` first, the recoverable-failure-specific branch of the operator alert never triggers, leaving the zero-reviewer blind spot partially unfixed.\n  ISSUE_CONFIDENCE: 5\n\n- .github/workflows/review_autofix.yml\n  Line or code reference: 7880-7900\n  Problem: The editor_slot classification logic does not check `EDITOR_NOOP_REFUSAL` first before checking `EDITOR_NOOP_RECOVERABLE_FAILURE`, creating a precedence bug that could misclassify refusal as recoverable_failure.\n  Why it fails at runtime: The refusal flag should take precedence over recoverable_failure, but the current logic checks refusal after recoverable_failure in the elif chain, which violates the documented precedence requirement.\n  ISSUE_CONFIDENCE: 5\n\n- .github/workflows/review_autofix.yml\n  Line or code reference: 8046-8056\n  Problem: The `determine_finalize_reason` function has incorrect ordering \u2014 the recoverable_failure check is placed after refusal but before the generic case, which could cause incorrect classification when both flags are set.\n  Why it fails at runtime: The precedence should be: refusal first, then recoverable_failure, then generic editor_noop_suspicious. The current ordering violates this documented requirement.\n  ISSUE_CONFIDENCE: 5\n\n- TASK COMPLETENESS / INTENT GAPS\n  Requirement: \"refusal / editor_noop_refusal keep precedence and every existing value is unchanged\" \u2014 this requirement is NOT fully implemented in the classification logic.\n  Expected change site: .github/workflows/review_autofix.yml:7880-7900 and .github/workflows/review_autofix.yml:8046-8056\n  Evidence of absence: The diff shows the new recoverable_failure branch is added but does not maintain proper refusal precedence in the editor_slot classification logic and determine_finalize_reason function.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "f8f447a29abaed62954776fb546111d77dc16c01e635430b136b8f82ff42f3c2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4086,
+    "run_id": "34814601563",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34814601563",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260914075555_1eeb959d1e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4086,
+    "run_id": "34814601563"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-14T07:55:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

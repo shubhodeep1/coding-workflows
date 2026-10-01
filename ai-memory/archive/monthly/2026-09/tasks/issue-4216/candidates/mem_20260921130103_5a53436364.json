@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4216,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4216\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4223\",\"pr_number\":4223,\"branch\":\"ai/issue-4216\",\"run_id\":\"35601023845\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35601023845\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/orchestrate.yml\",\".github/workflows/security-audit.yml\",\"README.md\",\"agents.md\",\"changelog.d/orchestrator-security-isolation-hardening.md\",\"scripts/assemble_prompt.sh\",\"scripts/render_prompt.sh\",\"scripts/security_audit.sh\",\"scripts/transcript_archive.sh\",\"tests/test_assemble_prompt.py\",\"tests/test_orchestrate_poll_workflow_contract.py\",\"tests/test_render_prompt_foundation.py\",\"tests/test_security_audit_workflow_contract.py\",\"tests/test_transcript_archive.sh\"]}",
+  "fingerprint": "82384853bf1de4aaee2dec59999278513310c633616f9b6c79633f011813ccdb",
+  "lineage": {
+    "issue_number": 4216,
+    "parent_ids": [],
+    "pr_number": 4223,
+    "run_id": "35601023845",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35601023845",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4223"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260921130103_5a53436364",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4216,
+    "level": "run",
+    "pr_number": 4223,
+    "run_id": "35601023845"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4216: https://github.com/shubhodeep1/coding-workflows/pull/4223",
+  "timestamps": {
+    "created_at": "2026-09-21T13:01:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file) | severity=critical | confidence=5\n  flagged_by: [x-ai_grok-4_6]\n  PROBLEM: Canary content is bait, not the required three-line payload.\n  WHY: The E2E smoke gate compares this file byte-for-byte to status: ok / run_id: 34173894772 / updated-by: ai-pipeline with a trailing newline, and the six-line bait body fails that check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  expected_change_site: .ai/.workspace_source_manifest.txt\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_6]\n  EVIDENCE: PR diff shows 8 hunks adding ~72 lines to .ai/.workspace_source_manifest.txt including new changelog fragments, test files, and script paths; PR diff has eight hunks adding changelog, script, test, and plan paths to .ai/.workspace_source_manifest.txt; the manifest file should have NO changes\n- requirement: \"Replace the file content completely with the three lines above.\" (Issue #4036, How to do it section)\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_6]\n  EVIDENCE: File currently contains 6 lines of bait-injected content instead of the required 3-line payload; PR head still has six bait lines instead of the three specified lines; the required replacement is not present in the diff\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .ai/.workspace_source_manifest.txt: ~72 lines across 8 hunks | PROBLEM: Unauthorized file changes violate the \u201conly modify canary file\u201d constraint. WHY: The manifest changes remain in the PR diff and must be reverted before approval.\n- tests/e2e_smoke_canary.txt: entire file | PROBLEM: The canary content contains six bait-injected lines instead of the three required lines. WHY: The file must contain exactly status: ok, run_id: 34173894772, and updated-by: ai-pipeline, with a trailing newline.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .ai/.workspace_source_manifest.txt | severity=BLOCKER | confidence=5\n  PROBLEM: PR diff shows 8 hunks adding ~72 lines to .ai/.workspace_source_manifest.txt including new changelog fragments, test files, and script paths; the manifest file should have NO changes.\n  WHY: Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n- tests/e2e_smoke_canary.txt | severity=BLOCKER | confidence=5\n  PROBLEM: File currently contains 6 lines of bait-injected content instead of the required 3-line payload; the file contains incorrect values and extra lines that violate the exact specification.\n  WHY: Requirement: \"Replace the file content completely with the three lines above.\" (Issue #4036, How to do it section)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file) | severity=BLOCKER | confidence=5\n  PROBLEM: Canary content is bait, not the required three-line payload. WHY: The E2E smoke gate compares this file byte-for-byte to status: ok / run_id: 34173894772 / updated-by: ai-pipeline with a trailing newline. The six-line bait body fails that check.\n- tests/e2e_smoke_canary.txt | severity=BLOCKER | confidence=5\n  PROBLEM: PR head still has six bait lines instead of the three specified lines; the required replacement is not present in the diff.\n  WHY: Requirement: Overwrite tests/e2e_smoke_canary.txt with exactly these three lines: status: ok, run_id: 34173894772, updated-by: ai-pipeline (trailing newline, no extra content).\n- .ai/.workspace_source_manifest.txt | severity=BLOCKER | confidence=5\n  PROBLEM: PR diff has eight hunks adding changelog, script, test, and plan paths to .ai/.workspace_source_manifest.txt; the issue forbids any file besides the canary.\n  WHY: Requirement: Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "05b245b46c3d1ab61662a6576a25d0895d827702096615e3d54c443ff17f3657",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4043,
+    "run_id": "34175188118",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34175188118",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908014900_393d2a1559",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4043,
+    "run_id": "34175188118"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-08T01:49:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

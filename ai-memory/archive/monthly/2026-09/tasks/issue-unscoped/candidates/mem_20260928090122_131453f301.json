@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:941-978 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: When a later page in the `OTHER_ACTIVE_PLAN_RUNS` walk is unreadable, the outer poll loop resets `ACTIVE_WALK_PAGE` and retries the same page every `POLL_INTERVAL` without an outer retry bound or exponential backoff.\n  WHY: A persistently unreadable page can cause repeated API calls for as long as the gate runs; this is reported as NIT by all three reviewers.\n- .github/workflows/test-and-mark-stable.yml:864-978 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: In the completed-without-label branch, the status poll and active-run walk both fetch page 1 for the same `created=>` window, adding a duplicate API read on each poll iteration.\n  WHY: Reviewers report that the page-1 reread, together with the walk's additional reads, raises API usage to roughly 11 reads per `POLL_INTERVAL` in this branch; all report NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml: lines 941-978 (the `OTHER_ACTIVE_PLAN_RUNS` pagination walk that fires when page 1 has 0 active runs) | severity=low | confidence=[3]\n  PROBLEM: When a later page is permanently unreadable, `ACTIVE_WALK_PAGE` is reset on the next outer iteration and that page is fetched again every `POLL_INTERVAL` with no exponential backoff or outer retry bound.\n  WHY: This can cause about 2 API calls per `POLL_INTERVAL` for as long as the gate is alive; reported as NIT.\n- .github/workflows/test-and-mark-stable.yml: lines 864-872 (status poll `latest_scoped_run_field \"Plan\" \"status\" 1`) and lines 941-978 (the new other-active walk that also calls `fetch_plan_runs_json` for page 1) | severity=low | confidence=[4]\n  PROBLEM: In the stuck state, the status poll and active-run walk read the same page-1 window on each outer poll iteration, followed by up to 9 additional reads.\n  WHY: This raises usage to about 11 `actions/runs` reads per `POLL_INTERVAL`, compared with about 2 before the change; reported as NIT.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml: 950-975 (the `ACTIVE_WALK_PAGE` reset at line 951 and the `ACTIVE_WALK_UNCONFIRMED` retry at lines 970-973) | severity=low | confidence=[3]\n  PROBLEM: When a later page is permanently unreadable, the counter resets at each outer poll iteration and page 2 is re-fetched every `POLL_INTERVAL` without exponential backoff or an outer retry bound.\n  WHY: A rate-limited or permanently broken later page can cause about 2 API calls per `POLL_INTERVAL` for as long as the gate runs; reported as NIT.\n- .github/workflows/test-and-mark-stable.yml: 870 (status poll), 929 (page-1 fetch), 950-975 (other-active walk) | severity=low | confidence=[4]\n  PROBLEM: The active-run walk reads page 1 and up to 9 further pages after the status poll has already read page 1 in the same iteration.\n  WHY: This produces roughly 11 reads per `POLL_INTERVAL` in the stuck state; reported as NIT and a documented performance tradeoff.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/test-and-mark-stable.yml: ~870 (status poll) + ~929 (active check fetch_plan_runs_json) | severity=low | confidence=[4]\n  PROBLEM: The completed-without-label branch re-reads page 1 after the status poll has already read it.\n  WHY: The duplicate API call per poll adds rate-limit pressure in this rare case; reported as NIT.\n- .github/workflows/test-and-mark-stable.yml: ~958 (ACTIVE_WALK_UNCONFIRMED path) | severity=low | confidence=[3]\n  PROBLEM: An unreadable page in the active walk retries through the full poll loop indefinitely.\n  WHY: There is no outer retry bound for persistently unreadable later pages; reported as NIT.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4964c01749d24a39085e8b63b068cf5276e996eea8d1046c0c83f0e598046cc2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4730,
+    "run_id": "36397832640",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36397832640",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928090122_131453f301",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4730,
+    "run_id": "36397832640"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T09:01:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

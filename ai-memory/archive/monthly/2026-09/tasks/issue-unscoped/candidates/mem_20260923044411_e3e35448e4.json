@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_autofix_report.sh: lines 190 and 204 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Both the `build-autofix-payload` failure (line 190) and the `wrap-dispatch` failure (line 204) log `skip reason=payload_build_failed`, making distinct failure stages indistinguishable to grep-based monitoring.\n  WHY: An operator or alert rule matching `skip reason=payload_build_failed` cannot tell which stage failed without parsing `detail=`; the issue reporter uses a distinct `error dispatch_build_failed` for its wrap-dispatch failure.\n\n- .github/workflows/workflow-failure-heal-intake.yml: Line: 115 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Hard-coded \"::error::client_payload is not valid JSON\" is emitted for any unwrap-dispatch failure.\n  WHY: Valid JSON with bad structure/schema or another Python error produces a misleading log, complicating dispatch-rejection debugging.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: scripts/workflow_failure_heal_autofix_report.sh\n  Line or code reference: lines 190 and 204\n  Problem: Both the `build-autofix-payload` failure (line 190) and the `wrap-dispatch` failure (line 204) log `skip reason=payload_build_failed`. These are distinct stages \u2014 one builds the report payload, the other envelops it for dispatch \u2014 but the identical reason string makes them indistinguishable to grep-based monitoring and forces operators to parse the `detail=` field to tell them apart.\n  Why it fails at runtime: An operator or alert rule matching `skip reason=payload_build_failed` cannot tell which stage failed. The issue reporter (`workflow_failure_heal_report.sh:190`) already uses a distinct `error dispatch_build_failed` for its wrap-dispatch failure, so the autofix reporter is inconsistent with its sibling.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/workflow-failure-heal-intake.yml\n  Line: 115\n  Problem: Hard-coded \"::error::client_payload is not valid JSON\" for any unwrap-dispatch failure\n  Why it fails at runtime: Valid JSON with bad structure/schema or other Python error produces misleading log, complicating debug of dispatch rejections.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: scripts/workflow_failure_heal_autofix_report.sh\n  Location: lines 190 and 204 (both emit `skip reason=payload_build_failed`)\n  Issue: The two failure sites share the same skip reason even though they describe different stages: line 190 is the `build-autofix-payload` stage and line 204 is the `wrap-dispatch` envelope stage. An operator or grep-based monitor keyed on `skip reason=payload_build_failed` cannot distinguish which stage failed without parsing `detail=`.\n  Suggested minimal fix: change the literal at line 204 from `payload_build_failed` to a distinct reason such as `dispatch_envelope_failed` (one-line edit, no contract impact since `skip reason=` values are free-form log text, not parsed by the intake).\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "338cb0eaa65a578793d82a2bbf0387f84c7126c19751b1b61a096b119467b188",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4303,
+    "run_id": "35815820668",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35815820668",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923044411_e3e35448e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4303,
+    "run_id": "35815820668"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-23T04:44:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_checker_restart.py:701-717 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `decide()` can call `_issue_open_unblocked()` for a page-listed checker that was not refreshed, before skipping it as `not_looked_up`.\n  WHY: When the open-issue listing is empty, these checkers can trigger unnecessary issue API reads that cannot result in a restart.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_checker_restart.py:701-716 | severity=NIT | confidence=4\n  PROBLEM: A page-listed checker whose lookup failed can reach the `_issue_open_unblocked` call at line 705 even though it will ultimately be skipped as `not_looked_up` at line 716.\n  WHY: The issue read at lines 703-705 runs before the `checker not in refreshed` check at line 713. A page-listed checker that `_page_snapshot_restartable` qualified for `lookups_needed`, but whose `get_session` lookup subsequently failed, retains its page record in `by_id` (not in `refreshed`). It passes the idle/active/cooldown guards at 680-698 because those check the same stale page record that `_page_snapshot_restartable` already deemed restartable, then reaches the issue read before being rejected at 716. The wasted call is bounded by the 8-lookup cap, and the `issue_cache` at 639 prevents duplicate reads for the same issue across multiple checkers, so the worst case is at most 8 extra REST calls per wake when every lookup fails during an API outage.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_checker_restart.py: decide() lines 701-717, specifically the order of the issue-open check (lines 701-712) relative to the `not_looked_up` check (lines 713-716) | severity=NIT | confidence=4\n  PROBLEM: A page-listed checker that is not in `refreshed` (because it was past the LOOKUP_CAP in `lookups_needed`, or its lookup failed) can trigger a `repos/<repo>/issues/<n>` REST read via `_issue_open_unblocked` before being skipped as `not_looked_up` at line 716.\n  WHY: When more than 8 candidates are present, `lookups_needed` caps at 8 (rotated hourly) and the rest are never in `refreshed`. Those checkers still pass the conditions 2-11 in `decide` (they are idle, not blocked, not need_input, not active, not in a project session, not recently restarted, and not bound) and reach the issue read at line 705. The read returns from `gh_api` and is then thrown away because line 713's `checker not in refreshed` is True. Under a scan failure (`open_issues == {}`), the cap can be hit while the same 1-2 issues back every candidate, so the cap is reached before the first lookup rotates; the `issue_cache` saves the repeated read within one call, but every fresh wake with the same scan failure still spends up to LOOKUP_CAP-API-reads on issue lookups that `not_looked_up` discards.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_checker_restart.py: Lines 701\u2013716 | severity=NIT | confidence=4\n  PROBLEM: `decide()` calls `_issue_open_unblocked()` before checking whether the checker has a fresh `get_session` record.\n  WHY: When the open-issue listing fails, `open_issues` is empty. Page-listed issue checkers that were not looked up, or whose lookup failed, can each trigger a separate issue API read before being skipped as `not_looked_up`. Those reads cannot result in a restart and can consume API quota during recovery from the listing failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_checker_restart.py: lines 701-717 (issue check at 701-712, `not_looked_up` check at 713-717) | severity=NIT | confidence=4\n  PROBLEM: The issue API read (`_issue_open_unblocked`) runs before the `not_looked_up` guard.\n  WHY: When the scan's open-issue listing failed, `open_issues` is empty. Each unrefreshed issue-project checker then costs one REST read at line 705 before being skipped as `not_looked_up` at line 713. With many candidates, this adds avoidable API calls during a scan failure.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_checker_restart.py: lines 701-717 \u2014 condition 2 (issue-open check at 703-712) runs before condition 6 (not_looked_up at 713-717) | severity=NIT | confidence=4\n  PROBLEM: A page-listed checker that was not looked up (past the 8-lookup cap) and passes conditions 1, 3, 4, 5 still triggers the issue-open REST call at line 705 (`_issue_open_unblocked` \u2192 `gh_api`) before being skipped as `not_looked_up` at line 716.\n  WHY: The docstring at line 77-79 states condition 2 is \"read after the free checks: it may cost one REST call\", but condition 6 (a free check) currently runs AFTER condition 2, contradicting that stated ordering. Moving the `not_looked_up` check (lines 713-717) before the issue-open check (lines 701-712) would avoid all these API calls since a `not_looked_up` checker cannot be restarted regardless of issue state. The `issue_cache` mitigates redundant calls for the same issue within one `decide()` call, but distinct issues among capped checkers still waste calls during scan failures. Result is still correct \u2014 just unnecessarily expensive.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c52abf9244fa6e69dcb3ed8ea21514834e38f9e936f59d17d66d7e19b022e773",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5598,
+    "run_id": "36714987137",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36714987137",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930130722_8aeea37b6d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5598,
+    "run_id": "36714987137"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T13:07:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

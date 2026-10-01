@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/conftest.py:99 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The fixture name `_isolate_repo_pinning_git_environment` describes only the original git-variable scope even though the fixture now also strips staged-support workflow-runtime environment variables.\n  WHY: This causes no runtime failure because the fixture is autouse, session-scoped, and internal, but it is a maintainability concern; the reviewers classified the issue as a naming nit.\n- tests/test_pytest_git_env_isolation.py:57 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The helper name `_clean_git_env` describes only git variables even though its filter now excludes all of `WORKFLOW_RUNTIME_ENV_VARS`, including staged-support ledger variables.\n  WHY: This causes no runtime failure because the helper is module-local and used by both nested-run tests, but its name may mislead future contributors about the broader filtering scope.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/conftest.py:99 | severity=NIT | confidence=3\n  PROBLEM: The fixture function name describes only the original scope (stripping repo-pinning git variables) but the function now also strips `STAGED_SUPPORT_RUNTIME_ENV_VARS` via `WORKFLOW_RUNTIME_ENV_VARS`.\n  WHY: This does not fail at runtime \u2014 the fixture is autouse and session-scoped with no external callers depending on the name. The docstring correctly describes the expanded scope, but a developer scanning the function name alone would be misled.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/conftest.py:99 | severity=NIT | confidence=3\n  PROBLEM: The function name `_isolate_repo_pinning_git_environment` is misleading as the fixture now also strips staged-support workflow-runtime environment variables (`STAGED_SUPPORT_RUNTIME_ENV_VARS`) in addition to repository-pinning git environment variables.\n  WHY: This is a naming preference/nit that creates no runtime failure; the function name mismatch affects clarity only.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/conftest.py:99 | severity=NIT | confidence=3\n  PROBLEM: The fixture name describes only the original git-variable scope, but the fixture now also strips `STAGED_SUPPORT_LEDGER`, `STAGED_SUPPORT_BASE_DIR`, `STAGED_SUPPORT_EDITOR_HEAD_LEDGER` and `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`, the `WORKFLOW_RUNTIME_ENV_VARS` constant composed from both lists, and the docstring rewritten to \"Strip workflow-runtime variables for the whole test session\".\n  WHY: does not fail at runtime. Renaming is a clarity/maintainability concern only \u2014 the fixture is autouse and session-scoped, no external caller depends on the name.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/conftest.py:99 | severity=NIT | confidence=4\n  PROBLEM: The fixture name describes only the original git-variable scope, but the fixture now also strips `STAGED_SUPPORT_RUNTIME_ENV_VARS` (the four staged-support ledger paths).\n  WHY: It does not fail at runtime. The fixture is autouse, session-scoped, and underscore-prefixed, so no external caller depends on the name. This is a maintainability concern: a future contributor reading the name will not realize it also strips staged-support ledger paths, and may duplicate the stripping or miss the broader scope when extending the fixture.\n- tests/test_pytest_git_env_isolation.py:57 | severity=NIT | confidence=4\n  PROBLEM: The helper name says \"clean git env\" but the filter on line 61 now excludes all of `WORKFLOW_RUNTIME_ENV_VARS` (git vars plus staged-support ledger vars), not just git vars.\n  WHY: It does not fail at runtime. The helper is module-local and both nested-run tests use it. A future reader may not realize the helper also strips staged-support vars when reusing it for a new nested-run scenario.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d823823049758c1c3c916be51491bdec723e46fd08f8bc81732b15536548db8e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4243,
+    "run_id": "35664916397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35664916397",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921234654_6dd19c7851",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4243,
+    "run_id": "35664916397"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-21T23:46:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/5667-checker-waits-on-held-head.md:12 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The changelog's claim of 0 extra GitHub API calls is imprecise for a `claude/implement-plan-*` PR with a blocking label but no hold.\n  WHY: The hold check fetches the comments listing before the blocking-label check returns, adding one paginated REST request per check-in in this case; reviewers uniformly rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- changelog.d/5667-checker-waits-on-held-head.md: line 12 | severity=NIT | confidence=[4]\n  PROBLEM: The table claims \"Extra GitHub API calls | 0 (the one comment listing is read once and reused for the hand-off check)\", but for a claude/implement-plan-* PR that already carries a blocking label (ai:review-blocked, ai:review-autofix-failed, ai:needs-human) and has no hold, check_pr now fetches the comments listing before checking blocking labels.\n  WHY: The changelog claim of 0 extra calls is imprecise for blocking-label PRs without a hold, which now make an additional paginated comments REST call per check-in.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/5667-checker-waits-on-held-head.md: row \"Extra GitHub API calls | 0\"; also workflow-templates/.claude/scripts/check_in_status.py:250-267 vs the old ordering where _label_names + blocking check ran before any comment fetch. | severity=NIT | confidence=[4]\n  PROBLEM: The changelog claims \"0\" extra API calls because the one comment listing is \"read once and reused for the hand-off check.\" That statement is true for the issue's case (hold on a fixer head, or a hand-off for the same head) but not for a `claude/implement-plan-*` PR that carries a blocking label (`ai:review-blocked`, `ai:review-autofix-failed`, `ai:needs-human`) with no hold.\n  WHY: Each hourly check-in for a blocked fixer head with no hold silently costs one extra paginated REST request; operators reading the changelog will be surprised by it. The runtime verdict is still correct (`state: blocked`, `done: true`), so this is documentation precision, not a runtime defect. The same claim is also restated in workflow-templates/.claude/scripts/check_in_status.py:84-86 (the API-budget docstring was updated to say the comment read happens \"before the label check\"), so the changelog row should be brought in line.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/check_in_status.py; changelog.d/5667-checker-waits-on-held-head.md | check_in_status.py:255-263, before the blocking-label return at lines 269-271; changelog line 12 | severity=NIT | confidence=[5]\n  PROBLEM: The changelog says the change adds 0 GitHub API calls. For an open `claude/implement-plan-*` PR with a blocking label but no hold, the checker now fetches the paginated comments listing before returning `blocked`; previously the label check returned without that read.\n  WHY: Each such check-in makes at least one additional REST request, so the documented API cost understates usage for this case.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/5667-checker-waits-on-held-head.md: line 12 (\"Extra GitHub API calls | 0\") | severity=NIT | confidence=[5]\n  PROBLEM: The \"0 extra API calls\" claim is imprecise for a narrow case. A `claude/implement-plan-*` PR with a blocking label but no hold now fetches the comments listing before returning `blocked`, whereas the old code checked blocking labels first and returned before any comment read.\n  WHY: The hold check at `workflow-templates/.claude/scripts/check_in_status.py:262` fetches comments via `gh_api_list` before the blocking-label check at lines 269-271. For a PR with `ai:review-blocked` (or similar) but no hold, each hourly check-in performs one additional paginated REST call. The comment read is reused for the hand-off check (so it's not wasted), but it is \"extra\" compared to the previous behavior for this specific case.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- changelog.d/5667-checker-waits-on-held-head.md: line 12, \"Extra GitHub API calls | 0 (the one comment listing is read once and reused for the hand-off check)\" | severity=NIT | confidence=[5]\n  PROBLEM: The \"0\" extra API calls claim is factually wrong for a `claude/implement-plan-*` PR that carries a blocking label (`ai:review-blocked`, `ai:review-autofix-failed`, `ai:needs-human`) but has no hold.\n  WHY: The new hold check at `workflow-templates/.claude/scripts/check_in_status.py:262` fetches the comments listing via `gh_api_list` before the blocking-label check at `:269-271` returns `blocked`. In the old code, the blocking-label check used data already in the PR payload and returned before any comment read was needed, so this case now adds one paginated REST call per hourly check-in.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "dd8caa6f8564de3c22ca3e81bc743e9667cbc6997b7a1091f789acbbf2d0620a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5716,
+    "run_id": "36727910179",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36727910179",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930150809_83ddd0b0be",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5716,
+    "run_id": "36727910179"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T15:08:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:~2191 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The documentation lists the bare `#<n> \u00b7 implement-issue-claude` title form but omits the optional `PR #<pr> \u2014 ` continuation that the janitor also matches.\n  WHY: This is a documentation precision gap, not a runtime failure; the code handles both forms, but an operator reading only CLAUDE.md may not realize the intermediate form is covered.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document the pickup's issue-start title forms, including \u201c#<N> \u00b7 implement-issue-claude\u201d and \u201c#<N> \u00b7 PR #<P> \u2014 implement-issue-claude.\u201d\n  expected_change_site: CLAUDE.md \u00a726.I and agents.md\u2019s stale session sweep title list.\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: CLAUDE.md \u00a726.I (lines 2189-2192) and agents.md \"Eligible titles\" list (lines 1098-1099) list only `#<n> \u00b7 implement-issue-claude`, omitting the optional `PR #<pr> \u2014 ` continuation; scripts/claude_session_janitor.py:41 documents `#<n> \u00b7 [PR #<pr> \u2014 ]implement-issue-claude\u2026`; tests/test_claude_session_janitor.py:111 exercises `(\"#5504 \u00b7 PR #5519 \u2014 implement-issue-claude\", \"issue_start\", {\"repo\": None, \"issue\": 5504})`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- CLAUDE.md:line ~2191 | severity=NIT | confidence=3\n  PROBLEM: The doc text lists only the bare `#<n> \u00b7 implement-issue-claude` form but the code in scripts/claude_session_janitor.py:103 also matches `#<n> \u00b7 PR #<pr> \u2014 implement-issue-claude` \u2014 the intermediate `PR #<pr> \u2014 ` continuation the pickup creates.\n  WHY: No runtime failure. This is a documentation precision gap: the code correctly handles both forms, and the phrase \"whose only issue number is the prefix\" is technically true for both, but the docs are less explicit than the janitor's own docstring.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Document the pickup's issue-start title forms the script now matches, including the \"#<n> \u00b7 implement-issue-claude\" form and its later \"#<n> \u00b7 PR #<pr> \u2014 implement-issue-claude\" form (the PR description explicitly states the pickup creates both forms on production sessions).\n  Expected change site: CLAUDE.md \u00a726.I (lines 2189-2192) and agents.md \"Eligible titles\" list (lines 1098-1099).\n  Evidence of absence: CLAUDE.md lists only `#<n> \u00b7 implement-issue-claude` and never mentions the optional `PR #<pr> \u2014 ` continuation that the new regex `^#(?P<issue>\\d+) \u00b7 (?:PR #\\d+ \u2014 )?implement-issue-claude(?![\\w-])` (scripts/claude_session_janitor.py:103) actually matches; agents.md does the same. The script's own docstring at scripts/claude_session_janitor.py:41 documents both as `#<n> \u00b7 [PR #<pr> \u2014 ]implement-issue-claude\u2026`, and the live test row at tests/test_claude_session_janitor.py:111 (`(\"#5504 \u00b7 PR #5519 \u2014 implement-issue-claude\", \"issue_start\", {\"repo\": None, \"issue\": 5504})`) pins the second form. The test_claude_md_documents_the_sweep needle list also stops at `#<n> \u00b7 implement-issue-claude` (tests/test_claude_session_janitor.py:490), so the doc-side gap is not regression-protected.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: Document the pickup\u2019s issue-start title forms, including \u201c#<N> \u00b7 implement-issue-claude\u201d and \u201c#<N> \u00b7 PR #<P> \u2014 implement-issue-claude.\u201d\n  Expected change site: CLAUDE.md \u00a726.I and agents.md\u2019s stale session sweep title list.\n  Evidence of absence: Both changed sections list \u201c#<n> \u00b7 implement-issue-claude\u201d but omit the optional \u201cPR #<pr> \u2014 \u201d continuation, although the janitor recognizes that title form and the PR description says the docs list the forms.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The PR description states \"CLAUDE.md \u00a726.I and agents.md list the forms\" for the new issue-start title patterns, and the script's docstring documents `#<n> \u00b7 [PR #<pr> \u2014 ]implement-issue-claude\u2026` with the optional PR continuation.\n  Expected change site: CLAUDE.md \u00a726.I (around line 2188) and agents.md (around line 1099)\n  Evidence of absence: Both documentation files list only `#<n> \u00b7 implement-issue-claude` but omit the `#<n> \u00b7 PR #<pr> \u2014 implement-issue-claude` variant that the regex `^#(?P<issue>\\d+) \u00b7 (?:PR #\\d+ \u2014 )?implement-issue-claude(?![\\w-])` matches and that the test `(\"#5504 \u00b7 PR #5519 \u2014 implement-issue-claude\", \"issue_start\", {\"repo\": None, \"issue\": 5504})` exercises. The script's own docstring documents the full form with the optional PR part, but the operator-facing docs do not.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The PR description and the script docstring (scripts/claude_session_janitor.py:41) document the issue-start form `#<n> \u00b7 [PR #<pr> \u2014 ]implement-issue-claude\u2026`, which includes the optional `PR #<P> \u2014 ` continuation. The PR description explicitly says the pickup titles sessions `#<N> \u00b7 implement-issue-claude` / `#<N> \u00b7 PR #<P> \u2014 implement-issue-claude`, and the tests cover both forms (tests/test_claude_session_janitor.py:110-111). The CLAUDE.md and agents.md documentation should list both forms.\n  Expected change site: CLAUDE.md \u00a726.I (line 2189-2192) and agents.md (line 1098-1099) \u2014 the issue-start title lists.\n  Evidence of absence: CLAUDE.md line 2191 says `and #<n> \u00b7 implement-issue-claude, whose only issue number is the prefix` but does not mention the `#<n> \u00b7 PR #<P> \u2014 implement-issue-claude` variant. agents.md line 1099 lists `#<n> \u00b7 implement-issue-claude` without the optional `PR #<P> \u2014 ` continuation. The script docstring (line 41) uses `#<n> \u00b7 [PR #<pr> \u2014 ]implement-issue-claude\u2026` which covers both, but the human-facing docs omit the bracketed continuation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2",
+  "fingerprint": "eda86a595b2ba8ee5dcd9f60cd6448411ef0d7eb276c94311dfef6ec0d82a762",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5543,
+    "run_id": "36684587049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36684587049",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930075802_350e22d5b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5543,
+    "run_id": "36684587049"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T07:58:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

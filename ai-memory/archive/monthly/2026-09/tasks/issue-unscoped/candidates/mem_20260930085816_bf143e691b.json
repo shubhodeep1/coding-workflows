@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1712 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: Phase 4 leg (c) compares the helper's lowercase SHA directly with PIN_SHA and BAIT_SHA, so an uppercase SHA accepted by validation can cause a legitimate run to be rejected.\n  WHY: The reviewers reporting this as a defect assign NIT severity; z-ai_glm-5_2 considers the comparison correct at runtime and a consistency observation, not a bug.\n- .github/workflows/test-and-mark-stable.yml:1734-1736 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A jq failure while extracting REVIEW_RUN silently becomes an empty REVIEW_RUN, indistinguishable from no review run being found.\n  WHY: Polling retries without surfacing the malformed-data failure, delaying detection until a working listing is returned or the poll times out.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:1734-1736 | severity=low | confidence=[2]\n  PROBLEM: When `REVIEW_RUNS_JSON` is captured successfully but the piped jq filter fails (e.g. a malformed API response with valid HTTP status), the `2>/dev/null || echo \"\"` fallback silently produces an empty `REVIEW_RUN`, which is indistinguishable from \"no review run found.\"\n  WHY: A malformed branch-listing payload that jq rejects causes an extra poll iteration with no diagnostic, delaying detection that the listing is producing invalid data. The poll continues until the timeout or until a working listing is returned, but the operator never sees the failure mode.\n- .github/workflows/test-and-mark-stable.yml:1712 | severity=low | confidence=[3]\n  PROBLEM: Phase 4 leg (c) compares `BUG_B_SHA` (always lowercase from the helper) against `PIN_SHA` / `BAIT_SHA` without case normalization.\n  WHY: If BAIT_SHA were ever uppercased (allowed by the validation regex), the Phase 4 leg (c) comparison would silently fail to match the legitimate lowercase SHA from the helper, preventing a completed Bug B run from ever advancing to \"verified\" and keeping the poll waiting.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/test-and-mark-stable.yml:1712\n  PROBLEM: Phase 4 compares BUG_B_SHA with PIN_SHA and BAIT_SHA directly without lowercasing, whereas Phase 4b at line 2715 uses ${BAIT_SHA,,} and ${RETRY_DISPATCH_SHA,,} for parity with the lowercase SHA extracted by smoke_review_checked_out_sha.\n  WHY: Suggested minimal fix: Change comparison to [ \"${BUG_B_SHA}\" = \"${PIN_SHA,,}\" ] || [ \"${BUG_B_SHA}\" = \"${BAIT_SHA,,}\" ] for consistency.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml: Phase 4 leg (c) SHA comparison, near the new `smoke_review_checked_out_sha` block (~line 1712): `if [ \"${BUG_B_SHA_RC}\" -eq 0 ] && { [ \"${BUG_B_SHA}\" = \"${PIN_SHA}\" ] || [ \"${BUG_B_SHA}\" = \"${BAIT_SHA}\" ]; }; then` | severity=low | confidence=[3]\n  PROBLEM: Phase 4 leg (c) compares the helper's SHA (`${BUG_B_SHA}`, lowercase by construction from the log line) against `${PIN_SHA}` / `${BAIT_SHA}` directly, but Phase 4b correlation lowercases the same pair (`${BAIT_SHA,,}` / `${RETRY_DISPATCH_SHA,,}`).\n  WHY: An uppercase `BAIT_SHA` that passes the validation regex would fail here and wrongly reject a verified run; the new test (`test_phase4b_correlation_outcomes`) only covers uppercase for the Phase 4b path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml: Phase 4 leg (c) verification, around the line `if [ \"${BUG_B_SHA_RC}\" -eq 0 ] && { [ \"${BUG_B_SHA}\" = \"${PIN_SHA}\" ] || [ \"${BUG_B_SHA}\" = \"${BAIT_SHA}\" ]; }; then` | severity=low | confidence=[3]\n  PROBLEM: Phase 4 leg (c) compares the helper's lowercase log output against `${PIN_SHA}` / `${BAIT_SHA}` without lowercasing them first.\n  WHY: The validation regex accepts uppercase hex, so an uppercase BAIT_SHA would not match the lowercase SHA extracted from the codex-agent log and the run would be rejected as \"not the bait/pin commit\".\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "22b8c1f3a891f5de89b8d4264d8e6af08325514bd2dfc207ac79c261ae7d609a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5107,
+    "run_id": "36687730599",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36687730599",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930085816_bf143e691b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5107,
+    "run_id": "36687730599"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T08:58:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

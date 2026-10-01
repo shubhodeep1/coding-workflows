@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1975-1981 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The auto-merge helper can run without enforcing success of earlier commands in the job step.\n  WHY: If the `gh api` fetch or `_pr_checks_completed` fails, execution can continue to `review_enable_auto_merge.sh`, potentially enabling auto-merge on a PR that moved, closed, or has failing required checks.\n- .github/workflows/review_autofix.yml:1997-2010 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The PR-state verification can fail without stopping execution, allowing auto-merge to be enabled without confirming the PR is open, on the expected head, and mergeable.\n  WHY: The `[ -n \"${base_ref}\" ] && jq -e ...` check is not fail-closed before `_pr_checks_completed` and `review_enable_auto_merge.sh`; reviewers rated this MAJOR or NIT.\n- .ai/.workspace_source_manifest.txt:177-178 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The manifest omits `changelog.d/4464-security-pass-trust-boundaries.md`, the changelog fragment created by this PR.\n  WHY: Manifest-driven workspace operations may exclude the fragment; reviewers rated this MAJOR or NIT, while noting the changelog assembler reads the directory directly.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:1975-1981 | severity=BLOCKER | confidence=5\n  PROBLEM: The auto-merge helper is executed without enforcing success of previous commands in the same job step.\n  WHY: If the `gh api` fetch or `_pr_checks_completed` function fails, the script may continue to `review_enable_auto_merge.sh`, potentially enabling auto-merge on a PR that moved, closed, or has failing required checks.\n- .ai/.workspace_source_manifest.txt:177 | severity=MAJOR | confidence=5\n  PROBLEM: The manifest omits `changelog.d/4464-security-pass-trust-boundaries.md`.\n  WHY: Automated workspace initialization or manifest-driven workflows may fail to track or include the new changelog fragment.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:1997\u20132010 | severity=MAJOR | confidence=5\n  PROBLEM: The PR-state and mergeability guard can fail without stopping execution before `_pr_checks_completed` and `review_enable_auto_merge.sh`.\n  WHY: Under `set -euo pipefail`, failure in the `&&` list does not exit the script; a moved or closed PR, or a false mergeability result, can therefore reach auto-merge enablement.\n- .ai/.workspace_source_manifest.txt:177-178 | severity=MAJOR | confidence=5\n  PROBLEM: The PR's `changelog.d/4464-security-pass-trust-boundaries.md` fragment is missing from the workspace-source manifest.\n  WHY: Manifest-driven workspace operations may silently exclude the fragment, although `scripts/assemble_changelog.py` reads the directory directly and release-time CHANGELOG assembly is unaffected.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:2003-2004 | severity=MAJOR | confidence=4\n  PROBLEM: The PR-state verification does not fail closed when `base_ref` is empty.\n  WHY: With `set -e`, failure of `[ -n \"\" ]` inside the AND-OR list is ignored, allowing `_pr_checks_completed` and `review_enable_auto_merge.sh` to run without the head/mergeability check passing.\n- .ai/.workspace_source_manifest.txt:177 | severity=MAJOR | confidence=5\n  PROBLEM: The manifest omits the new `changelog.d/4464-security-pass-trust-boundaries.md` fragment.\n  WHY: Manifest-driven workspace operations will not include the fragment in conflict detection or source-file inventory.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/review_autofix.yml:2002-2005 | severity=MAJOR | confidence=3\n  PROBLEM: The PR-state verification and `_pr_checks_completed` call are not properly chained to auto-merge enablement.\n  WHY: When `base_ref` is empty, the `&&` check can fail without stopping execution, allowing auto-merge without verifying the PR state, current head, and mergeability.\n- .ai/.workspace_source_manifest.txt:177 | severity=NIT | confidence=4\n  PROBLEM: The manifest omits `changelog.d/4464-security-pass-trust-boundaries.md`.\n  WHY: Manifest-driven workspace operations may omit the fragment from initialization or conflict detection, though the changelog assembler reads the directory directly.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2329f66ba02d6850954cce920217953f97bb5c677f0b4ebb10939f73c489570d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4466,
+    "run_id": "36125120578",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36125120578",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925110452_933afe2e98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4466,
+    "run_id": "36125120578"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T11:04:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

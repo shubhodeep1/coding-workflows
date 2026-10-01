@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:144-145 | severity=high | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The Retry-After extractor uses `awk '{print $2}'`, which only parses the value when there is whitespace after the colon, so an RFC-compliant `Retry-After:45` header is treated as empty and falls through to the X-RateLimit-Reset path.\n  WHY: If GitHub or an intermediate proxy emits `Retry-After` without a space after the colon, `curl_gh_api` ignores the authoritative secondary-limit wait and may sleep up to the 600 s cap; other reviewers characterized this as theoretical or not a live failure.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/gh_helpers.sh\n  Line or code reference: _parse_reset_header, lines 144-145\n  Problem: The Retry-After extractor uses `awk '{print $2}'`, which only parses the value when there is whitespace after the colon. An RFC-compliant header written as `Retry-After:45` (no space) is treated as a single awk field, so `$2` is empty and the function falls through to the X-RateLimit-Reset path. That reintroduces the very failure mode this PR fixes: a secondary-limit 403 would sleep up to the 600 s cap instead of the requested wait.\n  Why it fails at runtime: If GitHub (or an intermediate proxy) ever emits `Retry-After` without a space after the colon, `curl_gh_api` ignores the authoritative secondary-limit wait and computes the sleep from the primary-window reset, which can be up to an hour away.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "45358bbd15c43807f3d50efdffe3a4033e19cc49e835e812f40a2fcdff22d0c8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4047,
+    "run_id": "34186773644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34186773644",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908054421_f62ed1f4a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4047,
+    "run_id": "34186773644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-08T05:44:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

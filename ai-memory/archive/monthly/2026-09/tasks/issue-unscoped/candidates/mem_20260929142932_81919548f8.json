@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:~343 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `_write_stub_gh` heredoc can terminate prematurely if a future scenario payload contains `EOF` on its own line, causing the remaining payload to be interpreted as shell commands.\n  WHY: The current payloads (JSON arrays of dictionary literals) do not contain `EOF`, so this is a latent fragility, not an active bug. If triggered, `gh` would return truncated/ corrupted JSON, causing `json.loads` to fail in hooks that parse the response.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/guard_differential.py:~343 | severity=NIT | confidence=2\n  PROBLEM: The stub `gh` shell script uses `cat <<'EOF'` with `{payload}` interpolated into the heredoc body via an f-string. If a future scenario payload contains the string `EOF` on its own line, the heredoc would terminate prematurely and the remaining payload would be interpreted as shell commands by the subsequent `case` arm.\n  WHY: The current payloads (JSON arrays of dictionary literals) do not contain `EOF`, so this is a latent fragility, not an active bug. If triggered, `gh` would return truncated/ corrupted JSON, causing `json.loads` to fail in hooks that parse the response.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3b6b98a7603c02d6b6d5ff4c26deaaa4602d8222033b970e0171e2d351f3f88c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36581097468",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36581097468",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929142932_81919548f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36581097468"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T14:29:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

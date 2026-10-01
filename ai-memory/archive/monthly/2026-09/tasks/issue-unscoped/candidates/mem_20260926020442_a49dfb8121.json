@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  expected_change_site: PR description body on the PR that closes issue #4502\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  EVIDENCE: The PR description is \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/4502\" and does not record running the corrected test against the failing SHA (`b8e027c`) or against the patched HEAD; the regression test is present at `tests/test_codex_thread_reuse_core.py:568-569`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Record in the PR that you ran it both ways\" (linked issue's Fix constraints section, second sentence).\n  Expected change site: PR description body on the PR that closes issue #4502.\n  Evidence of absence: PR description is the single-line `Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/4502`. It carries no record of running the corrected test against the failing SHA (`b8e027c`) or against the patched HEAD. The substantive regression guard itself is in place \u2014 line 568 of `tests/test_codex_thread_reuse_core.py` negates the obsolete `helper_path=\"scripts/stage_workflow_support.sh\"` string and line 569 negates the obsolete `bash \"${helper_path}\" validate --manifest \"${manifest_path}\"` invocation, so reintroduction of either old pattern would fail the gate, which is the spirit of the regression-test requirement. Only the procedural PR-description record is missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  Expected change site: PR description (author-controlled prose) should record that the corrected test was run both ways \u2014 failing on the reported head and passing with the fix.\n  Evidence of absence: The PR description is \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/4502\" with no record of dual-direction test results. The code deliverable (the regression test itself, with negative assertions at tests/test_codex_thread_reuse_core.py:568-569 that would fail if the obsolete worktree invocation reappeared) IS present and correct. Only the documentation record is missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9b0c0073d160ce691d5efb6b921a3480a7c31d017907f6e37ac2f8b10a165662",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4504,
+    "run_id": "36209762078",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36209762078",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260926020442_a49dfb8121",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4504,
+    "run_id": "36209762078"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-26T02:04:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

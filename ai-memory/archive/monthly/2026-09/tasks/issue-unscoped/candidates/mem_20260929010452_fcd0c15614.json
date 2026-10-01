@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:lines 778-788 | severity=NIT | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new `jq` shape check correctly rejects unreadable or malformed workflow-run pages with exit code 1.\n  WHY: The ordering preserves the empty-input guard and the check aligns with the documented exit-code contract.\n- tests/test_test_and_mark_stable_plan_polling_guard.py:_run_latest_scoped_run_field body (sourced-script slice) and the new stub path `STUB_RUN_PAGE_FAILS` | severity=NIT | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The failed-page test does not directly emit the `gh_api_safe_print` stdout error shape, so it exercises the new shape check only through the sourced helper.\n  WHY: The test passes before and after the fix; an explicit stdout-error stub mode would lock the shape-check contract independently of future changes to `gh_api_safe_print`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:lines 778-788 | severity=NIT | confidence=3\n  PROBLEM: The shape check uses `printf '%s' \"$runs_json\" | jq -e '.workflow_runs | type == \"array\"' >/dev/null 2>&1 || return 1`, which correctly catches the documented `gh_api_safe_print` failure mode (the function echoes the `::error::gh api call failed` line to stdout on a failed read).\n  WHY: The fix is well-scoped: it does not add new identifiers, does not add new API calls, and only short-circuits a clearly-bad page. The ordering (existing `[ -n \"$runs_json\" ] || return 1` first, new shape check second) preserves the fast-path for the empty case and adds the malformed case. Both checks return 1, matching the function's documented exit-code contract (0 = match/end-of-window, 1 = unreadable, 2 = cap reached).\n- tests/test_test_and_mark_stable_plan_polling_guard.py:_run_latest_scoped_run_field body (sourced-script slice) and the new stub path `STUB_RUN_PAGE_FAILS`\n  PROBLEM: The `test_lookup_returns_1_when_a_later_page_cannot_be_read` stub writes only to stderr and exits 1 (`sys.stderr.write(\"HTTP 502: Bad Gateway\\n\"); sys.exit(1)`). It does not directly emit the `::error::gh api call failed` line to stdout that `gh_api_safe_print` is documented to emit. The test therefore relies on the real `scripts/comprehensive_test_and_release_gh_api.sh` (sourced into the test bash via `. ./scripts/comprehensive_test_and_release_gh_api.sh`) to translate the stub's stderr/exit-1 into a stdout capture of \"::error::...\". This works in this test environment because `gh_api_safe_print` is sourced verbatim, but a future refactor that makes `gh_api_safe_print` not echo to stdout on failure would silently leave the test only exercising the older `[ -n \"$runs_json\" ] || return 1` short-circuit (which already returns 1), not the new shape check.\n  WHY: Today the test passes both before and after the fix, but the new shape check is only transitively exercised by the real sourced `gh_api_safe_print`. A small explicit stub-mode that emits \"::error::gh api call failed\" to stdout and exits 1 would lock the contract independently of `gh_api_safe_print`'s behaviour. This is a test-robustness nit, not a runtime bug.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "619a148923fa8aefe7df871263696c4d71ca594cb401a45c787697e2fa01246d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4875,
+    "run_id": "36504333481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36504333481",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929010452_fcd0c15614",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4875,
+    "run_id": "36504333481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T01:04:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

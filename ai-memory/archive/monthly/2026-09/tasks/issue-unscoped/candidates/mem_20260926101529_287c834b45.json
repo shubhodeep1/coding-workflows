@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:125-132 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `python3()` wrapper selects `-I` only when the first argument is `-`, `-c`, or `-m`; flags before `-c` or `-m` instead leave it using `-E`, which does not disable user-site packages.\n  WHY: A wrapper invocation with flags before `-c` or `-m` can import modules from a writable user-site directory, bypassing the import isolation boundary; the highest reported severity was BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The security pass requires addressing every row through the pipeline, including fixing every instance of each finding's defect class across this project's changes.\n  expected_change_site: All referenced locations in the linked issue.\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The provided patch addresses several trust-boundary vulnerabilities in validation, staging, and sandboxing, but it does not appear to explicitly cover every instance of the defect classes (e.g., validate-manifest-entry-host-shell-injection or python-mongo-repo-checks unsafe YAML/shell syntax) listed in the issue if they are not already in the pre-existing worktree fixes, nor does it explicitly audit the status of findings such as validate-nonexplicit-selfheal-host-model-with-pat.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validate_process.sh:125-128 | severity=BLOCKER | confidence=5\n  PROBLEM: The python3 wrapper function only applies -I if the first argument is -, -c, or -m.\n  WHY: If invoked with flags preceding -m or -c (e.g., python3 -W error -m ...), it uses -E instead of -I, allowing user-site packages and potentially creating a trust-boundary violation where checkout-owned modules are imported from untrusted locations.\n- TASK_GAP\n  Requirement: The security pass requires addressing every row through the pipeline, including fixing every instance of each finding's defect class across this project's changes.\n  Expected change site: All referenced locations in the linked issue.\n  Evidence of absence: The provided patch addresses several trust-boundary vulnerabilities in validation, staging, and sandboxing, but it does not appear to explicitly cover every instance of the defect classes (e.g., validate-manifest-entry-host-shell-injection or python-mongo-repo-checks unsafe YAML/shell syntax) listed in the issue if they are not already in the pre-existing worktree fixes, nor does it explicitly audit the status of findings such as validate-nonexplicit-selfheal-host-model-with-pat.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validate_process.sh:125-128 | confidence=5\n  PROBLEM: The `python3()` wrapper selects `-I` only when the FIRST argument is `-`, `-c`, or `-m`. Any other leading flag (e.g. `-W`, `-X`, `-V`, `--option`) leaves the wrapper defaulting to `-E`. `-E` strips `PYTHON*` environment variables but does NOT disable user-site packages, so a writable `~/.local/lib/pythonX.Y/site-packages` (writable on every GitHub Actions runner) can still inject a checkout-controlled `json.py`/`pathlib.py` into any `python3` call that goes through the wrapper without a leading `-`/`-c`/`-m`. The wrapper is in scripts/validate_process.sh which IS in `LAST_RUN CHANGED FILES`; the case statement is the same code that the PR description and `changelog.d/4506-validation-trust-boundaries.md` claim isolates host-side Python imports.\n  WHY: A branch-authored Python invocation like `python3 -W error -c \"import json; ...\"` would run with `python3 -E -W error -c \"...\"`. With `-E` only, `sys.path` still contains the user-site directory; a checkout-supplied file placed there is imported before stdlib, defeating the import isolation the changelog advertises. The same defect defeats any future caller of the wrapper with a non-`-`/`-c`/`-m` first arg.\n- scripts/validate_process.sh:127 | confidence=5\n  PROBLEM: This is the declared-vs-effective capability gap the new code creates. `agents.md:1195-1196` and `changelog.d/4506-validation-trust-boundaries.md:1-2` both declare \"host-side Python imports ignore checkout modules\" as a security boundary the wrapper enforces, but the case statement only matches three specific first-argument shapes. Any invocation pattern outside those three silently downgrades to `-E`, allowing user-site import hijack despite the documented boundary.\n  WHY: Same code path as the SECURITY finding above; included here to surface the gap between declared behavior in operator documentation and effective behavior of the wrapper that establishes the trust boundary.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/validate_process.sh: lines 125-128 (python3 wrapper function) | HARDENING_RISK_SCORE=1\n  PROBLEM: The case statement only checks $1 for -/-c/-m. If a future caller uses flags before -c/-m (e.g., python3 -W error -c '...'), the wrapper falls through to -E, which does not exclude user site-packages or cwd from sys.path for -c/-m mode.\n  WHY: Current callers are safe (the only -c/-m calls pass those as $1), but the guard is fragile against future flag ordering changes.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/validate_process.sh: lines 129-132 (python3() wrapper) | HARDENING_RISK_SCORE=1\n  PROBLEM: The wrapper defaults to `-E` for any first-arg not matching `-`/`-c`/`-m`.\n  WHY: A future call like `python3 -W error -c \"...\"` would get `-E` instead of `-I`, missing user-site-package isolation. No current call triggers this, but the wrapper is general-purpose.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6b6eef4cb31d6454df0628a42a3b362f27eeb36cd09af455adcbd3bb667a7ea9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4510,
+    "run_id": "36234314218",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36234314218",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260926101529_287c834b45",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4510,
+    "run_id": "36234314218"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-26T10:15:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

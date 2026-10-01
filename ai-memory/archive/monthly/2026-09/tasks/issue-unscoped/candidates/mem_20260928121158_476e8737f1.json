@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails` does not exercise the intended fail-closed code path because the mock behaves differently than expected when `comments=None` is passed.\n  WHY: The mock returns JSON `null`, which `jq` converts to `[]`; the workflow treats that as a successful lookup, so the fail-closed guard at `review_autofix.yml:1488` is never entered.\n- .github/workflows/review_autofix.yml:817, 1487 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Redundant calls to `gate_fetch_marker_comments` occur on the same `workflow_dispatch` execution path.\n  WHY: Although the function is memoized, issuing identical, redundant GitHub API requests wastes rate-limit budget and increases execution latency unnecessarily for skip-eligible PRs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Append `claude_handoff_suppressed=${CLAUDE_HANDOFF_SKIP_SUPPRESSED}` to the existing `AUTOFIX_GATE_DET_SKIP_EVAL` log line to maintain the audit contract.\n  expected_change_site: .github/workflows/review_autofix.yml line 1500\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The current implementation adds the `CLAUDE_HANDOFF_SKIP_SUPPRESSED` variable but omits it from the `AUTOFIX_GATE_DET_SKIP_EVAL` echo statement, preventing operators from distinguishing between skip decisions in audit logs.\n- requirement: Document both addition and deletion bounds for the small-diff route in README.md.\n  expected_change_site: README.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The row for `CLAUDE_FIXER_ENABLED` cross-references the deterministic skip settings as (`AUTOFIX_SKIP_DOC_ONLY`, `AUTOFIX_SKIP_MAX_ADDITIONS`) but omits `AUTOFIX_SKIP_MAX_DELETIONS`, which is a mandatory bound for the skip path.\n- requirement: Improve documentation parseability in agents.md.\n  expected_change_site: agents.md lines 98-101\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The documentation for Claude-fixer mode contains a run-on sentence (\"...and also runs it). [claude-intervention] and ...\") that lacks a sentence break, making it difficult for operators to parse.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | confidence=5\n  PROBLEM: The test `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails` fails to exercise the intended fail-closed code path because the mock behaves differently than expected when `comments=None` is passed.\n  WHY: The test setup causes the mock to return a JSON `null` which `jq` converts to an empty array (`[]`). The workflow interprets this empty array as a successful lookup (`gate_marker_fetch_state=\"ok\"`), so the fail-closed guard at `review_autofix.yml:1488` is never entered.\n- .github/workflows/review_autofix.yml:817, 1487 | confidence=4\n  PROBLEM: Redundant calls to `gate_fetch_marker_comments` occur on the same `workflow_dispatch` execution path.\n  WHY: Although `gate_fetch_marker_comments` is memoized, issuing identical, redundant GitHub API requests wastes rate-limit budget and increases execution latency unnecessarily for skip-eligible PRs.\n- Requirement: Append `claude_handoff_suppressed=${CLAUDE_HANDOFF_SKIP_SUPPRESSED}` to the existing `AUTOFIX_GATE_DET_SKIP_EVAL` log line to maintain the audit contract.\n  Expected change site: .github/workflows/review_autofix.yml line 1500\n  Evidence of absence: The current implementation adds the `CLAUDE_HANDOFF_SKIP_SUPPRESSED` variable but omits it from the `AUTOFIX_GATE_DET_SKIP_EVAL` echo statement, preventing operators from distinguishing between skip decisions in audit logs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: Document both addition and deletion bounds for the small-diff route in README.md.\n  Expected change site: README.md\n  Evidence of absence: The row for `CLAUDE_FIXER_ENABLED` cross-references the deterministic skip settings as (`AUTOFIX_SKIP_DOC_ONLY`, `AUTOFIX_SKIP_MAX_ADDITIONS`) but omits `AUTOFIX_SKIP_MAX_DELETIONS`, which is a mandatory bound for the skip path.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- Requirement: Improve documentation parseability in agents.md.\n  Expected change site: agents.md lines 98-101\n  Evidence of absence: The documentation for Claude-fixer mode contains a run-on sentence (\"...and also runs it). [claude-intervention] and ...\") that lacks a sentence break, making it difficult for operators to parse.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b927f7458c1ef7a355d9d40d812ec966bd6c5f0414f3c517fe4e233c75436406",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36416507068",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36416507068",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928121158_476e8737f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36416507068"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T12:11:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

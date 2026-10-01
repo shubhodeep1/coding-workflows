@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What specifically should be improved?\nChoices:\nA. Name the workflow, script, prompt, documentation page, or behavior and describe the current problem. (RECOMMENDED)\nB. Provide a failing run, error message, or reproducible scenario.\nC. Describe the affected pipeline phase and user-facing pain point.\nQ2: What observable outcome should define success?\nChoices:\nA. Provide concrete acceptance criteria or expected behavior. (RECOMMENDED)\nB. Provide an example of the desired before-and-after behavior.\nC. Identify the metric to improve and its target value.",
+  "fingerprint": "9b937a5800d41c319c2d7e33561239110775188c8141bdaf99c93eaa188dd2e5",
+  "lineage": {
+    "issue_number": 4145,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35478072668",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35478072668",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260920001345_2d7eb709ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4145,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35478072668"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4145 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-20T00:13:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

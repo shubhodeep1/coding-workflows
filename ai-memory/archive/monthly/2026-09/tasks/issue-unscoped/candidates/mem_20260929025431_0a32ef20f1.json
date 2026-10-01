@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/issue-4786-guard-allow-read-loops-plan.md:14-100 | severity=low | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The plan's references to `gh_api_write_guard.py` functions and line ranges are stale by about 120 lines, which may send an implementer to the wrong code.\n  WHY: The cited function names remain searchable, so this causes confusion when cross-referencing the plan but has no runtime impact.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/plans/issue-4786-guard-allow-read-loops-plan.md | severity=NIT | confidence=5\n  PROBLEM: These line references are stale by ~120 lines. The actual `evaluate` function starts at line 769 (not 648-699); `_is_approvable_command` starts at line 677 (not 556-602); `_has_unsafe_shell_syntax` starts at line 627 (not 506-542). Lines 648-699 actually contain the tail of `_has_unsafe_shell_syntax`, `_is_safe_standalone`, and the start of `_is_approvable_command` \u2014 not `evaluate`. The #4909 plan, written one day later, correctly cites `evaluate` at lines 788-793 and `_is_approvable_command` at lines 677-723, confirming the #4786 plan's references predate #4704's quote-aware substitution additions.\n  WHY: No runtime impact \u2014 these are line-number references in a plan document, not executable code. Function names cited alongside the line numbers are correct and searchable, so the implementer can still locate the right code. Impact is limited to brief confusion when cross-referencing the plan against the file.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "19e3d6fce5ec9a00722ecccd7278b9d520fa4413f01872c7e7f60ffc0856c42e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36513881624",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36513881624",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929025431_0a32ef20f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36513881624"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T02:54:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

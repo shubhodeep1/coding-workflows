@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4499 and scripts/orchestrate_poll_process.sh:4517-4518 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The marker contract used by `resolve_security_pass_fix_successor` is a private, exact-substring handshake with the body produced by `create_security_pass_fix_issue` (scripts/orchestrate_poll_process.sh:4624-4631) and the verbatim-copy path in `close_and_reissue` at scripts/orchestrate_poll_process.sh:11064-11077, so future marker-format drift can cause every successor adoption to fail closed.\n  WHY: `jq -sr ... index($local_id_marker)` requires the entire literal string (including backticks, spaces, and the leading `- `) to appear on a single body line, and the dependency is documented only in prose rather than pinned in code.\n- scripts/orchestrate_poll_process.sh:4520-4522 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When the GitHub API legitimately returns zero managed issues (`[]`), the helper exits jq with an error and returns 2 (inconclusive) rather than 1 (no successor).\n  WHY: An empty paginated response is a successful API call, not a parse failure, so the outer arm repeatedly retains `security-pass-fixing` instead of reaching `security_pass_closed_fix_failure`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:4499 (`security_pass_successor_local_id=\"security-pass-fix-cycle-$((security_pass_successor_cycles + 1))\"`) and scripts/orchestrate_poll_process.sh:4517-4518 (the `--arg local_id_marker \"- Local ID: \\`${security_pass_successor_local_id}\\`\"`) | severity=low | confidence=3\n  PROBLEM: The marker contract used by `resolve_security_pass_fix_successor` is a private, exact-substring handshake with the body produced by `create_security_pass_fix_issue` (scripts/orchestrate_poll_process.sh:4624-4631) and the verbatim-copy path in `close_and_reissue` at scripts/orchestrate_poll_process.sh:11064-11077. If any future refactor reorders the orchestrator-metadata block, drops the leading `- `, or changes the backtick delimiter in either side, every successor adoption silently fails closed (the helper returns 1) and the project terminalises as `ai:security-pass-failed` even when a live successor exists.\n  WHY: `jq -sr ... index($local_id_marker)` requires the entire literal string (including backticks, spaces, and the leading `- `) to appear on a single body line. The dependency is documented only in prose, not pinned in code, so the two call sites can drift.\n- scripts/orchestrate_poll_process.sh:4520-4522 (the `if length == 0 or (all(.[]; type == \"array\") | not) then error(...)` guard inside `resolve_security_pass_fix_successor`) | severity=low | confidence=3\n  PROBLEM: When the GitHub API legitimately returns zero managed issues (`[]`), the helper exits jq with an error and the surrounding function returns 2 (inconclusive) rather than 1 (no successor).\n  WHY: A repo with no other `ai:orchestrator-managed` issues open at the moment of the poll tick will have its predecessor treated as inconclusive; every tick re-issues the same warn line and never falls through to `security_pass_closed_fix_failure`. The pre-existing `create_security_pass_fix_issue` block at scripts/orchestrate_poll_process.sh:4654-4658 has the same shape, so this is an inherited pattern, but the new helper is the first one to gate terminalisation on the empty-page case.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "1e71ab1122e3f7ea763dfe00499a9205cea587e31dcd0c71a2eedd342e535e3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33960594076",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33960594076",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260905110614_69fc2febc6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33960594076"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-05T11:06:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

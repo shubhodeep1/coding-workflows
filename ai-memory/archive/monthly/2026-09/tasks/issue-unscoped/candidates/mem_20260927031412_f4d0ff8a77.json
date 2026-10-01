@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:161 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The zombie-checker cleanup does not define what to do if `mcp__github__issue_read get_labels` fails while checking whether the source issue still carries `ai:claude-blocked`.\n  WHY: A transient read failure can leave the stopped session visible without surfacing a clear error or archival outcome.\n- .claude/commands/implement-plan-claude.md:103 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The issue-mode stop sequence does not define what to do if the `set_session_title` rename fails.\n  WHY: A failed rename can leave the session with its pre-stop title, which the new Zombie-checker cleanup will not match, leaving the session visible after `/reclarify` resumes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/implement-plan-claude.md:Zombie-checker cleanup logic | severity=low | confidence=2\n  PROBLEM: The cleanup script assumes that `mcp__github__issue_read get_labels` always succeeds in returning the label set. If the call fails (e.g., due to a transient MCP issue), the cleanup logic does not have a defined error handling path and might not archive the stopped session.\n  WHY: A transient failure leaves the stopped session visible in the user's session list, requiring manual intervention, even though the issue itself was correctly resumed. Given the fail-open nature of the cleanup script, this is acceptable, but worth noting as a minor correctness limitation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/implement-plan-claude.md:161 | severity=low | confidence=2\n  PROBLEM: When `mcp__github__issue_read get_labels` errors (transient MCP/network failure), the cleanup's predicate \"when the source issue no longer carries `ai:claude-blocked`\" has no defined branch \u2014 the doc tells the agent to read labels but doesn't say what to do on a read failure.\n  WHY: a stopped `\u2014 blocked on issue` session would neither be archived (read returned no label set) nor be retained with a clear error (no documented path). The resuming session ends its turn without surfacing the failure, leaving an idle session visible in the session list until a human notices. The original checker cleanup at line 159 sidesteps the same class of failure with `(drop `mine` if it errors)`, so an analogous \"treat read error as 'label still present, skip archival'\" one-liner would close the gap.\n- .claude/commands/implement-plan-claude.md:103 | severity=low | confidence=3\n  PROBLEM: The rename call (`set_session_title`) is added to the issue-mode stop sequence but the doc doesn't say what happens if the rename itself errors.\n  WHY: If `set_session_title` fails transiently, the session keeps its pre-stop title (which is whatever stage title it had \u2014 e.g. `\u2026 \u2014 validation 1/3 \u2014 blocked`, the very title the PR description calls out for issue #4552), so the new Zombie-checker cleanup at line 161 won't match it and the session is left visible after `/reclarify` resumes \u2014 exactly the failure mode this PR is meant to fix.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6817a7c767e86c83a5779e072fedc9da5333a6af0a7fa06c1817834446445fc2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4594,
+    "run_id": "36290049170",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36290049170",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927031412_f4d0ff8a77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4594,
+    "run_id": "36290049170"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T03:14:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

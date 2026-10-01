@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1251\u20131293 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The shard judgment loop can skip a shard with missing artifacts and report success even though that shard's tests did not run or its failure went undetected.\n  WHY: Missing shard artifacts can leave `shard_failures` at 0 and produce a false-positive CI success.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1251\u20131293 | severity=MAJOR | confidence=4\n  PROBLEM: The judgment loop silently ignores shards that did not produce any `.rc` file, potentially allowing CI to pass even though tests did not actually run or failed silently.\n  WHY: If one or more shards fail to initialize or are abruptly terminated before writing their exit code, the absence of the `.rc` file means the judgment loop never executes its failure-detection body, potentially leading to a false-positive success in CI.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:1273-1289 | severity=MAJOR | confidence=3\n  PROBLEM: `[ -f \"/tmp/poll_shard_${shard}.log\" ] || continue` silently skips a shard whose subshell produced neither a log nor an rc file, so the missing-`.rc` failure handler is bypassed.\n  WHY: If a shard is killed before logging, `shard_failures` stays at 0, the step exits 0, and CI reports green for a partial test run.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c1b6925998e6934651e3ca4b471113fd521f8192275a39d2768dd84b2e0f54f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4884,
+    "run_id": "36515364368",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36515364368",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929032853_53ddd03481",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4884,
+    "run_id": "36515364368"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T03:28:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

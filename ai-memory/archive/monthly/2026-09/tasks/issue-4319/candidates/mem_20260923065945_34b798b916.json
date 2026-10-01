@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4318` at `2352420a3b71bd0a591d6e5faa3b464973c132b4`\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: This is an exact single-file fixture update. No expansion, new dependency, interface, or cleanup is warranted.\n\n## Automation impact\n\n- Existing code/file only; no new script.\n- Scheduler or PR-push wiring: unchanged.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Future-removal registry entry: not required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace the existing three-line content with exactly:\n    1. `status: ok`\n    2. `decompose-run: 35828617303`\n\n## Functions or modules to implement\n\nNone. This is a plain-text fixture update.\n\n## Data structures affected\n\n- The canary file changes from three key-value lines to the required two-line format.\n- Remove obsolete `run_id` and `updated-by` lines.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the complete fixture content\n\n- **Chosen:** Write the exact required two lines and retain a normal trailing newline.\n- **Alternatives considered:** Append the new marker while retaining the existing `run_id` and `updated-by` lines.\n- **Why:** Retaining either existing line would violate the requirement that the file contain exactly two lines.\n\n## Security considerations\n\n- No trust boundary, authorization surface, endpoint, external input, secret, or money-handling behavior is affected.\n- Abuse case: accidental unrelated edits or extra fixture lines. Mitigate by verifying the exact bytes and changed-path set.\n\n## Risks and edge cases\n\n- **Codebase conflict:** The current file has three lines, including `run_id: 26151428977` and `updated-by: ai-pipeline`; both must be removed.\n- Preserve exact spelling, punctuation, ordering, and lowercase text.\n- Do not modify any file outside `tests/e2e_smoke_canary.txt`.\n\n## Testing considerations\n\n- Assert the file equals the expected two-line payload exactly.\n- Verify the line count is exactly two.\n- Verify `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n- No broader test suite is necessary for this fixture-only change.\n\n## Pre-execution self-check\n\n- Clarification response is sufficient.\n- Checkout branch matches integration metadata.\n- Target file exists and was inspected.\n- Scope is explicit and implementation-ready.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "cfe53fcef8aaf9074845c70ae6dcc0d9df5c1fc3812284e3691340a5f4ea8391",
+  "lineage": {
+    "issue_number": 4319,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35829071864",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35829071864",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4319"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260923065945_34b798b916",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4319,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35829071864"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4319",
+  "timestamps": {
+    "created_at": "2026-09-23T06:59:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

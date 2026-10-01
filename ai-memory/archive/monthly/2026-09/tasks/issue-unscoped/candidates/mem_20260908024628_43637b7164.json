@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:447-455 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `files` variable in the release loop is not declared with `local`.\n  WHY: If `_mt_pr_files_into files \"${num}\"` fails and leaves `files` empty, the next iteration could carry a stale value; the existing `files=\"\"` pre-declaration mitigates the worst case, but the fix should use `local` for correctness and consistency with the gate path.\n- scripts/gh_helpers.sh:144-145\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The Retry-After extractor uses `awk '{print $2}'`, so a header value with no space after the colon (Retry-After:45) yields an empty value instead of 45.\n  WHY: GitHub currently sends a space, but the helper silently falls back to the primary reset window rather than the requested wait when the header omits that space.\n- scripts/gh_helpers.sh:115\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: When curl_gh_api receives a Retry-After header, _parse_reset_header returns a synthesized epoch (now + seconds), but _sleep_until_reset logs it as \"(X-RateLimit-Reset: <epoch>)\".\n  WHY: The message is misleading because the wait was derived from Retry-After, not from X-RateLimit-Reset.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/review_merge_train.sh\n  Code: lines 447-455 (release path variables)\n  Problem: The `files` variable in the release loop is not declared with `local`. Since this is a named function (not a script entry point), `local` is required to prevent `files` from persisting in the function's variable scope after the loop iteration. A stale value from a prior iteration whose `_mt_pr_files_into` call failed could theoretically bleed into the next iteration.\n  Why it fails at runtime: If `_mt_pr_files_into files \"${num}\"` fails and leaves `files` empty, the next iteration that reuses `files` without an explicit assignment could carry a stale value. The existing `files=\"\"` pre-declaration is present in the code but not as `local files=\"\"`, so the declaration only zeros the value once at the top of the loop body \u2014 not re-initialized per iteration. The pre-declaration mitigates the worst case, but the fix should use `local` for correctness and consistency with the gate path.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: scripts/gh_helpers.sh\n  Location: _parse_reset_header, lines 144-145\n  Issue: The Retry-After extractor uses awk '{print $2}', so a header value with no space after the colon (Retry-After:45) yields an empty value instead of 45. GitHub currently sends a space, so the helper silently falls back to the primary reset window rather than the requested wait.\n  Suggested minimal fix: Replace the awk field extraction with a colon-aware extraction, e.g.\n    _retry_after_secs=$(grep -i '^retry-after:' \"${header_file}\" 2>/dev/null | head -1 | sed 's/^[^:]*: *//' | tr -d '\\r' || true)\n  This preserves the current numeric check while tolerating missing or extra spaces.\n- File: scripts/gh_helpers.sh\n  Location: _sleep_until_reset, line 115\n  Issue: When curl_gh_api receives a Retry-After header, _parse_reset_header returns a synthesized epoch (now + seconds), but _sleep_until_reset logs it as \"(X-RateLimit-Reset: <epoch>)\". The message is misleading because the wait was derived from Retry-After, not from X-RateLimit-Reset.\n  Suggested minimal fix: Accept an optional source label in _sleep_until_reset and log the source: e.g.\n    _sleep_until_reset() { local reset_epoch=\"$1\" local header_source=\"${2:-X-RateLimit-Reset}\"; ...; echo \"::warning::  Rate limit resets in ${wait_secs}s (${header_source}: ${reset_epoch:-unknown})\" >&2; }\n  Then update curl_gh_api to pass \"Retry-After\" when _parse_reset_header used it.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "4d5cc06af4b148d0d0f3b5ca176a6e41af8d5ecdb4c171248f0b48a654446935",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34178625136",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34178625136",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908024628_43637b7164",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34178625136"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-08T02:46:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

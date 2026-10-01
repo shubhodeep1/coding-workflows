@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:~17390-17418 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The default-branch cache does not persist across subshell invocations, causing repeated API calls instead of resolving the default branch at most once per poller run.\n  WHY: The reviewers attribute the extra calls to non-exported cache variables being unavailable in command-substitution subshells; severity is disputed, with Gemini rating it MAJOR and Grok calling it a NIT.\n- scripts/orchestrate_poll_process.sh:~7358 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Preflight tool slop_scan reports a syntax error (unexpected indent) in a Python heredoc.\n  WHY: Python code within the heredoc may fail to parse or execute correctly if invoked, causing failures in pipeline steps that rely on this heredoc.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Resolve the default branch at most once per poller run and store it in a global.\n  expected_change_site: _pr_named_review_default_branch in scripts/orchestrate_poll_process.sh\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The function is called inside subshells (via `$(...)` for argument resolution and within the stalled judge process) and fails to export its caching variables to subshells, causing the \"resolve once\" requirement to be unmet.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh: _pr_named_review_default_branch function (~line 17390) | severity=MAJOR | confidence=5\n  PROBLEM: The default branch caching mechanism fails to persist across subshell invocations, leading to repeated redundant API calls for the same value, contrary to the plan (G3) which mandates resolving it at most once per poller run.\n  WHY: The caching variables `_PR_NAMED_REVIEW_DEFAULT_BRANCH_READY` and `_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE` are declared globally but are not exported. When the function is called within a subshell (e.g., via `$(...)` in the `jq` argument resolution or stalling judge process), the subshell does not share the parent's environment state for these variables, causing each subshell to re-resolve the default branch and make fresh REST API calls. This violates the \"at most once per poller run\" requirement.\n- scripts/orchestrate_poll_process.sh: ~line 7358 | severity=MAJOR | confidence=4\n  PROBLEM: Preflight tool slop_scan reports a syntax error (unexpected indent) in a Python heredoc.\n  WHY: Python code within the heredoc may fail to parse or execute correctly if invoked, causing failures in pipeline steps that rely on this heredoc.\n- TASK_GAP\n  Requirement: Resolve the default branch at most once per poller run and store it in a global.\n  Expected change site: _pr_named_review_default_branch in scripts/orchestrate_poll_process.sh\n  Evidence of absence: The function is called inside subshells (via `$(...)` for argument resolution and within the stalled judge process) and fails to export its caching variables to subshells, causing the \"resolve once\" requirement to be unmet.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:17418 (_pr_named_review_default_branch + jq --arg calls) | NIT (runtime correct but inefficient)\n  PROBLEM: Cache vars (declare -g) not exported; $( ) subshells re-resolve default branch (\u22645 calls/run vs G3 \"once\").\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ff9d8d74381f40d726a54d3625ade090ebd201188725b81a8e4fa3cfd99253f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5109,
+    "run_id": "36553425658",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36553425658",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929104618_857839a8de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5109,
+    "run_id": "36553425658"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T10:46:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

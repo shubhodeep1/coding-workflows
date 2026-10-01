@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:929 | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The \"other active Plan runs\" check in the `wait-plan` step still uses the old single-page `fetch_plan_runs_json`, so it can miss an active same-issue Plan run beyond page 1.\n  WHY: If that check sees zero active runs, the step can terminate with `Plan workflow completed but issue lacks expected labels` instead of waiting.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:929 | severity=high | confidence=[3]\n  PROBLEM: The fix introduces `fetch_plan_runs_page_json` and a paginated `latest_scoped_run_field` for the Plan run *capture* path, but the \"other active Plan runs\" check in the same `wait-plan` step still calls the OLD single-page `fetch_plan_runs_json`. The new code's own comment (lines 752\u2013758) explicitly describes the vulnerability class this check still has \u2014 \"by the time Plan labels the issue our Plan run can sit past the first 100 runs of the created=> window \u2026 run 36374918973 found it at index 96, then lost it seconds later\". If a queued or in-progress Plan run for the same issue sits past index 100 of page 1, this check returns 0 active runs and the step errors out with `Plan workflow completed but issue lacks expected labels` (line 948) when it should have waited for the still-active run. The fix's stated scope is the capture path, but the same vulnerability class is now sitting in the same step and the new test file (`test_other_active_plan_runs_avoids_inline_fallback_substitution`, `test_plan_runs_payload_is_shape_validated_before_counting`) only enforces that the call stays indirect (a helper function), not that the helper paginates.\n  WHY: A Plan run for the smoke issue completes without producing `ai:awaiting-approval`/`ai:implementing` (already rare), a second comment triggers another Plan run (queued/in_progress) for the same issue, and between those two events more than 100 skipped runs accumulate in the `created=>` window (the same condition #4723 documented for the capture path). The capture path now walks pages 1\u201310 and succeeds; the other-active check still reads page 1, sees zero active runs, and terminates the gate with `status=plan_failed` instead of waiting.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a0d3c5924a634c9591dfd5276546223fa4b71f94b6d02a4be36bd754a5c65142",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4730,
+    "run_id": "36389754510",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36389754510",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928074002_e2ba00cb9f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4730,
+    "run_id": "36389754510"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T07:40:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

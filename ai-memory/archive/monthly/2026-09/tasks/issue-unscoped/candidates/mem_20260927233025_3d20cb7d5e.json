@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_intake.sh:{around line 110-127} | flagged_by: [minimax_minimax-m3]\n  PROBLEM: When `RUN_URL` is empty on a hand-driven run, `reject()` produces a malformed Telegram message with a `Run: ` prefix and no URL.\n  WHY: The auth gate runs before the existing code that documents `RUN_URL` as optional.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nFile: scripts/claude_issue_intake.sh\nLocation: reject() function (around line 110-127)\nIssue: When tg_send_msg is invoked inline as part of the reject() body, the failure path is gated with `>/dev/null 2>&1 || true` so the function never aborts on Telegram errors. Good. However, the function also assumes `${RUN_URL}` is set; on a hand-driven run it may be empty, producing a malformed Telegram body (`Run: ` with no URL). The auth gate runs before the existing code that documents RUN_URL as optional, so an empty value would produce a malformed \"Run: \" prefix in the Telegram message.\nSuggested minimal fix: in `reject()`, guard the RUN_URL interpolation with `${RUN_URL:-no-run-url}` so the Telegram message is never malformed.\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "22179a6b230fa0233613049a3a0ad3c1f923fd9f7132dccc59d45dd505f7be3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4633,
+    "run_id": "36356561608",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36356561608",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927233025_3d20cb7d5e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4633,
+    "run_id": "36356561608"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T23:30:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

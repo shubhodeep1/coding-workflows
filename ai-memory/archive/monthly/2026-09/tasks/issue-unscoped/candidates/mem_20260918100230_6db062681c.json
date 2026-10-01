@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:1904-1929 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The fail-closed regression test does not exercise the newly added `.` and `./` unsafe-path rejection patterns.\n  WHY: A future edit dropping `.|./` from `scripts/implement_staged_support_workspace.sh:80` could reopen the bare-worktree wipe while the suite still passes; moonshotai_kimi-k3 and qwen_qwen3_7-plus reported severity NIT, while the other reviewers omitted severity.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description \u00a7Testing states \"5 new tests cover ... fail-closed paths ...\"; the `_unsafe_path` predicate is the only fail-closed path added by the new helper, and the LAST RUN DIFF extended it without extending the test that claims to cover it.\n  expected_change_site: tests/test_implement_post_codex_recovery.py::test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base (around the `test_staged_ws_unsafe_` sub-block at lines 1904-1910)\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Only the `../escape.sh` entry is written to `STAGED_SUPPORT_LEDGER` in the test; no sub-block writes `.` or `./` and asserts `IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=.` / `path=./` with `returncode == 1`. The last-run patch to `_unsafe_path` added the two patterns but the test that is meant to pin the predicate still pins only one of its seven branches.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_implement_post_codex_recovery.py:1904-1910 | confidence=3\n  PROBLEM: The LAST RUN DIFF added `.|./` to `_unsafe_path` in `scripts/implement_staged_support_workspace.sh:80`, but the existing fail-closed regression test pins only the `../escape.sh` ledger entry.\n  WHY: Neither the new `.|./` patterns nor the pre-existing `/*`, `..`, `*/..`, `*/../*` patterns are exercised, so a future edit that drops `.|./` (or any of the others) would not be caught by CI; both `restore` (line 95) and `reinstall` (line 144) call sites use the same predicate, while the current reinstall sub-block only exercises `mode_unavailable`.\n\n- tests/test_implement_post_codex_recovery.py::test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base (around the `test_staged_ws_unsafe_` sub-block at lines 1904-1910) | confidence=3\n  PROBLEM: PR description \u00a7Testing states \"5 new tests cover ... fail-closed paths ...\", but the `_unsafe_path` predicate was extended without extending the test that claims to cover it.\n  WHY: Only the `../escape.sh` entry is written to `STAGED_SUPPORT_LEDGER`; no sub-block writes `.` or `./` and asserts `IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=.` / `path=./` with `returncode == 1`.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/implement_staged_support_workspace.sh:78-83 | confidence=1\n  PROBLEM: The new `.|./` path-rejection patterns are not exercised by any test.\n  WHY: Add assertions in tests/test_implement_post_codex_recovery.py::test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base to verify rejection of ledger paths `.` and `./`, mirroring the existing `../escape.sh` block.\n\n- tests/test_implement_post_codex_recovery.py::test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base | confidence=1\n  PROBLEM: The fail-closed regression test does not assert rejection of ledger paths `.` and `./`.\n  WHY: Add sub-cases writing `.` (and optionally `./`) to the ledger and asserting returncode 1 with `IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID ... reason=unsafe_path`.\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/implement_staged_support_workspace.sh:line 80 (`/*|../*|*/../*|..|*/..|.|./) return 0 ;;` in `_unsafe_path`) | severity=NIT | confidence=4\n  PROBLEM: The `.` and `./` rejection patterns added by the last run are not exercised by any test.\n  WHY: `tests/test_implement_post_codex_recovery.py::test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base` (lines 1904-1929) asserts only the `../escape.sh` rejection plus the missing-base and mode-unavailable paths; the other `LEDGER_INVALID` assertion in the file (line 2002) also uses a `../`-prefixed path. A future edit that drops the `.` or `./` alternatives could reopen the bare-worktree wipe (`git restore --source=HEAD --worktree -- .`).\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_implement_post_codex_recovery.py:around line 1915 in the PR diff | severity=NIT | confidence=3\n  PROBLEM: The last-run diff added `.` and `./` to `_unsafe_path` (`scripts/implement_staged_support_workspace.sh:80`) but no assertion in the fail-closed regression test exercises those two inputs.\n  WHY: A future edit that drops the new `.|./` alternatives would reopen the bare-worktree wipe vulnerability, and the suite would still pass because no assertion checks `IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=.` or `path=./`.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8afe027c1be6d42b3d362fe72cb7e9ce1253b13231ab18e613dc39535835e12a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4119,
+    "run_id": "35327031804",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35327031804",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260918100230_6db062681c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4119,
+    "run_id": "35327031804"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-18T10:02:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

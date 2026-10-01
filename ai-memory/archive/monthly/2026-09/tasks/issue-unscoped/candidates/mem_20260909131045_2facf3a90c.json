@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3853-3856 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: `git ls-files --others --exclude-standard -z | sort -zu > \"${PRE_EDITOR_UNTRACKED_FILE}\" || true` creates or truncates the snapshot before capture and suppresses failures, leaving an empty or partial file that is treated as a valid snapshot.\n  WHY: A capture failure causes downstream cleanup to preserve every pre-existing untracked file instead of using the documented legacy delete-all fallback, potentially staging runtime leftovers and build artifacts.\n- scripts/review_commit_changes.sh:207 | severity=high | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The availability check uses `-f` rather than `-s`, so an empty snapshot file from a failed capture is treated as available.\n  WHY: The empty snapshot makes `grep -zqxF` match nothing, causing every newly created untracked path to be preserved and bypassing the legacy delete-all fallback.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The snapshot capture should fail closed when `git ls-files` fails, ensuring that a missing snapshot properly triggers the legacy delete-all fallback behavior; \"without the snapshot (older wrapper, missing runtime dir) the legacy delete-all behaviour is kept, so the guard never fails open.\"\n  expected_change_site: `.github/workflows/review_autofix.yml:3853-3856` and `scripts/review_commit_changes.sh:207`\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: `.github/workflows/review_autofix.yml:3854` uses `|| true` after a redirection that creates the snapshot before the pipeline succeeds; `scripts/review_commit_changes.sh:207` probes only file existence with `-f` instead of distinguishing a valid snapshot from an empty or partial failed capture; no conditional removal, temporary-file promotion, sentinel marker, or non-empty availability check changes this failure-handling behavior.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:3853-3856 | severity=high | confidence=4\n  PROBLEM: The snapshot capture pipeline creates or truncates the output file before running and suppresses capture failures with `|| true`.\n  WHY: An empty or partial file is treated as an available snapshot, so pre-existing untracked files are preserved instead of triggering the legacy delete-all fallback.\n- Requirement: The snapshot capture should fail closed when `git ls-files` fails, ensuring that a missing snapshot properly triggers the legacy delete-all fallback behavior.\n  Expected change site: .github/workflows/review_autofix.yml lines 3853-3856\n  Evidence of absence: The `|| true` after the pipeline unconditionally suppresses failure. No separate test of the exit status, no conditional removal of the file, no sentinel marker distinguishes a valid empty snapshot from a failed capture. The cleanup script at `scripts/review_commit_changes.sh:212` probes only file existence with `-f`, so a failed capture that left an empty file cannot be distinguished from a successful capture of a clean working tree.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:3854 | severity=high | confidence=5\n  PROBLEM: The redirection creates or truncates the snapshot before the pipeline runs, and `|| true` suppresses failures.\n  WHY: A failed capture is treated as a successful empty snapshot, silently inverting the documented legacy delete-all fallback and staging unintended untracked files.\n- Requirement: \"without the snapshot (older wrapper, missing runtime dir) the legacy delete-all behaviour is kept, so the guard never fails open.\"\n  Expected change site: .github/workflows/review_autofix.yml:3854\n  Evidence of absence: The current capture line uses `|| true`, which lets a capture failure produce an empty snapshot that cleanup treats as available; the fallback path is bypassed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/review_autofix.yml:3854 \u2014 `git ls-files --others --exclude-standard -z | sort -zu > \"${PRE_EDITOR_UNTRACKED_FILE}\" || true` (interacts with scripts/review_commit_changes.sh:207 and :249) | severity=high | confidence=4\n  PROBLEM: The redirection creates or truncates the snapshot before the pipeline runs, and `|| true` suppresses failures, leaving an empty or partial snapshot indistinguishable from a legitimately empty untracked set.\n  WHY: The commit step treats the failed snapshot as valid, so every pre-existing stray and runtime leftover takes the editor-created preservation path and can be staged into the commit instead of using the legacy fallback.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:3854 | severity=high | confidence=5\n  PROBLEM: The snapshot file is created before the pipeline runs, and `|| true` suppresses failures, leaving an empty or partial snapshot.\n  WHY: The commit script treats the empty snapshot as valid, causing newly created untracked paths to be preserved and bypassing the documented legacy delete-all fallback.\n- scripts/review_commit_changes.sh:207 | severity=high | confidence=5\n  PROBLEM: The availability check uses `-f` instead of `-s`, so an empty snapshot file from a failed pipeline is treated as available.\n  WHY: The empty snapshot causes every newly created untracked path to be treated as editor-created and preserved.\n- Requirement: The snapshot capture should fail closed when `git ls-files` fails, ensuring that a missing snapshot properly triggers the legacy delete-all fallback behavior.\n  Expected change site: .github/workflows/review_autofix.yml:3853-3856 and scripts/review_commit_changes.sh:207\n  Evidence of absence: The workflow still uses `|| true` after the redirection, and the commit script still checks `-f` instead of `-s`; no failure-handling change distinguishes an empty snapshot from a valid snapshot.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "66ab6530ca5d3b8e4da710017e4d5db07e501cb756929ce993dae925619f40d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4068,
+    "run_id": "34351320527",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34351320527",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260909131045_2facf3a90c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4068,
+    "run_id": "34351320527"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-09T13:10:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

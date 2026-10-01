@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/security_pass_skip.py:146-149 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: When `delay < 0`, the diagnostic says the label was applied a negative number of seconds \u201cafter creation,\u201d which is confusing and misleading.\n  WHY: The safety behavior remains correct (`skip=False`); only the operator-facing diagnostic is affected.\n- agents.md:248 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The security-pass skip verification paragraph has an unbalanced closing parenthesis, making the clause structurally confusing.\n  WHY: This is documentation-only and has no runtime impact.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"update `docs/INVENTORY.md` if its parity gate covers `.claude/scripts/`\" (plan step 8).\n  expected_change_site: docs/INVENTORY.md\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: `tests/inventory_parity.py:86-91` does not cover `.claude/` paths; no INVENTORY.md change is required and none was made.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/security_pass_skip.py: lines 146-149, the delay check in _label_applied_at_creation | severity=low | confidence=[4]\n  PROBLEM: When delay < 0 (labeled event timestamp predates issue creation, clock skew), the format string {label} was applied {int(delay)}s after creation, not at creation renders a negative number, e.g. ai:security was applied -5s after creation, not at creation. The event did not happen \"after\" creation at all, so the message is misleading. The safety direction is correct \u2014 skip stays false \u2014 but a human reading ## Notes gets a confusing diagnostic.\n  WHY: Does not affect skip/run correctness. Only degrades operator-facing diagnostics when clock skew exists between the issue and its labeled events.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md: line 248 | severity=low | confidence=[3]\n  PROBLEM: The documentation paragraph regarding the security pass skip verification contains an unbalanced parenthesis. The closing parenthesis in `run`; see #4623),` does not have a corresponding opener in the immediate sentence, making the structural intent of the clause ambiguous for future readers.\n  WHY: Documentation only, no runtime impact, but it makes the documented contract structurally confusing.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/security_pass_skip.py: line ~140 in `_label_applied_at_creation`, the line `return f\"{label} was applied {int(delay)}s after creation, not at creation\"` | severity=low | confidence=[4]\n  PROBLEM: When `delay < 0` (the labeled event's `created_at` precedes the issue's `created_at` \u2014 clock skew or an events-page whose first item predates the issue), the message reads \"applied -5s after creation, not at creation\". Negative seconds is grammatically wrong and confusing in `## Notes`.\n  WHY: The safe direction (`skip=False`) is already enforced by the guard, so no security regression \u2014 only the human-facing diagnostic is misleading. Operators reading `## Notes` to debug a false negative will be confused by a negative duration that should never have been formatted as a positive-with-suffix in the first place.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/scripts/security_pass_skip.py: line ~140 | severity=low | confidence=[4]\n  PROBLEM: When `delay < 0`, the message reads \"applied -5s after creation\", which is grammatically odd.\n  WHY: This is a human-facing diagnostic only and does not affect the security decision; the safe direction (`skip=false`) is already enforced.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .claude/scripts/security_pass_skip.py:148 | severity=low | confidence=[4]\n  PROBLEM: `_label_applied_at_creation` returns `f\"{label} was applied {int(delay)}s after creation, not at creation\"` when `delay < 0`.\n  WHY: Negative delay (clock skew, reordered events) produces confusing `## Notes` text (\"applied -5s after creation\"). The safe `skip=False` path is taken, but the diagnostic is misleading.\n- TASK_GAP\n  Requirement: \"update `docs/INVENTORY.md` if its parity gate covers `.claude/scripts/`\" (plan step 8).\n  Expected change site: docs/INVENTORY.md\n  Evidence of absence: `tests/inventory_parity.py:86-91` does not cover `.claude/` paths; no INVENTORY.md change is required and none was made.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7289948257ec2cd642b12243131aee89d53e73d69a4f466414e3e7b4cbbb2d43",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4645,
+    "run_id": "36321144979",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36321144979",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927132335_56568dbe4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4645,
+    "run_id": "36321144979"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T13:23:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

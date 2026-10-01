@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:181, 184, 187-191 | severity=critical | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: PR base refs and related placeholders are interpolated unquoted into shell commands, allowing a ref containing shell metacharacters to execute additional commands.\n  WHY: A Claude session substituting PR metadata into these commands can execute unintended shell syntax and expose session credentials; reviewers disagreed on severity, with the highest rating being BLOCKER and z-ai_glm-5_2 rating it NIT.\n- workflow-templates/.claude/commands/fix-claude-pr.md:46, 49 | severity=critical | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Head and base refs are interpolated unquoted into fetch, checkout, and merge commands, allowing a ref containing shell metacharacters to execute additional commands.\n  WHY: A Claude session substituting PR metadata into these commands can execute unintended shell syntax and expose session credentials.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cThe `.claude/` copies are synced byte-identically in `[claude-twin-sync]` commits on this branch.\u201d\n  expected_change_site: `.claude/commands/implement-plan-claude.md` and `.claude/commands/fix-claude-pr.md`\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: Neither root command is changed in the PR diff; `.claude/commands/implement-plan-claude.md` still has the default-only drift check at lines 181\u2013183; `.claude/commands/fix-claude-pr.md` still has the pre-change step 5 at line 46; `docs/implement-plan/issue-5260-asset-sync-pr-base-drift.md:14,17,70` says the twin sync is pending; `tests/test_claude_asset_sync_command.py:33-35` requires the root commands to match their twins.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/commands/implement-plan-claude.md | severity=critical | confidence=[4]\n  PROBLEM: The base ref and related placeholders are interpolated directly into bash invocations with no quoting or validation, so a ref containing shell metacharacters can execute additional commands.\n  WHY: The procedure is given to an LLM agent that executes it via `bash -c`; a malicious or accidentally-crafted ref triggers command execution and can expose credentials available in the session.\n- workflow-templates/.claude/commands/fix-claude-pr.md | severity=critical | confidence=[4]\n  PROBLEM: Head and base refs are interpolated unquoted into fetch, checkout, and merge commands, so a ref containing shell metacharacters can execute additional commands.\n  WHY: The LLM executing the documented procedure substitutes the placeholder verbatim into bash; a head ref such as `feature;env` would inject `env` at the merge step.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/commands/implement-plan-claude.md | severity=critical | confidence=[4]\n  PROBLEM: The PR\u2019s base ref is used as shell syntax without validation or safe quoting.\n  WHY: A valid branch name such as `topic;env` makes the documented fetch run `git fetch origin topic` and then execute `env` as a separate command, permitting command execution and exposing credentials available in the session.\n- Requirement: \u201cThe `.claude/` copies are synced byte-identically in `[claude-twin-sync]` commits on this branch.\u201d\n  Expected change site: `.claude/commands/implement-plan-claude.md` and `.claude/commands/fix-claude-pr.md`.\n  Evidence of absence: Neither root command is changed in the PR diff. The progress log says the twin sync is still pending (lines 10, 14, 70); the checked-in `.claude/commands/implement-plan-claude.md` still has the default-only drift check at lines 181\u2013183, and `.claude/commands/fix-claude-pr.md` still has the pre-change step 5 at line 46. Thus the repo\u2019s active commands do not yet contain the base-aware fix, and the twin-parity tests remain unsatisfied.\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: BLOCKER\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/implement-plan-claude.md | severity=high | confidence=[4]\n  PROBLEM: The PR base ref placeholder `<base>` is interpolated unquoted into shell commands, so a valid git branch name such as `stable;env` can execute `env` as a separate command.\n  WHY: When a Claude session substitutes the PR\u2019s base ref, shell metacharacters allowed in git refs are interpreted by the shell, enabling command injection.\n- Requirement: \"The `.claude/` copies are synced byte-identically in `[claude-twin-sync]` commits on this branch\" and \"After it, both copies must match\" (PR description, Twin-first section)\n  Expected change site: `.claude/commands/implement-plan-claude.md` and `.claude/commands/fix-claude-pr.md`\n  Evidence of absence: The PR description explicitly states \"a fifth sync is **pending**\" and lists both twin sha256 values as \"(sync pending)\". The progress log at `docs/implement-plan/issue-5260-asset-sync-pr-base-drift.md:14,17,70` says \"Waiting on: PR #5282: twin sync\" and \"twin sync pending after review round 4\". Neither `.claude/commands/implement-plan-claude.md` nor `.claude/commands/fix-claude-pr.md` appears in the PR's changed-file list. The test at `tests/test_claude_asset_sync_command.py:33-35` requires the root commands to match their twins via parametrization, so the deliverable is incomplete until the sync lands.\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: MAJOR\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/commands/implement-plan-claude.md | severity=low | confidence=[2]\n  PROBLEM: The `<base>` placeholder from PR metadata is interpolated unquoted into git fetch, diff, and merge commands, so a base ref containing shell metacharacters could be read as multiple commands.\n  WHY: A Claude session substituting the base ref and executing it via the Bash tool could split the command at `;`, though this reviewer rated the practical risk low because the instruction is markdown, the model typically handles quoting, and such base refs are atypical.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e239626a081f7aad5b1b8f07b201807f5cfd2dcfbefc6c2ffdcde5ad50146859",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5282,
+    "run_id": "36679493544",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36679493544",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930070802_88949d417d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5282,
+    "run_id": "36679493544"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T07:08:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

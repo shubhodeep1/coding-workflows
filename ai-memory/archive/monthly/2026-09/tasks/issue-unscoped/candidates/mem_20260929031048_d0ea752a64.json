@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:line 3382 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `phase7_list_cancel_runs` calls raw `gh api` without rate-limit backoff, so a rate limit can make all three attempts fail with `lookup_failed`.\n  WHY: The reviewer states that the retry wrapper improves existing behavior and introduces no new failure mode.\n- scripts/comprehensive_test_and_release_gh_api.sh:line 100\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Sourcing the script sets `FIND_LATEST_SCOPED_RUN_MAX_PAGES` in the caller's shell namespace, creating a low-risk possibility of a name clash.\n  WHY: The variable is properly namespaced and read-only once the function runs, but a future caller variable with the same name could clash.\n- .github/workflows/test-and-mark-stable.yml:lines 620, 733, 942\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Clarify and Implement do not guard against an empty `ISSUE_TITLE`, so missing title output silently disables title filtering in their run lookups.\n  WHY: This can restore the unfiltered lookup behavior that the PR fixes, while the Plan step already fails early with a diagnostic.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml\n  Location: line 3382, phase7_list_cancel_runs uses raw `gh api` inside `PHASE7_CANCEL_RUNS_JSON=$(gh api ...)`\n  severity=NIT\n  confidence=2\n  PROBLEM: `gh api` is called bare inside a function defined within a `set -euo pipefail` step. The `if PHASE7_CANCEL_RUNS_JSON=$(gh api ...)` pattern correctly captures the exit code so `set -e` does not abort the step on failure. However, the `gh api` call is not wrapped in `gh_api_safe_print` or `gh_api_safe`, so rate-limit backoff is not applied to these Phase 7 listings. This is consistent with the rest of Phase 7 which uses raw `gh api` throughout (lines 3402, 3461, 3651, etc.), and the retry loop in `phase7_list_cancel_runs` handles transient HTTP errors (the 502 case that run 36389883126 hit). A rate limit would still cause each of the 3 attempts to fail, and the step would correctly bail with `lookup_failed` \u2014 which is the same outcome the old code would have produced on a single `gh api` failure.\n  WHY: The old code also used bare `gh api` for these listings. No new failure mode is introduced; the 3-retry wrapper strictly improves the existing behavior.\n- scripts/comprehensive_test_and_release_gh_api.sh\n  Location: line 100\n  HARDENING_RISK_SCORE: 1\n  Issue: `FIND_LATEST_SCOPED_RUN_MAX_PAGES=5` is set at the script's top level. When this script is sourced (line 629, 958 of test-and-mark-stable.yml: `. ./scripts/comprehensive_test_and_release_gh_api.sh`), this variable is written into the calling step's shell name space alongside the function definitions. The other callers of `gh_api_safe_*` helpers (the test-and-mark-stable.yml steps) do not expect a new top-level variable, and a future variable with the same name defined elsewhere could shadow or clash. The variable is properly namespaced (`FIND_LATEST_SCOPED_RUN_MAX_PAGES`) and is read-only once the function runs, so the risk is low.\n  Suggested minimal fix: Add `readonly FIND_LATEST_SCOPED_RUN_MAX_PAGES` after line 100, or declare it local inside `find_latest_scoped_run_field` with a default of 5 when the env var is not set. Using `local` inside the function would also allow a caller to override the cap via the environment without editing the script.\n  Estimated lines changed: 3\n- .github/workflows/test-and-mark-stable.yml\n  Location: lines 620, 733, 942 \u2014 the three `ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}` env exports\n  HARDENING_RISK_SCORE: 2\n  Issue: The Clarify and Implement steps use `\"${ISSUE_TITLE:-}\"` (empty default) in their `find_latest_scoped_run_field` calls, which degrades gracefully to no-title-filtering when ISSUE_TITLE is empty. The Plan step (line 743) has an explicit guard that exits with `plan_failed` when ISSUE_TITLE is empty. The Clarify and Implement steps have no equivalent guard. If the create-issue step were ever modified to stop outputting `title`, the Plan step would fail early with a clear diagnostic, while Clarify and Implement would silently fall back to the old unfiltered behavior \u2014 which is the exact bug this PR fixes (run 36374918973 recorded another issue's run).\n  Suggested minimal fix: Add the same `if [ -z \"${ISSUE_TITLE}\" ]` guard to the beginning of the wait-clarify and wait-implement `run:` bodies, matching the Plan step's guard at lines 743-747.\n  Estimated lines changed: 6\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "240af237541654d2492ca7ca1d2bb78af8793a27ec04da8e633ef139efa46661",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36514404744",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36514404744",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929031048_d0ea752a64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36514404744"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T03:10:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

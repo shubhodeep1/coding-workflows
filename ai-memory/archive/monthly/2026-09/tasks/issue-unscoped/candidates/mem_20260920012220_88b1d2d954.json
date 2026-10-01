@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:release_staged_support_needs_human_latches around line 15405-15407 (the refreshed labels read using `gh api --paginate --jq '[.[].name]' | jq -cs 'add // []'`) | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test coverage does not explicitly assert that `--jq` and `--paginate` combine with the intended per-page filtering and slurping semantics.\n  WHY: The current pipeline fails closed through `latch_revalidation_unavailable`, but an explicit array-type assertion would detect malformed output at the source.\n- tests/test_orchestrate_poll_process.py:test_staged_support_latch_release_revalidates_current_latch_before_edit (the two new `assert '... in poller_text'` lines pinning source-text shape) | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The source-text assertions are brittle and can fail on benign implementation refactors without any runtime behavior change.\n  WHY: The mock harness cannot simulate real GitHub pagination, but regex-style assertions could independently verify `--paginate` usage and cross-page response merging.\n- README.md:line 1619 \u2014 the new \"**Staged-support sweep revalidation contract:**\" paragraph inserted between items 13c and 13d | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new standalone paragraph breaks the numbered 13a\u201313d sub-item sequence and contains an ambiguous cross-reference to the superseded sentence.\n  WHY: Renumbering or relocating the paragraph and identifying the specific superseded sub-item would preserve document structure and clarify the reference.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh\n  Location: release_staged_support_needs_human_latches around line 15405-15407 (the refreshed labels read using `gh api --paginate --jq '[.[].name]' | jq -cs 'add // []'`)\n  Issue: `gh api --paginate` with `--jq` applies the jq filter per-page and concatenates the per-page outputs. On a successful single-page response the filter output is a single JSON array, but `jq -cs 'add // []'` then wraps it in `[[...]]` before `add` flattens it back \u2014 equivalent in the happy path. On an empty response (`[]` from `gh`), `--jq '[.[].name]'` yields `[]` and the pipe + `jq -cs` still produces `[]`, so the `index(\"ai:needs-human\") != null` revalidation check correctly returns false. However, if a future change ever causes `--jq` to be applied to the *concatenated* output (e.g., a gh CLI regression, or a refactor that drops the per-page semantics), the single `[arr1,arr2,...]` would fail `[.[].name]'` with a non-zero exit, the pipe would silently propagate `null`/`error`, and the revalidation would still fail closed because of the `if ! ...` guard \u2014 so the existing `latch_revalidation_unavailable` skip already protects this case. No change required.\n  Suggested minimal fix: Add an explicit assertion that `--jq` and `--paginate` semantically combine as expected (one filtered array per page, slurped and merged). The current test assertion in `test_staged_support_latch_release_revalidates_current_latch_before_edit` only pins the source-text shape, not the runtime semantics. A cheap reinforcement: append `| jq -ce 'type == \"array\"'` after the slurp, so a malformed pipeline (e.g., non-array output from a future gh change) fails closed at the source rather than being caught only by the outer `if !`.\n  HARDENING_RISK_SCORE: 1\n- tests/test_orchestrate_poll_process.py\n  Location: test_staged_support_latch_release_revalidates_current_latch_before_edit (the two new `assert '... in poller_text'` lines pinning source-text shape)\n  Issue: The assertion pins exact string fragments of the implementation (`gh_retry gh api --paginate \"repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels?per_page=100\"` and `--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []'`). Any benign refactor (splitting the long line, changing the per-page constant, switching from `--jq` to a downstream `jq` call, or normalizing quote style) breaks the test even when the runtime behavior is unchanged. The mock harness cannot simulate real GitHub pagination, so there is no better behavioral test in the current harness, but the brittleness means future maintainers will see CI failures for cosmetic changes.\n  Suggested minimal fix: Loosen the regex-style match to verify two independent properties: (1) `--paginate` is used on the labels path; (2) the response is merged across pages (any of `jq -cs 'add // []'`, `jq -s 'add // []'`, or `jq -c '[.[][]]'` would all be correct). Use `re.search(r'--paginate[^\"]*labels\\?per_page=100', poller_text)` and `re.search(r'add // \\[\\]', poller_text)`.\n  HARDENING_RISK_SCORE: 1\n- README.md\n  Location: line 1619 \u2014 the new \"**Staged-support sweep revalidation contract:**\" paragraph inserted between items 13c and 13d\n  Issue: The new standalone paragraph breaks the numbered sub-item sequence (13a \u2192 13b \u2192 13c \u2192 unnumbered paragraph \u2192 13d), whereas the surrounding items 13a\u201313d are all numbered sub-items of section 13. The paragraph also states it \"supersedes the earlier API-cost and skip-reason sentence in item 13\", but the sentence it replaces is in a different location (inside item 13 or its sub-items, not the position of this new paragraph), so the cross-reference is ambiguous for future readers trying to find the original sentence.\n  Suggested minimal fix: Either renumber the new paragraph as **13d** and shift the existing 13d to **13e**, or move the new paragraph to the end of section 13 (after 13d) so the numbered sequence 13a/13b/13c/13d is preserved. Updating the wording to reference the specific sub-item it supersedes (e.g., \"supersedes the API-cost sentence formerly embedded in item 13d\") would remove the cross-reference ambiguity.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "e57c9beb00d46d644aeacaed7a4803bf94cbc108e2d846ded6a9fc0b9efb6f64",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4133,
+    "run_id": "35471956651",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35471956651",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260920012220_88b1d2d954",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4133,
+    "run_id": "35471956651"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-20T01:22:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

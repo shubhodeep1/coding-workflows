@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:500 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The RUN_URL_PARTS_RE regex is not anchored, which allows trailing text to be included in the parsed run ID.\n  WHY: A crafted queue body with a trailing query or fragment could pass parsing with an incorrect run ID, potentially leading to binding_mismatch or the acceptance of an invalid binding.\n- scripts/claude_issue_intake.sh:129 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The code relies on Bash's silent dropping of NUL bytes from QUEUE_BODY after the jq check, but the subsequent gh api command may then fail or send an empty/malformed body.\n  WHY: The queue_failed path is taken, but the error message is generic, leaving the item in a half-written/unbound state visible to the watchdog, without the intake properly cleaning up or clarifying the error for operators.\n- scripts/claude_issue_intake.sh:129 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The validation failure message for QUEUE_BODY does not distinguish between a missing, empty, or invalid (binary/NUL) body.\n  WHY: Generic error messages make it difficult for operators to diagnose specific intake failures, especially when input formats are unexpectedly modified.\n- scripts/claude_issue_route.py:around line 520\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Comparison using rstrip() might be too lenient regarding trailing whitespace.\n  WHY: The suggested minimal fix is to use strict equality comparison `(body or \"\").replace(\"\\r\\n\", \"\\n\") != canonical[\"body\"]`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"the pickup reads producer runs for the first 3 \u00d7 limit targets (30) so stuck unbound items cannot starve bound items\" (AD-7, implemented in #4649).\n  expected_change_site: scripts/claude_issue_route.py:queue_binding_run_ids + callers in queue-pending / CLI.\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The function exists and is called, but the test in `tests/test_claude_issue_route.py` (`test_cli_stuck_unbound_items_do_not_starve_a_bound_item`) hard-codes the value `3` instead of reading the `QUEUE_BINDING_SCAN_FACTOR` constant. A future edit to the constant would silently break the test contract.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_route.py:500 | severity=MAJOR | confidence=4\n  PROBLEM: The RUN_URL_PARTS_RE regex is not anchored, which allows trailing text to be included in the parsed run ID.\n  WHY: A crafted queue body with a trailing query or fragment could pass parsing with an incorrect run ID, potentially leading to binding_mismatch or the acceptance of an invalid binding.\n- scripts/claude_issue_intake.sh:129 | severity=MAJOR | confidence=4\n  PROBLEM: The code relies on Bash's silent dropping of NUL bytes from `QUEUE_BODY` after the `jq` check, but the subsequent `gh api` command may then fail or send an empty/malformed body.\n  WHY: The `queue_failed` path is taken, but the error message is generic, leaving the item in a half-written/unbound state visible to the watchdog, without the intake properly cleaning up or clarifying the error for operators.\n- scripts/claude_issue_intake.sh:129 | severity=NIT | confidence=3\n  PROBLEM: The validation failure message for `QUEUE_BODY` does not distinguish between a missing, empty, or invalid (binary/NUL) body.\n  WHY: Generic error messages make it difficult for operators to diagnose specific intake failures, especially when input formats are unexpectedly modified.\n- TASK_GAP\n  Requirement: \"the pickup reads producer runs for the first 3 \u00d7 limit targets (30) so stuck unbound items cannot starve bound items\" (AD-7, implemented in #4649).\n  Expected change site: scripts/claude_issue_route.py:queue_binding_run_ids + callers in queue-pending / CLI.\n  Evidence of absence: The function exists and is called, but the test in `tests/test_claude_issue_route.py` (`test_cli_stuck_unbound_items_do_not_starve_a_bound_item`) hard-codes the value `3` instead of reading the `QUEUE_BINDING_SCAN_FACTOR` constant. A future edit to the constant would silently break the test contract.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- scripts/claude_issue_route.py:Location: line 500 (RUN_URL_PARTS_RE) | HARDENING_RISK_SCORE=1\n  PROBLEM: Regex is not anchored.\n  SUGGESTED MINIMAL FIX: anchor with `^` and `$`: `re.compile(r\"^https://github\\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/([0-9]{1,20})$\")`\n- scripts/claude_issue_route.py:Location: queue_binding_verdict (around line 520) | HARDENING_RISK_SCORE=1\n  PROBLEM: Comparison using rstrip() might be too lenient regarding trailing whitespace.\n  SUGGESTED MINIMAL FIX: Use strict equality comparison `(body or \"\").replace(\"\\r\\n\", \"\\n\") != canonical[\"body\"]`\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "eafff20415010fa19bbdf5115a9f5025c188d039ed09e7b2aabca411262e797b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4636,
+    "run_id": "36337973816",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36337973816",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927180335_b25f4f761b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4636,
+    "run_id": "36337973816"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T18:03:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

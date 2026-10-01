@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:17225-17232 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The compound condition `[ -z \"${_rb_merge_judged_sha}\" ] || [ -z \"${_rb_merge_sha}\" ] || [ \"${_rb_merge_sha}\" != \"${_rb_merge_judged_sha}\" ]` does not fail fast on empty judged SHA before evaluating live SHA equality.\n  WHY: An empty judged SHA could still reach the SHA equality check, creating a logical path where the merge proceeds with an unbound window even when the judged SHA is missing; other reviewers verified that Bash `||` short-circuits and disputed this finding.\n\n- scripts/orchestrate_poll_process.sh:17413-17420 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The defensive empty-SHA branch that previously guarded `_pr_checks_completed` calls was removed, eliminating a safety check that ensured `_rb_mwf_sha` was never empty before mutation.\n  WHY: Without this guard, an empty SHA could be passed to `_pr_checks_completed`, which may not handle empty inputs gracefully, creating an unbound merge risk in the merge_with_followup path; other reviewers verified that the new top-level guard subsumes this branch.\n\n- scripts/orchestrate_poll_process.sh:17217-17232, 17394 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: No explicit error handling exists for malformed or missing PR_META, and the SHA extraction and validation logic lacks explicit error handling for jq parse failures or missing PR_META keys.\n  WHY: A malformed PR_META would silently result in empty judged SHA values and could create an unbound merge window; other reviewers verified that empty extraction results reach the fail-closed guard.\n\n- scripts/orchestrate_poll_process.sh:17217, 17394 | confidence=2\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Variable names `_rb_merge_judged_sha` and `_rb_mwf_judged_sha` violate existing naming conventions in the file.\n  WHY: This is a style inconsistency that does not break functionality but violates naming conventions in the file; other reviewers considered the distinction between judged and live SHAs intentional.\n\n- check-run context, failed[0] `codex-agent` conclusion=cancelled (run 33983403289), while `review / codex-agent` (run 33983391955) is in_progress | confidence=1\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: One CI check-run on the PR head reports `cancelled` with empty summary and empty log_tail.\n  WHY: Not demonstrably a code failure; the pattern matches routine concurrency supersession after the latest push, and there is no log_tail to map to the diff.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh\n  Line: 17225-17232\n  Problem: The compound condition `[ -z \"${_rb_merge_judged_sha}\" ] || [ -z \"${_rb_merge_sha}\" ] || [ \"${_rb_merge_sha}\" != \"${_rb_merge_judged_sha}\" ]` does not fail fast on empty judged SHA before evaluating live SHA equality.\n  Why it fails at runtime: An empty judged SHA could still reach the SHA equality check, creating a logical path where the merge proceeds with an unbound window even when the judged SHA is missing.\n  ISSUE_CONFIDENCE: 4\n\n- scripts/orchestrate_poll_process.sh\n  Line: 17413-17420\n  Problem: The defensive empty-SHA branch that previously guarded `_pr_checks_completed` calls was removed, eliminating a safety check that ensured `_rb_mwf_sha` was never empty before mutation.\n  Why it fails at runtime: Without this guard, an empty SHA could be passed to `_pr_checks_completed`, which may not handle empty inputs gracefully, creating an unbound merge risk in the merge_with_followup path.\n  ISSUE_CONFIDENCE: 4\n\n- scripts/orchestrate_poll_process.sh\n  Line: 17217-17232, 17394\n  Problem: Variable names `_rb_merge_judged_sha` and `_rb_mwf_judged_sha` are inconsistent with existing style (`_rb_merge_sha`, `_rb_mwf_sha`).\n  Why it fails at runtime: This is a style inconsistency that doesn't break functionality but violates naming conventions in the file.\n  ISSUE_CONFIDENCE: 2\n\n- scripts/orchestrate_poll_process.sh\n  Line: 17217\n  Problem: No explicit error handling exists for malformed or missing PR_META, which would cause `printf '%s' \"${PR_META}\" | jq -r '.head_sha // empty'` to return empty string without warning.\n  Why it fails at runtime: A malformed PR_META would silently result in empty judged SHA, bypassing the fail-closed guard and potentially allowing unbound merges.\n  ISSUE_CONFIDENCE: 3\n\n- scripts/orchestrate_poll_process.sh\n  Line: 17217-17232\n  Problem: The SHA extraction and validation logic lacks explicit error handling for jq parse failures or missing PR_META keys.\n  Why it fails at runtime: Any failure in SHA extraction would silently produce empty strings, bypassing the fail-closed guard and creating unbound merge windows.\n  ISSUE_CONFIDENCE: 3\n\n- scripts/orchestrate_poll_process.sh\n  Line: 17217, 17394\n  Problem: New variables `_rb_merge_judged_sha` and `_rb_mwf_judged_sha` violate existing naming conventions in the file.\n  Why it fails at runtime: This is a style inconsistency that doesn't break functionality but violates naming conventions in the file.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- check-run context, failed[0] `codex-agent` conclusion=cancelled (run 33983403289), while `review / codex-agent` (run 33983391955) is in_progress\n  Problem: One CI check-run on the PR head reports `cancelled` with empty summary and empty log_tail\n  Why it fails at runtime: Not demonstrably a code failure \u2014 the pattern (a cancelled `codex-agent` sibling plus an in-progress successor on the same head) matches routine concurrency supersession after the latest push, and there is no log_tail to map to the diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "7d4ec42d7991917c1eb4c44648884d948678e6cccf1cd7a34886fafd557c7bdb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4006,
+    "run_id": "33983391955",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33983391955",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260905191938_4c0ebd192d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4006,
+    "run_id": "33983391955"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-05T19:19:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

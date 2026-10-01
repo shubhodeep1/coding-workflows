@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/promote_main_cycle.sh:362 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The workflow file name is treated as unsafe input in the active-gate lookup and is vulnerable to shell injection through special characters.\n  WHY: An attacker could inject shell commands through the workflow file name.\n\n- scripts/auto_release_stable.sh:150 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The active-run count does not validate that runs_json is valid JSON before jq processing.\n  WHY: Malformed API responses could cause jq to fail silently or return unexpected data.\n\n- scripts/auto_release_stable.sh:150 | confidence=2\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The jq selector processes runs_json from the GitHub API without hardening against malformed input.\n  WHY: Malformed JSON could cause jq parsing issues, though this was assessed as not a security vulnerability.\n\n- scripts/promote_main_cycle.sh:359-361 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: jq failure handling around the active gate lookup is not reliably distinguished from valid numeric output.\n  WHY: The guard may fail to trigger guard_unavailable on jq failures, leading to incorrect idle-wait decisions or other logic errors.\n\n- scripts/promote_main_cycle.sh:377-380 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The workflow file name is passed directly to gh workflow run without validation that it is a safe workflow name.\n  WHY: Malicious workflow file names could cause issues, though this is unlikely in practice.\n\n- scripts/promote_main_cycle.sh:79 | confidence=2\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The default value of 18000 seconds for PROMOTE_CYCLE_GATE_WAIT_SECS is not documented in the script help text.\n  WHY: Operators may not realize the long wait time when configuring the script.\n\n- scripts/promote_main_cycle.sh:82 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS is not documented in the script help section.\n  WHY: Operators will not know about the new configuration option.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The daily promote cycle and the 6-hourly auto-release no longer cancel each other's release gate, and a cancelled gate is retried instead of blocking the next release.\"\n  expected_change_site: scripts/auto_release_stable.sh\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The script's help text at lines 14-27 does not mention that cancelled gates are retried on the next tick\n\n- requirement: \"scripts/promote_main_cycle.sh should wait for the gate workflow to be idle on every branch before dispatching\"\n  expected_change_site: The script's help section\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The help section at lines 27-61 does not mention the new idle wait variable or its purpose\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/promote_main_cycle.sh:362 | confidence=4\n  PROBLEM: The regex check is vulnerable to shell injection if PROMOTE_CYCLE_GATE_WORKFLOW_FILE contains special characters. The variable is used in a string concatenation without proper escaping.\n  WHY: An attacker could inject shell commands through the workflow file name.\n\n- scripts/auto_release_stable.sh:150 | confidence=2\n  PROBLEM: The jq selector string is constructed from untrusted input (runs_json from GitHub API). While jq itself is safe, the pattern construction could be hardened.\n  WHY: Potential for malformed JSON to cause jq parsing issues, though not a security vulnerability.\n\n- scripts/promote_main_cycle.sh:359-361 | confidence=4\n  PROBLEM: The jq command can fail (returns empty string), but the error handling only checks if the result is numeric. If jq fails with a non-numeric error message, it could pass the numeric check.\n  WHY: The guard_unavailable skip is not reliably triggered on jq failures.\n\n- scripts/promote_main_cycle.sh:377-380 | confidence=3\n  PROBLEM: The workflow file name is used directly in the gh workflow run command without validation that it's a safe workflow name.\n  WHY: Malicious workflow file names could cause issues, though unlikely in practice.\n\n- scripts/promote_main_cycle.sh:362 | confidence=4\n  PROBLEM: If the jq command fails and returns a non-numeric string that happens to match the regex, the script continues with invalid data.\n  WHY: Could lead to incorrect idle wait decisions or other logic errors.\n\n- scripts/auto_release_stable.sh:150 | confidence=3\n  PROBLEM: No validation that runs_json is valid JSON before jq processing.\n  WHY: Malformed API responses could cause jq to fail silently or return unexpected data.\n\n- scripts/promote_main_cycle.sh:79 | confidence=2\n  PROBLEM: The default value of 18000 seconds (5 hours) is hardcoded but not documented in the script's help text.\n  WHY: Operators may not realize the long wait time when configuring the script.\n\n- scripts/promote_main_cycle.sh:82 | confidence=3\n  PROBLEM: The new PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS variable is not documented in the script's help section.\n  WHY: Operators won't know about the new configuration option.\n\n- TASK_GAP\n  Requirement: \"The daily promote cycle and the 6-hourly auto-release no longer cancel each other's release gate, and a cancelled gate is retried instead of blocking the next release.\"\n  Expected change site: scripts/auto_release_stable.sh should document the new behavior for cancelled gates in its help text\n  Evidence of absence: The script's help text at lines 14-27 does not mention that cancelled gates are retried on the next tick\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n\n- TASK_GAP\n  Requirement: \"scripts/promote_main_cycle.sh should wait for the gate workflow to be idle on every branch before dispatching\"\n  Expected change site: The script's help text should document the new PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS variable and its purpose\n  Evidence of absence: The help section at lines 27-61 does not mention the new idle wait variable or its purpose\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "37fe827f14c96954fa30a621e55f7873a5887645286e36df9113291ced8f6f09",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4185,
+    "run_id": "35556571903",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35556571903",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921040858_ab77594edd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4185,
+    "run_id": "35556571903"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 9 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T04:08:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

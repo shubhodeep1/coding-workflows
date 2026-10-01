@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_session_janitor.py:51 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `subprocess.run([\"gh\", \"api\", path]...)` inherits the runner's full environment.\n  WHY: Inherited environment variables (e.g., secrets, PATH, GIT_*) can interfere with gh execution, cause unexpected behavior, or widen the surface for information exposure.\n- scripts/claude_session_janitor.py:214 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `load_page` surfaces only a generic `ValueError` after JSON parse failures without logging specific context or partial data.\n  WHY: The pickup cannot distinguish between a malformed harness wrapper, truncated page, or genuine JSON syntax error, significantly delaying diagnosis of session-list problems in the field.\n- changelog.d/4887-archive-finished-sessions.md:2 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The changelog entry is grammatically incorrect.\n  WHY: A relative pronoun or auxiliary verb is missing between \"sessions\" and \"nothing\", making the sentence ungrammatical for consumers who read the CHANGELOG.md.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The claude-issue-pickup.md edit is coding-workflows-only (per PR description and task spec).\n  expected_change_site: .claude/commands/claude-issue-pickup.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff and changed-files list contain no edit to the root .claude/commands/claude-issue-pickup.md, which is required for the stale session sweep to be correctly invoked by the pickup, as identified by multiple previous reviewers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_session_janitor.py:51 | severity=low | confidence=[3]\n  PROBLEM: `subprocess.run([\"gh\", \"api\", path]...)` inherits the full environment of the runner.\n  WHY: Inherited environment variables (e.g., secrets, PATH, GIT_*) can interfere with gh execution, cause unexpected behavior, or widen the surface for information exposure.\n- scripts/claude_session_janitor.py:214 | severity=low | confidence=[3]\n  PROBLEM: `load_page` surfaces only a generic ValueError after JSON parse failures without logging the specific context or partial data.\n  WHY: The pickup cannot distinguish between a malformed harness wrapper, truncated page, or genuine JSON syntax error, significantly delaying diagnosis of session-list problems in the field.\n- changelog.d/4887-archive-finished-sessions.md:2 | severity=low | confidence=[5]\n  PROBLEM: The changelog entry \"The Claude issue pickup's hourly wake archives the fixer, issue-start, and report sessions nothing else archived\" is grammatically incorrect.\n  WHY: A relative pronoun or auxiliary verb is missing between \"sessions\" and \"nothing\", making the sentence ungrammatical for consumers who read the CHANGELOG.md.\n- TASK_GAP\n  Requirement: The claude-issue-pickup.md edit is coding-workflows-only (per PR description and task spec).\n  Expected change site: .claude/commands/claude-issue-pickup.md\n  Evidence of absence: The PR diff and changed-files list contain no edit to the root .claude/commands/claude-issue-pickup.md, which is required for the stale session sweep to be correctly invoked by the pickup, as identified by multiple previous reviewers.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7ceab9a975f5fe16cb4dbe7612d6df290cca7469cff6e1251b5eea70e0c0d245",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4937,
+    "run_id": "36566426490",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36566426490",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929125329_6e30bb15c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4937,
+    "run_id": "36566426490"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T12:53:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

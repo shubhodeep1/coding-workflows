@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:356-373 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: `_dispatched_review_runs` skips to the fallback workflow for a `ReadError` other than HTTP 404.\n  WHY: A transient error on the primary workflow could cause selection of the fallback workflow and an incorrect `stall_redispatched` verdict.\n- .claude/scripts/check_in_status.py:710-734 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: `_parse_time(run.get(\"started_at\"))` is called without checking whether `started_at` is `None` or empty.\n  WHY: A queued or pending check run without `started_at` could raise an uncaught exception; severity differs between reviewers, so the higher severity is used.\n- .claude/scripts/check_in_status.py:791 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `ignore_claim_by` is retained on the public `_review_stall_verdict` helper signature but is no longer used.\n  WHY: The parameter no longer affects the verdict.\n- .claude/scripts/check_in_status.py:777 | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `ignore_claim_by` is retained but unused after the run-based rule.\n  WHY: This leaves the API parameter unused.\n- workflow-templates/.claude/scripts/check_in_status.py:778 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `ignore_claim_by` is retained on the public helper but no longer affects the verdict.\n  WHY: The parameter is preserved for backward compatibility.\n- workflow-templates/.claude/scripts/check_in_status.py:835-836 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The defensive fallback at lines 835-836 is unreachable in the current call path.\n  WHY: The branch does not fail at runtime; it is dead code in the current call path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/scripts/check_in_status.py:835-836 | severity=low | confidence=[4]\n  PROBLEM: The defensive guard `if \"runs\" not in dispatched_listing:` followed by `dispatched_listing.update(_dispatched_review_runs(repo))` is unreachable code.\n  WHY: It does not fail at runtime. The guard is dead but harmless: one dict key check per call.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/check_in_status.py:356-361 | severity=high | confidence=[4]\n  PROBLEM: _dispatched_review_runs skips to the fallback workflow for any ReadError, not just 404 (Not Found).\n  WHY: A transient error (e.g., 500, 403) on the primary workflow will cause the script to skip it and incorrectly fall back to the consumer/other workflow, potentially returning stale or incorrect run data and resulting in an incorrect stall_redispatched verdict.\n- .claude/scripts/check_in_status.py:710-727 | severity=high | confidence=[4]\n  PROBLEM: _parse_time(run.get(\"started_at\")) is called without checking if started_at is None or empty.\n  WHY: _parse_time may raise an exception if a check run lacks a started_at timestamp (common for queued runs). While the code has a try-except block, it is safer and more robust to validate that the input is a valid timestamp string before processing.\n- .claude/scripts/check_in_status.py:791 | severity=low | confidence=[5]\n  PROBLEM: ignore_claim_by parameter is retained on the public _review_stall_verdict helper signature but no longer used.\n  WHY: It does not fail at runtime; it is retained for backward compatibility with potential external callers.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/check_in_status.py:835-836 | severity=low | confidence=[5]\n  PROBLEM: The defensive fallback at lines 835-836 is unreachable in the current call path.\n  WHY: It does not fail today; the branch is dead code.\n- workflow-templates/.claude/scripts/check_in_status.py:778 | severity=low | confidence=[5]\n  PROBLEM: The `ignore_claim_by: tuple[str, ...] = ()` parameter is retained on the public helper but no longer affects the verdict.\n  WHY: It does not fail at runtime. The parameter is preserved for backward compatibility per \u00a76.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .claude/scripts/check_in_status.py:365-373 | severity=high | confidence=[3]\n  PROBLEM: Skips on any ReadError except 404 (transient 5xx/403 could select wrong fallback workflow).\n  WHY: Incorrect stall_redispatched verdict on consumer repo with transient error on primary workflow.\n- .claude/scripts/check_in_status.py:726-734 | severity=low | confidence=[2]\n  PROBLEM: None/empty started_at before _parse_time can raise uncaught TypeError before try-except (though caught in practice).\n  WHY: Queued/pending check-run without started_at could crash verdict on edge head.\n- .claude/scripts/check_in_status.py:777 | severity=low | confidence=[4]\n  PROBLEM: Legacy param retained but unused after run-based rule (issue #5376).\n  WHY: No runtime failure; docstring notes it, but API surface drift if callers rely on it.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "00e216e6213e67c8ca709bf928f2d22f2632fda0ad35c07851c1eb28bfa56934",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5408,
+    "run_id": "36666686392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36666686392",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930041556_27b45a5a85",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5408,
+    "run_id": "36666686392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T04:15:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

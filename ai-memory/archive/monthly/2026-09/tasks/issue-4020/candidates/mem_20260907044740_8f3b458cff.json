@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What concrete improvement should be implemented?\nChoices:\nA. Fix a specific defect\u2014provide the affected workflow/feature, current behavior, and expected behavior. (RECOMMENDED)\nB. Add or change a feature\u2014describe the affected area and acceptance criteria.\nC. Improve documentation\u2014identify the topic and intended audience.",
+  "fingerprint": "1f20e492dd503a215a19680c11b4d58b409bd7da5e96ed2df05bc4f51ea087f7",
+  "lineage": {
+    "issue_number": 4020,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34084244836",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34084244836",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260907044740_8f3b458cff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4020,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34084244836"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4020 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-07T04:47:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

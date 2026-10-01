@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_codex_thread_reuse_core.py:567 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The test asserts that `validate.yml` contains the stale literal `helper_path=\"scripts/stage_workflow_support.sh\"` even though the workflow now uses `helper_stage_dir`.\n  WHY: The assertion fails during the CI `lint` check, leaving CI red and blocking PR merge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the stale assertions to match `validate.yml`'s current `helper_stage_dir` structure so the CI `lint` check passes.\n  expected_change_site: tests/test_codex_thread_reuse_core.py\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: `validate.yml:265` sets `helper_stage_dir`, `validate.yml:452` calls `${helper_stage_dir}/scripts/stage_workflow_support.sh`, while assertions at `tests/test_codex_thread_reuse_core.py:567-568` still refer to `helper_path`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_codex_thread_reuse_core.py:567 | severity=critical | confidence=5\n  PROBLEM: The test asserts that `validate.yml` contains the stale literal `helper_path=\"scripts/stage_workflow_support.sh\"` even though the workflow now uses `helper_stage_dir`.\n  WHY: The stale assertion fails during the CI `lint` check, blocking PR merge.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_codex_thread_reuse_core.py:567 | severity=critical | confidence=5\n  PROBLEM: The test `test_validate_workflow_contains_thread_reuse_bootstrap` asserts the literal `helper_path=\"scripts/stage_workflow_support.sh\"` in `validate.yml`, but the workflow now passes the bootstrap helper using `helper_stage_dir`.\n  WHY: The assertion raises an `AssertionError` in the CI `lint` check, leaving CI red and blocking PR merge.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_codex_thread_reuse_core.py:567 | severity=critical | confidence=5\n  PROBLEM: The test asserts that `validate.yml` contains the literal `helper_path=\"scripts/stage_workflow_support.sh\"`, but the workflow now uses `helper_stage_dir`.\n  WHY: The stale assertion fails during the CI `lint` check, leaving CI red and blocking PR merge.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\nTASK_GAP\nFile: tests/test_codex_thread_reuse_core.py\nLine or code reference: line 567 \u2014 `assert 'helper_path=\"scripts/stage_workflow_support.sh\"' in text`\nProblem: The CI `lint` check-run is red on this PR's head SHA (run 36143908256). The test `test_validate_workflow_contains_thread_reuse_bootstrap` asserts that `validate.yml` contains the literal `helper_path=\"scripts/stage_workflow_support.sh\"`, but `validate.yml` was refactored to use `helper_stage_dir` instead (confirmed: `validate.yml:265` sets `helper_stage_dir=\"${helper_stage_root}/src\"`, `validate.yml:452` calls `bash \"${helper_stage_dir}/scripts/stage_workflow_support.sh\" validate --manifest \"${manifest_path}\"`, and grep finds zero occurrences of `helper_path=` in `validate.yml`). The assertion at line 567 and the companion assertion at line 568 (`bash \"${helper_path}\" validate --manifest \"${manifest_path}\"`) are both stale. This is a pre-existing failure on the base branch \u2014 this PR does not touch `validate.yml` or `test_codex_thread_reuse_core.py` \u2014 but CI is red on the PR head SHA, which blocks merge.\nWhy it fails at runtime: `python3 tests/test_codex_thread_reuse_core.py` exits 1 at line 567, failing the `lint` CI job. The PR cannot merge while CI is red.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4f649c8a550b4c7f080e81cbceb36be17a743141fa4003def549ca9be5083546",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4472,
+    "run_id": "36143908703",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36143908703",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925154755_3354da2275",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4472,
+    "run_id": "36143908703"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T15:47:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

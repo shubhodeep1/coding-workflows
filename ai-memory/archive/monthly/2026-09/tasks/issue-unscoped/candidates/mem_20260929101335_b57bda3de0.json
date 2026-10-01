@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py:432 | confidence=3\n  flagged_by: [google_gemini-3_1_flash-lite]\n  PROBLEM: `_publish_attempts` may retry adding a label after GitHub accepted the request but the client timed out before receiving the response.\n  WHY: A retry can result in redundant label additions or unnecessary API calls.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Operator: copy it into .claude/hooks/unattended_question_guard.py as a [claude-twin-sync] commit on this branch\"\n  expected_change_site: .claude/hooks/unattended_question_guard.py\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1_flash-lite]\n  EVIDENCE: The PR CHANGED FILES list includes only workflow-templates/.claude/hooks/unattended_question_guard.py, not .claude/hooks/unattended_question_guard.py; The PR diff contains updates only to workflow-templates/.claude/hooks/unattended_question_guard.py. The .claude/hooks/unattended_question_guard.py remains unchanged (old version). Both reviewers report that the PR description explicitly defers this twin sync to the operator per Q40 and that this is intentional, not an unmet requirement.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \".claude/hooks/unattended_question_guard.py twin sync (operator, Q40)\"\n  Expected change site: .claude/hooks/unattended_question_guard.py\n  Evidence of absence: The PR CHANGED FILES list includes only workflow-templates/.claude/hooks/unattended_question_guard.py, not .claude/hooks/unattended_question_guard.py. The PR description explicitly states: \"Operator: copy it into .claude/hooks/unattended_question_guard.py as a [claude-twin-sync] commit on this branch\" and \"Until then test_template_parity[hooks/unattended_question_guard.py] fails by design; a hold claim is posted on the head.\" This is explicitly deferred per the twin-first workflow (Q40), not an unmet requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1_flash-lite ===\n- workflow-templates/.claude/hooks/unattended_question_guard.py:432 | confidence=3\n  PROBLEM: The `_publish_attempts` function does not handle potential duplicate label additions if the HTTP request for `POST .../labels` succeeds but the connection is dropped before the response is fully processed.\n  WHY: If the `POST` succeeds on the GitHub side but the client times out, the function might retry the label addition in a subsequent attempt. While GitHub's label API is usually idempotent, the `publish_cap_blocker` function assumes successful execution means the label was added successfully, which could lead to redundant label additions or unnecessary API calls.\n- TASK_GAP\n  Requirement: \"Operator: copy it into .claude/hooks/unattended_question_guard.py as a [claude-twin-sync] commit on this branch\"\n  Expected change site: .claude/hooks/unattended_question_guard.py\n  Evidence of absence: The PR diff contains updates only to workflow-templates/.claude/hooks/unattended_question_guard.py. The .claude/hooks/unattended_question_guard.py remains unchanged (old version). The PR description explicitly defers this task to the operator, so this is an intentional deferral and not a task gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1_flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5b08f9ebfc07130ebbdd89ceb439b36c855c2751b99818b4f412ff0754723819",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5104,
+    "run_id": "36547182560",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36547182560",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929101335_b57bda3de0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5104,
+    "run_id": "36547182560"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T10:13:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

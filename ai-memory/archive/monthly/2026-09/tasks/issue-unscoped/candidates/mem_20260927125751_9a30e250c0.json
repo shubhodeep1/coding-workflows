@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "I\u2019ll read the six on-disk review outputs and the required repository context, then consolidate only reported findings and task gaps.",
+  "fingerprint": "a45b1559c2fd9f921428247c47a9769bd4230b394d644d5535579fe313d2da97",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4601,
+    "run_id": "36320101095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36320101095",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927125751_9a30e250c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4601,
+    "run_id": "36320101095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T12:57:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

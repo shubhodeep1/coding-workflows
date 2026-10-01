@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py: lines 903-904 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `decide_duplicate_close` extracts `occurrences` and `target_occurrences` from raw bodies instead of the fenced-example-stripped `markers` and `target_markers`.\n  WHY: Marker text inside a fenced command example can supply untrusted occurrence counts to the verdict.\n- workflow-templates/.claude/scripts/permission_prompts.py: 123, _FENCED_EXAMPLE_RE | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fence regex only strips fences followed by the literal language label `text`, leaving marker text in other fence styles visible to the metadata parser.\n  WHY: Fenced blocks using another language label or no label can bypass stripping and expose embedded markers to the parser.\n- .claude/scripts/permission_prompts.py: line 123, _FENCED_EXAMPLE_RE | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The runtime copy uses a hardcoded four-backtick fence and does not size the example fence dynamically.\n  WHY: A command containing a line of four backticks can close the example fence early, allowing following marker text to be parsed as the filer's markers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Wire `tests/test_permission_prompt_duplicates.py` into the `ci.yml` step \"Unattended helper and permission prompt report tests\".\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  EVIDENCE: deepseek_deepseek-v4 says `.github/workflows/ci.yml` already lists the test at line 445 and `test_ci_runs_this_file` asserts the wiring at line 636; google_gemini-3_1-flash-lite says the PR diff and last run diff contain no `.github/workflows/ci.yml` change.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py: lines 903-904 in decide_duplicate_close | severity=MAJOR | ISSUE_CONFIDENCE: 5\n  PROBLEM: The `occurrences` and `target_occurrences` verdict fields are extracted from raw `body` and `target_body` strings instead of the already-computed `markers` / `target_markers` variables that have fenced examples removed.\n  WHY IT FAILS AT RUNTIME: A session command inside a fenced example that contains `**Occurrences:** 5` or `**Occurrences:** 0` populates the verdict with untrusted values from fenced text.\n- .claude/scripts/permission_prompts.py: line 123, _FENCED_EXAMPLE_RE | severity=MAJOR | ISSUE_CONFIDENCE: 5\n  PROBLEM: The regex `r\"^````text\\n.*?^````[ \\t]*$\"` hardcodes exactly four backticks, and lacks `_BACKTICK_RUN_RE` and `_example_fence` from the twin.\n  WHY IT FAILS AT RUNTIME: If a session command contains a line of four backticks, the fence ends early and any marker text after it is parsed as the filer's own markers.\n- TASK_GAP\n  Requirement: Wire `tests/test_permission_prompt_duplicates.py` into the `ci.yml` step \"Unattended helper and permission prompt report tests\" (plan Phase 1, point 4).\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR diff shows no ci.yml change, but this is a false alarm. Ci.yml already lists `tests/test_permission_prompt_duplicates.py` at line 445 (wired in Phase 1 PR #4903), and `test_ci_runs_this_file` at line 636 of the test file asserts the wiring exists. The requirement was already satisfied in an earlier PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/permission_prompts.py: 123, _FENCED_EXAMPLE_RE | ISSUE_CONFIDENCE: 4\n  PROBLEM: The regex `r\"^(`{4,})text\\n.*?^\\1[ \\t]*$\"` matches only fences opened by exactly four (or more) backticks followed by the literal language label `text\\n`.\n  WHY IT FAILS AT RUNTIME: Other fence styles (e.g., `bash`, `python`, or no language label) bypass the stripping, leaving marker text inside them visible to the metadata parser and bypassing the intended trust boundary.\n- TASK_GAP\n  Requirement: \"Wire tests `tests/test_permission_prompt_duplicates.py` into the `ci.yml` step 'Unattended helper and permission prompt report tests'.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR diff and last run diff contain no changes to .github/workflows/ci.yml; the requirement is explicitly listed in the plan (Phase 1, point 4) but is not implemented in this PR.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bbca46134c8e2cc05dca7c6cf983860f2eb39443fbbb95f8b78013367b67c817",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5403,
+    "run_id": "36672617351",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36672617351",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930055855_30ad65a776",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5403,
+    "run_id": "36672617351"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T05:58:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

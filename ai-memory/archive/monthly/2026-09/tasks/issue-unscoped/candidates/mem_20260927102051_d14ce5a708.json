@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py: DISPATCHER_ALLOWED_PERMISSIONS: tuple[str, ...] = (\"admin\", \"write\") | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The dispatcher permission check rejects users with the `maintain` role.\n  WHY: The GitHub API `/permission` endpoint returns `maintain` for maintainers with write access, preventing them from starting Claude sessions.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"every dispatcher login ... must have admin or write on the target repo\"\n  expected_change_site: scripts/claude_issue_route.py, DISPATCHER_ALLOWED_PERMISSIONS\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The constant excludes the `maintain` role, which provides write access on GitHub, failing to authorize maintainers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_route.py: DISPATCHER_ALLOWED_PERMISSIONS: tuple[str, ...] = (\"admin\", \"write\") | confidence=4\n  PROBLEM: The dispatcher permission check incorrectly rejects users with the `maintain` role.\n  WHY: The GitHub API `/permission` endpoint returns `maintain` for users with the maintainer role. These users have write access, but are currently rejected by this check, preventing them from starting Claude sessions.\n- TASK_GAP\n  Requirement: \"every dispatcher login ... must have admin or write on the target repo\"\n  Expected change site: scripts/claude_issue_route.py, DISPATCHER_ALLOWED_PERMISSIONS\n  Evidence of absence: The constant excludes the `maintain` role, which provides write access on GitHub, failing to authorize maintainers.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1e2f9e739beda6bad641bf3c9c04b9184cead61c22233a937ff55c88a30d148f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4637,
+    "run_id": "36311482886",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36311482886",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927102051_d14ce5a708",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4637,
+    "run_id": "36311482886"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T10:20:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

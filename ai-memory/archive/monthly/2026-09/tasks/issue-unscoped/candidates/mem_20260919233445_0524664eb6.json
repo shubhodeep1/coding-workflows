@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15384 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `created_at <= $latch_created_at` provenance check can accept a trusted actor's later `ai:needs-human` label event when it shares the same second as the staged-support latch comment.\n  WHY: GitHub timestamps have second-level precision, so ties defeat the contract that the latest label event precedes the marker; the risk is low because the trusted actor already has direct label and `/approved` authority.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:15384 | HARDENING_SUGGESTION\n  PROBLEM: GitHub timestamps have second-level precision, so a label event and latch comment sharing the same second cannot be ordered by `created_at`; the same-actor check limits the risk to a trusted actor.\n  WHY: No correctness change is needed because replacing `<=` with `<` would reject legitimate same-second event/comment pairs, while a `databaseId` tiebreaker would compare different ID namespaces and add complexity without addressing a real failure path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: the `created_at <= $latch_created_at` provenance check inside `release_staged_support_needs_human_latches` (around the `_current_needs_human_event` jq predicate the LAST RUN DIFF shares a function with) | severity=NIT | confidence=3\n  PROBLEM: GitHub timestamps have second-level precision. When the latest `ai:needs-human` `labeled` event and the staged-support latch comment share the same `created_at` second, the `<=` allows the latest event to be considered \"before\" the latch even when the relabel logically followed it; the actor check still passes because both came from the same trusted actor.\n  WHY: a trusted actor who re-labels `ai:needs-human` immediately after creating the latch in the same second would have the same-second timestamp pair pass `<=`, the sweep would then treat the latest label event as belonging to the original latch instance, and could post `/approved` for a latch the actor just deliberately set. It is low-risk (the trusted actor already has direct label and `/approved` authority), but the contract is \"the latest `ai:needs-human` event precedes the marker\" and ties defeat it.\n- TASK COMPLETENESS / INTENT GAPS\n  - Requirement: \"Both knobs are wired through `.github/workflows/orchestrate_poll.yml` with repo-var overrides.\"\n    Expected change site: `.github/workflows/orchestrate_poll.yml`\n    Evidence of absence: Both `SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE` and `STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED` are added with `vars.<NAME> || 'true'` env rows in the PR diff. Present.\n    confidence=5\n  - Requirement: \"README (env tables, 12g/12h, 13, staged-support restore), `agents.md`, and a `changelog.d` fragment are updated.\"\n    Expected change site: `README.md`, `agents.md`, `changelog.d/binance-blessings-249-parked-projects-resume-without-humans.md`\n    Evidence of absence: All three updated. Env table rows for both vars are present in README.md; agents.md gains the engine-aware terminal-state paragraph and the new log prefixes; the changelog fragment covers the new contract. Present.\n    confidence=5\n  - Requirement: \"Nine new poller tests (`test_security_pass_terminal_failure_records_engine_sha`, `test_security_pass_failed_project_auto_resets_once_on_newer_engine`, legacy-state, same-engine, once-per-engine, kill-switch/unresolved, manual-precedence, `test_staged_support_needs_human_latch_released_once_per_engine`, `test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone`).\"\n    Expected change site: `tests/test_orchestrate_poll_process.py`\n    Evidence of absence: All nine tests are present in the PR diff. Present.\n    confidence=5\n  - Requirement: \"`tests/test_orchestrate_poll_workflow_contract.py` env assertions.\"\n    Expected change site: `tests/test_orchestrate_poll_workflow_contract.py`\n    Evidence of absence: `test_security_pass_dark_launch_env_and_assets_are_wired` gains assertions for both env rows; `main` registers the two new tests. Present.\n    confidence=5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "7b22003abfd904522f203c6be7dc2957b0a69ebff3b6c5e8664ddf7f786ce2c4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4133,
+    "run_id": "35471967834",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35471967834",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919233445_0524664eb6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4133,
+    "run_id": "35471967834"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-19T23:34:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

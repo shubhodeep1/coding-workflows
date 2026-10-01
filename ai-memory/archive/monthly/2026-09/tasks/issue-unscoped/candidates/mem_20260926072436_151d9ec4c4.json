@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:619-622 | severity=high | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: Symlink conflicted paths are hashed as target-file content instead of link text, so valid staged resolutions are rejected.\n  WHY: `git hash-object -- <path>` follows symlinks while the staged blob stores the link text, causing `worktree_obj != staged_obj` at line 622 and a `ValueError`; SEVERITY: MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_conflict_resolve.sh: line 619 \u2014 `worktree_obj = git(\"hash-object\", \"--\", path).decode().strip()` inside `_assert_index_transition_allowed`\n  PROBLEM: `git hash-object -- <path>` follows symlinks: it opens the target file's content, not the link text. But `git ls-files -z --stage` (used by `index_entries()` at line 563 to produce `staged_obj`) stores the symlink's blob, which contains the link text. For a symlink conflicted path, `staged_obj` (hash of link text, mode 120000) will never equal `worktree_obj` (hash of target file content, mode 100644), so the check `worktree_obj != staged_obj` at line 622 is always true for symlinks, raising `ValueError(\"allowed path staged content does not match the resolved worktree\")` and failing the action closed (exit 2).\n  WHY: `workflow-templates/CLAUDE.md` is a real symlink to `../CLAUDE.md` in this repo (confirmed by `tests/test_touched_set_symlink_aware.py:83` and documented at `tests/test_touched_set_symlink_aware.py:1-11`). It is a common conflicted path during main-merge resolutions (PR #4443, runs 36101772827\u201336120214576). When the model stages this symlink, `_assert_index_transition_allowed` calls `git hash-object -- workflow-templates/CLAUDE.md`, which follows the link and hashes `CLAUDE.md`'s content. The staged blob from `git ls-files --stage` is the hash of the link text `../CLAUDE.md`. The mismatch triggers `ValueError`, the `check` action exits 2, and the resolver aborts \u2014 identical to the pre-fix behavior for regular files.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d64c20188937d2ad0ea13723e0a20b930765089f84263dbc637da098e8521381",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4539,
+    "run_id": "36225760921",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36225760921",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260926072436_151d9ec4c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4539,
+    "run_id": "36225760921"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-26T07:24:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

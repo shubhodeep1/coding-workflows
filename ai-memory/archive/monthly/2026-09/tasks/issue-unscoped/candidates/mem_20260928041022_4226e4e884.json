@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:1958 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The documented CI lint job budget still says 45 minutes after `.github/workflows/ci.yml` raises its timeout to 60 minutes.\n  WHY: The stale documentation may mislead operators sizing the budget; reviewers disagreed on severity, rating it MAJOR or NIT, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"raise the lint job timeout from 45 to 60 minutes\"\n  expected_change_site: `agents.md` around line 1958, in the documented operational contract paragraph\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No diff hunk touches `agents.md`; the prose contract in `agents.md:1958` was not updated.\n- requirement: \"The release workflows' validate-scripts jobs (mark-stable.yml and test-and-mark-stable.yml) are also at 45 minutes. They are left unchanged here...\"\n  expected_change_site: mark-stable.yml, test-and-mark-stable.yml (explicitly deferred to split issue)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: No changes; deferral cited in PR body.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- agents.md:1958 | severity=NIT | confidence=4\n  PROBLEM: The CI lint job's documented budget in agents.md line 1958 says \"The job budget is 45 minutes, leaving headroom over the sharded runtime for a cold runner\" but this PR raises timeout-minutes to 60 in ci.yml.\n  WHY: No runtime failure. The authoritative source (ci.yml) and contract test are both correct. This is documentation drift only.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:1958 | severity=MAJOR | confidence=4\n  PROBLEM: The operational documentation in agents.md states the lint job budget is 45 minutes, contradicting the updated timeout of 60 minutes in ci.yml.\n  WHY: This drift misleads operators sizing the budget or planning the parallelization split, potentially leading to incorrect assumptions about available headroom.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: \"raise the lint job timeout from 45 to 60 minutes\" (PR title; PR description \u00a7Why explicitly states \"The single `lint` job now takes 40\u201345 minutes. On `main`, two runs succeeded at 44.5 and 44.8 minutes, then two were cancelled at 45 minutes with every test still passing (runs 36367681221 and 36368393442). A cancelled `CI` run: makes clean Claude-fixer reviews miss their ready check snapshot...\").\nExpected change site: `agents.md` around line 1958, in the documented operational contract paragraph that begins \"The `CI / lint` job shards the 307-test post-fast-fail subset...\" and reads \"The job budget is 45 minutes, leaving headroom over the sharded runtime for a cold runner.\" in the present tense. After this PR the CI `lint` job budget is 60 minutes, but the `validate-scripts` jobs in `mark-stable.yml` and `test-and-mark-stable.yml` remain at 45 \u2014 the paragraph conflates the two.\nEvidence of absence: No diff hunk touches `agents.md`. The contract test (`tests/test_ci_poll_test_sharding.py:186`) was correctly bumped to 60 and the release-workflow assertion at line 315 was correctly retained at 45, so the runtime contract and its pinned tests are aligned, but the prose contract in `agents.md:1958` was not.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.md:1958 | severity=NIT | confidence=4\n  PROBLEM: The documented CI lint job budget is stale. Line 1958 states \"The job budget is 45 minutes, leaving headroom over the sharded runtime for a cold runner,\" but this PR raises `.github/workflows/ci.yml` lint `timeout-minutes` from 45 to 60.\n  WHY: No runtime failure. The workflow and test are correct. The defect is operational-document drift: an operator reading agents.md to size the CI budget or plan the split sees a stale 45-minute figure and misjudges headroom.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- agents.md:1958 | severity=MAJOR | confidence=5\n  PROBLEM: Documentation stale after ci.yml:24 and test_ci_poll_test_sharding.py:186 raised lint timeout to 60.\n  WHY: Operators sizing CI or planning the parallel-job split use incorrect headroom numbers.\nRequirement: \"The release workflows' validate-scripts jobs (mark-stable.yml and test-and-mark-stable.yml) are also at 45 minutes. They are left unchanged here...\"\nExpected change site: mark-stable.yml, test-and-mark-stable.yml (explicitly deferred to split issue)\nEvidence of absence: No changes; deferral cited in PR body.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- agents.md:1958 | severity=NIT | confidence=4\n  PROBLEM: This PR raises `.github/workflows/ci.yml` `lint` `timeout-minutes` from 45 to 60 and updates the contract test at `tests/test_ci_poll_test_sharding.py:186`, but the parallel operational documentation in `agents.md:1958` still states the CI lint job budget \"is 45 minutes\" in the present tense.\n  WHY: No runtime failure in `ci.yml` (the workflow value and test are correct). The defect is operational-document drift: an operator reading `agents.md` to size the budget or plan the split issue sees a stale 45-minute figure for the CI lint job and misjudges available headroom. CLAUDE.md \u00a77 requires updating `agents.md` when behavior changes; the repo's own materiality classifier (agents.md:1968) rates `.github/workflows/**` changes as \"high\" materiality, and the advisory comment on this PR already flagged the unchanged `agents.md`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3a64cc0ee3695381396df09e9a9e4742b479af785ca5a6b1a75ae6b77208ef2d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4706,
+    "run_id": "36374807466",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36374807466",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928041022_4226e4e884",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4706,
+    "run_id": "36374807466"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T04:10:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

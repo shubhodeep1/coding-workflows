@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:1973 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The merged-report title instruction omits the `#<issue> \u00b7 ` prefix annotation carried by the closed-report form.\n  WHY: This creates ambiguity that may lead to inconsistent session naming for terminal states.\n- tests/test_session_titles.py:70-75 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test verifies rename instructions for steps 3a and 6 but not steps 8, 10, 11, and 12.\n  WHY: The test can pass despite rename requirements being missing for those four steps.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: A stage that opens a PR (steps 3a, 6, 8, 10, 11, 12) renames itself with `set_session_title` in that same step as documented in the new ### Session titles rule in workflow-templates/.claude/commands/implement-plan-claude.md.\n  expected_change_site: workflow-templates/.claude/commands/implement-plan-claude.md and .claude/commands/implement-plan-claude.md, steps 8 (conformance fix), 10 (validation fix), 11 (completion), and 12 (verify-activation fix).\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The set_session_title rename instruction is implemented only in steps 3a and 6; steps 8, 10, 11, and 12 lack this instruction, leaving these automation stages unnumbered.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CLAUDE.md:1973 | severity=MAJOR | confidence=5\n  PROBLEM: The terminal rename instruction for \"merged\" session reports is inconsistent with the closed-report form. The merged form omits the `#<issue> \u00b7 ` prefix annotation that the closed-report form carries.\n  WHY: The specification creates ambiguity for operators, leading to inconsistent session naming for terminal states, which violates the goal that all numbered session titles lead with their issue number.\n- tests/test_session_titles.py:70-75 | severity=MAJOR | confidence=5\n  PROBLEM: The test verifies rename instructions for steps 3a and 6 but fails to verify that renaming requirement is met for steps 8, 10, 11, and 12.\n  WHY: The test passes despite the rename instruction being missing in the implementation for those four steps, allowing the documented rename functionality to remain partially unimplemented.\n- .claude/commands/fix-claude-pr.md:70-73 | severity=MAJOR | confidence=4\n  PROBLEM: The non-twin file removed the \"Rename and archive only the right session\" safety rule that was retained in the twin file.\n  WHY: During the interim twin-first window, a fixer reading the non-twin lacks the in-file guard against renaming or archiving the wrong session, which is a safety regression in a destructive operation.\n- Requirement: A stage that opens a PR (steps 3a, 6, 8, 10, 11, 12) renames itself with `set_session_title` in that same step as documented in the new ### Session titles rule in workflow-templates/.claude/commands/implement-plan-claude.md.\n  Expected change site: workflow-templates/.claude/commands/implement-plan-claude.md and .claude/commands/implement-plan-claude.md, steps 8 (conformance fix), 10 (validation fix), 11 (completion), and 12 (verify-activation fix).\n  Evidence of absence: The set_session_title rename instruction is implemented only in steps 3a and 6; steps 8, 10, 11, and 12 lack this instruction, leaving these automation stages unnumbered.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: agents.md\n  Location: lines 828-839 (the paragraph split by the new title rules insertion)\n  Issue: The original sentence \"...which archives the previous stage session unless it is waiting on the user; a finished stage session is not woken to continue, because the gap between check-ins outlives the prompt cache...\" is now split by a 9-line title-rules paragraph. The semicolon was converted to a period, and the \"A finished stage session is not woken to continue\" fragment now reads as the start of a new sentence after the inserted paragraph, losing the original \"a finished stage session is not woken to continue\" as a continuation of \"unless it is waiting on the user;\". The intended relationship (a finished session is not woken up in order to continue) is no longer obvious at first read.\n  Suggested minimal fix: Move the new title-rules paragraph to a separate location (e.g., directly after the \"Names say where the project is\" line as a sub-block, or its own subsection), or rejoin the trailing fragment to the prior sentence: replace \"unless it is waiting on the user.\" with \"unless it is waiting on the user; a finished stage session is not woken to continue, because the gap between check-ins outlives the prompt cache and a wake would re-send the whole history at full price.\" then start the title rules as a new paragraph.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c14d360582931858bc69480eb72cd83eff5ef013fe9a48c1d074d849e9b4e088",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5009,
+    "run_id": "36569589611",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36569589611",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929125331_55800a6c23",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5009,
+    "run_id": "36569589611"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T12:53:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

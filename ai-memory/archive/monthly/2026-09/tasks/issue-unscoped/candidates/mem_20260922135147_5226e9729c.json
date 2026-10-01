@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:around lines 3370-3505 in the merged file | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When the 90-second deadline trips with `PHASE7_MERGEABLE=\"unknown\"` or when `PHASE7_BASE_REF` is empty, the unconflict block is skipped and no `::warning::` is emitted.\n  WHY: The results table reports `pre-close unconflict=not_needed`, obscuring the actual deadline, empty-base-ref, or transient-null cause from operators.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: `_phase7_refresh_mergeability()` polling loop + main `if [ \"${PHASE7_MERGEABLE}\" = \"false\" ] && [ -n \"${PHASE7_BASE_REF}\" ]; then` block at the new Phase 7a body (around lines 3370-3505 in the merged file).\n  Problem: When the 90-second deadline trips with `PHASE7_MERGEABLE=\"unknown\"` (GitHub still recomputing), or when `PHASE7_BASE_REF` is empty (e.g. PR API returned no `.base.ref`), the outer `if` is skipped, `PHASE7_UNCONFLICT_OUTCOME` stays `\"not_needed\"`, and the PR is closed without a `::warning::`.\n  Why it fails at runtime: A future operator reading the run log sees `pre-close unconflict=not_needed` in the results table and the warning list, and concludes the PR was mergeable. The actual cause (deadline hit, empty base ref, transient `null`) is only in the raw `PHASE7_UNCONFLICT_CHECK ... mergeable=unknown mergeable_state=unknown` line; no `::warning::` surfaces it to the run summary, and the #4262 scheduled sweep is the only backstop that fires later.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1b37aa5557659708ceae83a3ed4f89adb3f5ce302a99c5c0247b115c108ffbda",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4276,
+    "run_id": "35726425627",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35726425627",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922135147_5226e9729c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4276,
+    "run_id": "35726425627"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-22T13:51:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan\n\nPlanning ref: `c900fdcc5d02d917c5c40923dbc8c741640f42c5` on `claude/gifted-einstein-nnfrmt`. This matches the issue\u2019s integration-branch metadata. The auto-posted `/answer` confirms that no clarification answers are outstanding.\n\nScope-mode: Hold Scope\nReuse-audit: extends `scripts/review_conflict_resolve.sh` retry loop and its existing snapshot, prompt, and final-guard mechanisms\nScope-mode justification: Keep the change to resolver recovery and its existing test file. Moving the check without verified restoration would exchange a safe abort for a retry over contaminated state. A complete, bounded recovery is therefore necessary within the requested scope. This follows `unattended_system_instructions.md` \u00a76: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and lifecycle\n\n- **Change type:** Extend an existing script; introduce no standalone script.\n- **Entry point:** `.github/workflows/internal-review.yml` runs on `pull_request` `opened`/`synchronize` and `workflow_dispatch`, calls `.github/workflows/review_autofix.yml`, and reaches its existing resolver step. No workflow wiring change is needed.\n- **Supervisor, database gate, removal registry:** None applies.\n\n## Files likely to change\n\n- `scripts/review_conflict_resolve.sh` \u2014 detect out-of-scope attempt edits before accepting soft-validation success; restore and retry only when safe.\n- `tests/test_review_conflict_resolve_retry_prelude_render.py` \u2014 extend the existing retry contract with focused recovery tests.\n\n## Functions, data, and interface changes\n\n1. Reuse the post-loop touched-path calculation for an **in-loop attempt check**, comparing paths with `CONFLICTED_PATHS_FILE`, the same captured set consumed by `check_resolver_diff.sh`. Check after every model attempt, including nonzero exits, before success or another attempt can retain its edits.\n2. Capture enough pre-attempt worktree state to restore changed tracked files, previously untracked files, modes, and deletions **without discarding pre-existing changes**. The existing `PRE_RESOLVER_STATE_FILE` records hashes, not recoverable file contents, and `_restore_attempt_base` covers only allowlisted paths; neither alone can restore an out-of-scope edit. Preserve the merge index and `MERGE_HEAD`.\n3. On a scope violation, log the offending paths, restore the exact pre-attempt state, and verify it before using the existing bounded retry counter. Give the next attempt scope-specific feedback on both integration-sync and generic conflict paths; the current generic `_build_retry_prompt` fallback copies the original prompt verbatim. If capture, restoration, verification, or index integrity is uncertain, fail closed instead of retrying.\n4. Keep the final `check_resolver_diff.sh` call and its syntax/reference checks unchanged.\n\nThe affected data is ephemeral resolver path lists, snapshots, and retry feedback under `RUNTIME_DIR`. No public API, environment variable, label, or persistent-state format changes are planned.\n\n## Decisions\n\n### D1 \u2014 Retry only after verified restoration\n- **Chosen:** Treat an out-of-scope edit as retryable only after exact pre-attempt state is restored and verified.\n- **Alternatives considered:** Keep the post-loop abort alone; retry after restoring only allowlisted files; weaken the final guard.\n- **Why:** The first does not recover this failure, while the latter two can retain or commit unauthorized edits.\n\n### D2 \u2014 Preserve the final commit gate\n- **Chosen:** Add early detection alongside the existing `check_resolver_diff.sh` gate.\n- **Alternatives considered:** Replace the final gate with the early check.\n- **Why:** A later change or an early-check defect must not bypass the existing commit-time protection.\n\n## Security considerations\n\nThe resolver\u2019s model output crosses a trust boundary into a privileged checkout. Validate touched paths against the captured conflict set by exact path identity; do not trust model text as evidence of scope. Guard against malformed paths, symlink traversal, newly created untracked files, mode changes, and index modifications. An unsafe restore or a concurrent change that prevents verification must abort without a commit. No new endpoint or authorization surface is introduced; the existing workflow permissions remain unchanged.\n\n## Risks and edge cases\n\n- The failure log does **not** identify the offending file or establish whether the resolver or another process changed it. The plan addresses the verified recovery gap, not an assumed actor.\n- The source comment currently treats retrying a hallucinated workflow edit as unsafe. Verified restoration is the prerequisite for changing that behavior; a missing or unsafe snapshot retains the abort.\n- Preserve auto-merged index entries and merge ancestry. Avoid broad reset/clean operations that could erase unrelated work.\n- A scope failure must not be mistaken for fingerprint no-progress or accepted because marker and fingerprint checks pass.\n\n## Testing considerations\n\nExtend the existing test file with an isolated attempt/retry fixture: an attempt edits a conflicted file and an out-of-scope tracked file, changes a mode, and creates an untracked file; verify that the next attempt starts from the exact baseline and only an in-scope resolution can reach the unchanged final gate. Cover failed capture/restore verification and index drift as fail-closed cases, plus scope feedback on the generic prompt path. Run `bash -n` on the script and the focused pytest file using the repository\u2019s pinned test environment.\n\n## Pre-execution self-check\n\nThe named files and retry/final-gate boundary were inspected on the matching planning ref. No new API contract or scheduler is needed. An unrelated pre-existing modification to `scripts/label_helpers.sh` must be left untouched.\n\nPLAN_SELF_CHECK: WARNING: The offending path and its actor are unknown; recovery must depend on verified restoration, not attribution.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "14c9dff54f32ebddee5ab84a766af529b3f3270fc08be5b075e5584e746f3fcb",
+  "lineage": {
+    "issue_number": 4447,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36106040236",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36106040236",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4447"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925071331_364d1eecdb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4447,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36106040236"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4447",
+  "timestamps": {
+    "created_at": "2026-09-25T07:13:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

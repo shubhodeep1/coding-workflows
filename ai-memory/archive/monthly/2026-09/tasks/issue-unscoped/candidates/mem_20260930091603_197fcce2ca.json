@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:713-735 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_head_arrival_time` can treat check runs started before a commit became the PR head as evidence of its arrival, allowing a review dispatched for the previous head to count as a redispatch for the current head and trigger a false hold.\n  WHY: The check-run listing is commit-SHA-scoped rather than PR-head-update-scoped, so earlier runs from another branch can make a prior review appear newer than the current head; severity was rated MAJOR by openai_gpt-6-luna and NIT by the other reviewers, and the resulting hold-and-ask is a documented safe-direction residual risk.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/check_in_status.py:713-735 (with call site at 837-838) | severity=low | confidence=4\n  PROBLEM: `_head_arrival_time` uses `min(started)` of all check runs fetched by commit SHA (`repos/{repo}/commits/{head_sha}/check-runs` at line 896). GitHub's API returns check runs associated with that SHA from any branch. If the commit was pushed to another branch before becoming the PR head, earlier check runs from the other branch predate the PR-head update. A dispatched review that completed between those two events can then appear to be \"after the head arrived,\" causing a false positive `stall_redispatched`.\n  WHY: The fixer holds and asks instead of re-dispatching review for the current head. The scenario requires the same commit SHA to have been pushed to another branch first with check runs that started before a dispatched review completed, and then the commit to be pushed to the PR branch afterward.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/check_in_status.py: Lines 713\u2013735 and 837\u2013838; `check_pr_hand_back` fetches check runs by commit SHA at line 896. | severity=high | confidence=4\n  PROBLEM: `_head_arrival_time` treats the earliest check run for a commit as proof of when that commit became the PR head. The check-run listing is commit-scoped and does not establish that the run started after this PR began pointing to that SHA.\n  WHY: A commit can have a check run from before it became the PR head. If a matching dispatch for the PR completes while the PR still points to a different head, then the PR advances to that previously checked commit, the old check-run timestamp can make the dispatch appear newer than the current head. `_verified_review_redispatch` then sets `stall_redispatched`, causing the fixer to hold and ask instead of retrying review for the current head.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/scripts/check_in_status.py: _head_arrival_time (lines 713-735), called at line 838 | severity=low | confidence=3\n  PROBLEM: The consensus finding from pass 1 reviewers is valid but overstated in severity. A commit first pushed to another branch carries that branch's earlier check runs, so _head_arrival_time can return a time before the commit became the PR head. A review run dispatched for the previous head in that gap could then be counted as a re-dispatch for the current head, causing a false hold.\n  WHY: The scenario requires: (1) a commit pushed to another branch first with check runs starting at T2, (2) a review dispatched for the previous head at T3 > T2, (3) the commit then pushed to the PR at T5 > T3. The arrival time reads as T2, so the review at T3 counts, but it reviewed the previous head, not the current one. However, the plan explicitly acknowledges this as a residual risk (docs/completed/issue-5376-verify-stall-redispatch-run-plan.md \"Risks\" section) and explains the impact is a false hold (safe direction), not a skipped review. A human is notified and can re-dispatch. The security property (review is not skipped) is preserved. The scenario also requires write access and specific timing.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/check_in_status.py:713-735 (_head_arrival_time) | severity=low | confidence=3\n  PROBLEM: `_head_arrival_time` uses `min(started)` \u2014 the earliest check-run `started_at` for the head SHA \u2014 as evidence of when the head arrived on the PR. Check runs are keyed by commit SHA, not by PR-head update, so a commit pushed to another branch first carries that branch's earlier check runs. This can make `arrived` precede the actual PR push, causing a completed review dispatch from before the push to satisfy `created >= arrived` in `_verified_review_redispatch`, setting `stall_redispatched=True` and making the fixer hold instead of retry.\n  WHY: An author with write access pushes commit X to branch A (check runs start at T1), dispatches a review for the PR while it has a different head (completes at T2, T1 < T2), then pushes X to the PR branch. The stall check sees `arrived = max(commit_date, T1)` which may be < T2, so the review at T2 counts as a re-dispatch and the fixer holds.\n=== END FINDINGS FROM z-ai_glm-5_2",
+  "fingerprint": "26219309ee1884c573e105e07df71fb467b80ee4a26dc3df8f16b96110720894",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5387,
+    "run_id": "36691242715",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36691242715",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930091603_197fcce2ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5387,
+    "run_id": "36691242715"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T09:16:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

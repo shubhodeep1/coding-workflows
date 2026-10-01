@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/smoke_review_dispatch.sh:153-154 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The grep regex for `Captured INITIAL_HEAD_SHA` relies on the exact ISO-8601 log timestamp format.\n  WHY: If GitHub changes the Actions log timestamp format, the grep can fail to match and unnecessarily fail the smoke gate; deepseek_deepseek-v4 and z-ai_glm-5_2 consider this fail-closed behavior correct.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/smoke_review_dispatch.sh:153-154 | severity=NIT | confidence=2\n  PROBLEM: The grep regex for `Captured INITIAL_HEAD_SHA` relies on the exact ISO-8601 log timestamp format.\n  WHY: If GitHub changes the Actions log timestamp format, this grep will fail to match, causing `smoke_review_checked_out_sha` to return 2 (indicating the line was not found), which unnecessarily causes the smoke gate to fail.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "79465779c548214a3d5d571d1fc48a558db722ba05a24169480835015c0648e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5111,
+    "run_id": "36563496516",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36563496516",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929120829_28257f41ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5111,
+    "run_id": "36563496516"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T12:08:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

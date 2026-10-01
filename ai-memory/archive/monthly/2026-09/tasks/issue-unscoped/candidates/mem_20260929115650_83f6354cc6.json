@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:217 | severity=high | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: A clean vote can be counted from the consensus ledger and runner status alone, without checking whether the runner-written reviewer output contains findings.\n  WHY: A manipulated consensus ledger can mislabel a reviewer block as clean and allow a Claude-fixer PR to auto-merge despite reported findings.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:217 | severity=high | confidence=[4]\n  PROBLEM: A clean vote can be counted from the consensus ledger and runner status alone, without checking whether the runner-written reviewer output contains findings.\n  WHY: A manipulated consensus ledger can mislabel a reviewer block as clean and allow a Claude-fixer PR to auto-merge despite reported findings.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2e34b34385a54abf872e5e0800002acdc95fa1b08f266f0fc2852cc09af28b5d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36563672627",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36563672627",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929115650_83f6354cc6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36563672627"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T11:56:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

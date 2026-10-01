@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/escalation_ledger.py:114 | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `normalise_evidence` omits evidence keys from the fingerprint when their values are only empty or whitespace-only strings, which the reviewer says can cause distinct failure events to collide.\n  WHY: The reviewer says this could cause the escalation judge to treat different failure sets as identical; deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, and z-ai_glm-5_2 dispute this as intentional, tested behavior.\n- workflow-templates/.claude/scripts/escalation_ledger.py:172 | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_read_log` catches `UnicodeDecodeError` and raises `LedgerError`, causing the script to exit with code 2 on unexpected encoding or corruption.\n  WHY: The reviewer says this terminates the judge session and leaves the project blocked for human intervention; deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, and z-ai_glm-5_2 say this is the documented fail-closed behavior.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/escalation_ledger.py:114 | confidence=[4]\n  PROBLEM: The `_normalise_text` helper, combined with `normalise_evidence` at line 114, omits evidence keys from the fingerprint if the list of values contains only empty or whitespace-only strings.\n  WHY: If different failure events are distinguished by a key but both events only have whitespace-only values for that key, the key is omitted from the canonical fingerprint, potentially causing a collision and incorrect escalation-judge choices.\n- workflow-templates/.claude/scripts/escalation_ledger.py:172 | confidence=[3]\n  PROBLEM: `_read_log` does not provide robust handling for `UnicodeDecodeError` when reading the log file.\n  WHY: If the log contains unexpected encoding characters or is corrupted, `_read_log` raises `UnicodeDecodeError`, which is caught and re-raised as `LedgerError`, exiting with code 2 and leaving the project blocked for human intervention. Suggested minimal fix: open the log with `errors='replace'` or `errors='ignore'`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c162b3bebf47b3a21e18fc53f18ce6317740fe8ebcd4360ce3f413f3ba481b01",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "36570531349",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36570531349",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929132338_ba9f2f8ecd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "36570531349"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T13:23:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml: lines 3401-3419 (_phase7_refresh_mergeability) combined with line 3468 (`if [ \"${PHASE7_MERGEABLE}\" = \"false\" ] && [ -n \"${PHASE7_BASE_REF}\" ]`) and line 3397 (`PHASE7_UNCONFLICT_OUTCOME=\"not_needed\"` initial value) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When mergeability polling times out with an unknown result, the unconflict pass is skipped and the outcome remains `not_needed`.\n  WHY: The log incorrectly implies that no fix was needed, while the mergeability probe actually failed to resolve within 90 seconds.\n- .github/workflows/test-and-mark-stable.yml: lines 3481-3486 (`phase7_merge_base_blob=\"\"` initialization combined with the comparison `if [ -n \"${phase7_base_blob}\" ] && [ \"${phase7_base_blob}\" != \"${phase7_merge_base_blob}\" ]`) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When the `/compare` API call fails and `PHASE7_MERGE_BASE_SHA` is empty, the empty merge-base blob causes the workflow to rewrite the file with the base version without confirming that the base changed it.\n  WHY: The defensive merge-base comparison is bypassed on API failure, producing spurious rewrites and noisy commits.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml: lines 3401-3419 (_phase7_refresh_mergeability) combined with line 3468 (`if [ \"${PHASE7_MERGEABLE}\" = \"false\" ] && [ -n \"${PHASE7_BASE_REF}\" ]`) and line 3397 (`PHASE7_UNCONFLICT_OUTCOME=\"not_needed\"` initial value) | severity=low | confidence=3\n  PROBLEM: When GitHub takes longer than the 90-second polling deadline to recompute mergeability, the loop exits with PHASE7_MERGEABLE=\"unknown\" / PHASE7_MERGEABLE_STATE=\"unknown\". The condition at line 3468 then evaluates false and the unconflict pass is skipped entirely, leaving PHASE7_UNCONFLICT_OUTCOME at its initial \"not_needed\" value.\n  WHY: The outcome \"not_needed\" is logged and shown in the results table as if no fix was needed, when in reality the mergeability probe never resolved.\n- .github/workflows/test-and-mark-stable.yml: lines 3481-3486 (`phase7_merge_base_blob=\"\"` initialization combined with the comparison `if [ -n \"${phase7_base_blob}\" ] && [ \"${phase7_base_blob}\" != \"${phase7_merge_base_blob}\" ]`) | severity=low | confidence=3\n  PROBLEM: When the `/compare` API call at line 3473 fails and PHASE7_MERGE_BASE_SHA is empty, `phase7_merge_base_blob` stays at its initialized \"\". Any non-empty `phase7_base_blob` then differs from it, so the comparison succeeds and `_phase7_take_base_version` rewrites the file with the base's version even though the base may not have actually changed the file since the merge base.\n  WHY: Spurious rewrites create noisy commits on the throwaway smoke branch, push more commits than necessary, and inflate the run log with `PHASE7_UNCONFLICT_FILE outcome=replaced_with_base` lines that are not actually conflict-relevant.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bcdc955cb3888a5ef3c5863811e5aa1649adff461a31c9b4eeadc4dda0437b87",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35726377727",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35726377727",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922125654_56fc4ebbbd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35726377727"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-22T12:56:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

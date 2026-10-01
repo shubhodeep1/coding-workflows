@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:79 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: `ALREADY_FIXED_CLASSIFICATION = \"already-fixed\"` is defined but never referenced; callers use the string literal directly.\n  WHY: This is dead code with no runtime impact, and the unused constant can drift from the independently repeated literal.\n\n- tests/test_workflow_failure_heal.py: test_intake_downgrades_an_unverifiable_already_fixed_claim (lines ~1330-1345) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The intake end-to-end downgrade test does not cover the `fixed_by_section_missing` reason.\n  WHY: The shell-level warning, classification rewrite, and intake-note insertion are not covered for that reason, so those invariants could drift while the unit test still passes.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py\nLine or code reference: line 79\nProblem: ALREADY_FIXED_CLASSIFICATION = \"already-fixed\" is a module-level constant that is never referenced anywhere in the codebase. All callers (the intake shell script, tests, the parse_classification function) use the string literal \"already-fixed\" directly. No consumer uses the constant.\nWhy it fails at runtime: It does not cause a runtime failure. This is dead code with zero functional impact.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py\nLine or code reference: line 79\nProblem: ALREADY_FIXED_CLASSIFICATION constant is defined but never referenced.\nWhy it fails at runtime: It does not cause a runtime failure, but it is dead code. The intake logic uses the string literal \"already-fixed\" directly instead of referencing this constant.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_failure_heal.py\nLine or code reference: test_intake_downgrades_an_unverifiable_already_fixed_claim (lines ~1330-1345)\nProblem: The intake end-to-end downgrade test only covers three of the four `already_fixed_unverified` reasons (`fixed_by_commit_not_after_failing_sha`, `branch_progress_unavailable`, `no_commits_after_failing_sha`); `fixed_by_section_missing` is exercised only at the unit-test level for `check_heal_already_fixed_claim`, not through the shell-level intake downgrade path that prepends the \"Heal intake note:\" body and emits the `warn already_fixed_unverified` log line.\nWhy it fails at runtime: The shell-downgrade branch is only entered when classification parses to `already-fixed` AND the diagnosis omits `## Fixed by`. If a future change to the diagnosis prompt or the check function ever lets `fixed_by_section_missing` reach the intake, the warning, classification rewrite, and intake-note insertion are not covered end to end. The unit test would still pass while the shell-level invariants drift.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n\n- scripts/workflow_failure_heal.py\nLine or code reference: line 79 (ALREADY_FIXED_CLASSIFICATION)\nProblem: `ALREADY_FIXED_CLASSIFICATION = \"already-fixed\"` is a module-level constant added next to the `CLASSIFICATIONS` tuple but is not referenced anywhere else in the codebase. A repo-wide grep confirms it has exactly one match: its own definition. The classifications tuple, the shell-script case statement, the prompt's documented token, and `parse_classification` all use the string literal `\"already-fixed\"` directly.\nWhy it fails at runtime: It does not cause a runtime failure; the value is correct and consistent with every other reference. This is dead code that future readers will assume is the single source of truth for the token, only to find themselves grepping for it later. Either reference it (e.g., inside the tuple, or as a docstring for the new check) or remove it. Confirms the pass-1 cross-pollination finding.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py\nLine or code reference: line 79 (`ALREADY_FIXED_CLASSIFICATION = \"already-fixed\"`)\nProblem: The module-level constant `ALREADY_FIXED_CLASSIFICATION` is defined but never referenced. Every caller (the intake shell script, tests, `parse_classification` comparisons) uses the string literal `\"already-fixed\"` directly. The other five classifications in `CLASSIFICATIONS` have no analogous per-class constant, so this is both dead code and inconsistent with the file's existing pattern.\nWhy it fails at runtime: It does not. Pure dead-code nit; no functional impact.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/workflow_failure_heal.py:79\nALREADY_FIXED_CLASSIFICATION constant defined but unused (string literal used everywhere)\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal.py\nLocation: line 79\nIssue: `ALREADY_FIXED_CLASSIFICATION = \"already-fixed\"` is defined but never referenced \u2014 the intake shell and all internal callers use the string literal `\"already-fixed\"` directly. Dead constant that could drift from the literal if either is changed independently.\nSuggested minimal fix: Either reference the constant in `check_heal_already_fixed_claim` and the `CLASSIFICATIONS` tuple (replacing the literal), or remove the unused definition.\nEstimated lines changed: 1-3\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "de68fb66cd8fdd9b6cc7392387815f0326363a1b2fa85dd2d1fbdd3b96aaa313",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4373,
+    "run_id": "35946789889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35946789889",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924031609_93b0e29dd6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4373,
+    "run_id": "35946789889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T03:16:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

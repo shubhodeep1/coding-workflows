@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:143,215 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The guidance says standalone helper calls avoid permission prompts, but the checker\u2019s environment-prefixed `check_in_status.py` invocation matches no existing allow rule.\n  WHY: The invocation can still trigger a permission prompt; minimax_minimax-m3 and qwen_qwen3_7-plus report that AD-4 documents this as an exception decided by the Auto-mode classifier.\n- tests/test_codex_stall_guard_scripts.py:203 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The observe-only caller-contract test failed to observe `codex_stall_observed` before it exited, while only a `CODEX_HEARTBEAT` line had been emitted.\n  WHY: The reviewer attributes this to a timing race and says the test and stall-guard code are outside the PR changes.\n- .github/workflows/review_autofix.yml:\"Resolve workflow support ref\" step | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The review / gate check-run failed to resolve the stable tag reference because GitHub returned an API rate-limit HTTP 403.\n  WHY: The reviewer identifies this as a transient infrastructure failure, not a defect in the PR changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Change the command file that produced the call [the permission prompt] so it uses an allowlisted helper ... or a command shape that an exact permissions.allow rule ... approves.\"\n  expected_change_site: .claude/settings.json:46-47 OR .claude/commands/implement-plan-claude.md:215 and .claude/commands/fix-claude-pr.md:17\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff retains the env-prefixed call at `.claude/commands/implement-plan-claude.md:215` and adds no `.claude/settings.json:46-47` allow rule for the three-env-var form; thus, unattended sessions hitting this call will still trigger a permission prompt, failing the task intent to fix the prompt via helper allowlisting.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/implement-plan-claude.md:143,215 | confidence=4\n  PROBLEM: The new guidance claims that running listed helpers standalone will avoid permission prompts, but the `check_in_status.py` helper in the Sonnet checker template (line 215) uses three environment-variable prefixes (`PYTHONDONTWRITEBYTECODE=1 CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=<login> CLAUDE_FIXER_VERDICT_BOT_LOGIN=<bot> python3 .claude/scripts/check_in_status.py ...`) that match no existing allow rule in `.claude/settings.json:46-47`.\n  WHY: Sessions following the guidance will still trigger a permission prompt for the env-prefixed `check_in_status.py` call, contradicting the fix objective defined in issue #4798.\n- TASK_GAP\n  Requirement: \"Change the command file that produced the call [the permission prompt] so it uses an allowlisted helper ... or a command shape that an exact permissions.allow rule ... approves.\"\n  Expected change site: .claude/settings.json:46-47 (to add an allow rule for the three-env-var form) OR revise the invocations at .claude/commands/implement-plan-claude.md:215 and .claude/commands/fix-claude-pr.md:17 to use only allowed prefixes.\n  Evidence of absence: The PR diff retains the env-prefixed call at `.claude/commands/implement-plan-claude.md:215` and adds no `.claude/settings.json:46-47` allow rule for the three-env-var form; thus, unattended sessions hitting this call will still trigger a permission prompt, failing the task intent to fix the prompt via helper allowlisting.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_codex_stall_guard_scripts.py:203 | severity=NIT | confidence=5\n  PROBLEM: The CI lint job failed with AssertionError: ('review_rb_fix', 'CODEX_HEARTBEAT: phase=review_rb_fix elapsed_secs=2\\n'). The test expects codex_stall_observed telemetry in stderr for the review_rb_fix caller contract in observe-only mode, but only a CODEX_HEARTBEAT line was emitted before the test exited.\n  WHY: This is a timing race \u2014 the heartbeat fires at the 2-second mark but the stall observation (expected after CODEX_STALL_TIMEOUT_SECONDS) did not appear in stderr within the test's runtime window. The file tests/test_codex_stall_guard_scripts.py is NOT in the PR's changed files, and the PR touches no stall-guard, heartbeat, or review_apply_fixes code. The failure is pre-existing on main (either a flaky test or a recent main-side regression merged into the project branch via the documented main syncs), not introduced by this PR's prose-guidance changes.\n- .github/workflows/review_autofix.yml:\"Resolve workflow support ref\" step | severity=NIT | confidence=5\n  PROBLEM: The review / gate check-run failed with HTTP 403: \"gh: API rate limit exceeded for user ID 11442166\". The gate could not resolve the stable tag reference, so it exited 1 before the reviewer panel ran.\n  WHY: A transient GitHub API rate limit prevented the gate from confirming the support ref. This is an infrastructure-level failure, not a defect in the PR's code changes (which only touch .claude/commands/ prose, tests, docs, and a changelog fragment). A re-run when the rate limit window resets should clear it.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b7b7c51f4f33c7e7398efddac835dcaac4d1413d50e7334c7206396c1da84bae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4810,
+    "run_id": "36533341447",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36533341447",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929071109_600016ee3c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4810,
+    "run_id": "36533341447"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T07:11:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

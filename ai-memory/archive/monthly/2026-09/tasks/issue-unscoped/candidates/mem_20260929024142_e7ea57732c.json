@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:1104 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The 50-position cap on JSON-start candidates can prevent `parse_sessions_listing` from locating the sessions payload in a harness-saved file with a bracket-heavy preamble.\n  WHY: If the payload starts after the 50th candidate, parsing raises `ValueError` and the CLI exits 2 without archiving the session; severity ranged from MAJOR to BLOCKER, while z-ai_glm-5_2 characterized this as a defensive robustness nit rather than a realistic runtime failure.\n- scripts/claude_issue_route.py:1123 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: `_session_repo_matches` uses `str.removesuffix`, which is unavailable before Python 3.9.\n  WHY: On Python versions earlier than 3.9, this raises `AttributeError` and session selection fails; z-ai_glm-5_2 disputed this finding because the file's PEP 604 union types require Python 3.10 or later.\n- scripts/claude_issue_route.py:1105-1111 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The candidate-start loop can perform repeated `raw_decode` attempts over a large harness-saved file.\n  WHY: The repeated parsing can add latency to the reclarify wake-up/archive step.\n- scripts/claude_issue_route.py:1730 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_cmd_replaced_sessions` catches read or parse errors, but the pickup treats exit 2 as an unretried failure.\n  WHY: A transient file error can leave blocked sessions unarchived until the next wake.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update parse_sessions_listing to robustly locate JSON despite preamble (plan \u00a71, prior reviewer consensus)\n  expected_change_site: scripts/claude_issue_route.py:1104 (and tests)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: [:50] cap remains in LAST RUN DIFF / PR DIFF; no alternative location logic added\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_issue_route.py:1104 | severity=high | confidence=4\n  PROBLEM: The 50-position cap on candidate JSON start positions in parse_sessions_listing can prevent the function from locating the actual sessions payload when a harness-saved file has a bracket-heavy preamble.\n  WHY: The CLI's _cmd_replaced_sessions catches ValueError from parse_sessions_listing and prints \"cannot read --sessions-file\" to stderr, exiting 2 without archiving any session.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_route.py:1104 | severity=critical | confidence=5\n  PROBLEM: The 50-position limit on bracket/brace search candidates is insufficient for harness-saved files with large preambles.\n  WHY: If the preamble has more than 50 [ or { characters before the JSON payload, the actual payload is never parsed, ValueError is raised, and the CLI exits with code 2, failing to archive the session.\n- scripts/claude_issue_route.py:1123 | severity=high | confidence=3\n  PROBLEM: The use of str.removesuffix is not compatible with Python versions earlier than 3.9.\n  WHY: If running on an older Python environment, an AttributeError is raised, crashing the session selection and failing session archiving.\n- scripts/claude_issue_route.py:1105-1111 | severity=low | confidence=3\n  PROBLEM: The heuristic search performs redundant scanning.\n  WHY: On a large harness-saved file, O(50 * len(text)) parsing logic may cause latency in the reclarify wake-up/archive step, potentially impacting time budgets.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_issue_route.py:1104 | severity=high | confidence=4\n  PROBLEM: The 50-position cap on candidate JSON start positions can prevent the function from locating the actual sessions payload when a harness-saved file's preamble contains more than 50 `[` or `{` characters before the JSON.\n  WHY: When the actual JSON's start position is beyond the cap, the function never tries it, raises `ValueError`, and the CLI exits with code 2 without archiving any session for that `reclarify` entry.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/claude_issue_route.py:1104 | severity=high | confidence=5\n  PROBLEM: parse_sessions_listing caps JSON-start candidates at [:50]\n  WHY: preamble >50 [/{ skips payload \u2192 ValueError, CLI exits 2, no archive on reclarify\n- scripts/claude_issue_route.py:1123 | severity=high | confidence=4\n  PROBLEM: _session_repo_matches uses str.removesuffix (3.9+)\n  WHY: AttributeError on <3.9, selection fails, no archiving\n- scripts/claude_issue_route.py:1730 | severity=low | confidence=3\n  PROBLEM: _cmd_replaced_sessions catches read/parse errors but pickup treats exit 2 as unretried failure\n  WHY: transient file error leaves blocked sessions unarchived until next wake\n- scripts/claude_issue_route.py:1105 | severity=low | confidence=4\n  PROBLEM: for-start-in-starts loop (\u226450 raw_decode calls) on large text\n  WHY: O(50*len(text)) parsing delays archive step on big harness files\n- TASK_GAP:\n  Requirement: Update parse_sessions_listing to robustly locate JSON despite preamble (plan \u00a71, prior reviewer consensus)\n  Expected change site: scripts/claude_issue_route.py:1104 (and tests)\n  Evidence of absence: [:50] cap remains in LAST RUN DIFF / PR DIFF; no alternative location logic added\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "643080d9cab2a8aabf81599c919d3ac7afa5b3a18ea5006a88be99ba0f165b97",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4846,
+    "run_id": "36511986380",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36511986380",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929024142_e7ea57732c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4846,
+    "run_id": "36511986380"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T02:41:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

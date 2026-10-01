@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:929-930 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The live root guard does not verify that every `gh api` body item was classified, allowing a quoted destructive call inside a loop to bypass the approval prompt.\n  WHY: `gh 'api' -X DELETE ...` is not matched by `_RAW_GH_API_RE`, so it can be omitted from classification and auto-approved.\n- tests/test_gh_api_write_guard.py:416-431 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The quoted-call tests run against the root guard without the fix and fail.\n  WHY: The tests expect `None` for quoted loop cases but receive `allow` from the root guard.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `agents.md` to name the approved read-loop shape beside the safe helpers.\n  expected_change_site: agents.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not contain any modifications to agents.md, which is required by Phase 1 of the implementation plan.\n- requirement: Mirror CLAUDE.md \u00a723.H table and paragraph, and \u00a723.D.4 wording, byte-for-byte to the root CLAUDE.md.\n  expected_change_site: CLAUDE.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not contain any modifications to CLAUDE.md.\n- requirement: Mirror CLAUDE.md \u00a723.H table and paragraph, and \u00a723.D.4 wording, byte-for-byte to workflow-templates/CLAUDE.md.\n  expected_change_site: workflow-templates/CLAUDE.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not contain any modifications to workflow-templates/CLAUDE.md.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/gh_api_write_guard.py:929-930 | severity=critical | confidence=[5]\n  PROBLEM: The root guard lacks the check that verifies the number of `gh api` body items matches the classified results.\n  WHY: A quoted destructive call such as `gh 'api' -X DELETE ...` inside a loop is not classified by `_RAW_GH_API_RE` and can bypass the approval prompt.\n- tests/test_gh_api_write_guard.py:416-431 | severity=critical | confidence=[5]\n  PROBLEM: The quoted-call tests run against the root guard, which lacks the fix.\n  WHY: The tests expect `None` for quoted loop cases but receive `allow` from the unfixed root guard.\n- Requirement: Update `agents.md` to name the approved read-loop shape beside the safe helpers.\n  Expected change site: agents.md\n  Evidence of absence: The PR diff does not contain any modifications to agents.md, which is required by Phase 1 of the implementation plan.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: Mirror CLAUDE.md \u00a723.H table and paragraph, and \u00a723.D.4 wording, byte-for-byte to the root CLAUDE.md.\n  Expected change site: CLAUDE.md\n  Evidence of absence: The PR diff does not contain any modifications to CLAUDE.md.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: Mirror CLAUDE.md \u00a723.H table and paragraph, and \u00a723.D.4 wording, byte-for-byte to workflow-templates/CLAUDE.md.\n  Expected change site: workflow-templates/CLAUDE.md\n  Evidence of absence: The PR diff does not contain any modifications to workflow-templates/CLAUDE.md.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/gh_api_write_guard.py:868-885 | HARDENING_SUGGESTION\n  The docstring does not explain that every `gh api` body item must correspond to a call in `results`; the inline comment explains the check, but a reader of the docstring alone may not know quoted or split-word calls keep the loop at no-decision. Suggested fix: add a sentence describing the `api_items` constraint.\n- workflow-templates/.claude/hooks/gh_api_write_guard.py:868-885 | HARDENING_SUGGESTION\n  Same docstring gap as the root file; the reviewer says the twin should receive the same edit verbatim to remain byte-identical.\n- docs/implement-plan/issue-4786-guard-allow-read-loops.md | HARDENING_SUGGESTION\n  The PR description narrative says \u201call five disguised writes now return None,\u201d while the reviewer counted four new `READ_LOOP_NO_DECISION` cases. Suggested fix: change \u201cfive\u201d to \u201cfour,\u201d or leave it if it includes the existing routine-write case.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e9138e3ed622965bdfa5f80be70efc74fb5f2c80a9501831f0371367a4beb77a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5049,
+    "run_id": "36553115037",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36553115037",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929105047_bceaf4eb01",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5049,
+    "run_id": "36553115037"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T10:50:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

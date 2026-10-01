@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:1104 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The 50-position cap on candidate JSON start positions can prevent `parse_sessions_listing` from trying the actual session payload when a preamble contains more than 50 `[` or `{` characters first.\n  WHY: If every tried position fails to yield the session list, the function raises `ValueError` and the CLI exits without archiving a legitimate blocked session; severity differs, with Gemini and Minimax rating this MAJOR and Qwen, Grok, and GLM rating it NIT.\n- scripts/claude_issue_route.py:1105-1111 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: Repeated `raw_decode(text, start)` attempts can rescan the remaining text for up to 50 candidate positions.\n  WHY: When many candidate positions are tried in a large harness-saved file, the redundant parsing can delay the reclarify wake and archive step.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_route.py: parse_sessions_listing, line ~1104 | severity=high | confidence=[3]\n  PROBLEM: The heuristic search for JSON start positions in `parse_sessions_listing` is capped at 50 `[` or `{` characters.\n  WHY: If a future harness wrapper preamble contains more than 50 such characters before the actual payload, the function can fail to locate the session payload, preventing session cleanup during reclarify runs.\n- scripts/claude_issue_route.py: parse_sessions_listing loop (lines 1105-1111) | severity=low | confidence=[2]\n  PROBLEM: `json.JSONDecoder().raw_decode(text, start)` is called redundantly for up to 50 candidate start positions.\n  WHY: For large harness wrappers, repeated parsing can delay the reclarify wake and archive step.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_route.py: parse_sessions_listing, the `starts = [index for index, char in enumerate(text) if char in \"[{\"][:50]` line (the added function between `parse_arm_check_in_request` and the new selection helpers) | severity=high | confidence=[4]\n  PROBLEM: The 50-position cap can discard the actual `list_sessions` payload when a harness-saved file has more than 50 `[` or `{` characters in its preamble.\n  WHY: `parse_sessions_listing` is the only path from the saved file to session objects for `select_replaced_sessions`; failure raises `ValueError`, so the CLI exits without archiving a session for that reclarify entry.\n- scripts/claude_issue_route.py: parse_sessions_listing, the `for start in starts:` loop iterating up to 50 times with `decoder.raw_decode(text, start)` | severity=low | confidence=[3]\n  PROBLEM: Each `raw_decode(text, start)` can rescan the remaining text, making the capped loop perform up to O(50 \u00d7 len(text)) parsing work.\n  WHY: With a large harness-saved file and the cap fully consumed, redundant JSON scanning can delay a reclarify wake.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_issue_route.py: parse_sessions_listing, line 1104 (`starts = [index for index, char in enumerate(text) if char in \"[{\"][:50]`) | severity=low | confidence=[3]\n  PROBLEM: The 50-position cap on candidate JSON start positions can prevent the function from locating the actual session payload when the harness preamble contains many `[` or `{` characters.\n  WHY: If the preamble contains 50 or more such characters before the `list_sessions` JSON, the JSON is never tried and the CLI exits without archiving a legitimate blocked session.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/claude_issue_route.py: parse_sessions_listing ~1098-1114 ([:50] candidate starts + raw_decode loop) | severity=low | confidence=[4]\n  PROBLEM: The hard-coded 50-position limit on JSON-start bracket/brace searches can skip the payload when the preamble contains more than 50 `[` or `{` characters.\n  WHY: The CLI raises `ValueError` and exits without archiving a session for that reclarify entry.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_issue_route.py: line 1104, `starts = [index for index, char in enumerate(text) if char in \"[{\"][:50]` in `parse_sessions_listing` | severity=low | confidence=[2]\n  PROBLEM: The 50-position cap on JSON start candidates can exclude the actual payload if a harness-saved preamble contains 50 or more `[` or `{` characters first.\n  WHY: If all tried positions fail to produce the session list, the actual payload is unreachable and the CLI exits without archiving that reclarify entry.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2e6916a9c6098904602045992272b78060802ee7f6a3dd22f6352ac3d1ee11f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4846,
+    "run_id": "36430701896",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36430701896",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928143605_404cd8a3ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4846,
+    "run_id": "36430701896"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T14:36:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

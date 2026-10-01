@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:177 | flagged_by: [x-ai_grok-4_20]\n  PROBLEM: UID home-dir for npm.\n  WHY: This concern is disputed: z-ai_glm-5_2 reports the dependency container's missing `--env HOME` is best-effort and non-blocking, while deepseek_deepseek-v4-pro reports the editor container has an explicit writable HOME.\n- scripts/review_untrusted_sandbox.sh:147 | flagged_by: [x-ai_grok-4_20]\n  PROBLEM: partial-transfer race.\n  WHY: This concern is disputed: deepseek_deepseek-v4-pro and z-ai_glm-5_2 report that the transfer marker and atomic `os.replace` cause partial transfers to fail closed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Install or test PR dependencies only in a disposable sandbox without repository credentials or secrets; keep privileged review operations outside it.\"\n  expected_change_site: The verified workflow support commit (`scripts/review_untrusted_sandbox.sh`, `scripts/review_untrusted_workspace.py`, `scripts/review_sandbox/Dockerfile`)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `agents.md` and the autofix editor summary both acknowledge that the trusted workflow SHA staged by `scripts/stage_workflow_support.sh` does not contain the new helpers, so the review job fails closed (`::error::Review isolation support missing`) until those files land on `main`; the PR cannot ship the isolation it advertises in `changelog.d/4432-isolate-review-pr-execution.md` until a follow-up PR adds the helpers to the verified support commit.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Install or test PR dependencies only in a disposable sandbox without repository credentials or secrets; keep privileged review operations outside it.\"\n  Expected change site: The verified workflow support commit (`scripts/review_untrusted_sandbox.sh`, `scripts/review_untrusted_workspace.py`, `scripts/review_sandbox/Dockerfile`) must be staged alongside the workflow change so the \"Install project dependencies (best-effort)\" step's `bash \"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh\" prepare` invocation resolves a real helper, not a missing file.\n  Evidence of absence: `agents.md` and the autofix editor summary both acknowledge that the trusted workflow SHA staged by `scripts/stage_workflow_support.sh` does not contain the new helpers, so the review job fails closed (`::error::Review isolation support missing`) until those files land on `main`. The PR cannot ship the isolation it advertises in `changelog.d/4432-isolate-review-pr-execution.md` until a follow-up PR adds the helpers to the verified support commit; until then, PR #4432's recommendation is implemented in tree but not in production. The PR description still claims \"Closes https://github.com/shubhodeep1/coding-workflows/issues/4432\", which is only true after the helpers are in trusted support.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- SECURITY: scripts/review_untrusted_sandbox.sh:177 (UID home-dir for npm)\n- CORRECTNESS: scripts/review_untrusted_sandbox.sh:147 (partial-transfer race)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b603eff402abc05989c58301ec22b9bf0590a7b6091a64040e441a55888c2acd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4435,
+    "run_id": "36101245654",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36101245654",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925063156_10181e2e7f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4435,
+    "run_id": "36101245654"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-25T06:31:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

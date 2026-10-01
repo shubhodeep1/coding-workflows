@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_rb_judge_label_propagation.py:lines 1109-1110 | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The assertion `assert \"\\n\" not in stdout` is incorrect and will cause the test to fail.\n  WHY: The test script outputs multiple lines of logs and metadata (including the confirmation line being asserted in the line above), all of which contain newline characters. This assertion unconditionally rejects any valid output from the script being tested.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_rb_judge_label_propagation.py: lines 1109-1110 | confidence=5\n  PROBLEM: The assertion `assert \"\\n\" not in stdout` is incorrect and will cause the test to fail.\n  WHY: The test script outputs multiple lines of logs and metadata (including the confirmation line being asserted in the line above), all of which contain newline characters. This assertion unconditionally rejects any valid output from the script being tested.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "447d3729725ec67141b6c5e6140c58d7fb558146610de30526b2a912163e8663",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4686,
+    "run_id": "36367140561",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36367140561",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928021159_d40e1c398e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4686,
+    "run_id": "36367140561"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T02:11:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

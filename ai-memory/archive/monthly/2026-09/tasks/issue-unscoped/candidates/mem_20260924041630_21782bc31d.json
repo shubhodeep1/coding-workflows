@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_iteration_summary.sh:826 | severity=critical | confidence=5\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The consolidator model default in the step-summary script still uses the old `openai/gpt-5.6-sol` value.\n  WHY: The inlined script text contains `openai/gpt-5.6-sol` while `test_review_pipeline_summary_step_is_local_only_and_grep_friendly` expects `openai/gpt-6-sol`; severity was reported as BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update all references to old models (gpt-5.6-*, xhigh defaults) to GPT-6 + high.\n  expected_change_site: scripts/orchestrate_poll_process.sh:6173,6718,8241,8368,14212,19806,21924; scripts/review_run_judge_interim.sh:277-334; CHANGELOG.md, docs, tests.\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: 48 gpt-5.6 + 100 xhigh matches remain (grep).\n- requirement: PR description states \"Moves the AI pipeline's OpenAI defaults to the GPT-6 family\" and lists `REVIEW_CONSOLIDATOR_REASONING` among the changed defaults, with the consolidator model moving from `openai/gpt-5.6-sol` to `openai/gpt-6-sol`.\n  expected_change_site: scripts/review_autofix_step_iteration_summary.sh line 826\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No diff hunk in `scripts/review_autofix_step_iteration_summary.sh` updates the consolidator model default. The file is not in the PR changed files list. The script still emits `${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.6-sol}` at line 826, contradicting both the PR intent and the updated test expectation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\nRequirement: Update all references to old models (gpt-5.6-*, xhigh defaults) to GPT-6 + high.\nExpected change site: scripts/orchestrate_poll_process.sh:6173,6718,8241,8368,14212,19806,21924; scripts/review_run_judge_interim.sh:277-334; CHANGELOG.md, docs, tests.\nEvidence of absence: 48 gpt-5.6 + 100 xhigh matches remain (grep).\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_autofix_step_iteration_summary.sh:826 | severity=BLOCKER | confidence=5\n  PROBLEM: The consolidator model default in this step-summary script still uses the old `openai/gpt-5.6-sol`, but the PR updated the consolidator default to `openai/gpt-6-sol` in `scripts/review_consolidate.sh:430` (`REVIEW_CONSOLIDATOR_MODEL=\"${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-6-sol}\"`) and updated the contract test expectation at `tests/test_review_autofix_review_pipeline_contract.py:5001` to `\"| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-6-sol} |\"`.\n  WHY: `test_review_pipeline_summary_step_is_local_only_and_grep_friendly` will fail the assertion at line 5001 because the inlined script body contains the old default. This file was introduced by the `[ai-merge-resolve]` merge commit (d688edfd) that brought in the workflow-file-size-limit splitting work; the PR's model migration edits predated the merge and did not cover this new file.\n  ISSUE_CONFIDENCE: 5\nRequirement: PR description states \"Moves the AI pipeline's OpenAI defaults to the GPT-6 family\" and lists `REVIEW_CONSOLIDATOR_REASONING` among the changed defaults, with the consolidator model moving from `openai/gpt-5.6-sol` to `openai/gpt-6-sol`.\nExpected change site: scripts/review_autofix_step_iteration_summary.sh line 826 \u2014 the summary output default for `${REVIEW_CONSOLIDATOR_MODEL:-...}` should match the new `openai/gpt-6-sol` default set in `scripts/review_consolidate.sh:430` and pinned by the contract test at `tests/test_review_autofix_review_pipeline_contract.py:5001`.\nEvidence of absence: No diff hunk in `scripts/review_autofix_step_iteration_summary.sh` updates the consolidator model default. The file is not in the PR changed files list. The script still emits `${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.6-sol}` at line 826, contradicting both the PR intent and the updated test expectation.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9ac50a77250c4cf5c19e787dfb5393087278f9587943175bb7513d60f313909e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4372,
+    "run_id": "35951090649",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35951090649",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924041630_21782bc31d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4372,
+    "run_id": "35951090649"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T04:16:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

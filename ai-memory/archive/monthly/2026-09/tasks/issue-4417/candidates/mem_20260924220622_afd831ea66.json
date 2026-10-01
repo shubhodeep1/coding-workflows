@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4417,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4417\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4418\",\"pr_number\":4418,\"branch\":\"ai/issue-4417\",\"run_id\":\"36064316735\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/36064316735\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"changelog.d/4417-editor-guard-failure-classification.md\",\"scripts/review_apply_fixes.sh\",\"tests/test_review_autofix_editor_noop_cascade_contract.py\"]}",
+  "fingerprint": "61fa6ad13974d6b5637ef2f6ec9cce840fa4ebef3e266eebb52d549eaa5cef30",
+  "lineage": {
+    "issue_number": 4417,
+    "parent_ids": [],
+    "pr_number": 4418,
+    "run_id": "36064316735",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36064316735",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4418"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260924220622_afd831ea66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4417,
+    "level": "run",
+    "pr_number": 4418,
+    "run_id": "36064316735"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4417: https://github.com/shubhodeep1/coding-workflows/pull/4418",
+  "timestamps": {
+    "created_at": "2026-09-24T22:06:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

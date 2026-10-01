@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `7c6abe28333ad48d4368826449c34a409618c4c3` on `ai/issue-4407`; it matches the issue\u2019s integration-branch metadata. The `/answer` was an automatic clear-status answer; there are no unanswered clarification questions.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/check_resolver_diff.sh::run_isolated_validator_python`  \nScope-mode justification: Fix the existing validator handoff rather than changing workflow wiring or sandbox policy. Copying **all three** manifest inputs used by strict validation, rather than only the two named manifests, is the complete fix for roughly the same effort as a partial workaround. This follows `unattended_system_instructions.md` \u00a76: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation wiring\nExtend an existing script; add no script, scheduler entry, supervisor, or database operation. The existing `.github/workflows/internal-review.yml` `pull_request` trigger invokes `.github/workflows/review_autofix.yml`, whose resolver step already calls the guard. No future-removal registry entry is needed.\n\n## Files likely to change\n- `scripts/check_resolver_diff.sh` \u2014 stage validator-readable copies of the conflicted set, conflict spans, and clean-merge manifest before the isolated Python call.\n- `tests/test_agent_process_isolation.py` \u2014 extend the existing resolver/validator isolation tests.\n\n## Functions and data structures\nIn the guard\u2019s optional-manifest validation block, copy the already-checked inputs into a private, temporary directory beneath a **canonical `RUNNER_TEMP` outside host `/tmp` and `/var/tmp`** when sandbox validation is enabled. Pass the copies to `run_isolated_validator_python`; retain the original paths for host-side checks. Clean up the copies on success and failure. No persisted structure changes.\n\n## API/interface changes\nNone. Preserve the guard\u2019s flags, environment-variable names, exit behavior, and `--strict-manifests` requirement. Leave its unsandboxed invocation path unchanged.\n\n## Decisions\n### D1 \u2014 Stage inputs rather than relax isolation\n- **Chosen:** Copy every manifest the isolated validator reads to a private, validator-visible location.\n- **Alternatives considered:** Disable `PrivateTmp=yes`; bypass the isolated check; relocate only the conflict-spans and clean-merge files.\n- **Why:** The validator also reads the conflicted set. Systemd\u2019s `PrivateTmp=` replaces the service\u2019s view of host `/tmp` and `/var/tmp`; weakening isolation or moving only two inputs leaves either a security regression or the same failure class. ([systemd.io](https://systemd.io/TEMPORARY_DIRECTORIES/?utm_source=openai))\n\n## Security considerations\nThe boundary is between host-produced resolver artifacts and credentialless, read-only validator execution. This adds no endpoint or authorization surface. Use quoted paths and a private staging directory; do not log manifest contents. Missing inputs, an unsafe staging root, or copy failure must reject validation and therefore prevent the merge-resolution commit. Keep the existing manifest path/content validation intact so copying cannot make forged anchors, changed clean files, or unsafe paths acceptable.\n\n## Risks and edge cases\n- The reporting run omitted the exception line: inaccessible `/tmp` inputs are strongly supported by the code path, but the precise failing read is unconfirmed.\n- Sandbox test mode does **not** recreate `PrivateTmp`; a test that merely runs in that mode could pass without proving this fix.\n- The existing worktree has unrelated modifications. Implementation must leave them untouched.\n\n## Testing considerations\nExtend `test_resolver_python_syntax_validation_is_read_only`\u2019s pattern with `/tmp`-origin strict manifests and a runner-temp directory outside `/tmp`. Make the test validator reject host-`/tmp` manifest arguments, then verify valid content passes, tampered spans or clean content still fails, unavailable staging fails closed, and temporary copies are removed. Run shell syntax checking and the focused isolation and resolver-boundary tests on the repository\u2019s installed toolchain; leave broader CI verification to the implementation phase.\n\n## Pre-execution self-check\nThe affected guard, its resolver callsite, sandbox policy, existing tests, and automatic trigger were inspected. The plan requires no unknown scalar input and does not depend on the omitted exception text.\n\nPLAN_SELF_CHECK: WARNING: The filtered failure log does not identify the exact read that raised the exception.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f7c402234141372e26cc06838d41bfd537e452a2fc2239514bc2b429cf8fe061",
+  "lineage": {
+    "issue_number": 4411,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36040159132",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36040159132",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4411"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924182421_c3def7eacb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4411,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36040159132"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4411",
+  "timestamps": {
+    "created_at": "2026-09-24T18:24:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

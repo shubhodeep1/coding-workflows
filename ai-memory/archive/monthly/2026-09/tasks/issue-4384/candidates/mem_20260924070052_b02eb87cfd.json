@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4383` at `ce31b0a76a74824f4f959658cc1a657b1f2145d3`; it matches the issue\u2019s integration branch.\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/e2e_smoke_canary.txt`\nScope-mode justification: Replace the existing second line rather than append a fourth line: the acceptance criteria require the new value at line 2. This is the complete, smallest change. It follows \u00a76\u2019s Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed priorities.\n\n## Automation\n- **Change type:** Existing-file content only; no new script or supervisor.\n- **Entry point:** No scheduler or PR-push wiring changes; the existing pipeline implements this issue.\n- **Database gate / removal registry:** Not applicable.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` only.\n\n## Implementation\n- Keep line 1 as `status: ok`.\n- Replace line 2, currently `run_id: 26151428977`, with exactly `decompose-run: 35966436009`.\n- Preserve line 3 (`updated-by: ai-pipeline`) and any subsequent content without reflow.\n\n## Data structures and API/interface changes\nNone. This changes a text fixture\u2019s second-line value.\n\n## Decisions\n### D1 \u2014 Replace rather than append\n- **Chosen:** Replace the existing second line in place.\n- **Alternatives considered:** Append `decompose-run: 35966436009`.\n- **Why:** Appending cannot satisfy the required line order or preserve later lines in their positions.\n\n## Security considerations\nNo new endpoint, authorization surface, external input, or money mutation. Treat the issue-supplied value as fixture content only; do not execute it.\n\n## Risks and edge cases\nThe file already has the required first line, but its second line differs from the issue. An append-only edit is therefore incompatible with acceptance. Do not change unrelated files even if broader fixture tests describe another canary format.\n\n## Testing considerations\nVerify that lines 1 and 2 match the requested strings exactly, later lines are unchanged, and `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\nThe answer requires no interpretation beyond the issue, the target exists, and the planning ref matches the integration branch.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2db8bdbd9ed57d859c758e6e9ee47359e638f64864cc43c122abc1d911e24021",
+  "lineage": {
+    "issue_number": 4384,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35966909991",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35966909991",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4384"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924070052_b02eb87cfd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4384,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35966909991"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4384",
+  "timestamps": {
+    "created_at": "2026-09-24T07:00:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

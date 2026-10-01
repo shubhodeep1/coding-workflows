@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:2271-2314 | severity=low | confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: After the model attempt, `unset GIT_INDEX_FILE` does not restore a value inherited from a caller.\n  WHY: The reviewer states this does not fail in any documented execution path because the workflow does not set `GIT_INDEX_FILE`; it was rated NIT.\n- scripts/review_conflict_resolve.sh:2217-2226 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: If the script is killed between the model exit and cleanup, the scratch index can remain until the next attempt's preparation removes it.\n  WHY: The reviewer states this is not a runtime defect because the per-run directory and next attempt's re-seeding limit the residue; it was rated NIT.\n- docs/plans/issue-4545-resolver-index-isolation-plan.md:Approach section, bullet \"The model's own `git add`/`git commit` (if it runs one despite the prompt change) writes to the scratch copy only.\"\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The plan still claims a model-issued `git commit` writes only to the scratch copy.\n  WHY: The reviewer says this conflicts with AD-2 and the corrected code and live docs: `GIT_INDEX_FILE` isolates the index, but `git commit` also moves `HEAD` and removes `.git/MERGEGE_HEAD`.\n- scripts/review_conflict_resolve.sh:651-658\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: When the workspace safety check skips the model, the scratch index created by `_resolver_prepare_scratch_index` is not removed on that path.\n  WHY: Cleanup is inside the `_run_codex=true` guard, so the file remains until the next iteration or the run ends; the reviewer describes this as harmless and suggests cleanup as hardening.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/review_conflict_resolve.sh\n  Line or code reference: lines 2271-2314 (the export/unset block)\n  Problem: The `unset GIT_INDEX_FILE` removes the variable entirely from the script's environment after the model attempt. If a caller had set `GIT_INDEX_FILE` before invoking this script (e.g. for some external reason in the source-repo path), that inheritance is lost after the first attempt. In practice `IS_WORKFLOW_SOURCE_REPO=true` only ever fires for this repository in the Actions environment, where no caller sets `GIT_INDEX_FILE`, so this is not a runtime issue.\n  Why it fails at runtime: It does not fail at runtime in any documented execution path; the scenario requires an upstream caller to have set the variable, which the workflow does not do. Not a defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- File: scripts/review_conflict_resolve.sh\n  Line or code reference: lines 2217-2226 (the `_resolver_prepare_scratch_index` call after `capture`)\n  Problem: The helper does `rm -f` then `cp` of the real index. If the real index does not exist (fresh repo, no commits), `cp` is skipped because of the `[ -f \"${real_index}\" ]` guard \u2014 good. However, the `unset GIT_INDEX_FILE` in the cleanup block runs only when `_resolver_index_isolated=true`. If the script is killed (SIGKILL) between the model exit and the cleanup block, `GIT_INDEX_FILE` remains set in the script's environment but the scratch file is removed by the next attempt's `rm -f` prelude. This is not a defect \u2014 `RUNTIME_DIR` is per-run and the next attempt's helper cleans up \u2014 but worth noting as a minor leak window.\n  Why it fails at runtime: It does not fail; the helper re-seeds on every attempt and the file is in a per-run directory. NIT only.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: docs/plans/issue-4545-resolver-index-isolation-plan.md\n  Line or code reference: Approach section, bullet \"The model's own `git add`/`git commit` (if it runs one despite the prompt change) writes to the scratch copy only.\"\n  Problem: This newly-added plan doc still claims a model-issued `git commit` \"writes to the scratch copy only.\" AD-2 (recorded in docs/implement-plan/issue-4545-resolver-index-isolation.md) explicitly lists \"the plan's Approach\" among the docs that said this and whose correction was picked as \"correct the comments/docs to say only the index is isolated and a model commit still fails closed.\" The script comment (scripts/review_conflict_resolve.sh:646-647), agents.md (lines 1944-1947), and the changelog fragment were all corrected to state that `git commit` still moves HEAD and removes MERGE_HEAD, but the plan's Approach bullet was not. The claim is now inconsistent with the code it describes: `git commit` with `GIT_INDEX_FILE` set writes the index to the scratch copy, but it also moves `HEAD` and removes `.git/MERGEGE_HEAD`, which are not isolated by `GIT_INDEX_FILE` (pinned by `test_scope_isolated_model_commit_still_fails_closed`).\n  Why it fails at runtime: No runtime failure \u2014 the code and the live docs (agents.md, changelog, script comment) are correct; only the historical plan doc retains the inaccurate statement. A future reader using the plan as the canonical description of the isolation mechanism would misunderstand the containment boundary.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- File: scripts/review_conflict_resolve.sh\n  Location: _resolver_prepare_scratch_index (lines 651-658)\n  Issue: When IS_WORKFLOW_SOURCE_REPO=true and the workspace safety check fails (_run_codex=false, line 2264-2268), _resolver_prepare_scratch_index has already created the scratch file at line 2220, but the cleanup block at lines 2308-2311 is inside the `if [ \"${_run_codex}\" = \"true\" ]` guard and so never runs. The scratch file is left on disk until the next iteration's _resolver_prepare_scratch_index re-seeds it (rm -f then cp). This is harmless (the file is not referenced after the attempt), but cleaning it up on the no-model path would keep RUNTIME_DIR tidy and avoid a stale file surviving a single-attempt run.\n  Suggested minimal fix: Add `rm -f \"${RESOLVER_SCRATCH_INDEX}\"` inside the `_run_codex=false` branch (after line 2268), or move the existing cleanup so it also runs when the safety check skips the model.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "18711fa570f247a0d68218598f6b80e551361cd3e6a6913e5e57c32b36d0f9c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36288929452",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36288929452",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927024734_91f03b342a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36288929452"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T02:47:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:1321-1336 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_cmd_final_merge_resume` catches `ValueError` from parsing `--reclarify-comment-id` with file-read errors and reports it as `unreadable input`, misattributing an invalid CLI argument to unreadable files.\n  WHY: The JSON files are readable; malformed IDs produce a misleading diagnostic, unlike `_cmd_build_dispatch`, which reports the validation error separately.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_issue_route.py:1321-1329 | severity=NIT | confidence=3\n  PROBLEM: `_cmd_final_merge_resume` catches `ValueError` from `_cli_reclarify_comment_id` in the same `except (OSError, ValueError)` block as file-read errors, so an invalid `--reclarify-comment-id` is reported with the misleading `\"unreadable input:\"` prefix.\n  WHY: No production path today passes a non-empty bad value; the exit code is correct. This is a contract inconsistency between the CLI handlers.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_route.py:1321-1334 | severity=NIT | confidence=4\n  PROBLEM: `_cli_reclarify_comment_id` raises `ValueError` for malformed non-empty values, and `_cmd_final_merge_resume` reports it as `\"unreadable input: \"` even though only the ID argument failed parsing.\n  WHY: No production caller currently passes a malformed value; direct CLI use or a future caller can receive a diagnostic that misattributes the validation failure to file readability.\n\n- TASK_GAP\n  Requirement: PR description lists every deliverable: `scripts/claude_issue_route.py` (function, two callers, payload key), `.github/workflows/clarify.yml` (env on Decide clarify route + Claude issue handoff), `scripts/claude_issue_handoff.sh` (env read + flag pass-through), `scripts/claude_issue_intake.sh` (header comment), `README.md` and `agents.md` (item 15) docs, `changelog.d/5514-final-merge-resume-reclarify-binding.md` (security), and tests in `tests/test_claude_issue_route.py`.\n  Expected change site: same files as listed above.\n  Evidence of absence: All listed files have non-empty diffs touching the named surfaces. The reproduction tables in the description (`trigger: opened`, `trigger: manual`, replayed `trigger: reclarify` all refused) are covered by `test_intake_refuses_a_closed_resume_without_a_bound_reclarify`, `test_intake_refuses_a_replayed_pre_closure_reclarify`, and `test_authorize_target_refuses_a_replayed_pre_closure_reclarify`. The progress log `docs/implement-plan/issue-5514-bind-closed-resume-to-reclarify.md` is updated with phase status. No gaps.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_issue_route.py:1323\u20131328 | severity=NIT | confidence=5\n  PROBLEM: Invalid `--reclarify-comment-id` values are caught by the same handler as file-read errors and reported as `unreadable input`.\n  WHY: The command exits with status 2 as intended, but an operator supplying a malformed ID is told the input files were unreadable, obscuring the actual validation error.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_issue_route.py:1323-1336 | severity=NIT | confidence=4\n  PROBLEM: `_cli_reclarify_comment_id` raises `ValueError` for a bad `--reclarify-comment-id` value, but the outer except clause catches `(OSError, ValueError)` and prints `\"unreadable input: <exc>\"`.\n  WHY: An operator or a future caller passing a non-numeric ID gets a diagnostic that misattributes the failure to the JSON files. The exit code (2) is correct, and no production caller currently passes a bad value.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_issue_route.py:1323-1329\n  PROBLEM: A bad `--reclarify-comment-id` value (e.g. \"abc\") raises `ValueError` from `_cli_reclarify_comment_id`, which is caught by the `except (OSError, ValueError)` block and reported as \"unreadable input: invalid --reclarify-comment-id: 'abc'\".\n  WHY: The \"unreadable input\" wording is misleading \u2014 the file inputs were readable; only the ID argument failed parsing. `_cmd_build_dispatch` handles this correctly by catching `ValueError` separately and printing the bare message.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6279a615b66d7a580620ea94a77a93c10f85ce4ebff05a28c649ec75cd5c4a69",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5557,
+    "run_id": "36685676952",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36685676952",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930082026_a9456b7be9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5557,
+    "run_id": "36685676952"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T08:20:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

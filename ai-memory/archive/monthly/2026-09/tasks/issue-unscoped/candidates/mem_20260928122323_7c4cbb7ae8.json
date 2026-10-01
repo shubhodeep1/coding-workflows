@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_template_parity.py:44-50 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The five pinned SHA-256 digests for divergent consumer-variant commands must be updated atomically with changes to the corresponding files.\n  WHY: The contract test correctly fails closed when a digest does not match the on-disk file; this is the intended design, not a code defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_claude_template_parity.py:44-50 | severity=low | confidence=2\n  PROBLEM: The five pinned SHA-256 digests for divergent consumer-variant commands are hardcoded constants that will fail CI if any of those five files changes by even one byte, without a mechanism to distinguish an authorized change from an unauthorized one.\n  WHY: If the workflow-templates/.claude/commands/analyze-log.md file on disk differs from the pinned digest, CI fails with \"consumer-variant template changed; its pinned SHA-256 no longer matches: commands/analyze-log.md\". The digest must be updated atomically in the same PR that changes the file \u2014 this is the intended design per the plan (\"Updating TEMPLATE_DIVERGENCE is itself a protected-equivalent change\"). No defect in the code; noted as a documentation of the intended contract.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5564e875c6c2ad1978d3f5e7fc0c02d52889f5ba791b419d1d00823f8742aecc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36420162510",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36420162510",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928122323_7c4cbb7ae8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36420162510"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T12:23:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

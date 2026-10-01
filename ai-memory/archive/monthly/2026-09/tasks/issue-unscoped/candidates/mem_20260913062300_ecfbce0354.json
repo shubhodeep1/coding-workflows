@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:6785 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The `editor_attempts` assignment lacks `|| true`, so an unmatched `editor_attempt_*.err` glob causes the recoverable-failure warning step to terminate under GitHub Actions' default `bash --noprofile --norc -eo pipefail`.\n  WHY: When `PREVIOUS_REVIEWS_DIR` exists but contains no matching `.err` files, `ls` exits 2 and `set -e` prevents both the Telegram alert and the PR comment carrying the `\u26a0\ufe0f **Editor no-op suspicious**` literal from being posted; severity was reported as MAJOR by four reviewers and NIT by one, so the highest severity is used.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml\nLine or code reference: 6785\nProblem: The `editor_attempts` assignment lacks `|| true` while the adjacent `last_err_file` assignment on line 6786 carries it. Under GitHub Actions' default shell (`bash --noprofile --norc -eo pipefail`), when `PREVIOUS_REVIEWS_DIR` exists but contains no `editor_attempt_*.err` files, bash passes the literal glob to `ls`, which exits 2, pipefail propagates the failure, and `set -e` terminates the step before `tg_send_tracked` and the `gh_retry` PR comment call execute.\nWhy it fails at runtime: When this triggers, neither the Telegram warning nor the PR comment carrying the `\u26a0\ufe0f **Editor no-op suspicious**` literal is posted, stranding the PR's automated recovery for that run.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml\nLine or code reference: 6785\nProblem: The `editor_attempts` assignment runs `ls -1 \"${PREVIOUS_REVIEWS_DIR}\"/editor_attempt_*.err 2>/dev/null | wc -l | tr -d '[:space:]'` without an `|| true` guard.\nWhy it fails at runtime: With GitHub Actions' default `bash --noprofile --norc -eo pipefail`, if the glob matches no files, `ls` exits 2, pipefail fails the pipeline, and the step terminates before both the Telegram alert and the PR comment post; severity was reported as NIT.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: .github/workflows/review_autofix.yml\nLine or code reference: line 6785, inside the elif [ \"${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}\" = \"true\" ] branch (lines 6782-6793): editor_attempts=\"$(ls -1 \"${PREVIOUS_REVIEWS_DIR}\"/editor_attempt_*.err 2>/dev/null | wc -l | tr -d '[:space:]')\"\nProblem: this assignment is missing the || true guard that the functionally identical line 6786 directly below it carries (last_err_file=... || true). The step has no shell: override and the workflow has no defaults.run.shell, so it runs under GitHub Actions' default bash --noprofile --norc -eo pipefail. If PREVIOUS_REVIEWS_DIR exists (passing the -d guard at line 6784) but contains no editor_attempt_*.err files, the glob stays literal, ls exits 2, pipefail propagates the failure through wc/tr, the assignment returns non-zero, and set -e terminates the step before tg_send_tracked (line 6808) and the gh api comment call (line 6815).\nWhy it fails at runtime: the producer side tolerates the .err files' absence explicitly \u2014 scripts/review_apply_fixes.sh copies them with 2>/dev/null || true at lines 2108, 2123, 2133, and 2423, and the same script's own identical glob at line 2556 (final_editor_err) also uses || true; both outputs are lost when the step terminates.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: .github/workflows/review_autofix.yml\nLine or code reference: line 6785, `editor_attempts=\"$(ls -1 \"${PREVIOUS_REVIEWS_DIR}\"/editor_attempt_*.err 2>/dev/null | wc -l | tr -d '[:space:]')\"`\nProblem: The `ls` pipeline is missing the `|| true` guard that the functionally identical line 6786 (`last_err_file=...`) carries immediately below it.\nWhy it fails at runtime: GitHub Actions runs workflow steps under `bash --noprofile --norc -eo pipefail` by default. When `${PREVIOUS_REVIEWS_DIR}` exists but contains no `editor_attempt_*.err` files, the glob stays literal, `ls` exits 2, `pipefail` fails the pipeline, and `set -e` terminates the step before both `tg_send_tracked` and the `gh api` comment call execute.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- File: .github/workflows/review_autofix.yml\nLine or code reference: 6785 editor_attempts=\"$(ls -1 \"${PREVIOUS_REVIEWS_DIR}\"/editor_attempt_*.err 2>/dev/null | wc -l | tr -d '[:space:]')\" versus 6786 last_err_file=\"$(ls ... | sort -V | tail -n 1 || true)\"\nProblem: The recoverable-failure warning branch counts editor_attempt_*.err with an unguarded ls pipeline.\nWhy it fails at runtime: An unmatched glob makes ls exit 2; pipefail fails the assignment; set -e aborts the step before tg_send_tracked and the gh api comment, so the Telegram alert and the PR comment that must keep the \u26a0\ufe0f **Editor no-op suspicious** literal are never posted.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "72ac2a509678d0eb86085dcb6ae81120ea2b3e9824390debd86865f2debf959a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4083,
+    "run_id": "34738654131",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34738654131",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260913062300_ecfbce0354",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4083,
+    "run_id": "34738654131"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-13T06:23:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

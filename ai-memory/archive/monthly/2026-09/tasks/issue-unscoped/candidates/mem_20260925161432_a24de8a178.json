@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_codex_thread_reuse_core.py:567 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The pre-existing assertion `assert 'helper_path=\"scripts/stage_workflow_support.sh\"' in text` fails in `test_validate_workflow_contains_thread_reuse_bootstrap`.\n  WHY: The `lint` job runs this test as a standalone script, so its non-zero exit fails the check and blocks the PR from merging; the PR description does not mention this second pre-existing failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description claims \u201cThe 65 existing test files touching these files pass (1,342 tests), except one: tests/test_workflow_overlay_core.py::test_target_workflows_stage_schema_and_invoke_loader. That test already fails on main at 56fcde4 (#4463 changed validate.yml) and is not touched by this PR.\u201d\n  expected_change_site: PR description and/or .github/workflows/review_autofix.yml\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: tests/test_codex_thread_reuse_core.py:567 fails because `test_validate_workflow_contains_thread_reuse_bootstrap` asserts `'helper_path=\"scripts/stage_workflow_support.sh\"' in text`; the lint step runs the test as a standalone script and reports conclusion=failure.\n- requirement: PR description claims \"12 new tests in tests/test_workflow_failure_heal.py\" plus \"3 new tests in tests/test_claude_md_section_numbers.py\" (15 total).\n  expected_change_site: tests/test_workflow_failure_heal.py additions\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The diff for tests/test_workflow_failure_heal.py adds 9 new test functions, not 12; tests/test_claude_md_section_numbers.py adds 3 tests, so total is 12.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_codex_thread_reuse_core.py:567 | severity not stated | confidence not stated\n  PROBLEM: The lint check-run fails because `tests/test_codex_thread_reuse_core.py:567` asserts `assert 'helper_path=\"scripts/stage_workflow_support.sh\"' in text` and receives `AssertionError`.\n  WHY: This test file is not in the PR's changed files, but its pre-existing failure blocks this PR's CI gate and is not mentioned in the PR description.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_codex_thread_reuse_core.py:567 | severity=BLOCKER | confidence=5\n  PROBLEM: Pre-existing CI failure (AssertionError in test_validate_workflow_contains_thread_reuse_bootstrap).\n  WHY: The CI lint job fails due to this assertion error, blocking this PR from merging. Although pre-existing on main, this currently prevents the PR from passing CI and merging.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nRequirement: PR description claims \"make generate-check, shellcheck, ruff and actionlint are clean\" and \"The 65 existing test files touching these files pass (1,342 tests), except one: tests/test_workflow_overlay_core.py::test_target_workflows_stage_schema_and_invoke_loader. That test already fails on main at 56fcde4 (#4463 changed validate.yml) and is not touched by this PR.\"\nExpected change site: PR description and/or .github/workflows/review_autofix.yml (the failing test is a pre-existing main issue caused by validate.yml divergence, which the PR inherits because the lint job runs tests against the PR head)\nEvidence of absence: The lint CI check on PR head c69ac0500c183a7e287a7d11a9b0edf4e975a2e9 is failing with a second pre-existing pytest failure not acknowledged in the PR description: tests/test_codex_thread_reuse_core.py:567 in test_validate_workflow_contains_thread_reuse_bootstrap asserts 'helper_path=\"scripts/stage_workflow_support.sh\"' in text (the validate.yml content), but the assertion fails with AssertionError. The lint step runs the test as a standalone script (exit code 1) and the workflow reports conclusion=failure. The PR description only lists test_workflow_overlay_core.py::test_target_workflows_stage_schema_and_invoke_loader as the pre-existing failure; this second one (also rooted in a validate.yml change) is not mentioned. Both reviewers in the cross-pollination summary (qwen_qwen3.7-plus with confidence 5, google_gemini-3_1-flash-lite with confidence 4) flag the same failure as a CI blocker. The PR cannot merge until lint is green.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n\nRequirement: PR description claims \"12 new tests in tests/test_workflow_failure_heal.py\" plus \"3 new tests in tests/test_claude_md_section_numbers.py\" (15 total).\nExpected change site: tests/test_workflow_failure_heal.py additions\nEvidence of absence: The diff for tests/test_workflow_failure_heal.py adds 9 new test functions (test_failure_headline_names_the_first_specific_error, test_failure_headline_redacts_credentials_and_stays_one_line, test_redact_secrets_patterns, test_failure_headline_cli, test_is_deterministic_failure, test_deterministic_issue_body_forbids_retry_fixes_and_requires_a_regression_test, test_intake_refuses_transient_for_a_deterministic_failure, test_heal_prompt_rule_for_deterministic_failures, test_review_autofix_failure_comment_names_the_failed_step_and_first_error), not 12. The 12 figure in the description is a count discrepancy; the test_claude_md_section_numbers.py file does add 3 tests, so total is 12, but the description's \"12 new tests in tests/test_workflow_failure_heal.py\" attribution is wrong.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_codex_thread_reuse_core.py:567 (`test_validate_workflow_contains_thread_reuse_bootstrap`) | severity=BLOCKER | confidence=5\n  PROBLEM: The `lint` CI job is failing on this PR head (`c69ac05`) because `test_validate_workflow_contains_thread_reuse_bootstrap` asserts `'helper_path=\"scripts/stage_workflow_support.sh\"' in text` and the assertion fails with `AssertionError`.\n  WHY: The `lint` job runs `python3 tests/test_codex_thread_reuse_core.py` as a standalone script (visible in the CI log_tail at `2026-09-25T15:01:45.0673066Z`). The assertion exits non-zero, failing the entire `lint` check. The PR cannot merge until this check is green. The PR diff does not touch `validate.yml` or this test file, so this is a pre-existing failure on `main` that the PR author did not account for.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4cb8b259355fdad8b440b7832b11d64802de2f179c5e3ff5371d9498f91ae521",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4476,
+    "run_id": "36150480674",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36150480674",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925161432_a24de8a178",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4476,
+    "run_id": "36150480674"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T16:14:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

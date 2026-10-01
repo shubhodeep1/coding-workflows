@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:2496-2499 | severity=major | confidence=5\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The shared test harness hard-requires `jq` via `assert real_jq is not None` instead of skipping when it is missing.\n  WHY: On a developer machine without `jq`, every test using `_run_poller` or `_run_poller_subprocess` raises `AssertionError` during fixture setup instead of following the repository's established skip-when-missing convention; severity was reported as major and nit, so the highest severity is used.\n\n- scripts/orchestrate_poll_process.sh:4835 | severity=nit | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The `jq` fallback in `fix_cycle_label` contains a stray `)` inside the double-quoted string, producing `?/3)` instead of `?/3`.\n  WHY: When `jq` fails, malformed `fix cycle ?/3)` output is propagated to log lines, tracking comments, and Telegram notifications.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description / Copilot PR review comment 3957508066 \u2014 \"Other tests in this repo treat `jq` as optional by skipping when it's missing; doing the same here keeps local runs consistent while still exercising CI (where `jq` is present).\"\n  expected_change_site: `tests/test_orchestrate_poll_process.py:2496-2499`\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `parse_api()` and `_save_store()` introduce `real_jq = shutil.which(\"jq\")` and `assert real_jq is not None` without any `@unittest.skipUnless` decorator or `if real_jq is None` fallback; the jq shim at lines 2602-2614 does not provide a no-`jq` path.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:2496-2499 | severity=major | confidence=5\n  PROBLEM: The shared `parse_api()` test fixture asserts that `jq` is installed, although other test modules skip when it is missing.\n  WHY: Every poller test using `_run_poller_subprocess` fails with `AssertionError` on developer machines without `jq` instead of following the repository convention.\n- TASK_GAP\n  Requirement: PR description / Copilot PR review comment 3957508066 \u2014 \"Other tests in this repo treat `jq` as optional by skipping when it's missing; doing the same here keeps local runs consistent while still exercising CI (where `jq` is present).\"\n  Expected change site: `tests/test_orchestrate_poll_process.py:2496-2499`\n  Evidence of absence: The LAST RUN DIFF adds `real_jq = shutil.which(\"jq\")` and `assert real_jq is not None` without a skip decorator or fallback branch; the jq shim at lines 2602-2614 does not provide a no-`jq` path.\n  ISSUE_CONFIDENCE: 5\n- tests/test_orchestrate_poll_process.py:2602-2614\n  PROBLEM: The jq shim decides whether to inject `MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL` by substring-matching the literal jq program text.\n  WHY: Future whitespace, line-break, or key-order changes to `scripts/orchestrate_poll_process.sh:4994-4998` can silently disable the failure injection.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_orchestrate_poll_process.py\n  Line or code reference: sandbox setup near lines 2496-2499 (`real_jq = shutil.which(\"jq\")` followed by `assert real_jq is not None`)\n  severity=nit\n  confidence=2\n  PROBLEM: The new hard assert makes `jq` a setup-time requirement for every test in this shared poller harness.\n  WHY: On a jq-less machine these tests already failed at runtime before this change; the assert moves the failure earlier and diverges from the repository's skip-if-missing convention.\n- tests/test_orchestrate_poll_process.py\n  Location: jq shim body (the `for jq_argument in \"$@\"` substring match on `.security_pass_active_fix_issues = [$successor]`)\n  PROBLEM: Failure injection is coupled to the literal jq program text.\n  WHY: A whitespace or formatting change in the production jq call silently disables the injection; the suggested alternatives were adding a coupling comment or matching the stable `--argjson successor` flag.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:4835 | severity=nit | confidence=5\n  PROBLEM: The jq fallback contains a stray `)` inside the double-quoted string: `echo \"?/${MAX_SECURITY_PASS_CYCLES}\")\"`.\n  WHY: If jq fails, `fix_cycle_label` becomes `?/3)` instead of `?/3`, producing malformed output in logs, tracking comments, and Telegram notifications.\n- tests/test_orchestrate_poll_process.py:2499 | severity=major | confidence=5\n  PROBLEM: The shared test harness hard-requires `jq` via an assert instead of skipping when it is missing.\n  WHY: On a developer machine without `jq`, every test in this 18000+ line module that calls `_run_poller` raises `AssertionError` at fixture setup instead of being skipped.\n- tests/test_orchestrate_poll_process.py:2602-2614\n  PROBLEM: The jq shim triggers state-persist failure by substring-matching the literal jq program text (`.security_pass_active_issues = [$successor]`).\n  WHY: If production reformats the jq program, the match silently misses and the failure-injection path becomes unreachable; the suggested fix is to check the environment variable directly or use a shorter stable sentinel.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- tests/test_orchestrate_poll_process.py\n  Line or code reference: parse_api sandbox setup at lines 2496-2499 (assert real_jq is not None) plus the jq shim write at 2602-2614 and REAL_JQ_BIN in _save_store at 3132\n  severity=nit\n  confidence=4\n  PROBLEM: The last-run harness hard-fails every `_run_poller` sandbox if jq is missing.\n  WHY: Local pytest on a machine without jq raises `AssertionError` during shared sandbox setup instead of skipping; CI is unaffected because runners have jq.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "f269c671f08d24b6000052a3de1fcea30d6b225a79e8512b9e2328c096fe62f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4055,
+    "run_id": "34221682984",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34221682984",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908131939_eb0bc2a6cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4055,
+    "run_id": "34221682984"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-08T13:19:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

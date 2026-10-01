@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1239-1249 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: `_autofix_pr_named_review_runs` matches PR-named workflow-dispatch runs without verifying they came from the default branch.\n  WHY: A spoofed matching run from a non-default branch can suppress a legitimate retrigger or consume the per-head changes-lost retry budget.\n- scripts/review_merge_train.sh:~410\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: `_mt_inflight_review_branches` matches PR-named workflow-dispatch runs without verifying they came from the default branch.\n  WHY: A matching run dispatched from a non-default branch can suppress that PR's merge-train release.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh | Line or code reference: _autofix_pr_named_review_runs (lines 1239-1249) | severity=high | confidence=[4]\n  PROBLEM: This helper matches PR-named workflow_dispatch runs by title and a loose path regex only, without verifying that the run came from the default branch (head_branch check is absent).\n  WHY: Someone with push access to the repo could dispatch a workflow at a branch whose workflow file carries the same run-name title as another PR's review, and autofix_retrigger_has_inflight_peer would report a false peer, suppressing the legitimate retrigger.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- file: scripts/gh_helpers.sh\n  location: _autofix_pr_named_review_runs, jq filter (~line 1245)\n  PROBLEM: The helper matches PR-named runs without requiring `head_branch == <default branch>`, allowing a branch-dispatched run with a matching name and path to suppress a legitimate retrigger or consume the per-head retry budget.\n  suggested minimal fix: Resolve the default branch once and add `select((.head_branch // \"\") == $default_branch)` to the jq filter, matching the poller helper.\n- file: scripts/review_merge_train.sh\n  location: _mt_inflight_review_branches, jq expression (~line 410)\n  PROBLEM: The helper emits `pr:<N>` keys for matching workflow-dispatch runs without requiring `head_branch == default_branch`; a branch-dispatched run named for another PR could suppress that PR's merge-train release.\n  suggested minimal fix: Add `and (.head_branch == $default_branch)` inside the `if (.event // \"\") == \"workflow_dispatch\" then ...` branch, passing the default branch via `--arg`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5eca231df7b00cf9e1846a414d4054d130690b959fa8401ad77c4478d2f54159",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36553392450",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36553392450",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929102107_e37dc1e1d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36553392450"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T10:21:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

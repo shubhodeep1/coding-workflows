@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml: lines 2103, 4128, 6420 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The staging directory `${RUNNER_TEMP}/review-ledger-cache` is shared by every review/validate job that lands on the same runner.\n  WHY: On a self-hosted runner executing concurrent jobs, one job's stage-out can remove or replace staging content underneath another job's restore/stage-in, silently losing resume state; GitHub-hosted runners are unaffected.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml: the three stage-out inline shell steps (lines ~4116-4150, ~6408-6442, and the early-save stage-out added at ~4083-4115)\n  PROBLEM: The stage-out logic (clear staging dir, iterate review_issue_ledger + review_runtime, copy the ledger file) is duplicated verbatim across three step blocks.\n  WHY: If a defect is found or the directory list changes, all three copies need the same edit.\n- .github/workflows/review_autofix.yml: the two stage-in inline shell steps (one in review_autofix.yml at ~2079, one in validate.yml at ~644)\n  PROBLEM: The stage-in logic (iterate directories, copy ledger file) is duplicated between review_autofix.yml and validate.yml.\n  WHY: The duplicated logic requires parallel maintenance, while validate.yml uses a narrower subset (only review_runtime).\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/review_autofix.yml: lines 2103, 4128, 6420 \u2014 `ledger_cache_staging_root=\"${RUNNER_TEMP}/review-ledger-cache\"` | severity=NIT | confidence=2\n  PROBLEM: The staging directory is shared by every review/validate job that lands on the same runner.\n  WHY: On a self-hosted runner executing two jobs concurrently, one job's stage-out can delete or replace the staging content underneath the other job's restore/stage-in, silently losing resume state; GitHub-hosted runners are single-job-per-VM and unaffected.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "8f7b9b73ba19d1414013c7c138b736e3e6d2d32fede25f0a89fa44d386e12ab9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34675588262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34675588262",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260912060001_c5ac0075f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34675588262"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-12T06:00:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

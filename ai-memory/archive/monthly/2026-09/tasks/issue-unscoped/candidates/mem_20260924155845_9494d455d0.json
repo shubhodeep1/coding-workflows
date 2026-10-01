@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:176 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_20]\n  PROBLEM: The poller computes `TRUSTED_POLLER_WORKSPACE_GUARD_SHA256` but does not export it as `POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256`.\n  WHY: The sandbox\u2019s integrity check is skipped when that expected hash is unset, allowing a tampered staged guard to run; both reviewers rate this MAJOR.\n- .github/workflows/orchestrate_poll.yml:404 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The poller workflow installs the workspace guard but does not compute and export `POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256`.\n  WHY: Without the expected hash, the sandbox skips the guard integrity check; both reviewers rate this MAJOR.\n- .github/workflows/review_autofix.yml | severity=critical\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The review-autofix workflow does not export `POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256`.\n  WHY: The reviewer identifies this as part of the missing integrity-check export blocker; no line or confidence was stated.\n- .ai/.workspace_source_manifest.txt:227 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The manifest lists `changelog.d/4342-sandbox-state-outside-private-tmp.md` but omits `changelog.d/4390-workspace-guard-private-tmp.md`.\n  WHY: The manifest does not include the 4390 fragment created by the PR; severity ranged from NIT to BLOCKER, so the highest severity is used.\n- tests/test_agent_process_isolation.py:~855 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The test assertion is reported to use literal `$36016993591` and `$1` instead of `${GITHUB_RUN_ID}` and `${GITHUB_RUN_ATTEMPT}`.\n  WHY: The reviewer reports this would cause an assertion failure in CI; severity ranged up to BLOCKER. Other reviewers verified the on-disk assertion uses the dynamic forms and considered this a false positive.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:176 | severity=high | confidence=5\n  PROBLEM: `TRUSTED_POLLER_WORKSPACE_GUARD_SHA256` is computed but never exported as `POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256`.\n  WHY: If the staged guard is replaced or corrupted before sandbox invocation, the sandbox runs it without detecting the tampering; the integrity check is a silent no-op for poller workspace-guard invocations.\n- .ai/.workspace_source_manifest.txt:227 | severity=low | confidence=4\n  PROBLEM: The manifest adds `changelog.d/4342-sandbox-state-outside-private-tmp.md` but omits `changelog.d/4390-workspace-guard-private-tmp.md`.\n  WHY: A consumer of the manifest may report a missing-file discrepancy or omit the 4390 changelog fragment from operations that iterate the manifest.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .ai/.workspace_source_manifest.txt:227\n  PROBLEM: The manifest entry for `changelog.d/4342-sandbox-state-outside-private-tmp.md` should instead name `changelog.d/4390-workspace-guard-private-tmp.md`.\n  WHY: The reviewer reports a manifest discrepancy and says it changed the entry to match the file created by the PR.\n- .github/workflows/orchestrate_poll.yml\n  PROBLEM: The poller workflow is missing the workspace-guard integrity-check export.\n  WHY: The reviewer reports adding the SHA export to `orchestrate_poll.yml`.\n- .github/workflows/review_autofix.yml\n  PROBLEM: The review-autofix workflow is missing the workspace-guard integrity-check export.\n  WHY: The reviewer reports adding the SHA export to `review_autofix.yml`.\n- tests/test_agent_process_isolation.py\n  PROBLEM: The test assertion in `test_every_writer_path_reconciles_complete_workspace_manifest` uses an incorrect literal substring for the workflow\u2019s dynamic directory naming pattern.\n  WHY: The reviewer reports updating the assertion to match the dynamic string patterns used in the workflow files.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/orchestrate_poll.yml:404 | severity=high | confidence=5\n  PROBLEM: The poller workflow installs `post_agent_workspace_guard.py` but does not compute and export `POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256` to `$GITHUB_ENV`.\n  WHY: Without the export, the sandbox skips SHA256 verification, allowing a tampered guard executable to run undetected if an earlier model step compromised `RUNNER_TEMP`.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:176 | severity=high | confidence=4\n  PROBLEM: `TRUSTED_POLLER_WORKSPACE_GUARD_SHA256` is computed but never exported as `POST_AGENT_WORKSPACE_GUARD_EXPECTED_SHA256`.\n  WHY: The sandbox integrity check for the poller workspace guard is a silent no-op, so a tampered staged guard can run undetected.\n- tests/test_agent_process_isolation.py:~855 | severity=critical | confidence=5\n  PROBLEM: The assertion uses literal `$36016993591` and `$1` placeholders instead of `${GITHUB_RUN_ID}` and `${GITHUB_RUN_ATTEMPT}`.\n  WHY: The test raises `AssertionError` in CI after the pattern change.\n- .ai/.workspace_source_manifest.txt:227 | severity=high | confidence=4\n  PROBLEM: The manifest adds `changelog.d/4342-sandbox-state-outside-private-tmp.md` but the PR creates `changelog.d/4390-workspace-guard-private-tmp.md`.\n  WHY: The manifest is inconsistent with the actual files on disk.\n\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .ai/.workspace_source_manifest.txt:227-228\n  PROBLEM: The PR creates `changelog.d/4390-workspace-guard-private-tmp.md` but does not add it to the workspace source manifest.\n  WHY: The manifest includes `changelog.d/4342-sandbox-state-outside-private-tmp.md` but is missing the 4390 entry.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f14bb9a1a9f2e79298ccb6c2fb7d4815e326624ec079a0b47300d059b9f41451",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4394,
+    "run_id": "36016993591",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36016993591",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924155845_9494d455d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4394,
+    "run_id": "36016993591"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T15:58:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py (and identical workflow-templates mirror): `remote_branch_tip` at line 502-503, `fetch_from_origin` at line 519-520 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603]\n  PROBLEM: `_run` passes no environment override, so `git ls-remote` and `git fetch` inherit the session environment and may prompt for credentials or stall on HTTPS remotes without credential helpers.\n  WHY: `GIT_TERMINAL_PROMPT=0` would make credential-less remote failures immediate and route them through the existing confirmation path instead of delaying each guarded push for the timeout.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py (and identical workflow-templates mirror) | severity=NIT | confidence=3\n  PROBLEM: Both functions call `_run` (line 159) which does not pass `env=` to `subprocess.run`, so `git ls-remote` and `git fetch` inherit the full session environment.\n  WHY: A credential-less https remote stalls the hook for up to 15 seconds before the timeout terminates it, and could interrupt the session's TTY with a credential prompt.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py (and identical workflow-templates mirror)\n  PROBLEM: `_run` invocations inside `remote_branch_tip` (around line 506) and `fetch_from_origin` (around line 521) pass no `env=` to `subprocess.run`, so they inherit the parent shell.\n  WHY: On an HTTPS origin with no credential helper, `git ls-remote` and `git fetch` can open `/dev/tty` to prompt for credentials or sit until the 15s `_GIT_REMOTE_TIMEOUT_SECONDS` backstop fires on every guarded push.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .claude/hooks/pr_merge_status_guard.py and workflow-templates/.claude/hooks/pr_merge_status_guard.py\n  PROBLEM: `_run` (line 159) passes no environment override, so `git ls-remote` / `git fetch` inherit the session environment.\n  WHY: On an https remote with no credential helper, git can open /dev/tty and prompt the user for credentials mid-hook, or sit until the 15s `_GIT_REMOTE_TIMEOUT_SECONDS` backstop fires on every guarded push.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "491af262f47a7de77906fa4390c921dedd6e97bda40d6786cd73ab954efd8e05",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4002,
+    "run_id": "33953679392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33953679392",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260905090926_3242448da4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4002,
+    "run_id": "33953679392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-05T09:09:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

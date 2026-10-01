@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit_causality.py: lines 137-141 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Module-level control-flow AST nodes are treated as indeterminate, causing common Python files to lose complete causal scope.\n  WHY: Waiver revalidation then rejects those findings as indeterminate, causing pre-existing defects to be re-reported on every audit cycle.\n- scripts/model_provider_proxy.py: lines 113-119, 256-292 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A single upstream response with missing or unparsable usage cost permanently marks accounting as failed.\n  WHY: Subsequent legitimate requests are rejected with 429, halting editor and reviewer runs.\n- scripts/security_audit.sh: lines 1469-1485 (within `normalize_finding`) | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Failed or unmatched git blame falls back to the audited head SHA as provenance even when that commit did not introduce the finding.\n  WHY: Waiver keys can bind to incorrect provenance and become incorrectly retained or re-issued after history changes.\n- scripts/untrusted_process_sandbox.sh: lines 68-79,315-417 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The cleanup trap waits indefinitely for the proxy after sending SIGTERM and has no bounded escalation.\n  WHY: A stuck proxy can block the sandbox wrapper and leave the GitHub Actions job hanging.\n- scripts/untrusted_process_sandbox.sh: lines 193-211 (safe_git_config construction) | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `remote.<name>.pushurl` and `[url] \"insteadOf\"` rewrites remain available despite remote URL sanitization.\n  WHY: Sandboxed git operations can still resolve to attacker-controlled destinations and exfiltrate repository contents.\n- scripts/orchestrate_poll_process.sh: lines 4728-4731 (and matching jq in security_audit.sh) | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Unknown or missing legacy `causal_scope_status` values are silently rewritten to `indeterminate`.\n  WHY: Older waivers then fail strict revalidation and reappear as blocking findings without an operator-visible diagnostic.\n- scripts/untrusted_process_sandbox.sh: lines 196-211 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Git configuration sanitization leaves `insteadOf`, proxy, template-directory, and related trust-boundary settings available.\n  WHY: A model can route git traffic through attacker-controlled infrastructure or influence filesystem behavior during later git operations.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit_causality.py: lines 137-141 | severity=BLOCKER | confidence=5\n  PROBLEM: `_symbols_for_source` sets `module_indeterminate = True` for any module-level AST node that is not in the explicit allowlist `(ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Expr, ast.Pass)`.\n  WHY: Any Python finding's waiver will fail closed on the very first re-audit because the validator cannot compute a complete causal scope for the cited file.\n- scripts/model_provider_proxy.py: lines 113-119, 256-292 | severity=MAJOR | confidence=4\n  PROBLEM: `ProxyAccounting.settle()` sets `self.accounting_failed = True` whenever `actual_cost is None`.\n  WHY: A single upstream response that lacks the `cost` key permanently causes subsequent `reserve()`/`add_reservation()` calls to reject with 429.\n- scripts/security_audit.sh: lines 1469-1485 (within `normalize_finding`) | severity=MAJOR | confidence=3\n  PROBLEM: When `git blame` returns non-zero or no commit matches the blame regex, the function falls back to using `audit_scope_head_sha` as `provenance_commit`.\n  WHY: The key can be bound to a commit that did not actually introduce the line, causing legitimate waivers to be incorrectly retained or re-issued.\n- scripts/untrusted_process_sandbox.sh: lines 68-79,315-417 | severity=MAJOR | confidence=3\n  PROBLEM: The cleanup trap kills `proxy_pid` and then calls `wait \"${proxy_pid}\"` with no timeout.\n  WHY: If the proxy does not exit promptly, the sandbox wrapper blocks indefinitely and the GitHub Actions job never finishes.\n- scripts/untrusted_process_sandbox.sh: lines 193-211 (safe_git_config construction) | severity=MAJOR | confidence=3\n  PROBLEM: `safe_git_config` rewrites `remote.<name>.url` but does not touch `remote.<name>.pushurl` or `[url] \"insteadOf\"` rewrite rules.\n  WHY: A model can configure git to push commits to an attacker-controlled host and exfiltrate staged changes.\n- scripts/orchestrate_poll_process.sh: lines 4728-4731 (and matching jq in security_audit.sh) | severity=MAJOR | confidence=4\n  PROBLEM: The poller rewrites any `causal_scope_status` other than `\"complete\"` or `\"indeterminate\"` to `\"indeterminate\"`.\n  WHY: Legacy keyless waivers silently stop suppressing re-reports because strict revalidation requires `\"complete\"`.\n- scripts/untrusted_process_sandbox.sh: lines 196-211 | severity=MAJOR | confidence=3\n  PROBLEM: The sandbox leaves `[url] insteadOf`, `http.*`, `core.gitProxy`, `remote.<name>.proxy`, `init.templateDir`, and related settings in scope.\n  WHY: A model process can route git traffic through attacker-controlled infrastructure or gain filesystem trust through git template configuration.\n- scripts/model_provider_proxy.py: _begin_accounted_request / _proxy_accounted_request accounting path\n  PROBLEM: A single missing-cost response permanently fails accounting; subsequent legitimate responses are blocked.\n  WHY: Track consecutive missing-cost responses or continue accepting requests up to the spend limit while exposing a warning.\n- scripts/untrusted_process_sandbox.sh: safe_git_config construction (lines 193-211)\n  PROBLEM: Git proxy, templateDir, and insteadOf rewriting is incomplete.\n  WHY: Also strip `[url] \"insteadOf\"` rules, `remote.<name>.pushurl`, `http.*.sslCAInfo`, `http.*.proxy`, `core.gitProxy`, `init.templateDir`, and `remote.<name>.proxy`.\n- scripts/security_audit_causality.py: module-level AST check (lines 137-141)\n  PROBLEM: Every non-trivial module body is marked indeterminate, blocking common `if __name__ == \"__main__\":` idioms.\n  WHY: Allow module-level control-flow wrappers when their bodies contain no indeterminate calls.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0068fe569f6fb1bd6bd11d373feeb3c0535b75d5a18c2b70a081e26d524d3b63",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35957677251",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35957677251",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924052215_bfd815cf13",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35957677251"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T05:22:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

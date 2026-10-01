@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:rm -f -- \"${writable_probe_path}\" without error check | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Cleanup failure could leave probe artifacts behind.\n  WHY: Unexpected filesystem behavior could silently let the preflight succeed while leaving temporary files; deepseek_deepseek-v4-pro, moonshotai_kimi-k3, and qwen_qwen3_7-plus report this was addressed in the last-run diff.\n- scripts/security_audit.sh:writable_probe_path=\"$(mktemp -p \"${required_parent}\" \".security-audit-writable-probe.XXXXXX\" 2>/dev/null)\" | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `mktemp` failure is silently treated as success.\n  WHY: A failed `mktemp` could create an invalid probe path and produce a false writable result; deepseek_deepseek-v4-pro, moonshotai_kimi-k3, and qwen_qwen3_7-plus report the exit code is checked by `if !`.\n- scripts/security_audit.sh:if ! : >> \"${required_path}\" 2>/dev/null; then | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The append-open probe silently ignores stderr.\n  WHY: Permission-denied or filesystem errors could be masked, allowing a bad destination to pass preflight; moonshotai_kimi-k3 and qwen_qwen3_7-plus report that the exit status is checked and stderr suppression is intentional.\n- scripts/security_audit.sh:if [ -e \"${required_path}\" ]; then ... else ... fi | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The missing-file branch uses an `mktemp` parent probe but does not verify parent-directory writability.\n  WHY: An unwritable parent directory might cause downstream failures; moonshotai_kimi-k3 and qwen_qwen3_7-plus report that creating a temporary file in the parent is itself the writability probe.\n- scripts/security_audit.sh:security_audit_emit_failure \"${required_phase}\" \"${required_path}\" \"destination is not writable\" | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The diagnostic message lacks phase-specific context.\n  WHY: Operators may be unable to distinguish findings-output-preflight, prompt-preflight, and codex-preflight failures; moonshotai_kimi-k3 and qwen_qwen3_7-plus report that `security_audit_emit_failure` emits the supplied phase context.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/security_audit.sh:rm -f -- \"${writable_probe_path}\" without error check | severity=high | confidence=5\n  PROBLEM: cleanup failure could leave probe artifacts behind on I/O errors\n  WHY: unexpected filesystem behavior would silently succeed the preflight despite leaving temporary files\n- scripts/security_audit.sh:writable_probe_path=\"$(mktemp -p \"${required_parent}\" \".security-audit-writable-probe.XXXXXX\" 2>/dev/null)\" | severity=high | confidence=5\n  PROBLEM: mktemp failure silently treated as success\n  WHY: a failed mktemp would create an invalid probe path, leading to a false writable result\n- scripts/security_audit.sh:if ! : >> \"${required_path}\" 2>/dev/null; then | severity=high | confidence=5\n  PROBLEM: append-open probe silently ignores stderr\n  WHY: permission-denied or filesystem errors are masked, allowing a bad destination to pass preflight\n- scripts/security_audit.sh:if [ -e \"${required_path}\" ]; then ... else ... fi | severity=high | confidence=5\n  PROBLEM: missing-file branch uses mktemp parent probe but doesn't verify parent directory writability\n  WHY: parent directory might be unwritable even if probe succeeds, causing downstream failures\n- scripts/security_audit.sh:security_audit_emit_failure \"${required_phase}\" \"${required_path}\" \"destination is not writable\" | severity=low | confidence=4\n  PROBLEM: diagnostic message lacks phase-specific context\n  WHY: operators cannot distinguish findings-output-preflight vs prompt-preflight vs codex-preflight failures\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "5dd901eb7b63d7e03a32553ea4c0a1657d448334a882131798c4b888f093b5d5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3962,
+    "run_id": "33591710598",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33591710598",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260902055231_5200023287",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3962,
+    "run_id": "33591710598"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-02T05:52:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

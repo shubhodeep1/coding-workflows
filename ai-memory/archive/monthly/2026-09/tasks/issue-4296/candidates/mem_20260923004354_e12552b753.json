@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`\n\nScope-mode justification: The issue explicitly limits the change to one existing fixture. No expansion is necessary.\n\n## Automation wiring\n\n- Change type: modify existing data file only.\n- Scheduler/PR-push entry point: none; existing implementation workflow remains unchanged.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Removal registry: not applicable.\n\n## Planning ref\n\n- Branch: `orchestrator/project-4295`\n- HEAD: `a015623092aaac04dc6e5427fd6c5e76702a8913`\n- Integration metadata matches the checkout.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 replace its current three lines with exactly:\n  1. `status: ok`\n  2. `decompose-run: 35802596362`\n\nNo other files may change.\n\n## Functions or modules to implement\n\nNone. This is a fixture-content-only update.\n\n## Data structures affected\n\nThe smoke-canary text fixture changes from three key/value lines to the required two-line representation.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the complete fixture content\n\n- **Chosen:** Rewrite the file as exactly the two specified lines.\n- **Alternatives considered:** Preserve `run_id`, retain `updated-by`, or append the new field.\n- **Why:** Those alternatives violate the exact-content acceptance criteria.\n\n### D2 \u2014 Keep verification narrowly scoped\n\n- **Chosen:** Validate exact bytes, line count, and the one-file diff.\n- **Alternatives considered:** Run the full repository test suite.\n- **Why:** No executable behavior changes, and broad validation would not provide useful additional signal.\n\n## Security considerations\n\n- Trust boundaries: none affected.\n- Authorization surfaces: none added or modified.\n- External-input validation: not applicable.\n- Abuse cases: prevent unintended extra content or unrelated file modifications by checking the exact file contents and changed-path set.\n- Secrets, credentials, payments, and databases are unaffected.\n\n## Risks and edge cases\n\n- The current file conflicts with the requested state: it contains `run_id: 26151428977` and `updated-by: ai-pipeline`.\n- Ensure there are exactly two lines with no blank or additional lines.\n- Preserve a conventional final newline while keeping the logical content at two lines.\n- Do not modify generated manifests, changelog fragments, tests, or documentation.\n\n## Testing considerations\n\n1. Compare `tests/e2e_smoke_canary.txt` against the exact expected two-line payload.\n2. Confirm the file contains exactly two lines.\n3. Run `git diff --name-only` and verify this is the only changed path.\n4. Inspect `git diff -- tests/e2e_smoke_canary.txt` for the precise replacement.\n\n## Pre-execution self-check\n\n- Clarification is sufficient.\n- Planning and integration refs match.\n- Target file exists and its current contents were verified.\n- The requested change is fully specified and confined to one file.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0bad700301b84a00ae55ada6040fd874699053cc8b01db3ae1db4c1afd673a4a",
+  "lineage": {
+    "issue_number": 4296,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35802990439",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35802990439",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4296"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260923004354_e12552b753",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4296,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35802990439"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4296",
+  "timestamps": {
+    "created_at": "2026-09-23T00:43:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

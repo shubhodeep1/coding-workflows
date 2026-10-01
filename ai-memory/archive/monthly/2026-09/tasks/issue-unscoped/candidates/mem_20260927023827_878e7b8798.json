@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/deploy-activation/pr-4443.md:5-7 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The \"Last updated\" header date remains 2026-09-26 while new content is dated 2026-09-27.\n  WHY: The stale header misrepresents the runbook's freshness to operators or automated scans.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: docs/deploy-activation/pr-4443.md\n  Line or code reference: line 7\n  Problem: The front-matter field `Last updated: 2026-09-26` was not refreshed to `2026-09-27` despite this change appending a `Last note` dated 2026-09-27 (line 8) and a time-stamped check section dated 2026-09-27 (lines 61\u201367). The previous diff's `Last note` referenced 2026-09-26 and matched the header, so the invariant held; this revision breaks it.\n  Why it fails at runtime: An operator or automated scan reading the front matter sees a one-day-stale header alongside fresh content. The header's sole purpose is to signal freshness; a stale date misrepresents the document's actual update state and can mislead a reader into concluding no change was applied since the previous day.\n  severity=low | confidence=5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: docs/deploy-activation/pr-4443.md\n  Line: 7\n  Problem: The \"Last updated\" header date (2026-09-26) is stale compared to the new content date (2026-09-27).\n  Why it fails at runtime: The runbook documentation is inconsistent, providing misleading information to operators regarding the freshness of the activation status.\n  severity=low | confidence=5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: docs/deploy-activation/pr-4443.md\n  Line or code reference: line 7 (`- Last updated: 2026-09-26`)\n  Problem: The \"Last updated\" header date remains 2026-09-26 while the new \"Last note\" (line 8) and the entire appended 2026-09-27 check section (lines 61\u201367) are all dated 2026-09-27. The pre-change \"Last note\" referenced \"2026-09-26 05:16 UTC\" and matched the header, so the prior invariant held; this revision breaks it.\n  Why it fails at runtime: Not a code runtime failure \u2014 this is a documentation freshness consistency defect. An operator or automation scanning the file's front-matter summary sees a one-day-stale header alongside fresh 2026-09-27 content, misrepresenting the runbook's actual freshness. Six prior-round reviewers on head `737525e66` flagged this defect with unanimous agreement (severity NIT, confidence 4\u20135); the current head `4e8d437` did not address it.\n  severity=low | confidence=5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: docs/deploy-activation/pr-4443.md\n  Line or code reference: line 5 (`- Last updated: 2026-09-26`)\n  Problem: The \"Last updated\" header remains dated 2026-09-26 while the new \"Last note\" on line 8 and the appended \"2026-09-27 check\" section (lines 61-67) are both dated 2026-09-27. The metadata header does not reflect the most recent content update.\n  Why it fails at runtime: An operator or automation scanning the file's front-matter summary sees a stale \"Last updated\" date that misrepresents the runbook's actual freshness. The prior invariant (header date matching the latest note date) is broken by this change.\n  severity=low | confidence=5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: docs/deploy-activation/pr-4443.md\n  Line or code reference: 7\n  Problem: \"Last updated: 2026-09-26\" header stale vs 2026-09-27 note + notes section\n  Why it fails at runtime: runbook freshness metadata inconsistent, misleads operators\n  severity=low | confidence=5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: docs/deploy-activation/pr-4443.md\n  Location: line 7, \"- Last updated: 2026-09-26\"\n  Issue: The \"Last updated\" header remains 2026-09-26 while the new \"Last note\" (line 8) and the appended 2026-09-27 check / operator Q7 notes (lines 61-67) are all dated 2026-09-27, breaking the prior invariant that the header date matches the latest content date. An operator or automation keying off the header sees a one-day-stale freshness signal.\n  Suggested minimal fix: Change line 7 to `- Last updated: 2026-09-27`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "237184fdc2ce14d52527d42c6583740773fff0164a1c3887b304408da2760899",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4584,
+    "run_id": "36288360475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36288360475",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927023827_878e7b8798",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4584,
+    "run_id": "36288360475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T02:38:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

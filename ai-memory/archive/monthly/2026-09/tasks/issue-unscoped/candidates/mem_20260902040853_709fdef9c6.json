@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/codex-blocked-verdict-bail.md:the fragment filename itself | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The fragment name omits the documented `<issue-or-pr>-` numeric prefix.\n  WHY: `iter_fragment_paths` accepts the file at runtime, but the filename deviates from the documented traceability convention; severity was reported as NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states the change should detect \"any final-output line starting with optional whitespace followed by `BLOCKED:`\" when the worktree delta is empty\n  expected_change_site: `.github/workflows/implement.yml` around line 2424\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The grep pattern `grep -qE '^[[:space:]]*BLOCKED:'` is present and correctly anchored\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: The PR description states the change should detect \"any final-output line starting with optional whitespace followed by `BLOCKED:`\" when the worktree delta is empty\n  Expected change site: `.github/workflows/implement.yml` around line 2424\n  Evidence of absence: The grep pattern `grep -qE '^[[:space:]]*BLOCKED:'` is present and correctly anchored\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- changelog.d/codex-blocked-verdict-bail.md:the fragment filename itself | severity=NIT | confidence=3\n  PROBLEM: The fragment name omits the documented `<issue-or-pr>-` numeric prefix.\n  WHY: It does not fail at runtime, but deviates from the documented traceability convention.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "b960f363348498c605ac0332767d3c59f737e6d68abb6d1f759544ed3938796a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3959,
+    "run_id": "33585365288",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33585365288",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260902040853_709fdef9c6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3959,
+    "run_id": "33585365288"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-02T04:08:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

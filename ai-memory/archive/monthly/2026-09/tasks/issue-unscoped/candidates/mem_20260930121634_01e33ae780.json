@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:compare_settings_wiring | PROBLEM: When the base settings file is committed but unparseable, the per-entry gate is silently skipped, allowing a head to pass even when hook wiring has disappeared. WHY: The base path does not fail closed; minimax identifies this as a residual issue, while the other reviewers report no issues.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/guard_differential.py:compare_settings_wiring | HARDENING_SUGGESTION: If `base_text` is not None and `base_settings` is None, treat the head as failing the check via the same `settings:<file>:unparseable` identity the head path already emits. The base settings file can be committed but unparseable, causing `extract_guard_wiring({})` to yield no base wirings and the loop to never run; a follow-up canonical head can then pass even when hook wiring has disappeared. The agents.md documents only the head unparseable path. Risk score 3.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "780ae7e92d079656133673b2df1797f082101c861d7ed8c4ec672da2394edd8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5356,
+    "run_id": "36710638483",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36710638483",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930121634_01e33ae780",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5356,
+    "run_id": "36710638483"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T12:16:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

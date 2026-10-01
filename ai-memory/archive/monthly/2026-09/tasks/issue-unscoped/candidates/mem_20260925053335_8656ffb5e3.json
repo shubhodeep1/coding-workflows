@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:\u00a726.C step 3 and \u00a726.B step 1 | severity=high | confidence=[3]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: On three consecutive read failures, the pushing session may follow the hand-back Routine's unconditional \u00a726.D instruction and delete the Routine and archive the checker while the PR is still open.\n  WHY: \u00a726.C step 3 requires reporting the failure while leaving the checker and Routine running, so following \u00a726.D instead would silently stop monitoring the non-terminal PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- CLAUDE.md:\u00a726.C step 3 (\"Read failed\") and \u00a726.B step 1 (hand-back Routine prompt: \"Continue with CLAUDE.md \u00a726.D in this session\") | severity=high | confidence=[3]\n  PROBLEM: On three consecutive read failures, the checker now calls `fire_trigger` to wake the pushing session, but the hand-back Routine unconditionally directs that session to \u00a726.D, which prescribes cleanup contrary to \u00a726.C step 3.\n  WHY: A transient GitHub API outage causing three consecutive `check_in_status.py` exit-2 failures could wake the pushing session, which would delete the Routine and archive the checker per \u00a726.D, silently killing all monitoring of the still-open PR.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d852e7697239734d47374c5b988bc13cd14a3ec9b05323e0ece7d196bd93e7f9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36098507765",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36098507765",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925053335_8656ffb5e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36098507765"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-25T05:33:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

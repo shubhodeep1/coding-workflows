@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should receive the cap fix?\nChoices:\nA. Target a branch containing the existing cap helper, such as `main`. (RECOMMENDED)\nB. Keep `ai/issue-4392` as the target and include the missing cap helper and required tests in that branch.",
+  "fingerprint": "afd94d34b991634cc54726009a57848c81aee1875aa5280bea3edf04ea1c2512",
+  "lineage": {
+    "issue_number": 4406,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36021470780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36021470780",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260924154158_ff1c6095a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4406,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36021470780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4406 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-24T15:41:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4496-4506 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The function still contains an early return guard that prevents re-rendering when both integration_branch and final_merge_pr are empty, despite the commit message claiming it was removed.\n  WHY: When security_pass_fail_closed runs with no integration branch, the function returns immediately without calling reconcile_tracking_issue_body_from_state, leaving the tracking body's security-pass block stale and showing the previous clean pass status even though the state has changed to failed.\n- scripts/orchestrate_poll_process.sh:5057-5062 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The SECURITY_PASS_CLEAN path inside run_security_pass_inline updates state and calls post_state_comment but does not call reconcile_tracking_body_after_security_pass_transition.\n  WHY: After a clean audit, the tracking issue body can show a stale security-pass block with the old SHA while the state comment shows the new pending state, creating a mismatch between the issue body and actual state.\n- scripts/orchestrate_poll_process.sh:5038-5047 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: When the integration head changes during the audit, the state is reset to security_pass_status: \"pending\" with an empty SHA and post_state_comment is called, but the body is not reconciled.\n  WHY: The body can continue showing the previous status and old SHA while the state comment shows pending for one poll cycle, creating inconsistency between the tracking issue body and actual state.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a test that fails closed on a project with no integration branch and asserts the body re-renders to `failed` with one edit; it fails with the guard in place.\"\n  expected_change_site: tests/test_orchestrate_poll_process.py, test_security_pass_fail_closed_without_integration_branch_rerenders_tracking_body function\n  confidence=[3]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The test exists at line 3858-3925 but the function name does not contain \"fail_closed_without_integration_branch\" or similar descriptive name that matches the requirement.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh\nCode: lines 4496-4506 (reconcile_tracking_body_after_security_pass_transition function)\nProblem: The function still contains an early return guard that prevents re-rendering when both integration_branch and final_merge_pr are empty, despite the commit message claiming it was removed.\nWhy it fails at runtime: When security_pass_fail_closed runs with no integration branch (e.g., \"no integration branch to audit\"), the function returns immediately without calling reconcile_tracking_issue_body_from_state, leaving the tracking body's security-pass block stale and showing the previous clean pass status even though the state has changed to failed.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n\n- scripts/orchestrate_poll_process.sh\nCode: lines 5057-5062 (SECURITY_PASS_CLEAN path inside run_security_pass_inline)\nProblem: The clean-pass path updates security_pass_status to \"passed\", sets security_pass_head_sha, changes status to \"in_progress\", and calls post_state_comment but does not call reconcile_tracking_body_after_security_pass_transition.\nWhy it fails at runtime: After a clean audit, the tracking issue body can show a stale security-pass block (Status: passed with old SHA) while the state comment shows the new pending state, creating a mismatch between what the issue body displays and the actual state.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\n- scripts/orchestrate_poll_process.sh\nCode: lines 5038-5047 (head-changed-during-audit path inside run_security_pass_inline)\nProblem: When the integration head changes during the audit, the state is reset to security_pass_status: \"pending\" with an empty SHA and post_state_comment is called, but the body is not reconciled.\nWhy it fails at runtime: The body can continue showing the previous status and old SHA while the state comment shows pending for one poll cycle, creating inconsistency between the tracking issue body and actual state.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\n- TASK COMPLETENESS / INTENT GAPS\nRequirement: \"Add a test that fails closed on a project with no integration branch and asserts the body re-renders to `failed` with one edit; it fails with the guard in place.\"\nExpected change site: tests/test_orchestrate_poll_process.py, test_security_pass_fail_closed_without_integration_branch_rerenders_tracking_body function\nEvidence of absence: The test exists at line 3858-3925 but the function name does not contain \"fail_closed_without_integration_branch\" or similar descriptive name that matches the requirement.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "f1b4fb6331a27f5fec56a7af5d7017e8868bfda4239eefe34aaf6c49fc64bcaa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4013,
+    "run_id": "34007219279",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34007219279",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260906044904_0202a1ceca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4013,
+    "run_id": "34007219279"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-06T04:49:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

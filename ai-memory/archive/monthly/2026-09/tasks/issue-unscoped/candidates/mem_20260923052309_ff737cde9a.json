@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/post-push-pr-status-check-in.md:filename (line 1) | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The changelog fragment filename omits the required `<issue-or-pr>-` prefix and should be `changelog.d/4304-post-push-pr-status-check-in.md`.\n  WHY: The assembler will still process the fragment, but the filename violates CLAUDE.md \u00a720.B and reduces traceability and the documented unique-path guarantee; severity disagreement: five reviewers rated this NIT and one rated it MAJOR, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/post-push-pr-status-check-in.md:filename (line 1) | severity=NIT | confidence=5\n  PROBLEM: The changelog fragment filename omits the PR number prefix required by CLAUDE.md \u00a720.B; the expected filename is 4304-post-push-pr-status-check-in.md.\n  WHY: The changelog assembly script will still find and process this fragment, but the filename violates a convention and makes it harder to trace the fragment back to the PR.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/post-push-pr-status-check-in.md:(filename) | severity=NIT | confidence=4\n  PROBLEM: The changelog fragment filename does not follow the \u00a720.B convention, which requires a PR number prefix.\n  WHY: The current filename might be picked up by the assembler's glob, but it violates the documented `<issue-or-pr>-<slug>.md` convention and reduces traceability.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/post-push-pr-status-check-in.md:filename | severity=MAJOR | confidence=4\n  PROBLEM: The fragment filename does not include the required `<issue-or-pr>-` prefix from \u00a720.B; it should be `4304-post-push-pr-status-check-in.md`.\n  WHY: The fragment would still be picked up by a glob, but omitting the PR number violates the mandatory convention and breaks the unique-path guarantee intended to prevent changelog fragment collisions.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/post-push-pr-status-check-in.md:filename | severity=NIT | confidence=4\n  PROBLEM: The changelog fragment filename does not follow the CLAUDE.md \u00a720.B convention and should be `4304-post-push-pr-status-check-in.md`.\n  WHY: The assembly script will still pick up the fragment, but the filename violates the documented naming contract and makes it harder to trace the fragment during release preparation.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- changelog.d/post-push-pr-status-check-in.md:1 | severity=NIT\n  PROBLEM: Missing 4304- prefix, \u00a720.B.\n  WHY: The changelog fragment filename does not follow the required PR-number naming convention.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- changelog.d/post-push-pr-status-check-in.md:filename (line 1 of the new file) | severity=NIT | confidence=4\n  PROBLEM: The changelog fragment filename omits the required `<issue-or-pr>-` prefix; the file should be `changelog.d/4304-post-push-pr-status-check-in.md`.\n  WHY: The assembler accepts any `*.md` file, so there is no functional failure, but the deviation violates the documented naming convention and makes the fragment harder to trace during release preparation.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "44e4d4c54200ff8365503243a56596db93cc46b27573011c676cc361ba987246",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4304,
+    "run_id": "35813580294",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35813580294",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923052309_ff737cde9a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4304,
+    "run_id": "35813580294"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-23T05:23:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

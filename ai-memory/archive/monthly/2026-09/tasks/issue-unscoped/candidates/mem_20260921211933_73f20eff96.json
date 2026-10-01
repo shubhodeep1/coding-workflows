@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/4240-release-tag-pat.md:line 1 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The changelog fragment lacks the `<!-- changelog: fixed -->` section marker.\n  WHY: `scripts/assemble_changelog.py` defaults unclassified fragments to `### Added`, so this release-failure regression will be miscategorized instead of appearing under `### Fixed`; severity was reported as MAJOR by minimax_minimax-m3 and NIT by the other reviewers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/4240-release-tag-pat.md:line 1 (entire file) | severity=NIT | confidence=4\n  PROBLEM: The fragment lacks the first-line section classifier.\n  WHY: Without `<!-- changelog: fixed -->`, `scripts/assemble_changelog.py` defaults the entry to `### Added`, miscategorizing this release-failure bugfix.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/4240-release-tag-pat.md:line 1 (full file) | severity=MAJOR | confidence=4\n  PROBLEM: The fragment has no `<!-- changelog: fixed -->` marker.\n  WHY: `scripts/assemble_changelog.py` will file this regression fix under the default `### Added` subsection instead of `### Fixed`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/4240-release-tag-pat.md:line 1 (entire file content) | severity=NIT | confidence=4\n  PROBLEM: The changelog fragment lacks the `<!-- changelog: fixed -->` section marker.\n  WHY: `assemble_changelog.py` will file this regression fix under `### Added` instead of `### Fixed`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- changelog.d/4240-release-tag-pat.md:Line: 1 | severity=NIT | confidence=5\n  PROBLEM: missing `<!-- changelog: fixed -->` marker\n  WHY: assemble_changelog.py defaults to \"Added\" section\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1f01580ac2d50cba6d4f363034f4349ad5e7841fe40430053b902cc3d97150d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4241,
+    "run_id": "35652199080",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35652199080",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921211933_73f20eff96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4241,
+    "run_id": "35652199080"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-21T21:19:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

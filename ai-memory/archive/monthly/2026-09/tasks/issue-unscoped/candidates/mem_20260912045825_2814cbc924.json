@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:the new ledger-collection block (~line 1236), specifically `if grep -Fqx -- \"${_staged_status_line}\" \"${_staged_support_pre_status}\" 2>/dev/null; then continue; fi` | severity=high | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The pre/post comparison is line-level, not content-level, so a tracked file already dirty before staging can be excluded from the ledger even when staging overwrites it.\n  WHY: On implement runs where an earlier step leaves a tracked support file modified, the overwrite is invisible to the ledger and the commit carries the SCRIPT_REF-installed copy, discarding the branch's version and earlier edit.\n\n- scripts/implement_commit_changes.sh:the `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING` branch (~line 130): `echo \"::warning::...leaving the worktree copy as-is.\"; continue` | severity=high | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: When the ledger lists a path but its base copy is missing, the helper warns and leaves the staged SCRIPT_REF copy in the worktree, allowing it to be committed.\n  WHY: A missing base copy is an unresolvable state, but unlike the conflict path it fails open and can commit main's helper copies onto the divergent branch.\n\n- .github/workflows/implement.yml:`_staged_support_path=\"${_staged_status_line:3}\"` (~line 1243) | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: Porcelain paths containing spaces or special characters are sliced with literal quotes and then silently skipped from the ledger.\n  WHY: A future support file with a space or non-ASCII name would bypass restoration because `[ -f \"${_staged_support_path}\" ]` fails without a diagnostic.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/implement.yml:the new ledger-collection block (~line 1236), specifically `if grep -Fqx -- \"${_staged_status_line}\" \"${_staged_support_pre_status}\" 2>/dev/null; then continue; fi`\n  PROBLEM: The pre/post comparison is line-level, not content-level. If a tracked file is already dirty before the staging step runs and staging then overwrites it, the porcelain line is byte-identical before and after staging, so the file is excluded from the ledger.\n  WHY: On any implement run where a pre-staging step leaves a tracked support file modified, the overwrite is invisible to the ledger and the wrong content is committed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 2\n\n- scripts/implement_commit_changes.sh:the `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING` branch (~line 130): `echo \"::warning::...leaving the worktree copy as-is.\"; continue`\n  PROBLEM: When the ledger lists a path but the base copy under STAGED_SUPPORT_BASE_DIR is missing, the block warns and leaves the staged SCRIPT_REF copy in the worktree, so `git add -u` later stages and commits it.\n  WHY: If the base-dir copy is lost, the run commits main's helper copies onto the divergent branch instead of stopping.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 2\n\n- .github/workflows/implement.yml:`_staged_support_path=\"${_staged_status_line:3}\"` (~line 1243)\n  PROBLEM: `git status --porcelain` C-quotes paths containing spaces or special characters, so the sliced path includes literal quotes and the file is silently skipped from the ledger.\n  WHY: A future support file with a space or non-ASCII name in scripts/, prompts/, or ai-memory/schemas/ would bypass the ledger with no diagnostic.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "1e11579a0d68499b348d19b3c7ee7648bf3534a6b81a7cc34b6d6bf4c8c79611",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34673304282",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34673304282",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260912045825_2814cbc924",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34673304282"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-12T04:58:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

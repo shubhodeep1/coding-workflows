@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:~16939-16941 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test uses `STALL_THRESHOLD_MINUTES=\"08\"`, which does not fail Bash octal arithmetic, so it does not test the leading-zero failure case its name and comment claim to cover.\n  WHY: A regression in leading-zero handling could go unnoticed because the expected sum is the same whether `\"08\"` is interpreted as octal or decimal.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement the pagination logic for `_pr_named_review_dispatch_runs` and the associated redispatch lookback logic correctly.\n  expected_change_site: `scripts/orchestrate_poll_process.sh`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The logic as implemented relies on `date` and `jq` without adequate validation for `STALL_THRESHOLD_MINUTES` and `REVIEW_RUN_MAX_RUNTIME_MINUTES` leading zeros in the bash arithmetic `(( ))` which treats them as octal. While the poller logic now attempts to strip them, the implementation in `orchestrate_poll_process.sh` at lines 1723-1726 and 1750-1753 lacks robust sanitization against potentially non-numeric or malformed environment variable values, which could result in runtime errors if not properly handled by the bash `(( ))` environment or the subsequent date calculation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nRequirement: Implement the pagination logic for `_pr_named_review_dispatch_runs` and the associated redispatch lookback logic correctly.\nExpected change site: `scripts/orchestrate_poll_process.sh`\nEvidence of absence: The logic as implemented relies on `date` and `jq` without adequate validation for `STALL_THRESHOLD_MINUTES` and `REVIEW_RUN_MAX_RUNTIME_MINUTES` leading zeros in the bash arithmetic `(( ))` which treats them as octal. While the poller logic now attempts to strip them, the implementation in `orchestrate_poll_process.sh` at lines 1723-1726 and 1750-1753 lacks robust sanitization against potentially non-numeric or malformed environment variable values, which could result in runtime errors if not properly handled by the bash `(( ))` environment or the subsequent date calculation.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:~16939-16941 | severity=NIT | confidence=4\n  PROBLEM: The test claims to exercise the \"non-octal leading zero\" path but uses STALL_THRESHOLD_MINUTES=\"08\", which is a valid octal literal (08 = 8 in base 8). The comment \"Octal arithmetic fails on '08' ('value too great for base')\" is factually wrong: bash's `$(( ))` only fails on octal digits 8 and 9 (e.g. \"09\" or \"08x\"), not on \"08\" alone. The expected sum 258 is identical whether \"08\" is interpreted as octal (= 8) or decimal (= 8) \u2014 the test passes with or without the `10#` fix and does not exercise the bug class it names.\n  WHY: As written, this test gives no coverage for the actual failure case the AD-10 fix addresses. A value like STALL_THRESHOLD_MINUTES=\"09\" would abort bash arithmetic pre-fix (because \"09\" has an invalid octal digit); \"08\" does not. The fix is correct, but the test's name and comment mislead future readers about what is verified, and a regression in the leading-zero handling could land unnoticed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c9fd99e206e325bfe566e1b2cb67d64c7c9aca7272d1f8e0e7808788ce2e764d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5098,
+    "run_id": "36576974419",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36576974419",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929135647_ad2f90dc48",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5098,
+    "run_id": "36576974419"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T13:56:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

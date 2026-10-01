@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/auto_release_stable.sh:143-146 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The in-flight promotion guard counts queued or running schedule-triggered `promote-main-to-stable.yml` cycle runs even though only `workflow_dispatch` promote runs can fast-forward `stable`.\n  WHY: A daily cycle can therefore make `promote_active_count` nonzero and cause auto-release to skip with `release_in_flight`, delaying stable-branch hotfixes beyond the documented six-hour release window.\n\n- scripts/auto_release_stable.sh:139-140 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The active-count check counts queued or running `test-and-mark-stable.yml` runs on any branch, including `gate_only` runs on `main` that cannot race the `stable` tag.\n  WHY: Daily smoke-gate runs on `main` can make auto-release skip with `release_in_flight` even when `stable` is genuinely ahead of its tag, delaying stable-branch hotfixes beyond the documented six-hour release window.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/auto_release_stable.sh\n  Line or code reference: 144-146\n  severity=high\n  confidence=4\n  PROBLEM: The promote_runs_json in-flight guard fetches all promote-main-to-stable.yml runs and counts every queued or in-progress run with no event-type filter.\n  WHY: A running cycle job satisfies the filter even though it cannot race the stable release, causing a stable-branch hotfix merged near midnight to wait up to 12 hours instead of the documented 6-hour release window.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/auto_release_stable.sh\n  Line or code reference: lines 144-145 (LAST RUN addition); interaction with .github/workflows/promote-main-to-stable.yml line 117 (`cycle: if: github.event_name == 'schedule'`) and line 147 (`promote: if: github.event_name == 'workflow_dispatch'`)\n  severity=high\n  confidence=4\n  PROBLEM: The LAST RUN introduced a `promote_runs_json` active-run check without an event filter.\n  WHY: A queued or running SCHEDULE-triggered `cycle` job satisfies the guard even though the `cycle` job never touches the `stable` branch, causing auto-release to skip and delaying hotfixes beyond the documented six-hour contract.\n\n- scripts/auto_release_stable.sh\n  Line or code reference: lines 139-140 (active_count filter for test-and-mark-stable.yml)\n  severity=high\n  confidence=4\n  PROBLEM: The active-count jq selector counts in-progress `test-and-mark-stable.yml` runs on ANY branch.\n  WHY: Daily `gate_only` smoke runs on `main` do not race the `stable` tag but still cause the 06:00 auto-release tick to exit with `AUTO_RELEASE_SKIPPED reason=release_in_flight`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/auto_release_stable.sh\n  Line or code reference: lines 143-146 (promote_active_count)\n  severity=high\n  confidence=4\n  PROBLEM: The in-flight promotion guard counts every queued/running `promote-main-to-stable.yml` run with no event filter, including schedule-triggered cycle jobs that never touch the `stable` branch.\n  WHY: Every day an active promote cycle forces `AUTO_RELEASE_SKIPPED reason=release_in_flight` at the 00:00 and 06:00 auto-release ticks even when `stable` is strictly ahead of its tag, delaying a stable-branch hotfix beyond the documented six-hour cadence.\n\n- scripts/auto_release_stable.sh\n  Line or code reference: line 140 (active_count on test-and-mark-stable.yml runs)\n  severity=high\n  confidence=4\n  PROBLEM: The active gate-runs check counts in-progress `test-and-mark-stable.yml` runs on any branch.\n  WHY: A `gate_only` run on `main` has no release job and can never race the `stable` tag, yet it blocks the stable release check and causes auto-release to skip.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/auto_release_stable.sh\n  Line or code reference: lines 144-146 (promote_active_count jq filter)\n  severity=high\n  confidence=4\n  PROBLEM: The in-flight promotion guard counts every queued/running `promote-main-to-stable.yml` run regardless of event type, including schedule-triggered cycle jobs.\n  WHY: A running schedule-triggered cycle satisfies the guard and forces `AUTO_RELEASE_SKIPPED reason=release_in_flight` even though only the `workflow_dispatch`-triggered promote job fast-forwards `stable`.\n\n- scripts/auto_release_stable.sh\n  Line or code reference: lines 139-140 (active_count jq filter on test-and-mark-stable.yml runs)\n  severity=high\n  confidence=4\n  PROBLEM: The gate-runs active check counts in-progress `test-and-mark-stable.yml` runs on any branch.\n  WHY: A `gate_only` run on `main` has no release job and cannot race the tag, yet it blocks the stable release check and delays stable-branch hotfixes.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- scripts/auto_release_stable.sh\n  Line or code reference: lines 144-146 (promote_active_count has no event filter)\n  severity=high\n  confidence=5\n  PROBLEM: The last-run in-flight guard counts every queued or running promote-main-to-stable.yml workflow run, including the schedule-triggered cycle job that never fast-forwards `stable`.\n  WHY: A live daily cycle leaves `promote_active_count` greater than 0 and causes auto-release to exit with `AUTO_RELEASE_SKIPPED reason=release_in_flight`, breaking the documented six-hour stable-hotfix contract.\n\n- scripts/auto_release_stable.sh\n  Line or code reference: lines 139-140 (active_count on AUTO_RELEASE_STABLE_WORKFLOW_FILE / test-and-mark-stable.yml)\n  severity=high\n  confidence=4\n  PROBLEM: The gate in-flight check counts every queued or running test-and-mark-stable.yml run on any branch, including promote-cycle `gate_only` runs on `main`.\n  WHY: Those runs cannot tag `stable`, but an overlapping auto-release tick skips with `release_in_flight` even when `stable` is genuinely ahead and no stable-tag writer is running.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "7f2c3f5e7d6623f86ccedd7badc0673cdf36d201dd6851c0bebeb6b563358f69",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4134,
+    "run_id": "35447120946",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35447120946",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919150714_886ba645d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4134,
+    "run_id": "35447120946"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-19T15:07:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

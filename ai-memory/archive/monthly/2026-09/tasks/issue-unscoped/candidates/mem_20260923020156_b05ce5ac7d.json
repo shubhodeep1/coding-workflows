@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The canary file contains bait/corrupted six-line content instead of the exact three-line specification required by Issue #4294.\n  WHY: The smoke test gate validates this canary file, so the current content will cause validation to fail.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention): status: ok / run_id: 35802596362 / updated-by: ai-pipeline\"\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  EVIDENCE: tests/e2e_smoke_canary.txt contains six bait/corruption lines instead of the required three lines; PR diff + last-run diff show bait content.\n\n- requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  expected_change_site: .ai/.workspace_source_manifest.txt\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  EVIDENCE: The PR diff modifies .ai/.workspace_source_manifest.txt in four hunks, approximately 36 lines, outside the allowed file.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  PROBLEM: `tests/e2e_smoke_canary.txt` contains bait/corruption lines instead of the three required lines specified in issue #4294.\n  WHY: The canary must be reverted to the exact three-line content specified by the issue.\n\n- .ai/.workspace_source_manifest.txt | confidence=5\n  PROBLEM: `.ai/.workspace_source_manifest.txt` was modified outside the task's allowlist.\n  WHY: The task constraint says only modify `tests/e2e_smoke_canary.txt`; the manifest changes expand PR scope.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  PROBLEM: The canary file contains bait/corrupted lines instead of the exact three-line specification required by Issue #4294.\n  WHY: The smoke test gate validates this canary file; current corrupted content will cause it to fail validation.\n\n- tests/e2e_smoke_canary.txt | severity=critical | confidence=5\n  PROBLEM: The file content does not match the three lines required: `status: ok`, `run_id: 35802596362`, and `updated-by: ai-pipeline`.\n  WHY: The requirement is exactly those three lines with a trailing newline, but the file contains six lines of bait content.\n\n- .ai/.workspace_source_manifest.txt | severity=high | confidence=4\n  PROBLEM: The PR modifies `.ai/.workspace_source_manifest.txt` even though only the canary file should be changed.\n  WHY: The PR diff modifies `.ai/.workspace_source_manifest.txt` in four hunks, approximately 36 lines, violating the task constraint.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  PROBLEM: bait content appears as six lines instead of the exact three-line specification (`status: ok\\nrun_id: 35802596362\\nupdated-by: ai-pipeline\\n` + trailing newline).\n  WHY: The smoke gate will fail; `.ai/.workspace_source_manifest.txt` was also touched, violating \"only modify canary\".\n\n- tests/e2e_smoke_canary.txt | severity=critical | confidence=5\n  PROBLEM: The required deliverable is exactly those three lines and only that file.\n  WHY: PR diff + last-run diff show bait content and manifest changes.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "da0384a09db95287edab356e0f2a156f60ab17a35e05bbf6e13bce98989fed4a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4299,
+    "run_id": "35803994060",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35803994060",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923020156_b05ce5ac7d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4299,
+    "run_id": "35803994060"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-23T02:01:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

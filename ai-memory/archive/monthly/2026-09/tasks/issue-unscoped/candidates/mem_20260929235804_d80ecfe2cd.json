@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:341-375 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The `check_review_runs` docstring/comment may mislead future contributors into removing the `run[\"id\"] > marker_run_id` filter.\n  WHY: This does not fail at runtime because the filter is present, but removing it could make the superseded check incorrect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_fixer_pending_checks.py:375 | severity=NIT | confidence=2\n  PROBLEM: The docstring/comment in `check_review_runs` could mislead future contributors regarding the necessity of the `id` filter in `newer = [run for run in bound_reviews if run[\"id\"] > marker_run_id]`.\n  WHY: Does not fail at runtime, but creates a maintenance trap where a future contributor might attempt to \"simplify\" the code by removing the `id` filter, leading to an incorrect superseded check.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/claude_fixer_pending_checks.py:341-348 | severity=NIT | confidence=2\n  PROBLEM: docstring describes \"latest completed review run bound to this PR\" but code builds bound_reviews (all candidates) then filters newer by id > marker_run_id; comment risks misleading future removal of filter\n  WHY: does not (filter present); NIT only\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9294e633845a4894b25e68f78908740c41b3d2097be20dccf02e82ba06b436b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5178,
+    "run_id": "36647040260",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36647040260",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929235804_d80ecfe2cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5178,
+    "run_id": "36647040260"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T23:58:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/check_in_status.py:~782-787 in the diff | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: `due` may be referenced before assignment when a claude/* PR has failed check runs, causing `UnboundLocalError` in the hand-back check.\n  WHY: The reviewer says `due` is only assigned inside `if not failed:` but is referenced afterward; no other reviewer reported this defect.\n- workflow-templates/.claude/scripts/check_in_status.py:~782 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_review_stall_verdict` does not handle transient 404/5xx responses from `gh_api(head commit)` on non-quiet paths and falls back to \"open\" instead of retry.\n  WHY: A stale head can be misclassified as review-stalled or open, causing duplicate re-dispatch or a missed fixer.\n- .github/workflows/review_autofix.yml:~1540 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The jq filter for an existing skip notice can miss multi-line markers split by GitHub comment rendering.\n  WHY: The reviewer says this can cause duplicate notices to be posted on the same head after a comment edit; the reported severity was NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml: Lines 1541-1593 (skip notice posting block)\n  PROBLEM: The skip notice posting block is complex, involving multiple `jq` and `gh` calls in a bash string.\n  Suggested minimal fix: Extract this block to a dedicated shell script in `scripts/` to improve readability and testability.\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/check_in_status.py: lines ~782-787 in the diff\n  PROBLEM: `due` is only assigned inside `if not failed:` but referenced unconditionally in `if due is None and not conflicted:` on the next line.\n  WHY IT FAILS AT RUNTIME: when a claude/* PR has failed check runs (the ci-failed path), `failed` is non-empty, the `if not failed:` block is skipped, `due` is never defined, and `if due is None and not conflicted:` raises `UnboundLocalError: local variable 'due' referenced before assignment`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- workflow-templates/.claude/scripts/check_in_status.py: ~782 (review_stall_verdict + _head_has_review_trace)\n  PROBLEM: _review_stall_verdict calls gh_api(head commit) only on non-quiet paths but does not handle transient 404/5xx (commit deleted or rate-limited); falls back to \"open\" instead of retry.\n  WHY IT FAILS AT RUNTIME: stale head can be misclassified as review-stalled or open, causing duplicate re-dispatch or missed fixer.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- .github/workflows/review_autofix.yml: ~1540 (gate_fetch_marker_comments + jq any())\n  PROBLEM: jq filter for existing skip notice can miss multi-line markers split by GitHub comment rendering; test only checks single-line case.\n  WHY IT FAILS AT RUNTIME: duplicate notices posted on the same head after a comment edit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bc92af68f370308db21fcc7e99e1b3096dcc218b22747d5d594e146d51dde735",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5056,
+    "run_id": "36527848016",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36527848016",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929061457_0c8e25d79a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5056,
+    "run_id": "36527848016"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T06:14:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

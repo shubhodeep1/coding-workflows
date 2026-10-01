@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/protected_path_authorization.py:362-363 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_disable_auto_merge` discards the GraphQL mutation response, so a top-level `errors` response can be treated as success while auto-merge remains enabled.\n  WHY: The gate reports `auto_merge=disabled` although auto-merge may still be pending and later merge a refused protected PR; severity disagrees, with google_gemini-3_1-flash-lite and minimax_minimax-m3 rating it MAJOR and the other reviewers rating it NIT.\n- scripts/protected_path_authorization.py:362-363 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: `_disable_auto_merge` does not retry the GraphQL mutation after transient failures such as HTTP 502/503.\n  WHY: A transient failure can leave auto-merge enabled on a refused protected PR, although the gate still blocks the immediate merge.\n- scripts/protected_path_gate.sh:123-133 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Binding every unprotected merge to the checked head with `--match-head-commit` can make a benign push between the gate check and merge require a retry.\n  WHY: The reviewer states that a push that does not add protected paths or change commit status can cause a commit mismatch and add latency and retries.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/protected_path_authorization.py:362-363 and 119-130 | severity=low | confidence=4\n  PROBLEM: `_disable_auto_merge` calls `_gh_json` and discards the return value; `_gh_json` parses GraphQL HTTP 200 error payloads without raising `ReadError`, so `check_pr` reports auto-merge as disabled even when the mutation failed.\n  WHY: The gate still returns 3 and blocks the merge, but auto-merge may remain pending and later land the unauthorized head.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/protected_path_authorization.py:362-363 | severity=high | confidence=4\n  PROBLEM: The GraphQL mutation response for `disablePullRequestAutoMerge` is discarded without checking for errors, and transient failures are not retried.\n  WHY: A GraphQL error or transient network failure can leave auto-merge enabled on an earlier, unprotected head, allowing GitHub to auto-merge the unauthorized protected path.\n- scripts/protected_path_gate.sh:123-133 | severity=low | confidence=4\n  PROBLEM: Binding every unprotected merge to the checked head via `--match-head-commit` can require a retry if a push occurs between the initial gate check and final merge.\n  WHY: Benign pushes that do not add protected paths or change commit status can cause a commit mismatch and require a retry, adding latency.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/protected_path_authorization.py:362-363 | severity=high | confidence=4\n  PROBLEM: `_disable_auto_merge` discards the GraphQL response, so an HTTP 200 payload containing `errors` is treated as success and `check_pr` reports `decision[\"auto_merge\"] = \"disabled\"` without verifying auto-merge was turned off.\n  WHY: Auto-merge can stay enabled and later merge the protected change without the owner's `/authorize-protected-paths <sha>` comment; the gate's immediate merge remains blocked.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/protected_path_authorization.py:362-363 | severity=low | confidence=3\n  PROBLEM: `_disable_auto_merge` discards the GraphQL response without checking for top-level `errors`, so a refused mutation can leave auto-merge enabled.\n  WHY: The decision reports `auto_merge: \"disabled\"` although auto-merge may remain enabled and later merge the PR.\n- scripts/protected_path_authorization.py:362-363 | severity=low | confidence=2\n  PROBLEM: The GraphQL mutation is not retried after transient 502/503 failures.\n  WHY: Auto-merge may remain enabled on a refused protected PR, although the merge is still blocked and retries on a write operation have different semantics.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/protected_path_authorization.py:362-363 | severity=low | confidence=3\n  PROBLEM: `_disable_auto_merge` discards the GraphQL mutation response, so a top-level `errors` response can be treated as success and the `auto_merge` log field can falsely report \"disabled\".\n  WHY: An operator may believe auto-merge was turned off when it remains pending; the merge itself is still blocked, so this is log-accuracy only, not a security bypass.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3dbe35260b78b47302447d6f53ba54605403b613aa11deea60dc0ac886a5d945",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5157,
+    "run_id": "36567891129",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36567891129",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929125242_cca7954a7c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5157,
+    "run_id": "36567891129"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T12:52:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

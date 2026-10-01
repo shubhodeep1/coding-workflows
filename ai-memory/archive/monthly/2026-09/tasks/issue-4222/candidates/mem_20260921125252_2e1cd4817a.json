@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4220` at `137a2dd79c0343eaff936008e5818df0d41e65b4` (matches integration metadata).\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing E2E smoke canary fixture pattern  \nScope-mode justification: This is a complete, one-file fixture update. Broader workflow, documentation, or test changes would violate the declared `files_touched` boundary without improving correctness.\n\n## Automation and wiring\n\n- Modify existing code only; no new script.\n- Existing entry point: `.github/workflows/test-and-mark-stable.yml` via `workflow_dispatch`.\n- No scheduler changes, supervisor, database work, or removal-registry entry required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary_b.txt`\n  - Replace its complete contents with:\n    ```text\n    status: ok\n    decompose-run: 35601057512\n    ```\n  - Retain the repository\u2019s established terminal LF, with no blank third line or trailing spaces.\n\nNo other files should change.\n\n## Functions or modules\n\nNone. This is a plain-text smoke-test fixture update.\n\n## Data structures affected\n\nThe two-line canary payload becomes exactly:\n\n```python\nb\"status: ok\\ndecompose-run: 35601057512\\n\"\n```\n\n## API/interface changes\n\nNo external API or public interface changes. The fixture contract consumed by the existing E2E workflow receives a new decomposition run identifier.\n\n## Decisions\n\n### D1 \u2014 Replace the whole fixture atomically\n\n- **Chosen:** Rewrite the complete file to the required two-line payload.\n- **Alternatives considered:** Edit only the numeric identifier in place.\n- **Why:** Whole-file replacement guarantees ordering and eliminates hidden trailing content or whitespace.\n\n### D2 \u2014 Keep the change fixture-only\n\n- **Chosen:** Change only `tests/e2e_smoke_canary_b.txt`.\n- **Alternatives considered:** Update workflow YAML, tests, documentation, or changelog.\n- **Why:** The workflow already generates this independent canary task and explicitly declares this single-file scope.\n\n## Security considerations\n\n- Trust boundary: the requested run identifier is stored as inert text and is never interpreted as executable input.\n- Authorization: no endpoint, worker, or new privileged surface is introduced.\n- Validation: compare exact bytes rather than using substring matching.\n- Abuse cases: reject extra lines, trailing spaces, altered ordering, or edits outside the declared fixture path.\n\n## Risks and edge cases\n\n- The current first line already matches, but the second line contains the stale value `25567947079`.\n- Avoid accidentally adding a blank third line, CRLF endings, or trailing whitespace.\n- Ensure the independent `tests/e2e_smoke_canary.txt` fixture remains untouched.\n\n## Implementation steps\n\n1. Replace `tests/e2e_smoke_canary_b.txt` with the exact required two-line content.\n2. Confirm the diff changes only the stale run identifier.\n3. Verify no unrelated paths are modified.\n\n## Testing considerations\n\n- Assert exact bytes equal `b\"status: ok\\ndecompose-run: 35601057512\\n\"`.\n- Confirm `splitlines()` produces exactly the two required strings.\n- Run `git diff --check`.\n- Run `git status --short` and verify only `tests/e2e_smoke_canary_b.txt` is modified.\n\n## Pre-execution self-check\n\n- Clarification answer is sufficient.\n- Planning and integration refs match.\n- Required scalar value is provided.\n- Scope is implementation-ready and limited to the declared file.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "cc5f63de04cce21f3fa47ee1946c3ae33319784a4bfe3be8711d23cd0de0d9f2",
+  "lineage": {
+    "issue_number": 4222,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35601594368",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35601594368",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4222"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260921125252_2e1cd4817a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4222,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35601594368"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4222",
+  "timestamps": {
+    "created_at": "2026-09-21T12:52:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

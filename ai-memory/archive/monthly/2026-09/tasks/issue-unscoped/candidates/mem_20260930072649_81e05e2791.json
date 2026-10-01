@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/inline_edit_guard.py:183-190 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The wrapper-option scan stops at a bare `-`, so `env - python3 ...` leaves `-` as the command word and the guard fails to recognize the inline-writing interpreter.\n  WHY: The guard gives no decision and the command reaches the permission flow the hook is intended to bypass; severity ratings disagreed (MAJOR and NIT), so the highest severity is used.\n- .claude/hooks/inline_edit_guard.py:356-364 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The detector does not inspect executable file-writing command substitutions inside quoted tokens, such as `echo \"$(python3 -c ...)\"`.\n  WHY: The segment command is `echo`, so the Python write pattern is not checked and the guard gives no decision.\n- .claude/hooks/inline_edit_guard.py:121-127 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `_PYTHON_WRITE_PATTERNS` omits file-writing operations including `shutil.unpack_archive()` and `shutil.make_archive()`.\n  WHY: A Python command using those operations is not matched by `program_writes()`, so the guard gives no decision.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/hooks/inline_edit_guard.py:183-187 | severity=high | confidence=5\n  PROBLEM: The wrapper option parsing loop in `_command_start` stops at a bare hyphen, leaving `-` as the command word instead of consuming it as an `env` option.\n  WHY: With `env -`, the guard checks `-` rather than the subsequent interpreter executable, failing to recognize inline writes and returning no decision.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/inline_edit_guard.py:183-190 | severity=high | confidence=5\n  PROBLEM: The wrapper-option scan stops at a bare `-`, leaving `-` as the command word in `env - python3 -c \"open('x','w').write('y')\"` instead of detecting the interpreter.\n  WHY: `segment_kind()` does not recognize `-` as an interpreter, so the hook gives no decision and the inline edit reaches the permission flow.\n- .claude/hooks/inline_edit_guard.py:356-364 | severity=high | confidence=4\n  PROBLEM: The detector checks tokenized command segments but does not inspect executable command substitutions inside quoted tokens, such as `echo \"$(python3 -c 'open(\"x\",\"w\").write(\"y\")')\"`.\n  WHY: The segment command is `echo`, so no Python write pattern is checked and the hook gives no decision.\n- .claude/hooks/inline_edit_guard.py:121-127 | severity=high | confidence=4\n  PROBLEM: The `shutil` pattern lists selected mutating functions but omits other file-writing operations, including `shutil.unpack_archive()` and `shutil.make_archive()`.\n  WHY: A Python command using one of those functions writes files, but `program_writes()` returns false because none of its patterns match.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/inline_edit_guard.py:183 | severity=low | confidence=5\n  PROBLEM: The wrapper-option scan stops at a bare `-` token, so `env -` is not consumed as an `env` option and `_command_start` returns the index of `-` as the command word.\n  WHY: `segment_kind` does not recognize `-` as an interpreter, so the guard gives no decision for inline-interpreter writes and the session stops at a permission prompt.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c2cfea0b49ff2d90cbc62790f426e1562ed63f3d8ec427b85f15ca01f85f780e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4877,
+    "run_id": "36679721708",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36679721708",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930072649_81e05e2791",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4877,
+    "run_id": "36679721708"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T07:26:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:line 18690-18691 (and line 18953) | severity=high | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The review-blocked judge path embeds an uncapped PR diff using only a `head -1000` line cap, so minified single-line diffs can exceed the codex input limit.\n  WHY: PRs with large minified-bundle diffs can cause the review-blocked judge prompt to exceed the 1,048,576-character stdin cap and fail before the model runs.\n\n=== END CONSENSUS FINDINGS ===\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh\n  Location: _judge_truncate_pr_diff_file function (lines 206-237)\n  Issue: The function always returns 0 even when both python3 and head -c fail. In that unlikely case, the original file remains unchanged (still holds the 500-line-capped content), and the caller proceeds to embed the untruncated diff, potentially overflowing the byte budget.\n  Suggested minimal fix: Not actionable in practice \u2014 python3 and head -c are universally available in GitHub Actions runners, and the fail-open design is the correct safety posture for a truncation utility.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh\n  Line or code reference: line 18690-18691 (uncapped diff fetch: PR_DIFF=\"$(gh_retry gh api \"repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}\" -H 'Accept: application/vnd.github.diff' ...)\") feeding line 18953 (head -1000 <<< \"${PR_DIFF}\" inside the review-blocked judge prompt assembly that is exec'd through codex)\n  Problem: This PR fixes the wave-judge prompt overflow (byte caps after the 500-line cap, because a single minified-bundle line of 44-66 KB defeats any line cap), but the poller-side review-blocked judge path in the same file embeds a PR diff with only a head -1000 line cap and no byte cap. The incident this PR cites (run 35425771769, project #3928) was caused by exactly this input class \u2014 committed Cloudflare Worker dist refresh PRs whose diffs are a handful of 40-70 KB single lines. One thousand such lines is tens of MB, far over codex's 1,048,576-character turn/start stdin cap.\n  Why it fails at runtime: if any PR carrying large minified-bundle diffs (the same PR shape documented in this PR's own changelog, #4416/#4425) transitions to ai:review-blocked on an orchestrator project, the review-blocked judge prompt assembled at lines 18934-18953 exceeds the codex stdin cap and every judge attempt dies with \"Input exceeds the maximum length of 1048576 characters\" before the model runs \u2014 the identical failure mode this PR eliminates for the wave judge, one code path over. The new _judge_truncate_pr_diff_file helper could be applied to this fetch with a few lines. This is a pre-existing adjacent site, not introduced by this diff, but it is the same defect class in the same file with the fix pattern now available in-tree.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n\n- scripts/orchestrate_poll_process.sh\n  Location: _judge_truncate_pr_diff_file, final else branch (~lines 230-235)\n  Issue: if both the python3 truncation and the head -c fallback fail, the helper removes the temp file and returns 0, leaving the diff file untruncated; the caller then logs \"diff truncated from X to Y bytes\" and embeds the full over-cap diff, silently reintroducing the exact prompt-overflow failure this PR fixes, with a misleading log line.\n  Suggested minimal fix: in the final else branch, write the sentinel into the diff file before returning, e.g. printf '%s' \"(diff unavailable)\" > \"${diff_path}\" \u2014 mirroring the double-failure handling in scripts/review_rb_judge.sh line 1092 \u2014 so the caller embeds a bounded sentinel instead of an untruncated diff.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "232cab0162296a87cebaa3a6dfd8613d66b54a21e549ff4b85490efdfe83518f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35427262797",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35427262797",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919072424_9f2c77a12b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35427262797"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-19T07:24:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

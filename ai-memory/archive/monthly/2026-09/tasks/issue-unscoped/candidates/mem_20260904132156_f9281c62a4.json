@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The predicate regex accepts `ai/<n>` and `ai-<n>` through optional groups in `(ai/(issue-)?|ai-(implement-)?)`.\n  expected_change_site: tests/test_orchestrate_poll_process.py, `test_linked_pr_is_issue_implementation_predicate_contract` cases list\n  confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The test cases include `ai/issue-77` and `ai-implement-77` but not `ai/77` or `ai-77`.\n- requirement: The PR description claims the label swap helper `_reset_implementing_to_awaiting_approval_for_retrigger` exists and is called by both re-trigger arms before posting `/approved`\n  expected_change_site: scripts/orchestrate_poll_process.sh:execute_stall_recovery_action and run_standalone_stall_recovery\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: LAST RUN DIFF shows no creation of `_reset_implementing_to_approval_for_retrigger` function and the two arms still use inline label edits or post `/approved` without swapping\n- requirement: The two claimed Fix 2 tests `test_reset_implementing_to_awaiting_approval_for_retrigger_contract` and `test_stall_recovery_retrigger_implement_arms_swap_label_before_posting_approved` should exist in tests/test_orchestrate_poll_process.py\n  expected_change_site: tests/test_orchestrate_poll_process.py around lines 16828-16902\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: LAST RUN DIFF shows no such tests added; PR DIFF references these tests but they are not present in the working tree\n- requirement: The README should document the label swap on both re-trigger arms as claimed in the PR description\n  expected_change_site: README.md section describing Fix 2 around line 1679-1695\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: README.md documents Fix 1 but contains no Fix 2 description about the label swap before `/approved` posts\n- requirement: The changelog fragment should document the label-swap helper and both arms calling it, not just the close_linked_pr changes\n  expected_change_site: changelog.d/3994-stall-recovery-linked-pr-scope.md\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The changelog describes two tests and close_linked_pr changes but does not mention the label-swap helper or the Fix 2 implementation\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:1682 still says `('ai/issue-<n>', 'ai-implement-<n>', \u2026)` \u2014 missing `ai/<n>` and `ai-<n>`.\n- changelog.d/3994-stall-recovery-linked-pr-scope.md:4, 10 still says `('ai/issue-<n>', 'ai-implement-<n>')` \u2014 missing `ai/<n>` and `ai-<n>`.\n- scripts/orchestrate_poll_process.sh:2947-2950 still says `('ai/issue-<n>', 'ai-implement-<n>', \u2026) \u2014 the same pattern cancel_zombie_runs_for_issue matches` \u2014 missing `ai/<n>`, `ai-<n>`, and falsely claims same pattern parity.\n- The original PR diff contains `_reset_implementing_to_awaiting_approval_for_retrigger` at lines 10449-10483 and tests for it, but these are NOT in the current working tree.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- The last-run-diff fix (leading boundary `(^|[^[:alnum:]_-])` on the close-keyword regex) is correct. It rejects `prefixes #77` and `encloses #77` while still accepting `Closes #77`, `fixes: #77`, and `(fixes #77)`. The regression case pins the behavior.\n- The docstring, changelog, and README branch-pattern documentation findings (deepseek, high severity) are already satisfied by commit e66a096 in this PR. The current `_linked_pr_is_issue_implementation` docstring at line 2948 enumerates `ai/issue-<n>`, `ai/<n>`, `ai-implement-<n>`, `ai-<n>` and states the stricter trailing boundary. The changelog table row and README sentence match.\n- The \"Fix 2 is entirely missing\" finding (minimax, critical) is incorrect. `_reset_implementing_to_awaiting_approval_for_retrigger` is defined at `scripts/orchestrate_poll_process.sh:10449-10483`, called in the managed arm at line 10619, and called in the standalone arm at line 13032. Both tests (`test_reset_implementing_to_awaiting_approval_for_retrigger_contract` and `test_stall_recovery_retrigger_implement_arms_swap_label_before_posting_approved`) are present in the PR diff. The README documents the label swap. The changelog documents it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "84115bff61fd921d65a9fd30dd4f195eb830f650703193a08516cfce9bdbbc6e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3994,
+    "run_id": "33856992372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33856992372",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260904132156_f9281c62a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3994,
+    "run_id": "33856992372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-04T13:21:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

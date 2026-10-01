@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:86 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `CLAUDE_FIXER_ENABLED` row omits `AUTOFIX_SKIP_MAX_DELETIONS` from the small-diff route settings.\n  WHY: The small-diff route requires both addition and deletion bounds, so the row gives operators incomplete information.\n- .github/workflows/review_autofix.yml:774-786, 802-806, 1479-1483 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, z-ai_glm-5_2]\n  PROBLEM: The jq predicate for detecting Claude hand-offs is duplicated across the existing checks and the new suppression block.\n  WHY: This is a maintainability issue rather than a runtime failure, but it increases the risk of logic drift if the marker format evolves.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- README.md:86 | PROBLEM: The `CLAUDE_FIXER_ENABLED` row describes the small-diff route as (`AUTOFIX_SKIP_DOC_ONLY`, `AUTOFIX_SKIP_MAX_ADDITIONS`) but the route requires both `AUTOFIX_SKIP_MAX_ADDITIONS <= n` AND `AUTOFIX_SKIP_MAX_DELETIONS <= n`. The omission of `AUTOFIX_SKIP_MAX_DELETIONS` is inconsistent with every other documentation site (CLAODE.md line 1889, agents.md line 94, changelog.d/4609-... line 6, and the PR description) which consistently name both bounds.\n  WHY: Suggested minimal fix: Change to (`AUTOFIX_SKIP_DOC_ONLY`, `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS`) to match the other docs.\n- .github/workflows/review_autofix.yml:802-806, 1479-1483 | PROBLEM: The jq predicate that matches a pending handoff comment is byte-identical at three call sites (the `claude_fixer_awaiting_session` guard at lines 802-806, the new `CLAUDE_HANDOFF_SKIP_SUPPRESSED` guard at lines 1479-1483, and the converged-verdict dedup at around line 777).\n  WHY: A future format change to the handoff marker would need updating at all three sites. Suggested minimal fix: Extract the predicate into a shared shell function alongside `gate_fetch_marker_comments` so a marker-format change is a single-site edit.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:1466-1487 | severity=low | confidence=4\n  PROBLEM: The jq predicate for detecting Claude hand-offs is duplicated across the new suppression block, the existing `claude_fixer_awaiting_session` check, and the converged check.\n  WHY: This is a maintainability issue rather than a runtime failure, but it increases the risk of logic drift if the marker format evolves.\n- README.md:86 | severity=low | confidence=4\n  PROBLEM: The description for `CLAUDE_FIXER_ENABLED` was updated but the cross-reference to the deterministic skip settings (\"(`AUTOFIX_SKIP_DOC_ONLY`, `AUTOFIX_SKIP_MAX_ADDITIONS`)\") is incomplete.\n  WHY: It misses `AUTOFIX_SKIP_MAX_DELETIONS`, which is also required for the small-diff route to fire, potentially misleading operators.\n- agents.md:94-101 | PROBLEM: The new sentence about `claude/*` PR deterministic skip runs on into the existing sentence about `[claude-intervention]` and `[claude-merge-resolve]` commits, creating a long, hard-to-parse sentence.\n  WHY: Suggested minimal fix: Break the sentence after \"and also runs it).\" and start the next sentence as \"`[claude-intervention]` and `[claude-merge-resolve]` commits end the counted run...\"\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- README.md:86 | severity=low | confidence=4\n  PROBLEM: The row mentions `AUTOFIX_SKIP_DOC_ONLY` and `AUTOFIX_SKIP_MAX_ADDITIONS` but omits `AUTOFIX_SKIP_MAX_DELETIONS`.\n  WHY: Both bounds must be satisfied for the small-diff route to fire. An operator reading this row would have an incomplete understanding of the route.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- README.md:86 | PROBLEM: The row lists `AUTOFIX_SKIP_DOC_ONLY` and `AUTOFIX_SKIP_MAX_ADDITIONS` but omits `AUTOFIX_SKIP_MAX_DELETIONS`.\n  WHY: The small-diff route requires both bounds to be satisfied simultaneously, so the documented var set is incomplete and an operator reading only this row would miss the second bound.\n- agents.md:98-101 | PROBLEM: The added text ends with \"...and also runs it).\" `[claude-intervention]` and\" \u2014 the new sentence and the pre-existing sentence are joined without a sentence break, producing an 8-line run-on that is hard to parse.\n  WHY: Suggested minimal fix: End the new sentence at \"and also runs it).\" and start a fresh sentence: \"`[claude-intervention]` and `[claude-merge-resolve]` commits end the counted run\".\n- .github/workflows/review_autofix.yml:802-806, 1479-1483 | PROBLEM: The jq hand-off matching predicate is duplicated verbatim at two sites (and a more elaborate variant at lines 774-786).\n  WHY: If the `ai:claude-fixer-handoff:v1` marker format changes, all sites must be updated in lock-step; a miss at one site silently weakens the guard. Suggested minimal fix: Extract the predicate into a shared shell function (e.g., `gate_claude_handoff_matches_pr_head`) defined alongside `gate_fetch_marker_comments`, then have both call sites invoke it.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "616a38e25fd2533463cb1fddd4b9cfa33d9c1d1943fde91a5f02b563ba7e05ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36303133543",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36303133543",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927074847_4d5271b95d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36303133543"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T07:48:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

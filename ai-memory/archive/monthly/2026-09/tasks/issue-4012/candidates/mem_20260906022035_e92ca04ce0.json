@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary_b.txt`\n\nScope-mode justification: The acceptance criteria require one literal line replacement in one declared file. No broader implementation improves correctness within scope.\n\nPlanning ref: `621c5ed4de1fbcbcd13f75aa277a14535f2f3d6a`  \nBranch: `orchestrator/project-4010`  \nIntegration branch match: yes\n\n## Automation impact\n\n- Modifies existing data only; no new script or operation.\n- Scheduler/PR-push wiring: not applicable.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Removal registry entry: not required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary_b.txt`\n  - Preserve line 1 as `status: ok`.\n  - Replace line 2 with `decompose-run: 34005835217`.\n  - Keep the file at exactly two lines.\n\n## Functions or modules\n\nNone.\n\n## Data structures affected\n\nA two-line smoke-canary text fixture only.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Apply an exact fixture-only replacement\n\n- **Chosen:** Change only the second line of `tests/e2e_smoke_canary_b.txt`.\n- **Alternatives considered:** Regenerating the fixture or updating related canaries/tests.\n- **Why:** The issue explicitly forbids sibling dependencies, additional lines, and changes outside the declared file.\n\n## Security considerations\n\n- No trust boundary, endpoint, authorization surface, secret, money flow, or external input is introduced.\n- Abuse/error cases are accidental scope expansion, adding extra content, or substituting an unverified run identifier; exact-content and changed-path checks prevent these.\n\n## Risks and edge cases\n\n- Preserve the exact spelling, spacing, and lowercase values.\n- Ensure no third line or unrelated formatting is introduced.\n- Conflict check: the file exists; its current second line is `decompose-run: 25567947079`, which is the intended replacement target.\n- The worktree was clean during planning.\n\n## Testing considerations\n\n- Verify the file contains exactly:\n  1. `status: ok`\n  2. `decompose-run: 34005835217`\n- Verify the line count is exactly two.\n- Verify `git diff --name-only` reports only `tests/e2e_smoke_canary_b.txt`.\n- Run `git diff --check`.\n\n## Pre-execution self-check\n\nThe target exists, the requested value is unambiguous, the branch matches orchestrator metadata, and the plan stays within the declared file scope.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ff68978176fc5da48ab6a64f893cf6263116297c1275c4cb446ad988b32c4b3a",
+  "lineage": {
+    "issue_number": 4012,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34006055259",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34006055259",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4012"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260906022035_e92ca04ce0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4012,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34006055259"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4012",
+  "timestamps": {
+    "created_at": "2026-09-06T02:20:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

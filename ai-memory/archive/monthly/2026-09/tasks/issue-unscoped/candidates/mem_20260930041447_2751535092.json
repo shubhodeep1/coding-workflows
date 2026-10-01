@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_nonblocking.py:802-803 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: If path normalization and trailing-punctuation removal reduce `wanted` to empty, the function returns False silently.\n  WHY: The structured parser rejects empty-file records, so this guard is not hit in practice and does not cause a runtime failure.\n- scripts/review_claude_fixer_nonblocking.py:790-804 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The empty-tail filtering logic in `_paragraph_names_path` is not covered by unit tests.\n  WHY: The `if tail` guard prevents failure in the current implementation, but its safety is implicit and unverified by tests.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The pass-2 cross-pollination header in scripts/review_run_reviewers.sh now tells reviewers to put the consensus_id: line inside the finding's own block.\n  expected_change_site: scripts/review_run_reviewers.sh\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Gemini reports scripts/review_run_reviewers.sh is not in the changed files and the PR diff contains no changes for it; deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, and z-ai_glm-5_2 report that the header change was delivered in Phase 1 (PR #5032).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_claude_fixer_nonblocking.py:802-803 | severity=low | confidence=1\n  PROBLEM: If `_norm_path` and `rstrip` reduce `wanted` to empty, the function returns False silently.\n  WHY: `_norm_path` strips leading `./` via a while loop, and `rstrip(\".;\")` only removes trailing punctuation. A path consisting solely of `./` with punctuation would produce an empty `wanted`. The entry's path comes from the structured parser in `flagger_finding_records()`, which already rejects empty-file records, so this guard is never hit in practice. It does not fail \u2014 the guard is belt-and-suspenders.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_claude_fixer_nonblocking.py:790-804 | severity=low | confidence=4\n  PROBLEM: The empty-tail filtering logic in _paragraph_names_path is not covered by unit tests.\n  WHY: It does not fail in the current implementation because of the `if tail` guard, but the safety is implicit and not verified by tests, which increases risk during future modifications.\n- TASK_GAP\n  Requirement: The pass-2 cross-pollination header in scripts/review_run_reviewers.sh now tells reviewers to put the consensus_id: line inside the finding's own block.\n  Expected change site: scripts/review_run_reviewers.sh\n  Evidence of absence: scripts/review_run_reviewers.sh is not in the list of changed files, and the PR diff does not contain any changes for it, despite this being a requirement of the task intent and the changelog fragment included in this PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "788d7aa2ccaaaede3d1213c5971913848e3577251288945fb8407938f2764b2a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5428,
+    "run_id": "36666778846",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36666778846",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930041447_2751535092",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5428,
+    "run_id": "36666778846"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T04:14:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

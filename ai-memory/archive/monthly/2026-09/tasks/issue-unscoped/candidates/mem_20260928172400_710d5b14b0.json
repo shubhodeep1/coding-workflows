@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.claude/commands/implement-plan-claude.md:218-220`; `workflow-templates/.claude/commands/implement-plan-claude.md:218-220` | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The checker prompt introduction's blanket prohibition conflicts with the step 5 instruction to archive a newly created session when `create_trigger` fails.\n  WHY: Following the prohibition literally would skip that cleanup and leave an orphaned session.\n- `CLAUDE.md:1794-1798` | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The \u00a726.B step 3 instruction prompt restatement of \u00a726.C step 5 rules is incomplete.\n  WHY: The checker relies on this restatement and could violate session-targeting rules, mishandle a delivered hand-back, or trigger duplicate hand-backs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Project log header should identify the PR under review; every downstream reader that reads \u201cFinal PR\u201d must resolve to the PR actually carrying this work.\n  expected_change_site: `docs/implement-plan/issue-4787-checker-renames-only-itself.md:6`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The header identifies #4797, while the log body and PR description identify #4828 as the phase 1 PR carrying this work.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- `.claude/commands/implement-plan-claude.md` and `workflow-templates/.claude/commands/implement-plan-claude.md`; lines 218-220 in the diffs | severity=critical | confidence=4\n  PROBLEM: The checker prompt introduction contains a blanket prohibition that contradicts the pre-existing step 5 instruction to archive a newly created session when `create_trigger` fails.\n  WHY: Following the blanket prohibition literally, the checker would skip the step 5 cleanup when `create_trigger` fails after `create_session` succeeds, leaving orphaned session resources in the account.\n- `CLAUDE.md:1794-1798` | severity=high | confidence=3\n  PROBLEM: The instruction prompt restatement of \u00a726.C step 5 rules remains incomplete according to reviewer consensus.\n  WHY: A new Sonnet checker session, which starts with `/effort low` and no other context, relies solely on this restated prompt. Without the full rule set, the checker might violate session-targeting rules (e.g., attempt to archive itself before the fixer handles it, misinterpret a delivered hand-back as gone, or trigger duplicate hand-backs).\n- Requirement: Project log header should identify the PR under review; every downstream reader that reads \u201cFinal PR\u201d must resolve to the PR actually carrying this work.\n  Expected change site: `docs/implement-plan/issue-4787-checker-renames-only-itself.md:6`\n  Evidence of absence: The header identifies #4797 (the project's draft final PR), while the log body and PR description consistently identify #4828 as the phase 1 PR actually carrying this work. This is misleading for downstream tools/readers.\n  SEVERITY: high\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b7e775d12d31ffc86a86acc9cfeb6cb9b415f48d7d9ba940b599608f1bb89cc3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4828,
+    "run_id": "36449405855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36449405855",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928172400_710d5b14b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4828,
+    "run_id": "36449405855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T17:24:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

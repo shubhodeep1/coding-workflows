@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1729-1730, 1773-1776 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `integration_value` returns `\"\"` for an empty-backtick Integration branch value, which the main loop accepts as a match and returns before checking a valid Target branch.\n  WHY: For the two bodies at BODIES lines 50-51, the helper returns `\"\"` while `extract_integration_branch` returns `\"real/branch\"`, causing the parity test to fail and callers to treat the issue as having no integration branch.\n- scripts/gh_helpers.sh:1770-1772 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The comment incorrectly claims `extract_integration_branch` returns `\"\"` for empty or whitespace-only Integration branch values.\n  WHY: `extract_integration_branch` uses `re.search(body)` with `re.MULTILINE`; when the Integration branch line has an empty value, the regex continues to subsequent lines and can return a valid Target branch value instead.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh:1729-1730 (integration_value) and 1773-1776 (main loop) | severity=high | confidence=5\n  PROBLEM: integration_value returns \"\" (not None) for empty-backtick values on Integration branch lines, e.g. rest = \" \\`\" after label stripping. The main loop at 1773 checks `if value is not None`, so \"\" is accepted as a match and the parser exits before checking Target branch labels.\n  WHY: For issue bodies like `\"Integration branch: \\`\\nTarget branch: \\`real/branch\\`\\n\"` (BODIES line 50) and `\"Integration branch:   \\nTarget branch: \\`real/branch\\`\\n\"` (BODIES line 51), the helper returns \"\" (no branch) while `extract_integration_branch` returns \"real/branch\". The parity test `test_shell_parser_matches_python_parser` compares `_shell_parse(body)` against `extract_integration_branch(body)` and would fail for both entries. The callers (`close_merged_issues_sweep` and `issue_pr_status.yml`) would treat such issues as having no integration branch, disqualifying them from non-default-branch merge closure when they should qualify.\n- scripts/gh_helpers.sh:1770-1772 (comment) | severity=low | confidence=5\n  PROBLEM: The comment claims \"extract_integration_branch returns it as \"\"\" for empty/whitespace-only Integration branch values, but `extract_integration_branch` uses `re.search(body)` with `re.MULTILINE`.\n  WHY: When the Integration branch line has an empty value, the regex does not match that line (group requires 1+ chars), so `re.search` continues to subsequent lines. For bodies where a valid Target branch follows, `extract_integration_branch` returns that Target branch value, not \"\".\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "77f45184d126edb6cb346eefa7a0b3c575920472f442ac5f3924f8526e1082f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5005,
+    "run_id": "36529647927",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36529647927",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929071529_2cd3a089a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5005,
+    "run_id": "36529647927"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T07:15:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4109,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4109\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4112\",\"pr_number\":4112,\"branch\":\"ai/issue-4109\",\"run_id\":\"35056983064\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35056983064\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"README.md\",\"changelog.d/4109-bind-auto-merge-head.md\",\"scripts/review_enable_auto_merge.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "7bb9bde326ef39115eb0a315a04b5433d7a05efca19eb36626385eb079b5a1e3",
+  "lineage": {
+    "issue_number": 4109,
+    "parent_ids": [],
+    "pr_number": 4112,
+    "run_id": "35056983064",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35056983064",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4112"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260916045935_27ce85b3d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4109,
+    "level": "run",
+    "pr_number": 4112,
+    "run_id": "35056983064"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4109: https://github.com/shubhodeep1/coding-workflows/pull/4112",
+  "timestamps": {
+    "created_at": "2026-09-16T04:59:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

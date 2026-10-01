@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:17401-17430 (in the final file content) | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `jq` filter uses the camelCase field `.displayTitle` to query workflow runs, but the GitHub API Actions runs JSON object uses the snake_case `display_title` field.\n  WHY: The `jq` filter `(.displayTitle // \"\")` will consistently result in an empty string because the field does not exist in the API response. This causes the lookup for PR-named dispatch runs to fail, leaving the poller unable to verify active runs by their PR-named titles. As a result, the active-run dedupe guard may miss live runs and proceed to duplicate-dispatch review workflows unnecessarily.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add PR run-name to review_autofix.yml\" (from plan, AD-10)\n  expected_change_site: .github/workflows/review_autofix.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff modifies `workflow-templates/ai-review.yml` to include a `run-name`, but `review_autofix.yml` remains unchanged and does not contain the `run-name` field.\n- requirement: Naming dispatched runs \"Internal: AI Review & Autofix [pr:<N>]\" for `internal-review.yml` (as stated in the PR description)\n  expected_change_site: .github/workflows/internal-review.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not modify `internal-review.yml` to add the `run-name` field as described in the PR description, leading to a discrepancy between the intended dispatch naming and the actual workflow configuration.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh: `_pr_named_review_dispatch_runs` function, lines 17401-17430 (in the final file content) | confidence=4\n  PROBLEM: The `jq` filter uses the camelCase field `.displayTitle` to query workflow runs, but the GitHub API Actions runs JSON object uses the snake_case `display_title` field.\n  WHY: The `jq` filter `(.displayTitle // \"\")` will consistently result in an empty string because the field does not exist in the API response. This causes the lookup for PR-named dispatch runs to fail, leaving the poller unable to verify active runs by their PR-named titles. As a result, the active-run dedupe guard may miss live runs and proceed to duplicate-dispatch review workflows unnecessarily.\n- TASK_GAP\n  Requirement: \"Add PR run-name to review_autofix.yml\" (from plan, AD-10)\n  Expected change site: .github/workflows/review_autofix.yml\n  Evidence of absence: The PR diff modifies `workflow-templates/ai-review.yml` to include a `run-name`, but `review_autofix.yml` remains unchanged and does not contain the `run-name` field.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: Naming dispatched runs \"Internal: AI Review & Autofix [pr:<N>]\" for `internal-review.yml` (as stated in the PR description)\n  Expected change site: .github/workflows/internal-review.yml\n  Evidence of absence: The PR diff does not modify `internal-review.yml` to add the `run-name` field as described in the PR description, leading to a discrepancy between the intended dispatch naming and the actual workflow configuration.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5594b906d40ced61f0f24401b6c2713918b56a1a4d1972d8c9b96c897f1f0341",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4725,
+    "run_id": "36387432113",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36387432113",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928070047_4167f58a32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4725,
+    "run_id": "36387432113"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T07:00:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

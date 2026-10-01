@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan\n\n**Planning ref:** `ai/issue-4338` at `982860f8c7cae31272da64c544a559df0320291f`; this matches the issue\u2019s integration-branch metadata. The `/answer` was auto-posted because no clarification questions were needed.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/untrusted_process_sandbox.sh`  \nScope-mode justification: Fix the repository linkage at the existing sandbox boundary, without changing guard behavior or adding a competing mechanism. A shortcut that forwards Git variables to every role would weaken isolation. Under \u00a76 Core Priorities, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and wiring\n\n- **Change type:** Extend an existing script and its contract tests; no new script or supervisor.\n- **Entry point:** The existing `.github/workflows/internal-review.yml` `pull_request` trigger invokes `.github/workflows/review_autofix.yml`, which already calls the sandbox. No workflow wiring change is needed.\n- **Database gate and future-removal registry:** Not applicable.\n\n## Files likely to change\n\n- `scripts/untrusted_process_sandbox.sh` \u2014 validate and forward repository linkage only for `workspace-guard`.\n- `tests/test_agent_process_isolation.py` \u2014 cover a materialized workspace without `.git` and preserve model-role isolation assertions.\n\n## Functions or modules to implement\n\nExtend the sandbox\u2019s role-specific environment construction. For `workspace-guard`, accept a **complete, validated** `GIT_DIR`/`GIT_WORK_TREE` pair: the canonical work tree must equal `--workspace`, and the Git directory must exist and resolve as that work tree\u2019s Git metadata. Include the pair in the guard\u2019s isolated environment and keep that metadata under its existing read-only mount protection. Do not forward either variable to model or `validator` roles. Incomplete or mismatched linkage must fail closed.\n\n## Data structures affected\n\nOnly the sandbox\u2019s in-memory environment array and existing protected-Git-path collection. No persisted schema, label, or log-prefix changes.\n\n## API/interface changes\n\nNo new CLI flags or external API calls. The existing `workspace-guard` role gains validated use of two existing environment variables; other roles retain their current environment contract.\n\n## Decisions\n\n### D1 \u2014 Restore linkage at the sandbox boundary\n- **Chosen:** Forward validated Git linkage exclusively to `workspace-guard`.\n- **Alternatives considered:** Change `post_agent_workspace_guard.py` to bypass ignore checks; copy `.git` into the materialized workspace; forward Git variables to all sandbox roles.\n- **Why:** The guard\u2019s `git check-ignore` needs repository context, while the alternatives weaken fail-closed classification or expose metadata to model processes.\n\n## Security considerations\n\nThe host-to-sandbox environment is the trust boundary. Reject linkage that points at a different work tree or invalid Git metadata; otherwise a guard command could read an unintended repository. Keep Git metadata read-only for the guard, inaccessible to model roles, and retain the guard\u2019s network denial and existing blocked/quarantine result on ignored paths. This adds no endpoint or authorization surface; the established workflow permissions remain unchanged. Do not log Git metadata contents or credentials.\n\n## Risks and edge cases\n\n- A `.git`-less workspace must classify both ordinary and ignored paths using its linked repository; missing or malformed linkage must not silently classify paths as safe.\n- The test-mode sandbox does not exercise systemd mounts, so retain a contract assertion for the production read-only metadata property.\n- **Evidence distinction:** `editor_empty_noop` is the reported downstream failure reason; the guard\u2019s Git ignore-classification failure is the code-level condition this plan addresses. No conflict was found between the cited paths and the checked-out code.\n- Other worktree files are already modified outside this task; leave them untouched.\n\n## Testing considerations\n\nExtend `tests/test_agent_process_isolation.py` with a temporary Git repository and a separate materialized workspace containing no `.git`. Run sandboxed guard snapshot and reconciliation with valid linkage; verify an ordinary new file is retained and a Git-ignored, non-hidden new file is rejected and quarantined. Test missing or mismatched linkage and assert that model and `validator` roles do **not** receive the variables even when the host supplies them. Replace the existing blanket \u201cvariable names absent from sandbox source\u201d assertion with role-scoped assertions. Run `bash -n` on the edited script and the focused pytest module; production systemd behavior remains subject to CI/runtime verification.\n\n## Pre-execution self-check\n\nThe required files, existing invocation path, failure mechanism, and test pattern are identifiable on the matching planning ref. No new dependency, scheduler entry, external contract, or unresolved scalar input is required.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c251697c1557559fce3a1feebdf1b61476340abffdc30e8670d49a211105b3f5",
+  "lineage": {
+    "issue_number": 4409,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36033459832",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36033459832",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4409"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924172507_f4d7462889",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4409,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36033459832"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4409",
+  "timestamps": {
+    "created_at": "2026-09-24T17:25:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

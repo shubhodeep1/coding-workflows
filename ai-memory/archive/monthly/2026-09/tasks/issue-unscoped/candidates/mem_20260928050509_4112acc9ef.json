@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:1716-1884 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The three new log prefixes appear in the prose list but are missing from the machine-readable `LOG_PREFIX.name=` registry.\n  WHY: The reviewers disagree on severity (MAJOR and NIT); using the higher severity, this breaks the established mirror contract and leaves the prefixes absent from tooling that reads the registry.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Both prefixes listed in `agents.md` 'Stable log prefixes (contractual)'\"\n  expected_change_site: agents.md LOG_PREFIX.name= structured enumeration\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR diff adds the three new prefixes to the prose bullet list at lines 1690-1692 but the `LOG_PREFIX.name=` block (lines 1716-1884) is unchanged \u2014 none of `LOG_PREFIX.name=CI_CANCELLED_RERUN`, `LOG_PREFIX.name=CI_CANCELLED_RERUN_END`, or `LOG_PREFIX.name=AUTOFIX_SWEEP_PR_SNAPSHOT_WRITE_FAILED` is present.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:1690-1692 | severity=MAJOR | confidence=4\n  PROBLEM: The three new log prefixes introduced by this PR were added to the prose bullet list but not to the structured `LOG_PREFIX.name=` enumeration.\n  WHY: The structured enumeration is the contractual, machine-readable list, so tooling and future contract tests will not see the new prefixes.\n- TASK_GAP\n  Requirement: \"Both prefixes listed in `agents.md` 'Stable log prefixes (contractual)'\" (plan line 25, step 5 of Implementation Steps at line 76)\n  Expected change site: agents.md LOG_PREFIX.name= structured enumeration (between current line 1884 `LOG_PREFIX.name=SECURITY_AUDIT_TARGET` and the closing `---` separator at line 1886)\n  Evidence of absence: PR diff adds the three new prefixes to the prose bullet list at lines 1690-1692 but the `LOG_PREFIX.name=` block (lines 1716-1884) is unchanged \u2014 none of `LOG_PREFIX.name=CI_CANCELLED_RERUN`, `LOG_PREFIX.name=CI_CANCELLED_RERUN_END`, or `LOG_PREFIX.name=AUTOFIX_SWEEP_PR_SNAPSHOT_WRITE_FAILED` is present. The plan's \"Stable log prefixes (contractual)\" section conventionally carries both forms (verified by `test_orchestrate_poll_workflow_contract.py:130-142` which asserts `f\"- \\`{prefix}\\`\"` AND `f\"LOG_PREFIX.name={prefix}\"` for every prefix it registers).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- agents.md:1716+ | severity=NIT | confidence=5\n  PROBLEM: The three new log prefixes in the prose bullet list are missing from the machine-readable `LOG_PREFIX.name=` registry.\n  WHY: The registry and prose list are established as a mirror, but the three new prefixes break that convention.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "844747c8227049080de902bd6d008d7374c6c397a83b0b101ba0b22258119f34",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36379062798",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36379062798",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928050509_4112acc9ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36379062798"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T05:05:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

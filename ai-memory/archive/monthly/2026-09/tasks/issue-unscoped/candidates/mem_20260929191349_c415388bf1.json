@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1273-1286 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The aggregate status job `lint` does not explicitly verify that every required job exists in the `needs` JSON object.\n  WHY: If a required job is dropped or renamed without updating the aggregate `lint` needs, filtering the `needs` JSON for unsuccessful results might silently skip the missing job.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update tests that pin job structure or timeouts (...), plus `docs/INVENTORY.md` if it lists CI steps\".\n  expected_change_site: docs/INVENTORY.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description explicitly requires updating `docs/INVENTORY.md` if it lists CI steps. `docs/INVENTORY.md` is not present in the PR changed files list (pr_changed_files.txt), and CI job structure has been significantly changed, meaning any existing inventory of CI steps is now stale.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1273-1286 | confidence=3\n  PROBLEM: The aggregate status job `lint` does not explicitly check if all needed jobs exist in the `needs` JSON object.\n  WHY: If a required job in the `needs` array is dropped or renamed in the workflow file but not updated in the aggregate `lint` needs, the `lint` job would still execute, read the `needs` JSON, and if the dropped job doesn't appear as a key, the `ci_unsuccessful_jobs` filtering `select(.value.result != \"success\")` might silently skip it if the code doesn't ensure every job declared in `needs` is actually present in the `needs` JSON output.\n- Requirement: \"Update tests that pin job structure or timeouts (...), plus `docs/INVENTORY.md` if it lists CI steps\".\n  Expected change site: docs/INVENTORY.md\n  Evidence of absence: The PR description explicitly requires updating `docs/INVENTORY.md` if it lists CI steps. `docs/INVENTORY.md` is not present in the PR changed files list (pr_changed_files.txt), and CI job structure has been significantly changed, meaning any existing inventory of CI steps is now stale.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "be2862c79a284666cf045259b913f9c132128f8a26a05668cf9c368b8cb1ad4e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4874,
+    "run_id": "36609651529",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36609651529",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929191349_c415388bf1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4874,
+    "run_id": "36609651529"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T19:13:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

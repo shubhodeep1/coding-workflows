@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_plan_claude_command.py:321, 323 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The constants `INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER` and `INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER` are reported as unused.\n  WHY: The reports describe these constants as dead code; other reviewers dispute this, reporting that the sunset guard references both constants.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: AD-12 states the sunset guard should \"check the twin, CLAUDE.md, agents.md, and master-session.md only\".\n  expected_change_site: `tests/test_implement_plan_claude_command.py`, function `test_interim_twin_first_default_is_removed_when_the_4785_sync_lands`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: Gemini reports the test asserts removal from the twin command, CLAUDE.md, and agents.md but lacks an assertion for `docs/operations/master-session.md`; Minimax reports no assert for `INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER` against `MASTER_SESSION_MD`. Other reviewers report that line 361 does assert this marker is absent from `MASTER_SESSION_MD`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_plan_claude_command.py:321, 323 | confidence=5\n  PROBLEM: The constants INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER (line 321) and INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER (line 323) are now unused following the removal of test_operator_docs_name_the_interim_twin_first_default.\n  WHY: Not a runtime failure, but constitutes dead code that should be cleaned up to prevent confusion.\n- TASK_GAP\n  Requirement: The sunset guard (test_interim_twin_first_default_is_removed_when_the_4785_sync_lands) must verify that the interim twin-first default is removed from all target files (twin, CLAUDE.md, agents.md, master-session.md).\n  Expected change site: tests/test_implement_plan_claude_command.py, test_interim_twin_first_default_is_removed_when_the_4785_sync_lands\n  Evidence of absence: The test function asserts removal from the twin command, CLAUDE.md, and agents.md, but lacks an assertion verifying the removal of the interim text from docs/operations/master-session.md. Although the text was removed from master-session.md, no test ensures it stays gone, and the previously used constant INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER is left unused in the test file without verification.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: AD-12 (recorded in `docs/implement-plan/issue-4785-twin-first-claude-sync.md` and `docs/plans/issue-4785-twin-first-claude-sync-plan.md`) states the sunset guard should \"check the twin, CLAUDE.md, agents.md, and master-session.md only\"; the PR description frames this PR as applying AD-12.\n  Expected change site: `tests/test_implement_plan_claude_command.py`, function `test_interim_twin_first_default_is_removed_when_the_4785_sync_lands` (the sunset guard).\n  Evidence of absence: The sunset guard currently asserts `INTERIM_TWIN_FIRST_MARKER` and `INTERIM_TWIN_FIRST_SUNSET_MARKER` absent from `TEMPLATE_COMMAND`, `INTERIM_TWIN_FIRST_CLAUDE_MD_MARKER` and `INTERIM_TWIN_FIRST_CLAUDE_MD_SUNSET_MARKER` absent from `CLAUDE_MD`, and `INTERIM_TWIN_FIRST_AGENTS_MD_MARKER` absent from `AGENTS_MD`, but has no assert for `INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER` against `MASTER_SESSION_MD`. The PR diff for `docs/operations/master-session.md` removes the matching \"Since #4948, stages in this repo record \u2026\" sentence, yet no test pins its continued absence. The constant `INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER` is defined at line ~321 and is unreferenced anywhere in the test module. A future change that re-introduces that sentence in `docs/operations/master-session.md` (e.g. a copy-paste from another project, or a hand edit while the new twin-first rule is being documented elsewhere) would not be caught by the sunset guard.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- tests/test_implement_plan_claude_command.py: lines ~321-323 (the constant block), and the test body of `test_interim_twin_first_default_is_removed_when_the_4785_sync_lands`.\n  PROBLEM: Two defined constants are no longer referenced by any active test. `INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER` was only used by the now-removed `test_operator_docs_name_the_interim_twin_first_default`; the only remaining test that touched it was deleted in this PR. `INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER` likewise lost its sole call site when `test_operator_docs_name_the_interim_twin_first_default` was deleted, and the sunset guard never referenced it (it previously asserted presence, not absence, in the now-deleted test).\n  WHY: The dead `INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER` is exactly the marker the sunset guard is missing per the TASK_GAP above \u2014 keeping it as dead code hides the missing assert from a casual reader. The dead `INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER` similarly signals a missing guard: if a future agent re-introduces the closer sentence in `agents.md`, no test will catch it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7753b8d078c3411afc13c4c41028f6d0cfbaf51a04b86b0f61d3c0dfac4092bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5122,
+    "run_id": "36561486339",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36561486339",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929114259_8e3b30dbec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5122,
+    "run_id": "36561486339"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T11:42:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:1384-1386 | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: An explicit `--limit` can bypass the `QUEUE_PICKUP_LIMIT_MAX` clamp enforced by `resolve_pickup_limit`.\n  WHY: A supplied limit such as 100 may exceed the stated limit of 30; qwen_qwen3_7-plus disagrees that this is a defect, noting the behavior is consistent.\n- scripts/claude_issue_route.py:855 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: Subtracting the earliest waiting timestamp from an aware `moment` could raise a `TypeError` if `_parse_timestamp` returns a timezone-naive datetime.\n  WHY: Such a `TypeError` would abort `queue-pending` and leave the issue queue undrained; z-ai_glm-5_2 and qwen_qwen3_7-plus reject this concern because `_parse_timestamp` normalizes results to timezone-aware datetimes.\n- scripts/claude_issue_route.py: argparse `p_pending.add_argument(\"--limit\", type=int, default=None, ...)` plus `max(int(limit), 0)` inside `queue_pending` | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A negative explicit `--limit` is accepted, clamped to zero, and reported as a successful run with no pending items.\n  WHY: This silently starts nothing for that wake; z-ai_glm-5_2 disagrees that this is a defect, describing the zero clamp and output as intentional.\n- scripts/claude_issue_route.py: `_cmd_queue_pending` lines ~1382-1415 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: An explicit `--now \"\"` is treated as if `--now` was not supplied.\n  WHY: The command uses the current time instead of producing an invalid-input error; z-ai_glm-5_2 and qwen_qwen3_7-plus disagree that this is a defect, describing the empty value as the default-time fallback.\n- .claude/commands/claude-issue-pickup.md: step 1 `\u2014 wake.` clause | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The catch-up wake records the catch-up trigger state, but step 4 does not consult that note on the catch-up path.\n  WHY: The note is unused for catch-up wakes, although the reviewer reports no runtime bug and says the hourly branch needs it.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_route.py: _cmd_queue_pending lines 1384-1386\n  PROBLEM: Explicit --limit argument bypasses the QUEUE_PICKUP_LIMIT_MAX clamp enforced by resolve_pickup_limit.\n  WHY: When a user provides --limit (e.g. 100), resolve_pickup_limit is bypassed and the value is not clamped to 30, potentially exceeding API budget constraints.\n  ISSUE_CONFIDENCE: 4\n\n- scripts/claude_issue_route.py: _oldest_waiting_minutes line 855\n  PROBLEM: Subtraction between a potentially timezone-naive datetime (from min(waiting_since)) and an aware datetime (moment) will raise a TypeError in Python 3.\n  WHY: Depending on the format of created_at strings parsed by _parse_timestamp, this can result in a TypeError at runtime, causing the CLI command to crash (exit 1) and leaving the issue queue undrained.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_route.py: argparse `p_pending.add_argument(\"--limit\", type=int, default=None, ...)` plus `max(int(limit), 0)` inside `queue_pending`\n  PROBLEM: An explicit `--limit` of `-5` flows into `queue_pending`, is clamped to `0`, and the output reports `limit=0`. The operator gets a successful exit with `pending=[]` rather than a usage error, and the help text does not document the clamp.\n  WHY: A negative `--limit` silently turns into \"start nothing this wake\" with no diagnostic. The `argparse` `type=int` is too permissive for a count, and the `None`-default + env-var resolution makes the help text the only documentation of acceptable bounds.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n\n- scripts/claude_issue_route.py: `_cmd_queue_pending` lines ~1382-1415, `if args.now:` guard\n  PROBLEM: An explicit `--now \"\"` is silently treated as \"not supplied\" because the empty string is falsy, so the operator gets a current-time-relative `oldest_waiting_minutes` instead of the deterministic reference they intended (or the explicit \"invalid --now\" error that `--now yesterday` produces).\n  WHY: The same command flag has three semantic outcomes (unset \u2192 current time, empty \u2192 current time silently, invalid \u2192 exit 2). Tests cover `--now yesterday` (non-empty invalid) but not the empty-string case.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n\n- scripts/claude_issue_route.py: `_oldest_waiting_minutes` line ~855, `moment - min(waiting_since)`\n  PROBLEM: If `_parse_timestamp` ever returns a timezone-naive `datetime` for an accepted `created_at` format, `moment - min(waiting_since)` raises `TypeError: can't subtract offset-naive and offset-aware datetimes`. The existing tests only exercise the `Z`-suffix form (which yields aware datetimes), and `datetime.now(timezone.utc)` is always aware, so a future format (e.g. a producer emitting `+00:00` or a naive ISO string) would abort the whole `queue-pending` call with exit 1 and leave the queue undrained.\n  WHY: One malformed or non-Z `created_at` from the GitHub API kills every wake until the next hourly retry. The `_waiting` helper and the new `--now` argument both lean on the same assumption.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n\n- .claude/commands/claude-issue-pickup.md: step 1 `\u2014 wake.` clause, \"Note whether an enabled `Claude issue pickup: catch-up` trigger is bound to your own session (step 4 needs it)\"\n  PROBLEM: On a `\u2014 wake. \u2014 catch-up` wake, step 1 records the catch-up trigger state but step 4 never consults it (`catch_up_due` is `False` for `catch-up` wakes per `catch_up_due`), so the note is dead work on that path. The text presents the note as consumed by step 4 unconditionally.\n  WHY: No bug, but the catch-up wake performs a no-op note and the doc overstates its necessity on the catch-up branch. The hourly branch legitimately needs it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "44ee222f6b0f77f5c761d314abb988c0ca4f9487d01cee719e45826f546859c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5030,
+    "run_id": "36566868651",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36566868651",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929124410_80ac5948f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5030,
+    "run_id": "36566868651"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T12:44:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Each attempt now gives the model a fresh copy of the captured index through `GIT_INDEX_FILE`, and the script still stages and commits the accepted resolution itself.\"\n  expected_change_site: `scripts/review_conflict_resolve.sh` \u2014 the `stage_resolver_touched_path_or_fail` function definition at lines 44-63.\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: The round 1 fix added a comment at the post-loop staging block (lines 2943-2945) explaining that staging runs on the real index on purpose and `GIT_INDEX_FILE` must not be set there; The function definition at lines 44-63 carries no such documentation; `test_private_model_index_wiring` asserts loop-level wiring but does not pin that the function definition itself stays on the real index; The agents.md paragraph at lines 2157-2164 says \"The script stages the accepted resolution itself\" without naming this function or documenting the constraint at the function definition.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Each attempt now gives the model a fresh copy of the captured index through `GIT_INDEX_FILE`, and the script still stages and commits the accepted resolution itself.\" (PR description; restated in `changelog.d/5627-resolver-private-model-index.md:4` and `agents.md:2157-2164`.)\n  Expected change site: `scripts/review_conflict_resolve.sh` \u2014 the `stage_resolver_touched_path_or_fail` function definition at lines 44-63.\n  Evidence of absence: The round 1 fix added a three-line comment at the post-loop staging block (lines 2943-2945) explaining that staging runs on the real index on purpose and `GIT_INDEX_FILE` must not be set there. The function definition itself at lines 44-63 was not touched in either the original PR or the round 1 autofix commit. The function calls `git add` (line 49) and `git rm` (line 54) on whatever index the calling process has, lives before the source-repo gating at line 2304, and before `RESOLVER_MODEL_INDEX_FILE` is initialized at line 540 \u2014 a reader who finds the function by itself has no signal that it must run on the real index. `test_private_model_index_wiring` asserts loop-level wiring but does not pin the function definition's index contract. A future editor who refactors this function or wraps its call in a subshell that exports `GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}` would silently reintroduce the original #5627 failure mode: the resolution would stage into the private copy, the real index would keep its unmerged entries, and the merge commit would carry nothing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Each attempt now gives the model a fresh copy of the captured index through `GIT_INDEX_FILE`, and the script still stages and commits the accepted resolution itself.\" (PR description; restated in `changelog.d/5627-resolver-private-model-index.md:4` and `agents.md:2161`.)\n  Expected change site: `scripts/review_conflict_resolve.sh` \u2014 the `stage_resolver_touched_path_or_fail` function definition at lines 44-63.\n  Evidence of absence: The round 1 fix added a comment at the post-loop staging block (lines 2943-2945) explaining that staging runs on the real index on purpose and `GIT_INDEX_FILE` must not be set there. However, the function definition itself (lines 44-63) carries no such documentation. The function runs `git add` (line 49) and `git rm` (line 54) on whatever index the calling process has, is defined before the source-repo gating at line 2304 and before `RESOLVER_MODEL_INDEX_FILE` is defined at line 540, and is only called from one site (line 2952) that already has the comment. A future editor who finds this function by itself has no signal that it must run on the real index. If someone wraps a call to this function in a subshell that exports `GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}`, the resolution would stage into the private copy, the real index would keep its unmerged entries, and the merge commit would carry nothing. The test `test_private_model_index_wiring` asserts loop-level wiring but does not pin that the function definition itself stays on the real index. The agents.md paragraph at lines 2157-2164 says \"The script stages the accepted resolution itself\" without naming this function or documenting the constraint at the function definition.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: \"the script still stages and commits the accepted resolution itself\" (PR description; restated in changelog.d/5627-resolver-private-model-index.md:4 and agents.md:2157-2164).\n  Expected change site: `scripts/review_conflict_resolve.sh` \u2014 the `stage_resolver_touched_path_or_fail` function definition at lines 44-63.\n  Evidence of absence: The round 1 fix added a comment at the post-loop call site (lines 2943-2945) documenting that staging runs on the real index on purpose and `GIT_INDEX_FILE` must not be set there. The function definition at lines 44-63 \u2014 which is the mechanism by which staging happens and is called from exactly one site (line 2952) \u2014 carries no analogous documentation. A future editor who finds the function by itself has no signal that it must run on the real index; wrapping its call in `GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}` would silently reintroduce the #5627 failure mode. The function is generic by design (it predates this PR and lives before `RESOLVER_MODEL_INDEX_FILE` is defined at line 540), and its sole call site is already documented, so this is a documentation gap, not a runtime defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "32fbe6db3c6553cd85115b5b2984b84cfad37bd84649d07fa6bb6cf03e5dcbd4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5648,
+    "run_id": "36722979535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36722979535",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930144205_e78ca469e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5648,
+    "run_id": "36722979535"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T14:42:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

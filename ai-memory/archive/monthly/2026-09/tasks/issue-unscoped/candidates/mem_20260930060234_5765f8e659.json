@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:4893-4895 | severity=high | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The pass-2 reviewer prompt still tells the model \"The raw per-reviewer outputs remain on disk at: ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt \u2014 Read a raw file only if a ledger entry is ambiguous or lacks detail.\"\n  WHY: The cross-pollination summary is inlined verbatim into the pass-2 prompt (review_run_reviewers.sh:5038 `assemble_reviewer_prompt ... ${CROSS_POLLINATION_FILE}`), and a pass-2 reviewer that tries to read a file can get auto-rejected and reproduce the empty-stdout failure mode.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_run_reviewers.sh | lines 4893-4895 | severity=MAJOR | confidence=4\n  PROBLEM: The pass-2 reviewer prompt still tells the model \"The raw per-reviewer outputs remain on disk at: ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt \u2014 Read a raw file only if a ledger entry is ambiguous or lacks detail.\"\n  WHY IT FAILS AT RUNTIME: The cross-pollination summary is inlined verbatim into the pass-2 prompt (review_run_reviewers.sh:5038 `assemble_reviewer_prompt ... ${CROSS_POLLINATION_FILE}`), and a pass-2 reviewer that finds a ledger entry ambiguous will try to `Read` the pass1 file, get auto-rejected, and can end the session with no text.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "99a74b7b61b171e522ec2fc613789c29a3847f371061646733e02f3ba7605fa7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5467,
+    "run_id": "36674187596",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36674187596",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930060234_5765f8e659",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5467,
+    "run_id": "36674187596"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T06:02:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

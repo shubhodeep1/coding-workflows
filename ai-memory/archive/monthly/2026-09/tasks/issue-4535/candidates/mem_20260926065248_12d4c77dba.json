@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"E2E Orchestrate Smoke 36224773465\",\"issues\":[{\"id\":\"issue-1\",\"title\":\"Update first E2E smoke canary\",\"priority\":1},{\"id\":\"issue-2\",\"title\":\"Update second E2E smoke canary\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "4c91592daba8de461a1f77418d13cff70e2c2a3897335b51cfa36609573fa9c4",
+  "lineage": {
+    "issue_number": 4535,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36224860239",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36224860239",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260926065248_12d4c77dba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4535,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36224860239"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'E2E Orchestrate Smoke 36224773465' into 2 issues (tracking #4535)",
+  "timestamps": {
+    "created_at": "2026-09-26T06:52:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

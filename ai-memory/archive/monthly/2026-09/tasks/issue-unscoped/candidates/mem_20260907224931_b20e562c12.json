@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12129-12135 and 12272-12278 | severity=nit | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: Both batched GraphQL helpers fetch only the first 50 labels per linked PR, so `ai:merge-queued` can be omitted from cached JSON when a PR has more than 50 labels.\n  WHY: The managed stall-recovery path can treat a held PR as not merge-queued and dispatch stall recovery; the risk is narrow because PRs with more than 50 labels are uncommon.\n- scripts/orchestrate_poll_process.sh:12352-12369 | severity=nit | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The three-condition shell guard in `_linked_pr_is_merge_queued` uses a fragile chained `&& ... || return 1` construct.\n  WHY: It is correct today but a future edit introducing an always-failing intermediate test could silently disable the merge-train skip for every caller.\n- scripts/orchestrate_poll_process.sh:recover_stalled_issue 14123-14131; standalone stall loop 13107-13116; _linked_pr_is_merge_queued 12357-12369 | severity=major | confidence=4\n  flagged_by: [x-ai_grok-4_6]\n  PROBLEM: The `ai:done` merge-train skip treats any linked PR carrying `ai:merge-queued` as intentionally waiting without checking whether the PR is already merged.\n  WHY: GitHub retains labels after merge, so a merged queued PR can bypass `_reconcile_merged_pr_issue`, leaving the issue in `ai:done` and preventing wave reconciliation.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:12132 and 12272 | severity=NIT | confidence=3\n  PROBLEM: The GraphQL queries fetch at most 50 labels per linked PR, so `_linked_pr_is_merge_queued` can return false when `ai:merge-queued` is label 51 or beyond.\n  WHY: The REST fallback only activates for an empty or null GraphQL result, not for a valid result with truncated labels.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:12129-12135 (inside _fetch_candidate_issue_details_graphql) and 12272-12278 (inside _fetch_linked_pr_status_graphql) | severity=NIT | confidence=3\n  PROBLEM: Both batched GraphQL helpers fetch only the first 50 labels per linked PR.\n  WHY: A label-truncated managed stall-recovery cache entry can cause `_linked_pr_is_merge_queued` to return false and dispatch stall recovery against a held PR.\n- scripts/orchestrate_poll_process.sh:12352-12369 (the `_linked_pr_is_merge_queued` helper body) | severity=NIT | confidence=2\n  PROBLEM: The three-condition guard `[ -n \"${linked_json}\" ] && [ \"${linked_json}\" != \"null\" ] && [ \"${linked_json}\" != \"{}\" ] || return 1` is a known shell idiom trap.\n  WHY: It does not fail today, but a future edit introducing an always-failing intermediate test would silently disable the merge-train skip in every caller.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- scripts/orchestrate_poll_process.sh\nLine or code reference: recover_stalled_issue 14123-14131; standalone stall loop 13107-13116; _linked_pr_is_merge_queued 12357-12369\nProblem: The new ai:done merge-train skip runs before _check_merged_pr_guard and treats any linked PR that still carries ai:merge-queued as an intentional wait. GitHub keeps PR labels after merge. _linked_pr_is_merge_queued only inspects labels; it does not require state OPEN or merged != true. A queued PR that lands (human Merge, leftover auto-merge) therefore never reaches _reconcile_merged_pr_issue.\nWhy it fails at runtime: The issue stays in ai:done. close_merged_issues_sweep only closes ai:merged / ai:ready-to-merge, and orchestrator-managed children are skipped by issue_pr_status.yml, so the poller's merged-PR stall guard is the healing path. That path is now unreachable, stall_recovery_count does not move, and the wave never reconciles to merged.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "fad07fa08aca9f2889ece9540ecd713c1416d466a2b06d9c116533e5f757a3e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4035,
+    "run_id": "34153553863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34153553863",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260907224931_b20e562c12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4035,
+    "run_id": "34153553863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-07T22:49:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:1378-1379 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The blocks-path filter excludes skip-warning notices with the prefix `\"merged-PR guard skipped: \"`, so they are omitted when another target blocks.\n  WHY: For a multi-target push with one blocked target and another that produces a skip warning, the operator sees only the block reason and loses the skip diagnostic.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:529-542 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Bulk push modes `--all` and `--mirror` are treated as ordinary options, so without an explicit refspec the parser checks only the current branch.\n  WHY: `git push --all origin` pushes every local branch, and `--mirror` writes refs beyond the checked-out branch; a stale local branch with merged-PR history can therefore be pushed without being examined.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:534-542 | severity=low | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `--tags` is treated as an ordinary option, so a tag-only push without an explicit refspec is judged against the current branch.\n  WHY: `git push --tags origin` pushes tags, not the checked-out branch, so the guard can block or prompt for an operation that does not write to that branch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py:1378-1379 | severity=high | confidence=4\n  PROBLEM: The blocks-path filter `notice.startswith(\"merged-PR guard: \")` silently excludes skip-warning notices that use the prefix `\"merged-PR guard skipped: \"`. The twin at `workflow-templates/.claude/hooks/pr_merge_status_guard.py:1378-1381` already has the fix (`blocks + notices`), and the test `test_block_keeps_skip_warnings_for_other_targets` verifies the corrected behavior; the root copy awaits the `[claude-twin-sync]` commit which is documented in the progress log as pending.\n  WHY: When a multi-target command like `git push origin HEAD:feature/merged HEAD:feature/other` has one target block and another produce a skip warning, an operator inspecting the block message would see only the block reason and lose the diagnostic for the skip-warned target. Every other path (asks with notices, notices-only) correctly includes all notice types.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:529-542 | severity=high | confidence=5\n  PROBLEM: Bulk push modes `--all` and `--mirror` are treated as ordinary options, and with no explicit refspec the parser checks only the current branch.\n  WHY: `git push --all origin` pushes every local branch. When the current branch is the default branch, `_judge_guard_target` skips the check, so a stale local branch with merged-PR history can be pushed without being examined. `--mirror` similarly writes refs beyond the checked-out branch.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:534-542 | severity=low | confidence=5\n  PROBLEM: `--tags` is treated as an ordinary option, so a tag-only push with no explicit refspec is judged against the current branch.\n  WHY: `git push --tags origin` pushes tags, not the checked-out branch. If that branch has merged-PR history, the guard blocks or prompts for a tag-only operation that does not write to that branch. The test case for `git push --tags origin` currently pins this behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a940bc6bd6ff2b94cfd03d13c9bb1ae5d4806071d05a79b40bef4fb5f14a3106",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5173,
+    "run_id": "36681248638",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36681248638",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930073412_40b5b500f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5173,
+    "run_id": "36681248638"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T07:34:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

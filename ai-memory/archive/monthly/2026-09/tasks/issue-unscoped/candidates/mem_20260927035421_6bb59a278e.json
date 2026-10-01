@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/implement-plan/issue-4550-readme-pickup-restart-command.md:20-31 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The progress log identifies issue #4575 as a merged PR.\n  WHY: Readers following the reference land on the issue rather than the conformance-fix PR, whose number is different.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- docs/implement-plan/issue-4550-readme-pickup-restart-command.md:31 | severity=NIT | confidence=4\n  PROBLEM: The progress log labels issue #4575 as a merged PR.\n  WHY: GitHub issues and PRs share a number sequence, but #4575 is the issue tracking this work, not the PR itself, which has a different number. This confuses readers attempting to navigate to the conformance fix PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/implement-plan/issue-4550-readme-pickup-restart-command.md | severity=NIT | confidence=3\n  PROBLEM: The log uses \"PR #4575\" but #4575 is the issue number for this very conformance fix (the linked issue body is titled \"Issue #4575: \u2026\"). Issues and PRs share one number sequence per repo, so no PR has number #4575; the conformance-fix PR has a different number. Phase 1 correctly cites \"PR #4562\" because that one is a real PR \u2014 the conformance-fix line follows the same \"PR #N\" shape with the wrong number.\n  WHY: A reader following the reference lands on the conformance-fix issue page instead of the PR that implemented the fix, so the log's \"Merged PRs\" list misreports what was actually merged. This is a factual accuracy issue in the project progress log; the rest of the run evidence (run ids 36288353113, 36288707267, session ids, merge SHAs) is unaffected.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/implement-plan/issue-4550-readme-pickup-restart-command.md | severity=NIT | confidence=3\n  PROBLEM: The progress log labels #4575 as a PR (\"fix PR #4575 merged\", \"Merged PRs: ... conformance fix #4575\"), but the linked issue header identifies #4575 as an issue (\"Issue #4575: Name the Claude issue pickup restart command under README Failure modes \u2014 conformance fix 1: rewrap to paragraph width\"). GitHub issues and PRs share one number sequence per repo, so #4575 is an issue, not a PR. The actual PR that closed #4575 has a different number.\n  WHY: A reader clicking #4575 to navigate to the conformance fix PR will land on the conformance fix issue instead. The log conflates the issue number with the PR number.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- docs/implement-plan/issue-4550-readme-pickup-restart-command.md:20 | severity=NIT | confidence=4\n  PROBLEM: \"fix PR #4575\" (and \"conformance fix #4575\") but #4575 is the issue, not PR.\n  WHY: Links land on issue.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "38cefe6ac4783d32b9fdd6f1a2f2610ab678169d9387c2e06db5b8faf3f33845",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4603,
+    "run_id": "36292036318",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36292036318",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927035421_6bb59a278e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4603,
+    "run_id": "36292036318"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T03:54:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

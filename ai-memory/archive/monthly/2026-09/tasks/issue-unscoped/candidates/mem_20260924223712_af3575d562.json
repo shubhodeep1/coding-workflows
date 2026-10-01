@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The repository requires a changelog fragment for observable behavior changes, including fixing a workflow failure.\n  expected_change_site: changelog.d/4407-workspace-guard-external-git.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The file .ai/.workspace_source_manifest.txt includes a reference to changelog.d/4407-workspace-guard-external-git.md, but this file is missing from the PR diff, The PR diff at .ai/.workspace_source_manifest.txt adds a sorted line `changelog.d/4407-workspace-guard-external-git.md` (line 230), but neither the PR diff nor the LAST RUN DIFF creates that file. The PR's last commit (71b945bbab6231b2cb1b18882789a9877b292a3a, \"AI implementation for issue #4411\") only touches .ai/.workspace_source_manifest.txt, scripts/check_resolver_diff.sh, and tests/test_agent_process_isolation.py; no fragment file is staged, and the manifest update inserts a dangling reference.\n- requirement: CLAUDE.md \u00a720 requires a changelog fragment for PRs that introduce new observable failure modes.\n  expected_change_site: changelog.d/4411-*.md (new fragment file)\n  confidence=[3]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The PR diff adds no changelog fragment for issue #4411's changes. The manifest update at .ai/.workspace_source_manifest.txt adds changelog.d/4407-workspace-guard-external-git.md (confirmed to exist on the branch from the base branch ai/issue-4407), but that fragment documents a different change. No fragment documents the resolver manifest copying or the new RUNNER_TEMP validation gate.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nRequirement: Repository \u00a720 requires a changelog fragment for any PR that changes observable behavior (in this case, fixing a workflow failure).\nExpected change site: changelog.d/4407-workspace-guard-external-git.md\nEvidence of absence: The file .ai/.workspace_source_manifest.txt includes a reference to changelog.d/4407-workspace-guard-external-git.md, but this file is missing from the PR diff.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: CHANGELOG fragment for the behavior change (per CLAUDE.md \u00a720 / agents.md \"changelog.d/\" guidance). The repository requires one fragment per PR for behavior changes; the fix introduces new behavior (manifest copy to RUNNER_TEMP, new RUNNER_TEMP canonical-path validation, new fail-closed `exit 1` paths) that operators and consumer repos would notice.\nExpected change site: changelog.d/4407-workspace-guard-external-git.md (or a correctly-numbered fragment, e.g. changelog.d/4411-resolver-isolated-validator-manifests.md)\nEvidence of absence: The PR diff at .ai/.workspace_source_manifest.txt adds a sorted line `changelog.d/4407-workspace-guard-external-git.md` (line 230), but neither the PR diff nor the LAST RUN DIFF creates that file. The PR's last commit (71b945bbab6231b2cb1b18882789a9877b292a3a, \"AI implementation for issue #4411\") only touches .ai/.workspace_source_manifest.txt, scripts/check_resolver_diff.sh, and tests/test_agent_process_isolation.py; no fragment file is staged, and the manifest update inserts a dangling reference. The new entry also uses issue number 4407 (the source PR #4408's base branch `ai/issue-4407` per the linked issue body), not 4411 (the linked issue) or 4413 (the PR number from the check-runs context `PR_NUMBER: 4413`), which is a copy-paste error from a related issue rather than a fragment for this PR. With no fragment file, scripts/assemble_changelog.py has nothing to fold at release time, and the manifest-line bookkeeping alone cannot satisfy the \u00a720 \"one fragment per PR\" contract.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\nRequirement: CLAUDE.md \u00a720 requires a changelog fragment for PRs that introduce new observable failure modes. The check_resolver_diff.sh change introduces a new failure mode: when POST_AGENT_VALIDATION_SANDBOX is set, RUNNER_TEMP must be a canonical path outside /tmp and /var/tmp, or the script exits with a new error message (\"canonical RUNNER_TEMP outside private tmp is required for isolated validation\"). This is a behavior change an operator would notice if RUNNER_TEMP is misconfigured.\nExpected change site: changelog.d/4411-*.md (new fragment file)\nEvidence of absence: The PR diff adds no changelog fragment for issue #4411's changes. The manifest update at .ai/.workspace_source_manifest.txt adds changelog.d/4407-workspace-guard-external-git.md (confirmed to exist on the branch from the base branch ai/issue-4407), but that fragment documents a different change. No fragment documents the resolver manifest copying or the new RUNNER_TEMP validation gate.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "30a11977ec5694350e366a5eb6727db6e206c47da5d8b04ddc557db0157e5b75",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4413,
+    "run_id": "36063391601",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36063391601",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924223712_af3575d562",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4413,
+    "run_id": "36063391601"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T22:37:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

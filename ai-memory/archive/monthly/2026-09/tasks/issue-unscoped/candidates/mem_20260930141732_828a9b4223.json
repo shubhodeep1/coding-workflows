@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update documentation describing the issue-start archive rule to match the new behavior: an issue-start session is archived only when its issue is closed; a later stage session does not count.\n  expected_change_site: docs/operations/master-session.md Q61 (line 30)\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: docs/operations/master-session.md:30 still reads \"issue-start sessions superseded by a later stage or whose issue is closed\"; docs/operations/master-session.md Q61 still describes the old issue-start archival rule; Line 30 still says issue-start sessions are archived when \u201csuperseded by a later stage or whose issue is closed.\u201d; `docs/operations/master-session.md:30` still reads \"issue-start sessions superseded by a later stage or whose issue is closed\"; `docs/operations/master-session.md:30` still reads \"issue-start sessions superseded by a later stage or whose issue is closed\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: Every operator-facing description of the old rule should be updated to match the change: an issue-start session is archived only when its issue is closed; a later stage session does not count. (Paraphrased from PR DESCRIPTION: \"CLAUDE.md \u00a726.I, README.md, agents.md, and the unreleased changelog.d/4887-archive-finished-sessions.md row now describe the new rule.\")\n  Expected change site: docs/operations/master-session.md Q61 (line 30)\n  Evidence of absence: The file at docs/operations/master-session.md:30 still reads \"issue-start sessions superseded by a later stage or whose issue is closed\" \u2014 the first clause (\"superseded by a later stage\") is the exact rule this PR removed. CLAUDE.md \u00a726.I, README.md, agents.md, and the changelog fragment were all updated to \"its issue is closed\" (a later stage does not count), but Q61 still carries the old text. The plan (docs/plans/issue-5664-archived-stage-disables-recovery-plan.md) does not list this file in its Files & Modules section, so it was not part of the planned scope; the operator-runbook description in agents.md frames it as an optional reference (\"read it only when needed\"). An operator reading the runbook and watching the janitor will see behavior different from what the runbook describes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  File: docs/operations/master-session.md\n  Line or code reference: line 30 (Q61 row in \"Standing operator decisions\" table)\n  Problem: Q61 still describes the old issue-start archival rule that the PR explicitly removes. The other operator-facing surfaces listed in the PR description (CLAUDE.md \u00a726.I, README.md, agents.md, and the changelog fragment) were updated to \"its issue is closed (a later stage session does not count, #5664)\"; Q61 was not.\n  Why it fails at runtime: the runbook still tells the operator to archive \"issue-start sessions superseded by a later stage or whose issue is closed\" until #4887 lands, but #4887 has already merged (PR #4937 merged 2026-09-30) and now applies the narrower rule. An operator following Q61 will see different janitor behavior than the runbook promises. The PR description does not enumerate master-session.md, but its stated intent (\"operator-facing description of the old rule ... now describe the new rule\") includes this row, and the diff to scripts/claude_session_janitor.py removes exactly the behaviour Q61 still prescribes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: Update documentation describing the issue-start archive rule to match the new behavior: archive only when the issue is closed, not because a later stage exists.\n  Expected change site: docs/operations/master-session.md, Q61.\n  Evidence of absence: Line 30 still says issue-start sessions are archived when \u201csuperseded by a later stage or whose issue is closed.\u201d The PR updates other descriptions of this rule but leaves this operator-facing instruction unchanged.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: PR DESCRIPTION states \"CLAUDE.md \u00a726.I, `README.md` (Claude issue implementer item 5), `agents.md` (Check-in Loop paragraph, Stale session sweep), and the unreleased `changelog.d/4887-archive-finished-sessions.md` row now describe the new rule\" \u2014 every operator-facing description of the old rule should be updated to match: an issue-start session is archived only when its issue is closed; a later stage session does not count.\n  Expected change site: `docs/operations/master-session.md` Q61 (line 30)\n  Evidence of absence: `docs/operations/master-session.md:30` still reads \"issue-start sessions superseded by a later stage or whose issue is closed\" \u2014 the first half is the rule this PR explicitly removed. README.md, CLAUDE.md \u00a726.I, agents.md, and the changelog fragment were all updated to \"its issue is closed\" (a later stage session does not count), but Q61 was not. An operator reading the runbook and watching the janitor will see different behavior than the runbook promises.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: An issue-start session is archived only when its issue is closed; a later stage session does not count (#5664). The PR description lists the operator-facing docs it updates (CLAUDE.md \u00a726.I, README.md, agents.md, changelog fragment).\n  Expected change site: docs/operations/master-session.md Q61 row (line 30)\n  Evidence of absence: docs/operations/master-session.md:30 still reads \"issue-start sessions superseded by a later stage or whose issue is closed\" \u2014 the \"superseded by a later stage\" clause is the rule this PR removed. The file is not in the PR's declared file list, so the omission is a scope-bounded doc-drift gap rather than a missed deliverable in the plan's Files & Modules; the operator runbook still promises the old behavior the janitor no longer performs.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "767ab582d9ecd0b710d959845b051b021b74eabab014fea0f1864daa0c60bbbb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5694,
+    "run_id": "36723434475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36723434475",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930141732_828a9b4223",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5694,
+    "run_id": "36723434475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T14:17:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

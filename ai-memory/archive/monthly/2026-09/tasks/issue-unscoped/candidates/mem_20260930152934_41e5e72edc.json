@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:517-555 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_migrate_legacy_counts` can raise `TypeError` when a legacy `filed-state.json` contains a signature value that is not a non-negative integer.\n  WHY: This crashes `file_patterns` instead of treating the malformed state as empty, contrary to the documented contract.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/permission_prompts.py | severity=NIT | confidence=3\n  PROBLEM: When a legacy `filed-state.json` exists but contains a value that is not a non-negative int (e.g., a string, float, list, or `null`), `_migrate_legacy_counts` reads `uncounted = legacy_counts[sig]` and then evaluates `if uncounted <= 0:`, raising `TypeError`.\n  WHY: Any such malformed legacy state crashes the whole `file_patterns` call instead of being treated as empty, contrary to the documented contract; existing tests do not cover this case.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f36dc422baf5dcc904513b6eee31a1fb0c7fd499fa92af7012097ad1ede22177",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5028,
+    "run_id": "36732233451",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36732233451",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930152934_41e5e72edc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5028,
+    "run_id": "36732233451"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T15:29:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

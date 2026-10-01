@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml: lines 3333-3338; scripts/implement_commit_changes.sh: lines 166, 179-184 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: `cmp -s` compares only file bytes, not mode bits, so mode-only editor changes to staged support files are classified as untouched and silently discarded.\n  WHY: The staging ledger records content or mode differences and `cp -p` preserves the baseline mode, but preflight resets and commit-helper restore logic use byte-only comparisons, hiding the mode change from `files_touched` enforcement and restoring HEAD's mode.\n- scripts/implement_handle_guard_block.sh: lines 13-53 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The staged-support `SSB_REASON` branch applies `ai:needs-human` with bare `2>/dev/null || true` and never performs the follow-up `gh issue view` verification read used by the sibling rejection branches.\n  WHY: If the label write fails, the issue retains its pipeline labels, the `STALL_SKIP reason=human_gated_latch` exclusion does not engage, and repeated failing implement runs and CRITICAL alerts can occur without reporting that the latch state is unverified.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/implement_commit_changes.sh: lines 166, 179-184 (and the matching preflight at .github/workflows/implement.yml lines 3333-3338, touched by LAST RUN) | severity=MAJOR | confidence=4\n  PROBLEM: The \"untouched staging copy\" check uses `cmp -s`, which compares file bytes only and ignores mode.\n  WHY: A mode-only editor change to a staged support file is classified as untouched, and both the preflight projection and the commit helper discard the editor's mode change.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/implement_commit_changes.sh: lines 166 and 179 (the `cmp -s -- \"${staged_support_path}\" \"${staged_support_base}`\" \"untouched\" decisions), with the mode-normalizing follow-through at lines 180 (`git restore --source=HEAD --worktree`) and 200-201; the same byte-only comparison exists in the preflight projection at .github/workflows/implement.yml lines 3333-3337. | severity=MAJOR | confidence=4\n  PROBLEM: `cmp -s` compares only file bytes, not the mode.\n  WHY: A mode-only editor change leaves content byte-identical to the baseline, so the commit helper discards the mode change and the preflight projection hides it from the `files_touched` scope guard.\n- scripts/implement_handle_guard_block.sh: lines 13-53 (the new staged-support `SSB_REASON` branch), compared with the scope branch's latch verification at lines 99-113 and the destructive branch's at lines 233-241. | severity=NIT | confidence=3\n  PROBLEM: The staged-support branch applies `ai:needs-human` with bare `2>/dev/null || true` and never performs the follow-up `gh issue view` verification read that both sibling rejection branches carry.\n  WHY: If the label write fails, the issue keeps its pipeline labels and the poller's `STALL_SKIP reason=human_gated_latch` exclusion never engages, allowing repeated failing implement runs and repeated CRITICAL alerts without telling the operator that the latch is unverified.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/implement.yml (preflight) and scripts/implement_commit_changes.sh (commit helper): implement.yml line 3336 (`cmp -s -- \"${preflight_staged_support_path}\" \"${preflight_staged_support_base}\"`); implement_commit_changes.sh line 166 and line 180 (`cmp -s -- \"${staged_support_path}\" \"${staged_support_base}\"`) | severity=MAJOR | confidence=4\n  PROBLEM: `cmp -s` compares only file bytes, not mode bits.\n  WHY: A mode-only editor change is classified as untouched, so preflight resets the index entry to HEAD and the commit helper restores HEAD's content and mode, silently discarding the editor's mode change.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- .github/workflows/implement.yml: preflight projection at lines 3333-3338 (cmp -s then git reset); matching restore in scripts/implement_commit_changes.sh lines 179-183 | severity=MAJOR | confidence=4\n  PROBLEM: Untouched vs editor-changed is decided with cmp -s, which compares bytes only.\n  WHY: A mode-only editor change still matches the baseline, so preflight resets the temp index to HEAD and the commit helper runs git restore --source=HEAD --worktree, discarding the mode change and hiding it from files_touched.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "5dcd37f6d36af5245df8bd17239448544bef437422b1c5fcdb15813e12cd2ec7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4081,
+    "run_id": "34687502869",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34687502869",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260912121933_12c7206aa4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4081,
+    "run_id": "34687502869"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-12T12:19:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

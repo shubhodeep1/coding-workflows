@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/3965-security-pass-fix-cycle-2.md:line 1 (`### Security`) | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The fragment omits the required `<!-- changelog: security -->` first-line marker and instead uses an in-body `### Security` heading.\n  WHY: `scripts/assemble_changelog.py::parse_fragment` resolves a fragment with no marker to `DEFAULT_CATEGORY = \"Added\"`, causing the security entries and literal heading to be inserted under the wrong CHANGELOG.md subsection at the next release.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Changelog fragment must use the required `<!-- changelog: security -->` marker on its first line so its security entries are assembled under the Security category rather than the default Added section\n  expected_change_site: changelog.d/3965-security-pass-fix-cycle-2.md line 1\n  confidence=5\n  flagged_by: [minimax_minimax-m3, mistralai_mistral-small-2603, qwen_qwen3_7-plus]\n  EVIDENCE: The fragment's first line is `### Security`, not the required marker; `scripts/assemble_changelog.py` falls back to default category `Added` when the marker is missing; `parse_fragment` matches only the `<!-- changelog: ... -->` pattern and includes the `### Security` heading verbatim in the body\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- requirement: Per CLAUDE.md \u00a720 (CHANGELOG Entries), every changelog fragment's first line must be a `<!-- changelog: <category> -->` marker so `scripts/assemble_changelog.py` classifies the entry under the correct section. Valid categories are `added`, `changed`, `deprecated`, `removed`, `fixed`, `security`; missing or malformed markers default the entry to `added`.\n  expected_change_site: changelog.d/3965-security-pass-fix-cycle-2.md line 1\n  severity=MAJOR\n  confidence=5\n  EVIDENCE: The fragment's first line is `### Security` (a Markdown heading), not the required marker. Lines 1-4 read:\n  ```\n  ### Security\n  - Poller model agents now run read-only without GitHub, Telegram, Git, or state-auth credentials; trusted shell actuators validate decisions before redispatching existing automation, normalize exhausted or merged-PR fix actions to bounded terminal paths, and retry transient conflict-judge failures within the existing lifetime cap.\n  - Orchestrator state signatures now use a dedicated rotation-capable keyring bound to immutable producer IDs, with legacy PAT signatures retained only for migration.\n  - Deterministic contract-list union now validates YAML node parents and all unaffected values, and targeted file context now enforces one strict rendered-output budget with bounded paths.\n  ```\n  Because the marker is missing, the assembler will fall back to default category `added` and insert the `### Security` heading verbatim into the wrong subsection of `CHANGELOG.md`. The PR's intent is clearly a Security entry (per its filename, the linked issue is a `[security-pass]` task, and the body describes security-relevant changes).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- requirement: changelog fragment must use the required `<!-- changelog: security -->` marker so its security entries are assembled under the Security category\n  expected_change_site: changelog.d/3965-security-pass-fix-cycle-2.md line 1\n  severity=MAJOR\n  confidence=5\n  EVIDENCE: The fragment starts with `### Security`; `scripts/assemble_changelog.py` falls back to default category `Added` when the marker is missing\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- changelog.d/3965-security-pass-fix-cycle-2.md:line 1 (`### Security`) | severity=MAJOR | confidence=5\n  PROBLEM: The fragment omits the required `<!-- changelog: security -->` first-line marker and instead uses an in-body `### Security` heading.\n  WHY: `scripts/assemble_changelog.py::parse_fragment` (lines 150\u2013158) resolves a fragment with no marker to `DEFAULT_CATEGORY = \"Added\"` and treats every line \u2014 including the `### Security` heading \u2014 as body content; `assemble` (lines 418\u2013422) then groups that body under the Added category in the Keep-a-Changelog layout.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- requirement: Changelog fragment `changelog.d/3965-security-pass-fix-cycle-2.md` must use the `<!-- changelog: security -->` marker on its first line so `scripts/assemble_changelog.py` classifies it under the Security section rather than the default Added section (CLAUDE.md section 20B).\n  expected_change_site: changelog.d/3965-security-pass-fix-cycle-2.md line 1\n  severity=MAJOR\n  confidence=5\n  EVIDENCE: The fragment starts with `### Security` (a Markdown heading) instead of the required `<!-- changelog: security -->` HTML comment marker. The assembler's `parse_fragment` (`scripts/assemble_changelog.py:140-166`) matches only the `<!-- changelog: ... -->` pattern via `CATEGORY_MARKER`; an absent or unrecognised marker resolves to `DEFAULT_CATEGORY` (`added`). The `### Security` heading will be included verbatim in the body and inserted under the wrong CHANGELOG.md subsection. Every other fragment in `changelog.d/` uses the marker format (confirmed by grep \u2014 80 fragments use `<!-- changelog: ... -->`, zero use `### ...` as the category marker). This was independently flagged by the pass-1 cross-pollination summary.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8918f202ec142004e415b4dd5acd42e15ede79c30893aef598167a6659b984eb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4001,
+    "run_id": "33946546308",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33946546308",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260905071910_be4942867a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4001,
+    "run_id": "33946546308"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-05T07:19:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

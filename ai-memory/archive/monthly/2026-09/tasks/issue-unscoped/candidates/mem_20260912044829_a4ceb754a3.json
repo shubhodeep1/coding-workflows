@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_commit_changes.sh: lines 194-234 (overlay drift guard loop) | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The snapshot captures ALL tracked paths dirty before Codex runs, not only support overlay files, so future legitimate non-overlay branch modifications could be silently excluded from staging.\n  WHY: If a future workflow step dirties a tracked non-support file before Codex runs and Codex does not touch it, the guard excludes it without warning.\n- .github/workflows/implement.yml: lines 4226-4238, restore_support_overlay_copies() | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The redirect `> \"${overlay_path}\"` truncates the file before `git cat-file blob` runs, so a cat-file failure leaves the overlay empty despite the warning claiming later steps will see the committed HEAD version.\n  WHY: The `else` branch does not restore the previous content, so subsequent steps can still encounter the overlay-related `command not found` failure.\n- scripts/implement_commit_changes.sh: lines 484-503 (the new remaining_changes filter loop) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `${remaining_line:3}` assumes porcelain v1 lines contain a bare path, so rename and copy entries such as `R  old -> new` or `C  old -> new` do not match the overlay excluded path list.\n  WHY: Rename-formatted dirty entries for an overlay path can still appear in the `Files present in worktree but excluded from staging` warning, and the test does not cover rename or copy porcelain entries.\n- .github/workflows/implement.yml: lines 2198-2223 (PRE_CODEX_DIRTY_TRACKED_FILE snapshot loop) | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Consumer repos run the snapshot loop even though they never use the snapshot.\n  WHY: Consumer repos still pay the cost of creating the snapshot file, running `git diff --name-only -z HEAD`, and running one `git hash-object` per dirty tracked path on every implement run.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/implement_commit_changes.sh\n  Line or code reference: lines 194-234 (overlay drift guard loop)\n  severity=low\n  confidence=3\n  PROBLEM: The snapshot at line 2222 (`git diff --name-only -z HEAD`) captures ALL tracked paths dirty before Codex runs \u2014 not only support overlay files. If any setup step other than the Stage step dirties a non-overlay tracked file before the snapshot, that path enters PRE_CODEX_DIRTY_TRACKED_FILE. The guard loop then subjects it to the same unchanged-content exclusion logic: if Codex never touched it and it differs from HEAD, it is excluded from staging. Today no such other setup step exists, so this never fires. However, the variable and block comments name \"workflow-support overlay\" exclusively, giving a reader the impression the logic is scoped to support scripts when it is not.\n  WHY: If a future workflow change introduces a step that dirties tracked non-support files before the Codex run, those legitimate branch modifications would be silently excluded from the commit. The failure would be silent \u2014 no warning and no staged changes \u2014 and the only observable effect would be a missing change in the PR that the implement run was supposed to produce.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml\n  Line or code reference: lines 4226-4238, restore_support_overlay_copies()\n  severity=high\n  confidence=3\n  PROBLEM: The redirect `> \"${overlay_path}\"` is processed before the command runs, so the file is truncated to zero bytes before `git cat-file blob` executes. If the cat-file command exits non-zero (lost blob, corrupted object store, edge-case `git gc` between steps), the file is left empty rather than its previous content \u2014 and the surrounding `::warning::` says \"later steps will see the committed HEAD version\", but the file is actually empty, so the warning is wrong about what later steps will see.\n  WHY: On a `cat-file` failure the redirect has already wiped the file; the conditional's `else` branch only emits a warning but does not undo the truncation, so subsequent steps in the same job see an empty `scripts/codex_helpers.sh` (or whatever overlay path) and the very same `model_provider_broker_start: command not found` failure mode the PR exists to prevent can still happen via a different path.\n- scripts/implement_commit_changes.sh\n  Line or code reference: lines 484-503 (the new remaining_changes filter loop)\n  severity=low\n  confidence=3\n  PROBLEM: `${remaining_line:3}` assumes `git status --porcelain=v1` lines are exactly `XY ` (two chars + space = 3 chars) followed by the path. Rename and copy entries in porcelain v1 format as `R  old -> new` or `C  old -> new`, where the path part at offset 3 is `old -> new`, not the bare path; those entries never match the overlay excluded path list and leak into the warning. The same shape predates this PR but the new filter relies on the assumption, so a rename-formatted dirty entry for an overlay path would still print `Files present in worktree but excluded from staging` and pollute the no-op report. The PR's test does not cover rename or copy porcelain entries.\n  WHY: An orchestrator integration branch that picked up a renamed tracked helper file via rebase would leave that rename-formatted line in `remaining_changes` after the new filter; the warning fires anyway and the test misses it. Consumer-side stages that also exercise rename states will see inconsistent output.\n- .github/workflows/implement.yml\n  Line or code reference: lines 2198-2223 (PRE_CODEX_DIRTY_TRACKED_FILE snapshot loop)\n  severity=low\n  confidence=2\n  PROBLEM: Consumer repos, which never use the snapshot, still pay the cost of `: > \"${PRE_CODEX_DIRTY_TRACKED_FILE}\"`, the `git diff --name-only -z HEAD` invocation, and one `git hash-object` per dirty tracked path on every implement run. The PR explicitly states consumer repos are unaffected, but they do pay this fixed overhead even when the guard does nothing for them. The snapshot file is also written under `RUNTIME_DIR` on every run.\n  WHY: A noisy nothing-burger on consumer repos; not a correctness issue but worth noting. Consider gating the snapshot block on `[ \"${is_self_repo}\" = \"true\" ]` to align with the guard's own gate; the README/agents.md comments already frame this as source-repo-only behaviour.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "465431baf1c4c5f406c51dfafea8f5c7ab13376190d2a7a8d48b49eb12cda402",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34672626801",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34672626801",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260912044829_a4ceb754a3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34672626801"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-12T04:48:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

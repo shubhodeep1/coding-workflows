@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/4017-review-autofix-pytest-bootstrap.md:11 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The changelog fragment incorrectly states there are 4 regression tests when there are actually 5 tests added in the PR.\n  WHY: The documentation is incorrect, which could mislead reviewers and operators about the test coverage.\n- changelog.d/4017-review-autofix-pytest-bootstrap.md:13 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The changelog fragment lists \"conftest.py\" as a detected configuration marker, but the actual implementation in `.github/workflows/review_autofix.yml:3765` only detects `tests/conftest.py` (root-level conftest.py is not detected).\n  WHY: The documentation overstates the configuration detection capabilities of the workflow.\n- changelog.d/4017-review-autofix-pytest-bootstrap.md:13 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The changelog fragment lists \"[pytest]\" as a detected configuration marker for setup.cfg, but the actual implementation in `.github/workflows/review_autofix.yml:3769` only detects `[tool:pytest]` (the legacy `[pytest]` section is not detected).\n  WHY: The documentation overstates the configuration detection capabilities of the workflow.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- changelog.d/4017-review-autofix-pytest-bootstrap.md:11 | severity=MAJOR | confidence=5\n  PROBLEM: The changelog fragment incorrectly states there are 4 regression tests when there are actually 5 tests added in the PR.\n  WHY: The documentation is incorrect, which could mislead reviewers and operators about the test coverage.\n- changelog.d/4017-review-autofix-pytest-bootstrap.md:13 | severity=MAJOR | confidence=5\n  PROBLEM: The changelog fragment lists \"conftest.py\" as a detected configuration marker, but the actual implementation in `.github/workflows/review_autofix.yml:3765` only detects `tests/conftest.py` (root-level conftest.py is not detected).\n  WHY: The documentation overstates the configuration detection capabilities of the workflow.\n- changelog.d/4017-review-autofix-pytest-bootstrap.md:13 | severity=MAJOR | confidence=5\n  PROBLEM: The changelog fragment lists \"[pytest]\" as a detected configuration marker for setup.cfg, but the actual implementation in `.github/workflows/review_autofix.yml:3769` only detects `[tool:pytest]` (the legacy `[pytest]` section is not detected).\n  WHY: The documentation overstates the configuration detection capabilities of the workflow.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "5ee94faac39f1899ad829e67e3c242fc4b32d6c532a2a74a882fae905f8c2b12",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4044,
+    "run_id": "34186854265",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34186854265",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908052649_2f4fe7f6c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4044,
+    "run_id": "34186854265"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-08T05:26:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

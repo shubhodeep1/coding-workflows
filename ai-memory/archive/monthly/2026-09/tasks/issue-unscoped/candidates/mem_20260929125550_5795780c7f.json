@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:_file_pending function | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_file_pending` collects reported signatures from every session bucket in `immediate-state.json` without filtering by repository or log session, allowing a report delivered elsewhere to suppress filing this session's prompt.\n  WHY: A permission prompt that blocks a coding-workflows stage session can be silently dropped when another session reported the same signature to a different repository, leaving the central filing repository without an issue for those occurrences.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py:_file_pending function | severity=MAJOR | confidence=5\n  PROBLEM: `_file_pending` collects reported signatures from every session bucket in `immediate-state.json` without filtering by repository or log session. A `report-now` delivered by session A to a consumer repo (e.g., someone/consumer PR #77) suppresses `file` in coding-workflows for session B's occurrences of the same signature.\n  WHY: A permission prompt that blocks a coding-workflows stage session whose pattern was immediately reported by another session to a different repository is silently dropped by `file` at step 14. The central filing repository never creates or updates the `ai:permission-prompt` issue for those occurrences.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f4bb682b61c9e01366522a85de62e84178e36f05193e4a9cbd02daefd1e31489",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36570061787",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36570061787",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929125550_5795780c7f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36570061787"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T12:55:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states it \"Corrected the comment, the module docstring's API budget (3 \u2192 4 dispatch listings), README.md, agents.md, and the changelog.d/5148-\u2026 fragment\".\n  expected_change_site: changelog.d/5148-pending-checks-newer-review-race.md line 9, the \"Extra reads per PR that is ready to merge\" table row\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The PR diff modifies lines 1-7 and 10-16 of the changelog fragment (the prose paragraphs) but does not touch line 9 (the table row). The table still says \"3\" while the module docstring at scripts/claude_fixer_pending_checks.py:62 now says \"4\".\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: The PR description states it \"Corrected the comment, the module docstring's API budget (3 \u2192 4 dispatch listings), README.md, agents.md, and the changelog.d/5148-\u2026 fragment\".\n  Expected change site: changelog.d/5148-pending-checks-newer-review-race.md line 9, the \"Extra reads per PR that is ready to merge\" table row\n  Evidence of absence: The PR diff modifies lines 1-7 and 10-16 of the changelog fragment (the prose paragraphs) but does not touch line 9 (the table row). The table still says \"3\" while the module docstring at scripts/claude_fixer_pending_checks.py:62 now says \"4\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f3f2a01621ba73826277c95296a3eac088814958b28bc85b591a9c0046c708e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5209,
+    "run_id": "36607693193",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36607693193",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929181443_b162f93a0f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5209,
+    "run_id": "36607693193"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T18:14:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

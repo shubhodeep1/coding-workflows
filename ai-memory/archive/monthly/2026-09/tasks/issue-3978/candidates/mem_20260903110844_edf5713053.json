@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should be improved?\nChoices:\nA: Specify the workflow, script, prompt, or documentation area and describe the problem. (RECOMMENDED)\nB: Provide a failing test, error message, or workflow-run symptom.\nC: Request a general repository audit for improvement opportunities.",
+  "fingerprint": "a3d39eb27295b3c985e855299aa1a71ec6f66454a45f3a9ae2a7b7ac868ef83d",
+  "lineage": {
+    "issue_number": 3978,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33747839690",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33747839690",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260903110844_edf5713053",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3978,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33747839690"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #3978 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-03T11:08:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

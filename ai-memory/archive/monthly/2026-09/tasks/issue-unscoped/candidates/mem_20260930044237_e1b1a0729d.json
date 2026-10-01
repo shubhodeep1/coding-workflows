@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:524 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If `os.replace` succeeds but a later exception occurs before the assignment, the finally block leaves the temp file.\n  WHY: Temporary configuration files may persist across retries, polluting RUNTIME_DIR and potentially leaking partial configuration states.\n- scripts/review_conflict_resolve.sh:539-543 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Failure emits ALERT but continues to opencode_require_bootstrap without resetting RESOLVER_OPENCODE_CONFIG.\n  WHY: Partial or stale configuration can cause downstream bootstrap or model invocation to use stale snapshot=true, breaking index isolation.\n- agents.md:2150-2181 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: New identifier/contract `RESOLVER_SCRATCH_INDEX` / `_resolver_prepare_scratch_index` is not documented in agents.md \"Integration-sync verifier\" section alongside RESOLVER_* constants.\n  WHY: Future maintainer cannot trace the isolation contract without reading the full script.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a safe, enumerated reason code to the scope error so a future failure distinguishes index drift from unsafe paths without printing untrusted path text.\" (issue #4545 Suggested fix, AD-4 in plan)\n  expected_change_site: scripts/review_conflict_resolve.sh, _resolver_scope_state error handling at lines 693-696\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No diff hunk adds the reason code table or updates the ::error:: line; existing message at line 695 still uses only type(exc).__name__.\n- requirement: \"Add the one missing call to main() [in tests/test_validate_workflow_validate_bootstrap.py]\" (from AD-5 in the progress log)\n  expected_change_site: tests/test_validate_workflow_validate_bootstrap.py, main()\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The review findings identified that `test_renderer_isolated_imports_ignore_workspace_shadows_and_reject_external_origins` is defined but not called in `main()`. This was accepted as a gap in Round 2.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_resolve.sh:524 | severity=high | confidence=[4]\n  PROBLEM: If os.replace succeeds but a later exception occurs before the assignment, the finally block leaves the temp file (leak on non-OSError paths).\n  WHY: Temporary configuration files persist across retries, polluting RUNTIME_DIR and potentially leaking partial configuration states.\n- scripts/review_conflict_resolve.sh:539-543 | severity=high | confidence=[4]\n  PROBLEM: Failure emits ALERT but continues to opencode_require_bootstrap without resetting RESOLVER_OPENCODE_CONFIG.\n  WHY: Partial or stale configuration can cause downstream bootstrap or model invocation to use stale snapshot=true, breaking index isolation.\n- agents.md:2150-2181 | severity=low | confidence=[3]\n  PROBLEM: New identifier/contract `RESOLVER_SCRATCH_INDEX` / `_resolver_prepare_scratch_index` is not documented in agents.md \"Integration-sync verifier\" section alongside RESOLVER_* constants.\n  WHY: Future maintainer cannot trace the isolation contract without reading the full script.\n- Requirement: \"Add a safe, enumerated reason code to the scope error so a future failure distinguishes index drift from unsafe paths without printing untrusted path text.\" (issue #4545 Suggested fix, AD-4 in plan)\n  Expected change site: scripts/review_conflict_resolve.sh, _resolver_scope_state error handling at lines 693-696\n  Evidence of absence: No diff hunk adds the reason code table or updates the ::error:: line; existing message at line 695 still uses only type(exc).__name__.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Add the one missing call to main() [in tests/test_validate_workflow_validate_bootstrap.py]\" (from AD-5 in the progress log)\n  Expected change site: tests/test_validate_workflow_validate_bootstrap.py, main()\n  Evidence of absence: The review findings identified that `test_renderer_isolated_imports_ignore_workspace_shadows_and_reject_external_origins` is defined but not called in `main()`. This was accepted as a gap in Round 2.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7a00df64fcd15727baab0133dfc612d78697dc96dff6800fe4df9202294db887",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4546,
+    "run_id": "36668853607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36668853607",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930044237_e1b1a0729d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4546,
+    "run_id": "36668853607"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T04:42:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

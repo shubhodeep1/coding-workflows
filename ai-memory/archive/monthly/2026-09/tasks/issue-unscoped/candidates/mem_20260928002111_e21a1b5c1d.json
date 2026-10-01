@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_intake.sh:91-111,148-155 | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: `fail()` can write a label and comment to the payload-specified target issue when validation fails before the dispatcher's authority is checked.\n  WHY: An unauthorized dispatcher can send a malformed payload naming an issue and cause writes to that issue, contrary to the stated goal that a refused dispatch writes nothing to the target issue.\n- scripts/claude_issue_route.py:15 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `DISPATCHER_ALLOWED_PERMISSIONS` omits the `maintain` permission.\n  WHY: GitHub returns `maintain` for maintain-role collaborators, so they are refused with `dispatcher_not_authorized`.\n- scripts/claude_issue_intake.sh:108-109 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: `fail()` unconditionally appends `Run: ${RUN_URL}` to its Telegram error message, leaving a bare `Run: ` line when `RUN_URL` is empty.\n  WHY: Hand-driven runs with an empty `RUN_URL` produce a malformed Telegram error message, unlike the guarded `reject()` implementation.\n- scripts/claude_issue_intake.sh:33 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `error_tail` Python one-liner can emit a very long unsplit line from the last 300 bytes.\n  WHY: Long error details can cause `tg_send_msg` to truncate or fail, producing a malformed Telegram error on hand-driven runs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_intake.sh: fail() function (near line 108) | severity=low | confidence=[4]\n  PROBLEM: The `fail()` function interpolates `${RUN_URL}` into the Telegram error message without checking if the variable is empty.\n  WHY: When `fail()` is called with `RUN_URL` unset, it produces a bare `Run: ` prefix and no URL.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_intake.sh: fail() Telegram line 109 | severity=low | confidence=[4]\n  PROBLEM: `fail()` emits a bare `Run: ` line in its Telegram error when `RUN_URL` is empty.\n  WHY: A hand-driven run with an empty `RUN_URL` ends the Telegram ERROR with a bare `Run: ` line, inconsistent with the rest of the file.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_issue_intake.sh: lines 88-89 (RAW_REPO/RAW_ISSUE set from payload), line 149 (fail \"invalid_payload\"), lines 91-111 (fail() function writes to target issue), lines 148 and 155 | severity=high | confidence=[4]\n  PROBLEM: `fail()` writes the `ai:claude-handoff-failed` label and a comment to the payload-specified target issue when validation fails before authorization.\n  WHY: An unauthorized dispatcher can craft a malformed payload with a valid-looking repo and issue, causing `fail()` to write to an arbitrary target issue before the dispatcher's authority is checked.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/claude_issue_route.py:15 | severity=high | confidence=[4]\n  PROBLEM: \"maintain\" permission (returned by GitHub for maintain-role collaborators) is absent from allowed list.\n  WHY: Maintainers are refused with dispatcher_not_authorized (see authorize_target:137).\n- scripts/claude_issue_intake.sh:33 | severity=low | confidence=[3]\n  PROBLEM: One-liner can emit very long unsplit line from last 300 bytes; tg_send_msg may truncate or fail.\n  WHY: Long error details produce malformed Telegram ERROR on hand-driven runs (see reject:22).\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_issue_intake.sh: line 109, fail() Telegram message | severity=low | confidence=[2]\n  PROBLEM: `fail()` unconditionally appends `\"Run: ${RUN_URL}\"` to the Telegram ERROR, producing a bare `Run: ` line when `RUN_URL` is empty.\n  WHY: On a hand-driven run, any `fail()` call from the queue step sends a Telegram ERROR ending in a bare `Run: ` line.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5a27ea2d4ccd6edcd31ce73afae048034984d99cb1e7f3710e4a0c42b098f312",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4633,
+    "run_id": "36360534984",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36360534984",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928002111_e21a1b5c1d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4633,
+    "run_id": "36360534984"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T00:21:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

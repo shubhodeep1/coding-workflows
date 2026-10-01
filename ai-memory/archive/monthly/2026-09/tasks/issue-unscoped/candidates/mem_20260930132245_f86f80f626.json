@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/permission_prompts.py and .claude/scripts/permission_prompts.py | HARDENING_SUGGESTION\n  Location: class_comment_body, the `**Pattern:**` line (sibling of the line fixed in issue_body)\n  PROBLEM: `class_comment_body` writes the raw `pattern[\"shape\"] or pattern[\"tool_name\"]` without `_pattern_line`.\n  WHY: The suggestion is for consistency with the guarded `issue_body` line; comments are not parsed for markers, so this is not a runtime defect, and the PR description documents the decision to leave it.\n  Suggested minimal fix: Replace the shape interpolation in `class_comment_body` with `_pattern_line(pattern)`, one line per twin.\n  Estimated lines changed: 2 (one per twin)\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "26442fa3f33222e6c87d0f3cf97d33237e86c4f767ff4f1f8146e4faecc0a147",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5649,
+    "run_id": "36718383077",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36718383077",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930132245_f86f80f626",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5649,
+    "run_id": "36718383077"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T13:22:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

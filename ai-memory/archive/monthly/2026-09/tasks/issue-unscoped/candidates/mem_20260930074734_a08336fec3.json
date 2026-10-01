@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:Lines 183\u2013184 and 189 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The three-dot diff checks compare against the merge base rather than comparing both branch tips, causing unnecessary drift merges when the head already contains the change and allowing a reverted guard on the project branch to pass verification.\n  WHY: The highest reported severity is MAJOR (openai_gpt-6-luna), versus NIT (qwen_qwen3_7-plus and z-ai_glm-5_2); deepseek_deepseek-v4-pro and minimax_minimax-m3 say these are not defects.\n- workflow-templates/.claude/commands/implement-plan-claude.md:step 1 \u2014 `git fetch origin <default>`; for a PR head also `git fetch origin <base>` | severity=low | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The base fetch is unconditional for every PR head, including when `<base>` equals the default branch (already fetched on the same line).\n  WHY: No runtime failure \u2014 the redundant fetch is a harmless no-op when the refs match. It is a minor inconsistency between step 1 and step 2's conditional, costing one redundant remote round-trip per default-bound PR head.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:Lines 183\u2013184 and 189 | severity=high | confidence=[5]\n  PROBLEM: These checks use `git diff A...B` as if it compared the current guard files at both branch tips. It compares the merge base of A and B to B instead.\n  WHY: After the project branch merges the default branch, the default tip is an ancestor of the project branch. The verification at line 189 then compares the default tip to itself and exits 0 even if a later project-branch commit reverted a guard. The drift check at line 183 has the same blind spot for a working branch descended from the default branch. A stale guard can therefore pass the sync checks.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:step 2, lines 184-186 (default drift and base drift checks) | severity=low | confidence=[3]\n  PROBLEM: The three-dot diff form `git diff A...B` compares the merge base of A and B to B's current tree, not the current trees of both branches. When the PR head independently contains the same guard change as the base (different commit, same content), the base-drift check exits non-zero and triggers a merge that is unnecessary.\n  WHY: If both branches independently authored the same `.claude/hooks/guard.py` v2 from a common v1 merge base, `HEAD...origin/<base>` compares v1 to v2 and reports drift even though HEAD already has v2. The sync then attempts a merge. The merge itself is clean (identical content on both sides), so this is an unnecessary operation rather than a correctness failure, but it contradicts the stated invariant that \"a branch's own edits to a guard are not staleness.\"\n- workflow-templates/.claude/commands/implement-plan-claude.md:step 3, line 189 (project-base verification) | severity=low | confidence=[2]\n  PROBLEM: The verification `git diff --quiet origin/<project branch>...origin/<default> -- .claude/hooks .claude/settings.json` uses three-dot form after the project branch has merged the default branch. When the project branch tip is a descendant of the default tip (post-merge), the merge base is the default tip, so the diff is empty even if a later project-branch commit reverted a guard.\n  WHY: After syncing the project branch (merging default into it), if the project branch then reverts a guard change, the verification diff compares the default tip (merge base) to the default tip (current), which is empty. The verification passes and the sync proceeds, leaving the PR head with a reverted guard. This is a contrived scenario (deliberate reversion after merge) but represents a gap in the verification logic.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:step 2 base-drift check `git diff --quiet HEAD...origin/<base> -- .claude/hooks .claude/settings.json` and step 3 verification `git diff --quiet origin/<project branch>...origin/<default> -- .claude/hooks .claude/settings.json` | severity=low | confidence=[3]\n  PROBLEM: The three-dot form `A...B` computes `git diff $(merge-base A B) B` \u2014 it shows changes in B since the merge-base, ignoring A's current tree. (1) Base check: if the PR head independently cherry-picked the base's guard change (HEAD already contains it), `HEAD...origin/<base>` still reports the change in the base since the merge-base, triggering an unnecessary merge/conflict stop. (2) Verification: after the project branch merges the default branch, `merge-base(project, default)` equals the default tip, so `origin/<project branch>...origin/<default>` is empty (exit 0) even if a later project-branch commit reverted a default-branch guard \u2014 the verification passes while the project tree actually lacks the guard.\n  WHY: An unnecessary base merge runs when the head already holds the guard (false-positive drift); or a reverted guard on the project branch is certified as present (false-negative verification), and the subsequent merge of the project branch brings the stale guard into the PR head.\n- workflow-templates/.claude/commands/implement-plan-claude.md:step 1 \u2014 `git fetch origin <default>`; for a PR head also `git fetch origin <base>` | severity=low | confidence=[4]\n  PROBLEM: The base fetch is unconditional for every PR head, including when `<base>` equals the default branch (already fetched on the same line). Step 2 explicitly scopes the base-drift check to \"a PR head whose base is not the default branch,\" so step 1 contradicts that gating.\n  WHY: No runtime failure \u2014 the redundant fetch is a harmless no-op when the refs match. It is a minor inconsistency between step 1 and step 2's conditional, costing one redundant remote round-trip per default-bound PR head.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b4e3e0b03425ad1d0ea52fea8e4dd18643f8a2e0897cf6ada8a119ab84fab8d8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5282,
+    "run_id": "36684222844",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36684222844",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930074734_a08336fec3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5282,
+    "run_id": "36684222844"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T07:47:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

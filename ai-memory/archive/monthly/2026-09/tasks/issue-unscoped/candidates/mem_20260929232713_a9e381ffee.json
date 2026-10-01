@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:972 | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Documentation still described the project-checker archive check as an exact-title match after AD-14 changed it to a \u201ccontains\u201d match with an optional prefix.\n  WHY: This stale description misleads readers and future reviewers; the checker archive logic and its test already used \u201ccontains.\u201d\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When a project changes how a check matches (exact \u2192 contains), grep agents.md and CLAUDE.md for every prose summary of that check too, not only the command text and its tests: a summary that says 'the same check' silently keeps the old rule.\"\n  expected_change_site: agents.md (and any other prose summary of the checker archive check)\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The stale sentence was the exact finding surfaced by conformance run 1; this PR removes it, adds the regression test, and updates the log/lessons. No other prose summaries of the check remain.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- agents.md:972 | severity=MAJOR | confidence=5\n  PROBLEM: Stale documentation still described the project-checker archive check as exact-title match after AD-14 changed it to \"contains\" (with optional prefix).\n  WHY: Misleads readers and future reviewers; the checker archive logic (and its test) already used contains, creating a documentation-implementation gap.\n- TASK_GAP\n  Requirement: \"When a project changes how a check matches (exact \u2192 contains), grep agents.md and CLAUDE.md for every prose summary of that check too, not only the command text and its tests: a summary that says 'the same check' silently keeps the old rule.\"\n  Expected change site: agents.md (and any other prose summary of the checker archive check)\n  Evidence of absence: The stale sentence was the exact finding surfaced by conformance run 1; this PR removes it, adds the regression test, and updates the log/lessons. No other prose summaries of the check remain.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8d19be2e5970a41aaff199521ec445432d25a2fb781d9984ec669eb9af50028b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5296,
+    "run_id": "36643824863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36643824863",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929232713_a9e381ffee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5296,
+    "run_id": "36643824863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T23:27:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

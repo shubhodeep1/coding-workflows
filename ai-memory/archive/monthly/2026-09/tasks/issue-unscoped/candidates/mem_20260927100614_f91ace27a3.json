@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:677-685 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The comment claims any future error inside the try block will produce exit 2 rather than a traceback, but the except clause only catches ValueError.\n  WHY: There is no runtime failure today because the current helpers only raise handled errors, but the comment overstates the guarantee and could mislead future maintainers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_issue_route.py:678-680 | severity=low | confidence=3\n  PROBLEM: The comment says \"it sits inside the try so any future error still ends in the documented exit 2, never a traceback\" but the except clause only catches ValueError.\n  WHY: No current failure. The code is correct today because load_allowed_repos never raises and parse_arm_check_in_request only raises ValueError.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_route.py:_cmd_arm_check_in_request, second try block (the comment immediately above `allowed = load_allowed_repos(...)`) | severity=low | confidence=3\n  PROBLEM: The new comment claims \"any future error still ends in the documented exit 2, never a traceback\", but the except clause only catches ValueError.\n  WHY: Under today's call graph nothing inside the second try raises a non-ValueError, so no runtime failure; the risk is that a future reader believes the catch is broader than it is.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_issue_route.py:677-685, the comment at lines 678-680 | severity=low | confidence=3\n  PROBLEM: The comment says \"it sits inside the try so any future error still ends in the documented exit 2, never a traceback\" but the except clause on line 683 only catches ValueError.\n  WHY: No runtime failure today. load_allowed_repos catches (OSError, ValueError) internally at line 261 and parse_arm_check_in_request only raises ValueError, so the except clause is sufficient for the current call sites.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_issue_route.py:_cmd_arm_check_in_request, second try block comment (lines ~677-680) | severity=low | confidence=4\n  PROBLEM: The comment reads \"it sits inside the try so any future error still ends in the documented exit 2, never a traceback,\" but the `except ValueError` clause only catches `ValueError`.\n  WHY: No runtime failure today \u2014 `load_allowed_repos` catches its own `(OSError, ValueError)` and `parse_arm_check_in_request` only raises `ValueError`, so the current path is safe.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "91c7a2ac6199295ec21ac3888e6794ff87856dd6f194170ff559d03ca2c96699",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4610,
+    "run_id": "36309935685",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36309935685",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927100614_f91ace27a3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4610,
+    "run_id": "36309935685"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T10:06:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

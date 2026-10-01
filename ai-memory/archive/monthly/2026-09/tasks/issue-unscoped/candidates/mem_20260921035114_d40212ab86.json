@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:386-389\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The pre-existing comment \"step ran a healthy 51m and the 50m cap killed the wait 58s before the step completed\" describes a historical incident that motivated raising the per-step cap to 75m, but does not reference which release/run the incident came from.\n  WHY: With two historical incidents now cited in nearby comments (the 51m/50m incident and the v1.29.7 120m\u2192180m incident), the absence of a release anchor on the older one makes future operators guess which release raised the per-step cap.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Stable-branch backport of #4171 must (1) raise `e2e-smoke-test` `timeout-minutes` from 120 to 180, (2) update the three referenced 120-minute comments, (3) add a `changelog.d/4171-e2e-smoke-job-timeout.md` fragment matching the main-branch content.\n  expected_change_site: `.github/workflows/test-and-mark-stable.yml` and `changelog.d/4171-e2e-smoke-job-timeout.md`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: All three deliverables are present in the LAST RUN DIFF \u2014 `timeout-minutes: 180` at the `e2e-smoke-test` job (line 343), the three comment updates (input description at lines 98-104, `REVIEW_STEP_TIMEOUT` env block at lines 386-392, wait-review clamp warning at lines 1363-1369), and the changelog fragment file with header, lead paragraph, numbers table, and operator-closing paragraph.\n- requirement: Changelog fragment must accurately describe the timeout rationale without inventing supporting facts (per \u00a720.F \"do not invent numbers, vague placeholders, or generic filenames\") and must not claim the cap contains the sum of all phase budgets when it only covers the evidenced healthy-run envelope.\n  expected_change_site: `changelog.d/4171-e2e-smoke-job-timeout.md` lead paragraph + workflow comment at `.github/workflows/test-and-mark-stable.yml` lines 343-357.\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Lead paragraph now states \"The 180-minute cap in `.github/workflows/test-and-mark-stable.yml` is sized for this evidenced healthy-run envelope ... it does not claim to contain the sum of every phase's fail-fast inactivity limit.\" The workflow comment was rewritten in the LAST RUN DIFF to say \"The job cap must cover the evidenced slow-but-healthy release path, not every phase's inactivity limit: reaching one of those limits fails that phase, while healthy activity resets its timer.\" The previously fabricated 340m parent cap row was removed from the numbers table. Both pieces of documentation are now internally consistent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- `.github/workflows/test-and-mark-stable.yml`\n  Location: lines 386-389 (REVIEW_STEP_TIMEOUT env comment)\n  Issue: The pre-existing comment \"step ran a healthy 51m and the 50m cap killed the wait 58s before the step completed\" describes a historical incident that motivated raising the per-step cap to 75m, but does not reference which release/run the incident came from. With two historical incidents now cited in nearby comments (the 51m/50m incident and the v1.29.7 120m\u2192180m incident), the absence of a release anchor on the older one makes future operators guess which release raised the per-step cap.\n  Suggested minimal fix: Add a parenthetical run/version anchor to the 51m/50m sentence, e.g. \"step ran a healthy 51m on run <id> (vX.Y.Z) and the 50m cap killed the wait 58s before the step completed\".\n  Estimated lines changed: 1\n- TASK_GAP:\n  Requirement: Stable-branch backport of #4171 must (1) raise `e2e-smoke-test` `timeout-minutes` from 120 to 180, (2) update the three referenced 120-minute comments, (3) add a `changelog.d/4171-e2e-smoke-job-timeout.md` fragment matching the main-branch content.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml` and `changelog.d/4171-e2e-smoke-job-timeout.md`\n  Evidence of absence: All three deliverables are present in the LAST RUN DIFF \u2014 `timeout-minutes: 180` at the `e2e-smoke-test` job (line 343), the three comment updates (input description at lines 98-104, `REVIEW_STEP_TIMEOUT` env block at lines 386-392, wait-review clamp warning at lines 1363-1369), and the changelog fragment file with header, lead paragraph, numbers table, and operator-closing paragraph.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP:\n  Requirement: Changelog fragment must accurately describe the timeout rationale without inventing supporting facts (per \u00a720.F \"do not invent numbers, vague placeholders, or generic filenames\") and must not claim the cap contains the sum of all phase budgets when it only covers the evidenced healthy-run envelope.\n  Expected change site: `changelog.d/4171-e2e-smoke-job-timeout.md` lead paragraph + workflow comment at `.github/workflows/test-and-mark-stable.yml` lines 343-357.\n  Evidence of absence: Lead paragraph now states \"The 180-minute cap in `.github/workflows/test-and-mark-stable.yml` is sized for this evidenced healthy-run envelope ... it does not claim to contain the sum of every phase's fail-fast inactivity limit.\" The workflow comment was rewritten in the LAST RUN DIFF to say \"The job cap must cover the evidenced slow-but-healthy release path, not every phase's inactivity limit: reaching one of those limits fails that phase, while healthy activity resets its timer.\" The previously fabricated 340m parent cap row was removed from the numbers table. Both pieces of documentation are now internally consistent.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "1c38550def2432ff7c761018f3c3364a70e82ebfbc3e0ea21106b8e1d274dc3d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4186,
+    "run_id": "35555348212",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35555348212",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921035114_d40212ab86",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4186,
+    "run_id": "35555348212"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T03:51:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

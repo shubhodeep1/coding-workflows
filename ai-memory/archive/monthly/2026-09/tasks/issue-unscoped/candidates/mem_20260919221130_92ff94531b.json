@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6522-6524; 6570-6574; 7038-7040 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3]\n  PROBLEM: Three early-return paths call `security_pass_file_advisory_findings`, which mutates `STATE_FILE`, without posting the updated state comment afterward.\n  WHY: The authoritative chunked state comment can remain stale relative to `STATE_FILE`, causing operators or a restarted poller to observe or retry already-filed advisory backlog entries; severity differs across reviewers, with one rating it MAJOR and two rating it NIT, so the highest severity is used.\n- changelog.d/security-pass-line-ownership-poller.md:filename itself | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The changelog fragment filename omits the issue or PR number required by the repository convention `changelog.d/<issue-or-pr>-<slug>.md`.\n  WHY: `scripts/assemble_changelog.py` still folds the fragment correctly, but the unnumbered filename prevents unique attribution to its source issue or PR and complicates concurrent fragment handling.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:Lines 6522-6524 (run_security_pass_inline valid-head early return), 6570-6573 (rebind path), 7038-7040 (ensure_security_pass_before_completion valid-head early return) | severity=MAJOR | confidence=4\n  PROBLEM: Three early-return paths call security_pass_file_advisory_findings which mutates STATE_FILE (backlog row removal via jq, merge-checked recording via security_pass_mark_followup_merge_checked) but do not call post_state_comment afterward.\n  WHY: The authoritative chunked state comment in the tracking issue shows stale advisory backlog content while the poller itself reads the updated STATE_FILE.\n- changelog.d/security-pass-line-ownership-poller.md:the filename itself | severity=NIT | confidence=4\n  PROBLEM: The changelog fragment filename omits the issue or PR number required by the repository convention documented in CLAUDE.md section 20.B.\n  WHY: The assembler still folds the fragment correctly, but unnumbered fragments are not uniquely attributable to their source issue or PR.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:6570-6574 (the rebind arm of `run_security_pass_inline`) | severity=NIT | confidence=3\n  PROBLEM: `security_pass_rebind_if_no_new_project_lines` posts state before `security_pass_file_advisory_findings` mutates `STATE_FILE`, and the head-valid early-return arms at 6522-6524 and 7038-7040 have the same shape.\n  WHY: The V2 chunked state comment can become stale relative to `STATE_FILE`, allowing a restarted poller to re-attempt same-tick advisory filing before the state catches up.\n- changelog.d/security-pass-line-ownership-poller.md:filename itself (and the matching manifest entry at .ai/.workspace_source_manifest.txt:236, plus the diff hunk that added it) | severity=NIT | confidence=4\n  PROBLEM: The fragment filename is `security-pass-line-ownership-poller.md` and does not include the issue or PR number required by CLAUDE.md \u00a720.B.\n  WHY: The fragment should be `changelog.d/4143-security-pass-line-ownership-poller.md`, with `.ai/.workspace_source_manifest.txt:236` and any other matching manifest entry updated accordingly.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh:lines 6522-6524 (head-valid early return in `run_security_pass_inline`), 6570-6574 (rebind path: `post_state_comment` fires inside `security_pass_rebind_if_no_new_project_lines` at line 4765, before `security_pass_file_advisory_findings` mutates state at 6572), and 7038-7040 (head-valid early return in `ensure_security_pass_before_completion`) | severity=NIT | confidence=3\n  PROBLEM: All three paths call `security_pass_file_advisory_findings`, which mutates `STATE_FILE`, but none posts the state comment afterward when the caller defers without its own state write.\n  WHY: On a tick where the backlog drains but the rest of the tick defers, the remote chunked state retains already-filed backlog rows and the next tick repeats reconciliation work until another state post occurs.\n- changelog.d/security-pass-line-ownership-poller.md:the filename itself | severity=NIT | confidence=2\n  PROBLEM: The fragment filename carries no issue or PR number, contrary to CLAUDE.md \u00a720.B.\n  WHY: No runtime failure occurs, but the fragment is not uniquely attributable to its PR; the expected name is `changelog.d/4143-security-pass-line-ownership-poller.md`, with the matching `.ai/.workspace_source_manifest.txt` entry updated.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/security-pass-line-ownership-poller.md:filename itself | severity=NIT | confidence=3\n  PROBLEM: The changelog fragment filename does not include the issue or PR number, deviating from CLAUDE.md \u00a720.B.\n  WHY: The assembler does not enforce the convention, so the fragment folds correctly, but unnumbered fragments complicate audit trails and concurrent PR handling.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "1216907f867ee3c27b684c50eedc3b656e5cbf253932381e3e0ed86f2c6ead88",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4144,
+    "run_id": "35466097830",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35466097830",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919221130_92ff94531b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4144,
+    "run_id": "35466097830"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-19T22:11:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

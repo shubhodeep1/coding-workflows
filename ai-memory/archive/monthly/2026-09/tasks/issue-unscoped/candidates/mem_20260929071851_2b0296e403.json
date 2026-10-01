@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/protected_path_gate.sh:51-64 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The PR-number parser captures the first token after `pr merge`, so a flag before the PR number is treated as the PR value.\n  WHY: The numeric check fails and returns 3 for a flag-first call, blocking a legitimate unprotected merge.\n- scripts/protected_path_authorization.py:262-316 | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `instruction_body` function lists all protected paths in the instruction comment without truncation.\n  WHY: A PR modifying many protected paths could exceed GitHub's 65,536-character limit, causing the POST to fail and leaving the operator without authorization instructions.\n- agents.md: Stable log prefixes (contractual) section | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: New log prefixes `PROTECTED_PATH_GATE` and `AUTOFIX_AUTO_MERGE_PROTECTED_PATH` are absent from the contractual stable-log-prefix list.\n  WHY: Future log-analysis tooling may not categorize or monitor these events correctly, and regenerators could rename or remove them, breaking downstream tooling.\n- .github/workflows/review_autofix.yml:1900, 1918 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The deterministic-skip-merge job executes `gh pr merge` calls without wrapping them in `protected_path_guarded_merge`.\n  WHY: A PR changing a protected-equivalent path can bypass the security gate and auto-merge without owner authorization when the deterministic-skip guard triggers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The CLAUDE.md and agents.md sections claim \"Read errors retry three times, then block for that attempt.\" The gate's exit code semantics need a contract test asserting that review_enable_auto_merge.sh actually does NOT call record_auto_merge_ready_labels_allowed \"true\" when protected_path_guarded_merge returns 3 (a gate block).\n  expected_change_site: tests/test_protected_path_authorization.py\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test `test_review_enable_auto_merge_refuses_without_ready_labels` (tests/test_protected_path_authorization.py:679) verifies only log output and does not actually invoke the script with a stubbed gate checker to verify the side-effect (the write of ready-labels is skipped).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/protected_path_gate.sh:51-64 | confidence=4\n  PROBLEM: The PR-number capture condition within the protected_path_guarded_merge() function is brittle because it captures the first token after 'pr merge' as the PR number regardless of whether that token is a flag (e.g., '--repo') or a positional argument.\n  WHY: If a future merge call were to pass a flag between 'pr merge' and the PR number, the gate would capture the flag as the PR value, cause the numeric check (line 69) to fail, and return 3 (fail closed), blocking a legitimate unprotected merge. While the 22 current call sites are consistent, this guard should be robust against future reordering.\n- scripts/protected_path_authorization.py:262-316 | confidence=3\n  PROBLEM: The `instruction_body` function lists all protected paths in the instruction comment without truncation, whereas the JSON output is capped at `PATHS_IN_OUTPUT = 20`.\n  WHY: A PR modifying many protected paths could generate an instruction comment exceeding GitHub's 65,536-character limit, resulting in a POST failure, leaving the operator without authorization instructions or a way to proceed.\n- agents.md: Stable log prefixes (contractual) section | confidence=4\n  PROBLEM: New log prefixes `PROTECTED_PATH_GATE` and `AUTOFIX_AUTO_MERGE_PROTECTED_PATH` are emitted by the implementation but are absent from the contractual stable-log-prefix list.\n  WHY: Future log-analysis tooling may not correctly categorize or monitor these events, and future regenerators could rename/remove them without recognizing them as contractual, breaking downstream tooling that depends on them.\n- .github/workflows/review_autofix.yml:1900, 1918 | severity=BLOCKER | confidence=5\n  PROBLEM: The deterministic-skip-merge job executes gh pr merge calls without wrapping them in protected_path_guarded_merge.\n  WHY: When the deterministic-skip guard (PROTECTED_SKIP_SUPPRESSED) triggers, the review/editor phases are skipped, but the merge still runs unwrapped. A PR changing a protected-equivalent path (such as tests/test_claude_template_parity.py, now added to the suppression list) can therefore bypass the security gate and auto-merge without owner authorization.\n- TASK_GAP\n  Requirement: The CLAUDE.md and agents.md sections claim \"Read errors retry three times, then block for that attempt.\" The gate's exit code semantics need a contract test asserting that review_enable_auto_merge.sh actually does NOT call record_auto_merge_ready_labels_allowed \"true\" when protected_path_guarded_merge returns 3 (a gate block).\n  Expected change site: tests/test_protected_path_authorization.py\n  Evidence of absence: The test `test_review_enable_auto_merge_refuses_without_ready_labels` (tests/test_protected_path_authorization.py:679) verifies only log output and does not actually invoke the script with a stubbed gate checker to verify the side-effect (the write of ready-labels is skipped).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/protected_path_gate.sh:51-64 | severity=NIT | confidence=4\n  PROBLEM: PR-number parser in protected_path_guarded_merge uses _ppg_prev2/_ppg_prev without full state reset after \"pr merge\".\n  WHY: flag-before-PR (e.g. --repo o/r 42) captures flag as PR value; numeric check fails, returns 3 (unparseable_merge_call).\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "039e95ea99f94f51e39ddf352d1eb9b92e8d02ed533c03623914d785b9ee4005",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4992,
+    "run_id": "36532578383",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36532578383",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929071851_2b0296e403",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4992,
+    "run_id": "36532578383"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T07:18:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

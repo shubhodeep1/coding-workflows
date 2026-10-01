@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:881-888 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `queue_binding_run_ids` does not implement resume-first ordering and processes issues in input order.\n  WHY: The reviewer says prioritized reclarify resumes may be skipped when the issue count exceeds the limit; minimax_minimax-m3, qwen_qwen3_7-plus, and z-ai_glm-5_2 state this is a false positive because the function delegates to `queue_pending`, which sorts resumes first.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Phase 1 \u2014 pickup throughput: catch-up wake, limit 20 (CLAUDE_ISSUE_PICKUP_LIMIT), resumes first, oldest_waiting\"\n  expected_change_site: scripts/claude_issue_route.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The function `queue_binding_run_ids` fails to sort resume entries (trigger=\"reclarify\") before processing, which is required by the \"resumes first\" requirement and the test `test_binding_run_window_follows_the_resume_first_order`; qwen_qwen3_7-plus says the command edit is a deliberate deferral, not a gap; x-ai_grok-4_20 and z-ai_glm-5_2 report the deferred command edit is present in the diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_issue_route.py:881-888 | severity=BLOCKER | confidence=5\n  PROBLEM: The function `queue_binding_run_ids` does not implement the resume-first ordering required for consistent processing. While the docstring and the tests expect resume-first behavior (reclarify issues first), the implementation processes issues in input order.\n  WHY: When the issue count exceeds the limit, prioritized reclarify resumes may not have their bindings checked if they appear after new issues in the raw input list, leading to inconsistent pickup behavior compared to the `queue_pending` function which correctly sorts them.\n- TASK_GAP\n  Requirement: \"Phase 1 \u2014 pickup throughput: catch-up wake, limit 20 (CLAUDE_ISSUE_PICKUP_LIMIT), resumes first, oldest_waiting\"\n  Expected change site: scripts/claude_issue_route.py\n  Evidence of absence: The function `queue_binding_run_ids` fails to sort resume entries (trigger=\"reclarify\") before processing, which is required by the \"resumes first\" requirement and the test `test_binding_run_window_follows_the_resume_first_order`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0ad2ba0529261c6cf32f7368cb96d84f3562123c42cc124bc77d9926e1e95277",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5061,
+    "run_id": "36531511736",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36531511736",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929071932_a64fcc76b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5061,
+    "run_id": "36531511736"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T07:19:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:512-515 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `check_pr_hand_back` makes an extra commit API read when `due.since` is `None` for an unhandled conflict.\n  WHY: This adds an API call despite the documented \u201cat most 1 had-commit read\u201d budget; it does not produce incorrect results.\n- .github/workflows/review_autofix_sweep.yml: `claude-pr-catch-all` job env block (lines ~322-336) | severity=high | confidence=[3]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The catch-all sweep does not honor `CLAUDE_FIXER_ENABLED=false` and can start Claude fixers even when Claude-fixer mode is disabled.\n  WHY: A due Claude PR can be dispatched to a Claude session despite the documented off switch; the reviewer identifies a disagreement between the workflow gate and the catch-all sweep behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/check_in_status.py:512-515 | severity=NIT | confidence=3\n  PROBLEM: check_pr_hand_back re-reads the head commit at lines 512-515 when due.since is None (e.g. unhandled conflict with no handoff comment, or ci-failed where chek-run completed_at is missing). In the conflict path this is a second commit read on the same head because the conflict branch in _check_claude_fixr_pr also returns since=None when no handoff is found. The docs say \"at most 1 had-commit read\" but for a conficted PR without a handoff the fuction reads the commit at line 499 (for the plan-stuck-window check) and then again at line 514.\n  WHY: wastes one API call per handback check of an unhandled conficted claude/* PR (not implement-plan) \u2014 the extra fallback at 512 alays fires because due.since is Nne for the confict path. Does not crash or produce wrong results; is an API-budget documentation drift.\n- (No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/review_autofix_sweep.yml: `claude-pr-catch-all` job env block (lines ~322-336) and scripts/claude_pr_sweep.py:sweep() | severity=MAJOR | confidence=3\n  PROBLEM: The new `claude-pr-catch-all` sweep job and `scripts/claude_pr_sweep.py` never read `CLAUDE_FIXER_ENABLED`. The job env passes `CLAUDE_PR_SWEEP_MIN_AGE_HOURS`, `CLAUDE_FIX_CLAIM_LEASE_HOURS`, `CLAUDE_FIX_HAND_BACK_CAP`, etc., but not `CLAUDE_FIXER_ENABLED`, and `sweep()` has no check for it. So when an operator sets `vars.CLAUDE_FIXER_ENABLED=false` (documented in the CLAUDE.md \u00a726.H text added by this same PR as turning Claude-fixer mode off, and in the changelog as \"sends every Claude PR back to the GPT path\"), the review workflow's gate correctly routes `claude/*` PRs to the GPT editor/resolver, but the hourly sweep still starts fresh Opus 5.5 `/fix-claude-pr` sessions for any `claude/*` PR whose fix has been due \u22652h with no live claim. For consumer repos the gap is structural: the sweep runs in coding-workflows and cannot read a consumer's per-repo `CLAUDE_FIXER_ENABLED` var at all.\n  WHY: Set `CLAUDE_FIXER_ENABLED=false`. A `claude/*` PR that the GPT path also fails to clear (e.g. it reaches `ai:review-blocked` after `MAX_AUTOFIX_ITERATIONS`, or the resolver escalates) sits with a block label and no active run. The sweep sees `state: blocked` \u2192 `done: true`, fires the dispatcher routine, and a Claude session claims the head and pushes a `[claude-autofix]`/`[claude-intervention]` commit \u2014 exactly what the operator disabled. The only way to stop the sweep is to remove `CLAUDE_ISSUE_ROUTINE_TOKEN`, which is an undocumented separate kill switch.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "994a0632fe3f32b3c8c132474eba91de0aadc56aa1269eef7e0046a74988e884",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36239483880",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36239483880",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260926114746_40610aed5e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36239483880"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-26T11:47:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

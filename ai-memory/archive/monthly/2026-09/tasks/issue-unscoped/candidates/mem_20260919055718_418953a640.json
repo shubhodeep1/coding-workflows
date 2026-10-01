@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:5816-5829 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The durable-marker deduplication check trusts any comment body containing `<!-- security-pass-advisory-unblock:<tracking>:<issue> -->` without verifying the comment author or author association.\n  WHY: On a public consumer repo, an untrusted commenter can forge the marker, causing the poller to skip the `/answer` POST, record the issue as checked, and permanently suppress the advisory re-plan.\n\n=== END CONSENSUS FINDINGS ===\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh: Line 5816, the dedup marker check in security_pass_unblock_filed_advisory_followups: `jq -e --arg marker \"${advisory_unblock_marker}\" 'any(.[]; (.body // \"\") | contains($marker))'` | severity=low | confidence=3\n  PROBLEM: The marker dedup check scans ALL comments on the advisory follow-up issue for the predictable string `<!-- security-pass-advisory-unblock:<tracking>:<issue> -->` without verifying the comment author or author_association.\n  WHY: Any GitHub user can post a comment containing this marker, causing the `/answer` POST to be skipped and the issue to be appended to `security_pass_followups_merge_checked` with outcome=\"answered\", so the advisory never re-enters planning without human intervention.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: ~line 5816 (marker-presence check in `security_pass_unblock_filed_advisory_followups`) | severity=low | confidence=3\n  PROBLEM: The dedup decision (`any(.[]; (.body // \"\") | contains($marker))`) trusts any comment body's content without verifying its author or `author_association`.\n  WHY: Anyone with comment-write access can pre-post the literal marker, causing the first merged-state tick to skip the `/answer` POST, append the issue to `security_pass_followups_merge_checked`, and leave the advisory follow-up parked in `ai:blocked` until a human notices.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh: line 5816, inside `security_pass_unblock_filed_advisory_followups` \u2014 `jq -e --arg marker \"${advisory_unblock_marker}\" 'any(.[]; (.body // \"\") | contains($marker))'` | severity=low | confidence=4\n  PROBLEM: The duplicate-suppression decision trusts the durable marker whenever it appears in ANY comment body on the advisory issue, with no check of the comment's author or `author_association`.\n  WHY: On a public consumer repo, a forged marker causes the `/answer [auto-answered-by-poller]` POST branch at lines 5819-5824 to be skipped, line 5826 to log `outcome=\"answered\"` despite nothing being posted, and line 5829 to record the issue as checked, permanently suppressing re-planning.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:5816 | severity=low | confidence=3\n  PROBLEM: The marker deduplication check `any(.[]; (.body // \"\") | contains($marker))` trusts the marker's presence in ANY comment body without verifying the comment author or author association.\n  WHY: An untrusted commenter can post the marker before the final merge, causing the POST branch to be skipped, the issue to be appended to `security_pass_followups_merge_checked`, and the security advisory never to re-enter planning without human intervention.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- scripts/orchestrate_poll_process.sh:5816-5829 | severity=low | confidence=4\n  PROBLEM: The new durable-marker skip trusts any comment body that contains `<!-- security-pass-advisory-unblock:${TRACKING_NUM}:${row_issue} -->` without a `user.login` or `author_association` filter.\n  WHY: A commenter can write the marker before or instead of the poller's `/answer`, causing the poller to record the issue as checked while leaving the follow-up in `ai:blocked`; standalone stall recovery skips `ai:blocked` by design.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "6585e20960755590309708ad5fb1c8f781426e8f2e84a8acc17812315b297464",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4135,
+    "run_id": "35422361115",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35422361115",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919055718_418953a640",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4135,
+    "run_id": "35422361115"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-19T05:57:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

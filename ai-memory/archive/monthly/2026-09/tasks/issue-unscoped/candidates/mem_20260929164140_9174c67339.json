@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"CLAUDE.md \u00a723.H (and workflow-templates/CLAUDE.md): add the deny outcome to the class table and the decision paragraph\" (plan step 4; Files & Modules section lists both \"CLAUDE.md, workflow-templates/CLAUDE.md\")\n  expected_change_site: workflow-templates/CLAUDE.md \u00a723.H table row and decision paragraph\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: Gemini reports the PR diff updates CLAUDE.md (lines 1317\u20131330) but does not include workflow-templates/CLAUDE.md in the changed files list; Qwen reports the PR diff and changed files show only CLAUDE.md is updated, and states that the plan context asserts the files are byte-identical. Minimax disputes the premise, reporting that workflow-templates/CLAUDE.md does not exist and concluding there is no gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP\nRequirement: The plan context states that `CLAUDE.md` and `workflow-templates/CLAUDE.md` are byte-identical and must be updated in tandem to reflect the new `deny` outcome in \u00a723.H.\nExpected change site: workflow-templates/CLAUDE.md\nEvidence of absence: The PR diff updates `CLAUDE.md` (lines 1317\u20131330) to include the new `deny` outcome for malformed jq CLI options, but does not include `workflow-templates/CLAUDE.md` in the changed files list, leaving the template copy outdated.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP\nRequirement: \"CLAUDE.md \u00a723.H (and workflow-templates/CLAUDE.md): add the deny outcome to the class table and the decision paragraph\" (plan step 4; Files & Modules section lists both \"CLAUDE.md, workflow-templates/CLAUDE.md\")\nExpected change site: workflow-templates/CLAUDE.md \u00a723.H table row and decision paragraph (mirror of the changes in CLAUDE.md lines 1317-1330)\nEvidence of absence: PR DIFF and PR CHANGED FILES show only CLAUDE.md is updated with the deny outcome; workflow-templates/CLAUDE.md is not in the changed files list. The plan's Context section states \"CLAUDE.md and workflow-templates/CLAUDE.md are byte-identical (checked 2026-09-29)\", and the Files & Modules section lists both files as deliverables. The hook twin has test_template_parity enforcing byte-parity, but no equivalent guard enforces CLAUDE.md parity, so the missing twin copy would silently drift.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "63babf26bf1b182b747be00d3bde26050f26007af11c3c8ce5f9f2c7deaacd5e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5033,
+    "run_id": "36597030583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36597030583",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929164140_9174c67339",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5033,
+    "run_id": "36597030583"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T16:41:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

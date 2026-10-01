@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"validate-scripts\" job timeout updates in `mark-stable.yml` and `test-and-mark-stable.yml`\n  expected_change_site: `mark-stable.yml` and `test-and-mark-stable.yml`\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The PR description explicitly defers these updates to the split issue; both files are left unchanged.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- The PR description explicitly defers the `validate-scripts` job timeout updates in `mark-stable.yml` and `test-and-mark-stable.yml`: \"They are left unchanged here and covered by the split issue.\" The remaining deliverables \u2014 bumping `ci.yml` `lint` `timeout-minutes` to 60, updating the contract test, and adding a changelog fragment \u2014 are all present in the diff.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d84232895f5aa5b7af0f290fe5d6db01ec5bd48fe682bde3ba84576ed3a4a411",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4706,
+    "run_id": "36374792775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36374792775",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928035439_85c4f0cc99",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4706,
+    "run_id": "36374792775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T03:54:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_claude_fixer_mode.py:588 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The test passes `comments=None` to `_run_gate`, whose state-file builder is reported to call `enumerate(comments, 1)` unconditionally, raising `TypeError` before the gate subprocess runs.\n  WHY: The test therefore does not exercise the fail-closed path it claims to verify. z-ai_glm-5_2 disputes this finding, stating: \"The actual file at line 497 has `None if comments is None else` guard \u2014 the minimax finding is a false positive\".\n- .github/workflows/review_autofix.yml:817, 1487 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `workflow_dispatch` execution path redundantly calls `gate_fetch_marker_comments` for the `claude_fixer_awaiting_session` and `CLAUDE_HANDOFF_SKIP_SUPPRESSED` checks.\n  WHY: The first call memoizes the result in `${gate_marker_comments_file}`, so the second call wastes GitHub API rate-limit budget and adds latency.\n- README.md:86 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `CLAUDE_FIXER_ENABLED` description mentions `AUTOFIX_SKIP_DOC_ONLY` and `AUTOFIX_SKIP_MAX_ADDITIONS` but omits `AUTOFIX_SKIP_MAX_DELETIONS`.\n  WHY: The small-diff skip route requires both addition and deletion bounds, so the description can mislead operators about the skip behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Append `claude_handoff_suppressed=${CLAUDE_HANDOFF_SKIP_SUPPRESSED}` to the existing `AUTOFIX_GATE_DET_SKIP_EVAL` log line to maintain the audit contract.\n  expected_change_site: .github/workflows/review_autofix.yml line 1500\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The `AUTOFIX_GATE_DET_SKIP_EVAL` echo currently lacks the `claude_handoff_suppressed` flag, preventing operators and log-scraping tools from distinguishing between \"diff didn't qualify for skip\" and \"handoff guard suppressed the skip\" when `skip=false`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_claude_fixer_mode.py:588 | severity=high | confidence=[4]\n  PROBLEM: The test `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails` passes `comments=None` to `_run_gate`.\n  WHY: `_run_gate` passes this directly to `enumerate(comments, 1)`, which raises `TypeError: 'NoneType' object is not iterable` before the test subprocess can even execute. The test fails with an error in the test harness rather than validating the intended behavior.\n- .github/workflows/review_autofix.yml:817, 1487 | severity=low | confidence=[4]\n  PROBLEM: Redundant calls to `gate_fetch_marker_comments` on the same execution path for `workflow_dispatch` events.\n  WHY: Both `claude_fixer_awaiting_session` check (line 817-818) and the `CLAUDE_HANDOFF_SKIP_SUPPRESSED` check (line 1487-1491) execute identical comment-fetching logic, wasting GitHub API rate-limit budget and increasing execution latency, even though the first call memoizes result in `${gate_marker_comments_file}`.\n- README.md:86 | severity=low | confidence=[4]\n  PROBLEM: The description for `CLAUDE_FIXER_ENABLED` mentions (`AUTOFIX_SKIP_DOC_ONLY`, `AUTOFIX_SKIP_MAX_ADDITIONS`) but omits `AUTOFIX_SKIP_MAX_DELETIONS`.\n  WHY: The small-diff skip route requires both `AUTOFIX_SKIP_MAX_ADDITIONS <= n` AND `AUTOFIX_SKIP_MAX_DELETIONS <= n`. An operator reading only this row would believe only one bound is required, misleading them about the actual skip behavior.\n- Requirement: Append `claude_handoff_suppressed=${CLAUDE_HANDOFF_SKIP_SUPPRESSED}` to the existing `AUTOFIX_GATE_DET_SKIP_EVAL` log line to maintain the audit contract.\n  Expected change site: .github/workflows/review_autofix.yml line 1500\n  Evidence of absence: The `AUTOFIX_GATE_DET_SKIP_EVAL` echo currently lacks the `claude_handoff_suppressed` flag, preventing operators and log-scraping tools from distinguishing between \"diff didn't qualify for skip\" and \"handoff guard suppressed the skip\" when `skip=false`.\n  SEVERITY: low\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_claude_fixer_mode.py | Line or code reference: test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails (passes comments=None to _run_gate) | severity=high | confidence=[5]\n  PROBLEM: The test passes comments=None, but _run_gate's state-file builder does enumerate(comments, 1) unconditionally. enumerate(None, 1) raises TypeError before json.dumps runs, so the state file is never written and the gate subprocess never starts.\n  WHY: The test crashes in setup with TypeError, not in the gate. The assertions about proc.returncode == 0 and AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_handoff_unverified are never reached. The fail-closed path the test claims to verify (skip suppressed when the comment lookup fails) is not exercised. If the fail-closed logic in review_autofix.yml were broken, this test would not catch it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "edffd97ec21ad8907c5991b4a6e1763b8d4892f6b4686c853635831384c26ad5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36365774538",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36365774538",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928013603_023d5e7a98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36365774538"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T01:36:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

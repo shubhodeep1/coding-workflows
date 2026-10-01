@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What should happen when a `target_ref` has no trusted project authorization binding its branch and commit SHA, including standalone runs with `tracking_issue=0`?\nChoices:\nA. Reject the explicit target until that branch-and-SHA authorization exists. (RECOMMENDED)\nB. Disable explicit `target_ref` validation; retain only the existing integration/default-ref paths.",
+  "fingerprint": "37835f79e495607517500402d70c27b7e259d68b3197c7eedbf1e10c3b189d25",
+  "lineage": {
+    "issue_number": 4452,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36111013869",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36111013869",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260925080955_29262dbac5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4452,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36111013869"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4452 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-25T08:09:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

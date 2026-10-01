@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update agents.md with a sentence on the fence and one on lookup's command being untrusted data.\n  expected_change_site: agents.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: google_gemini-3_1-flash-lite: agents.md is not modified by the PR diff; z-ai_glm-5_2: the agents.md update was delivered by phase PR #5182.\n- requirement: Create changelog fragment at changelog.d/5127-permission-report-fence.md.\n  expected_change_site: changelog.d/5127-permission-report-fence.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: google_gemini-3_1-flash-lite: changelog.d/5127-permission-report-fence.md is not in the PR diff; minimax_minimax-m3: the changelog fragment is already on disk from the phase PR; z-ai_glm-5_2: changelog.d/5127-permission-report-fence.md was delivered by phase PR #5182.\n- requirement: Create/Update test file tests/test_permission_prompts.py.\n  expected_change_site: tests/test_permission_prompts.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: google_gemini-3_1-flash-lite: tests/test_permission_prompts.py is not in the PR diff; z-ai_glm-5_2: tests/test_permission_prompts.py:929-1051, 7 new tests / 17 cases \u2014 delivered by phase PR #5182.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Update agents.md with a sentence on the fence and one on lookup's command being untrusted data.\n  Expected change site: agents.md\n  Evidence of absence: agents.md is not modified by the PR diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Create changelog fragment at changelog.d/5127-permission-report-fence.md.\n  Expected change site: changelog.d/5127-permission-report-fence.md\n  Evidence of absence: changelog.d/5127-permission-report-fence.md is not in the PR diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Create/Update test file tests/test_permission_prompts.py.\n  Expected change site: tests/test_permission_prompts.py\n  Evidence of absence: tests/test_permission_prompts.py is not in the PR diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5522a56035f0570db845c122f13e98c7759c399429e37eb9dae25c3c0f43fb4e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5274,
+    "run_id": "36638500800",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36638500800",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929230610_0cf8073128",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5274,
+    "run_id": "36638500800"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T23:06:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

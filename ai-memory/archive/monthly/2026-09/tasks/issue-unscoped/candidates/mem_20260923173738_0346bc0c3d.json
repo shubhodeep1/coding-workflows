@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In `workflow_failure_heal.py::build_issue_payload`, build bounded excerpts newest-first and compact or omit bulky orchestrator-state blobs so recent failure comments survive.\"\n  expected_change_site: `scripts/workflow_failure_heal.py`\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: Already satisfied. `build_issue_payload` at line 371 and `build_autofix_failure_payload` at line 474 both call `_build_recent_comments_excerpt` (line 296), which iterates `reversed(comment_texts[-8:])` (newest first), compacts `ORCHESTRATOR_STATE_V2` blobs via `_ORCHESTRATOR_STATE_V2_COMMENT_RE.fullmatch`, and enforces the byte budget with truncation.\n- requirement: \"Add the current Actions run URL to harness-error comments in `validate_process.sh`.\"\n  expected_change_site: `scripts/validate_process.sh`\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: Already satisfied. Lines 4201-4204 build `HARNESS_RUN_REFERENCE` from `GITHUB_RUN_ID`, and both harness-error comment variants at lines 4220 and 4228 append it.\n- requirement: \"In `mark_validation_failed`, post the detailed harness-error comment before applying `ai:harness-broken`.\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh`\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: Already satisfied. `post_tracking_comment` at line 11565 posts the detailed diagnostic, then `gh_retry gh issue edit ... --add-label \"ai:harness-broken\"` at line 11570 applies the label after the comment.\n- requirement: \"Add regression coverage using a large state comment followed by a harness-error comment, asserting both the diagnosis and run reference reach the payload.\"\n  expected_change_site: `tests/test_workflow_failure_heal.py`\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: Already satisfied. `test_autofix_payload_prioritizes_recent_diagnostics_and_compacts_state` (lines 1215-1243) constructs a large state comment followed by a harness diagnosis with a run URL, then asserts the excerpt starts with the diagnosis, the state is compacted, state data does not leak, the excerpt stays within the byte limit, and `run_refs` preserves the run URL.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"In `workflow_failure_heal.py::build_issue_payload`, build bounded excerpts newest-first and compact or omit bulky orchestrator-state blobs so recent failure comments survive.\"\n  Expected change site: `scripts/workflow_failure_heal.py`\n  Evidence of absence: Already satisfied. `build_issue_payload` at line 371 and `build_autofix_failure_payload` at line 474 both call `_build_recent_comments_excerpt` (line 296), which iterates `reversed(comment_texts[-8:])` (newest first), compacts `ORCHESTRATOR_STATE_V2` blobs via `_ORCHESTRATOR_STATE_V2_COMMENT_RE.fullmatch`, and enforces the byte budget with truncation.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5 (verified present)\n- Requirement: \"Add the current Actions run URL to harness-error comments in `validate_process.sh`.\"\n  Expected change site: `scripts/validate_process.sh`\n  Evidence of absence: Already satisfied. Lines 4201-4204 build `HARNESS_RUN_REFERENCE` from `GITHUB_RUN_ID`, and both harness-error comment variants at lines 4220 and 4228 append it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5 (verified present)\n- Requirement: \"In `mark_validation_failed`, post the detailed harness-error comment before applying `ai:harness-broken`.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`\n  Evidence of absence: Already satisfied. `post_tracking_comment` at line 11565 posts the detailed diagnostic, then `gh_retry gh issue edit ... --add-label \"ai:harness-broken\"` at line 11570 applies the label after the comment.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5 (verified present)\n- Requirement: \"Add regression coverage using a large state comment followed by a harness-error comment, asserting both the diagnosis and run reference reach the payload.\"\n  Expected change site: `tests/test_workflow_failure_heal.py`\n  Evidence of absence: Already satisfied. `test_autofix_payload_prioritizes_recent_diagnostics_and_compacts_state` (lines 1215-1243) constructs a large state comment followed by a harness diagnosis with a run URL, then asserts the excerpt starts with the diagnosis, the state is compacted, state data does not leak, the excerpt stays within the byte limit, and `run_refs` preserves the run URL.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5 (verified present)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e4540c8a6d404a51999e33c8e13b1588bac861f9e1c7e3501edf5d9d59354075",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4330,
+    "run_id": "35890120325",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35890120325",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923173738_0346bc0c3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4330,
+    "run_id": "35890120325"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-23T17:37:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

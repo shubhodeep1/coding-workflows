@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:766-780 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, qwen_qwen3_7-plus]\n  PROBLEM: `guard_targets` treats a `cd` preceded by `&&` as unconditionally executed, so a later push can be judged against the wrong directory.\n  WHY: If the command before `&&` fails, Bash skips the `cd` but runs the later push from the original directory, potentially bypassing or falsely triggering the merged-PR guard.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:596-601, 643-644 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, qwen_qwen3_7-plus]\n  PROBLEM: Wildcard tag-only refspecs trigger the unresolvable-refspec fallback, creating a guard target on the session checkout's current branch.\n  WHY: A tag-only push can be blocked or require confirmation based on branch history even though it does not write a branch; severity differed between reviewers (NIT and MAJOR), so the highest severity is used.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: When CLAUDE.md \u00a721 is updated with the effective repository and push target ref rules, the twin mirror at workflow-templates/CLAUDE.md must be updated identically so consumer repositories receive the documentation and test_template_copies_are_identical passes.\n  expected_change_site: workflow-templates/CLAUDE.md around lines 903-935 and 974-983\n  confidence=[5]\n  flagged_by: [google_gemini-3_8-flash]\n  EVIDENCE: CLAUDE.md was modified in lines 903-935 and 974-983, but workflow-templates/CLAUDE.md was not modified in the PR diff; tests/test_pr_merge_status_guard.py line 851 asserts the two files are identical.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: guard_targets, the `cd` branch evaluating `_is_sequential_separator(separator_before) and _is_sequential_separator(separator_after)` (lines ~766-780 in the diff) | severity=high | confidence=5\n  PROBLEM: `_is_sequential_separator` returns True for `&&`, so a `cd` preceded by `&&` is treated as having definitely run.\n  WHY: If the command before `&&` fails, Bash skips the `cd` but runs the later push from the original directory, while the guard judges it from the target directory.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: _unresolvable_refspec_reason (line ~643) + _push_refspec_targets unresolvable fallback (line ~596-600 in the diff) | severity=low | confidence=5\n  PROBLEM: A wildcard tag-only refspec triggers an unresolvable-refspec fallback target on the session checkout.\n  WHY: A tag-only push can be blocked or require confirmation based on the session checkout's branch, even though it does not write any branch refs.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: 594-601, 643-644 (and .claude/hooks/pr_merge_status_guard.py: 594-601, 643-644) | severity=high | confidence=5\n  PROBLEM: Wildcard tag refspecs trigger the unresolvable-refspec fallback, creating a fallback `GuardTarget` on the session checkout's current branch.\n  WHY: The guard evaluates the session checkout's branch even though the command only pushes tags, contrary to CLAUDE.md \u00a721.B.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: 281-284, 766-780 (and .claude/hooks/pr_merge_status_guard.py: 281-284, 766-780) | severity=high | confidence=5\n  PROBLEM: `_is_sequential_separator` returns True for `&&`, so `guard_targets` treats a `cd` preceded by `&&` as unconditionally updating the tracked directory.\n  WHY: If the preceding command fails, Bash skips the `cd` and runs the push from the original checkout, but the guard judges it against the target directory.\n- TASK_GAP\n  Requirement: When CLAUDE.md \u00a721 is updated with the effective repository and push target ref rules, the twin mirror at workflow-templates/CLAUDE.md must be updated identically so consumer repositories receive the documentation and test_template_copies_are_identical passes.\n  Expected change site: workflow-templates/CLAUDE.md around lines 903-935 and 974-983\n  Evidence of absence: CLAUDE.md was modified in lines 903-935 and 974-983, but workflow-templates/CLAUDE.md was not modified in the PR diff, causing test_template_copies_are_identical in tests/test_pr_merge_status_guard.py line 851 to fail on assert TEMPLATE_CLAUDE_MD.read_text(encoding=\"utf-8\") == CLAUDE_MD.read_text(encoding=\"utf-8\").\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: `_unresolvable_refspec_reason` (~line 643) and the fallback target creation in `_push_refspec_targets` (~lines 594-601) | severity=high | confidence=5\n  PROBLEM: A wildcard tag-only refspec triggers the unresolvable-refspec fallback, creating a `GuardTarget` on the session checkout.\n  WHY: The tag-only push can be blocked based on a branch the push does not write.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: `_is_sequential_separator` (~line 284) and the `cd` branch in `guard_targets` (~lines 766-780) | severity=high | confidence=5\n  PROBLEM: `_is_sequential_separator` returns True for `&&`, so a `cd` preceded by `&&` is treated as unconditional.\n  WHY: If the preceding command fails, Bash skips the `cd`, but the guard judges the later push from the wrong directory.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b1bb1d6fa25ff3c1f001541715f951139b13cbf72106d85e866836bdd552eb05",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5173,
+    "run_id": "36709311504",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36709311504",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930123133_263e1fa8bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5173,
+    "run_id": "36709311504"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T12:31:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

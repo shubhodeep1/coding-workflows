@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/heal-deterministic-autofix-failures-plan.md:P2 step 10 (gate jq filter, ~line 376-385) vs. step 11b (sibling idempotency, ~line 419-421) | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The gate filter does not include `review-autofix-failure-cap:v1` or specify output derivation for `fingerprint_cap_already_applied=true`, so the sibling job repeatedly posts the cap comment on subsequent runs.\n  WHY: The gate continues to set `fingerprint_cap=true` after the cap marker exists, causing duplicate cap comments and repeated heal reports instead of suppressing later dispatches.\n\n- docs/plans/heal-deterministic-autofix-failures-plan.md:P2 step 9 (~line 339-344, \"Post editor summary comment\") vs. step 8 (~line 318-335, \"Assemble failure evidence\") | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Step 9 computes its failure marker from `editor_stage_stderr.txt` only, while step 8 computes its marker from concatenated `editor_stage_stderr.txt`, `collect_metadata_stderr.txt`, and `review_autofix_run_summary_line.txt`.\n  WHY: The same underlying failure produces different fingerprints, so repeated failures do not accumulate against the cap; the two failure comments are treated as distinct failure modes.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/plans/heal-deterministic-autofix-failures-plan.md:P2 step 10 (gate jq filter, ~line 376-385) vs. step 11b (sibling idempotency, ~line 419-421) | severity=high | confidence=5\n  PROBLEM: The sibling job's idempotency check requires the gate to produce `fingerprint_cap_already_applied=true` when it sees a `<!-- review-autofix-failure-cap:v1 head=<sha> -->` marker on the current head. But step 10 only widens the gate's jq filter to keep comments containing `REVIEW_AUTOFIX_PARTIAL_V1` or `review-autofix-failure:v1` \u2014 the cap marker is excluded. On the verified gate code at `.github/workflows/review_autofix.yml:605-609`, the filter is `select((.body // \"\") | contains(\"<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->\"))`; the plan's \"widen\" step does not add `review-autofix-failure-cap:v1` to that predicate, so the gate cannot see the marker it is supposed to detect. Step 10 also does not specify any output-derivation logic that could set `fingerprint_cap_already_applied=true`.\n  WHY: After the first cap trip on head `H`, the sibling job posts the cap comment. On every subsequent run on the same head, the gate's filter still matches only the failure markers (count >= max), so `fingerprint_cap=true` is set again, the sibling job re-runs, and it re-posts the cap comment. The label application is idempotent, but the cap comment duplicates each cycle, and the heal reporter runs once per cycle instead of once per cap event \u2014 directly contradicting the goal \"posts nothing\" for later dispatches and defeating the \u00a715 \"cycle-local caches are first-class\" spirit.\n- docs/plans/heal-deterministic-autofix-failures-plan.md:P2 step 9 (~line 339-344, \"Post editor summary comment\") vs. step 8 (~line 318-335, \"Assemble failure evidence\") | severity=high | confidence=4\n  PROBLEM: Step 9 runs at line 4501 (the existing no-output-path comment step) and computes the failure marker inline because it runs before step 8 (which the plan places before \"Mark linked issues review-blocked (workflow failure)\" at line 7285). Step 9 specifies its evidence input as `editor_stage_stderr.txt` only; step 8 concatenates the tails of `editor_stage_stderr.txt`, `collect_metadata_stderr.txt`, AND `review_autofix_run_summary_line.txt`. Because `error_signature` runs over concatenated evidence, the two marker computations produce different `fp` values for the same underlying run failure.\n  WHY: A single failing run posts both the no-output-path comment (step 9) and \u2014 if the gate-trips path is not taken \u2014 a review-blocked / editor-changes-lost / editor-noop-suspicious comment (step 8). On the next run the gate scans newest-first for trailing markers sharing the newest `fp`. The step-9 marker is one `fp`; the step-8 marker (which references different evidence) is another. The counter treats them as distinct failure modes, the run's two failure comments do not accumulate against the cap, and the cap may never trip even after many identical underlying failures on the same head \u2014 the exact failure mode the cap is designed to catch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c232d9585f3ccc27d897080b230df199cb2a5a694c33fb8b2dc5362161c8bf2f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35728137814",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35728137814",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922130452_8559a0a6c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35728137814"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-22T13:04:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

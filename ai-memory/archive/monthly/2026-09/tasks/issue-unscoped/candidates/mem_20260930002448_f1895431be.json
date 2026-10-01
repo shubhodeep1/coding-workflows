@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1786 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `issue_body_integration_branch` suppresses all Python errors, including interpreter-not-found, and silently returns no branch.\n  WHY: If `python3` is unavailable, the sweep and workflow treat issues as having no declared integration branch, leaving eligible security follow-ups open until a default-branch merge; this is a fail-closed degradation, not a security bypass.\n- .github/workflows/issue_pr_status.yml:667 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The lineage step references `LINEAGE_FINALIZE_ISSUE_NUMBERS` without a default, so it would fail if separated from the step that exports it.\n  WHY: The variable is currently shared through `$GITHUB_ENV` within the same job, so this only becomes an issue if the steps are split into separate jobs or workflow files without passing the variable through job outputs.\n- .github/workflows/issue_pr_status.yml: `record_issue_integration_branches` (added in the new step block at ~lines 230-258) and its two call sites in the existing step (closing refs at ~line 343 and ORCH batch at ~line 486) | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `record_issue_integration_branches` repeatedly reparses the same payload with `jq` and launches per-issue subprocesses for each extracted issue number.\n  WHY: On the PR-close hot path, payloads with dozens of issues incur 2*N+1 `jq` invocations and roughly four subprocess forks per issue, making runtime grow super-linearly; the reviewer notes this is not a current correctness bug.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh:1786 | severity=low | confidence=2\n  PROBLEM: The embedded python3 in `issue_body_integration_branch` suppresses all errors with `2>/dev/null || true`, including interpreter-not-found.\n  WHY: If `python3` is missing from the runner PATH, `close_merged_issues_sweep` and `issue_pr_status.yml` treat every issue as having no declared integration branch. A security follow-up named on a project branch is then left open with `ai:merged` applied but never closed until a default-branch merge. This is a fail-closed degradation (safer than fail-open), not a security bypass.\n- .github/workflows/issue_pr_status.yml:667 | severity=low | confidence=1\n  PROBLEM: The lineage step now loops over `LINEAGE_FINALIZE_ISSUE_NUMBERS` instead of `LINKED_ISSUE_NUMBERS`. The `LINEAGE_FINALIZE_ISSUE_NUMBERS` env var is new and exported only by the first step's `export_orchestrator_issue_classification`. The lineage step's `run:` block directly references `LINEAGE_FINALIZE_ISSUE_NUMBERS` without the `:-` default, unlike the first step's check at line 625.\n  WHY: Only if the two steps were ever split into separate jobs or workflow files (where `GITHUB_ENV` doesn't carry between jobs), `LINEAGE_FINALIZE_ISSUE_NUMBERS` would be unset and the `<<<` heredoc would fail on an empty/unset variable. In the current layout they share one job's `$GITHUB_ENV`, so this works. The upstream `LINKED_ISSUE_NUMBERS` has the same dependency and has worked for years in this architecture.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/issue_pr_status.yml: `record_issue_integration_branches` (added in the new step block at ~lines 230-258) and its two call sites in the existing step (closing refs at ~line 343 and ORCH batch at ~line 486) | severity=low | confidence=4\n  PROBLEM: For each issue number extracted from a payload, the function re-runs `jq` against the same payload twice \u2014 once for the body and once for the `ai:orchestrator-managed` label check \u2014 plus a third pass to enumerate the numbers up front. With N issues in the closing or batched-orchestrator payload (up to 200 per `_fetch_linked_pr_status_graphql` call), this is 2*N+1 `jq` subprocess invocations, each reparsing the same JSON. The function also calls `issue_body_integration_branch` (a `python3 -c` subprocess) and `issue_body_orchestrator_project_branch` (a `sed | sort -u | wc -l` pipeline) on each iteration, so the per-issue cost is roughly four subprocess forks plus a payload-sized JSON parse in every one of them.\n  WHY: This is the gate step, which is on the PR-close hot path. With the typical linked-issue payload of dozens of issues, the runtime grows super-linearly. It is not a correctness bug today, but the queue_build_failed fix for issue #4955 was the immediate previous DoS hardening on this same code path; keeping the rest of the step's jq traffic efficient is in the same spirit. A single jq pass that emits a stream of `{number, body, labels}` records for both call sites would replace 2*N+1 jq calls with 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fb3e679969608e7947fc0b070edda66cd37a32dfe86f2781b120d194178eed37",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36648768708",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36648768708",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930002448_f1895431be",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36648768708"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T00:24:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

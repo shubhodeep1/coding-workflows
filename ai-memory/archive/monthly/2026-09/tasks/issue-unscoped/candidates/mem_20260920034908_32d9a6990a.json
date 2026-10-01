@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:lines 15605-15619 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The `elif` chain in `run_standalone_stall_recovery` invokes `_staged_support_comments_for_guard` in a condition, so a successful cache hit falls through and invokes the helper again with cache mode `\"false\"`, forcing an unnecessary paginated REST history fetch.\n  WHY: The standalone guard therefore performs redundant GitHub API reads, can download the same history twice when the cache is exhausted, and can block auto-approval when REST fails despite a conclusive cache result.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:lines 15598-15619, the `if [ \"${phase}\" = \"ai:awaiting-approval\" ]` guard block in `run_standalone_stall_recovery` (added in this last run) | severity=high | confidence=4\n  PROBLEM: The elif chain invokes `_staged_support_comments_for_guard` inside the elif condition, allowing evaluation to fall through after a successful cache hit and causing a second call with cache_available=\"false\".\n  WHY: A conclusive cache still triggers a paginated REST history fetch, duplicate full downloads occur when the cache holds exactly 100 comments, and REST failure can block auto-approval despite the conclusive cache.\n- scripts/orchestrate_poll_process.sh:lines 15598-15619 (same elif chain as above) | severity=high | confidence=4\n  PROBLEM: Every stalled ai:awaiting-approval standalone candidate whose GraphQL details are available pays at least one extra paginated REST API call per 5-minute poll tick, even when the cache is conclusive.\n  WHY: The third elif re-downloads the full comment history despite the prefetched cache, violating the documented cache-first and GitHub API hygiene contracts.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh:run_standalone_stall_recovery, the ai:awaiting-approval guard at lines 15605-15619 (helper `_staged_support_comments_for_guard` defined at line 13216) | severity=high | confidence=5\n  PROBLEM: The elif chain invokes `_staged_support_comments_for_guard` inside the elif conditions with `&& ! cmd`, so a successful cache call makes the condition false and evaluation falls through to the next elif, which invokes the helper again with `\"false\"`.\n  WHY: The standalone arm performs an unnecessary paginated REST read on cache hits, can download the history twice when the cache is exhausted, and can skip auto-approval if REST fails even though the cache had a conclusive answer.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:run_standalone_stall_recovery, the ai:awaiting-approval guard at lines 15605-15619 | severity=high | confidence=4\n  PROBLEM: The elif chain is not mutually exclusive; after a successful cache lookup with `_standalone_staged_support_cache_available=\"true\"`, evaluation falls through and invokes `_staged_support_comments_for_guard` again with `\"false\"`.\n  WHY: The first guard result is discarded, every cache hit incurs an extra paginated REST read, and REST failure can skip auto-approval despite the documented conclusive cache path.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "d73ee316aa5e653951c6bc260aec9215ae82bfcf2061d3bb8cae287da7d79ac0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4133,
+    "run_id": "35482327542",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35482327542",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260920034908_32d9a6990a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4133,
+    "run_id": "35482327542"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-20T03:49:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

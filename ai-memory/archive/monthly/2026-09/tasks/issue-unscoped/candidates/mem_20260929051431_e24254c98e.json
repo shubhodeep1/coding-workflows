@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The plan (step 2) and G5 require \"Copy to the other hook twin so both are byte-identical\" \u2014 the root `.claude/hooks/gh_api_write_guard.py` must be synced from the template copy.\n  expected_change_site: `.claude/hooks/gh_api_write_guard.py`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The PR diff touches only `workflow-templates/.claude/hooks/gh_api_write_guard.py`; the root hook at `.claude/hooks/gh_api_write_guard.py` is unchanged (lacks `DECISION_DENY`, `MalformedJq`, `_JQ_CLI_OPTION_RE`, and the deny path in `parse_gh_api_args` and `evaluate`). The implement-plan log confirms this is intentional (\"Waiting on: `[claude-twin-sync]` ... the root hook copy is left for the supervising session's `[claude-twin-sync]`). The `test_template_parity` test (line 642) asserts byte-identical parity between the template and root hooks. Without the root copy sync, this test will fail in CI.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: The plan (step 2) and G5 require \"Copy to the other hook twin so both are byte-identical\" \u2014 the root `.claude/hooks/gh_api_write_guard.py` must be synced from the template copy.\n  Expected change site: `.claude/hooks/gh_api_write_guard.py`\n  Evidence of absence: The PR diff touches only `workflow-templates/.claude/hooks/gh_api_write_guard.py`; the root hook at `.claude/hooks/gh_api_write_guard.py` is unchanged (lacks `DECISION_DENY`, `MalformedJq`, `_JQ_CLI_OPTION_RE`, and the deny path in `parse_gh_api_args` and `evaluate`). The implement-plan log confirms this is intentional (\"Waiting on: `[claude-twin-sync]` ... the root hook copy is left for the supervising session's `[claude-twin-sync]`\").\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ce6bd54c9a28bd297c5a6cf3e3a0d78ec37a58941a6d47a731e164577b89c806",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36523638720",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36523638720",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929051431_e24254c98e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36523638720"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T05:14:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

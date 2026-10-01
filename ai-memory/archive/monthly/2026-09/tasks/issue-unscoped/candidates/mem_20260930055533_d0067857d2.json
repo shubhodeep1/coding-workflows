@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/check_in_status.py:376-381 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If `page_payload` is not a dict, calling `page_payload.get(\"workflow_runs\")` raises an uncaught `AttributeError`.\n  WHY: The finding says the `ReadError` handler catches exceptions from `gh_api` but not structure-validation errors afterward; qwen_qwen3_7-plus and z-ai_glm-5_2 dispute it, reporting that `gh_api` validates the payload as a dict and raises `ReadError` first.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"[claude-twin-sync] copy into .claude/scripts/check_in_status.py (supervising session)\"\n  expected_change_site: .claude/scripts/check_in_status.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: google_gemini-3_1-flash-lite: workflow-templates/.claude/scripts/check_in_status.py is updated, but .claude/scripts/check_in_status.py in the root has not been updated; minimax_minimax-m3: workflow-templates/.claude/scripts/check_in_status.py is updated with the new `_pr_named_active_review_run_count` and `_complete_dispatch_run_listing` helpers, but .claude/scripts/check_in_status.py in the repo root is unchanged (parity test will fail until the twin sync lands). The minimax review also says this is a tracked twin-first follow-up, and qwen_qwen3_7-plus and z-ai_glm-5_2 report it as an explicitly deferred twin-sync rather than an unmet requirement.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/check_in_status.py:376-381 | severity=MAJOR | confidence=4\n  PROBLEM: If gh_api returns a non-dict page_payload, page_payload.get(\"workflow_runs\") raises an uncaught AttributeError.\n  WHY: If GitHub returns an unexpected response structure (e.g., a list when a dict is expected), the script crashes with AttributeError. The ReadError handler (lines 369-373) only handles exceptions from gh_api itself, not structure validation errors that happen later.\n- Requirement: \"[claude-twin-sync] copy into .claude/scripts/check_in_status.py (supervising session)\"\n  Expected change site: .claude/scripts/check_in_status.py\n  Evidence of absence: The file workflow-templates/.claude/scripts/check_in_status.py is updated, but .claude/scripts/check_in_status.py in the root has not been updated with the changes, which is explicitly noted as a pending task in the PR description's checklist.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"[claude-twin-sync] copy into .claude/scripts/check_in_status.py (supervising session)\"\n  Expected change site: .claude/scripts/check_in_status.py\n  Evidence of absence: workflow-templates/.claude/scripts/check_in_status.py is updated with the new `_pr_named_active_review_run_count` and `_complete_dispatch_run_listing` helpers, but .claude/scripts/check_in_status.py in the repo root is unchanged (parity test will fail until the twin sync lands).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d440599aa8f68cf4fffb55c28ffa4f67c8f76e9985bf1ee731f6ad265755b143",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5471,
+    "run_id": "36672588549",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36672588549",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930055533_d0067857d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5471,
+    "run_id": "36672588549"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T05:55:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

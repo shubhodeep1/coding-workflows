@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16297-16310 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: when the timeline evidence confirms the merge, the fix issue is advanced past, but the issue itself keeps the `ai:ready-to-merge` label forever \u2014 unlike the validation path, which backfills `ai:merged` via `backfill_validation_fix_issue_merged_label` (line 3358).\n  WHY: no functional failure for the project \u2014 the poller advances the security pass on the evidence and never consults this fix issue again \u2014 but the closed fix issue is left permanently mislabelled, so any future reader (or the mention-only failure path's diagnostics) sees `ai:ready-to-merge` on a merged-and-closed issue, the exact inconsistent state that caused incident #4379.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh:16297-16310 | severity=NIT | confidence=3\n  PROBLEM: when the timeline evidence confirms the merge, the fix issue is advanced past, but the issue itself keeps the `ai:ready-to-merge` label forever \u2014 unlike the validation path, which backfills `ai:merged` via `backfill_validation_fix_issue_merged_label` (line 3358).\n  WHY: no functional failure for the project \u2014 the poller advances the security pass on the evidence and never consults this fix issue again \u2014 but the closed fix issue is left permanently mislabelled, so any future reader (or the mention-only failure path's diagnostics) sees `ai:ready-to-merge` on a merged-and-closed issue, the exact inconsistent state that caused incident #4379.\n  suggested minimal fix: inside the `if validation_fix_issue_has_merged_pr_evidence ...; then` branch, call the existing `backfill_validation_fix_issue_merged_label \"${SECURITY_FIX_ISSUE}\" \"${SECURITY_FIX_LABELS}\"` (already defined at line 3358) before setting `SECURITY_FIX_PR_MERGED=\"true\"`, so the label matches the evidence\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "2bbfa029580709a1a567e054bb7341617334032246ab3147f613aeba55718fdc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35301789615",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35301789615",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260918033755_30d9bb6f41",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35301789615"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-18T03:37:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

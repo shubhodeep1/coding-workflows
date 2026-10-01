@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_route.py:1080-1113 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A new environment blocker on the same issue inherits the prior blocker's rolling retry count and can be alerted immediately without its own retries.\n  WHY: The reviewer notes this is per-spec because the limit is per issue, but it may surprise operators; the issue still receives an alert and can be reclarified.\n- scripts/claude_issue_route.py:984 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `<!-- ai:claude-blocked:v1 -->` marker gains an optional `reason=<reason>` suffix, but existing prefix readers still match the extended form.\n  WHY: The reviewer verified compatibility with `test_plain_marker_readers_still_match_the_reason_form` and confirmed no backward-compatibility break.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_issue_route.py:1080-1113 | severity=NIT | confidence=3\n  PROBLEM: The `recent` counter in `env_requeue_decision` tallies every trusted requeue marker in the rolling window regardless of which blocker they reference. When blocker #1 exhausts its two retries in 24h and a new environment failure (blocker #5, different reason) appears on the same issue, `recent` already equals `max_retries` and the new blocker is immediately alerted without its own retries.\n  WHY: This is not a crash or data-loss. The issue still gets an alert, and a human can comment `/reclarify`. The spec says \"at most 2 per issue per 24h,\" so this is per-spec. But it can surprise operators who would expect a genuinely new failure class to get a fresh allowance.\n- scripts/claude_issue_route.py:984 | severity=NIT | confidence=1\n  PROBLEM: The `<!-- ai:claude-blocked:v1 -->` marker gains an optional `reason=<reason>` suffix inside the same HTML comment. Every existing reader that matches on the `<!-- ai:claude-blocked:v1` prefix still matches the reason-extended form.\n  WHY: N/A \u2014 no break confirmed by test.\n- scripts/claude_issue_queue_watchdog.sh:160-163\n  PROBLEM: The `gh_retry gh api -X POST \"repos/${SELF_REPO}/dispatches\" --input \"${dispatch_file}\"` call sends a repository_dispatch to coding-workflows. If the intake workflow is temporarily broken (e.g., a clone of the dispatch body is malformed), the dispatch succeeds but the intake fails silently.\n  WHY: The watchdog has no way to know whether the intake succeeded until the next hourly run. Suggested minimal fix: Add a comment documenting that dispatch success does not guarantee intake success, and that the intake failure path (Telegram alert from `claude_issue_intake.sh`) is the primary signal.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "43d7879978750ac0504131b06c80e49eab60ce805f7dc0f3c18975408e2e1f5d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36519549044",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36519549044",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929042131_9b34059a96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36519549044"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T04:21:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

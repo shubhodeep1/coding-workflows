@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/claude-issue-pickup.md: Lines 39, 41; Lines 41, 55-59; :41, 55\u201359; Step 1 \"Cleanup calls\" paragraph, the `\u2014 wake.` section and the \"One pickup, never deeper.\" Rules bullet; .claude/commands/fix-claude-pr.md:15\u201320, 40\u201344; .claude/scripts/claude_fix_claim.py:93-117; :100\u2013117 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: When a denied deletion leaves the old pickup trigger enabled, an already-running old wake and the new pickup can read the same open PR-fix queue item and start concurrent fixer sessions whose non-atomic claim checks can both proceed to edit the PR.\n  WHY: The queue item is closed only after session-start calls succeed, and the separate claim read and comment POST allow both fixers to observe an unclaimed head; reviewers disagreed on severity, with MAJOR mapped to high and NIT mapped to low, so the highest severity is retained.\n- (No task gaps reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/claude-issue-pickup.md: Lines 39, 41 | severity=MAJOR | confidence=4\n  PROBLEM: The restart path creates this session's hourly trigger after a denied deletion of the old pickup trigger is skipped, leaving a window where both pickups can read the same open queue item and start sessions for it.\n  WHY: For a `pr_fix` item, `post_claim` reads the PR head and posts a comment non-atomically, so two sessions can see an unclaimed head, both post claims, and edit the same PR.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/claude-issue-pickup.md: Lines 41, 55-59 (Cleanup calls paragraph and the \"for that one wake\" acknowledgement); `.claude/scripts/claude_fix_claim.py` lines 93-117 (referenced by the cross-pollination finding) | severity=NIT | confidence=3\n  PROBLEM: When a denied `delete_trigger` leaves the old pickup trigger enabled, an already-running old wake and the new pickup can read the queue and call `create_session` for the same target.\n  WHY: Queue items close only after both session-start calls succeed, and `post_claim` checks the head and then posts a comment without atomically checking for another claim, so both sessions can proceed to edit the same PR head.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `.claude/commands/claude-issue-pickup.md:41, 55\u201359`; `.claude/commands/fix-claude-pr.md:15\u201320, 40\u201344`; `.claude/scripts/claude_fix_claim.py:100\u2013117` | severity=MAJOR | confidence=5\n  PROBLEM: A restart can leave an already-running old pickup wake overlapping with the new pickup; both can read the same open PR-fix queue item and start fixer sessions.\n  WHY: Each fixer reads claim state before claiming, then `post_claim` separately reads the PR head and posts a comment, so two fixers can observe no live claim and post claims for the same head before proceeding to edit and push.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- `.claude/commands/claude-issue-pickup.md`: Step 1 \"Cleanup calls\" paragraph, the `\u2014 wake.` section and the \"One pickup, never deeper.\" Rules bullet | severity=NIT | confidence=3\n  PROBLEM: In `start \u2014 restart` mode, a denied deletion of the old pickup trigger is skipped and the new pickup creates its own trigger; an already-running old wake is not stopped, so both pickups can read the queue for that wake.\n  WHY: Two overlapping wakes can each read the same still-open PR-fix item and start a session; `claude_fix_claim.py post` checks the PR head then posts a claim comment without an atomic compare-and-set, allowing both fixer sessions to pass the claim check.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1437120c33c607e6085ec188b11fbd4048463a0d810de2bc5454e23266b21963",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5097,
+    "run_id": "36718316495",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36718316495",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930131633_82d895c4eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5097,
+    "run_id": "36718316495"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T13:16:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

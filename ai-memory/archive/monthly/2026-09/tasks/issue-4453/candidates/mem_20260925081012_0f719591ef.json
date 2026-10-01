@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What identity should be authorized to attest a Claude-fixer verdict?\nChoices:\nA. A dedicated GitHub App or bot identity used exclusively by the fixer session; provision its credentials privately. (RECOMMENDED)\nB. No exclusive fixer identity is available; disable verdict-triggered auto-merge rather than trust a collaborator\u2019s attestation.",
+  "fingerprint": "080492d778a7297c0e72b0e237e6a1841c19d4cfa3d4a310d59c67cf5645f581",
+  "lineage": {
+    "issue_number": 4453,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36111015705",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36111015705",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260925081012_0f719591ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4453,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36111015705"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4453 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-25T08:10:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md: Zombie-checker cleanup section (\"Keep the recorded project checker when it is reusable (Arming the wait, step 1).\") | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The cleanup instruction can be read to archive a recorded legacy `\u2014 waiting:` checker, contradicting the instruction to keep it until step 1 replaces it.\n  WHY: The wording gives an LLM executor two divergent reading paths, even though the final state is still correct.\n- .claude/commands/implement-plan-claude.md: Check-in Loop \u2192 Checker prompt step 0 (\"or a newer checker-instructions message has arrived since this one, the wake is stale\") | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The stale-wake condition for a newer checker-instructions message does not specify how step 0 can verify that such a message arrived.\n  WHY: A checker cannot verify this condition from the prompt text, so it may silently drop the condition.\n- agents.md: agents.md \"Interactive slash-command model selection\" / \"There is **one checker per project**\" paragraph (~line 703-712) | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The description that the checker is \"created by the first stage and reused for every wait\" does not distinguish fresh projects from resumed stages that reuse or replace the recorded checker.\n  WHY: An agent reading only agents.md could infer that each stage creates a new checker rather than following find-or-create logic.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/implement-plan-claude.md: Zombie-checker cleanup section (\"Keep the recorded project checker when it is reusable (Arming the wait, step 1).\") | severity=NIT | confidence=3\n  PROBLEM: \"Reusable\" is defined by Arming-the-wait step 1 as a three-criterion conjunction: not archived, `status_bucket` not `failed`, AND title equals `implement-plan <slug> \u2014 checker`. A legacy `\u2014 waiting:` checker that is the recorded project checker for a project being migrated off the older one-checker-per-wait design is, by that strict reading, NOT reusable, so this sentence reads as an instruction to archive it. The end state is still correct (zombie cleanup archives the legacy checker, then step 1 creates a new `\u2014 checker`), but the instruction wording lets an LLM reader infer the legacy session should be preserved up to the step-1 swap, which the literal text contradicts.\n  WHY: an LLM executor that follows the parenthetical literally will archive the recorded legacy checker before step 1 has a chance to replace it; while the final state is correct, the instruction gives two divergent reading paths and the post-condition diverges from what a human reviewer of the doc would expect (resume hygiene just said \"do not archive it here, because every later wait reuses it\").\n- .claude/commands/implement-plan-claude.md: Check-in Loop \u2192 Checker prompt step 0 (\"or a newer checker-instructions message has arrived since this one, the wake is stale\") | severity=NIT | confidence=3\n  PROBLEM: The \"newer checker-instructions message has arrived\" condition is unfalsifiable from the prompt as written. Step 0 does not name `list_triggers` as the means to verify it (only the arming-the-wait step 2 does), and a `send_later` re-arm of step 2 produces a wake that carries only the wait id of *that* check-in, not a separate signal that a newer checker-instructions trigger exists.\n  WHY: a Sonnet checker that encounters a stale wake from the second condition (different from the \"different wait id\" condition) cannot verify the condition without going beyond the prompt text. The first condition covers the dominant stale-wake case, so this is a doc gap rather than a runtime correctness failure, but it lets the second condition be silently dropped.\n- agents.md: agents.md \"Interactive slash-command model selection\" / \"There is **one checker per project**\" paragraph (~line 703-712) | severity=NIT | confidence=2\n  PROBLEM: \"created by the first stage and reused for every wait\" is imprecise when the stage in question is a resumed stage carrying a `\u2014 resume.` block \u2014 that stage does not create, it reuses (or replaces) the recorded checker. The agent-facing architectural summary should distinguish \"the first stage of a fresh project creates the checker\" from \"every later stage reuses it\" so an implement-plan-claude author reading agents.md for context does not conclude that every stage session opens with a fresh `create_session`.\n  WHY: an LLM executor that reads only agents.md (e.g., during step 2 / step 5 of an unrelated task) and then writes step-1 logic in a downstream session will model step 1 as always-creating rather than find-or-creating, which is the bug the rest of this PR is fixing.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e8af7203d07e32002d02113870453756ec63d14c88c3e79caf39ce8827ef372a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36216127036",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36216127036",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260926040503_5feb420f7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36216127036"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-26T04:05:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

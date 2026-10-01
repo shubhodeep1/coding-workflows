@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"E2E Orchestrate Smoke 36504041362: parallel canaries\",\"issues\":[{\"id\":\"canary-a\",\"title\":\"Update first E2E smoke canary\",\"priority\":1},{\"id\":\"canary-b\",\"title\":\"Update second E2E smoke canary\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "55440598f1d59905cfa0e988399ebd0487a38d00ae7f2634404bdea03037ddd3",
+  "lineage": {
+    "issue_number": 4878,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36504123439",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36504123439",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260929004305_d243090322",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4878,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36504123439"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'E2E Orchestrate Smoke 36504041362: parallel canaries' into 2 issues (tracking #4878)",
+  "timestamps": {
+    "created_at": "2026-09-29T00:43:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

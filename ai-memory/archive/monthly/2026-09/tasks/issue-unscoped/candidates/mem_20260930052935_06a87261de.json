@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Documentation PR reflects the corrected release procedure, retired #4990 entries, current master session ID, and three new 2026-09-30 lessons consistent with the events described.\n  expected_change_site: docs/operations/master-session.md\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: All referenced deliverables are present in the diff and internally consistent with documented behavior (test-and-mark-stable.yml's `Validate dispatch ref` step restricts non-`gate_only` runs to `stable`; the \u00a721 merged-PR guard, \u00a723.C ask-first dispatch rule, and \u00a726 hold-claim scanning via `check_in_status.py --hand-back` are cited correctly against the in-repo CLAUDE.md sections; the #4990 fix description \"limit 20, resumes first, one 30-minute catch-up wake\" matches the \u00a723.I pickup contract; #5423 is the correct follow-up issue for the `/reclarify` wait now that #4990 is merged; #4813 is the correct close-sweep behaviour for project-branch merges; the Q63 condition 2 (issue open) reference is consistent with the project's numbered Q-table convention). The session ID format `session_01RNCnXFXVviFXqJaopAD78D` matches the standard `session_<id>` format and the documented session id echo pattern, and it is also recorded in the commit message `Claude-Session:` trailer for cross-reference.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Documentation PR reflects the corrected release procedure, retired #4990 entries, current master session ID, and three new 2026-09-30 lessons consistent with the events described.\n  Expected change site: docs/operations/master-session.md\n  Evidence of absence: All referenced deliverables are present in the diff and internally consistent with documented behavior (test-and-mark-stable.yml's `Validate dispatch ref` step restricts non-`gate_only` runs to `stable`; the \u00a721 merged-PR guard, \u00a723.C ask-first dispatch rule, and \u00a726 hold-claim scanning via `check_in_status.py --hand-back` are cited correctly against the in-repo CLAUDE.md sections; the #4990 fix description \"limit 20, resumes first, one 30-minute catch-up wake\" matches the \u00a723.I pickup contract; #5423 is the correct follow-up issue for the `/reclarify` wait now that #4990 is merged; #4813 is the correct close-sweep behaviour for project-branch merges; the Q63 condition 2 (issue open) reference is consistent with the project's numbered Q-table convention). The session ID format `session_01RNCnXFXVviFXqJaopAD78D` matches the standard `session_<id>` format and the documented session id echo pattern, and it is also recorded in the commit message `Claude-Session:` trailer for cross-reference.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e665863215fccfe8bc870f505be3d52686be8638a3a35203368d40191338e97b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36672513380",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36672513380",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930052935_06a87261de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36672513380"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T05:29:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6124-6151 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3]\n  PROBLEM: The findings-JSON validation gate checks existing suppression buckets but does not validate `.counts.suppressed_waived`, even though `scripts/security_audit.sh` emits it as a first-class suppression bucket.\n  WHY: A malformed or missing `suppressed_waived` value can pass validation and later cause waiver-suppression accounting failures or inconsistent downstream state; severity was reported as MAJOR and HIGH, so HIGH is used.\n- scripts/orchestrate_poll_process.sh:5560-5563 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The non-idempotent `gh issue create` for advisory follow-ups is deliberately not retried, so a transient network failure can permanently lose the follow-up issue after the waiver is recorded.\n  WHY: The marker reconciliation search covers the lost-response case but not the lost-request case, leaving a persisted waiver without its advisory tracking issue.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:6132-6137 | severity=MAJOR | confidence=4\n  PROBLEM: The findings-JSON validation gate at `run_security_pass_inline` checks `.counts.suppressed_excluded`, `.counts.suppressed_invalid`, `.counts.suppressed_low_confidence`, and `.counts.suppressed_out_of_scope` via `all([...][]; (type == \"number\") and (floor == .) and . >= 0)`, but does NOT include `.counts.suppressed_waived` even though `scripts/security_audit.sh:1172` now emits `suppressed_waived` as a first-class suppression bucket.\n  WHY: Immediately after this gate, `security_pass_apply_waivers_to_findings` at `scripts/orchestrate_poll_process.sh:5389` runs `int(counts.get(\"suppressed_waived\") or 0) + len(suppressed)`. If the engine emits `suppressed_waived` as a non-numeric string (e.g. `\"abc\"`), `int(\"abc\")` raises `TypeError` inside the `$(...)` capture, which the outer `if ! suppressed_summary=\"...\"` then evaluates as failure \u2014 the helper emits a `::warning::` and returns 0 without rewriting the findings file, so all waiver-rejected findings stay blocking on the poller side even though the engine suppressed them. A boolean value silently coerces to `1` and corrupts the count. Both paths bypass the validation that every other suppression bucket gets. This gap was introduced in the LAST RUN when the new bucket was added without extending the gate.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:5560-5563 | severity=MAJOR | confidence=4\n  PROBLEM: The non-idempotent `gh issue create` for advisory follow-ups is deliberately not retried (correct design), but a transient network failure causes the follow-up issue to be lost permanently since the waiver is already recorded in state and the next poll tick will not re-attempt creation.\n  WHY: A transient network failure during `gh issue create` permanently drops the advisory follow-up while the waiver persists, leaving the project in a state where the waiver exists but no follow-up issue exists to track it.\n- scripts/orchestrate_poll_process.sh:6124-6151 | severity=HIGH | confidence=4\n  PROBLEM: The findings-JSON validation in `run_security_pass_inline` checks `.counts.suppressed_excluded`, `.counts.suppressed_invalid`, `.counts.suppressed_low_confidence`, and `.counts.suppressed_out_of_scope`, but does not validate `.counts.suppressed_waived` even though `security_audit.sh` emits it as a first-class suppression bucket.\n  WHY: A malformed or missing `.counts.suppressed_waived` value (non-integer, negative, boolean) will pass the orchestrator\u2019s gate and later confuse the waiver-suppression accounting, producing inconsistent logs or downstream state corruption.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh:6124-6151 | severity=MAJOR | confidence=5\n  PROBLEM: The findings-JSON validation gate checks `.counts.suppressed_excluded`, `.counts.suppressed_invalid`, `.counts.suppressed_low_confidence`, and `.counts.suppressed_out_of_scope`, but does not validate `.counts.suppressed_waived`, even though `scripts/security_audit.sh` now emits `suppressed_waived` as a first-class suppression bucket and `security_pass_apply_waivers_to_findings` reads and logs it.\n  WHY: A malformed or missing `suppressed_waived` value (non-integer, negative, boolean, or absent entirely) passes the orchestrator's hard gate and later confuses waiver-suppression accounting, producing inconsistent logs or downstream state corruption. The engine emits the field at `scripts/security_audit.sh:1169` and the poller consumes it at `scripts/orchestrate_poll_process.sh:6179`/`6193`, so the validation at lines 6132-6137 should include it.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "e9eab00a6468c26878abf3bb6fc037d257c011645bd71d9beff4e6005ff5dac6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4074,
+    "run_id": "34441336545",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34441336545",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260910075843_c2899abe0e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4074,
+    "run_id": "34441336545"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-10T07:58:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

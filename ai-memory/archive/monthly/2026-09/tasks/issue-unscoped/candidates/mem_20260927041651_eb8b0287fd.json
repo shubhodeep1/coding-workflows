@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:_has_unsafe_shell_syntax and related parsing helpers | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The complexity of manual shell parsing using regexes and `shlex` poses a maintainability and potential edge-case risk for bypasses.\n  WHY: Shell parsing is notoriously fragile. While the implementation appears robust and is supported by extensive tests, any future evolution of the Bash commands or shell syntax could potentially introduce edge cases that the regex-based parser might misinterpret or fail to catch, leading to incorrect permission decisions (either false prompts or false approvals).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/gh_api_write_guard.py: Shell parsing logic (`_has_unsafe_shell_syntax` and related parsing helpers) | severity=NIT | confidence=2\n  PROBLEM: The complexity of manual shell parsing using regexes and `shlex` poses a maintainability and potential edge-case risk for bypasses.\n  WHY: Shell parsing is notoriously fragile. While the implementation appears robust and is supported by extensive tests, any future evolution of the Bash commands or shell syntax could potentially introduce edge cases that the regex-based parser might misinterpret or fail to catch, leading to incorrect permission decisions (either false prompts or false approvals).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ce1a740ae804c9c03ddb2fa47b08de4e041cd641482ea6bfd9d65e303d82c5ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4592,
+    "run_id": "36292630788",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36292630788",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927041651_eb8b0287fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4592,
+    "run_id": "36292630788"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T04:16:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

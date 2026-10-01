@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/check_in_status.py:724-726 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: _parse_time() is called with the result of run.get(\"started_at\") without validating that the value is a string or that it is truthy.\n  WHY: If started_at is None (common for queued or pending check runs) or an empty string, _parse_time() will raise an exception (TypeError for None, ValueError for empty string) which, if not caught, crashes the stall-detection logic, preventing _review_stall_verdict from returning a verdict. While the caller attempts to catch ValueError, TypeError is not caught.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/scripts/check_in_status.py:724-726 | confidence=4\n  PROBLEM: _parse_time() is called with the result of run.get(\"started_at\") without validating that the value is a string or that it is truthy.\n  WHY: If started_at is None (common for queued or pending check runs) or an empty string, _parse_time() will raise an exception (TypeError for None, ValueError for empty string) which, if not caught, crashes the stall-detection logic, preventing _review_stall_verdict from returning a verdict. While the caller attempts to catch ValueError, TypeError is not caught.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "111e8122a576e6028821798b7c17920caddc9543bbf8b922d4b48d189022ec69",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5408,
+    "run_id": "36675316632",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36675316632",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930061327_149dfe859c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5408,
+    "run_id": "36675316632"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T06:13:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

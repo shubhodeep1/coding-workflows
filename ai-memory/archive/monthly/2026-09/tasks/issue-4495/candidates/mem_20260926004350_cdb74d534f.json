@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `b8e027c2992f64a26b7a7e11e35e86cf700fd9bf`. No integration branch was specified. The auto-answer confirms that no clarification is needed.\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/e2e_smoke_canary.txt`\nScope-mode justification: The complete request is a one-file content replacement; there is no smaller shortcut or additional feature to implement. This follows \u00a76 priorities: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Implementation\n- **Files likely to change:** Only `tests/e2e_smoke_canary.txt`.\n- **Functions or modules:** None. Replace its entire content with `status: ok`, `run_id: 36205375333`, and `updated-by: ai-pipeline`, in that order, ending with one newline.\n- **Data structures affected:** The canary\u2019s text value only.\n- **API/interface changes:** None.\n\n## Decisions\n### D1 \u2014 Replace the existing file verbatim\n- **Chosen:** Overwrite the file with the three specified lines.\n- **Alternatives considered:** Edit only the existing run ID or change the smoke workflow.\n- **Why:** A complete replacement guarantees the exact requested content without changing another file.\n\n## Security considerations\nNo new trust boundary, endpoint, or authorization surface is introduced. Treat the issue-supplied run ID as the exact value to write, not as a shell command; verify the resulting bytes so extra content cannot enter the canary.\n\n## Risks and edge cases\nThe file exists on the planning ref and currently contains a different run ID (`26151428977`). Preserve neither that value nor any extra whitespace. No factual conflict with the issue was found.\n\n## Testing\nCompare the file byte-for-byte against `printf 'status: ok\\nrun_id: 36205375333\\nupdated-by: ai-pipeline\\n'`; check that the diff names only `tests/e2e_smoke_canary.txt`. No broader test run is needed for this data-only replacement.\n\n## Pre-execution self-check\nThe target, exact bytes, and one-file scope are specified; the checkout is `main`, with no conflicting integration-branch metadata.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "657eef242dd4b47c5bf16ed3eea4204ccfca4fcf6dd72dc6477b48ce34c7a16f",
+  "lineage": {
+    "issue_number": 4495,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36205615941",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36205615941",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4495"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260926004350_cdb74d534f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4495,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36205615941"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4495",
+  "timestamps": {
+    "created_at": "2026-09-26T00:43:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

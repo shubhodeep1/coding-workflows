@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_twin_sync.py:436-449 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: After the guard provenance check (lines 436-441) passes, execution falls through to the twin-at-head comparison (lines 442-449). For a stable backport where only .claude/hooks/h.py was changed to match main's content but the twin on stable was not updated, the provenance check passes (local equals main), but the twin-at-head comparison produces a spurious violation: the stable-side twin holds the old content and local.sha does not equal twin.sha, triggering \"changed to content that differs from twin\" even though that is not the question provenance mode asks.\n  WHY: A legitimate stable backport that updates a single .claude/ guard file to main's reviewed content would turn CI red on the \"Claude twin sync state\" step, blocking the PR. The existing tests all write both copies together (twin and .claude/), masking this.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_twin_sync.py:436-449 | severity=high | confidence=4\n  PROBLEM: After the guard provenance check (lines 436-441) passes, execution falls through to the twin-at-head comparison (lines 442-449). For a stable backport where only .claude/hooks/h.py was changed to match main's content but the twin on stable was not updated, the provenance check passes (local equals main), but the twin-at-head comparison produces a spurious violation: the stable-side twin holds the old content and local.sha does not equal twin.sha, triggering \"changed to content that differs from twin\" even though that is not the question provenance mode asks.\n  WHY: A legitimate stable backport that updates a single .claude/ guard file to main's reviewed content would turn CI red on the \"Claude twin sync state\" step, blocking the PR. The existing tests all write both copies together (twin and .claude/), masking this.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6b216873017d4868ffdc02b221ce2919bb9537a07b227d8384c01f22cb949305",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36714283297",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36714283297",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930123801_668ebac8f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36714283297"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T12:38:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

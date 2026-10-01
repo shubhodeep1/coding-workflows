@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:3916-3942 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: Adding issue bodies to the `gh issue list` payloads and passing them to `jq` via `--argjson` can exceed Linux\u2019s per-argument size limit, causing the fallback to silently empty the close-sweep queue.\n  WHY: Large issue bodies can make `jq` fail to start, so the sweep closes nothing for that cycle without logging the failure; severity was reported as BLOCKER by deepseek_deepseek-v4-pro and MAJOR by z-ai_glm-5_2.\n- .github/workflows/issue_pr_status.yml:226-229 | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Using `awk -F '\\t'` to parse `ISSUE_INTEGRATION_BRANCHES` may fail on non-GNU awk implementations that do not interpret `\\t` as a literal tab.\n  WHY: In such environments, the function may not find issue numbers and can block labeling legitimate integration-branch merges; this does not reproduce in the current Ubuntu CI runner environment.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:3927-3940 | severity=critical | confidence=[5]\n  PROBLEM: Issue #4813 adds body to the gh issue list --json field lists, which increases the size of merged_json and ready_json. These lists are then passed to jq as --argjson command-line arguments. Linux caps a single argument string at 131072 bytes (MAX_ARG_STRLEN). Two or three issues with large bodies can exceed this limit, causing jq to fail with \"Argument list too long\". The || echo \"[]\" fallback silently produces an empty queue, and the sweep closes nothing with no log line indicating the failure.\n  WHY: A malicious or accidental issue body of 65536 characters (GitHub's limit) with an ai:merged label will push the merged_json argument past 131072 bytes when combined with other issues. jq fails to start, the fallback returns [], and the sweep silently skips every issue. The plan for issue #4955 acknowledges this and provides a fix (stdin-fed jq), but that fix has not been implemented in this PR.\n- .github/workflows/issue_pr_status.yml:226-229 | severity=high | confidence=[3]\n  PROBLEM: The awk -F '\\t' field separator relies on GNU awk's extension where \\t in ERE matches a literal tab. On non-GNU awk implementations (BSDs, busybox), \\t would match a literal backslash followed by t, not a tab character. The function would fail to find issue numbers in ISSUE_INTEGRATION_BRANCHES, returning empty for integration branches, which would block labeling for legitimate integration-branch merges (fail-closed).\n  WHY: If the runner image ever switched to a non-GNU awk or if the script ran in a different environment, integration-branch merges would be treated as non-target-branch merges, and issues would not receive ai:merged labels. In the CI runner environment (Ubuntu with gawk) this does not reproduce today.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh:3931-3942 | severity=high | confidence=[5]\n  PROBLEM: This PR adds `body` to both `gh issue list --json` field lists (lines 3917, 3924), so `merged_json`/`ready_json` now carry every labelled issue's full body. Those payloads are then passed to `jq` as `--argjson` command-line arguments. Linux caps a single argv string at MAX_ARG_STRLEN = 131,072 bytes; GitHub allows 65,536-char issue bodies, so two or three large bodies on `ai:merged`/`ai:ready-to-merge` issues exceed the cap. When that happens `jq` fails to start (`Argument list too long`) and the `|| echo \"[]\"` fallback silently turns the work queue into an empty list, so `close_merged_issues_sweep` closes nothing for the whole cycle with no log line saying why.\n  WHY: Any user who can open/edit an issue that later carries `ai:merged` or `ai:ready-to-merge` can disable the close sweep for every issue by posting large bodies \u2014 a denial-of-service of the automated issue-closure path. This is a regression introduced by this PR: before #4813 the payloads held only `number,labels` and stayed far below the limit. The included `docs/plans/issue-4955-close-sweep-large-issue-bodies-plan.md` documents this exact finding (STRIDE: Denial of Service, confidence 10/10) and its Rollout states the fix is intended to \"reach main with #4813's final PR (#4826)\" \u2014 i.e. land in this PR \u2014 but the fix code (stream the payloads to `jq` via stdin and surface `queue_build_failed`) is not present here.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9f8f02bd255a8653533138ffc316fca35681d641f50bed0113bda32a97033f27",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36518451189",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36518451189",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929035745_ff89627e3c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36518451189"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T03:57:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

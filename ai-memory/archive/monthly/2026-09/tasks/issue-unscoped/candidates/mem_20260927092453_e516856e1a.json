@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix_sweep.yml:lines 205-210 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `dispatch_pr` jq function can fail on a workflow_dispatch run whose `display_title` does not match the PR-number pattern, causing the sweep to discard the active-run snapshot and lose duplicate-dispatch suppression.\n  WHY: A single non-matching row can make the jq reduce fail; severity is normalized from the reviewer\u2019s MAJOR rating.\n- scripts/orchestrate_poll_process.sh:lines 17271-17284 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The PR-number lookup issues an extra `gh run list` call even when an earlier head-branch lookup already found an active run.\n  WHY: The numeric check is unconditional for non-empty callers, so each conflict-dispatch attempt incurs an unnecessary API call; severity is normalized from the reviewer\u2019s NIT rating.\n- .github/workflows/internal-review.yml:line 8 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `inputs.pr_number` is interpolated verbatim into the run name without validation on a manual or third-party dispatch path that bypasses the sweep\u2019s numeric guard.\n  WHY: Such a path is not currently reachable through the sweep, but could expose arbitrary input in GitHub UI text and log scanning; severity is normalized from the reviewer\u2019s NIT rating.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix_sweep.yml:lines 205-210 (`def dispatch_pr` in the `snapshot_active_review_runs` jq) | severity=MAJOR | confidence=3\n  PROBLEM: The `dispatch_pr` jq function pipelines `(.display_title // \"\")` into `[match(\"^Internal: AI Review & Autofix \\\\[pr:([1-9][0-9]*)\\\\]$\").captures[0].string]` then into `first // \"\"`. On a `workflow_dispatch` run whose `display_title` does not match the regex (older runs predating this PR, manually named dispatches, or unrelated workflow runs surfaced by the API), `match()` produces no output, so the array literal is `[]` and `[] | first` raises `first(array) requires non-empty array`. `// \"\"` does not catch errors in jq. Any single non-matching row therefore fails the entire jq reduce; the sweep's outer `if snapshot_json=\"$(...)\"` falls into the `snapshot_json='{}'` branch and every PR loses its active-run suppression, re-creating the PR #3895 duplicate-dispatch loop the change is meant to keep closed. The `test_unnamed_or_malformed_dispatch_run_stays_branch_keyed` case in `tests/test_review_autofix_sweep_stale_queued.py:194-204` is the only signal this branch ever works; if it actually passes in the jq version used by CI, jq's `match` must be returning null instead of an empty stream there, which is a fragile, undocumented reliance.\n  WHY: The snapshot is only valid if EVERY workflow_dispatch run in the past 100 of each workflow happens to carry the exact `Internal: AI Review & Autofix [pr:<N>]` name. The header comment acknowledges that older runs \"stay branch-keyed\" and \"age out within one run\", but branch-keying requires the jq to keep producing output, which it does not for those rows.\n- scripts/orchestrate_poll_process.sh:lines 17271-17284 (`_has_active_autofix_run` PR-named lookup) | severity=NIT | confidence=3\n  PROBLEM: `gh run list --limit 100` truncates to the 100 most recent workflow runs. The plan acknowledges this is acceptable because the cost is a queued duplicate that cannot cancel its running peer. The lookup is also placed after the three `--limit 5` head-branch lookups, but the implementation does not actually check whether those earlier lookups found anything before issuing the new call: the `if [[ \"${pr_number}\" =~ ^[1-9][0-9]*$ ]]; then` gate fires unconditionally on every poll cycle for any non-empty caller, so a repo where the head-branch lookups almost always hit returns 0 quickly and then pays for the extra call anyway. The fix is one line: wrap the new block in the same head-branch-empty check that the comment promises, e.g. gate it on a flag set inside the loop.\n  WHY: Every conflict-dispatch attempt by the poller pays one extra `gh run list` (a \u00a715 budget regression the changelog entry claims is avoided), even when the earlier lookups just found a peer.\n- .github/workflows/internal-review.yml:line 8 (run-name expression) | severity=NIT | confidence=2\n  PROBLEM: `inputs.pr_number` is forwarded verbatim into the formatted run name. `gh workflow run` accepts any string in `-f pr_number=\u2026`, and only the sweep validates the value against `^[1-9][0-9]*$` before dispatch. A manual or third-party dispatch with `pr_number=../../etc/passwd` produces a run-name like `Internal: AI Review & Autofix [pr:../../etc/passwd]`, which the guards correctly fail to match (so functional behaviour is preserved), but the raw string still lands in GitHub UI text and the eventual log scan. The minimal fix is to validate the input in `internal-review.yml`'s workflow_dispatch block (or in `review_autofix_sweep.yml`'s existing guard, which already does this). The current sweep validation is sufficient because only the sweep dispatches `internal-review.yml` from a non-branch context \u2014 but `agents.md` and the changelog both claim the run-name itself is the security boundary; if any future caller dispatches without the sweep's guard, the run-name check leaks the input.\n  WHY: Only on a non-sweep dispatch path that bypasses the sweep's numeric guard; not currently reachable, but the security boundary moves silently when such a path is added.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "398b2e35f65e39aab3b8dfb2d6a01e0f3446e1c43e31ef9c91bf8c59fd8c0291",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36308440910",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36308440910",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927092453_e516856e1a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36308440910"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T09:24:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

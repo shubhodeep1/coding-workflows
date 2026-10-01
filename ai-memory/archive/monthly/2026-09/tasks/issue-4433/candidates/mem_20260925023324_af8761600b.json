@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4433,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4433\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4436\",\"pr_number\":4436,\"branch\":\"ai/issue-4433\",\"run_id\":\"36085270597\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/36085270597\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/review_autofix.yml\",\"agents.md\",\"changelog.d/4433-python-startup-boundaries.md\",\"scripts/check_resolver_diff.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/post_agent_workspace_guard.py\",\"scripts/review_append_iteration_summary.sh\",\"scripts/security_audit.sh\",\"scripts/untrusted_process_sandbox.sh\",\"tests/test_agent_process_isolation.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_security_audit_workflow_contract.py\"]}",
+  "fingerprint": "92df197a30ffa5d6ba61d6ca79448b9db1c2ea0e57cc00c8b26e345d26618277",
+  "lineage": {
+    "issue_number": 4433,
+    "parent_ids": [],
+    "pr_number": 4436,
+    "run_id": "36085270597",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36085270597",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4436"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260925023324_af8761600b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4433,
+    "level": "run",
+    "pr_number": 4436,
+    "run_id": "36085270597"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4433: https://github.com/shubhodeep1/coding-workflows/pull/4436",
+  "timestamps": {
+    "created_at": "2026-09-25T02:33:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

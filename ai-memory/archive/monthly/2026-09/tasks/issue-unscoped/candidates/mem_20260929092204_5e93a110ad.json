@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_nonblocking.py:612 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: When `source_reader` is `None`, a structurally invalid evidence range is labeled `out_of_range` instead of `source_unavailable`.\n  WHY: The range check runs before the source-availability check; other reviewers consider that ordering intentional and more informative, and the vote remains rejected.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_claude_fixer_nonblocking.py:537 | confidence=4\n  PROBLEM: `GIT_READ_TIMEOUT_SECONDS` is 30 seconds, so `git cat-file` may time out on a very large repository or heavily loaded runner.\n  WHY: The fail-closed behavior is acceptable, but a timeout could cause unexpected `source_unavailable` rejections.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_claude_fixer_nonblocking.py:612 | severity=NIT | confidence=4\n  PROBLEM: When source_reader=None an invalid range still returns \"out_of_range\" instead of \"source_unavailable\".\n  WHY: Diagnostic label is imprecise (vote is still rejected, but log misleads on root cause).\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bf28a608a9a1556093bdb66b3febca31e13ddf92dda1c6376676638058cd2154",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5027,
+    "run_id": "36545622786",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36545622786",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929092204_5e93a110ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5027,
+    "run_id": "36545622786"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T09:22:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

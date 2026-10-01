@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:evaluate() function | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `evaluate()` catches only a narrow exception set, allowing other unexpected exceptions to escape the per-PR loop.\n  WHY: An unhandled exception for one PR can terminate the sweep for all remaining PRs and repositories in that tick, potentially leaving PRs stalled.\n- scripts/claude_fixer_pending_checks.py:lines 218-232 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `read_enable_auto_merge()` detects an unset `ENABLE_AUTO_MERGE` by searching free-form `gh api` error output for the literal substring `\"HTTP 404\"`.\n  WHY: If the CLI or API error wording changes, the function may return `None` instead of the safe default `\"true\"`, preventing auto-merge for repositories without an explicit variable.\n- scripts/claude_fixer_pending_checks.py:lines 256-273 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `enable_auto_merge()` determines success by matching the exact stdout string `\"Auto-merge enabled.\"`.\n  WHY: If the helper's output wording changes, the function may report `merge_failed` even when auto-merge succeeded, stalling the PR merge process.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"scripts/claude_pr_sweep.py: count `pending_checks_merged` / `pending_checks_waiting`.\" (Plan Phase 1 step 4)\n  expected_change_site: scripts/claude_pr_sweep.py \u2014 the `summary` dict initialization and the sweep loop increment logic\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The summary dictionary initialization (lines 213-214 of the diff) adds only `pending_checks_merged`; no `pending_checks_waiting` key is defined or incremented in the sweep loop, although the `waiting` state is produced by `evaluate` and logged via the `pending_checks` log line (line 263).\n- requirement: \"tests/test_review_autofix_claude_fixer_mode.py: fix NameError for LEDGER_WITH_FINDINGS\" (from pass 1 findings)\n  expected_change_site: tests/test_review_autofix_claude_fixer_mode.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test function `test_handoff_findings_with_running_checks_still_hand_off` (in the diff, this test appears in `tests/test_claude_fixer_pending_checks.py`, but the pass 1 finding noted a NameError in `tests/test_review_autofix_claude_fixer_mode.py`) refers to `LEDGER_WITH_FINDINGS`, which is not defined or imported in `tests/test_review_autofix_claude_fixer_mode.py`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_fixer_pending_checks.py:evaluate() function | severity=high | confidence=4\n  PROBLEM: The function catches only a narrow exception set (ReadError, KeyError, OSError, TypeError, ValueError), allowing other unexpected exceptions (e.g., unexpected AttributeError, NameError, etc.) to propagate out of the per-PR loop.\n  WHY: An unhandled exception for a single PR terminates the entire sweep for all remaining PRs and repositories in that tick, potentially leaving PRs in a stalled state.\n- scripts/claude_fixer_pending_checks.py:lines 218-232 | severity=low | confidence=3\n  PROBLEM: Detection of an unset ENABLE_AUTO_MERGE variable relies on searching free-form `gh api` error output for the literal substring `\"HTTP 404\"`.\n  WHY: If GitHub's CLI or API error messaging changes, this detection logic may return `None` (unreadable) instead of the safe default `\"true\"`, preventing auto-merge for repositories that haven't explicitly set the variable.\n- scripts/claude_fixer_pending_checks.py:lines 256-273 | severity=low | confidence=3\n  PROBLEM: Success determination for `review_enable_auto_merge.sh` relies on an exact stdout string match (`\"Auto-merge enabled.\"`).\n  WHY: If the helper's output wording changes, this function would report `merge_failed` even when auto-merge was successfully enabled, stalling the PR merge process.\n- Requirement: \"scripts/claude_pr_sweep.py: count `pending_checks_merged` / `pending_checks_waiting`.\" (Plan Phase 1 step 4)\n  Expected change site: scripts/claude_pr_sweep.py \u2014 the `summary` dict initialization and the sweep loop increment logic.\n  Evidence of absence: The summary dictionary initialization (lines 213-214 of the diff) adds only `pending_checks_merged`. No `pending_checks_waiting` key is defined or incremented in the sweep loop, even though the `waiting` state is produced by `evaluate` and logged via the `pending_checks` log line (line 263).\n  Severity: low\n  Issue confidence: 4\n- Requirement: \"tests/test_review_autofix_claude_fixer_mode.py: fix NameError for LEDGER_WITH_FINDINGS\" (from pass 1 findings)\n  Expected change site: tests/test_review_autofix_claude_fixer_mode.py\n  Evidence of absence: The test function `test_handoff_findings_with_running_checks_still_hand_off` (in the diff, this test appears in `tests/test_claude_fixer_pending_checks.py`, but the pass 1 finding noted a NameError in `tests/test_review_autofix_claude_fixer_mode.py`) refers to `LEDGER_WITH_FINDINGS`, which is not defined or imported in `tests/test_review_autofix_claude_fixer_mode.py`.\n  Severity: critical\n  Issue confidence: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7de2768303e19f3ecb779289607a43c92f592bfa9a6294bfdd35585ac3722e9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4942,
+    "run_id": "36543198673",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36543198673",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929085846_f66ee72feb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4942,
+    "run_id": "36543198673"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T08:58:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

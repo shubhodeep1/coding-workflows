@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported; reviewer failed after non-retryable error on attempt 1.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_fixer_pending_checks.py | severity not stated | confidence not stated\n  Location: check_review_runs, the `for workflow_path in UNBOUND_DISPATCH_REVIEW_WORKFLOWS:` loop\n  PROBLEM: The `active.extend(run for run in listing or [] if run.get(\"status\") != \"completed\")` silently skips runs whose `status` key is missing or `None` (the `!= \"completed\"` check treats those as \"not completed\", so they would be included).\n  WHY: While this is fail-closed, runs without a `status` field are likely malformed API responses and should be flagged rather than treated as active.\n  Suggested minimal fix: Treat missing `status` as a read error (raise ReadError) rather than silently including it in the active list. Change `if run.get(\"status\") != \"completed\"` to also check `if run.get(\"status\") and run.get(\"status\") != \"completed\"`, and raise if a run has no status.\n  HARDENING_RISK_SCORE: 2\n- scripts/claude_fixer_pending_checks.py | severity not stated | confidence not stated\n  Location: check_review_runs, `type(run.get(\"id\")) is int and run[\"id\"] > marker_run_id`\n  PROBLEM: The comparison silently skips runs whose `id` is not an integer (e.g., string). If `marker_run_id` is also not an integer (defensive against malformed marker data), the `>` comparison would raise `TypeError` in Python 3.\n  WHY: While unlikely, a malformed marker should fail closed rather than potentially skipping the superseded check.\n  Suggested minimal fix: Wrap the comparison in a try/except that raises ReadError, or validate `marker_run_id` is an int at the start of the function and raise ReadError if not.\n  HARDENING_RISK_SCORE: 2\n- scripts/claude_fixer_pending_checks.py | severity not stated | confidence not stated\n  Location: evaluate, `f\"repos/{repo}/issues/{number}/comments\"` call\n  PROBLEM: The comments re-read uses `gh_api_list` but doesn't handle the case where the comments list endpoint returns malformed data (non-list, missing items).\n  WHY: `find_pending_marker` likely handles this, but explicit validation would be more robust.\n  Suggested minimal fix: Verify the return value is a list before passing to `find_pending_marker`, or rely on `find_pending_marker`'s existing validation.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "58b299b5f0abbffe69f404693a798eafc662dd1ea1c8c6dba6cbed7e156c6ebc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5183,
+    "run_id": "36578761023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36578761023",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929145039_39ed5b8282",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5183,
+    "run_id": "36578761023"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T14:50:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_workflow_contract.py:`test_security_pass_recovery_log_prefixes_are_registered` (lines 128-139) | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The contract test asserts 6 of the 9 new log prefixes registered in agents.md but omits the 3 `REISSUE_*` prefixes (`REISSUE_FILES_TOUCHED_UNION`, `REISSUE_ORCHESTRATOR_METADATA_CARRIED`, `REISSUE_ORCHESTRATOR_METADATA_ABSENT`) added by the last autofix run.\n  WHY: No runtime failure occurs because the prefixes are currently registered, but if they are accidentally removed from agents.md, no test catches it.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_workflow_contract.py\n  Line or code reference: `test_security_pass_recovery_log_prefixes_are_registered` (lines 128-139)\n  Problem: The contract test asserts 6 of the 9 new log prefixes registered in agents.md but omits the 3 `REISSUE_*` prefixes (`REISSUE_FILES_TOUCHED_UNION`, `REISSUE_ORCHESTRATOR_METADATA_CARRIED`, `REISSUE_ORCHESTRATOR_METADATA_ABSENT`) added by the last autofix run.\n  Why it fails at runtime: No runtime failure \u2014 this is a contract-test coverage gap. The prefixes are correctly registered in agents.md today, but the repo's contract-test invariant (every stable log prefix in agents.md is asserted by a test) is incomplete for these 3 entries.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "04309fc9a66b84c7bc70deda17745330ad932f2eb33ff2b16420e7c966b550bf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4133,
+    "run_id": "35495381694",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35495381694",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260920075516_f6584cc9c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4133,
+    "run_id": "35495381694"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-20T07:55:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

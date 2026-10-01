@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:Line 22 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Contradictory notes regarding promotion pause status.\n  WHY: The Note opens with present-tense \"Promotion is paused on purpose: PROMOTE_CYCLE_ENABLED=false\", then continues to explain it was superseded and lifted on 2026-09-28, potentially leading to redundant manual actions or a stalled deployment.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:Line 8 (\"Last note\") | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Stale and incomplete progress summary vs. checkbox status.\n  WHY: The \"Last note\" fails to mention that steps 1, 2, and 3a are marked complete [x] in the runbook body, so a resuming operator may erroneously re-execute completed verification steps or assume they are pending.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:Lines 11-12 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Inconsistent SHA records for main branch across steps 1 and 2.\n  WHY: Step 1 records main@677e8f6 (from operator Mac) while step 2 records main@5206437 (from Claude session checkout), leaving an auditor unable to determine which SHA was authoritative for each step or confirm they are consistent.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:4 | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Consumer count 13 vs 14 in JSON.\n  WHY: The reported consumer count does not match the JSON count.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Accurate reporting of consumer count in .github/ai/consumer_repos.json.\n  expected_change_site: docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md line 4 and docs/deploy-activation/pr-4443.md line 4\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Both documents state \"13 consumers\", but .github/ai/consumer_repos.json contains 14 entries; neither diff hunk updates the count.\n- requirement: Status IN_PROGRESS + step 3 unchecked\n  expected_change_site: not stated in source\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: Status IN_PROGRESS + step 3 unchecked\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:Line 22 | severity=high | confidence=5\n  PROBLEM: Contradictory notes regarding promotion pause status.\n  WHY: The Note opens with present-tense \"Promotion is paused on purpose: PROMOTE_CYCLE_ENABLED=false\", then continues to explain it was superseded and lifted on 2026-09-28. This contradiction misleads a resuming operator about whether promotion is currently paused or active, potentially leading to redundant manual actions or stalled deployment.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:Line 8 (\"Last note\") | severity=high | confidence=4\n  PROBLEM: Stale and incomplete progress summary vs. checkbox status.\n  WHY: The \"Last note\" fails to mention that steps 1, 2, and 3a are marked complete [x] in the runbook body. As the deploy-activation log acts as the resume contract, a resuming operator reading the summary may erroneously re-execute completed verification steps or assume they are pending, wasting operator cycles.\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:Lines 11-12 | severity=low | confidence=3\n  PROBLEM: Inconsistent SHA records for main branch across steps 1 and 2.\n  WHY: Step 1 records main@677e8f6 (from operator Mac) while step 2 records main@5206437 (from Claude session checkout). The evidence chain is unreconcilable without this context; an auditor reproducing the verification or a future operator cross-checking the evidence cannot determine which SHA was authoritative for each step or confirm they are consistent.\n- Requirement: Accurate reporting of consumer count in .github/ai/consumer_repos.json.\n  Expected change site: docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md line 4 and docs/deploy-activation/pr-4443.md line 4\n  Evidence of absence: Both documents state \"13 consumers\", but .github/ai/consumer_repos.json contains 14 entries; neither diff hunk updates the count.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- docs/deploy-activation/plan-issue-4623-verify-security-pass-skip-plan.md:4 | severity=high | confidence=5\n  PROBLEM: Consumer count 13 vs 14 in JSON.\n- Requirement: Status IN_PROGRESS + step 3 unchecked (SEVERITY: MAJOR ISSUE_CONFIDENCE: 4)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8dc383ad5489d1551d719f3aae25a839438a6c9894c4174aa25ec53e7fc67c7c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4693,
+    "run_id": "36392788416",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36392788416",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928075752_6763aea21b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4693,
+    "run_id": "36392788416"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T07:57:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

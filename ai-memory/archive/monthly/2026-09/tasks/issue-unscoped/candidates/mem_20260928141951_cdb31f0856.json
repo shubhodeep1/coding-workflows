@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Doc-only and small-diff `claude/*` PRs take the deterministic skip (`AUTOFIX_SKIP_DOC_ONLY`, `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS`) like any other PR, except on a `claude_fixer_converged_head` verification run or while a hand-off for the current head is pending.\"\n  expected_change_site: README.md line 86 (the `CLAUDE_FIXER_ENABLED` row in the variables table)\n  confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: README.md line 86 states \"except on a `claude_fixer_converged_head` verification run\"; agents.md lines 94-102 lists both exceptions; CLAUDE.md \u00a726.H says \"except on X or while Y\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Doc-only and small-diff `claude/*` PRs take the deterministic skip (`AUTOFIX_SKIP_DOC_ONLY`, `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS`) like any other PR, except on a `claude_fixer_converged_head` verification run or while a hand-off for the current head is pending.\" (From CLAUDE.md \u00a726.H and agents.md lines 94-102, which correctly describe both exceptions)\n  Expected change site: README.md line 86 (the `CLAUDE_FIXER_ENABLED` row in the variables table)\n  Evidence of absence: The `CLAUDE_FIXER_ENABLED` row at README.md line 86 states \"except on a `claude_fixer_converged_head` verification run\" (singular exception), but the actual implementation has TWO exceptions: (1) `claude_fixer_converged_head` verification run, and (2) pending hand-off on the current head. The agents.md change at lines 94-102 correctly says \"with two exceptions\" and lists both. CLAUDE.md \u00a726.H correctly says \"except on X or while Y\". The README row is inconsistent with both the implementation and the other documentation sites. Operators reading only the variables table would believe only the converged_head exception exists, missing the safety-critical pending-hand-off guard that prevents skipping past posted findings.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "997d8f355c5de6973a0630883144eb5294d5c4327abf6d27c7734c6703c7a431",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36429960088",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36429960088",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928141951_cdb31f0856",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36429960088"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T14:19:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

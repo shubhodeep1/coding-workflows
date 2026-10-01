@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/e2e_smoke_canary.txt`\nScope-mode justification: The complete implementation is a single literal replacement in the explicitly allowed file. Broader changes would violate the issue constraint and provide no correctness benefit.\n\n## Planning reference\n\n- Branch: `main`\n- HEAD: `137a2dd79c0343eaff936008e5818df0d41e65b4`\n- Integration metadata: absent; no conflicting branch requirement identified.\n- Clarification: the automatic answer confirms no questions were required.\n\n## Automation wiring\n\n- Modify existing content only; introduce no script or subsystem.\n- Scheduler/PR-push wiring: not applicable to this static fixture update.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Future-removal registry entry: not required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace the current `run_id` value.\n  - Preserve exactly three lines and a final newline.\n  - No other file may change.\n\n## Implementation steps\n\n1. Replace the file contents with exactly:\n   ```text\n   status: ok\n   run_id: alt-35601057512\n   updated-by: ai-pipeline\n   ```\n2. Confirm the Git diff contains only `tests/e2e_smoke_canary.txt`.\n\n## Functions or modules\n\nNone. This is a plain-text fixture update.\n\n## Data structures affected\n\nThe existing three-line key/value canary fixture. Only the `run_id` scalar changes from `26151428977` to `alt-35601057512`.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Apply an exact fixture replacement\n\n- **Chosen:** Write the three specified lines verbatim with one trailing newline.\n- **Alternatives considered:** Replace only the numeric substring or modify related smoke-test configuration.\n- **Why:** A complete literal replacement most reliably enforces the exact-content requirement while preserving the single-file scope.\n\n## Security considerations\n\n- No endpoint, authorization surface, secret, money flow, or external API is affected.\n- Treat the supplied text as literal fixture data rather than executable shell content.\n- Exact-content verification prevents accidental extra lines, whitespace, or injected content.\n\n## Risks and edge cases\n\n- Avoid retaining the old `run_id`.\n- Avoid extra blank lines, whitespace, encoding markers, or missing final newline.\n- Avoid formatter, documentation, workflow, or generated-file changes.\n- No issue/codebase conflict was found: the target exists and only its second line differs.\n\n## Testing considerations\n\n- Compare the file byte-for-byte with the required three-line payload.\n- Run `git diff --name-only` and require exactly `tests/e2e_smoke_canary.txt`.\n- Inspect `git diff --check` for whitespace errors.\n- No broader test suite is necessary because no executable behavior changes.\n\n## Pre-execution self-check\n\n- Target file exists on the planning ref.\n- Required final content is unambiguous.\n- The permitted change set is exactly one file.\n- No dependency, credential, external documentation, or unresolved scalar is required.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c3c631a406ea6d9ec5cb1aa06c7af23ccb3fa1e9c6a326a1b3eba7a7189421a4",
+  "lineage": {
+    "issue_number": 4217,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35601432886",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35601432886",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4217"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260921125056_060e12c019",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4217,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35601432886"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4217",
+  "timestamps": {
+    "created_at": "2026-09-21T12:50:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

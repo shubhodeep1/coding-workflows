@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4140,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4140\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4141\",\"pr_number\":4141,\"branch\":\"ai/issue-4140\",\"run_id\":\"35437804378\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35437804378\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"changelog.d/security-pass-line-ownership-engine.md\",\"prompts/_templates/mode-security-audit.txt\",\"prompts/mode-security-audit.txt\",\"scripts/security_audit.sh\",\"tests/test_security_audit_workflow_contract.py\"]}",
+  "fingerprint": "dfbdb7d3c0c39e8bc3534c569c2f72a217c3b0b3f6deea609bb192a988bf8536",
+  "lineage": {
+    "issue_number": 4140,
+    "parent_ids": [],
+    "pr_number": 4141,
+    "run_id": "35437804378",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35437804378",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4141"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260919105307_8e4163926b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4140,
+    "level": "run",
+    "pr_number": 4141,
+    "run_id": "35437804378"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4140: https://github.com/shubhodeep1/coding-workflows/pull/4141",
+  "timestamps": {
+    "created_at": "2026-09-19T10:53:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

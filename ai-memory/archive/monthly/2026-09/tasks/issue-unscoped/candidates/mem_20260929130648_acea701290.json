@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_issue_queue_watchdog.sh:line not provided | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The Telegram alert is sent only when the exhausted-marker comment succeeds, so a failed comment also drops the alert and can allow later runs to re-queue.\n  WHY: A transient GitHub API failure on the marker comment can silently drop the alert and lead to additional re-queues beyond the cap.\n- scripts/claude_issue_queue_watchdog.sh:line not provided | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The dispatch and re-queue marker comment are separate API calls, so a successful dispatch followed by a failed marker comment can cause the next hourly run to dispatch a duplicate re-queue.\n  WHY: A transient failure between the successful dispatch and failed marker can double-count a retry and exhaust the cap before the environment problem is fixed.\n- scripts/claude_issue_route.py:line not provided | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `recent` counts every re-queue marker in the window regardless of which blocker it responded to, so a fresh blocker can inherit the previous blocker's retry count.\n  WHY: When the environment changes, the second blocker can trigger an alert on its first re-queue rather than receive the full `max_retries` budget.\n- scripts/claude_issue_queue_watchdog.sh:line not provided | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `skip_security` field is passed to `build-dispatch --skip-security-pass` without validation, unlike the other extracted action fields.\n  WHY: Unexpected content from malformed or malicious action JSON can reach `build-dispatch`.\n- scripts/claude_issue_queue_watchdog.sh:line not provided | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The closed-target loop validates `queue_issue` but interpolates `target_repo` and `target_number` directly into log messages.\n  WHY: Malformed output from the local script could produce confusing log lines, although the PATCH uses the validated `queue_issue`.\n- scripts/claude_issue_route.py:line not provided | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_scan_issue_comments` uses `max(2, int(budget))`, so `budget=0` results in two reads rather than no reads.\n  WHY: A caller passing `budget=0` to skip the scan instead may fetch 200 comments.\n- scripts/claude_issue_route.py:line not provided | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The variable name `requeued` refers to a regex `Match` object rather than a boolean.\n  WHY: The name obscures the value's actual meaning and could mislead future maintainers modifying the logic.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_queue_watchdog.sh:line not provided | severity=high | confidence=[4]\n  PROBLEM: The Telegram alert is sent only when the exhausted-marker comment succeeds. If the marker POST fails, the operator receives neither the issue comment nor the Telegram ERROR, and the next run may re-queue again.\n  WHY: A transient GitHub API failure on the marker comment causes the alert to be silently dropped, the issue to receive additional re-queues beyond the cap, and the operator to remain unaware that automatic re-queue has stopped.\n- scripts/claude_issue_queue_watchdog.sh:line not provided | severity=low | confidence=[3]\n  PROBLEM: The dispatch and marker comment are two separate API calls. If dispatch succeeds but the marker comment fails, the next hourly run may dispatch another re-queue.\n  WHY: A transient failure between the successful dispatch and failed marker causes a duplicate re-queue and a double-counted retry, which can exhaust the cap before the real environment problem is fixed.\n- scripts/claude_issue_route.py:line not provided | severity=low | confidence=[3]\n  PROBLEM: `recent` counts every requeue marker within the window regardless of which blocker it responded to. The plan explicitly chose per-issue counting, but a fresh environment blocker does not receive a fresh retry budget.\n  WHY: When the environment changes, the second blocker triggers an alert on its first requeue rather than getting the full `max_retries` budget, sending a premature Telegram ERROR.\n- scripts/claude_issue_queue_watchdog.sh:line not provided | severity=low | confidence=[3]\n  PROBLEM: The `skip_security` field extracted from the action JSON is passed verbatim to `build-dispatch --skip-security-pass` without validation.\n  WHY: A malformed or malicious action JSON from a compromised `claude_issue_route.py` could pass unexpected content to `build-dispatch`.\n- scripts/claude_issue_queue_watchdog.sh:line not provided | severity=low | confidence=[2]\n  PROBLEM: Only `queue_issue` is validated as a positive integer; `target_repo` and `target_number` are interpolated directly into log messages.\n  WHY: A malformed `queue-closed-targets` output could produce confusing log lines but does not affect the PATCH call, which uses the validated `queue_issue`.\n- scripts/claude_issue_route.py:line not provided | severity=low | confidence=[2]\n  PROBLEM: `max(2, int(budget))` silently treats `budget=0` as `budget=2`.\n  WHY: A caller passing `budget=0` to skip a scan gets two reads instead, potentially fetching 200 comments when none were expected.\n- scripts/claude_issue_route.py:line not provided | severity=low | confidence=[2]\n  PROBLEM: The variable name `requeued` is misleading because it is a regex `Match` object, not a boolean.\n  WHY: No runtime failure occurs; the name could lead future maintainers to misinterpret or modify the logic.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1c821819e23888c81098643239fa9287b2ffdcca04a7bf267dac35801cc1f236",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36571594781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36571594781",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929130648_acea701290",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36571594781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T13:06:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

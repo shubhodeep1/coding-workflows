@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:389-390 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: substitution_bodies() does not inherit the outer double-quote state when entering $(...) substitutions.\n  WHY: When entering a $(...) substitution from an already double-quoted context, inner_double is initialized to False, which can cause the inner scanner to incorrectly parse double quotes inside the substitution body as new quoting boundaries and miss a hidden gh api call.\n- tests/test_gh_api_write_guard.py:591, 597 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Test cases for balanced nested parentheses within double-quoted strings inside $(...) or quoted parentheses within $(...) remain ambiguous or possibly incorrect.\n  WHY: The scanner's inability to inherit double-quote state, combined with incomplete test coverage for mixed quoting inside $(...), leaves the guard vulnerable to incorrect extraction of substitution bodies.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The guard now reads the raw command the way Bash does.\"\n  expected_change_site: .claude/hooks/gh_api_write_guard.py, substitution_bodies()\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The scanner fails to correctly inherit the double-quote state when entering $(...) substitutions (as identified in CORRECTNESS & LOGIC). This does not match Bash-faithful parsing.\n- requirement: The changelog fragment's \u201cnumbers that matter\u201d table must match the shipped test count, and the accuracy of the operator-facing record must be maintained.\n  expected_change_site: changelog.d/4704-gh-api-guard-quote-aware-substitutions.md, line 13\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The changelog fragment in the latest commit reports 27 total test cases, while consensus reviewers and Task Gap evidence indicate a total of 24. This inaccuracy misrepresents the actual test coverage added.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/gh_api_write_guard.py:389-390 | severity=high | confidence=[4]\n  PROBLEM: substitution_bodies() does not inherit the outer double-quote state when entering $(...) substitutions.\n  WHY: When entering a $(...) substitution from an already double-quoted context, inner_double is initialized to False. This can cause the inner scanner to incorrectly parse double quotes inside the substitution body as new quoting boundaries, leading to an improperly extracted body that may miss a hidden gh api call.\n- tests/test_gh_api_write_guard.py:591, 597 | severity=high | confidence=[4]\n  PROBLEM: Test cases for balanced nested parentheses within double-quoted strings inside $(...) or quoted parentheses within $(...) remain ambiguous or possibly incorrect.\n  WHY: The scanner's inability to inherit double-quote state, combined with incomplete test coverage for mixed quoting inside $(...), leaves the guard vulnerable to incorrect extraction of substitution bodies.\n- TASK_GAP\n  Requirement: \"The guard now reads the raw command the way Bash does.\"\n  Expected change site: .claude/hooks/gh_api_write_guard.py, substitution_bodies()\n  Evidence of absence: The scanner fails to correctly inherit the double-quote state when entering $(...) substitutions (as identified in CORRECTNESS & LOGIC). This does not match Bash-faithful parsing.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: The changelog fragment's \u201cnumbers that matter\u201d table must match the shipped test count, and the accuracy of the operator-facing record must be maintained.\n  Expected change site: changelog.d/4704-gh-api-guard-quote-aware-substitutions.md, line 13\n  Evidence of absence: The changelog fragment in the latest commit reports 27 total test cases, while consensus reviewers and Task Gap evidence indicate a total of 24. This inaccuracy misrepresents the actual test coverage added.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "77064075cf2a25fea63acf5b94c3c38ffff7faddcb10348e3f932229b9ba3776",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4704,
+    "run_id": "36407481306",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36407481306",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928110237_5d868aba18",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4704,
+    "run_id": "36407481306"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T11:02:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

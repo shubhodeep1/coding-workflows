@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4180` at `f60eb2de26b71344230992e6dce591ab91a6b034`  \nIntegration branch check: matches issue metadata.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: This is a deliberately surgical fixture update. The acceptance criteria prohibit changes outside the declared file, so no workflow, documentation, or test-contract expansion is appropriate.\n\n## Automation and wiring\n\n- Change type: modify one existing fixture; introduce no script or subsystem.\n- Existing entry point: the release smoke orchestration in `.github/workflows/test-and-mark-stable.yml`.\n- Scheduler/workflow changes: none.\n- Long-running supervisor: not required.\n- Database work or gate: none.\n- Future-removal registry entry: not applicable.\n\n## Clarification interpretation\n\n- No clarification questions were required.\n- The orchestrator\u2019s automatic `/answer` confirms proceeding with the exact issue specification.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace its current three-line content with exactly:\n    1. `status: ok`\n    2. `decompose-run: 35548345586`\n  - Preserve a conventional trailing newline without adding a third content line.\n\nNo other files may change.\n\n## Functions or modules to implement\n\nNone. This is a plain-text fixture replacement.\n\n## Data structures affected\n\n- The canary changes from a three-line key/value fixture using `run_id` and `updated-by` to the issue-specific two-line `status` and `decompose-run` representation.\n- No schemas or persistent runtime state are affected.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace rather than append canary content\n\n- **Chosen:** Rewrite the complete file to the specified two-line byte content.\n- **Alternatives considered:** Retain the existing `run_id` or `updated-by` lines; append `decompose-run` to the existing fixture.\n- **Why:** Both alternatives violate the exact-content acceptance criteria.\n\n### D2 \u2014 Keep the change fixture-only\n\n- **Chosen:** Do not update workflows, helper scripts, tests, or documentation.\n- **Alternatives considered:** Align existing three-line smoke-canary contracts with this issue-specific format.\n- **Why:** The issue explicitly restricts changes to one file, and those other contracts serve separate smoke scenarios.\n\n## Security considerations\n\n- Trust boundaries: none introduced or modified.\n- Authorization: no endpoint, worker, workflow permission, or privileged surface changes.\n- Input validation: the fixed numeric run identifier is copied literally from the issue; no runtime input is parsed.\n- Abuse cases: accidental extra lines, shell interpolation, or unrelated edits are prevented through exact byte comparison and scoped diff verification.\n- No credentials, secrets, payment data, or logging behavior are involved.\n\n## Risks and edge cases\n\n- Existing repository smoke paths also reference a separate three-line canary format. This is a factual format difference, not a reason to broaden scope; the issue requires this branch\u2019s fixture to contain two lines.\n- Appending instead of replacing would leave stale `run_id` or `updated-by` content.\n- Omitting the final newline could conflict with repository text-file conventions, while an extra blank line would violate the exact-content requirement.\n- Any additional modified path violates the declared `files_touched` constraint.\n\n## Testing considerations\n\n1. Assert the exact bytes equal:\n   `status: ok\\ndecompose-run: 35548345586\\n`\n2. Assert the file has exactly two logical content lines.\n3. Run `git diff --name-only` and verify the sole changed path is `tests/e2e_smoke_canary.txt`.\n4. Inspect the scoped diff to confirm no whitespace, reflow, or unrelated changes.\n\n## Pre-execution self-check\n\n- Requirements are unambiguous.\n- Planning ref matches the integration branch.\n- The requested scalar run identifier is supplied.\n- The plan changes only the allowed file.\n- No new interfaces, automation wiring, dependencies, or tests are required.\n\nPLAN_SELF_CHECK: PASS  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1c9d6d4b882087ee247a6ae2cee2c3cdee3df8a7cc67c5d5a3f4359de2a8eeaf",
+  "lineage": {
+    "issue_number": 4181,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35548621336",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35548621336",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4181"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260921004831_0b2c8b62b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4181,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35548621336"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4181",
+  "timestamps": {
+    "created_at": "2026-09-21T00:48:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

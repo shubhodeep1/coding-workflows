@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/verify_integration_fingerprints.py:lines 208-223 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: `_resolver_safe_path` rejects NUL bytes and backslashes but permits other ASCII control characters such as newline, carriage return, tab, and `\\x01-\\x1f`.\n  WHY: Crafted paths containing control characters can reach downstream line-oriented plumbing, although JSON serialization and HMAC-authenticated state limit exploitability.\n- .ai/.workspace_source_manifest.txt:line 188 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The workspace source manifest omits `changelog.d/3996-forged-state-resolver-scope.md` and instead lists `changelog.d/orchestrator-state-auth-yaml-bounds.md`, which reviewers disagree whether exists or is pre-existing.\n  WHY: The manifest is out of sync with repository contents, so downstream workspace tooling may omit the new changelog fragment or reference a missing file; severity disagreement was NIT versus MAJOR, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/verify_integration_fingerprints.py\n  Line or code reference: _resolver_safe_path at lines 208-223\n  Problem: The path validator only rejects NUL bytes and backslashes. It does not reject other control characters (\\n, \\r, \\t, \\x01-\\x1f).\n  Why it fails at runtime: A crafted fingerprint path containing a newline could pass through to line-oriented downstream consumers.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- File: .ai/.workspace_source_manifest.txt\n  Line or code reference: line 188 (entry `changelog.d/orchestrator-state-auth-yaml-bounds.md`)\n  Problem: The workspace source manifest lists `changelog.d/orchestrator-state-auth-yaml-bounds.md` at line 188, but this PR adds `changelog.d/3996-forged-state-resolver-scope.md` and does not add the new fragment to the manifest.\n  Why it fails at runtime: A workspace built from this manifest will not include the new fragment, so consumer-repo changelog assembly will silently miss this PR's user-visible changelog entry.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: scripts/verify_integration_fingerprints.py\n  Line or code reference: _resolver_safe_path (lines 208-223)\n  Problem: The resolver-safe path sanitizer rejects NUL bytes and backslashes but does not reject other ASCII control characters such as \\n, \\r, \\t, or \\x01-\\x1f.\n  Why it fails at runtime: A crafted fingerprint entry containing embedded control characters can pass the sanitizer and reach downstream line-oriented plumbing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- File: .ai/.workspace_source_manifest.txt\n  Line or code reference: line 188\n  Problem: The tracked workspace source manifest lists `changelog.d/orchestrator-state-auth-yaml-bounds.md`, which does not exist in the repository, and omits the PR's actual new changelog fragment `changelog.d/3996-forged-state-resolver-scope.md`.\n  Why it fails at runtime: The source manifest is a sorted inventory of tracked files; an out-of-sync entry means tooling that consumes the manifest will reference a missing file and fail to record the real new fragment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: .ai/.workspace_source_manifest.txt\n  Line or code reference: line 188\n  Problem: The manifest lists `changelog.d/orchestrator-state-auth-yaml-bounds.md` (a pre-existing fragment this PR correctly adds), but the PR's own new fragment `changelog.d/3996-forged-state-resolver-scope.md` is missing from the manifest.\n  Why it fails at runtime: A missing entry means the manifest is out of sync with the repository contents. Downstream consumers that rely on the manifest for workspace provenance would not account for the new fragment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- File: scripts/verify_integration_fingerprints.py\n  Location: _resolver_safe_path (lines 208-223)\n  Issue: The path validator rejects NUL and backslash but permits other ASCII control characters (\\x01-\\x1f, \\n, \\r, \\t).\n  Suggested minimal fix: Add `if any(ord(c) < 0x20 for c in raw_path): return None` after the existing NUL check.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "674c2c1eb236b7d2516bcd0d044b30b8ae0ff990a2eff288199a7664e251de44",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3997,
+    "run_id": "33871164099",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33871164099",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260904141413_9c6a7b11b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3997,
+    "run_id": "33871164099"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-04T14:14:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

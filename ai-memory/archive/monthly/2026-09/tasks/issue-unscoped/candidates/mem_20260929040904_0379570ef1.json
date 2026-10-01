@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1693-1711 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: The `Integration branch:` and `Target branch:` regexes in `issue_body_integration_branch` exhibit super-linear backtracking on untrusted issue bodies, creating a denial-of-service risk.\n  WHY: Issue bodies can trigger costly regex evaluation on the sweep and PR-close paths under a five-minute job timeout; both reviewers rate this MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh:1709-1711 | severity=high | confidence=4\n  PROBLEM: The `Integration branch:` and `Target branch:` regexes use `re.MULTILINE` with `^\\s*` prefix and lazy-quantified value groups followed by ambiguous whitespace alternatives. A crafted issue body with many blank lines causes quadratic backtracking; a single label line with a long whitespace run inside the value causes cubic backtracking.\n  WHY: Both the sweep (`close_merged_issues_sweep` at `scripts/orchestrate_poll_process.sh:3998`) and `issue_pr_status.yml` call this helper on issue bodies that anyone can submit, and the PR-close step has a five-minute job timeout. A body with 60,000 blank lines could keep the `python3 -c` subprocess busy for tens of seconds (measured before: 7.0 s at 16,000 lines). A single label line with 5,000 spaces took 29.7 s. This is the DoS vector that security audit #3576 filed as issue #4956. The fix (a linear-time line-by-line string parser) is tracked by plan `docs/plans/issue-4956-linear-issue-branch-parser-plan.md` and is not yet in this PR.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/gh_helpers.sh: issue_body_integration_branch() lines 1693-1707 \u2014 re.search with re.MULTILINE on untrusted issue body | severity=high | confidence=4\n  PROBLEM: The two re.MULTILINE regexes (INTEGRATION_BRANCH_LINE_RE and TARGET_BRANCH_LINE_RE) exhibit super-linear backtracking on pathological inputs.\n  WHY: The security audit of this branch filed #4956 (STRIDE Denial of Service, severity medium, confidence 9/10): a body with 16,000 blank lines takes ~7 s, and a single label line with 2,000 spaces takes ~29.7 s. close_merged_issues_sweep and issue_pr_status.yml call this helper on issue bodies that anyone who can open or edit an issue controls, under a 5-minute job timeout. A crafted issue body can cause the Python regex engine to consume the entire job timeout, blocking the workflow step. The same regexes already exist in scripts/orchestrate_lib.py:46-63 and scripts/gh_helpers.sh:1696-1707, so the DoS surface is not new to the codebase, but this PR introduces a new call site on the PR-close path. The #4956 plan (included in this PR as docs/plans/issue-4956-linear-issue-branch-parser-plan.md) replaces these regexes with a linear parser, but the fix is not yet implemented in this PR.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bea6b92c4e22beeccff87ce1f36aa833c5fe6b7f87942c5ee3d7a16edc843f9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36518941789",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36518941789",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929040904_0379570ef1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36518941789"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T04:09:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:318-327 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `hook_env` passes unprefixed caller environment variables to the hook subprocess.\n  WHY: The hooks do not read those variables today, and the test suite verifies no token or kill switch leaks, so the reviewer reports no runtime failure.\n- .github/workflows/ci.yml:488-510 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The inline script does not validate that `pull_request` in the event payload is a dictionary before reading the PR body.\n  WHY: A malformed payload results in an empty body treated like a PR without an Intended loosening section, which the reviewer reports is harmless.\n- scripts/guard_differential.py: `intentional_loosening` parser, the no-backtick branch (`else: hook, shape = \"\", content.strip()`) | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A hook-prefixed list item without backticks is parsed with the hook prefix included in the shape rather than as the hook name.\n  WHY: An intended loosening in that form will not match the corpus shape, so the check still fails until the line is rewritten.\n- scripts/guard_differential.py: `compare_hook_dirs` building a fresh scenario per shape (`root = scratch / f\"{hook}-{index}-{side}\"`) and `_init_repo` running per scenario | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `compare_hook_dirs` creates a fresh scenario and runs `_init_repo` for every shape on both sides, without sharing work across shapes.\n  WHY: Against the shipped corpora, the reviewer estimates roughly 360 `_init_repo` calls per tree and warns that the check may exceed the 20-minute CI job budget.\n- scripts/guard_differential.py: `run_hook` (subprocess.run block, ~line 469-478)\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Strict text decoding in `subprocess.run` can raise `UnicodeDecodeError` if a hook emits non-UTF-8 output.\n  WHY: The exception propagates and aborts the entire `compare_hook_dirs` run for that tree instead of producing an error outcome for that shape.\n- scripts/guard_differential.py: `compare_hook_dirs` scenario creation loop (~line 542-556)\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: An exception from running a single shape is not caught within the scenario loop.\n  WHY: A subprocess launch or scratch-directory I/O failure aborts the whole comparison for that tree and hides partial results from the other corpora.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/guard_differential.py:318-327 | severity=low | confidence=[2]\n  PROBLEM: `hook_env` passes unprefixed caller environment variables to the hook subprocess.\n  WHY: The hooks do not read those variables today, and the test suite verifies no token or kill switch leaks. No runtime failure.\n- .github/workflows/ci.yml:488-510 | severity=low | confidence=[2]\n  PROBLEM: The inline script does not validate that `pull_request` in the event payload is a dictionary before reading the PR body.\n  WHY: A malformed payload produces an empty body treated as no Intended loosening section, which is harmless.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/guard_differential.py: `intentional_loosening` parser, the no-backtick branch (`else: hook, shape = \"\", content.strip()`) | severity=low | confidence=[4]\n  PROBLEM: A hook-prefixed list item without backticks is parsed with the hook prefix included in the shape rather than as the hook name.\n  WHY: An intended loosening in that form is silently ignored, so the regression still reports and blocks the PR until the line is rewritten.\n- scripts/guard_differential.py: `compare_hook_dirs` building a fresh scenario per shape (`root = scratch / f\"{hook}-{index}-{side}\"`) and `_init_repo` running per scenario | severity=low | confidence=[3]\n  PROBLEM: `compare_hook_dirs` creates a fresh scenario and runs `_init_repo` for every shape on both sides, without sharing work across shapes.\n  WHY: With the shipped corpora, the reviewer estimates roughly 360 `_init_repo` calls per tree and warns the check may exceed the 20-minute CI job budget.\n- scripts/guard_differential.py: `run_hook` (subprocess.run block, ~line 469-478)\n  PROBLEM: Strict text decoding in `subprocess.run` can raise `UnicodeDecodeError` if a hook emits non-UTF-8 output.\n  WHY: The exception propagates and aborts the entire `compare_hook_dirs` run for that tree rather than degrading to an error outcome for that shape.\n- scripts/guard_differential.py: `compare_hook_dirs` scenario creation loop (~line 542-556)\n  PROBLEM: An exception from running a single shape is not caught within the scenario loop.\n  WHY: A subprocess launch or scratch-directory I/O failure aborts the whole comparison for that tree and surfaces as a SetupError, hiding partial results from the other corpora.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1948a834dd490ccde96199b9f25cd6ffb12ae27d2ade3a2c4954807cb198dffa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36656212395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36656212395",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930022040_c6058b4482",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36656212395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T02:20:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

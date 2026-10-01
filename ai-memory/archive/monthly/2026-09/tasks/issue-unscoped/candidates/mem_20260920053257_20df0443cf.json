@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:804-814 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The new \"Release staged-support latches without active projects\" step sets `ALERT_MSG_LEVEL` from `vars.ALERT_MSG_LEVEL || 'DEBUG'` instead of reading `env.ALERT_MSG_LEVEL` first.\n  WHY: This overrides the job-level `ALERT_MSG_LEVEL=SILENT` smoke-test export, can emit Telegram alerts during smoke runs, and fails the `test_every_step_level_alert_level_reads_env_context_first` and `test_step_level_alert_level_declarations_are_pinned` contract tests; severity differs between MAJOR and BLOCKER, so the highest severity is used.\n\n- scripts/review_rb_judge.sh:908, 933-938, 951, 2703-2729 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_6]\n  PROBLEM: `close_and_reissue` relies only on the fail-open GraphQL discovery call for `PR_BASE_REF` even though `_pr_meta` already contains the pull request metadata.\n  WHY: A GraphQL failure or missing `baseRefName` leaves `PR_BASE_REF` empty, causing replacement PRs to omit Tracking issue, Integration branch, and Local ID metadata and preventing successor adoption.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Both knobs are wired through `.github/workflows/orchestrate_poll.yml` with repo-var overrides. README (env tables, 12g/12h, 13, staged-support restore), `agents.md`, and a `changelog.d` fragment are updated.\" / Step-level ALERT_MSG_LEVEL must read env.ALERT_MSG_LEVEL first so the smoke SILENT export is not overridden\n  expected_change_site: .github/workflows/orchestrate_poll.yml:810\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: LAST RUN DIFF and original PR diff leave the new step's env block as `ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}`, and the failing tests `test_every_step_level_alert_level_reads_env_context_first` and `test_step_level_alert_level_declarations_are_pinned` require `${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}`.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/orchestrate_poll.yml: the new step \"Release staged-support latches without active projects\" declares ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }} | severity=MAJOR | confidence=5\n  PROBLEM: The step-level ALERT_MSG_LEVEL reads from vars directly rather than from env.ALERT_MSG_LEVEL first.\n  WHY: During E2E smoke tests, the job exports ALERT_MSG_LEVEL=SILENT, but this declaration overrides that silence with the repo var or DEBUG, leaking Telegram alerts.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/orchestrate_poll.yml: lines 804-814 (the new \"Release staged-support latches without active projects\" step, specifically the `ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}` line at ~line 808) | severity=BLOCKER | confidence=5\n  PROBLEM: The new sweep-only step sets `ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}`.\n  WHY: Step-level `ALERT_MSG_LEVEL` must read `env.ALERT_MSG_LEVEL` first so the smoke `SILENT` export is not overridden; the lint tests fail and smoke runs emit extra Telegram alerts.\n\n- Requirement: \"Both knobs are wired through `.github/workflows/orchestrate_poll.yml` with repo-var overrides. README (env tables, 12g/12h, 13, staged-support restore), `agents.md`, and a `changelog.d` fragment are updated.\"\n  Expected change site: `.github/workflows/orchestrate_poll.yml` \u2014 the new \"Release staged-support latches without active projects\" step must obey the repo-wide step-level ALERT_MSG_LEVEL contract (env \u2192 vars \u2192 default).\n  Evidence of absence: LAST RUN DIFF and original PR diff leave the new step's env block as `ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}`. The two lint tests (`test_every_step_level_alert_level_reads_env_context_first` and `test_step_level_alert_level_declarations_are_pinned`) fail for the PR head SHA.\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/orchestrate_poll.yml:810 | severity=BLOCKER | confidence=4\n  PROBLEM: The new step uses `ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}` instead of reading `env.ALERT_MSG_LEVEL` first.\n  WHY: The failing contract tests expect `${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}` so the smoke SILENT export is not overridden.\n\n- Requirement: Step-level ALERT_MSG_LEVEL must read env.ALERT_MSG_LEVEL first so the smoke SILENT export is not overridden\n  Expected change site: .github/workflows/orchestrate_poll.yml:810\n  Evidence of absence: The new step \"Release staged-support latches without active projects\" uses `ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}` but the failing test expects it to read `env.ALERT_MSG_LEVEL` first (pattern: `${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}`). The existing steps at lines 678 and 970 use the same pattern as the new step, suggesting either the test expects a new pattern that all steps should follow, or the test was recently added and the workflow needs updating.\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- .github/workflows/orchestrate_poll.yml:810 ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }} on step Release staged-support latches without active projects | severity=MAJOR | confidence=5\n  PROBLEM: The new quiet-tick sweep step sets step-level ALERT_MSG_LEVEL from vars only.\n  WHY: Smoke detection writes ALERT_MSG_LEVEL=SILENT to GITHUB_ENV, but a step env block that skips env.ALERT_MSG_LEVEL overrides that SILENT value and can send Telegram from release_staged_support_needs_human_latches; the lint contract tests also fail.\n\n- scripts/review_rb_judge.sh:908 _pr_meta REST pull payload; 933-938 GraphQL baseRefName into PR_BASE_REF with || true | severity=MAJOR | confidence=4\n  PROBLEM: `close_and_reissue` still takes PR_BASE_REF only from the GraphQL discovery call.\n  WHY: On GraphQL failure or missing `baseRefName`, PR_BASE_REF is empty even though `_pr_meta` was already fetched and later reused; the reissue path then logs REISSUE_ORCHESTRATOR_METADATA_ABSENT and creates the replacement without Tracking issue, Integration branch, or Local ID.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "431f4616546a374e7369064c7067c67559e0c4e85f1205e99d1c1a89f66b3354",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4133,
+    "run_id": "35489436353",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35489436353",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260920053257_20df0443cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4133,
+    "run_id": "35489436353"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-20T05:32:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

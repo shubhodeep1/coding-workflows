@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which base should this follow-up target?\nChoices:\nA. Wait for #3965 to merge, then implement against the default branch. (RECOMMENDED)\nB. Implement directly against `orchestrator/project-3965`.\nC. Backport the relevant resolver-state machinery and mitigation to the current default branch.",
+  "fingerprint": "d40f353d39d054c0ddf1dbee247241e1429fb9f533f09f0120dcc3103042aa94",
+  "lineage": {
+    "issue_number": 4091,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34830669978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34830669978",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260914100151_3c6e2bd856",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4091,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34830669978"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4091 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-14T10:01:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

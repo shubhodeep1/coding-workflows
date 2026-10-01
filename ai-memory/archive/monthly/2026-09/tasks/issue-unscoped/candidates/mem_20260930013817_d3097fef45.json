@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:17523, 17542-17548 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: When `mktemp` fails, `_pnr_err_file` is empty, so the 404 check cannot recognize a legitimate absent-wrapper response and classifies it as `page_failed`.\n  WHY: Under `/tmp` pressure, lookups for an absent wrapper return 1 instead of complete-and-empty, causing dispatches or pushes to be skipped; reviewers characterize this as a safe failure direction but a divergence from the documented 404 contract.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add `run-name: AI Review [pr:<N>]` to `workflow-templates/ai-review.yml` and match both names in every lookup.\n  expected_change_site: `workflow-templates/ai-review.yml` and `check_in_status.py`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description confirms this requirement is already on the integration branch base and thus not part of this diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- Requirement: Add `run-name: AI Review [pr:<N>]` to `workflow-templates/ai-review.yml` and match both names in every lookup.\n  Expected change site: `workflow-templates/ai-review.yml` and `check_in_status.py`\n  Evidence of absence: The PR description confirms this requirement is already on the integration branch base and thus not part of this diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: _pr_named_review_dispatch_runs body around lines 17523, 17542, 17545-17548 (mktemp + 404 detection branch) | severity=NIT | confidence=3\n  PROBLEM: When `mktemp` fails, `_pnr_err_file` becomes empty; the 404 detection branch is gated by `[ -n \"${_pnr_err_file}\" ]`, so a legitimate \"wrapper does not exist\" response is classified as `page_failed` instead of complete-and-empty.\n  WHY: In a consumer repo with only `ai-review.yml`, `internal-review.yml` always returns HTTP 404. If `/tmp` exhaustion makes `mktemp` fail at the same time, the helper cannot distinguish that 404 from a real API failure and reports the listing as incomplete. The next cycle retries, but the underlying mktemp failure persists, so every cycle returns rc=1. The retry only succeeds when /tmp recovers; the safe default is correct but the \"absent wrapper = complete and empty\" contract documented in the helper header and the changelog fragment does not hold under this edge condition.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: _pr_named_review_dispatch_runs, lines 17523, 17542-17548 | severity=NIT | confidence=2\n  PROBLEM: When mktemp fails and _pnr_err_file is empty, the 404 check at line 17545 requires [ -n \"${_pnr_err_file}\" ] to be true, so a legitimate 404 for an absent wrapper is classified as page_failed instead of complete-and-empty.\n  WHY: Under permanent /tmp exhaustion (correlated with other poller failures), every _pr_named_review_dispatch_runs call returns 1 even when the repository legitimately lacks one wrapper. The conflict dispatch, failed-autofix redispatch, and both empty-commit push sites all skip for that cycle. The next poll cycle retries, so the defect is self-recovering if /tmp pressure is transient, but permanent /tmp exhaustion blocks every dispatch and push indefinitely instead of treating a 404 as complete and empty. This is the consensus finding from pass 1 reviewers. The fail-closed behavior is actually safer than fail-open (skips dispatch rather than pushing under a live review), but it diverges from the documented contract that a 404 means the wrapper is absent.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh: _pr_named_review_dispatch_runs (17523 mktemp; 17545-17548 404 check) | severity=NIT | confidence=3\n  PROBLEM: mktemp failure leaves _pnr_err_file empty; 404 check requires -n \"${_pnr_err_file}\" && grep on file so absent-wrapper 404 treated as page_failed.\n  WHY: /tmp pressure makes helper return 1 on normal absent wrappers, causing extra skips of dispatches/pushes.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh: 17523, 17542, 17545-17548 | severity=NIT | confidence=2\n  PROBLEM: When mktemp fails, `_pnr_err_file` is empty. The stderr redirect `2>\"${_pnr_err_file:-/dev/null}\"` sends the gh error to /dev/null. The 404 detection at line 17545 requires `[ -n \"${_pnr_err_file}\" ]` to be true, so when mktemp failed, a legitimate 404 for an absent wrapper (e.g. `ai-review.yml` in this repo) is classified as `page_failed` instead of \"complete and empty\", making the listing incomplete and returning 1.\n  WHY: Under /tmp exhaustion, every `_pr_named_review_dispatch_runs` call in coding-workflows returns 1 (because `ai-review.yml` 404s but is not recognized), so all three callers skip their dispatch or push indefinitely. The failure direction is safe (blocks destructive actions, next cycle retries if transient), but it deviates from the documented contract that a 404 wrapper counts as complete and empty.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "965e1171f8edb9ec636cb5e067bc1adc75fbf516551364baf68281f76b1d9957",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4966,
+    "run_id": "36654211197",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36654211197",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930013817_d3097fef45",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4966,
+    "run_id": "36654211197"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T01:38:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

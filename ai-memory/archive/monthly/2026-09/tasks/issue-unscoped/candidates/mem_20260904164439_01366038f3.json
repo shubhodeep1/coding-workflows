@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:lines 2955-2957 (docstring of `_linked_pr_is_issue_implementation`), compared against line 2902 (`_linked_prs_by_body_reference` jq filter) and line 2979 (the predicate's own grep) | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k3]\n  PROBLEM: The docstring claims the body close-keyword matcher is \"the same pattern _linked_prs_by_body_reference matches\", but the enumeration helper and predicate use different leading and trailing boundaries.\n  WHY: This does not fail at runtime, but the false parity claim could cause a maintainer to weaken the stricter destructive-close predicate and authorize unrelated PRs; the source severity is NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 2955-2957 (docstring of _linked_pr_is_issue_implementation) versus line 2902 (_linked_prs_by_body_reference jq filter) and line 2979 (the predicate's own grep regex)\n  Problem: The docstring claims the body close-keyword matcher is \"the same pattern _linked_prs_by_body_reference matches\". It is not: the jq filter at line 2902 has no leading boundary (so `prefixes #77` would match there but is rejected by the predicate's `(^|[^[:alnum:]_-])` at line 2979), and the trailing boundaries differ (jq uses Oniguruma `\\b`, predicate uses `([^0-9A-Za-z_]|$)`).\n  Why it fails at runtime: Does not fail at runtime \u2014 both serve different roles (jq is a loose candidate gatherer for _find_all_linked_prs; the predicate is the stricter gate in close_linked_pr) and the predicate correctly handles all cases. This is a comment-accuracy defect only. A maintainer synchronizing the two matchers based on the parity claim could inadvertently tighten the jq filter and exclude real close-keyword PRs from candidate enumeration.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 2955-2957 (docstring of `_linked_pr_is_issue_implementation`), compared against line 2902 (`_linked_prs_by_body_reference`) and line 2979 (the predicate's own grep)\n  Problem: The docstring claims the body close-keyword matcher is \"the same pattern _linked_prs_by_body_reference matches\". It is not the same pattern: the enumeration helper at line 2902 has no leading boundary (so `prefixes #77` matches there but is rejected by the predicate's `(^|[^[:alnum:]_-])` at line 2979), and its trailing boundary is Oniguruma `\\b` (Unicode-aware) while the predicate uses the ASCII class `([^0-9A-Za-z_]|$)`. The asymmetry is deliberate and correct (the helper is a fail-open candidate enumeration; the predicate is the destructive-close authorization gate), but the \"same pattern\" wording states parity that does not exist.\n  Why it fails at runtime: It does not fail at runtime \u2014 this is a comment-accuracy defect. The risk is maintenance-time: this exact docstring has already been through two accuracy-correction rounds on this PR (the branch-forms enumeration and the `cancel_zombie_runs_for_issue` boundary claim), and a future maintainer trusting \"same pattern\" could loosen the predicate's leading boundary to match the enumeration helper, which would let a body like `prefixes #77` authorize closing an unrelated PR. A one-line rewording such as \"a stricter variant of the pattern _linked_prs_by_body_reference matches (adds a leading word boundary; ASCII trailing boundary)\" removes the false parity claim.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "de6f1d88d22716f4a27056b1fb639293f0d9acb1fb154cde0cf31626aba50eba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3994,
+    "run_id": "33878466397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33878466397",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260904164439_01366038f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3994,
+    "run_id": "33878466397"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-04T16:44:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

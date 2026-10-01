@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4407,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4407\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4408\",\"pr_number\":4408,\"branch\":\"ai/issue-4407\",\"run_id\":\"36026821058\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/36026821058\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"changelog.d/4407-workspace-guard-external-git.md\",\"scripts/untrusted_process_sandbox.sh\",\"tests/test_agent_process_isolation.py\"]}",
+  "fingerprint": "49aa56a8908fcb71a74e3fec483693503131f2fe80d9fae2b8b3b3466943b930",
+  "lineage": {
+    "issue_number": 4407,
+    "parent_ids": [],
+    "pr_number": 4408,
+    "run_id": "36026821058",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36026821058",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4408"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260924163352_1819ec2958",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4407,
+    "level": "run",
+    "pr_number": 4408,
+    "run_id": "36026821058"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4407: https://github.com/shubhodeep1/coding-workflows/pull/4408",
+  "timestamps": {
+    "created_at": "2026-09-24T16:33:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

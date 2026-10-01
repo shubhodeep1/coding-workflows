@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:around line 1290 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: The unguarded `rc=\"$(cat \"/tmp/poll_shard_${shard}.rc\")\"` causes the loop to terminate prematurely under `set -euo pipefail` if a `.rc` file is missing.\n  WHY: If a shard has test results but no `.rc` file, `cat` fails and suppresses the structured per-shard error diagnostics; the identically structured port in the release `validate-scripts` jobs of mark-stable.yml (line ~302) and test-and-mark-stable.yml (line ~4114) has the same bug.\n- tests/test_ci_poll_test_sharding.py:lines ~471-477 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The test expects an error message that the shell code cannot produce when the `.rc` file is missing.\n  WHY: The test exercises code under `set -euo pipefail`, where `cat` on the missing `.rc` file aborts before the expected diagnostic text is printed.\n- tests/test_ci_poll_test_sharding.py:lines ~467-477; lines ~181-207 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `run_shard_judge` helper does not correctly simulate the shell loop's runtime behavior under `set -euo pipefail` when the `.rc` file is missing.\n  WHY: The helper may capture the loop's early exit differently from the actual workflow, leading to misleading test results.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml | severity=high | confidence=[4]\n  PROBLEM: The cat command is unguarded. Under `set -euo pipefail` (which the step explicitly sets), if a shard has `.txt` and `.log` files but no `.rc` file, the `cat` exits non-zero and bash immediately aborts the entire for-loop. The structured `::error::` diagnostic and the aggregate failure count that follow are never emitted. The step fails with a cryptic `cat: ... No such file or directory` on stderr instead of the intended per-shard failure message.\n  WHY: A shard subshell that exits non-zero never writes `.rc` because `set -e` kills the subshell before `echo \"$?\" > .rc` runs. The identically structured port in the release `validate-scripts` jobs of mark-stable.yml (line ~302) and test-and-mark-stable.yml (line ~4114) has the same bug.\n- tests/test_ci_poll_test_sharding.py (lines ~471-477) | severity=high | confidence=[4]\n  PROBLEM: The test creates a shard with `.txt` and `.log` but no `.rc`, then asserts `self.assertIn(\"orchestrate-poll shard 1 failed (exit 1)\", result.stdout)`. The extracted shell code runs under `set -euo pipefail`, so the `cat` on the missing `.rc` aborts the script before the expected diagnostic text is ever printed. The assertion expects a message that the shell code cannot produce, so this test is either always failing or untested in CI.\n  WHY: The test exercises a code path whose own `set -e` semantics prevent the expected output from being reached.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml | severity=high | confidence=[4]\n  PROBLEM: The unguarded assignment `rc=\"$(cat \"/tmp/poll_shard_${shard}.rc\")\"` causes the loop to terminate prematurely under `set -euo pipefail` if a `.rc` file is missing.\n  WHY: If an orchestrate-poll shard has test results but no `.rc` file, the `cat` command fails, and the script exits the loop immediately due to `set -e`. This causes the script to lose all subsequent shard results and suppresses the structured per-shard error diagnostics that should follow.\n- tests/test_ci_poll_test_sharding.py (lines ~467-477) and the underlying `run_shard_judge` helper (lines ~181-207) | severity=high | confidence=[3]\n  PROBLEM: The test helper does not correctly simulate the runtime behavior of the shell loop under `set -euo pipefail` when the `.rc` file is missing.\n  WHY: The test helper runs the shell code in a subshell, but it doesn't correctly capture the exit state of the loop when the subshell terminates early due to an error. This can lead to misleading test results where the test might appear to behave differently than the actual workflow job.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e851b04009573453e63167262608d48da484c50dba1902ce063d37221ada862b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4874,
+    "run_id": "36601307949",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36601307949",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929174128_53adf7ef79",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4874,
+    "run_id": "36601307949"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T17:41:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

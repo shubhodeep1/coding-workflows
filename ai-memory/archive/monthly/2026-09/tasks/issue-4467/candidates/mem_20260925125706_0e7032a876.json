@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4467,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4467\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4468\",\"pr_number\":4468,\"branch\":\"ai/issue-4467\",\"run_id\":\"36135283175\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/36135283175\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/orchestrate_poll.yml\",\"agents.md\",\"changelog.d/4139-poller-trusted-support.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_orchestrate_poll_workflow_contract.py\",\"tests/test_orchestrator_completion_lessons.py\",\"tests/test_workflow_gh_retry_fallback_contract.py\"]}",
+  "fingerprint": "65617ec6a2d6287b81764b7290594b5d776adfb73dd65f8e703c0d8c3b5e88d4",
+  "lineage": {
+    "issue_number": 4467,
+    "parent_ids": [],
+    "pr_number": 4468,
+    "run_id": "36135283175",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36135283175",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4468"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260925125706_0e7032a876",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4467,
+    "level": "run",
+    "pr_number": 4468,
+    "run_id": "36135283175"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4467: https://github.com/shubhodeep1/coding-workflows/pull/4468",
+  "timestamps": {
+    "created_at": "2026-09-25T12:57:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

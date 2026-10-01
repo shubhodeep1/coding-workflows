@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml: lines 568-593 (and similar blocks in tests-heal-plan-and-validation, tests-promote-stall-and-review, tests-release-and-log-analysis, orchestrate-poll) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Each of the five worker jobs (static-checks, four tests-* jobs, orchestrate-poll) repeats an identical three-step setup (Checkout repository, Setup Python, Install Python CI dependencies).\n  WHY: With six runners running the same install, total CI minutes for setup roughly sextuple what they were when CI ran as a single job; this is not a correctness failure, and the trade-off accepted in the plan is parallelism over setup reuse.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Every old step name appears exactly once across the new jobs\"\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The step \"Inventory parity\" is not present in any of the new parallel CI jobs, but is required by the contract test tests/test_ci_inventory_parity_order_contract.py.\n- requirement: \"Update docs/INVENTORY.md if it lists CI steps\"\n  expected_change_site: docs/INVENTORY.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description explicitly requires updating docs/INVENTORY.md if it lists CI steps. docs/INVENTORY.md is not present in the PR changed files list, and the CI job structure has been significantly changed, meaning any existing inventory of CI steps is now stale.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"Every old step name appears exactly once across the new jobs\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The step \"Inventory parity\" is not present in any of the new parallel CI jobs, but is required by the contract test tests/test_ci_inventory_parity_order_contract.py.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Update docs/INVENTORY.md if it lists CI steps\"\n  Expected change site: docs/INVENTORY.md\n  Evidence of absence: The PR description explicitly requires updating docs/INVENTORY.md if it lists CI steps. docs/INVENTORY.md is not present in the PR changed files list, and the CI job structure has been significantly changed, meaning any existing inventory of CI steps is now stale.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml | severity=NIT | confidence=3\n  File: .github/workflows/ci.yml\n  Line or code reference: lines 568-593 (and similar blocks in tests-heal-plan-and-validation, tests-promote-stall-and-review, tests-release-and-log-analysis, orchestrate-poll)\n  Problem: Each of the five worker jobs (static-checks, four tests-* jobs, orchestrate-poll) repeats an identical three-step setup (Checkout repository, Setup Python, Install Python CI dependencies). Each runs `python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff` independently. With six runners running the same install, total CI minutes for setup roughly sextuple what they were when CI ran as a single job.\n  Why it fails at runtime: This is not a correctness failure; it is a CI-minute cost. Each runner pays ~10\u201320 s of pip setup that could be amortised via a composite action or reusable workflow that caches the install. The trade-off accepted in the plan is parallelism over setup reuse, so this is a known cost rather than a bug \u2014 flagging only so a follow-up could collapse the duplication.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "850ac8f67128982432de9f96cd6bc3ab7770fd70e96a6cda298fb4a39adf7ccf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4874,
+    "run_id": "36625860986",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36625860986",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929210202_b962a8acfe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4874,
+    "run_id": "36625860986"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T21:02:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

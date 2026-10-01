@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1569 | PROBLEM: The `ownership_indeterminate` path returns `True` without warning when blame fails on delta.\n  WHY: A failed blame operation can cause an ownership determination to incorrectly treat a finding as project-owned without surfacing the uncertainty.\n  flagged_by: [x-ai_grok-4_20]\n- scripts/review_collect_pr_metadata.sh:336 | PROBLEM: A partial fallback after a primary GraphQL error still marks metadata as resolved.\n  WHY: Marking incomplete metadata as resolved can allow advisory scope checks to be bypassed.\n  flagged_by: [x-ai_grok-4_20]\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/security_audit.sh:1569\n  PROBLEM: ownership_indeterminate path returns True without warning when blame fails on delta\n- scripts/review_collect_pr_metadata.sh:336\n  PROBLEM: partial fallback after primary GraphQL error still marks resolved; advisory scope bypassed\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3c502bcb30e532e48e69085a72ccc0cce8a1a7222ab7b3d91e9ea98996ddc11b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4174,
+    "run_id": "35594596407",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35594596407",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921121745_2c2c25478b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4174,
+    "run_id": "35594596407"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T12:17:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

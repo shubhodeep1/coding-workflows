@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_checker_restart.py:475-479 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The incomplete-trigger-page test does not verify that the `triggers_has_more` guard runs before `_project_trigger`.\n  WHY: The implementation currently checks the incomplete-page guard first, but with no triggers the test would still pass if that guard were moved after `_project_trigger`, leaving ordering regressions undetected.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement ci.yml step \"Dead-checker restart tests (Claude issue pickup, issue #4910)\".\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No diff hunk in .github/workflows/ci.yml introduces this step; PR DIFF and LAST RUN DIFF contain no reference to it.\n- requirement: Update workflow-templates/.claude/settings.json with allow rules for the script and set_session_tags.\n  expected_change_site: workflow-templates/.claude/settings.json\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No diff hunk in workflow-templates/.claude/settings.json; PR DIFF and LAST RUN DIFF contain no reference to it.\n- requirement: Update .claude/commands/claude-issue-pickup.md (exact diff for the blocked comment).\n  expected_change_site: .claude/commands/claude-issue-pickup.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No diff hunk in .claude/commands/claude-issue-pickup.md; PR DIFF and LAST RUN DIFF contain no reference to it.\n- requirement: Update README.md and agents.md.\n  expected_change_site: README.md, agents.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No diff hunk in README.md or agents.md; PR DIFF and LAST RUN DIFF contain no reference to them.\n- requirement: Create changelog fragment changelog.d/4910-restart-dead-checkers.md.\n  expected_change_site: changelog.d/4910-restart-dead-checkers.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No diff hunk in changelog.d/4910-restart-dead-checkers.md; PR DIFF and LAST RUN DIFF contain no reference to it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_claude_checker_restart.py:475-479 | confidence=4\n  PROBLEM: The test does not exercise ordering between the `triggers_has_more` guard and `_project_trigger`.\n  WHY: The test uses an empty trigger list, so it would still pass if the `_project_trigger` check moved ahead of the has_more guard.\n\n- Requirement: Implement ci.yml step \"Dead-checker restart tests (Claude issue pickup, issue #4910)\".\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: No diff hunk in .github/workflows/ci.yml introduces this step; PR DIFF and LAST RUN DIFF contain no reference to it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n- Requirement: Update workflow-templates/.claude/settings.json with allow rules for the script and set_session_tags.\n  Expected change site: workflow-templates/.claude/settings.json\n  Evidence of absence: No diff hunk in workflow-templates/.claude/settings.json; PR DIFF and LAST RUN DIFF contain no reference to it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n- Requirement: Update .claude/commands/claude-issue-pickup.md (exact diff for the blocked comment).\n  Expected change site: .claude/commands/claude-issue-pickup.md\n  Evidence of absence: No diff hunk in .claude/commands/claude-issue-pickup.md; PR DIFF and LAST RUN DIFF contain no reference to it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n- Requirement: Update README.md and agents.md.\n  Expected change site: README.md, agents.md\n  Evidence of absence: No diff hunk in README.md or agents.md; PR DIFF and LAST RUN DIFF contain no reference to them.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: Create changelog fragment changelog.d/4910-restart-dead-checkers.md.\n  Expected change site: changelog.d/4910-restart-dead-checkers.md\n  Evidence of absence: No diff hunk in changelog.d/4910-restart-dead-checkers.md; PR DIFF and LAST RUN DIFF contain no reference to it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_claude_checker_restart.py:475-479\n  PROBLEM: The test does not pin the ordering of the `triggers_has_more` guard relative to `_project_trigger(triggers, slug)` (line 711).\n  WHY: An empty trigger list lets the test pass if `_project_trigger` is checked first; adding a matching trigger with `has_more=True` would exercise the ordering invariant.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_claude_checker_restart.py:475-479 | severity=MAJOR | confidence=4\n  PROBLEM: The test does not exercise ordering between the `triggers_has_more` guard and `_project_trigger`.\n  WHY: The test state has no triggers, so `_project_trigger(triggers, slug)` returns None regardless of guard order and a regression that reorders the guards would not be caught.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_claude_checker_restart.py:475-479\n  PROBLEM: The new test does not pin that the `has_more` guard precedes `_project_trigger` when both an incomplete page and a project trigger are present.\n  WHY: The empty trigger list lets the test pass even if `_project_trigger` is moved ahead of the `has_more` guard.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5be1cc16bb362e2e878186cbc69e9c43e01424863163f87ba9a0d57830a26e7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5498,
+    "run_id": "36675858512",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36675858512",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930063227_33b8863934",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5498,
+    "run_id": "36675858512"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T06:32:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

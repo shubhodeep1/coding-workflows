@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_claude_fixer_mode.py:lines 647-653 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fail-closed test crashes during setup because it calls `enumerate(comments, 1)` when `comments` is `None`.\n  WHY: The `TypeError` prevents the test from exercising the fail-closed guard.\n- .github/workflows/review_autofix.yml:Lines 817 and 1487 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `gate_fetch_marker_comments` is called redundantly on the same execution path during `workflow_dispatch` events.\n  WHY: The repeated calls add unnecessary logic overhead and complexity if the memoization contract changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Documentation consistency for `CLAUDE_FIXER_ENABLED`.\n  expected_change_site: README.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: README.md line 86 lists `AUTOFIX_SKIP_DOC_ONLY` and `AUTOFIX_SKIP_MAX_ADDITIONS` for the small-diff route but omits `AUTOFIX_SKIP_MAX_DELETIONS`, which is also required for the route to fire, misleading operators about the skip behavior.\n- requirement: Improve parseability of Claude-fixer mode documentation.\n  expected_change_site: agents.md line 98-101\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The documentation text for Claude-fixer mode in agents.md contains a run-on sentence (\"...and also runs it). [claude-intervention] and ...\") that lacks a proper sentence break, making it difficult for operators to parse.\n- requirement: Append `claude_handoff_suppressed=${CLAUDE_HANDOFF_SKIP_SUPPRESSED}` to the existing `AUTOFIX_GATE_DET_SKIP_EVAL` log line to maintain the audit contract.\n  expected_change_site: .github/workflows/review_autofix.yml line 1500\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The `AUTOFIX_GATE_DET_SKIP_EVAL` echo statement in `.github/workflows/review_autofix.yml` lacks the `claude_handoff_suppressed` flag, which is inconsistent with the audit contract of logging all suppression flags.\n- requirement: Test the fail-closed comment lookup to ensure a failed comment lookup logs `reason=claude_fixer_handoff_unverified` and suppresses the skip.\n  expected_change_site: tests/test_review_autofix_claude_fixer_mode.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails` exists but does not exercise the intended failure path (GATE_MOCK_GH has no failure simulation for the `/comments` endpoint), meaning the fail-closed safety constraint is untested despite the PR's claims.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_claude_fixer_mode.py:lines 647-653 | severity=MAJOR | confidence=5\n  PROBLEM: The test intended to verify fail-closed behavior for a failed comment lookup crashes due to a TypeError during setup, preventing the execution of the fail-closed guard.\n  WHY: The test setup calls `enumerate(comments, 1)` unconditionally on the `comments` list. When `None` is passed to the test function `_run_gate`, this raises a `TypeError: 'NoneType' object is not iterable` during test setup, preventing the test from exercising the fail-closed guard logic.\n- .github/workflows/review_autofix.yml:Lines 817 and 1487 | severity=NIT | confidence=3\n  PROBLEM: Redundant calls to gate_fetch_marker_comments on the same execution path during workflow_dispatch events.\n  WHY: Even though memoized, multiple calls to this function in the same execution path add unnecessary logic overhead and complexity in the event of future modifications to the memoization contract.\n- TASK_GAP\n  Requirement: Documentation consistency for `CLAUDE_FIXER_ENABLED`.\n  Expected change site: README.md\n  Evidence of absence: README.md line 86 lists `AUTOFIX_SKIP_DOC_ONLY` and `AUTOFIX_SKIP_MAX_ADDITIONS` for the small-diff route but omits `AUTOFIX_SKIP_MAX_DELETIONS`, which is also required for the route to fire, misleading operators about the skip behavior.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: Improve parseability of Claude-fixer mode documentation.\n  Expected change site: agents.md line 98-101\n  Evidence of absence: The documentation text for Claude-fixer mode in agents.md contains a run-on sentence (\"...and also runs it). [claude-intervention] and ...\") that lacks a proper sentence break, making it difficult for operators to parse.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Append `claude_handoff_suppressed=${CLAUDE_HANDOFF_SKIP_SUPPRESSED}` to the existing `AUTOFIX_GATE_DET_SKIP_EVAL` log line to maintain the audit contract.\n  Expected change site: .github/workflows/review_autofix.yml line 1500\n  Evidence of absence: The `AUTOFIX_GATE_DET_SKIP_EVAL` echo statement in `.github/workflows/review_autofix.yml` lacks the `claude_handoff_suppressed` flag, which is inconsistent with the audit contract of logging all suppression flags.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: Test the fail-closed comment lookup to ensure a failed comment lookup logs `reason=claude_fixer_handoff_unverified` and suppresses the skip.\n  Expected change site: tests/test_review_autofix_claude_fixer_mode.py\n  Evidence of absence: The test `test_gate_claude_pr_skip_fails_closed_when_the_handoff_lookup_fails` exists but does not exercise the intended failure path (GATE_MOCK_GH has no failure simulation for the `/comments` endpoint), meaning the fail-closed safety constraint is untested despite the PR's claims.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bd0df8ea001c3da9ce6e67af4d172285a301502b802fefbafcb3e0a7a97d1de2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36444815624",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36444815624",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928161256_d926149195",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36444815624"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T16:12:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2234-2243 | severity=nit | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, qwen_qwen3_7-plus]\n  PROBLEM: The grep -Eq evaluation of ORCH_INTEGRATION_BRANCH_PATTERN does not distinguish an invalid ERE or non-match, so fallback derivation silently leaves the follow-up without Integration branch metadata.\n  WHY: The follow-up resolves to the default branch while emitting a misleading PR-base mismatch message instead of identifying the malformed or non-matching configured pattern.\n\n- scripts/review_rb_judge.sh:2234 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The fallback pattern ^orchestrator/project- is hardcoded in the grep -Eq call instead of using the existing ORCH_INTEGRATION_BRANCH_PATTERN variable.\n  WHY: Repositories with custom integration-branch patterns silently fail to derive the integration branch for parent issues lacking metadata.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh: line ~2238 | severity=NIT | confidence=3\n  PROBLEM: When ORCH_INTEGRATION_BRANCH_PATTERN is an invalid POSIX ERE, grep -Eq exits non-zero and the condition fails silently.\n  WHY: RB_FOLLOWUP_INTEGRATION_BRANCH stays empty and the follow-up resolves to the default branch without attributing the miss to an invalid pattern.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh: lines 2237-2239 | confidence=3\n  PROBLEM: ORCH_INTEGRATION_BRANCH_PATTERN is evaluated by grep -Eq, whose distinct outcomes for non-match, invalid ERE, and subsequent filtering are silently handled the same way.\n  WHY: RB_FOLLOWUP_INTEGRATION_BRANCH stays empty, the follow-up ships without an Integration branch line, and the log misleadingly attributes the failure to the PR base.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_rb_judge.sh: 2234-2243 | confidence=4\n  PROBLEM: The grep -Eq pattern against ORCH_INTEGRATION_BRANCH_PATTERN can silently fail when the pattern is misconfigured or does not match, causing the fallback to never fire.\n  WHY: scripts/resolve_integration_ref.sh routes the follow-up to the default branch with no log indicating why, introducing a silent-failure mode for the regression this PR fixes.\n\n- scripts/review_rb_judge.sh: 2234-2243 | confidence=4\n  PROBLEM: There is missing error handling for grep -Eq failure when ORCH_INTEGRATION_BRANCH_PATTERN is misconfigured or does not match the PR base.\n  WHY: The fallback derivation silently fails, leaving the follow-up without lineage metadata and causing it to resolve to the default branch.\n\n- scripts/review_rb_judge.sh: 2234 | confidence=4\n  PROBLEM: The fallback pattern ^orchestrator/project- is hardcoded in the grep -Eq call instead of using the existing ORCH_INTEGRATION_BRANCH_PATTERN variable.\n  WHY: Repositories with custom integration-branch patterns silently fail to derive the integration branch for parent issues lacking metadata.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge.sh: lines 2234-2243 | severity=NIT | confidence=3\n  PROBLEM: When ORCH_INTEGRATION_BRANCH_PATTERN contains an invalid ERE, grep -Eq exits with code 2 and the follow-up is created without the Integration branch line.\n  WHY: The existing fallback log is misleading because it does not distinguish a malformed regex from a legitimate pattern mismatch, causing fallback to the default branch without identifying the broken pattern.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "65d8c13db11f395ce91a6a3aaa50d1c33643fbcf938bffc40c4b16bb8e0fc63c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4117,
+    "run_id": "35316484749",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35316484749",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260918081002_e0b1c104ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4117,
+    "run_id": "35316484749"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-18T08:10:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

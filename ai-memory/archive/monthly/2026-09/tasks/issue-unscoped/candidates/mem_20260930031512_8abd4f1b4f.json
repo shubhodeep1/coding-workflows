@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:parse_immediate_block() | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `parse_immediate_block()` takes the last session marker in the body and returns `None` when it belongs to a different session, rather than finding the queried session's earlier block.\n  WHY: When one comment contains blocks for multiple sessions, `lookup()` can silently miss the queried session's report and delay operator notification.\n- .claude/scripts/permission_prompts.py:parse_immediate_block() | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `parse_immediate_block()` returns `None` when the heading occurs at the end of `fields` without a trailing newline and is not at position zero.\n  WHY: A hand-edited or partially redacted body with the newline after `**Immediate report**` omitted will fail to parse despite an intact fence and marker.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: .claude/scripts/permission_prompts.py\n  Line or code reference: parse_immediate_block() \u2014 the `markers = list(SESSION_MARKER_RE.finditer(text))` plus `if not markers or markers[-1].group(1) != session_label: return None` block\n  Problem: The new code takes the LAST marker in the body and returns None when that marker is for a session other than the queried one. The old code filtered markers to the queried session first, then took the last one. In a comment body that contains an immediate block for the queried session followed by an immediate block for a different session (the cross-session case the new design does not test), the old code returned the queried session's block; the new code returns None. `lookup()` in this repo iterates through issue/PR comments and parses each, so a single comment shared between sessions (e.g. two unattended stages reporting the same pattern) can now fail to surface the earlier session's report.\n  Why it fails at runtime: a comment body of `<SESSION_A_BLOCK>\\n\\n<SESSION_B_BLOCK>` causes `parse_immediate_block(body, SESSION_A)` to return None instead of SESSION_A's block. The downstream poller that reads `lookup` output would silently miss the earlier session's prompt, delaying the operator's notification.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- File: .claude/scripts/permission_prompts.py\n  Line or code reference: parse_immediate_block() \u2014 the `fields.rfind(f\"\\n{IMMEDIATE_HEADING}\\n\") ... elif fields.startswith(f\"{IMMEDIATE_HEADING}\\n\"): ... else: return None` chain\n  Problem: When the heading sits at the end of `fields` without a trailing newline (i.e. fields ends with `<heading>` rather than `<heading>\\n`), neither `rfind` (no `\\n` after the heading) nor `startswith` (heading is not at position 0) matches, so the parser returns None. immediate_block's normal layout always emits `\\n\\n` after the heading, so this requires a malformed or hand-edited body \u2014 but a body where someone trimmed the trailing newline of the heading line would silently produce a None instead of a parsed dict.\n  Why it fails at runtime: A hand-edited or partially redacted body that omits the `\\n` after `**Immediate report**` will fail to parse even when the fence and marker are intact, returning None where the old code (which searched for the heading on the same string without requiring the trailing `\\n` for the `startswith` fallback) would have parsed correctly.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d68a75ba14ca05f0e0c0a4fe83fbe3593ef353172c2129f3047939d9c26f6578",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5161,
+    "run_id": "36661448117",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36661448117",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930031512_8abd4f1b4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5161,
+    "run_id": "36661448117"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T03:15:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

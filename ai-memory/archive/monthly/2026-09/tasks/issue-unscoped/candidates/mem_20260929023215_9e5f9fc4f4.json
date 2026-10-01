@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:99-104 | severity=low | confidence=[1]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The pending-checks paragraph runs into the existing \u201cDoc-only and small-diff `claude/*`\u201d sentence without the intended paragraph break.\n  WHY: The rendered text is readable, but the missing break obscures the separation between the pending-checks description and the deterministic-skip description.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Phase 1 includes \"docs; changelog.d/ fragment\" and \"README.md, agents.md, docs/INVENTORY.md: document the marker, the gate skip, and the sweep's new duty\" (plan phases doc, implementation steps 6-7).\n  expected_change_site: README.md, agents.md, docs/INVENTORY.md, changelog.d/\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The reviewer reports that all four documentation files are present and changed in the PR diff, and that README.md, agents.md, docs/INVENTORY.md, and changelog.d/4900-claude-fixer-pending-checks-auto-merge.md satisfy the documentation requirements; the reviewer explicitly states \u201cNo gap exists.\u201d\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nRequirement: Phase 1 includes \"docs; changelog.d/ fragment\" and \"README.md, agents.md, docs/INVENTORY.md: document the marker, the gate skip, and the sweep's new duty\" (plan phases doc, implementation steps 6-7).\nExpected change site: README.md, agents.md, docs/INVENTORY.md, changelog.d/\nEvidence of absence: All four documentation files are present and changed in the PR diff. README.md adds a new \"A clean review that finishes before CI\" subsection and extends the stable log prefix list with pending_checks/pending_checks_failed. agents.md adds the hand-off pipeline description and the sweep documentation. docs/INVENTORY.md adds the new script entry and updates the handoff script description. changelog.d/4900-claude-fixer-pending-checks-auto-merge.md is a complete, well-formed fragment. All documentation requirements are satisfied.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5 \u2014 delivered; reporting as a verified gap that is actually satisfied, for completeness. No gap exists.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- agents.md:99-104 | Problem: The new prose ends \"...finish green. Doc-only and small-diff `claude/*`\" on the same line, merging the new paragraph with the existing \"Doc-only and small-diff `claude/*` PRs take the gate's deterministic skip...\" sentence.\n  WHY: The rendered text is still readable but loses the intended paragraph break between the pending-checks description and the deterministic-skip description.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f00322cbc7319ac8bde0cf5b4a2060754a6fb2c61b648361df26442acea1e40e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36511604620",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36511604620",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929023215_9e5f9fc4f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36511604620"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T02:32:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

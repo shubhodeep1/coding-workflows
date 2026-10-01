@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_guard_differential.py:543 | severity=critical | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The assertion in `test_guard_differential_steps_read_past_outer_comment_lines` compares `steps[1]` against a space-indented string, but `textwrap.dedent` leaves a leading TAB in the actual string.\n  WHY: The strict equality assertion raises `AssertionError` because the actual string starts with `\\t` while the expected string starts with spaces.\n- scripts/guard_differential.py:586 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_outer_comment` is defined inside the `while index < len(lines):` loop, so it is recreated on every iteration.\n  WHY: The behavior is correct, but the nested-function definition causes unnecessary allocation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Tests cover G1-G3. One executes the real `ci.yml` step body in a scratch repository with a local `origin`, and proves that the base verifier runs and the head verifier does not. They also cover the bootstrap fallback and the `verifier_change` detection.\"\n  expected_change_site: tests/test_guard_differential.py, the new `test_guard_differential_steps_read_past_outer_comment_lines` test\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: tests/test_guard_differential.py, `test_guard_differential_steps_read_past_outer_comment_lines`; tests/test_guard_differential.py, `test_ci_step_runs_the_base_verifier_not_the_prs`; tests/test_guard_differential.py, `test_ci_step_falls_back_to_the_prs_verifier_with_a_warning`\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_guard_differential.py:543 | severity=critical | confidence=[5]\n  PROBLEM: The strict equality assertion in `test_guard_differential_steps_read_past_outer_comment_lines` expects spaces, but `textwrap.dedent` leaves a leading TAB in `steps[1]`.\n  WHY: `steps[1]` begins with `\\t      ` while the expected literal begins with spaces, so the assertion raises `AssertionError`.\n- scripts/guard_differential.py:586 | severity=low | confidence=[3]\n  PROBLEM: `_outer_comment` is defined inside the `while index < len(lines):` loop and is recreated on every iteration.\n  WHY: The behavior is correct; the nested-function definition causes unnecessary allocation.\n- Requirement: \"Tests cover G1-G3. One executes the real `ci.yml` step body in a scratch repository with a local `origin`, and proves that the base verifier runs and the head verifier does not. They also cover the bootstrap fallback and the `verifier_change` detection.\"\n  Expected change site: tests/test_guard_differential.py, the new `test_guard_differential_steps_read_past_outer_comment_lines` test.\n  Evidence of absence: The test was added but its strict equality assertion does not match the actual `textwrap.dedent` output (tab vs. space mismatch described under CORRECTNESS). The test as written cannot pass; either the test data must move to a module-level constant whose indentation uses only spaces (matching the existing `SAMPLE_CI_WORKFLOW` pattern), or the expected literal must include the leading TAB. Until that is fixed, G4 is only partially covered \u2014 the step-execution tests (`test_ci_step_runs_the_base_verifier_not_the_prs`, `test_ci_step_falls_back_to_the_prs_verifier_with_a_warning`) and the parametrized guard-step change test still pass, but the round-2 fix is unprotected by a green test.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b3a6dcf7633057dfd6f42e5675b71ae4f41769664a0109a34011784122cd6760",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5368,
+    "run_id": "36668816010",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36668816010",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930044421_4ef66baa53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5368,
+    "run_id": "36668816010"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T04:44:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

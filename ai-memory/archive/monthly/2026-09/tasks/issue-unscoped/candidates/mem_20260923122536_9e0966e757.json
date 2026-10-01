@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5434-5454 | severity=major | confidence=4\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The `RESOLVER_ACTUATION_REQUIRED=true` sentinel is written after the `_probe_resolver` fallback chain, so a resolver-required run that reaches its terminal `exit 2` path never sets the sentinel and is misclassified as `clean_review_no_commit` instead of `conflict_resolver_failed`.\n  WHY: The step only runs when `MERGE_CONFLICT == 'true'`, but the probe can exit before the sentinel write; severity was reported as MAJOR by moonshotai_kimi-k3 and NIT by minimax_minimax-m3 and qwen_qwen3_7-plus, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml\nLine or code reference: step \"Run Codex resolver, validate, stage, commit\", lines 5434-5453 \u2014 the sentinel `echo \"RESOLVER_ACTUATION_REQUIRED=true\" >> \"$GITHUB_ENV\"` at line 5453 sits AFTER the `_probe_resolver` fallback chain whose terminal failure path calls `exit 2` at line 5449 (\"No clean resolver entry-point available.\").\n  severity=NIT | confidence=3\n  PROBLEM: On a conflicted run where the primary resolver and both fallbacks all fail `bash -n`, the step exits before setting `RESOLVER_ACTUATION_REQUIRED`.\n  WHY: `determine_finalize_reason` then reports `failure_reason=clean_review_no_commit` instead of identifying the resolver failure, suppressing the correct workflow-failure heal signal.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/review_autofix.yml\nLine or code reference: step \"Run Codex resolver, validate, stage, commit\", lines 5434-5454 \u2014 the sentinel `echo \"RESOLVER_ACTUATION_REQUIRED=true\" >> \"$GITHUB_ENV\"` at line 5453 sits after the `_probe_resolver` fallback chain whose terminal failure path is `exit 2` at line 5449 (\"No clean resolver entry-point available\").\n  severity=MAJOR | confidence=4\n  PROBLEM: A resolver-required run that reaches the exit 2 branch never sets `RESOLVER_ACTUATION_REQUIRED`.\n  WHY: `determine_finalize_reason` does not classify it as `conflict_resolver_failed`, so the run falls through to the misleading `clean_review_no_commit` reason.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml\nLine or code reference: step \"Run Codex resolver, validate, stage, commit\", line 5453 \u2014 `echo \"RESOLVER_ACTUATION_REQUIRED=true\" >> \"$GITHUB_ENV\"` is placed after the `_probe_resolver` fallback chain (lines 5434-5451), whose terminal failure path is `exit 2` at line 5449.\n  severity=NIT | confidence=4\n  PROBLEM: A resolver-required run that reaches the `exit 2` branch never sets `RESOLVER_ACTUATION_REQUIRED`.\n  WHY: `REVIEW_AUTOFIX_RUN_SUMMARY_V1` reports `clean_review_no_commit`, which misleads the workflow-failure heal intake that keys on `failure_reason`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "f57b316f153c06ef8d32c5b60e4e7779835f48810f7996c28daae47529bd9661",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4328,
+    "run_id": "35854522430",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35854522430",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923122536_9e0966e757",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4328,
+    "run_id": "35854522430"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-23T12:25:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

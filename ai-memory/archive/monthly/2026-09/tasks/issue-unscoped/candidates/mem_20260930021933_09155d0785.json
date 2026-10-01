@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:902-905 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The skip diagnostic says `reason=no-hook-change` even though the gate covers both hook trees and settings files.\n  WHY: The skip condition is correct, but the diagnostic label is narrower than the gate and the documented exit condition.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/guard_differential.py:902-904 | severity=NIT | confidence=[4]\n  PROBLEM: The skip message reads `reason=no-hook-change` even though the condition now checks both hook trees and settings files.\n  WHY: The skip condition is correct; only the diagnostic label is imprecise because settings files are also gated.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/guard_differential.py:902 | severity=NIT | confidence=[4]\n  PROBLEM: The log message says `reason=no-hook-change` even when the check also covers settings files.\n  WHY: This is not a runtime correctness bug, but can confuse operators troubleshooting why the check was skipped.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/guard_differential.py:lines 902-905 (the `print_report` skip branch) | severity=NIT | confidence=[4]\n  PROBLEM: The skip message is `reason=no-hook-change`, but the gate also covers the two `settings.json` files.\n  WHY: The skip condition is correct and the script still exits 0 as documented; the message misleads log readers and conflicts with the `agents.md` docstring line \"Exit 0 when clean or when no hook or settings file changed\".\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/guard_differential.py:903-904 | severity=NIT | confidence=[4]\n  PROBLEM: The skip reason string says `no-hook-change` but the gate now also triggers on settings-file changes.\n  WHY: The skip condition itself is correct, but log scrapers and the `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` path that grep for `reason=` would see a reason that does not reflect the actual gate scope.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/guard_differential.py:902-905 | severity=NIT | confidence=[4]\n  PROBLEM: The skip message still says \"no-hook-change\" after the settings check was added.\n  WHY: Operators see an outdated diagnostic; it does not affect correctness but breaks the observability contract.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/guard_differential.py:903-904 | severity=NIT | confidence=[3]\n  PROBLEM: The skip condition checks both `report.trees` and `report.settings`, but the reason string still says `no-hook-change`.\n  WHY: The skip condition is correct, but the label creates a documentation-vs-output mismatch and may mislead an operator debugging a skipped CI run.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f62bd4e73d54a78695d021161295a15b0087ad5d144c28bb2d8b507e1445f3fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5369,
+    "run_id": "36657094132",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36657094132",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930021933_09155d0785",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5369,
+    "run_id": "36657094132"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T02:19:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

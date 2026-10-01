@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_apply_fixes_reviewer_manifest_validation.py:98 and 116\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The docstrings on `test_garbled_checksum_warns_but_passes` and `test_truncated_checksum_warns_but_passes` reference the wrong review run.\n  WHY: They reference prior run 35803994060 instead of release gate run 35802596362, which can mislead future incident investigation.\n- .github/workflows/test-and-mark-stable.yml:2349\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new ADOPTED_REVIEW_RUN_ID lookup interpolates `BAIT_SHA` into the jq filter without validating that it is a 40-character hexadecimal SHA.\n  WHY: A malformed inject-bait output would make the adopted-run lookup silently return empty; `BAIT_SHA` should receive the same guard as `RETRY_DISPATCH_SHA`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_apply_fixes_reviewer_manifest_validation.py\n  Location: lines 98 and 116 (docstrings)\n  Issue: The docstrings on `test_garbled_checksum_warns_but_passes` and `test_truncated_checksum_warns_but_passes` both reference \"review run 35803994060\" but 35803994060 is the PRIOR (completed) run used as the `PRIOR_REVIEW_RUN` exclusion filter in the companion Phase 4b tests (line 304, `head_sha=PRE_BAIT`, status `in_progress` in that fixture). The failing run the changelog and README both name is release gate run 35802596362. A future reader will hunt for the wrong run when chasing the incident this test exists to pin.\n- .github/workflows/test-and-mark-stable.yml\n  Location: line 2349 (the new ADOPTED_REVIEW_RUN_ID lookup)\n  Issue: The jq filter is `select(.head_sha == \\\"${BAIT_SHA}\\\" or .head_sha == \\\"${RETRY_DISPATCH_SHA}\\\")`. `BAIT_SHA` is propagated from `steps.inject-bait.outputs.bait_sha` (line 2056) without an in-script regex guard analogous to the `${RETRY_DISPATCH_SHA} =~ ^[0-9a-fA-F]{40}$` check at line 2320. If the inject-bait step ever returns a non-hex value (corrupted output, schema change), the jq filter receives malformed input and the adopted-run lookup silently returns empty. `RETRY_DISPATCH_SHA` is already validated; `BAIT_SHA` should be too, for parity, since both are interpolated into the same jq program.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8fc4967cb2659c80b2b54570ef94d223093576ce6b7abf12cc4a4647a5ef3619",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35864574171",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35864574171",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923133536_438da4b32d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35864574171"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-23T13:35:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

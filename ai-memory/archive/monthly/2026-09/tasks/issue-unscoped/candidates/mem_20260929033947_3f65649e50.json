@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:215-238 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: The `review_<slug>.txt` read lacks explicit guards for `PREVIOUS_REVIEWS_DIR` and the slug format.\n  WHY: Current control flow has already passed those guards, so path traversal is not reachable today; reviewers flag the asymmetry as a future-maintenance risk.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:218-227 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: When `review_<slug>.txt` exists but is empty, the diagnostic reports `different` rather than `empty`.\n  WHY: The slot is still safely rejected, but the misleading diagnostic can send operators investigating the failure down the wrong path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:line 225\n  PROBLEM: The new `review_<slug>.txt` read lacks the explicit `PREVIOUS_REVIEWS_DIR` and slug-format guards present on the status-file read.\n  WHY: Current control flow has already passed those guards, so path traversal is not reachable today, but the reads are asymmetric.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:lines 226-227\n  PROBLEM: When `review_<slug>.txt` exists but is empty, the warning reports `different`, not `empty`.\n  WHY: The safety property still holds, but the diagnostic is misleading for operators investigating a zero-byte file.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:215-238 | confidence=[2]\n  PROBLEM: The new file read for `${PREVIOUS_REVIEWS_DIR}/review_${claude_fixer_block_slug}.txt` lacks an explicit check for the directory variable or the validity of the constructed path inside the conditional.\n  WHY: While currently guarded by the outer loop conditions, maintaining symmetric guards is safer if the script's control flow is restructured.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:219 | confidence=[4]\n  PROBLEM: When `review_<slug>.txt` exists but is empty, the warning reports `state=\"different\"` instead of `state=\"empty\"`.\n  WHY: This is not a runtime defect and the safety property is maintained, but it degrades diagnostic quality in this edge case.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_claude_fixer_handoff.sh:lines 218-224 | severity=NIT | confidence=[4]\n  PROBLEM: When the runner output file exists but is empty or contains only whitespace, the script sets `claude_fixer_block_runner_state=\"different\"` and the warning says the file is different rather than empty.\n  WHY: A zero-byte runner file is reachable, and the diagnostic can mislead operators into investigating a content mismatch instead of missing output.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1922bdb54e5205835197ebdeddff8667eeedc2cd54f6c970e828e9247525dc1d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4983,
+    "run_id": "36515692271",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36515692271",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929033947_3f65649e50",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4983,
+    "run_id": "36515692271"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T03:39:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

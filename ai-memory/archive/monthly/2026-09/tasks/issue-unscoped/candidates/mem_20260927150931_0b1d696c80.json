@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_issue_route.py:lines 465, 532-536 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Association strings in the test helper and parametrized cases are reported as misspelled, weakening test clarity and potentially hiding a regression.\n  WHY: The reviewer says these strings are rejected as untrusted, so they do not cause a runtime failure; severity is reported as NIT.\n- scripts/claude_issue_intake.sh:error_tail() helper and the reject() calls that use it\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A 4xx collaborator-permission response can be parsed as a null permission and reported as dispatcher_not_authorized, obscuring transient API failures.\n  WHY: The reviewer says adding --fail would route the read failure to authorization_read_failed; HARDENING_RISK_SCORE: 1.\n- scripts/claude_issue_intake.sh:error_tail() helper, line ~131\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: If python3 is unavailable, error_tail() silently returns empty and the rejection detail is blank.\n  WHY: The reviewer says the script still fails loudly, but the diagnostic detail degrades; HARDENING_RISK_SCORE: 1.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The plan specifies the intake step passes github.actor / github.triggering_actor through env: (Implementation Steps item 3).\n  expected_change_site: .github/workflows/claude-issue-intake.yml step \"Queue the issue for the Claude issue pickup\"\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: .github/workflows/claude-issue-intake.yml lines 113-118 contain the env vars; the implementation satisfies the requirement.\n- requirement: Tests covering the workflow wiring verify that the queue step binds both actor env vars from GitHub context, never from the payload.\n  expected_change_site: tests/test_claude_issue_route.py\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: tests/test_claude_issue_route.py test `test_intake_workflow_binds_dispatcher_from_github_context` at line ~700 checks `step[\"env\"][\"CLAUDE_ISSUE_DISPATCHER\"] == \"${{ github.actor }}\"` and the same for `CLAUDE_ISSUE_TRIGGERING_ACTOR`; the requirement is satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_claude_issue_route.py:lines 465, 532-536 | severity=NIT | ISSUE_CONFIDENCE: 3\n  PROBLEM: The test helper and parametrized test entries use association strings reported as misspelled.\n  WHY: These strings are rejected as untrusted, but the reviewer says the typos weaken test clarity and could hide a regression.\n- TASK_GAP\n  Requirement: The plan specifies the intake step passes `github.actor` / `github.triggering_actor` through `env:` (Implementation Steps item 3).\n  Expected change site: .github/workflows/claude-issue-intake.yml step \"Queue the issue for the Claude issue pickup\"\n  Evidence of absence: The env vars are present at lines 113-118 of the workflow YAML. The implementation satisfies the requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Tests covering the workflow wiring \u2014 the queue step binds both actor env vars from GitHub context, never from the payload.\n  Expected change site: tests/test_claude_issue_route.py\n  Evidence of absence: The test `test_intake_workflow_binds_dispatcher_from_github_context` at line ~700 checks `step[\"env\"][\"CLAUDE_ISSUE_DISPATCHER\"] == \"${{ github.actor }}\"` and the same for `CLAUDE_ISSUE_TRIGGERING_ACTOR`. The requirement is satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_issue_intake.sh: error_tail() helper and the reject() calls that use it\n  PROBLEM: `gh_retry_to_file` exits 0 on a 4xx response, so a non-collaborator permission response can become a null permission and be reported as dispatcher_not_authorized, obscuring transient API failures.\n  WHY: The reviewer suggests adding `--fail` so the existing error path reports authorization_read_failed.\n  HARDENING_RISK_SCORE: 1\n- scripts/claude_issue_intake.sh: error_tail() helper, line ~131\n  PROBLEM: On a runner without python3, error_tail() silently returns empty and the rejection detail is blank.\n  WHY: The reviewer says the script still fails loudly, but the diagnostic detail degrades.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3b195fc68fcd574f68fe2137de6cd73452039099b676b212f2e2af84779f16d8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36327143865",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36327143865",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927150931_0b1d696c80",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36327143865"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T15:09:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

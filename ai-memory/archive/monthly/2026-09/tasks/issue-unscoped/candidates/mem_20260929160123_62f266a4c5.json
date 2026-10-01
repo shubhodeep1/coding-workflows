@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_checker_restart.py:439-441 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: _project_trigger uses a single hardcoded ellipsis character to identify truncated Routine names and may fail to recognize names truncated by another character or method.\n  WHY: Gemini warns this could let the requeue guard create a duplicate trigger; z-ai_glm-5_2 says the current ellipsis produces a strict-prefix stem, so reviewers disagree about whether the condition is reachable.\n- scripts/claude_checker_restart.py:212-220 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: If the git ls-tree fallback raises ReadError, the failure is not surfaced alongside the original git show error.\n  WHY: Operators may be unable to distinguish a failed fallback from an existing but unreadable log, making triage of the failure more difficult.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_checker_restart.py:439-441 | severity=MAJOR | confidence=3\n  PROBLEM: The logic to handle truncated Routine names in _project_trigger uses a single hardcoded ellipsis character (\"\u2026\") to identify truncated names, but it does not account for potential variations in truncation behavior.\n  WHY: If the system uses a different truncation character or method, the `stem.startswith` logic will fail to identify the truncated name, and the requeue guard might consequently miss an existing trigger, leading to the creation of a duplicate trigger for a project that already has an active safety-net check-in.\n- scripts/claude_checker_restart.py:212-217 | severity=NIT | confidence=3\n  PROBLEM: While the commit message claims to have addressed the swallowing of per-branch git show failures, the `ls-tree` fallback itself is wrapped in an exception handler (`except ReadError: missing = False`). If the `ls-tree` command fails (e.g., due to a temporary git error), `missing` defaults to `False`, and the original exception is appended to `errors[]` as `project log {branch}: {exc}`.\n  WHY: This hides the failure of the `ls-tree` fallback itself. While it does append the `git show` failure, it masks the cause of the failure, making on-call triage for transient git errors more difficult.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_checker_restart.py:around line 217 in the current file\n  PROBLEM: When the fallback `git ls-tree` itself raises ReadError, `missing` is forced to False and the original `git show` exception is appended to `errors[]`, but the ls-tree failure is not surfaced.\n  WHY: When both reads fail for the same root cause (e.g., the prior `git fetch` left a corrupted object), operators see only \"git show failed: \u2026\" and may chase the wrong layer.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_checker_restart.py:lines 212-220 | severity=NIT | confidence=2\n  PROBLEM: When the fallback `git ls-tree` itself raises `ReadError`, `missing` is forced to `False` and the original `git show` exception is appended to `errors[]`, but the ls-tree failure is not surfaced.\n  WHY: The reported message claims \"git show failed\" without indicating the disambiguation step also failed. When both reads fail for the same root cause (e.g., corrupted object, network issue), on-call triage cannot tell whether the ls-tree fallback succeeded (log exists but is unreadable) or also failed (both reads failed, likely a systemic issue). The error message is incomplete.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c9dff7f8045907dfcf2fb9720405481bea2bece7fdc5fa006fb452146dd5c4e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4984,
+    "run_id": "36592381085",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36592381085",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929160123_62f266a4c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4984,
+    "run_id": "36592381085"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T16:01:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

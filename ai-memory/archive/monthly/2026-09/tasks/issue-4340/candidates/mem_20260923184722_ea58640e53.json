@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: The issue explicitly restricts the change to one existing fixture. No broader implementation is needed.\n\n## Automation and wiring\n\n- Change type: modify existing data file only; no new script or code.\n- Scheduler/PR-push entry point: none required; existing pipeline handles the commit.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Future-removal registry: not applicable.\n\n## Planning ref\n\n- Branch: `main`\n- HEAD: `241d891077e1d4c9d87629e7271c35e0a254f5d1`\n- No integration branch was specified; no mismatch is established.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 replace its entire content with exactly:\n  1. `status: ok`\n  2. `run_id: alt-35903885958`\n  3. `updated-by: ai-pipeline`\n\nNo other files may change.\n\n## Functions or modules to implement\n\nNone.\n\n## Data structures affected\n\n- Three-line plain-text canary fixture only.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the fixture exactly\n\n- **Chosen:** Overwrite the existing file with the three specified lines and a conventional trailing newline.\n- **Alternatives considered:** Append the lines, preserve unspecified existing content, or update related tests/docs.\n- **Why:** Exact replacement directly satisfies the issue while respecting the single-file scope constraint.\n\n## Security considerations\n\n- Trust boundaries: none.\n- Authorization surfaces or endpoints: none.\n- External-input validation: not applicable; the required static content is fully specified.\n- Abuse cases: ensure no generated metadata, secrets, shell interpolation, or unrelated content enters the fixture.\n\n## Risks and edge cases\n\n- Extra whitespace, blank lines, comments, or retained prior content would violate the exact-content requirement.\n- Editing any additional file would violate the explicit scope.\n- The editor-model override does not alter the implementation requirements.\n\n## Testing considerations\n\n- Compare the file bytes against the expected three-line payload.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n- No broader test suite is necessary for this static fixture-only change.\n\n## Pre-execution self-check\n\n- Requirements are complete and unambiguous.\n- The target file is stated to exist.\n- The plan preserves the exact one-file scope.\n- No external API, dependency, scheduler, supervisor, database, or interface work is required.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4763b9c466cd5cb573f7a0c4eb07ce9964053c1638b82ca29beb5ac3e3d900b3",
+  "lineage": {
+    "issue_number": 4340,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35904353669",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35904353669",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4340"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260923184722_ea58640e53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4340,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35904353669"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4340",
+  "timestamps": {
+    "created_at": "2026-09-23T18:47:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

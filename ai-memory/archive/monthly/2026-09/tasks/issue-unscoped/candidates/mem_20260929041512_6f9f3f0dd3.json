@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1699-1738 | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `integration_value` parsing order is brittle for empty backtick values, making future regex changes liable to diverge from this parser.\n  WHY: The reviewer found no current runtime divergence, but reports that a future tightening could produce subtle mismatches.\n- .github/workflows/issue_pr_status.yml:~302 and ~439 | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: If an issue body changes between the two reads, `record_issue_integration_branches` appends conflicting values and `issue_integration_branch_for` silently selects the earlier branch.\n  WHY: The reviewer reports that a mid-step edit could cause the sweeper to close an issue against a stale integration branch.\n- scripts/orchestrate_poll_process.sh:around lines 4001-4004 | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Matching the managed-issue marker anywhere in the body can classify an ordinary issue as managed and bypass the target-branch gate.\n  WHY: A quoted marker in prose can trigger the body match; the reviewer notes the same false positive exists in `issue_pr_status.yml`, while the new gate magnifies its impact.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u00a727 / CLAUDE.md \u2014 \"Split at 480,000 bytes\" guard\n  expected_change_site: .github/workflows/issue_pr_status.yml (file size audit)\n  confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No workflow file size check in this PR; the file remains ~36 KB after the additions. Reviewer states no split is needed and this is a confirmation, not a gap.\n- requirement: docs/plans/issue-4956-linear-issue-branch-parser-plan.md, \u00a7References \u2014 \"Follow-up candidate (not filed by this chain): INTEGRATION_BRANCH_LINE_RE, TARGET_BRANCH_LINE_RE and TRACKING_ISSUE_LINE_RE in scripts/orchestrate_lib.py and the two patterns in scripts/resolve_integration_ref.sh share the same super-linear backtracking.\"\n  expected_change_site: docs/ or follow-up issue\n  confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The plan explicitly defers this to a follow-up (AD-1: \"\u00a75; the other copies are on main, outside this project's diff\"). Reviewer states this is a deferral, not a gap.\n- requirement: docs/plans/issue-4813-close-sweep-target-branch-merges-plan.md, Non-goals \u2014 \"The existing issue_pr_status.yml behaviour for a PR closed without merging (label ai:closed and close) is out of scope.\"\n  expected_change_site: implement-plan log Notes mention a separate issue would track this\n  confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR explicitly leaves \"PR closed without merge\" behavior untouched; `tests/test_issue_pr_status_target_branch_gate.py::test_unmerged_close_behaviour_is_unchanged` confirms this. Reviewer states this is a documented deferral, not a gap.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh:1699-1738 | confidence=2\n  PROBLEM: The `integration_value` parsing order is brittle for empty backtick values, making future regex changes liable to diverge from this parser.\n  WHY: The reviewer found no current runtime divergence, but reports that a future tightening could produce subtle mismatches.\n- .github/workflows/issue_pr_status.yml:~302 and ~439 | confidence=2\n  PROBLEM: If an issue body changes between the two reads, `record_issue_integration_branches` appends conflicting values and `issue_integration_branch_for` silently selects the earlier branch.\n  WHY: The reviewer reports that a mid-step edit could cause the sweeper to close an issue against a stale integration branch.\n- scripts/orchestrate_poll_process.sh:around lines 4001-4004 | confidence=2\n  PROBLEM: Matching the managed-issue marker anywhere in the body can classify an ordinary issue as managed and bypass the target-branch gate.\n  WHY: A quoted marker in prose can trigger the body match; the reviewer notes the same false positive exists in `issue_pr_status.yml`, while the new gate magnifies its impact.\n- Requirement: \u00a727 / CLAUDE.md \u2014 \"Split at 480,000 bytes\" guard; agents.md notes issue_pr_status.yml at ~36 KB (well below 480,000), so no split needed.\n  Expected change site: .github/workflows/issue_pr_status.yml (file size audit)\n  Evidence of absence: No workflow file size check in this PR. Verified by inspection that the file remains ~36 KB after the additions. Not a gap; this is a confirmation.\n  ISSUE_CONFIDENCE: 1\n- Requirement: docs/plans/issue-4956-linear-issue-branch-parser-plan.md, \u00a7References \u2014 \"Follow-up candidate (not filed by this chain): INTEGRATION_BRANCH_LINE_RE, TARGET_BRANCH_LINE_RE and TRACKING_ISSUE_LINE_RE in scripts/orchestrate_lib.py and the two patterns in scripts/resolve_integration_ref.sh share the same super-linear backtracking.\"\n  Expected change site: docs/ or follow-up issue\n  Evidence of absence: The plan explicitly defers this to a follow-up (AD-1: \"\u00a75; the other copies are on main, outside this project's diff\"). Deferral, not a gap.\n  ISSUE_CONFIDENCE: 1\n- Requirement: docs/plans/issue-4813-close-sweep-target-branch-merges-plan.md, Non-goals \u2014 \"The existing issue_pr_status.yml behaviour for a PR closed without merging (label ai:closed and close) is out of scope.\"\n  Expected change site: implement-plan log Notes mention a separate issue would track this\n  Evidence of absence: The PR explicitly leaves \"PR closed without merge\" behavior untouched. Tests/test_issue_pr_status_target_branch_gate.py::test_unmerged_close_behaviour_is_unchanged confirms this. Not a gap; documented deferral.\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4e65fa0f9eae242b425696a70ef1e600262a8d66da578b2d637ad077f3ad4bb1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36519393152",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36519393152",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929041512_6f9f3f0dd3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36519393152"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T04:15:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

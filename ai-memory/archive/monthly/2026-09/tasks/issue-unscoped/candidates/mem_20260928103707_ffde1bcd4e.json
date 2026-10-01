@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The failed-comment-lookup test does not simulate an API error, so the workflow treats the lookup as successful and does not exercise the fail-closed guard.\n  WHY: The mock emits valid JSON for the comments response, setting `gate_marker_fetch_state=\"ok\"`; the guard at review_autofix.yml:1488 is never entered, leaving the failed-comment-fetch path untested.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Improve documentation parseability in agents.md.\"\n  expected_change_site: agents.md line 98-101\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: agents.md line 98-101 describes the Claude-fixer mode with a run-on sentence (\"...and also runs it). [claude-intervention] and ...\") that makes it difficult for operators to parse.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=critical | confidence=5\n  PROBLEM: The test intended to verify fail-closed behavior for a failed comment lookup does not exercise the intended branch.\n  WHY: The mock serializes `comments=None` as JSON `null`, which jq transforms into an empty array (`[]`), causing the workflow to treat the lookup as successful instead of simulating an API error (`gate_marker_fetch_state=\"ok\"`). The fail-closed guard at `review_autofix.yml:1488` is never entered, so the test's assertions fail to validate the intended fail-closed safety constraint.\n- Requirement: \"Improve documentation parseability in agents.md.\"\n  Expected change site: agents.md line 98-101\n  Evidence of absence: The added text describing the Claude-fixer mode in agents.md contains a run-on sentence (\"...and also runs it). [claude-intervention] and ...\") that makes it difficult for operators to parse.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_claude_fixer_mode.py:647-653 | severity=critical | confidence=5\n  PROBLEM: The failed-comment-fetch test cannot simulate a failed `/comments` API call and therefore does not exercise the fail-closed guard.\n  WHY: The mock at lines 486-487 emits `state[\"comments\"]` as valid JSON and exits 0, so the workflow sets `gate_marker_fetch_state=\"ok\"` and never enters the guard at review_autofix.yml:1488. The invalid-head-SHA test at lines 656-662 covers another arm of the `||` guard, but the failed-comment-fetch arm remains untested despite being claimed as tested in the PR description, changelog, and agents.md.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "22ed565fabf8dcdae7b1f293651475a70133f0d50a242c31aadc797ed19c70cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4609,
+    "run_id": "36405519570",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36405519570",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928103707_ffde1bcd4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4609,
+    "run_id": "36405519570"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T10:37:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

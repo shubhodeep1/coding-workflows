@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:1949-1955 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The early workspace-guard initialization failure path does not call `emit_editor_substate \"Failed\"`, unlike the in-loop snapshot-failure path.\n  WHY: The run-substate ledger lacks a terminal failure event, making an early sandbox initialization failure appear stalled or incomplete; reviewers agree this is a telemetry gap, not a classification or safety defect.\n- scripts/review_apply_fixes.sh:initialize_editor_workspace_guard_runtime | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The GNU-only `stat -c '%a'` check treats an empty result from non-GNU `stat` as incorrect permissions and rejects the runtime.\n  WHY: On a runner without GNU `stat`, valid runtimes may be classified as `sandbox_initialization_failure`, despite being created with `umask 077`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_apply_fixes.sh:1949-1955 | severity=low | confidence=4\n  PROBLEM: The early `initialize_editor_workspace_guard_runtime` failure path does not call `emit_editor_substate \"Failed\"`.\n  WHY: The run-substate ledger lacks a terminal failure event for this path, while other failure paths record one. This is a telemetry gap; the summary file, error file, partial-finalize env vars, and operator alert are still produced correctly.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_apply_fixes.sh:1949-1955 | severity=low | confidence=4\n  PROBLEM: The pre-loop workspace guard initialization failure path does not call `emit_editor_substate \"Failed\"`.\n  WHY: The editor run-substate ledger telemetry lacks a terminal \"Failed\" event, making a sandbox initialization failure appear stalled or incomplete in observability tooling.\n- scripts/review_apply_fixes.sh:866-905\n  HARDENING_SUGGESTION: Generic error message when cd or mktemp fails within the workspace guard runtime initialization. Suggested minimal fix: Capturing the actual command failure output instead of returning a generic error string.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_apply_fixes.sh:1949-1955 | severity=low | confidence=4\n  PROBLEM: The early initialization failure path does not invoke `emit_editor_substate \"Failed\" \"1\" \"${PREVIOUS_REVIEWS_DIR}/editor_attempt_1.err\"`, unlike the in-loop snapshot-failure branch.\n  WHY: The run-substate ledger has no terminal `Failed` event for this case, so the failure appears stalled or incomplete. Classification, the summary-file sentinel, and the validator's `EDITOR_NOOP_SANDBOX_INITIALIZATION_FAILURE=true` export are still correct.\n- scripts/review_apply_fixes.sh:initialize_editor_workspace_guard_runtime | severity=low | confidence=3\n  PROBLEM: `stat -c '%a'` is GNU-coreutils-only; on a runner without GNU `stat`, it returns empty and the strict `!= \"700\"` test rejects the runtime.\n  WHY: A non-GNU runner would classify every workspace-guard snapshot as `sandbox_initialization_failure`, even though the runtime was correctly created via `umask 077`.\n- scripts/review_apply_fixes.sh:initialize_editor_workspace_guard_runtime | severity=low | confidence=2\n  PROBLEM: The `2>/dev/null` on `runtime_base_resolved=\"$(cd \"${runtime_base}\" ...)\"` and the analogous `cd \"${runtime_created_path}\"` block swallows the underlying `cd` error message.\n  WHY: When resolution fails, the operator-facing diagnostic is the generic `trusted temporary runtime base could not be resolved` or `trusted workspace-guard runtime could not be resolved` string, with no underlying reason.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_apply_fixes.sh:1949-1955 | severity=low | confidence=4\n  PROBLEM: The early initialization failure path does not call `emit_editor_substate \"Failed\"` before skipping the editor loop; the in-loop snapshot-failure path does.\n  WHY: The editor run-substate ledger lacks a terminal \"Failed\" event, making the failure appear stalled or incomplete in telemetry rather than classified. The summary file, error file, partial-finalize env vars, and operator alert are still written correctly.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_apply_fixes.sh:1949-1955 | severity=low | confidence=4\n  PROBLEM: The early `initialize_editor_workspace_guard_runtime` failure path does not call `emit_editor_substate \"Failed\"`, unlike the in-loop snapshot-failure path.\n  WHY: The substate ledger lacks a terminal \"Failed\" event on pre-launch sandbox init failures, making the failure appear stalled or incomplete in telemetry. The summary file, error file, validator, warning step, and partial-finalize path are correct.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_apply_fixes.sh:1949-1955 | severity=low | confidence=4\n  PROBLEM: The early-init failure path does not call `emit_editor_substate \"Failed\"` before skipping the editor loop, while the in-loop snapshot-failure path does.\n  WHY: The run-substate telemetry lacks a terminal `Failed` event, so the early sandbox initialization failure appears as a missing or incomplete editor phase rather than a classified failure.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "35b4da166350e0cb1cbd139c9a9e1c88dea4ceb745b704e9970944d18a01707b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4348,
+    "run_id": "36013877701",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36013877701",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924152510_7e3201c9b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4348,
+    "run_id": "36013877701"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T15:25:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

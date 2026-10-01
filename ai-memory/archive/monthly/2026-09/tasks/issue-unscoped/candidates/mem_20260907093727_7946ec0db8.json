@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/255-artifact-cleanup-preserves-tracked.md:12 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k3]\n  PROBLEM: The changelog table states that the orchestrator poller block guards 12 paths, but the loop guards 13 paths.\n  WHY: The counts for review_conflict_resolve.sh and review_rb_judge.sh are correct, but the orchestrator poller count is incorrect and will be carried into the assembled CHANGELOG.md.\n- scripts/review_rb_judge.sh:1917, scripts/orchestrate_poll_process.sh:17514 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `git ls-files --error-unmatch` guard does not protect tracked files inside a tracked directory when given the directory path.\n  WHY: `git ls-files` lists individual tracked files rather than directory entries, so `rm -rf -- ai-memory` or the analogous cleanup could delete tracked files under those directories; practical impact is zero because these paths are exclusively workflow artifacts.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/255-artifact-cleanup-preserves-tracked.md\n  Line or code reference: line 12 (`| Guarded paths per block | 5, 16, and 12 |`)\n  PROBLEM: The orchestrator poller block guards 13 paths, not 12. The for-loop lists: pre_assembled_static.txt, unattended_system_instructions.md, ai_pipeline.md, agents.md, probably_unnecessary_but_read_if_stuck.md (5), scripts/git_ref_health_check.sh, scripts/generate_symbol_diff_summary.py, scripts/label_helpers.sh, scripts/tg_helpers.sh, scripts/codex_model_catalog.json (5), .github/prompts, .github/scripts (2), .github/ai/orchestrate_schema.v1.json (1) = 13 total.\n  WHY: Operator or reviewer reading the table sees 12 and may miscount. The actual block in scripts/orchestrate_poll_process.sh:17510-17515 lists 13 entries.\n  severity=NIT\n  confidence=5\n- scripts/review_rb_judge.sh, scripts/orchestrate_poll_process.sh\n  Line or code reference: review_rb_judge.sh:1917 (`ai-memory`), orchestrate_poll_process.sh:17514 (`.github/prompts .github/scripts`)\n  PROBLEM: The `git ls-files --error-unmatch` guard protects individual tracked files correctly, but does NOT protect tracked files inside tracked directories. `git ls-files` lists individual files, not directory entries. `git ls-files --error-unmatch -- ai-memory` exits non-zero even when `ai-memory/some-file.txt` is tracked, because `ai-memory` itself (a directory) is not a tracked file path. The `rm -rf -- ai-memory` following the false-negative guard result would still delete any tracked files within.\n  WHY: If a consumer repo improbably tracks files under `.github/prompts/`, `.github/scripts/`, or `ai-memory/`, the `rm -rf` would still delete them. Practical impact is zero \u2014 these directory paths are exclusively workflow artifacts and no consumer repo owns them \u2014 but the guard's claim \"never delete a path the consumer repo actually TRACKS\" is not fully accurate for directory entries.\n  severity=NIT\n  confidence=3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- changelog.d/255-artifact-cleanup-preserves-tracked.md\n  Line or code reference: table row \"Guarded paths per block | 5, 16, and 12\"\n  PROBLEM: the orchestrate_poll_process.sh loop guards 13 paths, not 12. Counting the `for _orch_cleanup_artifact` list at scripts/orchestrate_poll_process.sh:17510-17514: pre_assembled_static.txt, unattended_system_instructions.md, ai_pipeline.md, agents.md, probably_unnecessary_but_read_if_stuck.md (5) + scripts/git_ref_health_check.sh, generate_symbol_diff_summary.py, label_helpers.sh, tg_helpers.sh (4) + scripts/codex_model_catalog.json (1) + .github/prompts, .github/scripts (2) + .github/ai/orchestrate_schema.v1.json (1) = 13. The counts for review_conflict_resolve.sh (5) and review_rb_judge.sh (16) are correct.\n  WHY: not a runtime failure; it is a wrong number in a fragment governed by CLAUDE.md \u00a720.E (\"Keep claims concrete and verifiable\", \"Do not invent numbers\"), and the assembled CHANGELOG.md will carry the miscount permanently.\n  severity=NIT\n  confidence=5\n- No linked issue exists; judging against the PR's own declared intent (guard all consumer-repo cleanup blocks, add regression test, register test in CI): all three cleanup sites are converted, the test executes each real block, and the test is registered in ci.yml, mark-stable.yml, and test-and-mark-stable.yml. The commit message's claim that review_commit_changes.sh \"already carried this guard\" is confirmed at scripts/review_commit_changes.sh:226-233. No gap.\n  severity not stated\n  confidence not stated\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "2848a88f2c1bca23d9c87629decdb879fc587378e9306cfa05881b555d41f572",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34103467796",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34103467796",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260907093727_7946ec0db8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34103467796"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-07T09:37:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_nonblocking.py:~319-325 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: Reviewer outputs (`review_<slug>.txt`) are read multiple times during rejection processing.\n  WHY: Re-reading each reviewer\u2019s output adds redundant file I/O; severity was reported as NIT by minimax.\n- scripts/review_claude_fixer_nonblocking.py:~494 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: `successful_reviewers()` is called multiple times in `main()`, re-reading reviewer status files.\n  WHY: The extra calls redundantly scan statuses and perform file I/O; severity was reported as NIT by minimax.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_claude_fixer_nonblocking.py | confidence=4\n  PROBLEM: `main() -> successful_reviewers()` is called multiple times in `main()`, leading to redundant file I/O.\n  WHY: The reviewer status files are re-read unnecessarily, increasing execution time proportionally to the number of reviewers. This was also flagged by the pass-1 reviewer (minimax).\n- scripts/review_claude_fixer_nonblocking.py | confidence=4\n  PROBLEM: Reviewer outputs (`review_<slug>.txt`) are read multiple times per call.\n  WHY: Each reviewer's raw output is read separately for rejections and other logic, causing redundant file system I/O.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_claude_fixer_nonblocking.py:demote_with_diagnostics, lines ~319-325 | severity=NIT | confidence=3\n  PROBLEM: Each reviewer's `review_<slug>.txt` is opened and read three times per demote call, once for outputs, once for `reviewer_bound_rejections`, and once for the legacy `reviewer_rejections` count.\n  WHY: With the six-reviewer roster this is six extra file reads on top of the two already needed; it does not change behaviour but inflates IO on every Claude-fixer hand-off.\n- scripts/review_claude_fixer_nonblocking.py:main(), the CLAUDE_FIXER_NONBLOCKING log line ~ line 494 | severity=NIT | confidence=3\n  PROBLEM: `successful_reviewers(args.reviews_dir)` is called a second time after `demote_with_diagnostics` already populated the same map, re-scanning `status_review_*.txt` purely to compute `len()` for the log line.\n  WHY: Redundant directory walk and six re-reads of `status_review_*.txt` on every CLI invocation; behaviour is correct, only the cost is wasteful.\n- scripts/review_claude_fixer_nonblocking.py:reviewer_bound_rejections (around the REJECTED_FINDING_ID_RE / REJECTED_FINDING_RE pair)\n  Issue: A REJECTED_FINDING line with no id but with the legacy proximity match still goes through the reviewer_rejections fallback used for the legacy count. Today the fallback path is read-only (it counts and ignores), but the function itself never validates the rest of the line beyond a regex match; a malformed rest that happens to match REJECTED_FINDING_RE could underreport ambiguity for the LEGACY_REJECTIONS diagnostic.\n  Suggested minimal fix: Drop the legacy reviewer_rejections call in main entirely once enough runner versions guarantee ids; alternatively have the helper return only the count it can prove against the file, so the LEGACY_REJECTIONS line cannot silently include unparsable rejections.\n  Estimated lines changed: 3\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "161c29942558b4a82e1106fecb0d805435ffb5df02df7cbb9da073217e9441c9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4695,
+    "run_id": "36430261246",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36430261246",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928141455_087414e1b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4695,
+    "run_id": "36430261246"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T14:14:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

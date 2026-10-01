@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4258,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4258\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4262\",\"pr_number\":4262,\"branch\":\"ai/issue-4258\",\"run_id\":\"35684902056\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35684902056\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/cancel_on_pr_close.yml\",\".github/workflows/internal-cancel-on-pr-close.yml\",\".github/workflows/test-and-mark-stable.yml\",\"README.md\",\"agents.md\",\"changelog.d/4258-conflict-safe-pr-close.md\",\"tests/test_review_merge_train.py\",\"tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py\",\"workflow-templates/ai-cancel-on-pr-close.yml\"]}",
+  "fingerprint": "931c52472c31bc1808f82bcf75ff848d6c4693054320d7e6e2f829b1b0d86e6d",
+  "lineage": {
+    "issue_number": 4258,
+    "parent_ids": [],
+    "pr_number": 4262,
+    "run_id": "35684902056",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35684902056",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4262"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260922041107_d0c13f9cf5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4258,
+    "level": "run",
+    "pr_number": 4262,
+    "run_id": "35684902056"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4258: https://github.com/shubhodeep1/coding-workflows/pull/4262",
+  "timestamps": {
+    "created_at": "2026-09-22T04:11:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

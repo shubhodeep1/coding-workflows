@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:290 | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `has_skip_ai_marker` returns True for a `[skip ai]` line inside a nested fence because the marker check is not guarded by `not in_fence`.\n  WHY: The test at tests/test_skip_ai_marker_rule.py:67 expects False, but the code returns True; the gate, sweep, and checker disagree on intent, violating #5377 and the case table contract.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"update both the root .claude/scripts/check_in_status.py and its workflow-templates twin so parity tests pass immediately\"\n  expected_change_site: the twin-sync step (or explicit edit of both copies in this PR)\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: PR diff and last_run_diff touch both copies but the bug above is present in both; test_skip_ai_marker_rule.py loads the twin yet the shared logic is broken, so parity contract (agents.md:1031, plan:133) is not met.\n- requirement: \"the awk program in both workflows and the Python has_skip_ai_marker must stay identical per the case table and #4985 contract\"\n  expected_change_site: .github/workflows/review_autofix.yml:474, review_autofix_sweep.yml:141, .claude/scripts/check_in_status.py:290 (and twin)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: both awk and Python now allow marker inside fence (missing not-in_fence guard); test expects the nested case to be False but all three copies treat it as True.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .claude/scripts/check_in_status.py:290 | severity=MAJOR | confidence=5\n  PROBLEM: marker check `if SKIP_AI_BODY_LINE_RE.match(line): return True` is not guarded by `not in_fence` (original toggle version had it; new fence-aware version dropped it). A `[skip ai]` line inside a nested fence (e.g. ````md\\n```\\n[skip ai]\\n```\\n````) reaches the check, returns True, and skips review.\n  WHY: test case in tests/test_skip_ai_marker_rule.py:67 expects False but code returns True; gate/sweep/checker disagree on intent, violating #5377 and the case table contract.\n- Requirement: \"update both the root .claude/scripts/check_in_status.py and its workflow-templates twin so parity tests pass immediately\"\n  Expected change site: the twin-sync step (or explicit edit of both copies in this PR)\n  Evidence of absence: PR diff and last_run_diff touch both copies but the bug above is present in both; test_skip_ai_marker_rule.py loads the twin yet the shared logic is broken, so parity contract (agents.md:1031, plan:133) is not met.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"the awk program in both workflows and the Python has_skip_ai_marker must stay identical per the case table and #4985 contract\"\n  Expected change site: .github/workflows/review_autofix.yml:474, review_autofix_sweep.yml:141, .claude/scripts/check_in_status.py:290 (and twin)\n  Evidence of absence: both awk and Python now allow marker inside fence (missing not-in_fence guard); test expects the nested case to be False but all three copies treat it as True.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "141da998e98824d762ed38c60cafed4619e354064347ee5c2c064ea5e8ca2658",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5400,
+    "run_id": "36666662389",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36666662389",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930041354_3aef25c546",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5400,
+    "run_id": "36666662389"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T04:13:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

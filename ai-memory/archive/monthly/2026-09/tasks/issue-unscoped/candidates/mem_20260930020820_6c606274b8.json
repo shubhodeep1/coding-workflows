@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:42,252-258 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The hook environment filter omits security-relevant `gh` and `GITHUB_*` variables that can redirect API calls or alter their behavior.\n  WHY: An untrusted hook can use an unstripped variable such as `GITHUB_API_URL` to receive attacker-controlled API responses and defeat the guard's isolation boundary.\n- scripts/guard_differential.py:374,488 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_repo_git` does not apply the same `GIT_CONFIG_NOSYSTEM=1` and pinned `HOME` settings as `_git`.\n  WHY: User or CI Git configuration can affect operations performed through `_repo_git`, undermining the determinism expected of this check.\n- scripts/guard_differential.py:233-258,321-340 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When a crashed hook also emits `systemMessage`, the regression output omits the exit-code detail.\n  WHY: The report can make a crashed hook indistinguishable from a `none` decision, reducing diagnostic clarity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/guard_differential.py: line 42 (`_STRIPPED_ENV_KEYS = (\"GH_TOKEN\", \"GITHUB_TOKEN\", \"GH_HOST\")`) and the filter in `hook_env` (around line 252-258) | severity=high | confidence=[4]\n  PROBLEM: The environment filter strips `GH_TOKEN`, `GITHUB_TOKEN`, and `GH_HOST` from the hook's environment, but does NOT strip other security-relevant `gh`/`GITHUB_*` variables that can redirect or impersonate API calls. Notable unstripped vars include `GITHUB_API_URL` (redirects REST API), `GITHUB_GRAPHQL_URL` (redirects GraphQL), `GITHUB_GRAPHQL_URL`, `GH_REPO` (default repo override), `GH_ENTERPRISE_URL`/`GH_ENTERPRISE_HOST` (enterprise redirect), `GH_DEBUG` (verbose logging that can leak tokens/secrets in debug output), `GH_CONFIG_DIR` (custom config), and `GH_GITLAB_HOST`. The filter only blocks `key in _STRIPPED_ENV_KEYS` for exact matches, and the broader `GIT_*` filter only catches `GIT_*` prefixed vars, not `GH_*`/`GITHUB_*` (except the three in the tuple).\n  WHY: The guard's whole point is to run untrusted/loosened hook code in isolation. If a hook calls `gh api ...` and the env contains `GITHUB_API_URL=https://attacker.example/api`, the request goes to the attacker, who can return a crafted response (e.g., \"PR #41 merged, head_sha=...\"). The guard's decision is then made on attacker-controlled data, defeating the security boundary. Same risk with `GITHUB_GRAPHQL_URL` for GraphQL queries. `GH_DEBUG=api` would print full request/response bodies to stderr (captured by `subprocess.run(..., capture_output=True)` and discarded, but the hook itself would still log tokens to a file the hook can reach). This bypass is exactly the kind of silent loosening the check exists to prevent \u2014 but the check's own sandbox has the same hole it is meant to detect.\n\n- scripts/guard_differential.py: `_repo_git` (around line 488) vs. `_git` (around line 374) | severity=low | confidence=[3]\n  PROBLEM: `_repo_git` builds its env by stripping `GIT_*` keys but does NOT set `GIT_CONFIG_NOSYSTEM=1` or pin `HOME` to the repo root, while the helper `_git` does both. The two functions are used interchangeably for git operations against the same repo (e.g., `_init_repo` uses `_git`; `materialize` and `changed_paths` use `_repo_git`).\n  WHY: A user or CI environment with `~/.gitconfig` containing `init.defaultBranch`, `protocol.allow`, `core.quotepath`, `safe.directory`, or other settings that affect `ls-tree`/`cat-file`/`diff` output formatting could change which files are reported as \"changed\", which blob names survive the split, or which diffs are visible. This breaks the determinism the check depends on \u2014 `test_current_hooks_are_deterministic_against_themselves` could start flaking depending on the runner's git config. The inconsistency between the two helpers (one sets `GIT_CONFIG_NOSYSTEM`, the other does not) is itself a code-quality defect; both touch the same checkout.\n\n- scripts/guard_differential.py: `run_hook` (around line 321-340) and `classify_output` (around line 233-258) | severity=low | confidence=[3]\n  PROBLEM: When a hook exits non-zero (other than 2 \u2014 i.e., crashed hooks classified as `error`), the script maps the exit code to `Outcome(\"error\", warned, f\"exit {returncode}\")` and continues. The strictness map has `error == allow == 0`, so a head crash and a head allow are equivalent under the loosening rule. But `classify_output` reads `warned` from `systemMessage` regardless of exit code, and the regression line uses `_describe` which prints `decision+warning` but loses the `error` detail marker when there's no `detail` field beyond the one stored in `Outcome.detail`.\n  WHY: When a base hook crashes and a head hook also crashes with the same exit code, no regression is flagged (correct). When only the head crashes, `STRICTNESS[\"error\"] < STRICTNESS[<base>] ` triggers a regression with `head=error` \u2014 but `_describe` for `Outcome(\"error\", False, \"exit 1\")` prints `error (exit 1)` and the line is `base=<base> head=error (exit 1)`, which is correct. However, when the head crashes AND emits `systemMessage`, `_describe` prints `error+warning` because `outcome.warned` is True \u2014 the `(exit N)` detail is then dropped because `_describe` only appends `(detail)` when `detail` is non-empty, but the `+warning` already consumed the warning marker path. Result: the regression line loses the exit-code information that distinguishes \"hook crashed\" from \"hook chose `error`\" semantically. This is not a false-negative (it still fails) but it makes a crashed hook indistinguishable from a `none` decision in the printed line. Mitigation is trivial: include the `detail` in the printed decision even when `warned` is true.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6e10302f7b5bcf21796e5242d57934df2377c42f85a579eec7b60e93177b98b7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36656907223",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36656907223",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930020820_6c606274b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36656907223"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T02:08:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

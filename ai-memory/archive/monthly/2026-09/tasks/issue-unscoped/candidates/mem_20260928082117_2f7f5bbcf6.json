@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validate.yml:250 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The parent-PR check does not validate `.head.sha` against the 40-hex format used by the target-PR check.\n  WHY: The parent SHA is not propagated downstream, so this is an unused-value consistency gap rather than a runtime failure.\n- .github/workflows/validate.yml:242-243 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The stderr from `git check-ref-format` is discarded, so a rejected branch name produces only the generic authorization error.\n  WHY: When the regex accepts a name that Git rejects, the workflow log does not identify ref-format validation as the reason for rejection.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/validate.yml:250 | severity=NIT | confidence=[2]\n  PROBLEM: The parent-PR check does not validate the parent PR's SHA format, unlike the target-PR check.\n  WHY: Ensuring consistent validation across authorization checks helps prevent potential confusion and drift for future maintainers.\n- .github/workflows/validate.yml:242-243 | severity=NIT | confidence=[3]\n  PROBLEM: The stderr from git check-ref-format is discarded (>/dev/null 2>&1).\n  WHY: When git check-ref-format rejects a branch name, the operator sees only the generic \"Explicit validation target is not authorized.\" error message.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/validate.yml:project case, the parent `jq -e` filter `single_pr(\"parent\") | trusted_pr($repo) and .head.ref == $branch and .base.ref == $base` | severity=NIT | confidence=[2]\n  PROBLEM: The parent-PR classifier does not constrain `.head.sha` to `^[0-9a-fA-F]{40}$`, unlike the target classifier.\n  WHY: The parent SHA is never propagated downstream; the defect is the inconsistency and the risk of a future maintainer assuming the value was validated.\n- .github/workflows/validate.yml:project case, the `git check-ref-format --branch \"${target_detail}\" >/dev/null 2>&1 || { echo \"::error::Explicit validation target is not authorized.\"; exit 1; }` line | severity=NIT | confidence=[3]\n  PROBLEM: stderr from `git check-ref-format` is suppressed, and the operator-facing message is generic.\n  WHY: When a branch name fails only `git check-ref-format`, the operator cannot tell from the workflow log that the cause was ref-format rather than the listing, parent binding, or trusted-author checks.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- validate.yml:250 | severity=NIT | confidence=[3]\n  PROBLEM: Parent PR SHA format not validated (validate.yml:250) \u2014 The parent PR's `.head.sha` is not checked against the 40-hex regex, unlike the target PR.\n  WHY: However, the parent SHA is never propagated downstream; only `authorized_sha` from the target PR is checked out and pinned by \"Verify authorized checkout\".\n- validate.yml:242-243 | severity=NIT | confidence=[3]\n  PROBLEM: `git check-ref-format` stderr discarded (validate.yml:242-243) \u2014 When the jq regex accepts a branch name that git then rejects (e.g. `claude/implement-plan-foo..bar`), the operator sees only the generic authorization error.\n  WHY: However, the behavior is correct (the target is refused), and the generic error message is consistent with other authorization failures.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/validate.yml:jq parent check (~line 250): `single_pr(\"parent\") | trusted_pr($repo) and .head.ref == $branch and .base.ref == $base` | severity=NIT | confidence=[2]\n  PROBLEM: The parent-PR check omits the SHA-format validation that the target-PR check applies (`(.head.sha | type == \"string\" and test(\"^[0-9a-fA-F]{40}$\"))`).\n  WHY: The parent SHA is never propagated downstream; only `authorized_sha` is output and checked out, so this is an inconsistency, not a security gap.\n- .github/workflows/validate.yml:`git check-ref-format --branch \"${target_detail}\" >/dev/null 2>&1` | severity=NIT | confidence=[3]\n  PROBLEM: stderr from `git check-ref-format` is discarded, so when the jq regex accepts a name that git rejects (e.g. trailing `.` or `..`), the operator sees only the generic \"Explicit validation target is not authorized.\" message.\n  WHY: No runtime failure; debugging ergonomics only.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d24f909a7d5510066d80ac3fef3e29f1c904f1797ec3cd19ec071ea0bb2a1dbb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4758,
+    "run_id": "36394434456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36394434456",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928082117_2f7f5bbcf6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4758,
+    "run_id": "36394434456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T08:21:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:180 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: _FIELD_EXPANSION_CHARS_RE at line 180 matches `[` and `]` in field keys such as `labels[]`; the search at line 875 on `f\"{field_key}={field_value}\"` therefore classifies `-F 'labels[]=bug'` as a write, prompting for a routine label-add request that reads no file.\n  WHY: `gh api repos/SHUBHODEEP1/Coding-Workflows/issues/5/labels -F 'labels[]=bug'` prompts for permission instead of being classified as routine or read. This is a false positive that fails closed (prompt, never allow), and practical impact is minimal. z-ai_glm-5_2 disputes the premise, stating that `parse_gh_api_args` at line 585 strips `[]` from field keys.\n- .claude/hooks/gh_api_write_guard.py:736 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: _brace_expansion_at at line 736 returns False on unquoted whitespace inside braces, so a brace expansion containing whitespace after a comma may evade the file-backed `-F` detection.\n  WHY: The reviewer reports that the guard returns no decision instead of asking for a contrived command that could produce a file-backed argument. The reviewer also notes that the ANSI-C quoting check at line 765 independently catches the most common bypass pattern, while z-ai_glm-5_2 states that unquoted whitespace inside `{}` ends the word in Bash and is not a brace expansion.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/gh_api_write_guard.py:180 | severity=low | confidence=[4]\n  PROBLEM: _FIELD_EXPANSION_CHARS_RE at line 180 matches `[` and `]` in field keys such as `labels[]`; the search at line 875 on `f\"{field_key}={field_value}\"` therefore classifies `-F 'labels[]=bug'` as a write, prompting for a routine label-add request that reads no file.\n  WHY: `gh api repos/SHUBHODEEP1/Coding-Workflows/issues/5/labels -F 'labels[]=bug'` prompts for permission instead of being classified as routine or read. But this is a false positive that fails closed (prompt, never allow), and the standard GitHub API convention uses `-f` (raw field, skipped at line 871), so practical impact is minimal.\n- .claude/hooks/gh_api_write_guard.py:736 | severity=low | confidence=[2]\n  PROBLEM: _brace_expansion_at at line 736 returns False on unquoted whitespace inside braces.\n  WHY: `if character in \" \\t\\r\\n;&|<>()\": return False` causes `{a, b}` (valid Bash brace expansion with space after comma) to be treated as \"not a brace expansion.\" A command such as `gh api -F{'q=1', 'x=@/tmp/a b'}` with a space after the comma inside a quoted word would produce a file-backed `-F` flag via brace expansion that the scanner does not detect. The shell's brace expansion preserves quoted content and produces the file-backed argument after quote removal. The guard returns no decision instead of asking. The ANSI-C quoting check at line 765 independently catches `-F body=$'@f'`, the most common bypass pattern, and the `$` in `x=@/tmp/a` after quoting removal would become unquoted and would be split as a separate word by the shell (so `gh` may not parse it as a field flag). Practical exploitation requires contrived command shapes.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7221a2ac67e199fa3fab919d596fb4b62ca9b92ee77040ec45478bf907f84b30",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4641,
+    "run_id": "36694476965",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36694476965",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930100042_0d73ac5de1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4641,
+    "run_id": "36694476965"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T10:00:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

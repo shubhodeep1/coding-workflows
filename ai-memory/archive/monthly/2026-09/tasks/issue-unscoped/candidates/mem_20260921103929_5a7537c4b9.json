@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Rebind only when the merge tree equals a deterministically recomputed conflict-free merge of the audited head and current default; otherwise re-audit.\" (security-pass-combined-diff-rebind-bypass)\n  expected_change_site: scripts/orchestrate_poll_process.sh security_pass_rebind_if_no_new_project_lines\n  confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The function is not in last run changed files. The earlier PR commits at orchestrator lines 4766-4807 already implement git merge-tree --write-tree equality verification with strict fail-closed handling for non-merge commits, conflicts, parent-selection resolutions, tree mismatch, and Git ambiguity. Tests verify deterministic_merge_tree_match.\n- requirement: \"Treat model prose as quoted evidence; generate tasks from deterministic fields and enforce provenance-based cited-file and protected-path scope in downstream workflows.\" (security-advisory-prompt-laundering)\n  expected_change_site: Multiple files across plan, implement, review, and conflict workflows\n  confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The last run diff reinforces existing protections (multi-backtick extractor, footer regex capture groups, metadata collection integrity). The full PR already implements sanitized quoted evidence with HTML comment and machine-marker neutralization, generated advisory metadata footer with exact cited file, and scope guards at plan, implement, review-editor, judge-fix, and both conflict-resolution boundaries.\n- requirement: \"Never suppress by model-generated ID alone; require a deterministic engine-generated key bound to file, category, location, and provenance.\" (waiver-id-collision-bypasses-security-pass)\n  expected_change_site: scripts/security_audit.sh normalize_finding and matching_waiver\n  confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The last run diff fixes generated_footer_key_regex to capture audited commit and cited file groups and adds existing_waiver_metadata verification requiring matching head_sha and file. The full PR already implements waiver_match_key from git blame provenance plus file, category, and line, with key-only authorization throughout.\n- requirement: \"Include deleted diff hunks and enclosing control-flow changes in ownership analysis; keep findings blocking unless their causal code is provably base-owned.\" (line-ownership-misses-deleted-guards)\n  expected_change_site: scripts/security_audit.sh finding_is_project_owned\n  confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: Not in last run changed files. Earlier PR commits implement cross-file guard deletion detection, structural decorator/helper recognition, and causal diff analysis bounded to the active delta range. Tests cover deleted @login_required, has_access(), user.can_view predicates, and custom cross-file authorization decorators.\n- requirement: \"Persist every unfiled advisory in a durable paginated queue; if storage is bounded, retain severity-first and create an automated overflow issue covering omitted rows.\" (advisory-backlog-drops-critical-findings)\n  expected_change_site: scripts/orchestrate_poll_process.sh ensure_security_pass_state_fields\n  confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: Not in last run changed files. Earlier PR commits remove the 100-row cap on security_pass_advisory_backlog, add deterministic severity/confidence ordering, and use chunked V2 orchestrator state for unbounded storage. Legacy keyless rows are preserved and migrated to provenance keys during filing.\n- requirement: Address all five blocking security-pass findings (rebind verification, prompt laundering prevention, waiver-key collisions, deleted-guard ownership, advisory-backlog durability) across every affected path, using automated deterministic controls.\n  expected_change_site: scripts/orchestrate_poll_process.sh (security_pass_rebind_if_no_new_project_lines, ensure_security_pass_state_fields, create_security_pass_advisory_followup), scripts/security_audit.sh (normalize_finding, finding_is_project_owned, security_audit_append_prompt_context), scripts/files_touched_scope_guard.py (parse_generated_advisory, evaluate_allowlist), .github/workflows/{plan,implement,review_autofix}.yml, scripts/review_commit_changes.sh + conflict/judge paths.\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST RUN DIFF and PR DIFF implement deterministic merge-tree equality, provenance-bound waiver_match_key (with legacy migration), cross-file guard deletion detection, exact-file scope from cached metadata (with digest verification), marker neutralization, untruncated V2 backlog, and fail-closed guards on all commit producers; tests cover regressions; no unmet deliverable remains.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_collect_pr_metadata.sh\n  Location: lines ~355-365, the metadata artifact write path\n  Issue: When `_linked_metadata_collection_status` is not \"resolved\", the metadata file is written as `[{\"_collection_status\":\"unresolved\"}]`. This is the same sentinel used for \"no linked issues found\" and \"GraphQL/fallback failed\". Operators triaging a fail-closed review commit cannot distinguish \"PR has no linked issues\" from \"PR has >50 linked issues and page was truncated\" from \"GraphQL returned errors\".\n  Suggested minimal fix: When `_linked_primary_truncated` is true, write `[{\"_collection_status\":\"unresolved\",\"_truncated\":true,\"_reason\":\"page_exceeded_50\"}]` instead. The downstream `parse_linked_issue_metadata` already rejects any row with `_collection_status`, so behavior is unchanged; only diagnostics improve. ~3 lines.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a81862004781528f79921dafb0d64b63ca142e1190d32550794cb9c7edd83279",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4174,
+    "run_id": "35586406493",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35586406493",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921103929_5a7537c4b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4174,
+    "run_id": "35586406493"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T10:39:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

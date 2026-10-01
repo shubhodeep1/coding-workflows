@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validate.yml:301 | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `jq` filter for issue events enforces `length < 100`.\n  WHY: If a legitimate `ai:workflow-heal` issue has 100 or more total events, the authorization check fails closed, incorrectly rejecting a valid heal issue.\n- .github/workflows/validate.yml:229 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The username validation regex `^[A-Za-z0-9][A-Za-z0-9-]*(\\\\[bot\\\\])?$` is insufficiently strict.\n  WHY: The regex accepts invalid GitHub usernames (e.g., consecutive hyphens, trailing hyphens), which may lead to incorrect authorization decisions if user identity is not strictly validated against GitHub's rules.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/validate.yml:301 | confidence=5\n  PROBLEM: The `jq` filter for issue events enforces `length < 100`.\n  WHY: If a legitimate `ai:workflow-heal` issue has 100 or more total events, the authorization check fails closed, incorrectly rejecting a valid heal issue.\n- .github/workflows/validate.yml:229 | confidence=3\n  PROBLEM: The username validation regex `^[A-Za-z0-9][A-Za-z0-9-]*(\\\\[bot\\\\])?$` is insufficiently strict.\n  WHY: The regex accepts invalid GitHub usernames (e.g., consecutive hyphens, trailing hyphens), which may lead to incorrect authorization decisions if user identity is not strictly validated against GitHub's rules.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4842709623a82ae3ce3961ef7f01c081488a4e4de368275c8e05c4ecfdb2bd9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4803,
+    "run_id": "36411638452",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36411638452",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928111628_0da40fb615",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4803,
+    "run_id": "36411638452"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T11:16:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

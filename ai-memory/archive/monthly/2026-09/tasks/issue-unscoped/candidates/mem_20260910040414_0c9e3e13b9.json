@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:2054-2065 | severity=major | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Unguarded watchdog reaping could abort the script under set -euo pipefail when the watchdog has already exited.\n  WHY: The guarded reap prevents loss of retry attempts, fallback-summary generation, and archived editor stderr.\n- scripts/review_run_reviewers.sh:3960-4011 | severity=major | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Unguarded reviewer-watchdog reaping could abort the script when the watchdog has already exited.\n  WHY: The guards prevent incomplete cleanup and loss of retry attempts and fallback-summary generation.\n- scripts/review_apply_fixes.sh:2054-2061 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The comment enumerates the watchdog self-exit codes as \"(143/142)\" but omits exit 144 from the PR-closed path at line 1938.\n  WHY: No runtime failure occurs because the reap guard handles all exit codes uniformly; the source reviewers classify this as a NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_apply_fixes.sh:2054 | severity=NIT | confidence=4\n  PROBLEM: The new comment documents the watchdog's self-exit codes as \"(143/142)\" only, but `scripts/review_apply_fixes.sh:1938` also has the watchdog self-exit with code 144 on the PR-closed path, which reaches this same reap line.\n  WHY: The reap guard already handles any non-zero exit from `kill`/`wait`, so this is purely a comment-accuracy gap with no runtime failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_apply_fixes.sh:2054-2065 | severity=MAJOR | confidence=5\n  PROBLEM: The reap command now properly handles the edge case where the watchdog subshell exits on its own after killing the editor, preventing the script from aborting and ensuring retry attempts and fallback summary generation can proceed.\n  WHY: The unguarded reap would cause the script to exit 1 under set -euo pipefail, resulting in no attempt 2/3, no fallback-model attempt, no fallback summary, and no archived editor stderr, classifying the run as an empty no-op.\n- scripts/review_run_reviewers.sh:3960 and 4011 | severity=MAJOR | confidence=5\n  PROBLEM: The reap commands now handle the edge case where the watchdog has already exited, preventing script abort and ensuring proper cleanup.\n  WHY: Without the guards, the reviewer watchdog kill sites would abort the script, causing incomplete cleanup and potential resource leaks.\n- scripts/review_apply_fixes.sh:2054-2065 | severity=MAJOR | confidence=5\n  PROBLEM: Unguarded watchdog reaping could abort the script under set -euo pipefail when the watchdog has already exited.\n  WHY: The guarded reap prevents loss of retry attempts, fallback-summary generation, and archived editor stderr.\n- scripts/review_run_reviewers.sh:3960 and 4011 | severity=MAJOR | confidence=5\n  PROBLEM: Unguarded reviewer-watchdog reaping could abort the script when the watchdog has already exited.\n  WHY: The guards prevent incomplete cleanup and loss of retry attempts and fallback-summary generation.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_apply_fixes.sh:2054-2061 | severity=NIT | confidence=4\n  PROBLEM: The comment enumerates the watchdog's self-exit codes as (143/142) but omits 144.\n  WHY: The PR-closed path at line 1938 has the same kill-editor-then-self-exit shape and reaches the exact reap line at 2062 this comment documents; no runtime failure occurs.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_apply_fixes.sh:2054 | severity=NIT | confidence=4\n  PROBLEM: The comment enumerates the watchdog self-exit codes as \"(143/142)\" but omits exit 144, which the same watchdog emits on the PR-closed path at line 1938.\n  WHY: All three exit paths reach this exact reap line at 2062; there is no runtime impact because the `|| true` guard covers all exit codes uniformly.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "907f376e7bd17ba3eb7c96fe3ecaa0861a7b84b41830775518ac2e8d9166721c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4072,
+    "run_id": "34426745526",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34426745526",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260910040414_0c9e3e13b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4072,
+    "run_id": "34426745526"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-10T04:04:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

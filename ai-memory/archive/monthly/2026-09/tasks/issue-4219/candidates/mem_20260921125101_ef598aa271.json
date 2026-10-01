@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`\n\nScope-mode justification: The request is fully specified and limited to replacing one existing fixture\u2019s contents. No broader implementation is necessary.\n\n## Automation impact\n\n- Extends an existing file; introduces no scripts or subsystems.\n- Scheduler/PR-push entry point: none; no workflow wiring required.\n- Long-running supervisor: not required.\n- Database work: none.\n- Future-removal registry entry: not applicable.\n\n## Planning ref\n\n- Branch: `main`\n- Commit: `137a2dd79c0343eaff936008e5818df0d41e65b4`\n- Integration branch metadata was absent; no branch mismatch was established.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 overwrite the existing 55-byte content with the required three lines.\n- No other files may change.\n\n## Functions or modules to implement\n\nNone.\n\n## Data structures affected\n\nThe plain-text canary fixture will become exactly:\n\n```text\nstatus: ok\nrun_id: 35601057512\nupdated-by: ai-pipeline\n```\n\nA newline must follow the final line.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the complete canary fixture\n\n- **Chosen:** Overwrite the entire existing file with the three specified lines and final newline.\n- **Alternatives considered:** Edit only the `run_id` value.\n- **Why:** Full replacement most directly guarantees exact content and excludes stale or additional bytes.\n\n### D2 \u2014 Keep the change strictly single-file\n\n- **Chosen:** Modify only `tests/e2e_smoke_canary.txt`.\n- **Alternatives considered:** Add documentation, tests, or a changelog fragment.\n- **Why:** The issue explicitly prohibits touching other files, and exact byte verification is sufficient.\n\n## Security considerations\n\n- Trust boundaries: none; this is a static test fixture.\n- Authorization surfaces: none introduced.\n- External input: none processed.\n- Abuse cases: accidental extra content, omitted final newline, or unrelated file changes. Prevent these through byte-exact and changed-path verification.\n- Money-handling concerns: not applicable.\n\n## Risks and edge cases\n\n- Preserve lowercase spelling, punctuation, spacing, and line order exactly.\n- Replace the current `run_id: 26151428977` rather than appending another value.\n- Ensure there are exactly three lines and a trailing newline.\n- Avoid formatter, generator, changelog, or metadata changes.\n- No factual conflict was found: the target file exists on the planning ref.\n\n## Testing considerations\n\n1. Compare the file byte-for-byte with the required content.\n2. Verify it reports exactly three lines.\n3. Confirm the last byte is `0a`.\n4. Run `git diff --name-only` and require the sole changed path to be `tests/e2e_smoke_canary.txt`.\n5. No broader test suite is necessary for this fixture-only update.\n\n## Pre-execution self-check\n\n- Target file exists and its current contents require the specified `run_id` replacement.\n- Scope is explicit and implementation-ready.\n- No new dependency, interface, script, workflow wiring, supervisor, or database operation is required.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e131182a7578804a20c0b111bf48a29c21c236736b4b569138bf11fc86d40037",
+  "lineage": {
+    "issue_number": 4219,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35601469684",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35601469684",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4219"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260921125101_ef598aa271",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4219,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35601469684"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4219",
+  "timestamps": {
+    "created_at": "2026-09-21T12:51:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

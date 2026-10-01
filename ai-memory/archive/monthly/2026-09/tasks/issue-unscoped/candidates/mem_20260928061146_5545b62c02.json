@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1931-1932 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The `ltrimstr(\"\\n\\n\")` expression is reported to leave two unwanted leading blank lines in the fix prompt when `fix_description` is empty.\n  WHY: The reviewers report that the expression does not remove the leading newlines; other reviewers explicitly describe this as a false positive.\n- scripts/review_rb_judge.sh:1069 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `claude_fixer_judge_merge_path` does not check whether `claude_fixer_judge_create_followup` succeeded before posting a verdict comment.\n  WHY: If follow-up issue creation fails, the verdict comment can claim a follow-up exists when none was created.\n- scripts/review_rb_judge.sh:915-931 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `claude_fixer_judge_fix_count` returns the cap value when both the git merge-base lookup and REST API pagination fail.\n  WHY: A transient lookup failure can cause the judge to skip a valid fix round and escalate prematurely.\n- scripts/review_rb_judge.sh:869 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script validates that `PR_NUMBER` is set but does not confirm it identifies the correct PR.\n  WHY: An incorrect `PR_NUMBER` could cause actions such as posting comments or labels on the wrong PR.\n- review_claude_fixer_judge.py:160-175\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Duplicate-ruling logic can drop later upheld findings because it uses first-wins behavior.\n  WHY: The reviewer reports that the first ruling prevents a later upheld ruling from being retained.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When nothing valid is left, post one comment giving each finding's rejection reason in one line citing `file:line` or a test, and ending with the line `<!-- ai:claude-fixer-rejection:v1 head=<sha> round=<r> -->` (the round from the hand-off marker). Then dispatch the GPT judge...\"\n  expected_change_site: `scripts/review_autofix_step_claude_fixer_handoff.sh`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff for `scripts/review_autofix_step_claude_fixer_handoff.sh` does not implement the logic to post the rejection comment containing the rejection reasons as specified in the updated requirement. It still follows the old path of attempting to post a verdict-bot comment.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:1931-1932 | severity=NIT | confidence=4\n  PROBLEM: The `jq` expression for `fix_description` in Claude-fixer mode uses `ltrimstr(\"\\n\\n\")`.\n  WHY: In a JSON string context, `\"\\n\\n\"` in a jq filter is interpreted as two literal backslash-n character pairs, not two newline characters. As a result, when `$decision[0].fix_description` is empty, the string to be trimmed starts with two actual newlines, which `ltrimstr` fails to remove, causing the fix prompt to start with two unwanted blank lines.\n- scripts/review_rb_judge.sh:1069 | severity=MAJOR | confidence=4\n  PROBLEM: `claude_fixer_judge_merge_path` calls `claude_fixer_judge_create_followup` to create a follow-up issue, but does not check the return value or handle creation failures before proceeding to post a verdict comment.\n  WHY: If the GitHub API fails during follow-up issue creation, the verdict comment is still posted claiming the PR merges with a follow-up issue, creating a misleading tracking artifact and leaving no follow-up issue for the upheld findings.\n- scripts/review_rb_judge.sh:915-931 | severity=MAJOR | confidence=4\n  PROBLEM: `claude_fixer_judge_fix_count` returns the cap value when both the git merge-base lookup and REST API pagination fail.\n  WHY: A transient lookup failure causes the judge to skip a valid fix round and escalate to `merge_with_followup` or `hold` instead of retrying the lookup, leading to premature escalation for a functional PR.\n- scripts/review_rb_judge.sh:869 | severity=MAJOR | confidence=4\n  PROBLEM: The script uses `PR_NUMBER` to validate that it is running in a PR context, but does not confirm it is running in the context of the *correct* PR.\n  WHY: If the environment accidentally sets an incorrect `PR_NUMBER` (e.g., from a stale or concurrent job artifact), the script could perform actions on the wrong PR, such as posting comments or labels.\n\nTASK_GAP\nRequirement: \"When nothing valid is left, post one comment giving each finding's rejection reason in one line citing `file:line` or a test, and ending with the line `<!-- ai:claude-fixer-rejection:v1 head=<sha> round=<r> -->` (the round from the hand-off marker). Then dispatch the GPT judge...\"\nExpected change site: `scripts/review_autofix_step_claude_fixer_handoff.sh`\nEvidence of absence: The PR diff for `scripts/review_autofix_step_claude_fixer_handoff.sh` does not implement the logic to post the rejection comment containing the rejection reasons as specified in the updated requirement. It still follows the old path of attempting to post a verdict-bot comment.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_rb_judge.sh:1931\n  PROBLEM: jq ltrimstr(\"\\n\\n\") in review_rb_judge.sh:1931 treats literal chars not newlines (fix prompt starts with blanks).\n  WHY: The reviewer reports that the expression does not strip the leading newlines.\n- review_claude_fixer_judge.py:160-175\n  PROBLEM: Duplicate-ruling logic in review_claude_fixer_judge.py:160-175 can drop later upheld (first-wins).\n  WHY: The reviewer reports that first-wins duplicate-ruling logic can drop later upheld findings.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "113a325a381fab1fd663bd7889212f77f7bc327ed57f5a06cc0640a3ca7a4829",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4691,
+    "run_id": "36383363736",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36383363736",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928061146_5545b62c02",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4691,
+    "run_id": "36383363736"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T06:11:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

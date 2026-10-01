@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which failure should this issue address?\nChoices:\n- A: Missing isolation support at the trusted commit. Provide the failing dependency step\u2019s stderr and the trusted support SHA.\n- B: The editor\u2019s empty/no-op failure. Provide the editor\u2019s failure log. (RECOMMENDED)\n- C: Neither remains reproducible; close this heal issue after verifying a review run against updated trusted support.",
+  "fingerprint": "2c27f29f61081ddc8ff4a8c10ae7691be6d2d58f0413ae39cb1d41caadc07875",
+  "lineage": {
+    "issue_number": 4445,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36103664223",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36103664223",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260925064159_944e04e516",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4445,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36103664223"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4445 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-25T06:41:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

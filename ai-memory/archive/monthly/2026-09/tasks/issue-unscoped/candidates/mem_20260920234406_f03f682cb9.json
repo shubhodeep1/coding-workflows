@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1619-1620 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The numbered-section header regex accepts optional trailing punctuation, but the paired stop regex requires trailing punctuation, so a period-less successor heading does not terminate the files-to-change section.\n  WHY: Later numbered sections can be captured as files-to-change entries, causing downstream template-owned-path and exact-file scope checks to evaluate unrelated paths.\n- scripts/files_touched_scope_guard.py:215-223 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, x-ai_grok-4_6]\n  PROBLEM: The Python `extract_plan_files()` mirror has the same mismatch between optional punctuation on section entry and required punctuation on section termination.\n  WHY: Period-less numbered sections are not closed, so paths from later sections can be returned as plan files and cause incorrect generated-advisory exact-file or template-owned-path decisions.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Treat model prose as quoted evidence; generate tasks from deterministic fields and enforce provenance-based cited-file and protected-path scope in downstream workflows.\"\n  expected_change_site: scripts/review_commit_changes.sh (the review/autofix editor commit path)\n  confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  EVIDENCE: `review_commit_changes.sh` stages the editor's changes with `git add -u` plus an untracked-file `git add` pass (lines 448-449) and contains no reference to the generated-advisory metadata or the scope guard; `review_autofix.yml` is not among the PR's changed files.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/plan.yml:1619-1620 | severity=high | confidence=4\n  PROBLEM: The numbered-section header regex on line 1619 accepts optional trailing punctuation (`[.:]?\\s*$`) but the numbered-section stop regex on line 1620 requires trailing punctuation (`[.:]\\s*$`), so a numbered section without trailing punctuation is never closed.\n  WHY: Items from later sections that contain backtick-wrapped paths are evaluated against the wrong scope; the same asymmetry exists in `scripts/files_touched_scope_guard.py:222-224`.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:1619-1620 (perl entry/stop regex pair); same defect mirrored in scripts/files_touched_scope_guard.py:215 and scripts/files_touched_scope_guard.py:223 | severity=high | confidence=4\n  PROBLEM: The header regex makes terminal punctuation optional while the paired stop regex requires it, so the section never closes when the model emits a numbered section header without terminal punctuation.\n  WHY: Later sections are captured as files-to-change paths; current tests do not exercise the period-less variant.\n- scripts/security_audit.sh:1514 (cross_file_guard_deletion_pattern, function-call alternation) | severity=low | confidence=3\n  PROBLEM: The function-call alternation uses `has_\\w*` and `can_\\w*`, allowing bare `has_` and `can_` predicates to match.\n  WHY: A deleted line such as `has_(user)` or `can_(user)` can incorrectly trigger the cross-file guard and demote an access-control finding from advisory back to blocking.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/plan.yml:1619-1620 (perl section extractor), mirrored at scripts/files_touched_scope_guard.py:214-225 (`extract_plan_files`) | severity=high | confidence=3\n  PROBLEM: The header regex allows optional trailing punctuation, but the paired stop regex requires it and refuses headers containing a backtick, so a numbered plan without trailing periods never closes the files section.\n  WHY: `extract_plan_files` can return paths from later sections, falsely rejecting generated security advisories or blocking valid plans; no test covers the period-less numbered variant.\n- Requirement: \"Treat model prose as quoted evidence; generate tasks from deterministic fields and enforce provenance-based cited-file and protected-path scope in downstream workflows.\" (linked issue #4173, finding security-advisory-prompt-laundering)\n  Expected change site: scripts/review_commit_changes.sh (the review/autofix editor commit path)\n  Evidence of absence: The PR enforces generated-advisory exact-file scope at the plan boundary and both implement commit boundaries, but the downstream review phase is untouched; `review_commit_changes.sh` stages editor changes with `git add -u` plus an untracked-file `git add` pass (lines 448-449) and contains no generated-advisory metadata or scope-guard reference, while `review_autofix.yml` is not among the changed files.\n  ISSUE_CONFIDENCE: 3\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/plan.yml:1619-1620 (perl regex header vs stop pair) | severity=high | confidence=4\n  PROBLEM: The header regex declares `[.:]?`, making trailing punctuation optional, while the paired stop regex declares `[.:]`, making it required.\n  WHY: If the model emits a numbered section without a trailing period, subsequent sections are captured as files-to-change paths and evaluated against the wrong paths.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- .github/workflows/plan.yml:1620 numbered-section stop regex; mirror in scripts/files_touched_scope_guard.py extract_plan_files | severity=high | confidence omitted\n  PROBLEM: The header allows optional trailing punctuation (`[.:]?`) while the stop requires `[.:]`.\n  WHY: A numbered successor heading without terminal punctuation does not close the files section, although the canonical shipped template includes the period.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "93dd77e633e11d0fda175f0b2233138cf15b1231e98fec00ddbfafb46c04b922",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4174,
+    "run_id": "35542391318",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35542391318",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260920234406_f03f682cb9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4174,
+    "run_id": "35542391318"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-20T23:44:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

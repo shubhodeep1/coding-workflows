@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should be improved?\nChoices:\nA. Specify the workflow, script, prompt, or documentation path and describe the problem. (RECOMMENDED)\nB. Provide the failing workflow run, error output, or reproducible behavior.\nC. Describe the user-facing capability or outcome you want improved.",
+  "fingerprint": "695800df48b179660cc513ad0d890f48c1e76a4a2d10ea406432746fcabfbf3f",
+  "lineage": {
+    "issue_number": 4315,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35828708306",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35828708306",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260923065418_2e503149e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4315,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35828708306"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4315 needs clarification",
+  "timestamps": {
+    "created_at": "2026-09-23T06:54:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: A new `scripts/*.py` needs its `docs/INVENTORY.md` entry in the same PR, or `tests/inventory_parity.py` (`CI / Inventory parity`) fails on the next PR into `main`.\n  expected_change_site: `docs/INVENTORY.md` entries for `scripts/guard_differential.py` and `tests/test_guard_differential.py`\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `PR diff does not touch docs/INVENTORY.md.` The implement-plan logs (issue-5325 AD-4, issue-5326 Conformance notes, both inherited from #5174) explicitly record this as a deferred gap that \"surfaces on [the project's] final PR #5185 into main, where CI runs inventory parity; fixing it in each of #5174's four child projects would conflict.\" z-ai_glm-5_2 considers the gap not applicable to this PR because `ci.yml` runs inventory parity only on PRs into `main`/`stable`, not on the project branch this PR targets.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: A new `scripts/*.py` needs its `docs/INVENTORY.md` entry in the same PR, or `tests/inventory_parity.py` (`CI / Inventory parity`) fails on the next PR into `main`. (lesson in docs/implement-plan/issue-5326-guard-differential-trusted-loosening.md:46-48, also restated in the #5325 and #5174 logs.)\n  Expected change site: `docs/INVENTORY.md` entries for `scripts/guard_differential.py` and `tests/test_guard_differential.py`.\n  Evidence of absence: PR diff does not touch `docs/INVENTORY.md`. The implement-plan logs (issue-5325 AD-4, issue-5326 Conformance notes, both inherited from #5174) explicitly record this as a deferred gap that \"surfaces on [the project's] final PR #5185 into main, where CI runs inventory parity; fixing it in each of #5174's four child projects would conflict.\" So the deferral is documented, but the entry is still required for `CI / Inventory parity` to pass when the final PR lands; the lessons-learned warnings say the same.\n  ISSUE_CONFIDENCE: 2\n- scripts/guard_differential.py: `run_check`, the order of input validation (base_ref \u2192 head_sha \u2192 head_ref)\n  PROBLEM: A malformed `--head-sha` is checked only after `git rev-parse --verify <base_ref>^{commit}` succeeds. If both are wrong, the user sees only the base-ref error and has to fix-and-rerun to learn about the head-sha error.\n  WHY: Not a security issue; small UX nit.\n- scripts/guard_differential.py: `compare_hook_dirs` `home.mkdir()` / `cache.mkdir()` (and `default_scenario` / `merged_checkout_scenario` `worktree.mkdir()`)\n  PROBLEM: `mkdir()` without `exist_ok=True` would raise `FileExistsError` on a retry inside the same scratch tree.\n  WHY: Today each `scratch / f\"{hook}-{index}-{side}\"` is unique, so it never triggers; the explicit `exist_ok=True` would future-proof the helper against partial-tempdir cleanup.\n- scripts/guard_differential.py: `_write_stub_gh`, the embedded `gh` stub\n  PROBLEM: The stub ignores arguments that don't match a payload and prints `[]` for any unmatched call. A hook that pipes a giant response through the stub would buffer it all to stdout.\n  WHY: The hook timeout (`HOOK_TIMEOUT_SECONDS=120`) caps the wall clock, so this is not a real DoS. The reviewer suggests leaving it as-is; no change is recommended.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c69fabff33f8700c5abe6072fe2363885aa49f6e34dd42d5c3ac6bbf4dd2ccd1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36707105944",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36707105944",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930113607_7b24426a90",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36707105944"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T11:36:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

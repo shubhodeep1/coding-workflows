@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:35-45 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new twin-first hold claim posts a misleading \u201ccap reached\u201d comment even though the hold is for twin-sync.\n  WHY: `claude_fix_claim.py` renders the cap-reached sentence for every hold, so protected-path phase PRs will claim the cap was reached when the actual reason is twin-sync.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: workflow-templates/.claude/commands/implement-plan-claude.md (and the root copy at .claude/commands/implement-plan-claude.md)\n  Line or code reference: new paragraph in step 4, lines 35-45 (per the implement-plan log)\n  Problem: The new auto-decision invokes `claude_fix_claim.py post \u2026 --kind hold` to post a hold claim after the phase PR opens, but `claude_fix_claim.py` (in `.claude/scripts/claude_fix_claim.py`, not modified by this PR) renders the \"this PR reached the cap of 3 Claude hand-backs\" sentence for every hold regardless of the actual reason. The new twin-first hold will therefore post a misleading \"cap reached\" comment on every protected-path phase PR.\n  Why it fails at runtime: Every protected-path phase that triggers the new twin-first default will receive a hold claim comment claiming the cap was reached, when the actual reason is twin-sync (the master needs to copy the twins to `.claude/`) as `[claude-twin-sync]`. The plan's AD-8 and the lesson learned in `docs/implement-plan/issue-4948-protected-path-twin-first-default.md:51-56` explicitly capture this gap; the fix is deferred to the in-flight claude-fixer-unattended-convergence project (D15, phase 3: `--reason` on hold claims, which `/implement-plan-claude` passes for every hold it posts). Already observed on PR #5008 (comment 2026-09-29T04:03Z).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4568d62dbab97f0bd370566089a90b434e31a189f3cf54941e80c6d3adf3c768",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36546218624",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36546218624",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929090827_5922d095d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36546218624"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T09:08:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

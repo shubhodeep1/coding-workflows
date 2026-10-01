@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:security_pass_unblock_filed_advisory_followups (lines 5771-5825), invoked from finalize_integration_merge_if_needed and the completed-project finalizer arms (lines 10064, 10113, 10205, 10247, 16856, 16887-16902) | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Each unchecked advisory follow-up issues a `gh api GET /repos/{repo}/issues/{N}` and, when the issue is open and carries `ai:blocked`, a `gh api POST /repos/{repo}/issues/{N}/comments` without a per-issue authorization or origin check beyond \"open + ai:blocked\".\n  WHY: The comments are posted on behalf of the orchestrator's `GH_PAT`, so an unrelated or manually re-labelled issue could be auto-answered by the poller, although this is a documented design choice and no concrete runtime failure path was found.\n- scripts/orchestrate_poll_process.sh:in `security_pass_unblock_filed_advisory_followups` (~lines 5808-5821) | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: When the `/answer` comment posts successfully but `security_pass_mark_followup_merge_checked` fails, the issue remains unchecked and the next merged-state tick can post a duplicate `/answer [auto-answered-by-poller]` comment.\n  WHY: A transient `STATE_FILE` write failure prevents recording the issue number, causing repeated comments until a mark write succeeds; the impact is bounded to comment noise because `plan.yml` processes only the latest answer.\n- scripts/orchestrate_poll_process.sh:`security_pass_unblock_filed_advisory_followups` (~lines 5813-5821) | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The issue is marked merge-checked immediately after the `/answer` POST, before confirmation that the re-plan actually un-parked the issue.\n  WHY: If the re-plan emits `BLOCKED:` for a different unresolved scalar input, the issue can return to `ai:blocked` while already recorded in `security_pass_followups_merge_checked`, so standalone stall recovery skips it and it waits for a human `/answer`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:security_pass_unblock_filed_advisory_followups (lines 5771-5825), invoked from finalize_integration_merge_if_needed and the completed-project finalizer arms (lines 10064, 10113, 10205, 10247, 16856, 16887-16902) | severity=NIT | confidence=2\n  PROBLEM: Each unchecked advisory follow-up issues one `gh api GET /repos/{repo}/issues/{N}` and (when the issue is open and carries `ai:blocked`) one `gh api POST /repos/{repo}/issues/{N}/comments` without any per-issue authorization or origin check beyond \"open + ai:blocked\".\n  WHY: The comments are posted on behalf of the orchestrator's `GH_PAT`, so a project that filed an advisory about an unrelated user-facing issue, or one re-labelled by hand, could be auto-answered by the poller at the next merged tick; this is a documented design choice and no concrete runtime failure path was found.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh:in `security_pass_unblock_filed_advisory_followups` (~lines 5808-5821) | severity=NIT | confidence=2\n  PROBLEM: The ordering is: POST `/answer` succeeds, then `security_pass_mark_followup_merge_checked` may fail, leaving the issue unchecked.\n  WHY: A transient `STATE_FILE` write failure produces duplicate auto-answer comments on the advisory issue each tick until a mark write succeeds; `plan.yml` processes only the latest answer, so the impact is comment noise rather than a double pipeline trigger.\n- scripts/orchestrate_poll_process.sh:`security_pass_unblock_filed_advisory_followups` (~lines 5813-5821) | severity=NIT | confidence=2\n  PROBLEM: The issue is marked merge-checked immediately after the `/answer` POST, before any confirmation that the re-plan actually un-parked the issue.\n  WHY: If the re-plan runs against the merged default branch and emits `BLOCKED:` for a different reason, the issue lands back in `ai:blocked` but is already in `security_pass_followups_merge_checked`, so standalone stall recovery skips it and it waits for a human `/answer`.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "2866c13f93b144a92ff7d70329fd6b3133123a23a9441b723397b6f696f6fb83",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35417896236",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35417896236",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919034745_61c5547bf2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35417896236"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-19T03:47:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

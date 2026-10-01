@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:13937-13940, 14401-14404, 16610-16613, 17693-17696\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The shell jq matchers compare workflow paths exactly and can miss PR-named review runs if GitHub returns a path with an `@<ref>` suffix.\n  WHY: The Python checker strips the optional suffix, but the shell matchers do not; a suffixed path can cause duplicate review dispatches, missed in-flight guards, empty-commit pushes during an active review, or incorrect retry budgeting.\n- scripts/orchestrate_poll_process.sh:17486-17498\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The default-branch cache globals are not exported, so subshells can resolve the default branch again instead of reusing the cache.\n  WHY: Calls from unprimed subshells perform another `repos/<repo>` read, adding avoidable API calls during a busy poll cycle.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh | PROBLEM: The new PR-named matchers in the shell jq filters use exact path matching and may fail to match GitHub paths with an `@<ref>` suffix; this can lead to duplicate review dispatches, missed in-flight guards, empty-commit pushes during an active review, or incorrect retry budgeting. WHY: `check_in_status.py` strips the optional suffix, but the shell matchers do not. Location: lines 17693-17696 (in `_pr_named_review_dispatch_runs`), 13937-13940 (in empty-commit push guards' inline jq), 14401-14404 (failed-autofix redispatch), 16610-16613 (standalone stall-recovery push guard). Suggested minimal fix: mirror the Python strip in each shell site. HARDENING_RISK_SCORE: 3\n- scripts/orchestrate_poll_process.sh | PROBLEM: The cache globals are not exported, so subshells can resolve the default branch again instead of reusing the cache, adding avoidable API calls during a busy poll cycle. WHY: Subshells created by command substitution inherit the variables as unset. Location: lines 17486-17498 (`_pr_named_review_default_branch`). Suggested minimal fix: export `_PR_NAMED_REVIEW_DEFAULT_BRANCH_CACHE` and `_PR_NAMED_REVIEW_DEFAULT_BRANCH_READY` after the declarations, or use a file-based cache. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d374a4e12df045a53f0b53183e4b9e0d3102b94c71c0bf7c2316e92fb5cbf19e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36684431531",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36684431531",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930075222_fd4b6b1917",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36684431531"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T07:52:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_twin_sync.py:checks_green function | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The substring match for the current run ID can also match a different run ID that has it as a prefix, causing that run's checks to be skipped.\n  WHY: A check run from another workflow run could be silently skipped, allowing the merge check to pass with fewer verified checks; the source rates this NIT.\n- scripts/claude_pr_sweep.py:~83 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `claude_pr_sweep.py` duplicates the twin-sync branch prefix instead of importing it, allowing the values to drift.\n  WHY: If the prefix changes in `claude_twin_sync.py` without a corresponding change here, the sweep could queue fixer sessions for sync PRs that should be excluded; the source rates this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_twin_sync.py:checks_green function | severity=NIT | confidence=3\n  PROBLEM: The marker filter uses a substring match that can incorrectly skip check runs from a different run ID that happens to contain the shorter run ID as a substring.\n  WHY IT FAILS AT RUNTIME: Under rare collision of GitHub Actions run IDs, a legitimate check run from a different workflow run would be treated as the twin-sync workflow's own run and silently skipped, causing the merge check to pass with fewer verified checks than intended.\n- scripts/claude_pr_sweep.py:line ~83 | severity=NIT | confidence=3\n  PROBLEM: `claude_pr_sweep.py` defines its own `CLAUDE_TWIN_SYNC_BRANCH_PREFIX` constant rather than importing `SYNC_BRANCH_PREFIX` from `claude_twin_sync.py`.\n  WHY IT FAILS AT RUNTIME: A future change to the sync branch prefix in `claude_twin_sync.py` without updating `claude_pr_sweep.py` would mean the sweep starts queuing fixer sessions for sync PRs that should be excluded. CLAUDE.md \u00a728.C says these PRs are merged by the sync workflow or the owner and should never have AI fixers. The test catches this at CI time, so the window is PR-open-to-test-run.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_twin_sync.py:line 307-308\n  issue: `tree_of` is defined but never called anywhere in the module \u2014 dead code that could confuse future readers or accumulate maintenance burden.\n  suggested minimal fix: Remove the two-line `tree_of` function.\n  estimated lines changed: 2 (deletion)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ecbe83d77f7971cf45ab2639892bb1c92480eae4fe0a82e5597e8186f1e1aef2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36651508403",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36651508403",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930005539_280947dfc8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36651508403"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T00:55:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

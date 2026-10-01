@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing `tests/e2e_smoke_canary_b.txt` fixture contract  \nScope-mode justification: The exact one-file replacement fully satisfies the issue. Broader changes would violate the explicit scope and canary A independence.\n\n## Planning basis\n\n- Ref: `5099eb4e534533478f59b2415331b3805195fda4`\n- Branch: `orchestrator/project-4100`; matches integration metadata.\n- Clarification: no questions; the orchestrator auto-answer confirms continuation.\n- Current file has two newline-terminated lines but contains stale run `25567947079`.\n- No factual codebase conflicts or pre-existing worktree changes found.\n\n## Automation and lifecycle\n\n- Change type: modify an existing fixture only; no new script or subsystem.\n- Existing entry point: `.github/workflows/test-and-mark-stable.yml`, manually triggered by `workflow_dispatch`.\n- Scheduler wiring: unchanged.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Removal-registry entry: not applicable.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary_b.txt` \u2014 replace its complete contents with:\n  ```\n  status: ok\n  decompose-run: 35052424845\n  ```\n  Preserve the final newline.\n\n## Functions or modules\n\nNo functions or modules change. Perform a complete, deterministic fixture-content replacement.\n\n## Data structures affected\n\nThe two-line canary B marker changes only its `decompose-run` scalar from `25567947079` to `35052424845`.\n\n## API/interface changes\n\nNone. Canary A and workflow definitions remain untouched.\n\n## Decisions\n\n### D1 \u2014 Use an exact whole-file replacement\n\n- **Chosen:** Write the required two lines and final newline byte-for-byte.\n- **Alternatives considered:** Edit only the numeric run ID or modify the release workflow.\n- **Why:** Whole-file replacement directly enforces the requested format while avoiding unrelated workflow or canary A changes.\n\n## Security considerations\n\n- Trust boundary: the provided run identifier becomes test-fixture data only; it is not executed or used as authorization.\n- Authorization: no endpoint, workflow permission, or external surface changes.\n- Validation: require the literal decimal run ID and reject extra whitespace, lines, or missing newline.\n- Abuse cases: prevent accidental changes to canary A, additional paths, or executable workflow behavior.\n\n## Risks and edge cases\n\n- Missing final newline despite visually correct content.\n- Extra blank lines or whitespace.\n- Accidental modification of `tests/e2e_smoke_canary.txt`.\n- Formatter or editor touching unrelated paths.\n\n## Testing considerations\n\n1. Compare the file against the exact expected byte sequence.\n2. Confirm exactly two logical lines and a final newline.\n3. Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary_b.txt`.\n4. Confirm the diff contains no canary A changes.\n5. No typecheck, dependency installation, build, or broader test suite is necessary for this fixture-only edit.\n\n## Pre-execution self-check\n\n- Exact target content is specified.\n- Branch metadata matches the checkout.\n- Scope is restricted to one existing file.\n- No external input or implementation blocker is missing.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8c3a78aa7f6c3e9fafd3504c2060ef38b3896c2fbfad4828089e57b01e894bb0",
+  "lineage": {
+    "issue_number": 4104,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35053148196",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35053148196",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4104"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260916035316_54d9b5112f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4104,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35053148196"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4104",
+  "timestamps": {
+    "created_at": "2026-09-16T03:53:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

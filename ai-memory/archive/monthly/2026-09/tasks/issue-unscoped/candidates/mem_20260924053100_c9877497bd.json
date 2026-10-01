@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_iteration_summary.sh:826 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The fallback model slug still uses `openai/gpt-5.6-sol` instead of `openai/gpt-6-sol`.\n  WHY: When `REVIEW_CONSOLIDATOR_MODEL` is unset, diagnostics report the wrong model and the contract test at `tests/test_review_autofix_review_pipeline_contract.py:5001` fails; severity disagreement (MAJOR vs BLOCKER), using the highest.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states \"17 repo-var defaults for GPT phases change\"\n  expected_change_site: PR description text\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The PR description says \"17 repo-var defaults\", while `changelog.d/4372-gpt-6-model-refresh.md:11`, `README.md`, `agents.md`, and the implementation enumerate 18 variables.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_autofix_step_iteration_summary.sh:826 | severity=MAJOR | confidence=5\n  PROBLEM: The fallback model slug in the shell expansion still reads `openai/gpt-5.6-sol` instead of `openai/gpt-6-sol`.\n  WHY: The contract test at `tests/test_review_autofix_review_pipeline_contract.py:5001` expects `gpt-6-sol`; when no `REVIEW_CONSOLIDATOR_MODEL` env var is set, the iteration summary reports the wrong model slug.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: The PR description states \"17 repo-var defaults for GPT phases change\" whereas the implementation and changelog identify 18 variables.\n  Expected change site: PR description\n  Evidence of absence: The PR description incorrectly cites 17, while the changelog and implementation confirm 18 variables were updated.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_iteration_summary.sh: line 826 | severity=BLOCKER | confidence=5\n  PROBLEM: The fallback string still contains `openai/gpt-5.6-sol` instead of `openai/gpt-6-sol`.\n  WHY: When `REVIEW_CONSOLIDATOR_MODEL` is unset, the iteration summary diagnostic table reports `gpt-5.6-sol`; the contract test at line 5001 asserts `openai/gpt-6-sol` and will fail.\n\n- Requirement: PR DESCRIPTION \u2014 \"17 repo-var defaults for GPT phases change, along with their script fallbacks\" (paragraph 3 of \"Reasoning defaults: xhigh \u2192 high\")\n  Expected change site: PR body text in the PR description / GitHub issue body\n  Evidence of absence: The PR description says 17, while `changelog.d/4372-gpt-6-model-refresh.md` and `README.md`/`agents.md` enumerate 18 variables.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_autofix_step_iteration_summary.sh:826 | severity=BLOCKER | confidence=5\n  PROBLEM: The shell fallback reference still uses `openai/gpt-5.6-sol` instead of `openai/gpt-6-sol`.\n  WHY: The contract test at `tests/test_review_autofix_review_pipeline_contract.py:5001` expects `gpt-6-sol`; when no `REVIEW_CONSOLIDATOR_MODEL` environment variable is set, the iteration summary reports the wrong model slug.\n\n- Requirement: PR description states \"17 repo-var defaults for GPT phases change\"\n  Expected change site: PR description text\n  Evidence of absence: The changelog fragment at `changelog.d/4372-gpt-6-model-refresh.md:11` correctly lists 18 variables, but the PR description says \"17 repo-var defaults\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c333e293de9cab528e4c6a8eeca5282966bba0c1022a4107b2f1b2844199c1ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4372,
+    "run_id": "35951084648",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35951084648",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924053100_c9877497bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4372,
+    "run_id": "35951084648"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-24T05:31:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

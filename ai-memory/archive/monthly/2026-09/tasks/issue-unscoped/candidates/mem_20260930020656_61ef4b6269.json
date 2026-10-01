@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Plan goal G3 (docs/plans/issue-5325-fail-warned-guard-loosening-plan.md:26-27): \"The docstring, the remediation message, the ci.yml step comment, agents.md, and the unreleased #5174 changelog fragment describe the new rule. None of them tells a PR to 'fall back with a warning' any more.\"\n  expected_change_site: scripts/guard_differential.py line 3 \u2014 the module docstring's opening summary line.\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: Line 3 still reads \"base-branch hook and the PR's hook, and fail on a silent loosening.\" The word \"silent\" describes the OLD rule (a warning excuses a loosening). The PR updated docstring step 4 (lines 27-34), the remediation text (lines 704-711), the test module docstring (lines 7-9, now saying \"a loosening fails with or without a warning\"), the ci.yml comment, agents.md, and the changelog fragment \u2014 but left the opening summary line of the script's own docstring stale. A maintainer reading line 3 would infer a warned loosening still passes, contradicting the new rule and the test docstring. The implementation step 1 parenthetical (\"step 4 of 'What it does', lines 27-32\") narrowed the edit, but G3's acceptance criterion (\"The docstring ... describe the new rule\") covers the whole docstring.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: Plan goal G3 (docs/plans/issue-5325-fail-warned-guard-loosening-plan.md:26-27): \"The docstring, the remediation message, the ci.yml step comment, agents.md, and the unreleased #5174 changelog fragment describe the new rule. None of them tells a PR to 'fall back with a warning' any more.\" The plan's done condition also states the docstring must describe the new rule.\n  Expected change site: scripts/guard_differential.py line 3 \u2014 the module docstring's opening summary line.\n  Evidence of absence: Line 3 still reads \"base-branch hook and the PR's hook, and fail on a silent loosening.\" The word \"silent\" describes the OLD rule (a warning excuses a loosening). The PR updated docstring step 4 (lines 27-34), the remediation text (lines 704-711), the test module docstring (lines 7-9, now saying \"a loosening fails with or without a warning\"), the ci.yml comment, agents.md, and the changelog fragment \u2014 but left the opening summary line of the script's own docstring stale. A maintainer reading line 3 would infer a warned loosening still passes, contradicting the new rule and the test docstring. The implementation step 1 parenthetical (\"step 4 of 'What it does', lines 27-32\") narrowed the edit, but G3's acceptance criterion (\"The docstring ... describe the new rule\") covers the whole docstring.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b8cdc979c227c913af4b229178792a3c1fae88c657d595bb88aea1dd6b337350",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5366,
+    "run_id": "36656924488",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36656924488",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930020656_61ef4b6269",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5366,
+    "run_id": "36656924488"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T02:06:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

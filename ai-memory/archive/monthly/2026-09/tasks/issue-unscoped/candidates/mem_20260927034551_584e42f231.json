@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:599-602 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: When the expected base branch cannot be resolved, `_security_fix_contained` propagates the lookup error and the checker exits with code 2, causing repeated retries without surfacing the underlying failure.\n  WHY: The reported failure path treats an unrecoverable branch lookup problem as a transient read failure; Qwen and GLM state that the checker reports the error after 3 consecutive errors.\n- .claude/scripts/check_in_status.py:_audit_result function and its call in check_run | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A commit pushed between reading the audit log and reading the branch HEAD can make the checker reject a successful audit result as \u201cmoved.\u201d\n  WHY: The audit log records the earlier SHA while the subsequent HEAD read sees the new SHA; Qwen and GLM state that a moved branch intentionally requires re-audit.\n- .github/workflows/validate.yml:215-218 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `Integration branch:` capture rejects a backtick-quoted branch name followed by trailing prose, causing valid issue metadata to be rejected as `malformed issue base`.\n  WHY: Unlike the `Target branch:` capture, this capture permits only whitespace after the branch name; GLM characterizes the asymmetry as fail-closed and says it does not affect current generated metadata.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/check_in_status.py:599-602 (_security_fix_contained) | severity=low | confidence=[3]\n  PROBLEM: When `--security-fix-base` is set and the expected base branch no longer exists, `gh_api` raises `ReadError`, which propagates through `check_issues` to `main()` and returns exit 2.\n  WHY: The checker treats exit 2 as a transient read failure and retries hourly without surfacing that the deleted branch is blocking the security cycle.\n- .github/workflows/validate.yml:215-218 (jq Integration branch capture) | severity=low | confidence=[2]\n  PROBLEM: The `Integration branch:` capture permits only whitespace to end of line after the branch name, so a backtick-quoted branch followed by trailing prose fails capture.\n  WHY: An `Integration branch:` line such as `` `orchestrator/project-4139` (integration branch) `` would be rejected as `malformed issue base`; current generated metadata does not include trailing prose, so the risk is theoretical in the current pipeline.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/check_in_status.py:_audit_result function and its call in check_run | severity=high | confidence=[4]\n  PROBLEM: A commit pushed after the audit log is read but before the branch HEAD is read can cause the checker to reject a valid, successful audit result as \u201cmoved.\u201d\n  WHY: The audit log SHA and the subsequently read branch HEAD SHA will differ if a new commit is pushed between those reads.\n- .claude/scripts/check_in_status.py:_security_fix_contained function | severity=low | confidence=[3]\n  PROBLEM: If the `gh_api` call to resolve the base branch fails or returns an invalid SHA, `_security_fix_contained` raises an exception and `main` exits with code 2.\n  WHY: The checker then silently retries without surfacing the underlying repository access failure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "dbe2d807fe182d3c97c63af5bb1730d41f527085927c5152aefe3e0b569c222e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4600,
+    "run_id": "36291395749",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36291395749",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927034551_584e42f231",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4600,
+    "run_id": "36291395749"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-27T03:45:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

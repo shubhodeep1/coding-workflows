@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:14734-14770 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k3]\n  PROBLEM: The staged-support latch release validates labels, comments, and events before an unconditional label edit, so a trusted actor can re-add `ai:needs-human` for a different reason during the read/modify window and have the fresh human gate removed.\n  WHY: The label edit can silently remove a newly added human gate and post `/approved`; the window is narrow, but a final live-label or event re-check is a cheap mitigation.\n\n- scripts/orchestrate_poll_process.sh: CI check-run context, head_sha 6720f7cd; failed[0] `review / codex-agent` (run 35452034565, conclusion=failure), failed[1] `codex-agent` (run 35452049989, conclusion=cancelled) | severity=low | confidence=1\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: A failed check-run exists on the PR head but has empty summary and empty log_tail, so it cannot be mapped to any diff hunk.\n  WHY: Not demonstrably a code defect; it may be a superseded or cancelled duplicate of the still-running review, so the editor should confirm it is stale before relying on green status.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh\n  Location: release_staged_support_needs_human_latches function, label edit near line 14770\n  PROBLEM: The sweep reads issue labels, comments, and events, verifies the latch is a staged-support one, then performs an unconditional label edit (`gh issue edit --remove-label \"ai:needs-human\" --add-label \"ai:awaiting-approval\"`); between the read and the write, a trusted actor could add `ai:needs-human` for a different reason.\n  WHY: The current code verifies comment markers and label-event provenance but does not re-check the issue's live labels immediately before the transition, creating a narrow TOCTOU window.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=1\n  PROBLEM: A failed check-run exists on the PR head but ships with empty summary and empty log_tail, so it cannot be mapped to any diff hunk; it may be a superseded/cancelled duplicate of the still-running review (run 35459829030 is in_progress on the same head).\n  WHY: Not demonstrably a code defect \u2014 surfaced per the check-run reporting rule so the editor can confirm the failing run is the stale duplicate and not a real regression before relying on green status.\n\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=2\n  PROBLEM: The provenance checks (label events, comments, co-latch labels) are all read before the label edit, and the edit is unconditional; a trusted actor who re-adds `ai:needs-human` for a different reason in the seconds-wide window would have that fresh human gate removed and a `/approved` posted.\n  WHY: The window is one API call wide on a 5-minute poll cadence and requires a human to act inside it, so the precondition is unlikely \u2014 but the consequence is silent removal of a human gate, and the fix is cheap (one re-read).\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8a93e32ccdadb8ccf5f828cf4e6d3a69ab455e8d60332d49fd44d073efc5efcf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4133,
+    "run_id": "35459829030",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35459829030",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919193000_8ef998fe65",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4133,
+    "run_id": "35459829030"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-19T19:30:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

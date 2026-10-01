@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:19 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: Step 2 uses `git merge --no-edit origin/<default>` for the project-branch Claude-asset sync, so its merge subject does not use the documented `[claude-asset-sync]` prefix.\n  WHY: The highest severity is used because Qwen says downstream tooling may fail to identify these merges; DeepSeek disagrees, describing the mismatch as cosmetic and saying no downstream tool greps for the subject.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/implement-plan-claude.md:19 | severity=NIT | confidence=3\n  PROBLEM: Step 2's project-branch merge uses `git merge --no-edit origin/<default>` with the note \"This merge is also the project branch's Claude-asset sync,\" but the Claude-asset sync helper at line 166 documents a `[claude-asset-sync]` merge subject (`git merge --no-ff -m \"...\"`).\n  WHY: The mismatch is cosmetic \u2014 the merge content is the sync regardless of subject. No downstream tool greps for the subject. The `.claude/` files reach the project branch either way.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/commands/implement-plan-claude.md (and workflow-templates/.claude/commands/implement-plan-claude.md) | severity=MAJOR | confidence=5\n  PROBLEM: Step 2's project-branch merge uses `git merge --no-edit origin/<default>` but claims the merge is the Claude-asset sync. The Claude-asset sync helper's step 4 requires `git merge --no-ff -m \"[claude-asset-sync] merge <source> for .claude/ guard updates\" origin/<source>`.\n  WHY: Project-mode stages and `/implement-issue-claude` resumes execute step 2's command, creating merge commits without the `[claude-asset-sync]` subject. Downstream tooling that greps for the prefix will not identify these merges. The test `test_documented_merge_and_settings_commands_behave_as_described` extracts and executes the command from the `### Claude-asset sync` section (step 4), not from step 2, so the inconsistency is untested.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9e45f6322518972169f951031fe71a3af024e5a518304d92f1c45982170af597",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5010,
+    "run_id": "36553129540",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36553129540",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929102147_c210740649",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5010,
+    "run_id": "36553129540"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T10:21:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

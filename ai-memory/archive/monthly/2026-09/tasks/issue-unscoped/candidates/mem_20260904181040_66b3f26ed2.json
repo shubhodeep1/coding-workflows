@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/verify_integration_fingerprints.py:208-223 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The function `_resolver_safe_path` only rejects paths whose first segment is \".git\"; a nested \".git\" segment (e.g. \"subdir/.git/config\") would currently pass validation and could still be used to expand the resolver allowlist into Git metadata-like directories.\n  WHY: An impossible nested `.git` path could enter the resolver allowlist and repeatedly wedge fingerprint verification or wave dispatch.\n- scripts/verify_integration_fingerprints.py:208-223 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_resolver_safe_path()` does not reject control characters (notably `\\n`, `\\r`, `\\t`), or applies the control-character check inconsistently.\n  WHY: Because these paths can flow into the resolver allowlist and other line-oriented plumbing, a crafted fingerprint entry could inject extra allowlist lines or break downstream parsing even after the \"resolver-safe\" export.\n- .ai/.workspace_source_manifest.txt:189 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The manifest omits the real fragment `changelog.d/3996-forged-state-resolver-scope.md`.\n  WHY: The manifest will be out of sync with the repository contents.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/verify_integration_fingerprints.py\n  Line or code reference: 208-223\n  Problem: The function `_resolver_safe_path` only rejects paths whose first segment is \".git\"; a nested \".git\" segment (e.g. \"subdir/.git/config\") would currently pass validation and could still be used to expand the resolver allowlist into Git metadata-like directories.\n  Why it fails at runtime: An impossible nested `.git` path could enter the resolver allowlist and repeatedly wedge fingerprint verification or wave dispatch.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- scripts/verify_integration_fingerprints.py\n  Line or code reference: 208-223\n  Problem: The function `_resolver_safe_path` rejects paths containing ASCII C0 control characters and DEL, but the check is applied inconsistently.\n  Why it fails at runtime: A fingerprint path with control characters could still pass validation and enter the resolver-safe export, potentially causing issues in downstream processing.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- scripts/verify_integration_fingerprints.py\n  Line or code reference: 223\n  Problem: `_resolver_safe_path()` does not reject control characters (notably `\\n`, `\\r`, `\\t`).\n  Why it fails at runtime: Because these paths can flow into the resolver allowlist and other line-oriented plumbing, a crafted fingerprint entry could inject extra allowlist lines or break downstream parsing even after the \"resolver-safe\" export.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- .ai/.workspace_source_manifest.txt\n  Line or code reference: 189\n  Problem: The manifest omits the real fragment `changelog.d/3996-forged-state-resolver-scope.md`.\n  Why it fails at runtime: The manifest will be out of sync with the repository contents.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "e29c88ca22ae331a5347d77d7d8754c2a65056f4754e8c73f22700f383f98ebc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3997,
+    "run_id": "33893996636",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33893996636",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260904181040_66b3f26ed2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3997,
+    "run_id": "33893996636"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-04T18:10:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

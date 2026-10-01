@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2000 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The new LINKED_ISSUE_METADATA_FILE export adds a declared-but-unconsumed runtime artifact path to the workflow's exported env surface.\n  WHY: This is an intentional wiring for future helpers, not a latent bug; the export has no effect on any current runtime path and carries no execution risk.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:2000 | severity=NIT | confidence=5\n  PROBLEM: The new LINKED_ISSUE_METADATA_FILE export adds a declared-but-unconsumed runtime artifact path to the workflow's exported env surface. The changelog fragment and agents.md both state \"Nothing on main reads the new variable yet\" and \"the export exists so PR-head helpers that do read it find the same path the PR's workflow copy would set.\" This is an intentional wiring for future helpers, not a latent bug. The export itself has no effect on any current runtime path and carries no execution risk.\n  WHY: Does not fail at runtime. The variable is exported as a shell env but no step or helper on main currently references it. The export is a prerequisite for the documented self-repo staging rule (unattended_system_instructions.md \u00a78 extension) to take effect: once a staged helper on a PR branch reads LINKED_ISSUE_METADATA_FILE and carries the required in-helper default, the export on main ensures both sides define the same artifact path, preventing the incident-class failure described in agents.md.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "5a368edd6226b28cb4fbd3a23f2a77ae93705957acfe9ee23875e71736057a65",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35555502512",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35555502512",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921031537_d217c0045a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35555502512"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T03:15:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

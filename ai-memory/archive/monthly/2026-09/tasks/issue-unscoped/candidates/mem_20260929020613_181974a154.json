@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_shared_shell_block_guard.py:65-72 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: `_lint_steps` is misleadingly named because it reads steps from the `static-checks` job, not the `lint` job.\n  WHY: This is a maintenance hazard, not a runtime failure; all reporting reviewers classified it as NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_ci_shared_shell_block_guard.py:66 | severity=NIT | confidence=4\n  PROBLEM: `_lint_steps` reads steps from `GUARD_JOB_ID` (\"static-checks\"), but the function name says \"lint\".\n  WHY: It does not fail at runtime \u2014 the body reads the correct job. The damage is maintenance confusion: a maintainer looking for where the guard runs may follow the old name and inspect the wrong job's steps, or may copy the pattern for a new test that legitimately reads from `lint`'s steps.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_shared_shell_block_guard.py:65-72 | severity=NIT | confidence=4\n  PROBLEM: The function _lint_steps is misleadingly named.\n  WHY: It returns steps from the static-checks job (due to GUARD_JOB_ID being \"static-checks\"), not the lint job as the name implies. This misleads maintainers looking for the lint job steps.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_shared_shell_block_guard.py:65-71 | severity=NIT | confidence=4\n  PROBLEM: The function is still named `_lint_steps` after the CI layout change but now reads `workflow[\"jobs\"][GUARD_JOB_ID][\"steps\"]` where `GUARD_JOB_ID = \"static-checks\"`.\n  WHY: This is a maintainability hazard rather than a runtime failure. A future maintainer following the function name will reach for `ci.yml[\"jobs\"][\"lint\"][\"steps\"]` (the aggregate jq step), not find the guard there, and may incorrectly conclude the guard is missing from the new layout.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_ci_shared_shell_block_guard.py:66 | severity=NIT | confidence=4\n  PROBLEM: `_lint_steps` loads from `GUARD_JOB_ID=static-checks` but name implies `lint` job.\n  WHY: Misleads maintainers; no runtime failure.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3f77a86b82d643a44c08a59dcd422c59425814154242a3089a8c9a074e003340",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4884,
+    "run_id": "36504981251",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36504981251",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929020613_181974a154",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4884,
+    "run_id": "36504981251"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T02:06:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:531-540 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `_push_refspec_targets` can drop the first refspec when `--repo` consumes the remote, causing the guard to judge the checked-out branch instead of the destination branch.\n  WHY: A push to a merged branch can be allowed if the checked-out branch does not trigger the guard; severity disagreement: qwen rated this NIT while deepseek and minimax rated it MAJOR.\n- .claude/hooks/pr_merge_status_guard.py:529-540 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: `_push_refspec_targets` can drop the first refspec when `--repo` consumes the remote, causing the guard to judge the checked-out branch instead of the destination branch.\n  WHY: A push to a merged branch can be allowed if the checked-out branch does not trigger the guard; severity disagreement: Gemini rated this BLOCKER while minimax and z-ai rated it MAJOR.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:1379 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The blocks-path notice filter excludes skip-warning notices beginning with `\"merged-PR guard skipped: \"`.\n  WHY: When a target blocks, the operator loses secondary diagnostics for skipped targets in the same command; severity disagreement: deepseek rated this MAJOR while minimax and qwen rated it NIT.\n- .claude/hooks/pr_merge_status_guard.py:1378-1379 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The blocks-path notice filter excludes skip-warning notices beginning with `\"merged-PR guard skipped: \"`.\n  WHY: When a target blocks, the operator loses secondary diagnostics for skipped targets in the same command.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: line 1379 | severity=MAJOR | confidence=4\n  PROBLEM: The blocks-path notice filter excludes skip-warn notices beginning with `\"merged-PR guard skipped: \"`.\n  WHY: When one target blocks, secondary diagnostics for other targets in the same command can be lost.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: `_push_refspec_targets`, around lines 530-540 | severity=MAJOR | confidence=3\n  PROBLEM: When `--repo` consumes the remote, `positionals[1:]` drops the first refspec.\n  WHY: The guard can judge the checked-out branch instead of the refspec destination and allow a push to a merged branch.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/pr_merge_status_guard.py: 529-535 | severity=BLOCKER | confidence=4\n  PROBLEM: `_push_refspec_targets` assumes `positionals[0]` is the remote and can miss the destination branch when push options such as `--repo` consume an argument.\n  WHY: The guard may fall back to judging the checked-out branch and allow a push that should have been blocked.\n- .claude/hooks/pr_merge_status_guard.py: 1378-1379 | severity=NIT | confidence=4\n  PROBLEM: The blocks-path output filter excludes skip-warning notices beginning with `\"merged-PR guard skipped: \"`.\n  WHY: The operator loses secondary diagnostics when a command targets multiple branches and one target blocks.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py (and .claude/hooks/ twin): `_push_refspec_targets`, lines ~518-547 | severity=MAJOR | confidence=4\n  PROBLEM: When `--repo` consumes the remote, `positionals[1:]` drops the first refspec; the `--repo=origin` form is also described as affected.\n  WHY: The guard can judge the checked-out branch instead of the destination branch and allow a push to a merged branch.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py (and .claude/hooks/ twin): `_evaluate_bash`, the blocks path returning the stderr | severity=NIT | confidence=4\n  PROBLEM: The blocks-path filter excludes skip-warning notices beginning with `\"merged-PR guard skipped: \"`.\n  WHY: When one target blocks, the operator loses secondary diagnostics for other targets in the same command.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: 1379 | severity=NIT | confidence=4\n  PROBLEM: The blocks-path filter excludes skip-warning notices beginning with `\"merged-PR guard skipped: \"`.\n  WHY: The operator loses secondary diagnostics for skipped targets when another target blocks.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: 531-540 | severity=NIT | confidence=3\n  PROBLEM: When an option such as `--repo` consumes the remote, `positionals[1:]` drops the first refspec.\n  WHY: The guard can judge the checked-out branch instead of the destination and allow a push to a merged branch.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .claude/hooks/pr_merge_status_guard.py:1379 (blocks-path filter) | severity=NIT | confidence=4\n  PROBLEM: The notices filter drops skip-warnings beginning with `\"merged-PR guard skipped: \"` when any block exists.\n  WHY: The operator loses secondary diagnostics for multi-target commands.\n\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/pr_merge_status_guard.py: `_push_refspec_targets`, lines 531-540; `positionals[1:]` at line 540 | severity=MAJOR | confidence=4\n  PROBLEM: When `--repo <remote>` consumes the remote, `positionals[1:]` drops the first refspec.\n  WHY: The guard judges the checked-out branch instead of the refspec destination and may allow a push to a merged branch.\n- .claude/hooks/pr_merge_status_guard.py: `_evaluate_bash`, line 1379 | severity=NIT | confidence=4\n  PROBLEM: The blocks-path filter excludes skip-warning notices beginning with `\"merged-PR guard skipped: \"`.\n  WHY: The operator loses a secondary diagnostic when one target blocks and another target produces a skip warning.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9a6ce44d889d15cabb269e5d02fb8c9b893628cad35e297ecd9dae2fdbdf6dcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5173,
+    "run_id": "36668782207",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36668782207",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930044140_d0c291945f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5173,
+    "run_id": "36668782207"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T04:41:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py (and workflow-templates/.claude/scripts/check_in_status.py): Lines 134-136, 321-336, 282-310, 457-459 | severity=high | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: `check_in_status.py` recognizes only `internal-review.yml` dispatch runs, so it fails to verify consumer-repo `ai-review.yml` runs dispatched from the default branch.\n  WHY: In consumer repos the checker does not verify the review hand-off and may report a PR as stuck while its review dispatch is active; this is a regression after the poller began dispatching from the default branch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/check_in_status.py (and workflow-templates/.claude/scripts/check_in_status.py)\n  Line or code reference: Lines 134-136 (DISPATCHED_REVIEW_WORKFLOW, DISPATCHED_REVIEW_TITLE, DISPATCHED_REVIEW_RUNS_PATH) and lines 321-336 (_is_pr_dispatched_review_run), 282-310 (_active_run_count), 457-459 (_check_claude_fixer_pr verification path)\n  severity=high | confidence=4\n  PROBLEM: The check_in_status.py changes only recognize internal-review.yml dispatch runs, while consumer repos dispatch ai-review.yml from the default branch, so the checker cannot find or verify those runs.\n  WHY: In a consumer repo, a claude/* PR gets an ai-review.yml dispatch from the default branch. The \u00a726 checker runs check_in_status.py --hand-back. _check_claude_fixer_pr finds the hand-off, fetches the review run (path=ai-review.yml, head_branch=default, event=workflow_dispatch, display_title=`AI Review [pr:<N>]`). Line 455 passes (ai-review.yml is in FIXER_WORKFLOW_PATHS). Line 457: _is_pr_dispatched_review_run returns False (path is ai-review.yml, not internal-review.yml). Line 458: head_branch != head_ref is True (default branch vs PR head). Result: \"waiting for verified completed review run\" \u2014 the hand-off is never verified, the fixer is never woken, the PR sits until the 7-day dead-man's switch. Similarly, check_pr's stuck path (line 276) calls _active_run_count which returns 0 (head-branch lookups miss the default-branch run, internal-review.yml listing 404s), falsely reporting the PR as \"stuck\" while a review dispatch is actively running. Before #4701, the poller dispatched with --ref <head_branch>, so head-branch lookups found the run. After #4701, neither lookup finds it in consumer repos. This is a regression in consumer repos only.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "30083e2ac036a35c762164a4621db6ca5660f52828b52b50ef252142c4ce8120",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36518526301",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36518526301",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929035939_5c6768ed5e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36518526301"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T03:59:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml:lines 411-426 (the MANAGED_ISSUES comment block) | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The comment still says managed issues merge into `orchestrator/project-N`, never `main`, contradicting the new logic that also accepts merges into the default branch or the issue's declared integration branch.\n  WHY: This does not fail at runtime, but the stale wording may mislead maintainers about which branches can close a managed child.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/issue_pr_status.yml:lines 411-426 (the MANAGED_ISSUES comment block) | severity=NIT | confidence=4\n  PROBLEM: The comment block still says \"These merge into orchestrator/project-N, never main, so the default `PR_BASE_REF == main` close gate would strand them.\" This is now stale \u2014 the new logic accepts merges into the default branch, the declared integration branch, or the project branch.\n  WHY: It does not fail at runtime, but a maintainer reading the comment will believe a managed child can only close on `orchestrator/project-<N>`, when it can now also close on the default branch and on the issue's declared `Integration branch:`. This kind of drift has historically caused fix-in-place patches to miss relevant code paths.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "83892a1d27dda9dd557c644f62e82d6a3b3c01eed0e6cb6861ffb99bd9c19904",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5011,
+    "run_id": "36520527059",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36520527059",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929043622_a8aa6f5910",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5011,
+    "run_id": "36520527059"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T04:36:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

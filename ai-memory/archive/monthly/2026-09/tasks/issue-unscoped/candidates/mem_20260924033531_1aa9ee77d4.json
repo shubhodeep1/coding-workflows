@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_memory_lib.py:_load_lessons_learned_records | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: every retrieval call iterates sorted(task_root.glob(\"*/lessons_learned/*.json\")) and runs JSON-load + schema-validate on every record, even though the function caps the output at LESSONS_RETRIEVAL_MAX (5).\n  WHY: For repos with many orchestrator projects (each appending one retrospective record per completion), this becomes O(N) per retrieve, and retrieve is called from every plan / implement / review prompt.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ai_memory_lib.py\n  Code: _load_lessons_learned_records, called from select_lessons_for_context, called from retrieve_memory_context.\n  Problem: every retrieval call iterates sorted(task_root.glob(\"*/lessons_learned/*.json\")) and runs JSON-load + schema-validate on every record, even though the function caps the output at LESSONS_RETRIEVAL_MAX (5). For repos with many orchestrator projects (each appending one retrospective record per completion), this becomes O(N) per retrieve, and retrieve is called from every plan / implement / review prompt.\n  Why it fails at runtime: a single workflow run that issues, say, three retrieves now performs N file reads + N JSON parses + N schema validations three times. The plan/implementation/reviewer fan-out in review_autofix.yml alone can multiply this. There is no caching across calls in the same process, no limit on how many lessons are loaded before sort-and-trim, and no early-exit when the cap has been reached (the function returns ALL valid records sorted by discovered_at, then truncates).\n  ISSUE_CONFIDENCE: 3\n- scripts/orchestrate_poll_process.sh (record_orchestrator_lesson_event, around line 455-466)\n  Code:\n    if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py append-lesson-event \\\n      --state-file \"${STATE_FILE}\" --event-json \"${event_json}\" >/dev/null 2>&1; then\n      echo \"::warning::tracking #${TRACKING_NUM:-?}: could not record orchestrator lesson event; continuing fail-open\" >&2\n    fi\n  Issue: the Python process's stdout AND stderr are both redirected to /dev/null, so the warning message carries no diagnostic context (just \"could not record\"). When the warning fires repeatedly in a tick (e.g. several judge_fixup events fail), operators have nothing to grep for beyond \"could not record\". The fail-open contract is correct, but a one-line fix to capture and forward the exception message would not change the contract.\n  Suggested minimal fix: redirect only stdout to /dev/null and capture the last line of stderr into the warning (`2>/tmp/.lerr` then `awk` or similar), or write a one-liner `--format json` shim that emits `{ok: false, error: \"...\"}` for fail-open consumers to log.\n  Estimated lines changed: ~3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a5f15bb693d87bd1d46872ccdcd0fb646a40e319ee93925b66ace692f4f3c4fd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4370,
+    "run_id": "35944596047",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35944596047",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924033531_1aa9ee77d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4370,
+    "run_id": "35944596047"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T03:35:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Clarification required\n\nClarification required\n\nInterpreted Q1 as **A: target `ai/issue-4329`**.\n\nConflict: the issue metadata and planning ref still target `stable` at `e551f092`, where the required helper and tests are absent. Implementation resolves checkout from the issue body, not answer comments.\n\nQ2: Which executable target should be used?\nChoices:\nA. Update `Target branch:` to `ai/issue-4329`, then re-run planning. (RECOMMENDED)\nB. Keep `stable` and authorize a broader workflow-level backport.\n\nReply with:\n/answer\n\nPLAN_SELF_CHECK: BLOCKER: Clarified target conflicts with implementation checkout metadata.\nSTATUS: NOT_CLEAR\n\nReply with:\n/answer",
+  "fingerprint": "f28b8a0bee47f7041ced68f3259bf04588524c7e73bd7320ff92cf699b9c76bb",
+  "lineage": {
+    "issue_number": 4336,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35897713103",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35897713103",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4336"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260923175240_913d72dc71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4336,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35897713103"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Plan requested re-clarification for issue #4336",
+  "timestamps": {
+    "created_at": "2026-09-23T17:52:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

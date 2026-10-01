@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description states \"security-audit.yml / ai-security-audit.yml gain `bypass_weekly_cap` and `ref` dispatch inputs\" and \"The command now dispatches with `bypass_weekly_cap=true` and treats a pass as clean only when `deferred_by_weekly_cap=0`.\"\n  expected_change_site: `.github/workflows/security-audit.yml`, `workflow-templates/ai-security-audit.yml`, `scripts/security_audit.sh`, `.claude/commands/implement-plan-claude.md`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20, z-ai_glm-5_2]\n  EVIDENCE: `ref` was added, but `bypass_weekly_cap` input was NOT added to the workflows, and `deferred_by_weekly_cap` logic does not appear in the diff; `.claude/commands/implement-plan-claude.md` never sends `bypass_weekly_cap`; `bypass_weekly_cap` does not appear as a workflow input in either file, `SECURITY_AUDIT_BYPASS_WEEKLY_CAP` does not appear in `scripts/security_audit.sh`, and `deferred_by_weekly_cap` does not appear anywhere in the diff. Tests assert the absence of these identifiers, and reviewers note the weekly cap was removed entirely, making the bypass input unnecessary. This is a PR-description-vs-implementation discrepancy, not a runtime code defect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: PR description states \"security-audit.yml / ai-security-audit.yml gain `bypass_weekly_cap` and `ref` dispatch inputs\" and \"The command now dispatches with `bypass_weekly_cap=true` and treats a pass as clean only when `deferred_by_weekly_cap=0`.\"\n  Expected change site: .github/workflows/security-audit.yml, workflow-templates/ai-security-audit.yml, .claude/commands/implement-plan-claude.md\n  Evidence of absence: The `ref` input was added, but `bypass_weekly_cap` input was NOT added to the workflows, and `deferred_by_weekly_cap` logic does not appear in the diff. The editor summary suggests the cap was removed entirely, rendering these inputs unnecessary, but the PR description and plan-claude command still document/expect these inputs, which will cause operator confusion and dispatch failures if attempted.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  File: .github/workflows/security-audit.yml\n  Line or code reference: workflow_call and workflow_dispatch inputs blocks; scripts/security_audit.sh input handling\n  Problem: PR description states \"security-audit.yml / ai-security-audit.yml gain `bypass_weekly_cap` and `ref` dispatch inputs\" and \"The command now dispatches with `bypass_weekly_cap=true` and treats a pass as clean only when `deferred_by_weekly_cap=0`.\" Only the `ref` input ships; the implementation removed the weekly cap entirely so `bypass_weekly_cap` was deemed unnecessary. The PR description's stated user-visible contract is not reflected in the workflow surface \u2014 `.claude/commands/implement-plan-claude.md` never sends `bypass_weekly_cap`, `deferred_by_weekly_cap` is not computed anywhere, and the test `test_security_audit_workflow_declares_branch_audit_inputs_on_both_triggers` explicitly asserts `assert \"bypass_weekly_cap\" not in inputs`. The agents.md \"Security Audit\" section describes the cap as already removed in prior PRs, which is consistent with the implementation but contradicts the PR description's narrative.\n  Why it fails at runtime: No runtime failure \u2014 a documented-only cap removal is a valid way to achieve the stated goal \"audit can no longer pass with deferred findings\". However, the PR description promises a specific mechanism (the bypass input) that the implementation does not ship, so the deliverable described in the PR description does not match the PR diff. Consumers reading the PR description expecting the bypass input will not find it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: PR description states \"security-audit.yml / ai-security-audit.yml gain `bypass_weekly_cap` and `ref` dispatch inputs\" and \"The command now dispatches with `bypass_weekly_cap=true` and treats a pass as clean only when `deferred_by_weekly_cap=0`.\"\n  Expected change site: `.github/workflows/security-audit.yml`, `workflow-templates/ai-security-audit.yml`, `.claude/commands/implement-plan-claude.md`\n  Evidence of absence: `ref` input added; `bypass_weekly_cap` and `deferred_by_weekly_cap` absent (tests assert this; cap removed entirely per editor summary). PR description still claims them.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: PR description states \"security-audit.yml / ai-security-audit.yml gain `bypass_weekly_cap` and `ref` dispatch inputs\" and \"The command now dispatches with `bypass_weekly_cap=true` and treats a pass as clean only when `deferred_by_weekly_cap=0`.\" The Changes section also names `SECURITY_AUDIT_BYPASS_WEEKLY_CAP` and \"The summary line reports `deferred_by_weekly_cap`.\"\n  Expected change site: `.github/workflows/security-audit.yml`, `workflow-templates/ai-security-audit.yml`, `scripts/security_audit.sh`, `.claude/commands/implement-plan-claude.md`\n  Evidence of absence: The `ref` input was added to both workflows and `SECURITY_AUDIT_TARGET_REF` was added to the script. However, `bypass_weekly_cap` does not appear as a workflow input in either file, `SECURITY_AUDIT_BYPASS_WEEKLY_CAP` does not appear in `scripts/security_audit.sh`, and `deferred_by_weekly_cap` does not appear anywhere in the diff. The tests `test_security_audit_workflow_declares_branch_audit_inputs_on_both_triggers` and `test_security_dispatch_targets_project_branch` explicitly assert the absence of these identifiers. The editor's summary explains the weekly cap was already removed entirely, making the bypass input unnecessary \u2014 the same goal is achieved by removing the cap rather than adding a bypass. This is a PR-description-vs-implementation discrepancy, not a runtime code defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e8501ccd0a081e9e5830a940415d2017e836e59cbe40ca913d1993327a5c31aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4438,
+    "run_id": "36098924234",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36098924234",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925055241_a65ce30d8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4438,
+    "run_id": "36098924234"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T05:52:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4329,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4329\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4332\",\"pr_number\":4332,\"branch\":\"ai/issue-4329\",\"run_id\":\"35862808448\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35862808448\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/auto-release-stable.yml\",\".github/workflows/check_failure_triage.yml\",\".github/workflows/ci.yml\",\".github/workflows/clarify.yml\",\".github/workflows/implement.yml\",\".github/workflows/internal-orchestrate.yml\",\".github/workflows/internal-validate.yml\",\".github/workflows/mark-stable.yml\",\".github/workflows/opencode-live-smoke.yml\",\".github/workflows/orchestrate.yml\",\".github/workflows/orchestrate_clarify_respond.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/plan.yml\",\".github/workflows/promote-main-to-stable.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/security-audit.yml\",\".github/workflows/test-and-mark-stable.yml\",\".github/workflows/validate.yml\",\"README.md\",\"agents.md\",\"analysis/validation-selftest-status.json\",\"analysis/workflow-optimization-2026-09-18.md\",\"analysis/workflow-optimization-2026-09-20-2.md\",\"analysis/workflow-optimization-2026-09-20.md\",\"changelog.d/3928-judge-prompt-pr-diff-byte-cap.md\",\"changelog.d/3965-security-pass-loop-convergence.md\",\"changelog.d/4127-security-fix-pr-base.md\",\"changelog.d/4134-auto-apply-analysis-and-stable-release.md\",\"changelog.d/4139-security-agent-isolation.md\",\"changelog.d/4139-security-pass-cycle-3-isolation.md\",\"changelog.d/4139-security-pass-hardening.md\",\"changelog.d/4143-security-pass-line-ownership-poller.md\",\"changelog.d/4161-smoke-test-telegram-silencing.md\",\"changelog.d/4173-security-pass-integrity-hardening.md\",\"changelog.d/4290-security-boundary-hardening.md\",\"changelog.d/post-agent-python-startup-isolation.md\",\"changelog.d/security-pass-line-ownership-engine.md\",\"docs/INVENTORY.md\",\"docs/how-it-works.md\",\"docs/plans/security-pass-convergence-plan.md\",\"docs/scripts-pending-removal.md\",\"probably_unnecessary_but_read_if_stuck.md\",\"prompts/_templates/mode-judge-security-pass-exhaustion.txt\",\"prompts/_templates/mode-security-audit.txt\",\"prompts/mode-judge-review-blocked.txt\",\"prompts/mode-judge-security-pass-exhaustion.txt\",\"prompts/mode-security-audit.txt\",\"scripts/apply_analysis_on_main.sh\",\"scripts/auto_release_stable.sh\",\"scripts/check_resolver_diff.sh\",\"scripts/files_touched_scope_guard.py\",\"scripts/implement_commit_changes.sh\",\"scripts/implement_diagnose_post_codex_failure.sh\",\"scripts/lint_pr_body_auto_close.py\",\"scripts/model_provider_proxy.py\",\"scripts/opencode_helpers.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/package_download_proxy.py\",\"scripts/post_agent_workspace_guard.py\",\"scripts/promote_main_cycle.sh\",\"scripts/review_apply_fixes.sh\",\"scripts/review_collect_pr_metadata.sh\",\"scripts/review_commit_changes.sh\",\"scripts/review_conflict_prepare.sh\",\"scripts/review_conflict_resolve.sh\",\"scripts/review_rb_judge.sh\",\"scripts/run_plan_codex.sh\",\"scripts/security_audit.sh\",\"scripts/security_audit_causality.py\",\"scripts/stage_workflow_support.sh\",\"scripts/trusted_git_write.sh\",\"scripts/untrusted_process_sandbox.sh\",\"scripts/verify_integration_fingerprints.py\",\"tests/test_agent_process_isolation.py\",\"tests/test_apply_analysis_on_main.py\",\"tests/test_auto_release_stable.py\",\"tests/test_changelog_fragment_contract.py\",\"tests/test_files_touched_scope_guard.py\",\"tests/test_implement_blocked_verdict_terminalizes.py\",\"tests/test_implement_post_codex_recovery.py\",\"tests/test_implement_pr_body_tracking_refs.py\",\"tests/test_lint_pr_body_auto_close.py\",\"tests/test_opencode_helpers.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_orchestrate_poll_promote_cycle.py\",\"tests/test_orchestrate_poll_workflow_contract.py\",\"tests/test_plan_codex_step_extraction.py\",\"tests/test_plan_template_owned_path_guard.py\",\"tests/test_promote_main_cycle.py\",\"tests/test_review_autofix_editor_noop_cascade_contract.py\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_pipeline_integration.py\",\"tests/test_review_rb_judge_label_propagation.py\",\"tests/test_security_audit_workflow_contract.py\",\"tests/test_smoke_alert_silencing_contract.py\",\"tests/test_verify_integration_fingerprints_baseline.py\",\"tests/test_workflow_checkout_integration_ref_audit.py\",\"tests/test_workspace_init.py\",\"workflow-templates/ai-validate.yml\"]}",
+  "fingerprint": "e32093380ad749da42199c1b1722d6eec628514b3bfec7133641cad69fa8dd5c",
+  "lineage": {
+    "issue_number": 4329,
+    "parent_ids": [],
+    "pr_number": 4332,
+    "run_id": "35862808448",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35862808448",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4332"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260923130918_6228838cf8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4329,
+    "level": "run",
+    "pr_number": 4332,
+    "run_id": "35862808448"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4329: https://github.com/shubhodeep1/coding-workflows/pull/4332",
+  "timestamps": {
+    "created_at": "2026-09-23T13:09:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

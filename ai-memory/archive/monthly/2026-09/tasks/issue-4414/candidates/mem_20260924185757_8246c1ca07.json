@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan\n\n**Planning ref:** `ai/issue-4407` at `7c6abe28333ad48d4368826449c34a409618c4c3`; it matches the issue\u2019s integration-branch metadata. The automatic `/answer` confirms that no clarification was requested.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/review_conflict_resolve.sh` and its existing post-agent runtime directory  \nScope-mode justification: Repair the reported resolver path without changing the validator or sandbox. Staging all four inputs is the complete fix for this path, rather than a shortcut that leaves another manifest inaccessible. This follows \u00a76\u2019s priority order: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n### Automation and lifecycle\n- **Entry point:** `.github/workflows/review_autofix.yml`, on its existing PR review triggers, invokes the resolver. Extend that invocation path; add no script or trigger.\n- **Supervisor:** None required.\n- **Database gate / future-removal registry:** Not applicable.\n\n### Files likely to change\n- `scripts/review_conflict_resolve.sh` \u2014 stage validator inputs and pass the staged paths.\n- `tests/test_agent_process_isolation.py` \u2014 cover strict-manifest validation with inputs originating under `/tmp`.\n- `tests/test_review_autofix_review_pipeline_contract.py` \u2014 update its existing assertion that pins the direct manifest arguments; keep its strict-validation assertions.\n\n### Functions or modules to implement\nIn the resolver\u2019s pre-commit validation block, copy the conflicted set, touched set, conflict spans, and clean-merge manifest **after the model and workspace guard finish** into a private staging location under the existing `POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR`. Confirm that location resolves outside `/tmp` and `/var/tmp`; reject missing, unsafe, or failed copies. Pass only those copies to `check_resolver_diff.sh`, retaining `--strict-manifests`, the isolated validator, and the existing no-commit failure path. The workflow\u2019s existing cleanup owns the runtime directory.\n\n### Data structures affected\nFour temporary validation files only. No persisted state, schema, label, or log-prefix changes.\n\n### API/interface changes\nNone. The existing `check_resolver_diff.sh` arguments remain unchanged; only their path values change.\n\n### Data flow\nPrepare manifests under `RUNTIME_DIR` \u2192 model resolves conflict \u2192 workspace guard reconciles output \u2192 trusted shell stages four inputs outside private `/tmp` \u2192 existing isolated strict validator checks them \u2192 commit only on success.\n\n## Security considerations\nThe resolver output and its touched-path list cross from an untrusted writer into a trusted commit decision. Stage inputs only after reconciliation, reject staging or path-validation failure, and never fall back to the inaccessible originals or a non-isolated validator. Preserve strict span, clean-tree, and touched-set checks: a forged path, altered manifest, or failed copy must not authorize a commit. This adds no endpoint or authorization surface.\n\n### Risks and edge cases\n- The traceback omits its exception message, so the `/tmp` diagnosis is well-supported by the path flow but not conclusively proven by the supplied log.\n- `check_resolver_diff.sh` sorts the two set files in place; pass writable staged copies while keeping the original preparation artifacts intact.\n- A missing or `/tmp`-backed `POST_AGENT_WORKSPACE_GUARD_RUNTIME_DIR` must fail closed.\n- `scripts/review_rb_judge.sh` also passes runtime files to this guard, but its separate flow is outside this issue\u2019s reported resolver fix; do not silently change it.\n\n### Testing considerations\nExtend the existing isolation test to exercise **strict** manifests and all four staged inputs. Because sandbox test mode does not reproduce `PrivateTmp=yes`, include a test boundary that rejects host `/tmp` arguments rather than treating a test-mode pass as proof of visibility. Verify both an accepted resolution and a tampered span/clean-tree rejection, plus staging failure before commit. Update the existing review-pipeline contract test to assert staged arguments and continued `--strict-manifests`. Run focused tests and shell syntax checks on the pinned repository environment.\n\n### Pre-execution self-check\nThe plan has an automated entry point, named files and tests, no new interface, and a fail-closed path. No repository files were changed during planning.\n\nPLAN_SELF_CHECK: WARNING: The supplied traceback is truncated; confirm the first inaccessible path during implementation.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "920adccf02185aa401bc8b5d3658fd9bf648530711d87c7d612cd9d7190a12ce",
+  "lineage": {
+    "issue_number": 4414,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36044153243",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36044153243",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4414"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924185757_8246c1ca07",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4414,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36044153243"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4414",
+  "timestamps": {
+    "created_at": "2026-09-24T18:57:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

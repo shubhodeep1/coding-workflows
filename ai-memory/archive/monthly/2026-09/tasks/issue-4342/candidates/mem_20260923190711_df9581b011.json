@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4342,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4342\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4349\",\"pr_number\":4349,\"branch\":\"ai/issue-4342\",\"run_id\":\"35905474538\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/35905474538\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"changelog.d/4342-review-workspace-guard-direct.md\",\"scripts/review_apply_fixes.sh\",\"scripts/review_conflict_resolve.sh\",\"scripts/review_rb_judge.sh\",\"tests/test_agent_process_isolation.py\"]}",
+  "fingerprint": "baecb89652bbe4ff2404d8cf16b0394c9c3f4af8a695af683c573908a56d11eb",
+  "lineage": {
+    "issue_number": 4342,
+    "parent_ids": [],
+    "pr_number": 4349,
+    "run_id": "35905474538",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35905474538",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4349"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260923190711_df9581b011",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4342,
+    "level": "run",
+    "pr_number": 4349,
+    "run_id": "35905474538"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4342: https://github.com/shubhodeep1/coding-workflows/pull/4349",
+  "timestamps": {
+    "created_at": "2026-09-23T19:07:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

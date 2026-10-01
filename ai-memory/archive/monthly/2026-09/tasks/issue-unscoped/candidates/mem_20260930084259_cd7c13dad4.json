@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:529-552 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Bulk branch pushes using `--all`, `--mirror`, or the `:` matching refspec can be reduced to a check of only the checked-out branch, allowing other branches with merged-PR history to be pushed without examination.\n  WHY: When the checked-out branch is the default branch, `_judge_guard_target` skips it and does not check the other branches the push can write.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:534-542 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `--tags` is skipped as an ordinary option, causing a tag-only push with no explicit refspec to be judged against the checked-out branch.\n  WHY: `git push --tags origin` writes tags, not the checked-out branch, so the guard can block or ask for confirmation for a branch this push does not write.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:534-535 and 541-542 | severity=high | confidence=5\n  PROBLEM: `--all` and `--mirror` are treated as ordinary options and skipped, so the parser returns a target for only the checked-out branch when no explicit refspec remains.\n  WHY: When the checked-out branch is the default branch, `_judge_guard_target` allows the push without examining stale branches carrying merged-PR history.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:534-535 and 541-542 | severity=low | confidence=5\n  PROBLEM: `--tags` is treated as an ordinary option and skipped, so the parser falls back to judging the checked-out branch.\n  WHY: `git push --tags origin` writes no branch refs, so the guard can block or prompt for a branch operation that is not happening.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:529\u2013542 and 550\u2013552 | severity=high | confidence=5\n  PROBLEM: Bulk branch pushes are reduced to a check of the current branch; the parser skips `--all` and `--mirror`, and the `:` matching refspec is likewise represented by only the checked-out branch.\n  WHY: `git push --all origin`, `git push --mirror origin`, and `git push origin :` can write other branches, but when the checked-out branch is the default branch, `_judge_guard_target` skips it and stale branches with merged-PR history can be pushed without being checked.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:534\u2013542; tests/test_pr_merge_status_guard.py, line 1333 | severity=low | confidence=5\n  PROBLEM: `--tags` is skipped as an ordinary option, so a tag-only push with no explicit refspec is treated as a push of the current branch.\n  WHY: `git push --tags origin` writes tags, not the checked-out branch, so the guard can block or ask for confirmation for a branch this push does not write.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:529-542 | severity=high | confidence=5\n  PROBLEM: Bulk push modes `--all` and `--mirror` are treated as ordinary options and skipped, so when no explicit refspec is provided the parser returns a target for the checked-out branch only.\n  WHY: When the checked-out branch is the default branch, stale side branches with merged-PR history can be pushed without examination.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:529-542; test_push_refspecs_name_the_judged_branch_and_tip pins this behavior | severity=low | confidence=5\n  PROBLEM: `--tags` is treated as an ordinary option and skipped, so a tag-only push with no explicit refspec is judged against the checked-out branch.\n  WHY: `git push --tags origin` writes no branch ref, but the guard may block or prompt for a branch operation that is not happening.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8fd663c4f1eefe3af0a166bdd79cebe1fadcb91641d97676add3191bbdc451ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5173,
+    "run_id": "36685529890",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36685529890",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930084259_cd7c13dad4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5173,
+    "run_id": "36685529890"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T08:42:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

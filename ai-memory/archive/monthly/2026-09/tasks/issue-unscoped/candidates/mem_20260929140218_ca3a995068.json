@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:find_pending_marker (line 113) and evaluate (line 323) | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A PR author can retarget a `claude/*` PR after a clean review without changing its head, allowing the hourly sweep to enable auto-merge into a base whose diff was not reviewed.\n  WHY: The marker and merge authorization bind only to the head SHA; Deepseek rates this MAJOR, while z-ai reports no security finding because the #5147 fix is planned to land before the feature reaches main.\n- scripts/claude_fixer_pending_checks.py:parse_check_snapshot, line 201 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A timeout snapshot with zero incomplete and zero failed checks is treated as invalid rather than ready, creating an asymmetry with the hand-off step's pending-check handling.\n  WHY: This is fail-closed and self-corrects on the next hourly tick; the source explicitly says it is not a regression or runtime failure.\n- scripts/claude_fixer_pending_checks.py:read_enable_auto_merge, lines 272-284 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The repository-variable read uses a direct `subprocess.run` call without the `gh_retry` wrapper, so a transient network error or rate limit can leave the PR open until a later sweep.\n  WHY: The failure is fail-closed and self-correcting on retry; the observable effect is at most a one-hour delay.\n- scripts/claude_fixer_pending_checks.py:Line 82 \u2014 _load(\"check_in_status\", ROOT / \".claude\" / \"scripts\" / \"check_in_status.py\") | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: This module imports and calls private helpers from `.claude/scripts/check_in_status.py`, which are also used across other modules.\n  WHY: The reviewer found no new identifier collisions; this is reported as a naming/backward-compatibility NIT, not a runtime defect.\n- .github/workflows/review_autofix.yml:Lines 740-747 (gate_claude_pending_checks_on_head) and scripts/claude_pr_sweep.py:342 (pending_checks=evaluate_pending_checks) | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The reviewer checked whether the new pending-checks capabilities introduce an implicit-execution risk.\n  WHY: The reviewer found the capabilities properly gated within existing Claude-fixer mode and explicitly reports no implicit execution risk.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_fixer_pending_checks.py:find_pending_marker (line 113) and evaluate (line 323) | severity=MAJOR | confidence=4\n  PROBLEM: A PR author can retarget a claude/* PR to a different base after a clean review without moving the head, and the hourly sweep would then enable auto-merge into a base whose diff nobody reviewed.\n  WHY: The hand-off step posts only head=<sha>, the gate skips re-runs on any head with a pending-checks marker regardless of the current base, and evaluate() in the sweep compares nothing about the base before enabling auto-merge.\n- scripts/claude_fixer_pending_checks.py:parse_check_snapshot, line 201 | severity=NIT | confidence=2\n  PROBLEM: When collection_status is \"timeout\" and incomplete_count is 0 and failed_count is 0, the function returns \"invalid\" rather than \"ready\".\n  WHY: This is fail-closed and the next hourly tick retries; the source says this is not a regression or runtime failure.\n- scripts/claude_fixer_pending_checks.py:read_enable_auto_merge, lines 272-284 | severity=NIT | confidence=1\n  PROBLEM: The repository variable read uses a direct subprocess.run([\"gh\", \"api\", ...]) call without going through check_in_status.gh_api() and its gh_retry wrapper.\n  WHY: The failure is fail-closed and self-correcting on retry; the only observable effect is a one-hour delay.\n- scripts/claude_fixer_pending_checks.py:Line 82 \u2014 _load(\"check_in_status\", ROOT / \".claude\" / \"scripts\" / \"check_in_status.py\") | severity=NIT | confidence=1\n  PROBLEM: This module imports and calls private helpers from `.claude/scripts/check_in_status.py`; the reviewer says these helpers are pre-existing and used across multiple modules.\n  WHY: No new identifier collisions were found.\n- .github/workflows/review_autofix.yml:Lines 740-747 (gate_claude_pending_checks_on_head) and scripts/claude_pr_sweep.py:342 (pending_checks=evaluate_pending_checks) | severity=NIT | confidence=1\n  PROBLEM: The reviewer checked whether the new pending-checks gate and sweep pass create an implicit-execution risk.\n  WHY: The capabilities are properly gated within existing Claude-fixer mode; the reviewer reports no new capability surface or implicit execution risk.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6fb55ec7f52a5bafbf4ad68725b62a8b9ecf749ca1a1f932b910b1e819ddc656",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36577368305",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36577368305",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929140218_ca3a995068",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36577368305"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T14:02:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

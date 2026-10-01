@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:1971-1978 (approximate) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The merged-session rename instruction omits the `#<issue> \u00b7 ` prefix annotation that the Session titles rule says should appear on report titles.\n  WHY: Implementing the merged-session rename literally would omit the issue prefix and make merged session titles inconsistent with closed session titles.\n- agents.md:823-839 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The inserted title-rules paragraph breaks the original sentence about archiving the previous stage session and leaves its trailing fragment disconnected from the preceding clause.\n  WHY: This makes the technical documentation harder to parse and obscures the documented behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A stage that opens a PR (steps 3a, 6, 8, 10, 11, 12) renames itself with set_session_title in that same step\" as documented in the new ### Session titles rule in workflow-templates/.claude/commands/implement-plan-claude.md.\n  expected_change_site: workflow-templates/.claude/commands/implement-plan-claude.md and .claude/commands/implement-plan-claude.md, steps 8 (conformance fix), 10 (validation fix), 11 (completion), and 12 (verify-activation fix)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The set_session_title rename instruction is explicitly implemented only in steps 3a (line 25) and 6 (line 38); steps 8 (line 53), 10 (line 67), 11 (line 73), and 12 (line 77) lack this instruction, leaving these automation stages unnumbered.\n- requirement: \"A stage renames itself on PR open\" tested by test_stage_renames_itself_when_it_opens_a_pr. The test must cover every step named by the Session titles rule.\n  expected_change_site: tests/test_session_titles.py::test_stage_renames_itself_when_it_opens_a_pr\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test implementation asserts rename instructions only for steps 3a and 6, failing to verify that the renaming requirement is met for steps 8, 10, 11, and 12.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CLAUDE.md:1971-1978 (approximate) | severity=high | confidence=5\n  PROBLEM: The terminal session rename instructions provide inconsistent instructions for merged versus closed outcomes because the merged-report form lacks the `#<issue> \u00b7 ` prefix annotation.\n  WHY: An operator implementing the merged-session rename literally would omit the issue prefix, making merged titles inconsistent with closed titles and violating the stated title convention.\n- agents.md:823-839 | severity=low | confidence=5\n  PROBLEM: The inserted title-rules paragraph breaks the original sentence about archiving the previous stage session and leaves its trailing fragment disconnected from the preceding clause.\n  WHY: This makes the technical documentation harder to parse and obscures the documented behavior.\n- Requirement: \"A stage that opens a PR (steps 3a, 6, 8, 10, 11, 12) renames itself with set_session_title in that same step\" as documented in the new ### Session titles rule in workflow-templates/.claude/commands/implement-plan-claude.md.\n  Expected change site: workflow-templates/.claude/commands/implement-plan-claude.md and .claude/commands/implement-plan-claude.md, steps 8 (conformance fix), 10 (validation fix), 11 (completion), and 12 (verify-activation fix).\n  Evidence of absence: The set_session_title rename instruction is explicitly implemented only in steps 3a (line 25) and 6 (line 38); steps 8 (line 53), 10 (line 67), 11 (line 73), and 12 (line 77) lack this instruction, leaving these automation stages unnumbered.\n  Severity: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"A stage renames itself on PR open\" tested by test_stage_renames_itself_when_it_opens_a_pr. The test must cover every step named by the Session titles rule.\n  Expected change site: tests/test_session_titles.py::test_stage_renames_itself_when_it_opens_a_pr.\n  Evidence of absence: The test implementation asserts rename instructions only for steps 3a and 6, failing to verify that the renaming requirement is met for steps 8, 10, 11, and 12.\n  Severity: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "aacafaecd5790bbb0545cf35f39900c12e88c543dd140e4a50a3ea5f90ef7ae0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5009,
+    "run_id": "36578649763",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36578649763",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929141120_0c2fdbf567",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5009,
+    "run_id": "36578649763"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T14:11:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

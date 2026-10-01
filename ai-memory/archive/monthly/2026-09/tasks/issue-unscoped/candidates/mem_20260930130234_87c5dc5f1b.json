@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:664-670, 772-778 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash]\n  PROBLEM: The checker monitors only the first candidate run ID from an ambiguous dispatch and does not check subsequent candidates if the first does not match the target ref.\n  WHY: If the first candidate belongs to a parallel dispatch, the project\u2019s actual run can remain unverified and the project can stall.\n- .claude/commands/implement-plan-claude.md:71; workflow-templates/.claude/commands/implement-plan-claude.md:71 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The read-result instructions do not specify how to handle recorded candidates that are still in progress and whose logs cannot yet be read, so the stage may re-dispatch before determining whether one is the project's run.\n  WHY: Reviewers rated this NIT; the instructions can lead to a duplicate run when a project candidate is still running, though the candidate-log wording was also characterized as ambiguous.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/scripts/check_in_status.py:664-670, 772-778 | severity=high | confidence=4\n  PROBLEM: The checker implementation only monitors the first candidate run ID from an ambiguous dispatch, failing to check subsequent candidates if the first one does not match the target ref.\n  WHY: If the first candidate run ID recorded in the dispatching stage is not the project's run (e.g., it belongs to a parallel dispatch), the checker will wait for it to complete. Once complete, if the target ref does not match, the checker logic stops, leaving the project\u2019s actual run unverified and potentially stalled, instead of pivoting to check the other recorded candidates, as instructed in .claude/commands/implement-plan-claude.md.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/implement-plan-claude.md; workflow-templates/.claude/commands/implement-plan-claude.md | Step 9, the read-result-stage instructions beginning \"In the next stage session, **first confirm the run audited this project**\" through \"when no recorded run matches, do not use any verdict, re-dispatch once in this cycle through the helper\" | severity=low | confidence=4\n  PROBLEM: The instruction does not gate the \"no recorded run matches\" path on all recorded candidates having completed.\n  WHY: When the first candidate completes without matching the project branch while a sibling is still in progress, its log cannot yet be read; treating no completed match as no recorded run match can trigger a duplicate dispatch and a later `Status: BLOCKED`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/implement-plan-claude.md; workflow-templates/.claude/commands/implement-plan-claude.md | Step 9, line 71; step 10, line 78 | severity=low | confidence=4\n  PROBLEM: The instructions say a run\u2019s target ref can be checked from its log only after the run completes, but also direct the stage to identify a matching candidate by checking each candidate\u2019s log and re-arm the wait if that candidate is still in progress.\n  WHY: If the first candidate completes while the project\u2019s candidate is still running, the stage cannot read the latter\u2019s log to verify its target ref. No candidate is confirmed, so the \u201cno recorded run matches\u201d path can dispatch again while the original project run is still active. This can start a duplicate security audit or validation run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/commands/implement-plan-claude.md (and twin workflow-templates/.claude/commands/implement-plan-claude.md) | Step 9, line 71 (read-result stage paragraph) | severity=low | confidence=3\n  PROBLEM: \"When the log lists other candidates, check each the same way: the one that matches is this project's run, and a matching candidate still in progress gets the wait re-armed on it\" uses \"the log\" ambiguously and implies the stage knows which candidate matches before reading its log.\n  WHY: A stage session following these instructions may try to identify the matching candidate before the log is available, or may confuse the dispatch helper's output with the run's log. The correct behavior \u2014 try each candidate's log in order, re-arm the wait on any candidate whose log is not yet available \u2014 is implementable but not what the wording literally says.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c5173fc67538592d01954686007155ed19ed0c7edc585a2877c6d89852205c2c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5625,
+    "run_id": "36715171304",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36715171304",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930130234_87c5dc5f1b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5625,
+    "run_id": "36715171304"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T13:02:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

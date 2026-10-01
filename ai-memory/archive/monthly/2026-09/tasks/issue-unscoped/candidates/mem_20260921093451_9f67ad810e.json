@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh: line 2022, `generated_footer_key_regex = re.compile(...)` | severity=critical | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The footer regex uses literal `\\n` line separators instead of `\\r?\\n`, so CRLF-encoded advisory bodies do not populate provenance metadata and duplicate follow-up issues can be created.\n  WHY: Both reviewers identify the same CRLF parsing failure; minimax labels it BLOCKER and qwen labels it MAJOR, so the highest severity is used.\n- scripts/files_touched_scope_guard.py:207 (multi-path bullet bypass)\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: A multi-path bullet bypass is present.\n  WHY: The reviewer identified a security issue at this code location.\n- scripts/review_collect_pr_metadata.sh:297 (unresolved metadata sentinel)\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: An unresolved metadata sentinel is present.\n  WHY: The reviewer identified a correctness issue at this code location.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh: line 2022, `generated_footer_key_regex = re.compile(...)` | severity=BLOCKER | confidence=4\n  PROBLEM: The regex uses literal `\\n` for every line separator inside the canonical generated-advisory footer, so a CRLF-encoded advisory body never matches `footer_key_match`.\n  WHY: The existing provenance tuple is not populated, causing a duplicate `ai:security` follow-up issue to be filed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh: line 2022, `generated_footer_key_regex = re.compile(...)` | severity=MAJOR | confidence=4\n  PROBLEM: The footer regex uses literal `\\n` for line separators, while the sibling regexes correctly use `\\r?\\n`.\n  WHY: CRLF advisory bodies fail to populate the provenance-key tuple, allowing duplicate follow-up issues.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/files_touched_scope_guard.py:207 (multi-path bullet bypass)\n  PROBLEM: A multi-path bullet bypass.\n- scripts/review_collect_pr_metadata.sh:297 (unresolved metadata sentinel)\n  PROBLEM: An unresolved metadata sentinel.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "43431a3d6b5082541de6e2c5f35a118c6422323076d4255e89765dd5d72fdf58",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4174,
+    "run_id": "35579063461",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35579063461",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921093451_9f67ad810e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4174,
+    "run_id": "35579063461"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-21T09:34:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

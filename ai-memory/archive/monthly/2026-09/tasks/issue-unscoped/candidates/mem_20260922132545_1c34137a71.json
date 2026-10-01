@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:lines 20701-20709 (wave judge NOTE/elision) and 18687-18688 (review-blocked judge NOTE) | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The NOTE prefix added to PR_DIFF is not subtracted from `_judge_pr_diff_budget_left`, and the elided branch does not decrement the budget despite embedding the NOTE.\n  WHY: With many truncated PRs or tighter `JUDGE_PR_DIFFS_TOTAL_MAX_BYTES` settings, unaccounted NOTE bytes can push the assembled prompt past the 1,048,576-character cap and skip judge attempts; the reviewer labeled this NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 20701-20709 (wave judge NOTE/elision) and 18687-18688 (review-blocked judge NOTE)\n  Problem: The NOTE prefix (~250-340 bytes depending on substitution) is concatenated into PR_DIFF but is not subtracted from `_judge_pr_diff_budget_left`. In the truncated branch (line 20707), the budget is decremented by `_pr_diff_allowance` (truncated size only), not by the actual length of NOTE + truncated content. In the elided branch (line 20703), the budget is not decremented at all but the NOTE still adds ~250 bytes to the prompt. With many truncated PRs, the actual embedded byte sum can exceed JUDGE_PR_DIFFS_TOTAL_MAX_BYTES by up to N*~340 bytes, and the 950,000-character warning only fires after assembly, so the under-accounting is invisible to operators until the 1,048,576-character hard skip trips.\n  Why it fails at runtime: An operator raising JUDGE_PR_DIFFS_TOTAL_MAX_BYTES near the codex cap (e.g. 786432) with many merged minified-bundle PRs each consuming JUDGE_PR_DIFF_MAX_BYTES (65536) \u2014 12 such PRs * 340-byte NOTE overhead \u2248 4080 bytes unaccounted for \u2014 could push the prompt past the 1,048,576-character stdin cap and skip every judge attempt on an otherwise recoverable project. Defaults (524288 + ~250KB static \u2248 775KB) keep this safely under cap, but the budget accounting under-reports the actual size.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d4bf05a54338b78bcf1feffcb4b0f12879f7339b029f3d14a443ea6753c67278",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4275,
+    "run_id": "35728146648",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35728146648",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260922132545_1c34137a71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4275,
+    "run_id": "35728146648"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-22T13:25:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

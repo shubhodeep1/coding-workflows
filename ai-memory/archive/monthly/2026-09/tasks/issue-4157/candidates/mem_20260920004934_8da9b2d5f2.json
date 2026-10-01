@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Planning context\n\n- Ref: `orchestrator/project-4156`\n- HEAD: `5570973fb7e28c2b91188daa217ec3e47d8fb8d5`\n- Integration branch matches.\n- Clarification: auto-answer confirms implementation may proceed.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: Modify only the existing canary fixture. Replacing all three current lines with the complete two-line specification is safer than a partial edit and follows \u00a76 priorities: correctness before speed.\n\n## Automation and wiring\n\n- Existing entry point: `.github/workflows/test-and-mark-stable.yml`, `workflow_dispatch`, job `orchestrate-decompose-test`.\n- No new script, scheduler wiring, supervisor, database operation, or removal-registry entry is required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace its contents with:\n    1. `status: ok`\n    2. `decompose-run: 35479338161`\n  - Retain a trailing newline.\n- No other files, tests, documentation, or changelog fragments may change.\n\n## Functions or modules to implement\n\nNone. This is a literal fixture-content update.\n\n## Data structures affected\n\n- Two-line plain-text canary record.\n- Remove the legacy `run_id` and `updated-by` lines.\n- Add the required `decompose-run` record.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the complete fixture\n\n- **Chosen:** Rewrite the file as exactly the required two lines.\n- **Alternatives considered:** Edit only the second line while retaining the existing third line.\n- **Why:** Retaining `updated-by: ai-pipeline` would violate the exact-content acceptance criteria.\n\n## Security considerations\n\n- Trust boundary: issue-provided literal content entering a tracked test fixture.\n- No endpoint, authorization surface, secrets, external API, money handling, or executable input is involved.\n- Abuse case: unrelated or injected content could expand the diff; prevent this by verifying exact bytes and the changed-file list.\n\n## Risks and edge cases\n\n- Existing content has three lines, so merely replacing `run_id` is insufficient.\n- Other smoke paths reference a three-line canary format, but this orchestrator-decomposition task explicitly requires two lines; those paths must not be edited.\n- Avoid whitespace, blank lines, BOMs, or additional files.\n\n## Testing considerations\n\n1. Compare the fixture against the exact expected two-line, newline-terminated content.\n2. Confirm it contains exactly two lines.\n3. Run `git diff --name-only` and verify only `tests/e2e_smoke_canary.txt` appears.\n4. Inspect the scoped diff for whitespace or extra-line changes.\n\n## Assumptions and missing context\n\n- A trailing newline is treated as the repository\u2019s normal text-file convention.\n- No required context is missing and no codebase conflict blocks implementation.\n\n## Pre-execution self-check\n\n- Scope is explicit and limited to one existing file.\n- Required values, branch, and verification criteria are fully specified.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7e925d8bda834a61c4ff4277e7d9d6e10b3b3ce90c358252f88b7de043afce0d",
+  "lineage": {
+    "issue_number": 4157,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35479572981",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35479572981",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4157"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260920004934_8da9b2d5f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4157,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35479572981"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4157",
+  "timestamps": {
+    "created_at": "2026-09-20T00:49:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

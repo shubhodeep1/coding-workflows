@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"This PR copies the twin byte-for-byte into `.claude/`\" \u2014 the PR description says it copies `workflow-templates/.claude/scripts/permission_prompts.py` (sha256 `29bc5735\u2026e77a`) into `.claude/scripts/permission_prompts.py`.\n  expected_change_site: `.claude/scripts/permission_prompts.py`\n  confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The diff in `original_pr_diff.patch` shows 58 lines changed (40 insertions, 18 deletions) across 5 hunks in `.claude/scripts/permission_prompts.py`. The `_lookup_candidates`, `lookup`, and docstring sections match the twin read from `workflow-templates/.claude/scripts/permission_prompts.py` (lines 905-954). The PR changed exactly 1 file as stated, and the content changes are confined to the `lookup` function and `_lookup_candidates` helper. No missing deliverables.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"This PR copies the twin byte-for-byte into `.claude/`\" \u2014 the PR description says it copies `workflow-templates/.claude/scripts/permission_prompts.py` (sha256 `29bc5735\u2026e77a`) into `.claude/scripts/permission_prompts.py`.\n  Expected change site: `.claude/scripts/permission_prompts.py` \u2014 the diff must be exactly the delta between the old `.claude/` copy (sha256 `973c6091\u2026`) and the twin.\n  Evidence of absence: The diff in `original_pr_diff.patch` shows 58 lines changed (40 insertions, 18 deletions) across 5 hunks in `.claude/scripts/permission_prompts.py`. The `_lookup_candidates`, `lookup`, and docstring sections match the twin read from `workflow-templates/.claude/scripts/permission_prompts.py` (lines 905-954). The PR changed exactly 1 file as stated, and the content changes are confined to the `lookup` function and `_lookup_candidates` helper. No missing deliverables.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8bbef801ddc7b7b329385d72900bfe88e68f422ff923170de24b0528d68033d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5433,
+    "run_id": "36667218524",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36667218524",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930042115_c1e1225373",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5433,
+    "run_id": "36667218524"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T04:21:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

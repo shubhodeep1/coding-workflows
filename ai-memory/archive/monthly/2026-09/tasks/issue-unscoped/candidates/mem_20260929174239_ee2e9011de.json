@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:766 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: Splitting comment bodies on `\\n` leaves trailing `\\r` on CRLF lines, preventing the gate from matching the pending-checks markers.\n  WHY: GitHub web-UI comments may use CRLF, while the Python sweep strips it; the gate can therefore dispatch a redundant review when the sweep accepts the marker.\n- .github/workflows/review_autofix.yml:768 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, x-ai_grok-4_20]\n  PROBLEM: The `header_round` expression calls `capture()` without first ensuring its header pattern matches, which reviewers report can error on comments without that header.\n  WHY: Reviewers report that a `capture()` error makes the jq filter fail and the gate dispatch a review; minimax_minimax-m3 and z-ai_glm-5_2 dispute this, reporting that jq `and` short-circuits and the capture is only evaluated after matching conditions.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"gate now reads only the latest trusted pending-checks comment for the head (as find_pending_marker does) and requires its single v2 line\"\n  expected_change_site: .github/workflows/review_autofix.yml:766-778 (and test coverage)\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: current jq still vulnerable to CRLF and capture errors; tests do not cover CRLF or error cases\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:766 | severity=high | confidence=4\n  PROBLEM: The new jq filter logic splits comment lines using `split(\"\\n\")` only, which fails to strip carriage returns (`\\r`) when the comment body contains CRLF endings.\n  WHY: The `v1` regex anchor `$` fails to match when a trailing `\\r` remains on the line. Consequently, the gate logic fails to identify the latest pending-checks marker, leading to an incorrect `false` result (or an error if the header pattern match fails), causing the gate to run when it should skip.\n- .github/workflows/review_autofix.yml:768 | severity=high | confidence=4\n  PROBLEM: The `header_round` jq expression uses `capture()` on the entire comment body without verifying if the header pattern actually matches first.\n  WHY: jq's `capture()` throws an error when the regex does not match the input. Since the filter is applied across all PR comments, any comment that does not start with the pending-checks header will cause this expression to error, which makes the entire `jq` filter return non-zero exit status, causing the gate to fail open (review dispatch runs when it should not).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml line 766 (`def lines: (.body // \"\") | split(\"\\n\");`) inside the `gate_claude_pending_checks_on_head` jq filter; downstream `v1_markers` (uses `test(v1)` with `$` anchor) and v2 array `==` comparison at lines 776-777 | severity=high | confidence=5\n  PROBLEM: `split(\"\\n\")` does not strip carriage returns, leaving trailing `\\r` on comment lines and causing the v1 marker match and v2 exact-array comparison to fail.\n  WHY: A CRLF pending-checks comment can make the gate reject the latest marker while the Python sweep's `splitlines()` accepts it, breaking gate/sweep parity on the retarget sequence.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:766 (`def lines: (.body // \"\") | split(\"\\n\");`) | severity=high | confidence=5\n  PROBLEM: The jq `lines` helper splits on `\\n` only, leaving a trailing `\\r` on each line when the comment body has CRLF endings.\n  WHY: The v1 regex `$` anchor and v2 exact `==` comparison fail with trailing `\\r`; the gate may dispatch a review while `scripts/claude_fixer_pending_checks.py:170` handles CRLF correctly with `splitlines()`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:766 | severity=high | confidence=4\n  PROBLEM: `lines: split(\"\\n\")` leaves `\\r` on CRLF comments; `^...$` and exact `==` on v2 line fail.\n  WHY: gate and sweep disagree on marker; PR stalls with neither merge nor review.\n- .github/workflows/review_autofix.yml:768 | severity=high | confidence=4\n  PROBLEM: `capture()` in `header_round` errors on non-matching comments; `and` does not short-circuit, select fails.\n  WHY: gate errors and fails open (unnecessary review dispatch).\n- .github/workflows/review_autofix.yml:766-778 | severity=high | confidence=4\n  PROBLEM: jq error paths (CRLF, capture failure) cause gate to return non-zero and fail open.\n  WHY: dispatched re-run occurs when it should have been skipped.\n- TASK_GAP\n  Requirement: \"gate now reads only the latest trusted pending-checks comment for the head (as find_pending_marker does) and requires its single v2 line\"\n  Expected change site: .github/workflows/review_autofix.yml:766-778 (and test coverage)\n  Evidence of absence: current jq still vulnerable to CRLF and capture errors; tests do not cover CRLF or error cases\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/review_autofix.yml line 766 \u2014 `def lines: (.body // \"\") | split(\"\\n\");` | severity=high | confidence=3\n  PROBLEM: The jq `lines` function splits on `\\n` only, leaving trailing `\\r` on each line when a comment body has CRLF line endings.\n  WHY: The gate's header and marker matching can fail on CRLF comments while the Python sweep's `find_pending_marker` uses `body.splitlines()`, which strips CRLF; the gate may dispatch a redundant review while the sweep may merge on the same comment.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "710b9fe577188997f42302ebdea31fb2c6a33bd9458512dadc7ed6baafd1be4a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5213,
+    "run_id": "36602985697",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36602985697",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929174239_ee2e9011de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5213,
+    "run_id": "36602985697"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T17:42:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

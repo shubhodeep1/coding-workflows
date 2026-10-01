@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Pre-approved `internal-review.yml` dispatches now run only from the default branch\" \u2014 applies to all three pre-approved surfaces.\n  expected_change_site: the three surfaces are settings.json allow rule, gh_api_write_guard hook, and dispatch_workflow.py helper.\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: All three surfaces are updated in the diff (settings.json loses the allow rule at line 37-42; gh_api_write_guard.py removes internal-review.yml from DISPATCHABLE_WORKFLOWS at line 185-190; dispatch_workflow.py adds DEFAULT_BRANCH_ONLY_WORKFLOWS, DEFAULT_BRANCH_ONLY_INPUT_KEYS, PR_NUMBER_INPUT_RE, validate_default_branch_only_inputs, and the default-branch pin at lines 14-36, 67-74, 82-93, 171-185, 188-203). No deliverable from the PR description or plan is missing from the diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: \"Pre-approved `internal-review.yml` dispatches now run only from the default branch\" \u2014 applies to all three pre-approved surfaces.\nExpected change site: the three surfaces are settings.json allow rule, gh_api_write_guard hook, and dispatch_workflow.py helper.\nEvidence of absence: All three surfaces are updated in the diff (settings.json loses the allow rule at line 37-42; gh_api_write_guard.py removes internal-review.yml from DISPATCHABLE_WORKFLOWS at line 185-190; dispatch_workflow.py adds DEFAULT_BRANCH_ONLY_WORKFLOWS, DEFAULT_BRANCH_ONLY_INPUT_KEYS, PR_NUMBER_INPUT_RE, validate_default_branch_only_inputs, and the default-branch pin at lines 14-36, 67-74, 82-93, 171-185, 188-203). No deliverable from the PR description or plan is missing from the diff.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7600b94dd5152697b31fb3ca8cd3d99202fba95ea67a7e88fa9406a3b1598f6f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5477,
+    "run_id": "36673510707",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36673510707",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930055215_9fa8a39dd8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5477,
+    "run_id": "36673510707"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T05:52:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

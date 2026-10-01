@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/5523-retry-budget-trusted-push-bound.md:lines 8-10 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The changelog\u2019s \u201cbehaviour before #4898\u201d claim may mislead operators about the behavior change when no run is visible on the head.\n  WHY: This is a documentation issue, not a runtime defect; the prior code used committer time as a fallback bound.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/5523-retry-budget-trusted-push-bound.md:lines 8-10 | severity=low | confidence=2\n  PROBLEM: The \"behaviour before #4898\" claim is unverifiable from the PR alone and may mislead operators about the behavior change when no run is visible on the head.\n  WHY: Documentation claim, not a runtime defect; the previous code used the committer time as a fallback bound.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9056f1b67a4439de2ad40704b97adc794b3143316ec7437c72bba1d6b0834b54",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5573,
+    "run_id": "36690661815",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36690661815",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930091333_d5f74a8b14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5573,
+    "run_id": "36690661815"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T09:13:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

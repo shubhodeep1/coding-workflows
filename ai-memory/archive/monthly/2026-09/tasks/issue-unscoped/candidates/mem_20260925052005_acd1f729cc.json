@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1741-1742 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The `deleted file mode` branch unconditionally sets `cross_file_non_python_added = True` for deleted files, including Python files.\n  WHY: Deleting a Python file can keep a base-owned access-control finding blocking even though the deletion cannot introduce a cross-language route; severity differed, with deepseek rating it MAJOR and qwen rating it NIT.\n- scripts/untruested_process_sandbox.sh:578 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The disposal invocation uses `${4}` to locate the guard script, making it fragile if a caller changes the Python flags before the script path.\n  WHY: Current callers use the same three-flag pattern, but inserting a flag could make `${4}` resolve to the wrong argument and break disposal.\n- scripts/untrusted_process_sandbox.sh:578 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The disposal call incorrectly uses `${4}` as the path to the disposal script.\n  WHY: The shell positional parameter `${4}` refers to the guard_action argument, so the disposal command attempts to execute that action as a Python script and fails to dispose of a contaminated workspace after an inventory error.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/security_audit.sh:1741-1742 | severity=MAJOR | confidence=4\n  PROBLEM: The `deleted file mode ` branch unconditionally sets `cross_file_non_python_added = True` without checking what file is being deleted against the safe-extension list.\n  WHY: A project that deletes a `.py` file (e.g., `views.py`) and also has a base-owned access-control finding will have that finding kept blocking rather than routed as advisory.\n- scripts/untruested_process_sandbox.sh:578 | severity=NIT | confidence=3\n  PROBLEM: The disposal invocation uses `${4}` to locate the guard script, assuming the command after `--` has exactly three Python flags before the guard script path.\n  WHY: Current callers all use the identical 3-flag pattern so this works now. A future modification to the sandbox invocation that inserts a flag (e.g., `-B`) would silently break disposal.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/untrusted_process_sandbox.sh:578 | severity=BLOCKER | confidence=5\n  PROBLEM: The disposal call incorrectly uses ${4} as the path to the disposal script.\n  WHY: The shell positional parameter ${4} refers to the guard_action argument (e.g., 'reconcile' or 'snapshot') passed to the sandbox script, not the path to the workspace guard script (post_agent_workspace_guard.py). Consequently, the disposal command will attempt to execute 'python3 reconcile dispose ...' and fail, failing to dispose of a contaminated workspace after an inventory error.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:1741 | severity=NIT | confidence=3\n  PROBLEM: The `deleted file mode` branch unconditionally sets `cross_file_non_python_added = True` for any deleted file, including `.py` files.\n  WHY: When a project deletes a Python file unrelated to access control and has a base-owned access-control finding on a sink, the finding stays blocking even though the deletion cannot introduce a new cross-language route.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e43e83d65c7b10022616acda9508743143e53277ae5c77c1a732b3186d5ab964",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4436,
+    "run_id": "36096892553",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36096892553",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925052005_acd1f729cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4436,
+    "run_id": "36096892553"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T05:20:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

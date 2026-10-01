@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_session_janitor.py, _REPO pattern (line 57) and its use in _terminal_pr_age_hours (line 259) and _issue_closed (line 270)\n  HARDENING_SUGGESTION: The _REPO regex `[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+` accepts `.` and `..` as complete path segments from session titles (operator-controlled data). A title like `PR ../users#12 \u2014 fixed review` would produce the gh api path `repos/../users/pulls/12`, which after HTTP path normalization redirects the GET to a different API endpoint. The conformance review (run 1) explicitly accepted this as a low-risk HYPOTHESIS: only the operator's own sessions set titles, the call is a read-only GET, the worst case is a 404 (session kept), and archiving is reversible. Tightening the pattern would add defense in depth by rejecting path traversal segments before they reach the API path.\n  SUGGESTED_MINIMAL_FIX: Add a validation check after extracting the repo from the title, before constructing the API path: reject segments that are exactly `.` or `..` by checking `all(segment not in ('.', '..') for segment in repo.split('/'))` and raising ValueError if it fails. This keeps the regex unchanged for valid repo names containing dots while blocking path traversal.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7f4df7386878e6b8f2db4a5e7cc88efdbaab16b60174f16f301f6292badbe811",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36684525387",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36684525387",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930075427_f2db84c7f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36684525387"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T07:54:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

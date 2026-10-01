@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:17495-17511 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The jq filter silently discards runs if the GitHub Actions API response is ever a bare JSON array instead of the documented object envelope.\n  WHY: The filter treats a non-object response as an empty run list, which could cause legitimate review runs to be missed; reviewers describing this as a concern rate it NIT, while others present it only as a hardening suggestion or reject it as theoretical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:17496 | severity=NIT | confidence=2\n  PROBLEM: The jq filter that unwraps the REST response uses `(if type == \"object\" then (.workflow_runs // []) else [] end)`. If the GitHub REST API ever returned a bare JSON array (e.g., `[{...}]`) instead of the canonical `{\"total_count\": N, \"workflow_runs\": [...]}` envelope, `type` would be `\"array\"`, the `else [] end` branch would fire, and every legitimate run would be silently dropped into `[]` \u2014 indistinguishable from no matches.\n  WHY: Currently does not fail \u2014 GitHub's `actions/runs` API response shape is stable and well-documented. This is a defense-in-depth observation: the two-stage guard `type == \"object\" \u2192 .workflow_runs` then `type == \"array\"` is correct for the documented API contract; only a future breaking API response-shape change (without advance deprecation notice) would surface a silent-empty-matches regression.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:17495-17511 | confidence=2\n  PROBLEM: If the REST response from GitHub for `actions/runs` were ever changed to a bare JSON array instead of an object, the current `jq` filter would silently discard all runs.\n  WHY: The first stage `(if type == \"object\" then (.workflow_runs // []) else [] end)` would return `[]` for a bare array, and all subsequent filtering would operate on an empty list, causing legitimate review runs to be missed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:17495-17511 (inside `_pr_named_review_dispatch_runs`) | severity=NIT | confidence=3\n  PROBLEM: When the REST body is a bare JSON array, the first stage takes the `else []` branch and silently drops every entry before the filter predicates run.\n  WHY: The current GitHub `actions/runs` response is the canonical `{workflow_runs: [...]}` envelope, so the helper is correct today, but a future response-shape change (a v3 endpoint, a slim payload, or a regression that strips the envelope) would cause the helper to return `[]` for every PR with no diagnostic and no log line, re-opening the very spoofing window this PR closes (recovery would see \"no PR-named run\", push the empty commit, and miss the dispatched review).\n  Suggested minimal fix: Accept both shapes in the first stage so the array is preserved when the envelope is missing: `(if type == \"array\" then . elif type == \"object\" then (.workflow_runs // []) else [] end)`. The second stage then becomes a no-op safety net; the existing test `test_fails_open_on_gh_failure_or_bad_payload` keeps passing because `[1, 2]` is filtered out by the `select(type == \"object\")` clause that follows.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh\n  Location: _pr_named_review_dispatch_runs, jq filter stage 1 (lines 17495-17511)\n  Issue: The first jq stage `(if type == \"object\" then (.workflow_runs // []) else [] end)` silently drops runs if GitHub ever returns a bare JSON array instead of the `{workflow_runs: [...]}` envelope.\n  Suggested minimal fix: Accept both shapes in the first stage: `(if type == \"array\" then . elif type == \"object\" then (.workflow_runs // []) else [] end)`. The second guard then becomes a no-op safety net.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e7987a19009b61363e324fd11e7dbbae5b25e86c5c3bd48c27d1414f0f8c6cf7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5106,
+    "run_id": "36600681982",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36600681982",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929173757_b027bba3d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5106,
+    "run_id": "36600681982"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T17:37:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:~2003 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Line is approximately 120 characters, breaking visual rhythm.\n  WHY: Not a functional failure, style issue.\n- agents.md:~913 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Line is approximately 110 characters, breaking visual rhythm.\n  WHY: Not a functional failure, style issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Accept hold and claim markers only from a dedicated automation identity, bound to an authorized fixer session and verified cap state.\n  expected_change_site: .claude/scripts/check_in_status.py, read_fix_claims\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implementation restricts markers by author identity (PR author or configured workflow account) but does not restrict them based on whether the cap is currently reached, as suggested by \"Accept ... and verified cap state.\" in the issue description.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: Accept hold and claim markers only from a dedicated automation identity, bound to an authorized fixer session and verified cap state.\n  Expected change site: .claude/scripts/check_in_status.py, read_fix_claims\n  Evidence of absence: The implementation restricts markers by author identity (PR author or configured workflow account) but does not restrict them based on whether the cap is currently reached, as suggested by \"Accept ... and verified cap state.\" in the issue description.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- CLAUDE.md:~2003 | severity=NIT | confidence=4\n  PROBLEM: Line is approximately 120 characters, breaking visual rhythm.\n  WHY: Not a functional failure, style issue.\n- agents.md:~913 | severity=NIT | confidence=4\n  PROBLEM: Line is approximately 110 characters, breaking visual rhythm.\n  WHY: Not a functional failure, style issue.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3129431e327b7b28d45bcc807a6fe2d5c9444d7694822a4fe35036af0acddc8f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4632,
+    "run_id": "36356456931",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36356456931",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927230445_8a63bc3394",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4632,
+    "run_id": "36356456931"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T23:04:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

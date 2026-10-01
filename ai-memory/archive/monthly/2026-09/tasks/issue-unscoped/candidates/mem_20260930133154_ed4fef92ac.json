@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1567-1582 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When a branch is force-pushed from head A to head B and back to head A, the bound can use A's first-push timestamp, allowing a completed PR-named review of B to consume A's retry budget and skip its editor-changes-lost recovery dispatch.\n  WHY: This is a fail-closed edge case requiring the PR's own pusher to force-push back; the source rates it NIT and describes changing the bound as a design tradeoff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh:1567-1582 | severity=NIT | confidence=2\n  PROBLEM: The bound is the earliest (min) created_at of any run on the head SHA in the branch's newest 30-run page. If head A was pushed, force-pushed to head B, and force-pushed back to head A, the branch page still holds A's first-push runs. The bound for A becomes its first push timestamp, and a completed PR-named review of B (created between the pushes) meets the timestamp filter on the PR-named-count path, consuming A's retry budget and skipping its editor-changes-lost recovery dispatch.\n  WHY: The retry is skipped (return 0, no dispatch) for a head that has never had a recovery retry dispatched. This is fail-closed \u2014 no infinite loop, no lost data \u2014 and requires a force-push-back the PR's own pusher performs. The conformance audit flagged this as an HYPOTHESIS concern, documented in the progress log and plan Notes. The plan chose this bound explicitly (AD-1). Changing it to the latest run on the head or a per-push counter is a design tradeoff, not a demonstrated defect.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d63ac1c524dcd2a1a8a826c65f8095caed3acf84c8876e3f626f4ba3ac5e5b97",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5541,
+    "run_id": "36715827516",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36715827516",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930133154_ed4fef92ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5541,
+    "run_id": "36715827516"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T13:31:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"the new and existing tests in tests/test_claude_issue_route.py, tests/test_implement_issue_claude_command.py (twin-reading tests), and tests/test_phase_skip_gate_telemetry_contract.py pass\"\n  expected_change_site: tests/test_phase_skip_gate_telemetry_contract.py::test_clarify_route_emits_stable_gate_telemetry\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20]\n  EVIDENCE: tests/test_phase_skip_gate_telemetry_contract.py:56-68 only asserts the three pre-existing reasons (`issue_closed`, `untrusted_issue_author`, `orchestrator_fast_path`) with `in block` presence checks; tests/test_claude_issue_route.py:2043 only checks the string appears in `result.stdout` for a stubbed subprocess run; File absent from pr_changed_files.txt and no diff hunk references it from any changed file\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"the new and existing tests in tests/test_claude_issue_route.py, tests/test_implement_issue_claude_command.py (twin-reading tests), and tests/test_phase_skip_gate_telemetry_contract.py pass\"\n  Expected change site: tests/test_phase_skip_gate_telemetry_contract.py\n  Evidence of absence: The plan requirement explicitly lists tests/test_phase_skip_gate_telemetry_contract.py as a test gate that must pass, presumably to verify the new AI_PHASE_GATE_V1 log line format introduced in clarify.yml. No diff hunk modifies or references this test file, meaning the new log line was not validated against this test gate in this PR.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n- File: .github/workflows/clarify.yml\n  Location: lines 425-428\n  Issue: When gh_helpers.sh is missing or fails to source, the fallback gh_retry_to_file stub performs no retry, backoff, or rate-limit handling.\n  Suggested minimal fix: Emit a ::warning:: log line after the fallback function is defined to notify operators of the degraded non-retrying state when the helper sourcing fails.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The plan (\"Phase 1 \u2014 final-merge resume on a closed issue\") lists `tests/test_phase_skip_gate_telemetry_contract.py` as a done-when gate, naming the new `AI_PHASE_GATE_V1 phase=clarify gate=route reason=final_merge_resume outcome=handoff` log line the contract must accept.\n  Expected change site: `tests/test_phase_skip_gate_telemetry_contract.py::test_clarify_route_emits_stable_gate_telemetry` and `tests/test_claude_issue_route.py::test_clarify_routes_a_closed_final_merge_block_to_claude` (PR diff includes the new log line via clarify.yml lines 489\u2013494 but no test asserts its presence in the workflow's run block).\n  Evidence of absence: `tests/test_phase_skip_gate_telemetry_contract.py:56-68` only asserts the three pre-existing reasons (`issue_closed`, `untrusted_issue_author`, `orchestrator_fast_path`) with `in block` presence checks \u2014 it does not assert the new `reason=final_merge_resume outcome=handoff` line. The PR's existing test in `tests/test_claude_issue_route.py:2043` only checks the string appears in `result.stdout` for a stubbed subprocess run; nothing pins the new log line into the static YAML block. The test currently passes either way, so the plan's \"done when\" clause is trivially satisfied and would not detect a regression where the new reason line is removed from clarify.yml.\n  ISSUE_CONFIDENCE: 2\n  SEVERITY: NIT\n- File: .github/workflows/clarify.yml\n  Location: lines 426-427 (the `source scripts/gh_helpers.sh 2>/dev/null || true` + `type gh_retry_to_file >/dev/null 2>&1 || gh_retry_to_file() { ... }` fallback stub)\n  Issue: When `scripts/gh_helpers.sh` is missing or fails to source (silenced by `|| true`), the fallback writes the raw `gh api --paginate` output to file but performs no retry/backoff/rate-limit handling. A transient 5xx or rate-limit hit then lands an unreadable comments file, the inner `if` fails, the else branch logs `::warning::final_merge_resume check failed for closed issue #N`, and a legitimate resume is dropped even though `gh_retry_to_file` would have recovered.\n  Suggested minimal fix: After the `type` check, when the fallback is in use, emit one `::warning::gh_retry_to_file missing; using no-retry fallback for closed-issue comments read` so operators can spot a degraded run before the resume is silently dropped. One `echo` line, no new dependency.\n  Estimated lines changed: 2\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n- File: .github/workflows/clarify.yml\n  Location: Decide clarify route step, lines ~425-428 (the `gh_retry_to_file` fallback stub)\n  Issue: When `gh_helpers.sh` fails to source and the fallback stub is used, degraded-mode runs are silent. A transient `gh api` failure that the real `gh_retry_to_file` would recover from instead drops straight into the outer `::warning::final_merge_resume check failed` path.\n  Suggested minimal fix: After the `type` check, if the fallback is defined, emit `::warning::gh_retry_to_file missing; using no-retry fallback for final_merge_resume check` so operators can distinguish a degraded run from a normal ineligible result in logs.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Phase 1 lists tests/test_phase_skip_gate_telemetry_contract.py as \"done when\" (new AI_PHASE_GATE_V1 final_merge_resume log line must be accepted by the phase-skip gate contract).\n  Expected change site: tests/test_phase_skip_gate_telemetry_contract.py (or update to any test enforcing the gate telemetry contract).\n  Evidence of absence: File absent from pr_changed_files.txt and no diff hunk references it from any changed file; plan's done-when clause cannot be verified.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "42b6a443556c989a5a2b5734452ce51a14dc9816ffc4a14a35d9531b1dc4668f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5271,
+    "run_id": "36636991425",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36636991425",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929222003_c513f6cb8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5271,
+    "run_id": "36636991425"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-29T22:20:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

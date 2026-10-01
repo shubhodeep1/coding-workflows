@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1638 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `now_utc` is assigned but not referenced after the weekly-capacity accounting removal.\n  WHY: The call does not fail, but the unused assignment runs on every audit and can be removed.\n- scripts/security_audit.sh:1639-1645 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, x-ai_grok-4_20]\n  PROBLEM: The comment says \"`gh api --paginate --slurp` yields one array per page; flatten them,\" but these reviewers report that array-returning endpoints produce a single flat JSON array.\n  WHY: The flattening code handles both shapes and does not fail at runtime, but the comment and nested-shaped test mock may mislead future maintainers about the API output.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/security_audit.sh:lines 1639-1645 | severity=low | confidence=5\n  PROBLEM: The comment incorrectly describes the output format of `gh api --paginate --slurp`, suggesting it returns a nested list of pages, when it actually returns a single flat JSON array for issue endpoints.\n  WHY: The code functions correctly by accident because it treats both shapes (flat list or nested list) in a way that produces a flat list, but the misleading comment can cause confusion during future maintenance.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh:1638 (`now_utc = datetime.now(timezone.utc)`) | severity=low | confidence=5\n  PROBLEM: Dead code \u2014 `now_utc` is assigned but never referenced after the weekly-capacity accounting removal.\n  WHY: It does not fail; it is just unused. Removing it would shrink the script by one line.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:1639-1645 (the flattening loop and its comment) | severity=low | confidence=4\n  PROBLEM: The comment \"`gh api --paginate --slurp` yields one array per page; flatten them\" is factually incorrect. The `--slurp` flag merges all paginated responses into a single flat JSON array for array-returning endpoints like `/repos/{owner}/{repo}/issues`.\n  WHY: The code works correctly despite the misleading comment because the flattening logic handles both shapes (flat array of dicts via `append`, nested array of arrays via `extend`). However, the comment will mislead future maintainers about the actual API behavior. The test mock in `test_security_audit_files_every_new_finding_and_dedupes_across_pages` also returns a nested shape (`[[first_page, second_page]]`) that doesn't match the real flat-array output, though the code handles both.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/security_audit.sh:1639-1645 | severity=low | confidence=5\n  PROBLEM: Comment states \"`gh api --paginate --slurp` yields one array per page; flatten them.\" For array-returning endpoints the flag produces one flat JSON array. The test mock in tests/test_security_audit_workflow_contract.py also returns a nested shape that does not match actual API output.\n  WHY: No runtime failure (flattening code handles both shapes via extend/append), but the inaccurate comment and mock will mislead future maintainers about the real endpoint contract.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "34f2ba5ce236ab69acad3b3c219aa8432c0bee23a06a6bea10a91f4741be32b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4437,
+    "run_id": "36086975770",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36086975770",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925030044_ed2b53777c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4437,
+    "run_id": "36086975770"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T03:00:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

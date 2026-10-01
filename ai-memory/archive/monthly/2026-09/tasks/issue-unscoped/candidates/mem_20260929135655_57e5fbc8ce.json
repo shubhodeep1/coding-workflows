@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:354-368 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: evaluate() can enable auto-merge based on an older successful review run without checking whether a newer review of the same PR is active or has completed.\n  WHY: A reviewer or human dispatches a forced review on a pending-checks head (green checks, live marker). The newer review's reviewer panel finds real defects. While that review is still running, the hourly sweep snapshots the head's check runs (green), verifies only the older marker's run, reads ENABLE_AUTO_MERGE, and enables auto-merge. GitHub merges the PR once required checks pass, before the newer review can post its findings.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The #5148 plan (docs/plans/issue-5148-pending-checks-newer-review-race-plan.md) phase 1 requires that (G1) evaluate() returns review_active while a newer review is queued or running, (G2) returns review_superseded when the latest completed newer review did not succeed, and (G3) re-reads the PR's comments before the merge decision to confirm the marker is still live.\n  expected_change_site: scripts/claude_fixer_pending_checks.py, evaluate() function between verify_review_run success (line 356) and read_enable_auto_merge (line 358)\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: No check_review_runs() call, no comment re-read, and no review_active or review_superseded states exist in the shipped evaluate() function. The #5148 plan's Implementation Steps section lists these as code to add, but the current PR diff contains only the plan and log files for #5148 (docs/implement-plan/issue-5148-*, docs/plans/issue-5148-*), not the actual code changes. The implement-plan log confirms \"Status: IN_PROGRESS\" and \"Stage: phase 1/1\" with \"Final PR: pending\".\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_fixer_pending_checks.py:354-368 | severity=BLOCKER | confidence=5\n  PROBLEM: The evaluate() function enables auto-merge based solely on the marker's own review run verification without checking whether a newer review of the same PR is active or has completed. A forced-review dispatch (force_rb_judge or [force-review] title/label) from the default branch can run the full reviewer panel on the same head while checks are green \u2014 the gate skips sweep dispatches on a pending-checks head (claude_fixer_pending_checks) but explicitly allows force_rb_judge and force-review to bypass. The sweep then enables auto-merge from the older marker's clean review, violating the trust model.\n  WHY: A reviewer or human dispatches a forced review on a pending-checks head (green checks, live marker). The newer review's reviewer panel finds real defects. While that review is still running, the hourly sweep snapshots the head's check runs (green), verifies only the older marker's run, reads ENABLE_AUTO_MERGE, and enables auto-merge. GitHub merges the PR once required checks pass, before the newer review can post its findings. The PR's own plan files (docs/plans/issue-5148-pending-checks-newer-review-race-plan.md, \"Context\" section) document this exact race: \"Nothing disables auto-merge when a later review posts findings [...] and with green required checks GitHub merges within seconds.\" The security audit finding pending-merge-races-newer-review (high, confidence 8/10, A01:2021-Broken Access Control) at scripts/claude_pr_sweep.py:253 is tracked as issue #5148 in the repo's security tracker #3576.\n- TASK_GAP\n  Requirement: The #5148 plan (docs/plans/issue-5148-pending-checks-newer-review-race-plan.md) phase 1 requires that (G1) evaluate() returns review_active while a newer review is queued or running, (G2) returns review_superseded when the latest completed newer review did not succeed, and (G3) re-reads the PR's comments before the merge decision to confirm the marker is still live.\n  Expected change site: scripts/claude_fixer_pending_checks.py, evaluate() function between verify_review_run success (line 356) and read_enable_auto_merge (line 358)\n  Evidence of absence: No check_review_runs() call, no comment re-read, and no review_active or review_superseded states exist in the shipped evaluate() function. The #5148 plan's Implementation Steps section lists these as code to add, but the current PR diff contains only the plan and log files for #5148 (docs/implement-plan/issue-5148-*, docs/plans/issue-5148-*), not the actual code changes. The implement-plan log confirms \"Status: IN_PROGRESS\" and \"Stage: phase 1/1\" with \"Final PR: pending\".\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5a9c6ad58731058e8621669c163e92beca96cba25be6042a02c43b6c985319d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36577345525",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36577345525",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929135655_57e5fbc8ce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36577345525"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T13:56:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

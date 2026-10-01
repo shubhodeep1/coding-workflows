@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml: lines 2911-2915 | severity=NIT | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The \"If rate-limited, skip this cycle\" guard is unreachable dead code.\n  WHY: The preceding labels-read failure branch exits or continues before the guard, while successful `gh_api_safe` calls reset `RATE_LIMIT_BACKOFF=0`; this has no runtime impact but misleads future readers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml\n  Line or code reference: lines 2911-2915\n  severity=NIT | confidence=4\n  PROBLEM: The \"If rate-limited, skip this cycle\" guard is dead code.\n  WHY: The preceding `if ! LABELS=$(gh_api_safe_quiet_print ...)` block either `continue`s or `exit 0`s before line 2912 is reached on every failure path, and successful `gh_api_safe` calls reset `RATE_LIMIT_BACKOFF=0`; this is dead code with no runtime impact but misleads future readers.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml\n  Line or code reference: lines 2911-2915, the \"If rate-limited, skip this cycle\" guard immediately after the new labels-failure branch\n  severity=NIT | confidence=4\n  PROBLEM: This guard became unreachable dead code in the LAST RUN DIFF.\n  WHY: The new failure branch at lines 2899-2908 `continue`s on any labels-read failure before line 2912, and successful `gh_api_safe` calls reset `RATE_LIMIT_BACKOFF=0`; the guard has no observable runtime defect but is a clarity hazard for future readers.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml\n  Location: Lines 2911-2915\n  PROBLEM: The \"If rate-limited, skip this cycle\" guard is unreachable dead code.\n  WHY: When `gh_api_safe_quiet_print` fails, the new failure branch at lines 2897-2909 executes `continue` before reaching line 2912; when it succeeds, `gh_api_safe` resets `RATE_LIMIT_BACKOFF=0`, so the condition `[ \"$RATE_LIMIT_BACKOFF\" -gt 0 ] && [ -z \"$LABELS\" ]` can never be true.\n\n- .github/workflows/test-and-mark-stable.yml\n  Location: Lines 479-491 (serial budget calculation)\n  PROBLEM: The serial budget covers only named phase windows.\n  WHY: Unbudgeted steps draw from `E2E_FINALIZATION_RESERVE_MINUTES`, which is arithmetic only with no runtime deadline enforcement.\n  Suggested minimal fix: Add a comment above the serial budget calculation documenting the unbudgeted phases and the reserve's purpose, or add a runtime check before Phase 6 that verifies at least N minutes remain.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "ff10cb8dc6f679c7afa0f3dbcbb09c5d56c6bd8cf85b5c23a5bc4b1c3537a2e4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4168,
+    "run_id": "35503818672",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35503818672",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260920112723_9a9cc81006",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4168,
+    "run_id": "35503818672"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-20T11:27:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

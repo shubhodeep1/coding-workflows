@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_autofix_report.sh:206 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The autofix reporter logs a failure of the dispatch API call but exits with code 0 instead of propagating the error to the workflow.\n  WHY: The CI workflow pipeline incorrectly registers this run as a success, concealing the critical dispatch failure from downstream health checks; qwen_qwen3_7-plus disagrees, stating that exit-0 behavior is intentional for the advisory, non-blocking review workflow.\n- scripts/workflow_failure_heal_report.sh:190 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The two reporters use different reason tokens for the identical Python subcommand error: `dispatch_build_failed` versus `dispatch_envelope_failed`.\n  WHY: Operators scanning logs for envelope-construction failures must grep for both tokens, increasing the risk of missing failures; qwen_qwen3_7-plus characterizes this as a naming preference with no runtime impact.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_autofix_report.sh\nLine: 206\nProblem: The autofix reporter script logs a failure of the dispatch API call but exits with code 0 instead of propagating the error to the workflow.\nWhy it fails at runtime: The CI workflow pipeline incorrectly registers this run as a success, concealing the critical dispatch failure from downstream health checks.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n- scripts/workflow_failure_heal_report.sh (line 190) and scripts/workflow_failure_heal_autofix_report.sh (line 204)\nLine or code reference: Python wrap-dispatch command failure handling\nProblem: The two reporters emit inconsistent reason tokens for the identical Python subcommand error (dispatch-envelope construction failure): `dispatch_build_failed` versus `dispatch_envelope_failed`.\nWhy it fails at runtime: This is an observability inconsistency; operators scanning logs for envelope-construction failures must grep for both tokens, increasing the risk of missing critical failures.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_autofix_report.sh:203 and scripts/workflow_failure_heal_report.sh:190\nLine or code reference:\n- Autofix reporter (LAST RUN DIFF): `log \"skip reason=dispatch_envelope_failed pr=${PR} detail=...\"`\n- Issue reporter (original PR, NOT updated in LAST RUN DIFF): `log \"error dispatch_build_failed issue=${ISSUE_NUMBER} detail=...\"`\nProblem: After the autofix reporter's rename in the LAST RUN DIFF, the two reporters use different reason tokens for the identical `wrap-dispatch` Python failure. The autofix reporter exits 0 with `skip reason=dispatch_envelope_failed` while the issue reporter exits 1 with `error dispatch_build_failed`. Both wrap-dispatch failures stem from the same `_cmd_wrap_dispatch` raising a `ValueError` for a non-object payload, yet emit distinct tokens.\nWhy it fails at runtime: This is not a runtime failure \u2014 both log lines still emit, both reporters still exit with their documented codes, and the dispatch outcome is unchanged. However, log-based triage is the only signal for this failure class (no other telemetry channel exists), and an operator grepping across both reporters for \"dispatch envelope build failures\" must now know two patterns.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/workflow_failure_heal_report.sh:190\nProblem: Uses \"dispatch_build_failed\" for wrap-dispatch failure (autofix reporter uses \"dispatch_envelope_failed\")\nWhy it fails at runtime: Inconsistent tokens hinder log grepping for the exact envelope-construction class across reporters\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal_report.sh:190, scripts/workflow_failure_heal_autofix_report.sh:204\nLine or code reference: report.sh `log \"error dispatch_build_failed ...\"` vs autofix_report.sh `log \"skip reason=dispatch_envelope_failed ...\"`\nProblem: The two reporters use different reason tokens for the identical failure condition (the `python3 \"${HEAL_PY}\" wrap-dispatch` call failed and wrote to `build_error.txt`). The LAST RUN DIFF renamed the autofix reporter's token from `payload_build_failed` to `dispatch_envelope_failed` but left the issue reporter's token as `dispatch_build_failed`. Operators grepping across both reporters for the dispatch-envelope construction failure class must know both tokens.\nWhy it fails at runtime: No runtime failure \u2014 both paths log the error and exit with the correct codes (issue reporter exits 1, autofix exits 0). This is an observability/grep-consistency inconsistency: log-based triage is the only signal channel for the autofix reporter's envelope failure, and an operator searching for `dispatch_envelope_failed` on the issue reporter would miss it under `dispatch_build_failed`.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8d31232a59af1bfcafcb865a40eb88f1880fd25ad3090ddd486e9f40f2712c37",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4303,
+    "run_id": "35820064620",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35820064620",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923054045_e98ea257a3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4303,
+    "run_id": "35820064620"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-23T05:40:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

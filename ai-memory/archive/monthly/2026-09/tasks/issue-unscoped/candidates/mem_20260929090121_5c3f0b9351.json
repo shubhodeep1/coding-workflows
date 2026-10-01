@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_unattended_question_guard.py:789-799 | severity=critical | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The live `.claude/hooks/unattended_question_guard.py` differs from its workflow-template twin, causing the byte-for-byte parity test to fail.\n  WHY: `test_template_parity` asserts `live.read_bytes() == template.read_bytes()` for `hooks/unattended_question_guard.py`; the live copy lacks the cap-blocker additions present in the template, so the CI step fails.\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/unattended_question_guard.py vs workflow-templates/.claude/hooks/unattended_question_guard.py | severity=BLOCKER | confidence=5\n  PROBLEM: The live `.claude/hooks/unattended_question_guard.py` (450 lines, from issue #4911) is not byte-identical to its twin `workflow-templates/.claude/hooks/unattended_question_guard.py` (678 lines, with the #5083 cap blocker additions). The `test_template_parity` test asserts `live.read_bytes() == template.read_bytes()` for `hooks/unattended_question_guard.py`, which will fail.\n  WHY: pytest `test_template_parity` parametrizes over `hooks/unattended_question_guard.py` and compares the two copies. The live copy lacks `subprocess`, `publish_cap_blocker`, `read_state`/`_write_state`, `cap_blocker_marker`, `cap_blocker_body`, `run_gh_api`, and all `CAP_BLOCKER_*` constants that the twin has. The assertion `live.read_bytes() == template.read_bytes()` returns False, failing the test and the CI step.\n- ...\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3c74603792a58c8d0cb1fb29b603b963d81e9e1b66177e836c51f4419a09113e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36544594943",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36544594943",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929090121_5c3f0b9351",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36544594943"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T09:01:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

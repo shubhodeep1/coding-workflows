@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `de1abf998525ca3ec6fd2d1c064dbf5fceb0efef` on `orchestrator/project-4139`; it matches the issue\u2019s integration branch. The `/answer` continuation supplies no additional constraints.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/security_audit.sh` findings-JSON packaging and `tests/test_security_audit_workflow_contract.py`  \nScope-mode justification: This is a local compatibility repair, not a new audit path. Keeping the existing validation and atomic publication while conditionally serializing the additive fields is the complete fix; a narrower test-only change would leave the regression. Per `unattended_system_instructions.md` \u00a76, correctness and backward compatibility take priority over a shorter patch.\n\n## Automation and lifecycle\n- Extend the existing audit script; introduce no standalone script or workflow.\n- Existing entry points remain `.github/workflows/internal-orchestrate-poll.yml` (`*/5 * * * *`, through `orchestrate_poll.yml`) and `.github/workflows/security-audit.yml` (weekly `0 8 * * 0`). Neither needs editing.\n- No supervisor, database gate, or `docs/scripts-pending-removal.md` entry is needed.\n\n## Files likely to change\n- `scripts/security_audit.sh` \u2014 findings-JSON packaging only.\n- `tests/test_security_audit_workflow_contract.py` \u2014 compatibility and `project-lines` assertions.\n- `tests/fixtures/security_audit_default_findings.json` \u2014 frozen pre-Phase-A serialized-output expectation.\n\n## Functions or modules to implement\n- Pass the already-validated ownership mode into the existing packaging Python block. Keep loading and validating its intermediate outputs. For `file` (including the unset default), serialize only the legacy top-level fields and legacy count keys; for `project-lines`, retain all three additive fields.\n\n## Data structures affected\n- The serialized `security_audit_findings.v1` payload only. Filtering results and intermediate summaries remain unchanged.\n\n## API/interface changes\n- No new flag or endpoint. Restore the previous findings-JSON wire shape for unset/`file`; preserve the additive `project-lines` shape. Do not change the poller\u2019s optional-field reader at `scripts/orchestrate_poll_process.sh:7087\u20137096`.\n\n## Decisions\n### D1 \u2014 Select the serialized shape at packaging\n- **Chosen:** Branch on the validated ownership mode immediately before JSON serialization.\n- **Alternatives considered:** Remove the additive fields everywhere, or change the filter\u2019s intermediate summary.\n- **Why:** The poller needs those fields for `project-lines`; changing filtering would broaden the repair and risk weekly issues-mode behavior.\n\n## Security considerations\n- The trust boundary remains model-produced findings entering the existing validated packaging path. Validate the ownership mode before selecting a shape; do not weaken count or finding validation or the atomic output write.\n- No new surface or authorization path is introduced. An invalid mode must still fail preflight, rather than silently selecting the legacy shape.\n\n## Risks and edge cases\n- **Codebase-context gap:** No pre-Phase-A fixture or parent commit is present in this checkout. Freeze the documented legacy field set and serialization format as a fixture; do not regenerate the expected bytes from the changed packager.\n- A current test expects `verified_fixed_finding_ids` with ownership unset (`tests/test_security_audit_workflow_contract.py:2167`). Update that expectation while retaining its waiver assertions; the existing `project-lines` test covers verified-fixed IDs.\n- Preserve sorted keys, indentation, newline, and all *legacy* count keys. Explicit `file` and unset mode must agree. Weekly `issues` mode must not enter this packaging branch.\n\n## Testing considerations\n- Compare **raw output bytes**, not parsed JSON, with the frozen fixture for both unset and explicit `file` mode; ensure the unset test removes any inherited ownership environment variable.\n- Retain the existing nonempty `project-lines` advisory and verified-fixed assertions. Run the focused security-audit contract tests and shell syntax check, then the relevant CI suite on its configured toolchain.\n\n## Pre-execution self-check\nThe planning ref matches integration metadata; the change fits the existing script and test harness. Unrelated worktree modifications are present and must be left untouched. The missing historical fixture is a non-blocking test-fixture reconstruction concern.\n\nPLAN_SELF_CHECK: WARNING: The checkout has no parent commit or pre-Phase-A fixture to copy; establish the frozen expectation from the documented legacy contract before changing packaging.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4670b776f9bd0386ba5cf53d5823ca2fc94f980ea7765b1cb24b4dec7807d8dc",
+  "lineage": {
+    "issue_number": 4442,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36099448780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36099448780",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4442"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925054409_9a243f0392",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4442,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36099448780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4442",
+  "timestamps": {
+    "created_at": "2026-09-25T05:44:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:render_failure_marker() (lines 738-744) | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The function calls is_valid_sha(head) but this helper function does not appear to be defined or imported within the scope of scripts/workflow_failure_heal.py.\n  WHY: The code will raise a NameError and fail when a marker needs to be rendered, breaking the failure-marker mechanism.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:render_failure_marker() (lines 738-744) | confidence=4\n  PROBLEM: The function calls is_valid_sha(head) but this helper function does not appear to be defined or imported within the scope of scripts/workflow_failure_heal.py.\n  WHY: The code will raise a NameError and fail when a marker needs to be rendered, breaking the failure-marker mechanism.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e888f6bb92f6fff0a5bdd7a04b2df75ddce632ff2a1fef67f35e915b5dc64888",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4327,
+    "run_id": "35860987963",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35860987963",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923134835_2b3e9b48b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4327,
+    "run_id": "35860987963"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-23T13:48:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

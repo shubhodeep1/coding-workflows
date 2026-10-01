@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:stable log prefixes section after line 1473 (prose list) and after line 1675 (LOG_PREFIX.name= block) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `VALIDATION_RUN_ATTRIBUTION` is contractual (the test pins its exact format) but is absent from the documented registry.\n  WHY: Workflow-log-analysis tooling that greps for the registered prefixes will silently miss attribution telemetry, and a future rename/removal will not be flagged by the contract this file declares (\"Renames are breaking unless an alongside-old shim is documented\").\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:stable log prefixes section after line 1473 (prose list) and after line 1675 (LOG_PREFIX.name= block)\n  PROBLEM: `VALIDATION_RUN_ATTRIBUTION` is contractual (the test pins its exact format) but is absent from the documented registry.\n  WHY: workflow-log-analysis tooling that greps for the registered prefixes will silently miss attribution telemetry, and a future rename/removal will not be flagged by the contract this file declares (\"Renames are breaking unless an alongside-old shim is documented\")\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "dd80b228cde5e4c908cf3a650d7b4a10daa6ff4322abdef7eb35c63a34f09dc4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36288078843",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36288078843",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927023015_b243cae304",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36288078843"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T02:30:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

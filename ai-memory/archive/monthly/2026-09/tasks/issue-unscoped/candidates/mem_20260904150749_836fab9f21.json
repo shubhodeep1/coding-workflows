@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:line 2956 (docstring of `_linked_pr_is_issue_implementation`) | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The comment claims the body close-keyword matcher is \"the same pattern _linked_prs_by_body_reference matches\", but the two matchers are not the same.\n  WHY: No runtime failure occurs because the close-time predicate is strictly tighter, but the misleading comment could lead a future maintainer to loosen the predicate and re-introduce false closes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh:line 2956 (docstring of `_linked_pr_is_issue_implementation`) | severity=NIT | confidence=3\n  PROBLEM: The comment claims the body close-keyword matcher is \"the same pattern _linked_prs_by_body_reference matches\", but the two matchers are not the same: `_linked_prs_by_body_reference` (line 2902) uses `(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#<n>\\b` with NO leading boundary, so a body containing \"prefixes #77\" or \"hotfix #77\" matches there, while the new predicate adds a leading `(^|[^[:alnum:]_-])` boundary and rejects those same bodies (pinned by the `(\"77\", \"claude/some-fix\", \"prefixes #77\", 1)` test case).\n  WHY: No runtime failure \u2014 the divergence is in the safe direction (the close-time predicate is strictly tighter than the enumeration helper, so it can only skip more, never close more). The defect is a misleading comment: a future maintainer editing one matcher to \"restore parity\" with the other could loosen the predicate and re-introduce the false-close class this PR fixes.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "757f45873378736f5d45a22da2bc314ac9e9c31f09791c17f09dfd5059ce18cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3994,
+    "run_id": "33878489835",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33878489835",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260904150749_836fab9f21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3994,
+    "run_id": "33878489835"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-04T15:07:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

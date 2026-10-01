@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:71 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: After an ambiguous dispatch, the checker waits only on the first candidate, so the read-result stage cannot inspect the other candidates until that run completes.\n  WHY: If the first candidate is an unrelated queued or long-running run, this project\u2019s completed run remains unchecked and the security or validation stage is delayed; deepseek_deepseek-v4-pro also reports the same text in workflow-templates/.claude/commands/implement-plan-claude.md.\n- CLAUDE.md:1361 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The dispatch helper API-call count omits the default-branch lookup when `--ref` is omitted, and the polling-path wording does not account for the pre-dispatch recent-runs read.\n  WHY: `dispatch_workflow.py:211-214` reads the default branch when `--ref` is omitted, and `dispatch_workflow.py:218-223` reads recent runs before dispatch; reviewers differ on how common the omitted-`--ref` path is, but the documented count undercounts it.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/implement-plan-claude.md:71 | severity=high | confidence=[4]\n  PROBLEM: After an ambiguous dispatch, the session waits on the first candidate run and records the rest, but the checker monitors only that first run.\n  WHY: If the first candidate belongs to another dispatch and stays queued or in progress while this project's run completes, the session cannot inspect the other candidates until the first run completes; the twin at workflow-templates/.claude/commands/implement-plan-claude.md has the same text.\n- CLAUDE.md:1361 | severity=low | confidence=[5]\n  PROBLEM: The dispatch_workflow.py helper row omits the default-branch read when `--ref` is omitted.\n  WHY: `.claude/scripts/dispatch_workflow.py:211-214` reads the default branch before the pre-dispatch run-list read, making this a fourth API call on that path rather than the three documented; the table is a documentation-only API-call budget reference.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/implement-plan-claude.md:71 | severity=high | confidence=[4]\n  PROBLEM: The ambiguous-dispatch handling waits on the first candidate alone before entering the read-result stage that examines all candidates.\n  WHY: `check_in_status.py:777` accepts a single run id, and `check_run` at `check_in_status.py:664-670` reports completion for that run only; the read-result stage is reached after the first candidate completes, so another project's queued candidate can delay reading this project's completed run. `dispatch_workflow.py:112` sorts run IDs descending, and the dispatching stage records that first candidate as its wait target; the read-result routing at line 246-256 checks other candidates only after that target completes. The reviewer notes that AD-6 records the wait-on-first-candidate trade-off and characterizes this as a design gap, not a regression.\n- CLAUDE.md:1361 | severity=low | confidence=[4]\n  PROBLEM: The helper table undercounts API calls when `--ref` is omitted and inaccurately describes the polling-path reads.\n  WHY: `dispatch_workflow.py:212` reads the default branch, `dispatch_workflow.py:218-223` attempts the pre-dispatch recent-run read, and `dispatch_workflow.py:237` reads the named run; this is 3 reads + 1 POST when `--ref` is omitted and 2 reads + 1 POST when supplied. On the polling path, the pre-dispatch read remains, so polling replaces the post-dispatch named-run read rather than the pre-dispatch read; the reviewer says the common stage invocation omits `--ref`.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/implement-plan-claude.md:71 | severity=high | confidence=[5]\n  PROBLEM: The checker waits only on the first candidate from an ambiguous dispatch before starting the read-result stage that examines all candidates.\n  WHY: If that candidate belongs to another dispatch and remains queued or in progress after this project's run completes, `check_in_status.py --run <id>` reports the first candidate as not done, delaying this project's security or validation stage.\n- CLAUDE.md:1361 | severity=low | confidence=[5]\n  PROBLEM: The documented normal-path read count omits the default-branch lookup when `--ref` is not supplied.\n  WHY: `dispatch_workflow.py` reads the repository\u2019s default branch at line 212, reads recent workflow runs before dispatch at line 221, posts the dispatch, then reads the named run at line 237; the helper invocation does not require `--ref`, so the stated count underestimates this path by one GET.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- CLAUDE.md:1361 | severity=low | confidence=[3]\n  PROBLEM: The helper table undercounts by one GET when `--ref` is omitted.\n  WHY: `dispatch_workflow.py:211-212` reads the default branch when `--ref` is omitted, `dispatch_workflow.py:221` reads recent runs, `dispatch_workflow.py:225` posts the dispatch, and `dispatch_workflow.py:237` reads the named run, totaling 3 reads + 1 POST on that path. The reviewer notes that the table is accurate for the primary `/implement-plan-claude` usage with `--input ref=...`, and calls the omitted-`--ref` case a minor documentation gap.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "60fbbe87ba1d307c0ac5d8dfcc3883fbaf0a4c2f24bce9af8c55ba46015563a6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5625,
+    "run_id": "36702619607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36702619607",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930113302_7725acf061",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5625,
+    "run_id": "36702619607"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T11:33:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

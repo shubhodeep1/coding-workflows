@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_openrouter_broker.py:67-91 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The review broker may forward requests whose JSON body specifies a model other than the configured model.\n  WHY: The reviewers say this could allow a sandboxed editor to drive unexpected API spend; z-ai_glm-5_2 disagrees, reporting that line 75 already validates the model.\n- scripts/review_untrusted_workspace.py:22 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The transferable-path extension allowlist lacks `.cjs`, `.mjs`, `.mts`, and `.cts`.\n  WHY: Changes to these file types may be skipped during workspace snapshotting and rejected during result transfer; x-ai_grok-4_20 reports that JS module suffixes were added at line 23.\n- .github/workflows/review_autofix.yml:4405-4412 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The trusted workflow SHA may not contain the isolation support files required by the review job.\n  WHY: Review runs against that SHA may fail with `::error::Review isolation support missing` and skip the editor stage; z-ai_glm-5_2 reports this gap as valid.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement isolated execution for PR build code and review editor commands.\n  expected_change_site: .github/workflows/review_autofix.yml and support scripts\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The workflow definition does not ensure that the required support scripts exist in the trusted checkout SHA used by CI runs.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/clarify_openrouter_broker.py: do_POST\n  severity=high | confidence=[4]\n  PROBLEM: The host-side review-broker forwards requests without validating the model requested in the JSON body.\n  WHY: An injected or misconfigured editor process inside the --network=none sandbox can request arbitrary expensive models in the request body. The host broker will forward these requests to OpenRouter with the real `OPENROUTER_API_KEY`, driving up API costs beyond the configured `editor_attempt_model`.\n- scripts/review_untrusted_workspace.py: EXCLUDED set and allowed() function\n  severity=high | confidence=[4]\n  PROBLEM: The file-extension allowlist for transferable paths lacks modern JavaScript/TypeScript module extensions (`.cjs`, `.mjs`, `.mts`, `.cts`).\n  WHY: Changes to these file types are silently skipped during workspace snapshotting and rejected as unsafe result paths during transfer, breaking end-to-end review for modern JS/TS projects using these configurations.\n- .github/workflows/review_autofix.yml: Review job setup steps\n  severity=critical | confidence=[4]\n  PROBLEM: The isolation support files are absent from the current trusted workflow SHA.\n  WHY: Review runs dispatched against the current trusted workflow SHA will fail with `::error::Review isolation support missing` when attempting to run `bash \"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh\" prepare`, causing the review job to skip the editor stage entirely and preventing any autofix commitment.\n- TASK_GAP\n  Requirement: Implement isolated execution for PR build code and review editor commands.\n  Expected change site: .github/workflows/review_autofix.yml and support scripts.\n  Evidence of absence: The proposed changes introduce the isolation logic but the workflow definition does not ensure that the required support scripts exist in the trusted checkout SHA used by the CI runs, creating a deployment blocker where the isolation environment fails to initialize on the current SHA.\n  severity=critical | confidence=[4]\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/clarify_openrouter_broker.py:67-91\n  severity=high | confidence=[4]\n  PROBLEM: The review-broker validates request path, headers, and auth, but never validates that the `model` field in the JSON body matches `server.model`.\n  WHY: A prompt-injected editor inside the `--network none` container can modify its API request to use a more expensive model (e.g., changing from `openai/gpt-6-sol` to a premium model). The bridge forwards the request to the review-broker, which validates path and auth but not model, then forwards to openrouter.ai with the host's real `OPENROUTER_API_KEY`. The container cannot exfiltrate data (no network), but can drive unexpected API spend. The test documents intended security behavior that the code does not implement.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b45a494666a49a684786c55d36f6c00d7d01cb46682d7a3e56083cac860d1c76",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4435,
+    "run_id": "36094152202",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36094152202",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925050012_3010a32610",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4435,
+    "run_id": "36094152202"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T05:00:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

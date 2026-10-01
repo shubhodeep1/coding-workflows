@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/inline_edit_guard.py: _WRAPPER_VALUE_OPTIONS (line ~72)\n  Issue: `stdbuf` (in gh_api_write_guard's _EXECUTOR_COMMANDS) is not handled as a wrapper, so `stdbuf -oL sed -i f` bypasses detection. Low-risk false negative since stdbuf is rarely used with sed/perl in Claude Code sessions.\n  Suggested minimal fix: Add `\"stdbuf\": frozenset({\"-i\", \"-o\", \"-e\"})` to _WRAPPER_VALUE_OPTIONS. These flags take attached values (-oL), so the existing inner-while logic (which checks `tokens[index].startswith(\"-\")` and advances by 1 for unknown flags) would skip `-oL` as a single token, then reach the actual command. ~1 line.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "461a83210a755fc9ba75736d44b5943736efb6208c449a25ab05f0d7b12773b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36532027899",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36532027899",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929070048_68d0196d0b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36532027899"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T07:00:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

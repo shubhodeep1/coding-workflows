@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:170, 259-281 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The root `check_in_status.py` copy retains a toggle-based skip-AI fence parser, which can disagree with the newer fence-aware parser about markers inside nested fences.\n  WHY: During twin-sync, the checker and catch-all sweep may find a marker that the gate correctly ignores, suppressing review-stall detection for that head.\n- .claude/settings.json:40 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Adding `internal-review.yml` to the permission allow list permits that workflow to be dispatched without a permission prompt.\n  WHY: The reviewer states this expansion is intentional, documented, bounded by fixer conditions, and kept consistent across the dispatch helper, settings allow list, and guard.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/check_in_status.py:170, 259-281 | severity=NIT | confidence=3\n  PROBLEM: The .claude/scripts/check_in_status.py copy retains the old toggle-based fence parser while the workflows and workflow-templates twin use the new fence-aware parser.\n  WHY: During the twin-sync window, the checker and catch-all sweep could find a skip-AI marker in a nested four-backtick fence that the gate correctly ignores, suppressing stall detection for that head.\n- .claude/settings.json:40 | severity=NIT | confidence=1\n  PROBLEM: Adding internal-review.yml to the permission allow list widens the set of workflows that can be dispatched without a permission prompt.\n  WHY: This is the declared scope of the PR and is bounded by the reviewer's stated conditions; the dispatch helper, settings allow list, and gh_api_write_guard.py DISPATCHABLE_WORKFLOWS are kept equal by tests.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0d059376a3d7537d1159d35296afab5beef9aac4551e50de50af0f36fd1f839e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36663299682",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36663299682",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930032247_42e695fa9c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36663299682"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T03:22:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:597 | severity=high | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `validate_payload` unconditionally drops `base_branch`, `script_ref`, `changed_files`, and `crash_file` if `kind` is not `autofix_failure`.\n  WHY: If the validation logic is extended to other kinds or if the payload is passed to a downstream component that expects these fields, they will be missing, potentially causing unexpected behavior or errors.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The plan mentions that `pr-self-inflicted` routes to a diagnosis comment on the PR, and `base-self-inflicted` opens an issue in coding-workflows.\n  expected_change_site: scripts/workflow_failure_heal_intake.sh\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff implements the routing logic for both tokens. The implementation logic for remapping a self-inflicted token when computed ownership does not back it is present.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:597 | severity=MAJOR | confidence=2\n  PROBLEM: `validate_payload` unconditionally drops `base_branch`, `script_ref`, `changed_files`, and `crash_file` if `kind` is not `autofix_failure`.\n  WHY: If the validation logic is extended to other kinds or if the payload is passed to a downstream component that expects these fields, they will be missing, potentially causing unexpected behavior or errors.\n- TASK_GAP\n  Requirement: The plan mentions that `pr-self-inflicted` routes to a diagnosis comment on the PR, and `base-self-inflicted` opens an issue in coding-workflows.\n  Expected change site: `scripts/workflow_failure_heal_intake.sh`\n  Evidence of absence: The PR diff implements the routing logic for both tokens. However, the plan also states: \"A self-inflicted token the computed ownership does not back [...] takes the `workflow-defect` route above.\" The implementation logic for this remapping is present.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "240944211b8167abb5bcbf45f21d23447bfb9fb5393bdbeae9929f44b6305c67",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4365,
+    "run_id": "35941192120",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35941192120",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260924023659_d3cb510c34",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4365,
+    "run_id": "35941192120"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-24T02:36:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

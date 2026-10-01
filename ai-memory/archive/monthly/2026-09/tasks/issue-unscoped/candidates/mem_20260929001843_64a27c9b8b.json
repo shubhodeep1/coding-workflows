@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validate.yml:289-304 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `jq` filter for events (`all(.[]; type == \"array\")`) incorrectly assumes every item in the input is an array.\n  WHY: GitHub issue events are a flat array of objects, so valid non-empty event lists fail validation.\n- PR description:N/A | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The PR description still describes the old \u201cone 100-item page, fail closed on overflow\u201d rule that AD-5 replaced with `--paginate --slurp`.\n  WHY: The PR description alone misleads readers about the runtime read count.\n- .github/workflows/validate.yml:232-234 | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The stable classifier login pattern allows a 39-character body plus the `[bot]` suffix, exceeding GitHub\u2019s 39-character login limit.\n  WHY: The exact-author equality check prevents this shape from reaching the branch, so the risk is defence-in-depth only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement the provenance and binding checks for stable targets in validate.yml.\n  expected_change_site: .github/workflows/validate.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implemented `jq` filter for the `stable` case incorrectly validates the input structure (`all(.[]; type == \"array\")`), as noted in the CORRECTNESS & LOGIC finding. While the provenance logic is present, it is currently non-functional due to this logic error.\n- requirement: PR description states \"had `ai:workflow-heal` applied only by its author, the first time within 120 s of creation (one 100-item events page, and a full page fails closed).\"\n  expected_change_site: PR description (`.github/workflows/validate.yml` step body comment already correctly states the implementation), plus the `target_ref` input documentation block in `README.md` and the workflow hook paragraph in `agents.md`.\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR description (auto-decision justification row in `changelog.d/4734-\u2026` is fine) still describes the old \"one 100-item page, fail closed on overflow\" rule that AD-5 deliberately replaced with `--paginate --slurp`. The README and agents.md are already updated to the new behaviour, and `validate.yml` itself carries the correct `one read per 100 of its events` comment, so this is a stale description rather than a code defect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/validate.yml:289-304 | severity=BLOCKER | confidence=5\n  PROBLEM: The `jq` filter for events (`all(.[]; type == \"array\")`) is overly broad, assuming all items in the input are arrays.\n  WHY: The `gh api` output for issue events is a flat array of objects (one per event), not an array of arrays. The current `all(.[]; type == \"array\")` check will return `false` for a valid, non-empty event list, causing the validation to fail closed for every legitimate `ai:workflow-heal` issue.\nTASK_GAP:\nRequirement: Implement the provenance and binding checks for stable targets in validate.yml.\nExpected change site: .github/workflows/validate.yml\nEvidence of absence: The implemented `jq` filter for the `stable` case incorrectly validates the input structure (`all(.[]; type == \"array\")`), as noted in the CORRECTNESS & LOGIC finding. While the provenance logic is present, it is currently non-functional due to this logic error.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: PR description states \"had `ai:workflow-heal` applied only by its author, the first time within 120 s of creation (one 100-item events page, and a full page fails closed).\"\nExpected change site: PR description (`.github/workflows/validate.yml` step body comment already correctly states the implementation), plus the `target_ref` input documentation block in `README.md` and the workflow hook paragraph in `agents.md`.\nEvidence of absence: The PR description (auto-decision justification row in `changelog.d/4734-\u2026` is fine) still describes the old \"one 100-item page, fail closed on overflow\" rule that AD-5 deliberately replaced with `--paginate --slurp`. The README and agents.md are already updated to the new behaviour, and `validate.yml` itself carries the correct `one read per 100 of its events` comment, so this is a stale description rather than a code defect.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n- .github/workflows/validate.yml:232-234 | confidence=2\n  PROBLEM: The login shape regex `^[A-Za-z0-9](?:-?[A-Za-z0-9])*(\\[bot\\])?$` combined with `(sub(\"\\[bot\\]$\"; \"\") | length <= 39)` allows a 39-character body plus the `[bot]` suffix (44 characters total). GitHub's actual rule caps a login at 39 characters *including* the `[bot]` suffix, so the regex over-admits shapes GitHub would not issue.\n  WHY: The risk is purely defence-in-depth: the next check `(.user.login == $author)` enforces exact equality against an API-reported author, so a 44-character login cannot actually reach this branch.\n  Suggested minimal fix: Replace `(sub(\"\\[bot\\]$\"; \"\") | length <= 39)` with `length <= 39`, and tighten the regex's inner repetition to bound the *total* length. Estimated lines changed: 2.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ba241c1659ed0c1b72c77d04230e28e116f00e82d69aac115e56c4bf4d5262bc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4803,
+    "run_id": "36499210643",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36499210643",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929001843_64a27c9b8b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4803,
+    "run_id": "36499210643"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T00:18:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing `e2e_smoke_canary_b.txt` release-gate fixture pattern\n\nScope-mode justification: This is a fully specified, single-file fixture update. Expanding beyond the declared file would violate the issue\u2019s isolation and `files_touched` constraints.\n\n## Automation wiring\n\n- **Change type:** Modify existing fixture only; no new script or subsystem.\n- **Scheduler/PR-push entry point:** Existing `.github/workflows/test-and-mark-stable.yml` smoke flow consumes the fixture.\n- **Supervisor:** None required.\n- **Database gate:** Not applicable.\n- **Removal registry:** Not applicable.\n\n## Planning reference\n\n- Commit: `7901726e688a083ada212981f4e42242083abd63`\n- Branch: `orchestrator/project-4360`\n- Integration metadata matches the checked-out branch.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary_b.txt`\n  - Preserve line 1 as `status: ok`.\n  - Replace line 2 with `decompose-run: 35939081506`.\n  - Ensure no third line or other content exists.\n\n## Functions or modules to implement\n\nNone. This is a literal fixture-content update.\n\n## Data structures affected\n\nA two-line plain-text smoke-canary fixture only.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Apply a literal two-line replacement\n\n- **Chosen:** Replace the fixture contents with exactly the two requested lines.\n- **Alternatives considered:** Edit only the existing run ID while preserving any trailing content.\n- **Why:** A full literal replacement guarantees ordering and prevents prohibited extra lines.\n\n### D2 \u2014 Keep the change isolated\n\n- **Chosen:** Modify only `tests/e2e_smoke_canary_b.txt`.\n- **Alternatives considered:** Update the workflow or related primary-canary fixture.\n- **Why:** The issue explicitly requires independence from the primary canary and strict adherence to `files_touched`.\n\n## Security considerations\n\n- No endpoint, authorization surface, secret, external input, money operation, or trust boundary is introduced.\n- Treat the requested run ID as literal fixture data.\n- Do not read or interpolate primary-canary output.\n- Abuse case: accidental unrelated edits are prevented by verifying the changed-path set contains only the declared fixture.\n\n## Risks and edge cases\n\n- A trailing blank or third line would violate the exact-content requirement.\n- The current second line contains `decompose-run: 25567947079`, confirming the requested replacement is necessary.\n- Preserve Unix text formatting while ensuring the file has exactly two logical lines.\n\n## Testing considerations\n\n1. Compare the complete file content against:\n   ```text\n   status: ok\n   decompose-run: 35939081506\n   ```\n2. Verify the file has exactly two lines.\n3. Verify `git diff --name-only` lists only `tests/e2e_smoke_canary_b.txt`.\n4. No broader test suite is necessary for this data-only change.\n\n## Pre-execution self-check\n\n- Requirements are explicit and internally consistent.\n- The target file exists and is tracked.\n- The planning ref matches the integration branch.\n- The plan remains within the declared file scope.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a6890a11c0c60cade85c9ff3db7263531fac185bf83e0a49a4874f469ef62b78",
+  "lineage": {
+    "issue_number": 4362,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35939490572",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35939490572",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4362"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260924004528_8a2b51c850",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4362,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35939490572"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4362",
+  "timestamps": {
+    "created_at": "2026-09-24T00:45:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

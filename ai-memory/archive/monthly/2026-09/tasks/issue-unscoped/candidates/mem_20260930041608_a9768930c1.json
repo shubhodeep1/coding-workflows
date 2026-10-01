@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/dispatch_workflow.py:213-237 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: `recent_run_ids(repo, workflow)` is called unconditionally before `_post_dispatch`, wasting a GitHub API call on the response-id path and allowing a `ReadError` to prevent the dispatch POST.\n  WHY: On the normal path the result is unused; on a transient list-read failure, dispatch never occurs. Severity was rated NIT by deepseek_deepseek-v4-pro and qwen_qwen3_7-plus, and MAJOR by google_gemini-3_1-flash-lite, x-ai_grok-4_20, and z-ai_glm-5_2.\n- .claude/scripts/dispatch_workflow.py:184 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_post_dispatch` does not validate that the parsed JSON response is a dictionary before accessing `workflow_run_id`.\n  WHY: Valid JSON that is a list or primitive causes `response.get(\"workflow_run_id\")` to raise an `AttributeError`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/dispatch_workflow.py:213 | severity=NIT | confidence=4\n  PROBLEM: `known_ids = recent_run_ids(repo, workflow)` is called unconditionally before `_post_dispatch`. If `recent_run_ids` raises a `ReadError` (transient API failure such as a proxy 502), the exception propagates out of `dispatch` before `_post_dispatch` ever runs.\n  WHY: A transient GitHub API outage that breaks run-list reads (while the dispatch POST works and returns a valid id) would prevent the dispatch from even being attempted.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/dispatch_workflow.py:213-237 | severity=MAJOR | confidence=4\n  PROBLEM: `recent_run_ids(repo, workflow)` is called unconditionally before `_post_dispatch` even though its result is only used by the fallback polling path.\n  WHY: Every successful dispatch that receives a `workflow_run_id` in the response performs an unnecessary GitHub API call to list recent runs, increasing latency and API quota consumption needlessly.\n- .claude/scripts/dispatch_workflow.py:184 | severity=MAJOR | confidence=4\n  PROBLEM: `_post_dispatch` does not explicitly validate that the parsed JSON response is a dictionary before accessing `workflow_run_id`.\n  WHY: If the response is valid JSON but not a dictionary (e.g., a JSON list or a primitive), `response.get(\"workflow_run_id\")` will raise an AttributeError.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/scripts/dispatch_workflow.py (and twin workflow-templates/.claude/scripts/dispatch_workflow.py), dispatch() function, line where `known_ids = recent_run_ids(repo, workflow)` is called before `_post_dispatch` | severity=NIT | confidence=4\n  PROBLEM: `recent_run_ids` is called unconditionally before the POST, but its result is only consumed by the polling fallback path.\n  WHY: When the dispatch response contains a `workflow_run_id`, the list read is wasted; if the list read raises `ReadError`, the dispatch POST never happens even though GitHub would have returned the run id directly.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .claude/scripts/dispatch_workflow.py:213 | severity=MAJOR\n  PROBLEM: `recent_run_ids` before `_post_dispatch` wastes API call on response-id path (and can block on transient list failure); move after response_run_id check.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/dispatch_workflow.py:213 | severity=MAJOR | confidence=4\n  PROBLEM: `known_ids = recent_run_ids(repo, workflow)` called unconditionally before `_post_dispatch` at line 215. `known_ids` is only consumed by the polling fallback at line 242 (`new_runs(repo, workflow, known_ids)`).\n  WHY: A transient GitHub API failure on the pre-POST list read blocks every dispatch, including ones that would succeed via the response-id path. On the normal path (response has a run id), one GitHub API call is wasted per dispatch.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "31ba9158e3f66ec456bc970944dfa4ec609cb23ff5422c3b24bda09df7dbbd15",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5059,
+    "run_id": "36667128798",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36667128798",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930041608_a9768930c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5059,
+    "run_id": "36667128798"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T04:16:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/untrusted_process_sandbox.sh:line 470 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The expansion `\"${retained_paths[@]}\"` in `append_sandbox_write_path` lacks the defensive `:-` fallback used elsewhere, which can raise an `unbound variable` error under `set -u` on Bash < 4.4 when the array is empty.\n  WHY: GitHub-hosted ubuntu-latest uses Bash 5.x, but consumer repos or local development on older Bash versions can fail before `systemd-run` is invoked and reclassify the editor as `editor_empty_noop`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/untrusted_process_sandbox.sh\n  Line or code reference: line 470 inside `append_sandbox_write_path` (`sandbox_write_paths=(\"${retained_paths[@]}\" \"${candidate_path}\")`)\n  Problem: Inconsistent defensive `:-` fallback inside the same function. Lines 457 and 463 expand `\"${sandbox_write_paths[@]:-}\"` defensively, but line 470 expands `\"${retained_paths[@]}\"` without the `:-` pattern.\n  Why it fails at runtime: On Bash < 4.4 the empty declared array would trigger `unbound variable` and exit the script before `systemd-run` is invoked, so the editor would be reclassified as `editor_empty_noop`. GitHub-hosted ubuntu-latest runs Bash 5.x where empty declared arrays are safe, but consumer repos or local dev on legacy Bash would still hit the failure.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: scripts/untrusted_process_sandbox.sh\n  Line or code reference: canonicalize_sandbox_output_file function (around lines 55-82), called from the CODEX_THREAD_REUSE_OUTPUT_FILE handling block (around line 360)\n  Problem: The refactor removed the `mkdir -p \"$(dirname \"${environment_value}\")\"` call that existed in the original code. The new `canonicalize_sandbox_output_file` function calls `canonicalize_sandbox_directory` on the parent path, which requires `[ -d \"${candidate_path}\" ]` to pass. If a CODEX_THREAD_REUSE_* variable points to a path whose parent directory does not yet exist, the canonicalization will fail with \"parent directory is unavailable\" instead of creating it.\n  Why it fails at runtime: The old code defensively created parent directories before touching output files. The new code assumes they exist. While RUNTIME_DIR is typically created earlier in the workflow, any caller that sets these variables to paths with non-existent parents will see a regression where the sandbox fails to start.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- File: scripts/untrusted_process_sandbox.sh\n  Line or code reference: append_sandbox_write_path function, line setting `sandbox_write_paths=(\"${retained_paths[@]}\" \"${candidate_path}\")` (around line 470)\n  Problem: The expansion `\"${retained_paths[@]}\"` lacks the `:-` defensive pattern used elsewhere in the same function (lines 457, 463 use `\"${sandbox_write_paths[@]:-}\"`). When `retained_paths` is empty (first call or when all existing paths are subsumed by the new candidate), bash < 4.4 with `set -u` raises \"unbound variable\".\n  Why it fails at runtime: GitHub Actions ubuntu-latest uses bash 5.x where empty array expansion is safe, so this is not a runtime bug on the target platform. However, the inconsistency with the defensive pattern used two lines above in the same function suggests an oversight. Consumer repos running on older bash versions (e.g., CentOS 7 with bash 4.2) would hit this failure path.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ebb3b4e2f327266879d28469fc3e4817dc43cbfc9b084877f97525a754cf85fc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4332,
+    "run_id": "35931332271",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35931332271",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260923230546_102abac4ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4332,
+    "run_id": "35931332271"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-23T23:05:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

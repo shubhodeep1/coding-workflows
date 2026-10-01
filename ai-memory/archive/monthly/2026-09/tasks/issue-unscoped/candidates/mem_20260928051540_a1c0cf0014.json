@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update CLAUDE.md section 23.I to add the file-edit rule mandating the use of Edit and Write tools instead of inline interpreter scripts, and precisely name the repository root's .claude/** as the only protected path.\n  expected_change_site: CLAUDE.md section 23.I\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff (pr_diff.patch) contains no changes to CLAUDE.md.\n- requirement: Add one bullet to agents.md under the Unattended helpers and permission prompt reports section stating that file edits use the Edit and Write tools, never inline interpreters, and that only the repository root's .claude/** is a protected path.\n  expected_change_site: agents.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff (pr_diff.patch) contains no changes to agents.md.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Update CLAUDE.md section 23.I to add the file-edit rule mandating the use of Edit and Write tools instead of inline interpreter scripts, and precisely name the repository root's .claude/** as the only protected path.\n  Expected change site: CLAUDE.md section 23.I\n  Evidence of absence: The PR diff (pr_diff.patch) contains no changes to CLAUDE.md.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Add one bullet to agents.md under the Unattended helpers and permission prompt reports section stating that file edits use the Edit and Write tools, never inline interpreters, and that only the repository root's .claude/** is a protected path.\n  Expected change site: agents.md\n  Evidence of absence: The PR diff (pr_diff.patch) contains no changes to agents.md.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "75d052173933e787094f88973e147f856df6c5e0180aec37297e90f0e7c4190f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4728,
+    "run_id": "36379978960",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36379978960",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928051540_a1c0cf0014",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4728,
+    "run_id": "36379978960"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T05:15:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

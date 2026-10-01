@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:425-461 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: When `mktemp` fails and `err_file` is empty, the fallback runs the command without capturing stderr, so permanent-failure detection is skipped and definitive 4xx errors are retried with backoff.\n  WHY: The fallback can waste retry time and emit misleading retry warnings on permanent errors; all reviewers rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/clarify.yml | severity=low | confidence=2\n  Line or code reference: lines 447-451 (the `gh_retry_to_file` fallback body when `err_file` is empty after mktemp failure)\n  PROBLEM: When `mktemp` fails and sets `err_file=\"\"`, the else branch runs `\"$@\" > \"${out}\" && return 0`. On command failure (non-zero exit), the function falls through to retry logic without capturing stderr, so the permanent-failure grep detection (404, 422, \"Resource not accessible\") is lost. A definitive 4xx will consume the retry budget with backoff instead of returning immediately, and each retry will log the misleading \"retrying in Xs\" message as if a transient error occurred.\n  WHY: `mktemp` failure on a GitHub Actions runner is extremely unlikely (`RUNNER_TEMP` is a built-in env var pointing to a writable directory), so this path is rarely exercised. When it does trigger, the only consequence is wasted retry budget on a permanent error \u2014 the function still reaches the max-attempts exit and the caller still falls through to the \"final_merge_resume check failed\" warning.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/clarify.yml | severity=low | confidence=2\n  Line or code reference: lines 425-461 (the inline `gh_retry_to_file` fallback when `err_file` is empty after `mktemp` fails)\n  PROBLEM: When `mktemp \"${RUNNER_TEMP:-/tmp}/gh_retry_fallback_stderr.XXXXXX\"` fails and `err_file=\"\"`, the fallback takes the `else` branch (`\"$@\" > \"${out}\" && return 0`) which runs the command without capturing stderr. The function then cannot grep for the `_is_gh_permanent_failure` patterns (404, 422, \"resource not accessible\") and falls through to the max-attempts path on every non-zero exit, including a definitive 404 or 422. The result is the retry budget being consumed (2+4+6+8 = 20s with the cap) and a misleading `::warning::gh_retry_to_file fallback: gh command failed (attempt N/M), retrying in Xs` message, even though the real helper would have stopped on the first attempt with the non-retryable warning.\n  WHY: A degraded runner with no writable `RUNNER_TEMP` and a read-only `/tmp` (or any other `mktemp` failure path) silently disables the permanent-failure detection that this whole fallback was hardened to add. The conditions are narrow (`RUNNER_TEMP` invalid AND `/tmp` not writable AND the API call happens to return a 4xx) but the failure mode defeats the purpose of the new grep branch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/clarify.yml | severity=low | confidence=2\n  Line or code reference: lines 447-451 (the `else` branch of the `if [ -n \"${err_file}\" ]` check inside the fallback `gh_retry_to_file()`)\n  PROBLEM: When `mktemp` fails and `err_file` is empty, the `else` branch runs `\"$@\" > \"${out}\" && return 0` without capturing stderr. The permanent-failure grep (404, 422, \"Resource not accessible by ...\") only runs inside the `if [ -n \"${err_file}\" ]` branch, so a definitive 404 on the closed-issue comments read falls through to the retry loop instead of stopping immediately.\n  WHY: `mktemp` fails (missing binary, unreadable `RUNNER_TEMP`), a real 404 is returned, and the fallback burns up to 5 attempts with backoff instead of stopping at attempt 1. The run still converges (the outer `::warning::final_merge_resume check failed` fires), but the degraded-mode optimization the rest of the fallback was built to provide is silently lost on the exact failure modes it was designed to detect.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/clarify.yml | severity=low | confidence=2\n  Line or code reference: lines 447-451 (the `gh_retry_to_file` fallback body when `err_file` is empty)\n  PROBLEM: When `mktemp` fails and `err_file=\"\"`, the `else` branch runs `\"$@\" > \"${out}\" && return 0` without capturing stderr. The permanent-failure grep (404/422/resource-not-accessible patterns) is skipped, so a definitive 4xx is retried up to `max_attempts` times with backoff instead of stopping immediately.\n  WHY: On a degraded runner where `mktemp` is unavailable or `RUNNER_TEMP` does not exist, the fallback loses the permanent-failure detection this commit specifically added. A 404 on the closed issue would burn the full 20s backoff budget and log a misleading \"retrying\" message. The command still fails correctly, so the outcome is wasted time, not a wrong result.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "71a3849661411f4e37cdcafbbc7d40c6af9f7f90973008b2ef55c21d9bb90220",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5271,
+    "run_id": "36660322947",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36660322947",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930024715_3b7f8f4fec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5271,
+    "run_id": "36660322947"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T02:47:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

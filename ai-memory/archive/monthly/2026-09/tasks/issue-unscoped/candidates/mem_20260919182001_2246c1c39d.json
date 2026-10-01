@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/auto_release_stable.sh:lines 148-150 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The legacy mark-stable.yml active-run count lacks the head_branch filter applied to the adjacent release-gate counts.\n  WHY: A mark-stable.yml run dispatched on a non-stable ref could incorrectly set active_count > 0 and skip an otherwise dispatchable release; severity was reported as NIT by both reviewers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"the 6-hour auto-release counts only stable-branch gate runs and workflow_dispatch promotion runs as in flight (a scheduled cycle tick and a gate_only smoke run on main no longer block it)\"\n  expected_change_site: scripts/auto_release_stable.sh lines 148-150 (legacy_runs_json active count)\n  confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The legacy mark-stable.yml active-run count filter does not include a head_branch filter, unlike the main release gate filter (lines 139-140) which now filters by head_branch == stable. The stated intent is to count only stable-branch runs as active releases, but the legacy filter counts runs from any branch. While mark-stable.yml is typically dispatched only from stable, the filter is missing for consistency with the stated intent and the other filters.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/auto_release_stable.sh: lines 148-150 (legacy_runs_json active-count jq filter) | severity=NIT | confidence=2\n  PROBLEM: The legacy mark-stable.yml active-run count selects runs on status alone with no head_branch filter.\n  WHY: If mark-stable.yml were ever run on a branch other than stable, an in-progress run on another branch would block auto-release unnecessarily.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/auto_release_stable.sh: line ~148-150, `legacy_active_count` jq filter for `mark-stable.yml` runs | severity=NIT | confidence=3\n  PROBLEM: This run-count check lacks the same two filters the prior hunk applied to the main release-gate count and to the promote-main-to-stable count.\n  WHY: A caller could dispatch mark-stable.yml on a different ref, or a future schedule trigger could over-count an in-flight run that cannot move stable and skip an otherwise dispatchable release.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"the 6-hour auto-release counts only stable-branch gate runs and workflow_dispatch promotion runs as in flight (a scheduled cycle tick and a gate_only smoke run on main no longer block it)\"\n  Expected change site: scripts/auto_release_stable.sh lines 148-150 (legacy_runs_json active count)\n  Evidence of absence: The legacy mark-stable.yml active-run count filter does not include a head_branch filter, unlike the main release gate filter (lines 139-140) which now filters by head_branch == stable. The stated intent is to count only stable-branch runs as active releases, but the legacy filter counts runs from any branch. While mark-stable.yml is typically dispatched only from stable, the filter is missing for consistency with the stated intent and the other filters.\n  severity=NIT\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "d63719843217ef79f2b06d9558cb978c24054cb4668cf38862e0256a54b5f8b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4134,
+    "run_id": "35457485940",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35457485940",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260919182001_2246c1c39d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4134,
+    "run_id": "35457485940"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-19T18:20:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

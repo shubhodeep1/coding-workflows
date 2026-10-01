@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:106 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The live copy still describes the pre-#5082 evidence rule and omits the verified-comment-plus-label requirement.\n  WHY: Sessions reading the Issue Mode instructions would miss the `ai:claude-blocked` label and comment URL verification requirements; `test_template_parity[commands/implement-plan-claude.md]` will fail in CI until synced.\n- .claude/hooks/unattended_question_guard.py:332-333 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The backslash escape handling treats `\\` as an escape character in all quoting contexts, but in POSIX shell, single-quoted strings (`'...'`) treat backslash literally.\n  WHY: A valid `gh api` command with a backslash preceding a syntax character inside a single-quoted argument can be incorrectly classified as holding prohibited syntax, causing the `gh api` parser to reject it; the practical impact is limited to blocker comments containing such sequences.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/implement-plan-claude.md:106 | severity=high | confidence=5\n  PROBLEM: The live copy still describes the pre-#5082 evidence rule (\"unless this turn posted the `<!-- ai:claude-blocked:v1 -->` comment (at most twice per session)\") while the workflow-templates twin at line 106 correctly describes the verified-comment-plus-label evidence (\"unless this turn posted a verified blocker on the source issue: the `<!-- ai:claude-blocked:v1 -->` comment, whose result carries its URL, and the `ai:claude-blocked` label on that same issue (issue #5082; the accepted forms are in CLAUDE.md \u00a728.G)\").\n  WHY: Sessions reading the Issue Mode instructions from the live `.claude/` copy would see outdated rules that do not mention the label requirement or the result-URL verification. They would learn only to post the comment, missing the requirement to also add the ai:claude-blocked label and have the result carry the comment URL. The twin-first workflow means the twin is already correct and this is a staged fix pending the Q40 sync; test_template_parity[commands/implement-plan-claude.md] will fail in CI until synced.\n- .claude/hooks/unattended_question_guard.py:332-333 (_and_chain_segments, the `elif char == \"\\\\\"` branch) | severity=low | confidence=3\n  PROBLEM: The backslash escape handling treats `\\` as an escape character in all quoting contexts, but in POSIX shell, single-quoted strings (`'...'`) treat backslash literally; `\\` inside single quotes is not an escape. The function at line 329-331 checks `state == \"'\"` only for `char == \"'\"`, then falls through to the universal `char == \"\\\\\"` branch at 332 which unconditionally skips the next character.\n  WHY: A `gh api` command with a backslash preceding a syntax character inside single quotes (e.g. `-f body='hello\\;world'`) is valid shell \u2014 the `\\;` inside single quotes is literal data. The hook's `_and_chain_segments` would see the `;` as a command separator after the backslash skip and incorrectly classify the entire command as holding prohibited syntax, causing the `gh api` parser to reject it. The practical impact is limited to blocker comments whose body contains backslash-followed-by-syntax-character sequences inside single-quoted arguments. The STOP_BLOCK_CAP of 2 provides a safety net.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c94abc1d786a510281b6734ea7dfef18c730b52274e9a2af708ac2577dd44e99",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36656387526",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36656387526",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930015406_3d9a066f74",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36656387526"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T01:54:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

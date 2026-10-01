@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_detect_editor_changes_lost.py:401-413 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_20, z-ai_glm-5_2]\n  PROBLEM: The test `test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback` asserts obsolete `opencode_run_cmd` and `writer` patterns in `scripts/review_apply_fixes.sh`, which the PR replaced with a sandbox-mediated invocation.\n  WHY: These assertions fail and cause the required CI lint job to exit 1, blocking the PR from merging.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_detect_editor_changes_lost.py: lines 403-404 | severity=critical | confidence=5\n  PROBLEM: The test `test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback` asserts two patterns that no longer exist in `scripts/review_apply_fixes.sh`.\n  WHY: The CI lint job exits 1, blocking the PR from merging.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_detect_editor_changes_lost.py: 401-413 | severity=critical | confidence=5\n  PROBLEM: The test asserts obsolete behavior (`opencode_run_cmd` and `writer` usage in scripts/review_apply_fixes.sh) that was removed by this pull request.\n  WHY: The test assertions fail, causing the CI lint job to exit 1, which blocks the PR from merging.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_detect_editor_changes_lost.py: lines 401-413 (test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback), specifically the asserts at lines 403-404 against APPLY_FIXES_SH = REPO_ROOT / \"scripts\" / \"review_apply_fixes.sh\" | severity=critical | confidence=5\n  PROBLEM: The PR replaced the editor invocation in scripts/review_apply_fixes.sh (now at lines 230-237) with `bash \"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh\" run ...`, removing the `writer` positional argument and the `opencode_run_cmd \"$@\"` invocation.\n  WHY: The CI lint job on the PR head SHA (024a760) reports `FAIL  test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback` and exits 1; `lint` is one of the required check-runs blocking merge.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_detect_editor_changes_lost.py: 403-404 | severity=critical | confidence=5\n  PROBLEM: The test `test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback` asserts that `scripts/review_apply_fixes.sh` contains `'opencode_run_cmd \"$@\"'` and `'writer\\n    \"${editor_attempt_model}\"'`, but the PR replaced the direct editor invocation with `bash \"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh\" run` and removed the `writer` argument.\n  WHY: The test reads `scripts/review_apply_fixes.sh` and checks for patterns that no longer exist after the isolation refactor. The CI lint job already fails on this test (visible in `failed[1].log_tail`: `FAIL  test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback`).\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_detect_editor_changes_lost.py:403-404 | severity=critical\n  PROBLEM: Test asserts old `opencode_run_cmd` + writer pattern replaced by sandbox call.\n  WHY: lint CI fails.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_detect_editor_changes_lost.py: 403-404 | severity=critical | confidence=5\n  PROBLEM: The test `test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback` asserts `'opencode_run_cmd \"$@\"' in contents` and `'writer\\n    \"${editor_attempt_model}\"' in contents` against `scripts/review_apply_fixes.sh`, but the PR replaced that direct invocation with `bash \"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh\" run` and removed the `writer` positional argument.\n  WHY: CI lint job (run 36091142478) exits 1 with `FAIL test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback`, blocking the PR from merging.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d0d345a5d55a4997f446b644af16597385f47ce1e98197005aa04e66b3acd37b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4435,
+    "run_id": "36091142818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36091142818",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260925042008_26b7fbc2a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4435,
+    "run_id": "36091142818"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-25T04:20:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

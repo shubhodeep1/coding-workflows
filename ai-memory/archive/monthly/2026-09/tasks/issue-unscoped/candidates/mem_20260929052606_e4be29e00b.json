@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:284 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A transient error from `gh_api` while listing dispatched runs raises `ReadError` from `_active_run_count` and may terminate the status check-in.\n  WHY: The error may prevent the status check-in from completing; no severity disagreement.\n- .github/workflows/review_autofix_sweep.yml:247-251 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: An invalid `pr_number` is silently skipped by the sweep dispatch without alerting that a managed PR may be left unreviewed.\n  WHY: The reviewer says a failed positive-integer check implies a malformed PR reference that should be logged or alerted; no severity disagreement.\n- .github/workflows/review_autofix_sweep.yml: `dispatch_pr` jq function (inside `snapshot_active_review_runs` step, around the `match(\"^Internal: AI Review & Autofix \\\\[pr:([1-9][0-9]*)\\\\]$\")` call) | severity=critical | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: `match(regex)` errors for non-matching or missing `display_title` values, causing the snapshot step and sweep job to fail.\n  WHY: The reviewer says the existing test supplies such titles and expects branch-keyed dedupe; no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/scripts/check_in_status.py:284 | severity=high | confidence=[4]\n  PROBLEM: When `active_run_count` fails to list `internal-review.yml` runs due to a 404 (workflow file not found), it correctly returns 0. However, for any other `gh_api` read error, it raises `ReadError`. In `_active_run_count` (which is called by `check_pr` and `check_pr_hand_back`), this exception might be unhandled, potentially crashing the status check-in process.\n  WHY: If the GitHub API returns a transient error (e.g., 502, 503) during the `listing` lookup for dispatched runs, the process terminates abruptly, preventing the status check-in from completing, which could lead to project stalls until the next hourly run.\n- .github/workflows/review_autofix_sweep.yml:247-251 | severity=low | confidence=[3]\n  PROBLEM: The new validation for `pr_number` (`[[ \"${pr_number}\" =~ ^[1-9][0-9]*$ ]]`) skips the dispatch if invalid. While this is safe, if an orchestrator-managed PR has an invalid number, it will be silently skipped by the sweep dispatch without an alert, potentially leaving the PR unreviewed.\n  WHY: PRs are expected to have positive integer numbers; if this regex fails, it implies a malformed PR reference. It should at least be logged as a critical error or alert if this happens for a managed PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix_sweep.yml: `dispatch_pr` jq function (inside `snapshot_active_review_runs` step, around the `match(\"^Internal: AI Review & Autofix \\\\[pr:([1-9][0-9]*)\\\\]$\")` call) | severity=critical | confidence=[3]\n  PROBLEM: `match(regex)` in jq errors when the input string does not match. Any `workflow_dispatch` run of `internal-review.yml` whose `display_title` does not match the pattern \u2014 a manual dispatch without `pr_number`, a dispatch from before this change, or an empty/malformed title \u2014 causes the whole jq expression to error, which fails the snapshot step and the entire sweep job.\n  WHY: The test `test_unnamed_or_malformed_dispatch_run_stays_branch_keyed` in `tests/test_review_autofix_sweep_stale_queued.py` feeds exactly these cases (titles `\"Internal: AI Review & Autofix\"`, `\"[pr:0]\"`, `\"[pr:12x]\"`, and missing `display_title`) and expects them to fall through to branch-keyed dedupe. With `match` erroring on each, `subprocess.run(..., check=True)` raises `CalledProcessError` and the test fails. The fix is one character: add `?` after the `match(...)` call so non-matching titles produce `empty` instead of an error:\n  ```\n  [match(\"^Internal: AI Review & Autofix \\\\[pr:([1-9][0-9]*)\\\\]$\")?.captures[0].string]\n  ```\n  `[empty]` becomes `[]`, `first` of `[]` is `null`, and `null // \"\"` yields `\"\"`, which routes the run to the `head_branch` key as intended.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "be20d516d45afd9ca123c07bcce318a71a907285025e8f27cc974ca1e7f88bf2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5033,
+    "run_id": "36523668304",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36523668304",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260929052606_e4be29e00b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5033,
+    "run_id": "36523668304"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-29T05:26:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

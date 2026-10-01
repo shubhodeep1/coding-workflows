@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing `tests/e2e_smoke_canary.txt` fixture\n\nScope-mode justification: The issue specifies an exact two-line replacement and a single-file boundary. No broader workflow, test, documentation, or changelog changes are permitted.\n\nPlanning ref: `orchestrator/project-4343` at `241d891077e1d4c9d87629e7271c35e0a254f5d1`\n\n## Automation and wiring\n\n- **Change type:** Modify existing fixture only; no new script or subsystem.\n- **Scheduler/PR-push entry point:** No wiring changes; existing smoke workflows continue consuming the fixture.\n- **Supervisor:** Not required.\n- **Database gate:** Not applicable.\n- **Removal registry:** Not applicable.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace its current three lines with exactly:\n    1. `status: ok`\n    2. `decompose-run: 35903885958`\n  - Preserve a trailing newline and add no other content.\n\n## Functions or modules to implement\n\nNone. This is a plain-text fixture update.\n\n## Data structures affected\n\n- The canary changes from a three-line `status`/`run_id`/`updated-by` shape to the requested two-line `status`/`decompose-run` shape.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Perform an exact fixture replacement\n\n- **Chosen:** Replace the complete file with the two specified lines.\n- **Alternatives considered:** Retain existing metadata, append the new line, or update workflow logic.\n- **Why:** The issue explicitly requires exactly two lines and forbids other content or files.\n\n## Security considerations\n\n- No authorization, endpoint, credential, money, or external-input boundary changes.\n- Treat the supplied run identifier as literal fixture content.\n- Prevent scope abuse by verifying that only the declared file changes.\n\n## Risks and edge cases\n\n- Existing smoke-workflow code contains other scenarios expecting three-line canary formats; those contracts must not be changed because this issue specifically targets the decomposition canary content.\n- Avoid retaining `run_id: 26151428977`, `updated-by: ai-pipeline`, blank lines, whitespace, or formatting artifacts.\n- Ensure the final newline does not create an additional blank content line.\n\n## Testing considerations\n\n- Compare the file byte-for-byte against:\n  `printf 'status: ok\\ndecompose-run: 35903885958\\n'`\n- Verify the file has exactly two logical lines.\n- Run `git diff --check`.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\n\n- Clarification answer is sufficient.\n- Planning ref matches the integration branch metadata.\n- Requested file exists and its current content requires replacement.\n- Scope, expected bytes, and verification steps are unambiguous.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4c64c7522998a598f6ca4e6c9af54afc91dbb7ede801286ba2aa886f2d8c265e",
+  "lineage": {
+    "issue_number": 4344,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35904522252",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35904522252",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4344"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260923184916_a95d7bc9a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4344,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35904522252"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4344",
+  "timestamps": {
+    "created_at": "2026-09-23T18:49:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

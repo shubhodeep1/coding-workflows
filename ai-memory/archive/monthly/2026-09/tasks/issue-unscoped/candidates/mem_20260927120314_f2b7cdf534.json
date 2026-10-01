@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/move-checking-roles-to-claude-plan.md:475-478 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Step 25 cites `derive_check_name_key` as a function in `scripts/check_failure_triage.sh`, but this function does not exist in that script.\n  WHY: An implementer attempting to follow the plan will fail to locate the function, creating confusion and potentially leading to incorrect implementation or omitted changes for the `claude/*` PR-head skip logic.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Every plan for the orchestrator must surface, in a dedicated section near the top of the plan, the five automation details required by \u00a718.E, including complete registry entries under \u00a718.F for every new script or supervisor.\n  expected_change_site: docs/plans/move-checking-roles-to-claude-plan.md, near the top in a dedicated automation surface section\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: While an \"Automation surface\" section exists, it is not structured to clearly meet the \u00a718.F registry requirements, and reviewers have consistently flagged it as incomplete, missing required fields (Script path, Introduced in, Removal trigger, Removal preflight checks, Owner) or being incorrectly presented as a single table cell rather than the required structured format for each entry.\n- requirement: Add a changelog fragment (one per phase per \u00a720).\n  expected_change_site: changelog.d/\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: PR diff contains only the plan; no fragment.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- docs/plans/move-checking-roles-to-claude-plan.md:475-478 | severity=high | confidence=[5]\n  PROBLEM: Step 25 cites `derive_check_name_key` as a function in `scripts/check_failure_triage.sh`, but this function does not exist in that script.\n  WHY: An implementer attempting to follow the plan will fail to locate the function, creating confusion and potentially leading to incorrect implementation or omitted changes for the `claude/*` PR-head skip logic.\n- Requirement: Every plan for the orchestrator must surface, in a dedicated section near the top of the plan, the five automation details required by \u00a718.E, including complete registry entries under \u00a718.F for every new script or supervisor.\n  Expected change site: `docs/plans/move-checking-roles-to-claude-plan.md`, near the top in a dedicated automation surface section.\n  Evidence of absence: While an \"Automation surface\" section exists, it is not structured to clearly meet the \u00a718.F registry requirements, and reviewers have consistently flagged it as incomplete, missing required fields (Script path, Introduced in, Removal trigger, Removal preflight checks, Owner) or being incorrectly presented as a single table cell rather than the required structured format for each entry.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Add a changelog fragment (one per phase per \u00a720).\n  Expected change site: changelog.d/\n  Evidence of absence: PR diff contains only the plan; no fragment.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "74b5e213484c6b9606f262e57f14a158be7ad22ed91b5d923f5775946dfb30af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4614,
+    "run_id": "36316832502",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36316832502",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260927120314_f2b7cdf534",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4614,
+    "run_id": "36316832502"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-27T12:03:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

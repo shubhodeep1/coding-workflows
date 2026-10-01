@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:727-736 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: When `report.trees` is empty, `print_report` returns after printing `status=skipped reason=no-hook-change` without including `verifier_changes=<n>` in the summary line.\n  WHY: The documented summary format implies the field accompanies every status, so downstream parsers relying on it may miss verifier changes for skipped runs; the reviewers reported no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Phase 1 deliverables: `.github/workflows/ci.yml` step pins the verifier to the base branch with a bootstrap fallback; `scripts/guard_differential.py` adds `verifier_changes()` detection, `Report.verifier_changes` field, and the new log lines; `tests/test_guard_differential.py` covers all of it; `agents.md` documents the pinned verifier, the output lines, and the flag-compatibility rule; `changelog.d/5327-pinned-guard-verifier.md` exists.\"\n  expected_change_site: `.github/workflows/ci.yml`, `scripts/guard_differential.py`, `tests/test_guard_differential.py`, `agents.md`, `changelog.d/5327-pinned-guard-verifier.md`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `.github/workflows/ci.yml` is updated; `scripts/guard_differential.py` adds the constants, helpers, report field, wiring and warning lines; `tests/test_guard_differential.py` adds the verifier-change tests plus the two step-execution tests (`test_ci_step_runs_the_base_verifier_not_the_prs`, `test_ci_step_falls_back_to_the_prs_verifier_with_a_warning`) and the wiring assertion; `agents.md` carries the new \"Pinned verifier\" bullet and the updated \"Output\" section; `changelog.d/5327-pinned-guard-verifier.md` exists with the security marker. All phase 1 deliverables are present in the PR diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/guard_differential.py:736 | severity=low | confidence=4\n  PROBLEM: When report.trees is empty, print_report prints verifier_change warnings at lines 728-733, then returns early at line 736 with `status=skipped reason=no-hook-change` but omits `verifier_changes=<n>`.\n  WHY: A downstream log parser that expects verifier_changes in every GUARD_DIFFERENTIAL status= line would not find it on status=skipped lines when verifier changes exist. The verifier_change warnings still print, but the summary counter is absent.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/guard_differential.py:727-736 | severity=low | confidence=4\n  PROBLEM: When report.trees is empty (no hook changed), the print_report function prints verifier_change warnings but returns early at line 736 without printing the detailed summary line that includes the verifier_changes=<n> field.\n  WHY: This is a reporting inconsistency. Downstream log parsers expecting the verifier_changes field in every GUARD_DIFFERENTIAL status= line will fail to parse the log entry when status=skipped.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/guard_differential.py: around line 736; full summary line at lines 772-778\n  PROBLEM: When `report.trees` is empty (no hook changed), the new code path prints `::warning::GUARD_DIFFERENTIAL verifier_change \u2026` lines, then prints `status=skipped reason=no-hook-change`, and returns before reaching the multi-field summary line that carries `verifier_changes=<n>`.\n  WHY: It is not a correctness bug for the verifier itself (the `::warning::GUARD_DIFFERENTIAL verifier_change` lines still surface the security-boundary changes), but the documented output contract for the summary line does not match what the verifier emits in the no-hook-change path. Any downstream log parser that splits on `verifier_changes=` and assumes the field is present on every `status=\u2026` line will silently miss it for the `status=skipped` case. The doc either needs to clarify that `verifier_changes=<n>` is omitted on the `status=skipped` path, or the summary line needs to include the field there too (e.g. by moving the `if not report.trees: \u2026 return` block to after the missing-corpus and intended-loosening loops, or by emitting a minimal `status=skipped \u2026 verifier_changes=<n>` summary before the early return).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/guard_differential.py:727-736\n  PROBLEM: When report.trees is empty (no hook changed), the function prints verifier_change warnings (lines 728-733) then returns early at line 736 without printing the summary line that carries verifier_changes=<n> (line 775).\n  WHY: The agents.md documentation states \"a GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> \u2026 verifier_changes=<n> summary\" is printed, implying the summary line accompanies every status value including skipped. A downstream log parser expecting verifier_changes in every GUARD_DIFFERENTIAL status line would not find it in status=skipped lines. The test test_cli_reports_a_verifier_script_change_without_failing expects \"status=skipped reason=no-hook-change\" which is consistent with the current behavior, but the documentation is not.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/guard_differential.py: lines 734-736\n  PROBLEM: When no hook changed (`report.trees` is empty), `print_report` emits the `verifier_change` `::warning::` lines (728-733) and then prints `GUARD_DIFFERENTIAL status=skipped reason=no-hook-change` (735) and returns early \u2014 without the `verifier_changes=<n>` field.\n  WHY: A PR that changes only the verifier script (no hook change) produces `status=skipped reason=no-hook-change` without `verifier_changes=1` in the summary line. A log parser that relies on the summary line for the `verifier_changes` count misses it in this case (the `::warning::verifier_change` lines are still printed, so the information is present elsewhere in the output).\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fc72fe9263eaaaf6642369c4c6a61ef731322c617c43007378fbbc17300e8609",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5368,
+    "run_id": "36656976829",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36656976829",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930022204_d7a921e8c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5368,
+    "run_id": "36656976829"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T02:22:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

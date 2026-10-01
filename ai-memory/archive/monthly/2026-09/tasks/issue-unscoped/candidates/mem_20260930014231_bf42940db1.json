@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml:`record_issue_integration_branches()` function (called twice: once for CLOSING_ISSUES_RESP, once for ORCH_RESP) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: For N issues, `record_issue_integration_branches()` starts approximately 2N+1 jq processes per call, each re-parsing the entire payload.\n  WHY: With up to 200 issues and bodies up to 64 KiB each, repeated parsing adds avoidable latency to PR close events, though the impact is bounded by the step's 5-minute timeout.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/issue_pr_status.yml:`record_issue_integration_branches()` function (called twice: once for CLOSING_ISSUES_RESP, once for ORCH_RESP) | severity=NIT | confidence=3\n  PROBLEM: For N issues, the function makes approximately 2N+1 jq subprocess invocations per call, and each invocation re-parses the entire payload.\n  WHY IT FAILS AT RUNTIME: Workflow step latency scales linearly with O(N * payload_size). For a PR that links to many orchestrator-tracked issues with large bodies, the `Update linked issue labels when PR closes` step could take several seconds longer than necessary. This is bounded \u2014 the step has a 5-minute timeout \u2014 but adds avoidable latency to every PR close event that touches orchestrator-tracked issues.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "87e73c3a5d528b886f76bec49fbb0afc93eb87dc3f0a96538234c15b3031e0fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36655153614",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36655153614",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930014231_bf42940db1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36655153614"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T01:42:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

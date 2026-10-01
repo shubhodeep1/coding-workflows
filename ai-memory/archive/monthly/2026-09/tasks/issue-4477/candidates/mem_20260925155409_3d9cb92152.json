@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4477,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4477\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4478\",\"pr_number\":4478,\"branch\":\"ai/issue-4477\",\"run_id\":\"36155680195\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/36155680195\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"changelog.d/4477-review-worktree-transfer.md\",\"scripts/review_untrusted_sandbox.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "add40418dc7617ba08c3299f2681e32abd0a11e5c44cf7cd46331ede70b302b1",
+  "lineage": {
+    "issue_number": 4477,
+    "parent_ids": [],
+    "pr_number": 4478,
+    "run_id": "36155680195",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36155680195",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4478"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260925155409_3d9cb92152",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4477,
+    "level": "run",
+    "pr_number": 4478,
+    "run_id": "36155680195"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4477: https://github.com/shubhodeep1/coding-workflows/pull/4478",
+  "timestamps": {
+    "created_at": "2026-09-25T15:54:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

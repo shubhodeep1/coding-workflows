@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8106-8117 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The jq command updating `.sync` metadata is still incorrectly merged with the `mark_integration_sync_clean` call, causing the cleanup to observe prior conflict state prematurely.\n  WHY: The merged jq command updates `.sync` and immediately calls `mark_integration_sync_clean`, which resets `integration_sync_status` before the deterministic merge's success tracking comment is posted.\n- tests/test_orchestrate_poll_process.py:3139-3145 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The env dict indentation is misaligned, violating YAML formatting conventions.\n  WHY: Misaligned indentation in YAML can cause parsing issues in CI checks and violates repository style.\n- tests/test_orchestrate_poll_process.py:5609-5635 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Test assertions for deterministic sync clearing prior healing state are missing `integration_sync_status` and `integration_sync_last_error` verification.\n  WHY: The test does not verify that the deterministic merge properly clears the integration sync status fields, leaving a gap in test coverage for critical state transitions.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh\n  Line or code reference: 8106-8117\n  Problem: The jq command updating `.sync` metadata is still incorrectly merged with the `mark_integration_sync_clean` call, causing the cleanup to observe prior conflict state prematurely.\n  Why it fails at runtime: The merged jq command updates `.sync` and immediately calls `mark_integration_sync_clean`, which resets `integration_sync_status` before the deterministic merge's success tracking comment is posted. This breaks the expected flow where the deterministic merge should fully resolve the conflict state.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- tests/test_orchestrate_poll_process.py\n  Line or code reference: 3139-3145\n  Problem: The env dict indentation is misaligned, violating YAML formatting conventions.\n  Why it fails at runtime: Misaligned indentation in YAML can cause parsing issues in CI checks and violates repository style.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- tests/test_orchestrate_poll_process.py\n  Line or code reference: 5609-5635\n  Problem: Test assertions for deterministic sync clearing prior healing state are missing `integration_sync_status` and `integration_sync_last_error` verification.\n  Why it fails at runtime: The test does not verify that the deterministic merge properly clears the integration sync status fields, leaving a gap in test coverage for critical state transitions.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "d78b4b1675a222a5d8126f0c54342e957aabafe91390e2451bd96829419f3b03",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3970,
+    "run_id": "33714597372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33714597372",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260903061146_7a90626900",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3970,
+    "run_id": "33714597372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-03T06:11:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3184 | severity=blocker | confidence=5\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The merge-train gate condition only matches the literal string `'true'`, while `scripts/review_merge_train.sh` accepts additional truthy values.\n  WHY: Values such as `1`, `yes`, `on`, or `TRUE` enable release handling but skip the gate, silently disabling merge-train serialization; severity was reported as MAJOR and BLOCKER, so BLOCKER is used.\n- scripts/review_merge_train.sh:121\u2013130 | severity=major | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `_mt_own_files` treats any non-empty `PR_DIFF_FILE` as successful even when it contains no parseable `diff --git` paths.\n  WHY: A `[NO_PR_DIFF_AVAILABLE]` placeholder prevents the `_mt_pr_files` API fallback, causing the gate to continue with `no_changed_files` instead of recovering the actual PR files; severity was reported as MAJOR and NIT, so MAJOR is used.\n- scripts/review_merge_train.sh:202\u2013205 | severity=nit | confidence=3\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `_mt_upsert_comment` interpolates `marker` directly into a shell-built `--jq` filter.\n  WHY: A marker containing `\"` or `\\` can produce a jq syntax error, causing the fallback POST path to create a duplicate comment.\n- scripts/review_merge_train.sh:233\u2013246 | severity=major | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_mt_dispatch_review` dispatches workflows using `head` without verifying that the ref matches `MERGE_TRAIN_HEAD_REF_PREFIX`.\n  WHY: A queued PR whose head ref changes to an arbitrary non-`ai/issue-*` ref can cause the release path to dispatch review workflows against an unintended ref.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:3184 | severity=MAJOR | confidence=5\n  PROBLEM: The merge-train gate step condition still ends with `&& env.MERGE_TRAIN_ENABLED == 'true'`, so only the literal string `true` matches; `scripts/review_merge_train.sh` lines 82\u201383 accept `true|TRUE|True|1|yes|on`.\n  WHY: When `vars.MERGE_TRAIN_ENABLED` is one of `1`, `yes`, `on`, or `TRUE`, the gate step is skipped, no `ai:merge-queued` label is applied, and no `AUTOFIX_MERGE_QUEUED=true` is written to `$GITHUB_ENV`.\n- scripts/review_merge_train.sh:121\u2013129 | severity=MAJOR | confidence=4\n  PROBLEM: `_mt_own_files` returns 0 from the `PR_DIFF_FILE` branch whenever the file exists and is non-empty, even when the `sed` pipeline produces zero paths.\n  WHY: A `[NO_PR_DIFF_AVAILABLE]` placeholder passes the non-empty check, prevents the documented `_mt_pr_files` fallback, and causes the gate to continue with `no_changed_files`.\n- scripts/review_merge_train.sh:202\u2013205 | severity=NIT | confidence=3\n  PROBLEM: `_mt_upsert_comment` interpolates `${marker}` directly into a shell-built `--jq` filter.\n  WHY: A marker containing `\"`, `\\`, or shell-meaningful characters can break the jq expression and cause the fallback POST branch to create a duplicate comment.\n- scripts/review_merge_train.sh:233\u2013246 (`_mt_dispatch_review`) | severity=MAJOR | confidence=3\n  PROBLEM: The release subcommand calls `gh workflow run ${wf} --ref ${head}` without verifying that `head` matches `MERGE_TRAIN_HEAD_REF_PREFIX`.\n  WHY: A queued PR whose head ref changes to a non-`ai/issue-*` ref can trigger review workflows against an arbitrary ref.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:3184 | severity=BLOCKER | confidence=5\n  PROBLEM: The merge-train gate step condition includes `env.MERGE_TRAIN_ENABLED == 'true'`, which only matches the literal string `'true'`, while `scripts/review_merge_train.sh` accepts `true|TRUE|True|1|yes|on`.\n  WHY: Values such as `1`, `yes`, `on`, or `TRUE` skip the gate even though release paths treat merge train as enabled, disabling merge-train serialization.\n- scripts/review_merge_train.sh:121-130 (_mt_own_files function) | severity=NIT | confidence=3\n  PROBLEM: The function treats any non-empty `PR_DIFF_FILE` as a successful path source even when it contains no valid `diff --git` lines.\n  WHY: A placeholder such as `[NO_PR_DIFF_AVAILABLE]` prevents fallback to `_mt_pr_files`, so the merge train can silently fail to queue overlapping PRs.\n- scripts/review_merge_train.sh:202\u2013205 | confidence=1\n  PROBLEM: The jq filter interpolates the marker directly: `--jq \".[] | select(.body | startswith(\\\"${marker}\\\")) | .id\"`.\n  WHY: A future marker containing `\"` or `\\` can cause jq syntax errors; passing the marker with `--arg` avoids shell interpolation.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "590a8a8041d3af3fea3833db3f5e7547803298e586b2c6744a18ff036911b995",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4035,
+    "run_id": "34141339056",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34141339056",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260907170456_7bc97c3089",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4035,
+    "run_id": "34141339056"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-07T17:04:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

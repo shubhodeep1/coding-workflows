@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_pr_reconcile.sh:291 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_close_claude_inner_prs` fetches open inner PRs without `--paginate`, so it processes at most the first 100 and may leave additional inner PRs open after the final PR is closed.\n  WHY: The GitHub endpoint returns at most 100 items without pagination; severity disagreement: minimax rated this MAJOR while qwen and z-ai rated it NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_pr_reconcile.sh:291 | confidence=4\n  PROBLEM: The `_close_claude_inner_prs` function fetches inner PRs using `gh api` without the `--paginate` flag.\n  WHY: It fetches only the first 100 open inner PRs based on the project branch. If a Claude issue-mode project has more than 100 open inner PRs, those PRs remain open and orphaned after the final PR is closed, potentially leading to cluttered repositories or stale PRs that should have been cleaned up.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_pr_reconcile.sh: line 291 \u2014 `gh_retry gh api --method GET \"repos/${REPO}/pulls\" -f state=open -f base=\"${project_branch}\" -f per_page=100` inside `_close_claude_inner_prs` | severity=MAJOR | confidence=4\n  PROBLEM: The inner-PR listing omits `--paginate` and uses only `-f per_page=100`.\n  WHY: `gh api` returns at most one page of 100 items when `--paginate` is absent; inner PRs beyond the first 100 would be left open after the project branch's final PR is closed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_pr_reconcile.sh: _close_claude_inner_prs function, gh_retry gh api --method GET \"repos/${REPO}/pulls\" -f state=open -f base=\"${project_branch}\" -f per_page=100 | severity=NIT | confidence=3\n  PROBLEM: The inner-PR listing fetches at most 100 open PRs with no --paginate.\n  WHY: A Claude issue-mode project with more than 100 open inner PRs based on the project branch would have inner PRs beyond the first page silently left open after the final PR is closed.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal_pr_reconcile.sh: line 291 \u2014 `_close_claude_inner_prs` uses `gh_retry gh api --method GET \"repos/${REPO}/pulls\" -f state=open -f base=\"${project_branch}\" -f per_page=100` without `--paginate` | severity=NIT | confidence=3\n  PROBLEM: The inner-PR listing fetches only the first 100 open PRs based on the project branch.\n  WHY: GitHub's `pulls` endpoint caps at 100 items per page. Without `--paginate`, only the first page is fetched, leaving PRs beyond it open after the final PR is closed.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fe46106dce66622007c8841c5e9f2ac3f939178839403e094656b1019227313a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4517,
+    "run_id": "36218297699",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36218297699",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260926044948_6dd1098e2e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4517,
+    "run_id": "36218297699"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-26T04:49:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

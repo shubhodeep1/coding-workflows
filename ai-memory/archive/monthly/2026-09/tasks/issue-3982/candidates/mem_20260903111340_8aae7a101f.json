@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`\n\nScope-mode justification: The exact two-line replacement is complete and explicitly constrained to one file. Expanding scope would violate the acceptance criteria.\n\n## Planning reference\n\n- Branch: `orchestrator/project-3981`\n- HEAD: `c2fd9c24f691d4be69c7d2bdd2170dc559c52807`\n- Integration branch matches the checked-out ref.\n\n## Automation integration\n\n- Modify existing content only; introduce no scripts.\n- Existing entry point: `.github/workflows/internal-implement.yml`.\n- No scheduler, supervisor, database gate, or removal-registry entry is required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace its current three lines with exactly:\n    1. `status: ok`\n    2. `decompose-run: 33747749514`\n  - Ensure the file contains no additional lines or unrelated content.\n\n## Functions or modules\n\n- None.\n\n## Data structures affected\n\n- Plain-text two-line smoke-canary fixture only.\n\n## API/interface changes\n\n- None.\n\n## Decisions\n\n### D1 \u2014 Replace the complete canary payload\n\n- **Chosen:** Rewrite the file as the exact required two-line payload.\n- **Alternatives considered:** Edit only line 2 while retaining `updated-by: ai-pipeline`.\n- **Why:** Retaining the third line would violate the required final content and exact acceptance criteria.\n\n## Security considerations\n\n- No external input, authorization surface, credentials, money handling, or executable behavior is introduced.\n- Treat the issue-provided value as literal fixture content; do not interpolate or execute it.\n- Enforce the one-file scope to prevent unrelated repository modification.\n\n## Risks and edge cases\n\n- The existing second line is `run_id: 26151428977`, not the required `decompose-run` value.\n- The existing third line must be removed.\n- Preserve exact spelling, punctuation, ordering, and lowercase text.\n- Do not inspect or depend on the other smoke-canary issue.\n\n## Testing considerations\n\n- Verify `tests/e2e_smoke_canary.txt` has exactly two lines in the specified order.\n- Verify `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n- Verify the diff contains no whitespace reflow or unrelated changes.\n\n## Pre-execution self-check\n\n- Requirements and auto-answer are sufficient and non-contradictory.\n- Target file exists and its required delta is unambiguous.\n- No missing context or assumptions are required.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "dbe7ee6c18c9d5bd661fc61fca0a34b04e7eec24d917b3adac931adc2dff3f8f",
+  "lineage": {
+    "issue_number": 3982,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33748219451",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33748219451",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3982"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260903111340_8aae7a101f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3982,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33748219451"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3982",
+  "timestamps": {
+    "created_at": "2026-09-03T11:13:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan \u2014 verification-only closeout\n\n**Planning ref:** `ai/issue-4432` at `ef80777d05473b20db54fd26d48f36f3ffe52166`. It matches the integration-branch metadata.\n\n**Clarification:** The earlier Q1:B editor-no-op choice was superseded by Q2:A: address the missing helper in trusted workflow support.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/stage_workflow_support.sh`  \nScope-mode justification: The requested fix is already present. The trusted-support staging registry includes `review_untrusted_sandbox.sh`, `review_untrusted_workspace.py`, the broker, and the sandbox Dockerfile. PR #4435 has merged, and its later review run passed both support staging and dependency installation. A second implementation would add risk without improving correctness; the \u00a76 priority order favors Security and Correctness over speed or duplicate work. ([github.com](https://github.com/shubhodeep1/coding-workflows/pull/4435))\n\n**Automation wiring:** No new script or operation. The existing `.github/workflows/internal-review.yml` `pull_request:synchronize` entry point calls `review_autofix.yml@main`; the existing review sweep is the scheduled backstop. No supervisor, database gate, or future-removal registry entry is needed. GitHub\u2019s reusable-workflow documentation confirms that a called workflow and its caller checkout are distinct contexts. ([docs.github.com](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations?utm_source=openai))\n\n### Files likely to change\nNone. The relevant implementation is already in `scripts/stage_workflow_support.sh`, `scripts/review_untrusted_sandbox.sh`, `scripts/review_untrusted_workspace.py`, `scripts/review_sandbox/Dockerfile`, and `scripts/clarify_openrouter_broker.py`. Existing review contract tests cover the wiring. ([github.com](https://github.com/shubhodeep1/coding-workflows/pull/4435))\n\n### Functions/modules, data structures, and API/interface changes\nNone proposed. Preserve the verified-commit staging requirement and the isolation failure gate.\n\n### Risks and edge cases\nThe issue\u2019s `editor_empty_noop` classification is downstream of the cited dependency-install failure, not evidence that the editor ran. That historical diagnosis should not drive an editor change. A future run using an older trusted support commit must still fail closed rather than execute a helper from the PR checkout.\n\n### Security considerations\nThe boundary is trusted workflow support versus PR-controlled code. Do not backfill executables from the PR checkout, pass host credentials into the disposable workspace, or make isolation failure best-effort. This plan adds no endpoint or authorization surface.\n\n### Testing and closeout\nThe later review run on the updated PR head succeeded at **\u201cStage workflow support files\u201d** and **\u201cInstall project dependencies (best-effort)\u201d**; PR #4435 merged on **September 25, 2026**. Record this issue as already satisfied. No local validator or repository edit was run or made in this planning phase. ([github.com](https://github.com/shubhodeep1/coding-workflows/pull/4435))\n\n## Decisions\n### D1 \u2014 Do not duplicate the trusted-support fix\n- **Chosen:** Verification-only closeout.\n- **Alternatives considered:** Re-add the helper or bypass isolation when support is missing.\n- **Why:** The helper and staging are present, the affected PR merged, and bypassing isolation would weaken the security boundary. ([github.com](https://github.com/shubhodeep1/coding-workflows/pull/4435))\n\n**Assumptions:** Q2:A is the final scope choice. **Missing context:** None needed for this closeout.\n\nPLAN_SELF_CHECK: WARNING: The requested implementation became available and the affected PR merged before this planning pass; there are no justified file changes.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6998b43050d80ee3e703f5b656e9198027953b5b8c338c444e5e42cb9549506b",
+  "lineage": {
+    "issue_number": 4445,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36116374049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36116374049",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4445"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260925091113_e9adf496e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4445,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36116374049"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4445",
+  "timestamps": {
+    "created_at": "2026-09-25T09:11:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

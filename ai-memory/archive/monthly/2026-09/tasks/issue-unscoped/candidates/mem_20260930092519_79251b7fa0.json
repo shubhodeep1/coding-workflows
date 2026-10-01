@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:1536-1540 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The documented `.codex-workflow-src-main/scripts/claude_merge_hold_gate.py` fallback is unavailable when the poller runs because `.github/workflows/orchestrate_poll.yml` deletes `.codex-workflow-src-main` before executing the poller.\n  WHY: When the primary support checkout lacks the gate script, the fallback cannot be used and the gate fails closed, deferring eligible `claude/*` ready-to-merge PRs; severity was rated MAJOR by four reviewers and NIT by z-ai_glm-5_2, which characterized the behavior as a safe refusal and misleading documentation.\n- scripts/orchestrate_poll_process.sh:1543-1544 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: If the gate process is interrupted, the command substitution may leave `gate_rc` unset or capture an unexpected status while `gate_json` is incomplete.\n  WHY: The caller fails closed for a nonzero or missing exit status, so the described worst case is a false refusal that defers an otherwise mergeable PR for one poll tick.\n- scripts/orchestrate_poll_process.sh:line 1546 (mktemp fallback path) | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: If `mktemp` fails, the fallback filename could be reused if the same `gate_pr` is used more than once in the poller process.\n  WHY: The reviewer states that `mktemp` normally succeeds on GitHub-hosted runners and that current iterations use unique `gate_pr` values, making this a low-practical-risk hardening concern.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh: lines 1538-1539 (the `.codex-workflow-src-main` fallback path inside `_orch_claude_merge_hold_gate_allows`) | severity=high | confidence=[4]\n  PROBLEM: The fallback to `.codex-workflow-src-main/scripts/claude_merge_hold_gate.py` is dead code because `.codex-workflow-src-main` is deleted before the poller runs.\n  WHY: If `SCRIPT_REF` resolves to a commit that predates the gate, the fallback cannot supply it and the poller returns `action=refuse reason=gate_unavailable`, leaving `claude/*` ready-to-merge PRs unmerged on every poll tick.\n- scripts/orchestrate_poll_process.sh: lines 1543-1544 in `_orch_claude_merge_hold_gate_allows` | severity=low | confidence=[2]\n  PROBLEM: If the Python gate process is interrupted, `gate_rc` could be unset or capture an unexpected status while `gate_json` contains incomplete output.\n  WHY: The caller fails closed for a nonzero or missing exit code, so the described worst case is a false refusal that defers a mergeable PR for one poll tick.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: lines 1536-1540 (`_orch_claude_merge_hold_gate_allows`) | severity=high | confidence=[5]\n  PROBLEM: The documented fallback to `.codex-workflow-src-main/scripts/claude_merge_hold_gate.py` is dead code at runtime because the workflow deletes that directory before the poller executes.\n  WHY: When `.codex-workflow-src/scripts/claude_merge_hold_gate.py` is absent, the helper refuses with `reason=gate_unavailable`; the test `test_poller_gate_falls_back_to_the_main_support_snapshot` (tests/test_claude_merge_hold_gate.py:589-591) passes by staging a directory that does not exist in production.\n- scripts/orchestrate_poll_process.sh: lines 1536-1540 (gate script selection) | severity=high | confidence=[4]\n  PROBLEM: The helper probes `.codex-workflow-src/scripts/...` rather than the staged location `scripts/claude_merge_hold_gate.py`, while the `.codex-workflow-src-main` fallback is unavailable at runtime.\n  WHY: A stale `SCRIPT_REF` can leave the poller's gate-calling code without the gate script, causing the helper to refuse the merge; the deterministic-skip-merge variant in `review_autofix.yml:1925-1944` is described as having the same risk.\n- scripts/orchestrate_poll_process.sh: line 1546 (mktemp fallback path) | severity=low | confidence=[2]\n  PROBLEM: If `mktemp` fails, the fallback filename could be reused if the same `gate_pr` is used more than once in the poller process.\n  WHY: The reviewer states that `mktemp` normally succeeds on GitHub-hosted runners and current iterations use unique `gate_pr` values, making this a hardening-grade concern.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: 1537-1539; fallback checkout is removed in .github/workflows/orchestrate_poll.yml:584 before the poller runs at line 806. | severity=high | confidence=[5]\n  PROBLEM: The gate helper\u2019s documented `.codex-workflow-src-main` fallback is unavailable at runtime.\n  WHY: If the primary support checkout lacks `claude_merge_hold_gate.py` while the main snapshot contains it, the helper cannot find the fallback, refuses the gate, and defers eligible `claude/*` ready-to-merge PRs on each poll.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: 1536-1540 (_orch_claude_merge_hold_gate_allows function) | severity=high | confidence=[5]\n  PROBLEM: The documented fallback to `.codex-workflow-src-main/scripts/claude_merge_hold_gate.py` is unreachable at runtime because `.github/workflows/orchestrate_poll.yml` deletes that directory before running the poller.\n  WHY: When the primary support checkout lacks the gate script, the helper refuses as unavailable and `claude/*` PRs remain unmerged on each poll until the primary support checkout contains the gate.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- _orch_claude_merge_hold_gate_allows, lines 1538-1539 (`if [ ! -f \"${gate_script}\" ] && [ -f \".codex-workflow-src-main/scripts/claude_merge_hold_gate.py\" ]; then`) | severity=low | confidence=[4]\n  PROBLEM: The `.codex-workflow-src-main` fallback is dead code because `orchestrate_poll.yml` line 584 (`rm -rf .codex-workflow-src-main`) runs before the poller.\n  WHY: When the primary `.codex-workflow-src/scripts/claude_merge_hold_gate.py` is missing, the helper fails closed; the reviewer characterizes this as misleading documentation and dead code, not a security bypass.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "461a6b80ba502607e73d00c1ea2c77b664370c23653ff9d1c3addcb07a03c921",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5589,
+    "run_id": "36693805313",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36693805313",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930092519_79251b7fa0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5589,
+    "run_id": "36693805313"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-30T09:25:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/conftest.py:lines 98\u2013115 | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The session fixture hard-codes the staged-support runtime environment variables, so a future workflow variable can silently leak into every pytest session if it is not added to `STAGED_SUPPORT_RUNTIME_ENV_VARS`.\n  WHY: The original bug resulted from an additive workflow export, and no automated check currently verifies that workflow-exported staged-support variables remain synchronized with the fixture's stripped set.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- file: tests/conftest.py\n  location: lines 98\u2013115 (`_isolate_repo_pinning_git_environment` fixture)\n  issue: The fixture currently pops each variable by literal name from a tuple. If a future workflow step adds another self-repo runtime variable, the new variable will silently leak into every test session until someone notices the missing entry in `STAGED_SUPPORT_RUNTIME_ENV_VARS`.\n  suggested minimal fix: Add a small test that checks `implement.yml`, `review_autofix.yml`, and `validate.yml` for `STAGED_SUPPORT_*` / `IMPLEMENT_STAGED_SUPPORT_*` writes to `$GITHUB_ENV` and asserts each one is in `STAGED_SUPPORT_RUNTIME_ENV_VARS`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "769ee4bf22a8339811f50ddeb5046727ebe0e35c6c8ebc5ce92ccb5cea28388c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35664888057",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35664888057",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260921231725_a2b542949f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35664888057"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-21T23:17:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

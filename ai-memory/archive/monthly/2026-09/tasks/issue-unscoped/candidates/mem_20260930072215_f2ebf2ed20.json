@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:532-542 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The marker re-read does not detect a newer review that starts after its workflow\u2019s run listing was fetched but before the re-read.\n  WHY: If the newer review has not yet posted findings or a pending-checks comment, the original marker still matches and `evaluate()` can enable auto-merge at line 550 while that review is active.\n- scripts/claude_fixer_pending_checks.py:372-379, 398-413 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Workflow-run listings read only the newest 100 runs, without pagination or a completeness check.\n  WHY: An active review omitted from the listings is absent from `active` and `bound_reviews`, so the evaluator can accept the unchanged marker and enable auto-merge while that review is running.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_fixer_pending_checks.py | Location: evaluate() \u2014 re-read comment block around lines 533-539\n  Issue: The reason string for the `review_superseded` state when the marker changed uses the original `comment_id` and a generic \"no longer the live marker\" phrasing. The same state fires for three distinguishable cases (a newer review posted its own marker, a newer review handed off findings with the original marker still present, or the marker was deleted entirely). An operator triaging a `pending_checks ... state=review_superseded` log line in `scripts/claude_pr_sweep.py` cannot tell which case fired without re-reading the comments.\n  Suggested minimal fix: distinguish the cases in the reason string \u2014 e.g. include \"marker was deleted\" when `current is None` and \"a newer marker comment is now live\" when `current[\"comment_id\"] != marker[\"comment_id\"] and current is not None`. Two branches, one extra `if/else` arm.\n- tests/test_claude_fixer_pending_checks.py | Location: _malformed helper around lines 195-209\n  Issue: The `_DROP = object()` sentinel collides with intent: a future test that wants to assert a field explicitly holds the sentinel would silently drop the field instead. Today no test does this, but the helper is reused for every malformed-listing parametrization, so any new author will trip on it.\n  Suggested minimal fix: rename `_DROP` to `_OMIT` (or guard with `if value is _DROP: run.pop(key, ...)` and document \"only use to delete a key\"). No runtime impact.\n- scripts/claude_fixer_pending_checks.py | Location: check_review_runs(), head-branch listing URL around line 379\n  Issue: `REVIEW_RUNS_PER_PAGE = 100` truncates without warning. A head branch with 100+ runs (plausible on a busy consumer repo's claude/* branch over weeks of churn) silently hides any newer-than-marker review that lives beyond the 100th row. The plan acknowledges the risk as ACCEPTED but the code emits no diagnostic, so the limit surfaces only as a confusing \"older failed review must be newest?\" wrong verdict if the marker itself fell off the page.\n  Suggested minimal fix: after the head-branch read, if the page returned exactly 100 runs, log `pending_checks ... state=review_active ... reason=head_branch_run_listing_truncated` so an operator sees the truncation. Single `if len(branch_runs) == REVIEW_RUNS_PER_PAGE:` branch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_fixer_pending_checks.py:532-542 | severity=high | confidence=4\n  PROBLEM: The run listings are checked before the comment re-read, but the re-read verifies only that the marker is unchanged. A newer review that starts after its workflow\u2019s listing was fetched is not detected while it is still running.\n  WHY: If that review has not posted its findings or pending-checks comment by the re-read, the original marker still matches. `evaluate()` then proceeds to enable auto-merge at line 550 while the newer review is active, recreating the race this change is intended to prevent.\n- scripts/claude_fixer_pending_checks.py:372-379, 398-413 | severity=high | confidence=4\n  PROBLEM: Each workflow-run listing reads only the newest 100 runs, with no pagination or completeness check. The title-bound internal-review listing and the repository-wide unbound dispatch listings can omit an active review if more than 100 newer runs exist.\n  WHY: An omitted active review is absent from `active` and from `bound_reviews`. The evaluator can therefore accept the unchanged marker and enable auto-merge while that review is still running.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "dd10f35b4215bb68afefa41d20284bc0de1ce2e6f5fff0e35e04396762bd36a6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5178,
+    "run_id": "36678837374",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36678837374",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260930072215_f2ebf2ed20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5178,
+    "run_id": "36678837374"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-30T07:22:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

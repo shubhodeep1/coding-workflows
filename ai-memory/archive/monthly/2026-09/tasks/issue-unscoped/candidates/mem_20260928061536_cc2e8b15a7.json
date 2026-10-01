@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:capture_run_id (lines 817-831); latest_scoped_run_field around the capture path (the new paging loop interacts with the pre-existing capture_run_id retry loop); wait-plan (capture_run_id retry loop + latest_scoped_run_field while) | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, x-ai_grok-4_20]\n  PROBLEM: When the Plan run is absent from the first 1,000 results, capture_run_id can repeat the full 10-page lookup across 5 retries, consuming up to 50 page reads for the same search window.\n  WHY: This is a non-correctness performance cost that wastes shared GitHub API quota; reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:capture_run_id (lines 817-831) | severity=low | confidence=4\n  PROBLEM: When the Plan run is genuinely absent, capture_run_id retries 5 times, each walking pages 1-10 and consuming up to 50 API calls to search the same 1,000-run window.\n  WHY: Not a correctness failure; the guard correctly exits with status=run_id_missing, but this wastes GitHub API calls against the shared rate-limit budget.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:latest_scoped_run_field around the capture path (the new paging loop interacts with the pre-existing capture_run_id retry loop) | severity=low | confidence=3\n  PROBLEM: capture_run_id still retries 5 times when the lookup returns empty, and now each retry walks the full 10-page window before the next retry can short-circuit it.\n  WHY: On a genuine miss, the capture costs up to 50 page reads instead of 5; this is a NIT, not a regression that breaks the gate.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/test-and-mark-stable.yml:wait-plan (capture_run_id retry loop + latest_scoped_run_field while) | severity=low | confidence=4\n  PROBLEM: failure case now walks up to 10 pages per retry (5 retries \u2192 ~50 calls).\n  WHY: wastes shared GitHub API quota on absent Plan run.\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "24c1e0db105d9b740472490884c6ea2849370b45c94743ea7fa638da1fa58de1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4730,
+    "run_id": "36383853354",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36383853354",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928061536_cc2e8b15a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4730,
+    "run_id": "36383853354"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-28T06:15:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

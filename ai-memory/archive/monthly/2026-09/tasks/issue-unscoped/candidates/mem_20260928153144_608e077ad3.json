@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:Section 26.B step 3 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The instruction prompt restatement of \u00a726.C step 5 rules is still incomplete.\n  WHY: A checker relying on the restatement might perform forbidden actions because critical rules are missing; DeepSeek, Qwen, and Grok reported no finding on this issue.\n- docs/implement-plan/issue-4787-checker-renames-only-itself.md:Line 6, Final PR header | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The project log header identifies PR #4797 as the final PR, while the log body consistently references #4828 as the active phase 1 PR.\n  WHY: Downstream readers could resolve to the wrong PR number and hand-back URL when the project is resumed; Qwen and Grok report that #4797 is intentionally the project final PR and #4828 is the phase PR.\n- .claude/commands/implement-plan-claude.md (and workflow-templates/.claude/commands/implement-plan-claude.md twin):line 218 (checker prompt intro) vs line 246 (step 5 cleanup) | severity=high | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The new checker prompt intro says \"You rename and archive no session, yourself included: never call set_session_title or archive_session\", contradicting the existing step 5 cleanup instruction to call archive_session on a newly created session if its trigger fails.\n  WHY: Following the blanket prohibition could leave an orphaned session when create_trigger fails after create_session succeeds.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CLAUDE.md:Section 26.B step 3 | severity=high | confidence=[4]\n  PROBLEM: The instruction prompt restatement of \u00a726.C step 5 rules is still incomplete according to reviewer consensus.\n  WHY: A new Sonnet checker session, which starts with /effort low and no other context, might rely on these instructions and perform forbidden actions if the restatement is missing critical rules, such as rules regarding the checker not archiving itself, succeeded hand-back delivery rules, or the requirement to re-check the PR before starting a fresh fixer.\n- docs/implement-plan/issue-4787-checker-renames-only-itself.md:Line 6, Final PR header | severity=high | confidence=[5]\n  PROBLEM: The project log header identifies PR #4797 as the final PR, while the log body consistently references #4828 as the active phase 1 PR.\n  WHY: Downstream readers of the project log (issue progress comments, the \u00a726 hand-back prompt, the --resume. block) resolve to the wrong PR number and the wrong hand-back URL when the project is resumed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/commands/implement-plan-claude.md (and workflow-templates/.claude/commands/implement-plan-claude.md twin):line 218 (checker prompt intro) vs line 246 (step 5 cleanup) | severity=high | confidence=[4]\n  PROBLEM: The new checker prompt intro says \"You rename and archive no session, yourself included: never call set_session_title or archive_session\" \u2014 a blanket prohibition on calling archive_session. But step 5 (pre-existing, unchanged) instructs: \"If create_session is refused or fails, or create_trigger fails (then archive_session the new session first)\" \u2014 requiring archive_session to clean up a newly created session whose trigger failed.\n  WHY: The checker is a Sonnet session at low effort with no context beyond this prompt. Following \"never call archive_session\" literally, it would skip the step 5 cleanup, leaving an orphaned session when create_trigger fails after create_session succeeds.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a049babacd182a1a8765a071b335330fdbf8248735bd2f98e97d48469be4e6cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4828,
+    "run_id": "36439262566",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36439262566",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260928153144_608e077ad3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4828,
+    "run_id": "36439262566"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-28T15:31:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
