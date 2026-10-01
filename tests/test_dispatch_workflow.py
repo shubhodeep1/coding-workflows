@@ -165,7 +165,7 @@ def test_fallback_never_guesses_between_several_new_runs(fake):
 	assert result["ambiguous"] is True
 	assert result["candidate_run_ids"] == [202, 201]
 	assert "run_id" not in result
-	assert "never dispatch again" in result["error"]
+	assert "dispatch again" in result["error"]
 	assert len(github.dispatches) == 1
 
 
@@ -188,6 +188,11 @@ def test_fallback_candidates_exclude_runs_from_another_ref(fake_twin):
 	assert code == 2
 	assert result["ambiguous"] is True and result["candidate_run_ids"] == [403, 401]
 	assert "dispatched from main" in result["error"] and "audited commit" in result["error"]
+	# PR #5860 review round 1 (head 952aa92): the read-result stage may re-dispatch once after
+	# every candidate completed without a match, so the helper bans a new
+	# dispatch only while a candidate could still be this one.
+	assert "do not dispatch again while any candidate could still be this dispatch's run" in result["error"]
+	assert "never dispatch again" not in result["error"]
 
 
 def test_fallback_times_out_when_only_other_refs_start_runs(fake_twin):

@@ -473,3 +473,23 @@ def test_dispatch_helper_section_names_the_same_ref_filter_and_commit_check():
 	assert "was dispatched from the same ref (its `head_branch`; a run started from another ref runs another copy of the workflow file, issue #5841)" in section
 	assert "confirm its target ref and the commit it covered once the run has completed" in section
 	assert "whose audited commit is the project's pre-sync head" in section
+
+
+# PR #5860 review round 1 (head 952aa92): each read-result stage is a fresh
+# session, so the one re-dispatch per cycle must ride the next stage's name,
+# or every stage would treat a repeated mismatch as the first one.
+def test_steps_9_and_10_carry_the_re_dispatch_marker_into_the_next_stage():
+	step_2 = _step_twin("2. **Pick the mode", "3. **Build the phase checklist")
+	assert "A `… — read result — re-dispatched` stage (step 9) is a read-result stage too." in step_2
+	step_9 = _step_twin("9. **Security pass", "10. **Runtime validation")
+	assert "never dispatch again from this stage" in step_9
+	assert "the re-dispatching stage names the next stage `security-pass <k>/5 — read result — re-dispatched`, which the checker copies into the `— resume.` block's `Stage:` line" in step_9
+	assert "`Waiting on: run <id> (re-dispatched after a mismatch)`" in step_9
+	assert "A stage whose `Stage:` line ends with `— re-dispatched` has used this cycle's re-dispatch, so its mismatch is the second one." in step_9
+	assert "Re-arming the wait on a candidate still in progress keeps the stage name, marker included." in step_9
+	step_10 = _step_twin("10. **Runtime validation", "11. **Completion PR")
+	assert "re-dispatch once in this cycle, naming the next stage `validation <k>/3 — read result — re-dispatched`" in step_10
+	assert "a mismatch in a stage whose `Stage:` line ends with `— re-dispatched` is the second one and is `Status: BLOCKED`" in step_10
+	helper = _step_twin("### Dispatch helper", "### Comment helper")
+	assert "Never dispatch again while a candidate could still be this dispatch's run; only a read-result stage that found every candidate completed and none matching re-dispatches, once (step 9)." in helper
+	assert "(never dispatch again)" not in helper

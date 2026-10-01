@@ -97,7 +97,7 @@ Phase 1:
 ## Risks & Mitigations
 
 - The step 2 sync merges a busy default branch on every stage, so comparing against the post-sync head would re-audit after nearly every run → compare against the pre-sync head (AD-2), and run no sync in a read-result stage, so even a clean merge never lands between the check and the verdict (AD-7).
-- A legitimate move of the project branch during an audit (a late follow-up fix merge) means a mismatch and one re-dispatch. Two in a row means `Status: BLOCKED` → ACCEPTED — the branch should not move during a run wait, so two moves in a row need a human.
+- A legitimate move of the project branch during an audit (a late follow-up fix merge) means a mismatch and one re-dispatch. Two in a row means `Status: BLOCKED` → ACCEPTED — the branch should not move during a run wait, so two moves in a row need a human. Each read-result stage is a fresh session, so the re-dispatching stage names the next stage `… — read result — re-dispatched` and a mismatch in a stage with that marker is the second one (AD-8, PR #5860 review round 1 on head `952aa92`).
 - Waiting for every candidate can delay a read by the difference in the runs' durations → ACCEPTED — only on the fallback path, which needs both a missing run id and a parallel dispatch (#5016 AD-7).
 - A run without `head_branch` is dropped from the fallback → ACCEPTED — the field is always present on workflow runs. Its absence means a timeout and exit 2 with `dispatched: true`, never a wrong run.
 - Consumer repos keep the old text until their next `.claude/` sync → ACCEPTED — the existing sync ships it.
