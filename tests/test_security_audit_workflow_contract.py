@@ -1409,6 +1409,9 @@ def test_security_audit_codex_failure_classifies_provider_status() -> None:
 		"tokens used: 429\nreview missing rate limiting on login\n": "unknown",
 		# Context words count only as whole words (review round 1, head a9b6dcc).
 		"encode402 finished\nValueError 500 rows\n": "unknown",
+		# A status code glued to the context word is part of a longer word too
+		# (review round 3, head 84d953c).
+		"handler error402 hit\nloaded Error500Handler\n": "unknown",
 		'request failed: {"statusCode": 429}\n': "429",
 		"provider error_code=402\n": "402",
 		"": "unknown",

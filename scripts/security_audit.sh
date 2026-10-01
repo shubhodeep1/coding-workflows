@@ -173,13 +173,13 @@ security_audit_mask_stderr_line() {
 # Classifies one Codex stderr line as a provider failure. Prints
 # 402|401|429|5xx, or nothing when the line matches no class. A bare status
 # code counts only after the word http, status, code, or error (also the
-# compounds statuscode and errorcode), never inside a longer word such as
-# encode or ValueError, so token counts and ids never match. Within one line
-# the order is 402, 401, 429, 5xx.
+# compounds statuscode and errorcode) and at least one separator, never inside
+# a longer word such as encode, ValueError, or error402, so token counts and
+# ids never match. Within one line the order is 402, 401, 429, 5xx.
 security_audit_classify_codex_provider() {
 	local provider_line="${1-}"
 	provider_line="${provider_line,,}"
-	local provider_status_context='(^|[^[:alnum:]])(http/[0-9.]+|http|statuscode|status|errorcode|code|error)[^[:alnum:]]{0,16}'
+	local provider_status_context='(^|[^[:alnum:]])(http/[0-9.]+|http|statuscode|status|errorcode|code|error)[^[:alnum:]]{1,16}'
 	local provider_402_pattern="payment required|insufficient credits|${provider_status_context}402([^0-9]|$)"
 	local provider_401_pattern="unauthorized|${provider_status_context}401([^0-9]|$)"
 	local provider_429_pattern="too many requests|rate[ _-]?limit([^i]|$)|${provider_status_context}429([^0-9]|$)"

@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5816
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01SLmbVzcitKU2aiKHq634QY   (triggers in the intervention-1 stage report)
+- Check-in: checker session_01SLmbVzcitKU2aiKHq634QY   (triggers in the latest stage report)
 - Last updated: 2026-10-01
-- Last note: review round 7 (workflow round 2 after intervention 1) on head b788da3: secret-named env vars are now matched by name in any letter case (`api_key`, `Client_Secret`), value still read through the original name; regression test added. No finding rejected.
+- Last note: review round 8 (workflow round 3 after intervention 1) on head 84d953c: a provider status code now needs at least one separator after its context word (`error402`, `Error500Handler` no longer classify); regression case added. Rejected 1 finding: short secret values are already masked as whole words (AD-8).
 
 ## Phases
-1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR #5816 open (waiting); review rounds: 7; interventions: 1 (2026-10-01: autofix-iteration cap reached on 22c5180 with the reviewers skipped; `[claude-intervention]` commit to re-run review, label removed)
+1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR #5816 open (waiting); review rounds: 8; interventions: 1 (2026-10-01: autofix-iteration cap reached on 22c5180 with the reviewers skipped; `[claude-intervention]` commit to re-run review, label removed)
 
 ## Conformance
 
@@ -47,6 +47,7 @@
 - [source:intervention] In Claude-fixer mode the review run on the head carrying the `MAX_AUTOFIX_ITERATIONS`-th consecutive `[claude-autofix]` commit skips the reviewer panel and labels the PR `ai:review-blocked`, so that round's fix is never reviewed; a `[claude-intervention]` commit (with the log update) ends the run and gets it reviewed. (files: .github/workflows/review_autofix.yml)
 - [source:intervention] A per-line secret mask must split each multiline secret value into its lines (normalised the way the log stream is, CR removed) and mask every non-empty line: a value matched as one string never matches a single log line, so a PEM key's lines all print. (files: scripts/security_audit.sh)
 - [source:intervention] Bash `case` globs are case-sensitive: match secret-looking env var names on `${name^^}` so lowercase and mixed-case names (`api_key`, `Client_Secret`) are masked too, and keep reading the value through the original name. (files: scripts/security_audit.sh)
+- [source:intervention] A separator class between a context word and the value it qualifies must be `{1,n}`, not `{0,n}`: a zero-width separator lets the value glue onto the word (`error402`, `Error500Handler`), so an identifier reads as a status code. (files: scripts/security_audit.sh)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude from #5785; base branch main; security pass: run (`security_pass_skip.py`: no skip label).
