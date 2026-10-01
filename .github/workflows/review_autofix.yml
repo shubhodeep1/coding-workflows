@@ -1891,23 +1891,76 @@ jobs:
             } >> "${GITHUB_STEP_SUMMARY}"
           }
 
+          # deterministic_skip_head_is_current [refused_what] [gate_refused_what] [allow_snapshot_ref_fallback]
+          # Every merge-capable path calls this once before it authorizes a
+          # merge or merge labels. One pulls/{n} read refreshes the head SHA
+          # and ref, and the same PR object is the gate's --pr-json, so the
+          # gate issues no second PR read (CLAUDE.md §15).
+          # allow_snapshot_ref_fallback=true (the auto-merge-enabled path,
+          # whose merge is bound by --match-head-commit): when the read fails
+          # or returns no head SHA or ref and neither the gate job's snapshot
+          # ref nor a ref the read did return is claude/*, return 0 without
+          # the refreshed facts, so a transient
+          # read error never holds back a non-claude/* merge (PR #5572 review
+          # round 3). deterministic_skip_head_verified says whether the head
+          # was actually confirmed current.
+          deterministic_skip_pr_json=""
+          deterministic_skip_current_head_ref=""
+          deterministic_skip_head_verified="false"
+          deterministic_skip_route_ref=""
           deterministic_skip_head_is_current()
           {
-            local ready_label_current_head_sha=""
+            local refused_what="${1:-deterministic-skip merge-authorization labels}"
+            local gate_refused_what="${2:-Merge-authorization labels withheld}"
+            local allow_snapshot_ref_fallback="${3:-false}"
+            local ready_label_current_head_sha="" ready_label_current_head_ref="" ready_label_refresh_failed="false"
+            deterministic_skip_pr_json=""
+            deterministic_skip_current_head_ref=""
+            deterministic_skip_head_verified="false"
             if [ -z "${PR_HEAD_SHA}" ]; then
               return 1
             fi
-            # The gate snapshot cannot prove freshness on paths that
-            # intentionally skip gh pr merge, so those paths refresh only the
-            # head SHA instead of adding another call to the normal merge path.
-            if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null)"; then
-              echo "::warning::Could not refresh the current head for PR #${PR_NUMBER}; refusing deterministic-skip merge-authorization labels."
+            # The gate job's snapshot cannot prove the head is still current,
+            # nor that its ref was not renamed to claude/* since.
+            if ! deterministic_skip_pr_json="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null)"; then
+              deterministic_skip_pr_json=""
+              ready_label_refresh_failed="true"
+            else
+              ready_label_current_head_sha="$(printf '%s' "${deterministic_skip_pr_json}" | jq -r '.head.sha // ""' 2>/dev/null || true)"
+              ready_label_current_head_ref="$(printf '%s' "${deterministic_skip_pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || true)"
+              if [ -z "${ready_label_current_head_sha}" ] || [ -z "${ready_label_current_head_ref}" ]; then
+                ready_label_refresh_failed="true"
+              fi
+            fi
+            if [ "${ready_label_refresh_failed}" = "true" ] && [ "${allow_snapshot_ref_fallback}" = "true" ] \
+              && [ -n "${PR_HEAD_REF}" ] && [[ "${PR_HEAD_REF}" != claude/* ]] && [[ "${ready_label_current_head_ref}" != claude/* ]]; then
+              deterministic_skip_pr_json=""
+              echo "::notice::Could not refresh the head of PR #${PR_NUMBER}; its gate-observed ref '${PR_HEAD_REF}' is not claude/*, so ${refused_what} proceeds bound to head ${PR_HEAD_SHA}."
+              return 0
+            fi
+            if [ -z "${deterministic_skip_pr_json}" ]; then
+              echo "::warning::Could not refresh the current head for PR #${PR_NUMBER}; refusing ${refused_what}."
               return 1
             fi
             if [ -z "${ready_label_current_head_sha}" ] || [ "${ready_label_current_head_sha}" != "${PR_HEAD_SHA}" ]; then
-              echo "::warning::PR #${PR_NUMBER} no longer points at gate-observed head ${PR_HEAD_SHA}; refusing deterministic-skip merge-authorization labels for current head ${ready_label_current_head_sha:-unknown}."
+              echo "::warning::PR #${PR_NUMBER} no longer points at gate-observed head ${PR_HEAD_SHA}; refusing ${refused_what} for current head ${ready_label_current_head_sha:-unknown}."
               return 1
             fi
+            if [ -z "${ready_label_current_head_ref}" ]; then
+              echo "::warning::Could not determine the head ref of PR #${PR_NUMBER}; refusing ${refused_what}."
+              return 1
+            fi
+            deterministic_skip_current_head_ref="${ready_label_current_head_ref}"
+            # A ready label is a merge authorization (the orchestrator poller
+            # merges ready PRs), so claude/* heads pass the hold gate on every
+            # path (issues #5316, #5564). The current ref decides, not only
+            # the gate job's snapshot, so a branch renamed to claude/* without
+            # a new commit still meets the gate; its support checkout was
+            # skipped, so the missing gate script refuses (fail closed).
+            if { [[ "${ready_label_current_head_ref}" == claude/* ]] || [[ "${PR_HEAD_REF}" == claude/* ]]; } && ! merge_hold_gate_allows "${gate_refused_what}"; then
+              return 1
+            fi
+            deterministic_skip_head_verified="true"
             return 0
           }
 
@@ -1918,12 +1971,23 @@ jobs:
           merge_hold_gate_reason=""
           merge_hold_gate_allows()
           {
+            local gate_refused_what="${1:-Auto-merge not enabled}"
             local gate_script=".codex-workflow-src/scripts/claude_merge_hold_gate.py" gate_json="" gate_rc=0 gate_skip_reason=""
+            local deterministic_skip_pr_file=""
+            local -a gate_pr_json_args=()
             if [ ! -f "${gate_script}" ]; then
               gate_rc=2
               merge_hold_gate_reason="gate script ${gate_script} not found"
             else
-              gate_json="$(PYTHONDONTWRITEBYTECODE=1 python3 "${gate_script}" --repo "${REPOSITORY}" --pr "${PR_NUMBER}" --head "${PR_HEAD_SHA}")" || gate_rc=$?
+              # Reuse the PR object deterministic_skip_head_is_current just
+              # read, so the gate issues no second pulls/{n} read.
+              if [ -n "${deterministic_skip_pr_json}" ]; then
+                deterministic_skip_pr_file="$(mktemp)"
+                printf '%s' "${deterministic_skip_pr_json}" > "${deterministic_skip_pr_file}"
+                gate_pr_json_args=(--pr-json "${deterministic_skip_pr_file}")
+              fi
+              gate_json="$(PYTHONDONTWRITEBYTECODE=1 python3 "${gate_script}" --repo "${REPOSITORY}" --pr "${PR_NUMBER}" --head "${PR_HEAD_SHA}" "${gate_pr_json_args[@]}")" || gate_rc=$?
+              [ -z "${deterministic_skip_pr_file}" ] || rm -f "${deterministic_skip_pr_file}"
               merge_hold_gate_reason="$(printf '%s' "${gate_json}" | jq -r '.reason // empty' 2>/dev/null || true)"
             fi
             if [ "${gate_rc}" -eq 0 ]; then
@@ -1932,7 +1996,7 @@ jobs:
             fi
             gate_skip_reason="$(printf '%s' "${gate_json}" | jq -r '.skip_reason // empty' 2>/dev/null || true)"
             echo "AUTOFIX_AUTO_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} reason=${gate_skip_reason:-gate_unavailable}"
-            echo "::warning::Auto-merge not enabled on PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}'): ${merge_hold_gate_reason:-merge hold gate exited ${gate_rc}}."
+            echo "::warning::${gate_refused_what} on PR #${PR_NUMBER} (head ref '${deterministic_skip_current_head_ref:-${PR_HEAD_REF}}'): ${merge_hold_gate_reason:-merge hold gate exited ${gate_rc}}."
             return 1
           }
 
@@ -1950,9 +2014,17 @@ jobs:
             auto_merge_summary="REFUSED (gate-observed head SHA unavailable or malformed)"
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=head_sha_unavailable"
             echo "::warning::Gate-observed head SHA is unavailable or malformed for PR #${PR_NUMBER}. Failing closed: refusing deterministic-skip auto-merge enablement without a --match-head-commit guard."
-          elif [[ "${PR_HEAD_REF}" == claude/* ]] && ! merge_hold_gate_allows; then
-            auto_merge_summary="REFUSED (merge hold gate: ${merge_hold_gate_reason:-unavailable})"
-          elif [ -n "${PR_HEAD_REF}" ] && printf '%s\n' "${PR_HEAD_REF}" | grep -Eq '^auto/forward-merge-stable-'; then
+          elif ! deterministic_skip_head_is_current "deterministic-skip auto-merge enablement" "Auto-merge not enabled" "true"; then
+            # Head moved, the refresh failed or its ref is unreadable on a
+            # claude/* snapshot ref, or (claude/* heads, current or snapshot
+            # ref) the merge hold gate refused (issue #5564).
+            auto_merge_summary="REFUSED (head not current or merge hold gate: ${merge_hold_gate_reason:-see warnings above})"
+          elif deterministic_skip_route_ref="${deterministic_skip_current_head_ref:-${PR_HEAD_REF}}" \
+            && [ -n "${deterministic_skip_route_ref}" ] && printf '%s\n' "${deterministic_skip_route_ref}" | grep -Eq '^auto/forward-merge-stable-'; then
+            # The merge strategy follows the ref the shared check just read
+            # (a branch renamed without a new commit keeps its SHA), and the
+            # gate job's snapshot only when that read fell back to it (PR
+            # #5572 review round 4).
             # Mirror of the forward-merge-fallback handling in the codex-agent
             # "Enable auto-merge on PR" step. Defense in depth: a tiny
             # forward-merge fallback PR (e.g. one that just happens to fall
@@ -1965,7 +2037,7 @@ jobs:
             # full rationale (promote-main-to-stable.yml ancestry check,
             # "Create a merge commit" requirement, etc.).
             if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
-              echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
+              echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${deterministic_skip_route_ref}')..."
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=merge_commit"
               if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
@@ -1976,11 +2048,14 @@ jobs:
                 echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Check that 'Allow merge commits' and 'Allow auto-merge' are enabled in repo settings and branch protection is configured. The PR remains open for manual 'Create a merge commit'."
               fi
             else
-              if deterministic_skip_head_is_current; then
+              # deterministic_skip_head_is_current passed above; this mode
+              # enables no head-bound merge, so labels need a confirmed head
+              # (re-read only when the shared check fell back to the snapshot).
+              if [ "${deterministic_skip_head_verified}" = "true" ] || deterministic_skip_head_is_current; then
                 auto_merge_ready_labels_allowed="true"
               fi
-              auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
-              echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed on the deterministic-skip path. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
+              auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${deterministic_skip_route_ref}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
+              echo "PR #${PR_NUMBER} head ref '${deterministic_skip_route_ref}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed on the deterministic-skip path. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
             fi
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."

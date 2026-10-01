@@ -1037,6 +1037,39 @@ reviews, comments, and conflicts stay a direct §12 request.
   allows, 1 refuses, 2 (read error after the retries, malformed page,
   truncated tree, head moved, missing gate) refuses too. The log key is
   `AUTOFIX_AUTO_MERGE_SKIPPED reason=hold_claim|twin_parity|gate_unavailable`.
+  The same gate guards merge-authorization labels (issue #5564): the
+  helper's `reviewed_head_is_current_for_labels` (the `ENABLE_AUTO_MERGE`-off
+  and `e2e-smoke-test` exits, which set `AUTO_MERGE_READY_LABELS_ALLOWED`
+  without `gh pr merge`) and the job's `deterministic_skip_head_is_current`
+  run it for `claude/*` heads, classified on the head ref read together with
+  the fresh head SHA (one `pulls/{n}` read, reused as the gate's
+  `--pr-json`; the job also keeps the gate job's snapshot ref, so a branch
+  renamed to `claude/*` without a new commit still meets the gate, which
+  refuses when its support checkout was skipped), because the orchestrator
+  poller merges the PR of every `ai:ready-to-merge` issue. The job runs
+  `deterministic_skip_head_is_current` before it enables auto-merge too
+  (PR #5572 review round 2), so every deterministic-skip merge or label
+  path makes that one read and refuses when the head moved, its ref is
+  unreadable, or the read fails. On the auto-merge path only, a failed or
+  incomplete read falls back to the snapshot ref when neither that ref nor a
+  ref the read returned is `claude/*`, and the `--match-head-commit` merge proceeds as before (PR
+  #5572 review round 3). The poller
+  (`_orch_claude_merge_hold_gate_allows` in
+  `scripts/orchestrate_poll_process.sh`) re-reads the PR once right before
+  each of its two ready-to-merge merges (current wave, prior-wave backward
+  scan) and classifies on that read's ref, or on its earlier read's ref when
+  the re-read returns no head ref. For a `claude/*` ref it defers the
+  merge when the re-read failed or the head is no longer the one the checks
+  saw, runs the gate with that PR object as `--pr-json`, and then merges
+  with `--match-head-commit` on that head; other refs merge exactly as
+  before (PR #5572 review round 3); the gate comes
+  from `CLAUDE_MERGE_HOLD_GATE_SCRIPT`, else `.codex-workflow-src/scripts/`
+  (missing refuses; `.codex-workflow-src-main` is no fallback, since the
+  staging step deletes it before the poller runs), and
+  `orchestrate_poll.yml` passes `vars.CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`. Its
+  log key is `ORCH_MERGE_HOLD_GATE pr=<n> head_sha=<sha> action=allow|refuse
+  reason=<skip_reason>`. The poller's judge, stall, and noop force-merges are
+  not gated (they need a judge or stall verdict, not a ready label).
   Any new merge path for `claude/*` PRs, such as the pending-checks merge
   of #4900, must call the gate before `gh pr merge`. The `claude-pr-catch-all` job of
   `.github/workflows/review_autofix_sweep.yml` (cron `17 * * * *`; the
@@ -1812,6 +1845,7 @@ and shipped:
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `AUTOFIX_AUTO_MERGE_SKIPPED`
 - `AUTOFIX_MERGE_HOLD_GATE`
+- `ORCH_MERGE_HOLD_GATE`
 - `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -2006,6 +2040,7 @@ LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=AUTOFIX_AUTO_MERGE_SKIPPED
 LOG_PREFIX.name=AUTOFIX_MERGE_HOLD_GATE
+LOG_PREFIX.name=ORCH_MERGE_HOLD_GATE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---

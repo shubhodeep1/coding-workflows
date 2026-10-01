@@ -1680,6 +1680,7 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 			pr['state'] = 'closed'
 			pr['merged'] = True
 			store.setdefault('merged_prs', []).append(pr_num)
+			store.setdefault('merge_args', []).append(args[3:])
 			save()
 			sys.exit(0)
 	print('not found', file=sys.stderr)
@@ -21803,6 +21804,168 @@ def test_linked_pr_is_issue_implementation_predicate_contract():
 		got = {line.rsplit("|", 1)[0]: int(line.rsplit("|", 1)[1]) for line in result.stdout.splitlines() if line}
 		for issue, head, body, expected in cases:
 			assert got[f"{issue}|{head}|{body}"] == expected, (issue, head, body, got)
+
+
+
+_CLAUDE_HOLD_GATE_STUB = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["STUB_HOLD_GATE_CALLS"], "a", encoding="utf-8") as fh:
+	fh.write(json.dumps(args) + "\\n")
+rc = int(os.environ.get("STUB_HOLD_GATE_RC", "0"))
+print(json.dumps({"merge": rc == 0, "skip_reason": None if rc == 0 else "hold_claim", "reason": "stub"}))
+sys.exit(rc)
+"""
+
+
+def _run_ready_to_merge_with_stub_gate(head_ref: str, gate_rc: int, *, prior_wave: bool = False, incomplete_pr_read: int = 0, incomplete_pr_fields: dict | None = None) -> tuple[dict, list[list[str]]]:
+	"""Run the poller on one ai:ready-to-merge issue whose linked PR has
+	head `head_ref`, with CLAUDE_MERGE_HOLD_GATE_SCRIPT pointing at a stub
+	gate that exits `gate_rc` and records its argv (issue #5564).
+	`incomplete_pr_read` > 0 makes that `pulls/910` read (1-based) return the
+	PR without a head ref (or with `incomplete_pr_fields` instead), as a
+	truncated or partial response would."""
+	head_sha = "e" * 40
+	with tempfile.TemporaryDirectory(prefix="orch-hold-gate-") as td:
+		stub = Path(td) / "gate.py"
+		stub.write_text(_CLAUDE_HOLD_GATE_STUB, encoding="utf-8")
+		stub.chmod(0o755)
+		calls_path = Path(td) / "calls.jsonl"
+		if prior_wave:
+			state = _base_state()
+			state["total_issues"] = 2
+			state["total_waves"] = 2
+			state["current_wave"] = 2
+			state["waves"].append({"wave": 2, "issues": [{"id": "issue-2", "github_issue": 20, "status": "pending"}]})
+			state["issue_number_map"]["issue-2"] = 20
+			issue_labels = {10: ["ai:ready-to-merge"], 20: ["ai:implementing"]}
+		else:
+			state = _base_state()
+			issue_labels = {10: ["ai:ready-to-merge"]}
+		prs = [{"number": 910, "state": "open", "baseRefName": "main", "headRefName": head_ref, "headRefFromApi": head_ref,
+			"headSha": head_sha, "mergeable": True, "mergeable_state": "clean", "body": "Fixes #10"}]
+		pr_api_sequence = None
+		if incomplete_pr_read:
+			incomplete = dict(prs[0], **(incomplete_pr_fields if incomplete_pr_fields is not None else {"headRefFromApi": ""}))
+			pr_api_sequence = {910: [dict(prs[0])] * (incomplete_pr_read - 1) + [incomplete] + [dict(prs[0])]}
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			issue_labels=issue_labels,
+			issue_linked_prs={10: 910},
+			prs=prs,
+			pr_api_sequence=pr_api_sequence,
+			existing_branches=["main"],
+			env_overrides={
+				"CLAUDE_MERGE_HOLD_GATE_SCRIPT": str(stub),
+				"STUB_HOLD_GATE_CALLS": str(calls_path),
+				"STUB_HOLD_GATE_RC": str(gate_rc),
+			},
+		)
+		calls = [json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()] if calls_path.exists() else []
+	return result, calls
+
+
+def test_ready_to_merge_does_not_merge_a_held_claude_pr():
+	# Issue #5564: an ai:ready-to-merge label must not let the poller merge a
+	# claude/* PR whose head the merge hold gate refuses.
+	result, calls = _run_ready_to_merge_with_stub_gate("claude/issue-10", 1)
+	output = result["stdout"] + result["stderr"]
+	assert 910 not in result.get("merged_prs", []), output
+	assert len(calls) == 1, calls
+	gate_argv = calls[0]
+	assert gate_argv[gate_argv.index("--pr") + 1] == "910", gate_argv
+	assert gate_argv[gate_argv.index("--head") + 1] == "e" * 40, gate_argv
+	assert "--pr-json" in gate_argv, gate_argv
+	assert f"ORCH_MERGE_HOLD_GATE pr=910 head_sha={'e' * 40} action=refuse reason=hold_claim" in output, output
+	assert "Deferring merge of claude/* PR #910 for issue #10" in output, output
+
+
+def test_ready_to_merge_merges_an_allowed_claude_pr_bound_to_the_gated_head():
+	result, calls = _run_ready_to_merge_with_stub_gate("claude/issue-10", 0)
+	output = result["stdout"] + result["stderr"]
+	assert 910 in result.get("merged_prs", []), output
+	assert len(calls) == 1, calls
+	assert result["merge_args"][-1][-2:] == ["--match-head-commit", "e" * 40], result["merge_args"]
+	assert f"ORCH_MERGE_HOLD_GATE pr=910 head_sha={'e' * 40} action=allow" in output, output
+
+
+def test_ready_to_merge_merges_other_heads_without_the_gate():
+	result, calls = _run_ready_to_merge_with_stub_gate("ai/issue-10", 1)
+	output = result["stdout"] + result["stderr"]
+	assert 910 in result.get("merged_prs", []), output
+	assert calls == []
+	assert "--match-head-commit" not in result["merge_args"][-1], result["merge_args"]
+	assert "ORCH_MERGE_HOLD_GATE" not in output
+
+
+def test_backward_scan_does_not_merge_a_held_claude_pr():
+	result, calls = _run_ready_to_merge_with_stub_gate("claude/issue-10", 1, prior_wave=True)
+	output = result["stdout"] + result["stderr"]
+	assert 910 not in result.get("merged_prs", []), output
+	assert calls, output
+	assert "[backward-scan] Deferring auto-merge of claude/* PR #910 for prior-wave issue #10" in output, output
+
+
+def test_backward_scan_merges_an_allowed_claude_pr_bound_to_the_gated_head():
+	result, calls = _run_ready_to_merge_with_stub_gate("claude/issue-10", 0, prior_wave=True)
+	output = result["stdout"] + result["stderr"]
+	assert 910 in result.get("merged_prs", []), output
+	assert result["merge_args"][-1][-2:] == ["--match-head-commit", "e" * 40], result["merge_args"]
+
+
+# The merge-point pulls/910 read is the 5th PR read in the current-wave
+# ready-to-merge loop and the 2nd in the prior-wave backward scan.
+_RTM_MERGE_POINT_PR_READ = 5
+_PW_MERGE_POINT_PR_READ = 2
+
+
+def test_ready_to_merge_merges_other_heads_when_the_merge_point_read_is_incomplete():
+	# PR #5572 review round 3: a merge-point re-read without a head ref must
+	# not hold back a non-claude/* merge; the earlier read's ref classifies.
+	result, calls = _run_ready_to_merge_with_stub_gate("ai/issue-10", 1, incomplete_pr_read=_RTM_MERGE_POINT_PR_READ)
+	output = result["stdout"] + result["stderr"]
+	assert 910 in result.get("merged_prs", []), output
+	assert calls == []
+	assert "--match-head-commit" not in result["merge_args"][-1], result["merge_args"]
+	assert "Deferring merge of PR #910" not in output, output
+
+
+def test_ready_to_merge_defers_a_claude_pr_when_the_merge_point_read_is_incomplete():
+	result, calls = _run_ready_to_merge_with_stub_gate("claude/issue-10", 0, incomplete_pr_read=_RTM_MERGE_POINT_PR_READ)
+	output = result["stdout"] + result["stderr"]
+	assert 910 not in result.get("merged_prs", []), output
+	assert calls == []
+	assert "Deferring merge of claude/* PR #910 for issue #10: could not confirm head" in output, output
+
+
+def test_ready_to_merge_defers_a_head_renamed_to_claude_when_the_merge_point_read_has_no_sha():
+	# The merge-point read names a claude/* ref but no head SHA: the fresh ref
+	# classifies (not the earlier non-claude/* read), and an unconfirmed head
+	# defers.
+	result, calls = _run_ready_to_merge_with_stub_gate("ai/issue-10", 0, incomplete_pr_read=_RTM_MERGE_POINT_PR_READ,
+		incomplete_pr_fields={"headRefFromApi": "claude/issue-10", "headSha": ""})
+	output = result["stdout"] + result["stderr"]
+	assert 910 not in result.get("merged_prs", []), output
+	assert calls == []
+	assert "Deferring merge of claude/* PR #910 for issue #10: could not confirm head" in output, output
+
+
+def test_backward_scan_merges_other_heads_when_the_merge_point_read_is_incomplete():
+	result, calls = _run_ready_to_merge_with_stub_gate("ai/issue-10", 1, prior_wave=True, incomplete_pr_read=_PW_MERGE_POINT_PR_READ)
+	output = result["stdout"] + result["stderr"]
+	assert 910 in result.get("merged_prs", []), output
+	assert calls == []
+	assert "--match-head-commit" not in result["merge_args"][-1], result["merge_args"]
+
+
+def test_backward_scan_defers_a_claude_pr_when_the_merge_point_read_is_incomplete():
+	result, calls = _run_ready_to_merge_with_stub_gate("claude/issue-10", 0, prior_wave=True, incomplete_pr_read=_PW_MERGE_POINT_PR_READ)
+	output = result["stdout"] + result["stderr"]
+	assert 910 not in result.get("merged_prs", []), output
+	assert calls == []
+	assert "[backward-scan] Deferring auto-merge of claude/* PR #910 for prior-wave issue #10: could not confirm head" in output, output
 
 
 def main() -> int:

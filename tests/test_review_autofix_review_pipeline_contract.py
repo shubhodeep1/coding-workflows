@@ -6203,7 +6203,13 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_
 	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"' in block
 	assert 'auto_merge_ready_labels_allowed="false"' in block
 	assert 'if [ "${auto_merge_ready_labels_allowed}" != "true" ]; then' in block
-	assert block.count("if deterministic_skip_head_is_current; then") == 2
+	# ENABLE_AUTO_MERGE off checks the head itself; every auto-merge-enabled
+	# branch, the forward-merge manual mode included, runs after the shared
+	# refresh-and-gate check (PR #5572 review round 2).
+	assert block.count("if deterministic_skip_head_is_current; then") == 1
+	shared_check = 'elif ! deterministic_skip_head_is_current "deterministic-skip auto-merge enablement" "Auto-merge not enabled" "true"; then'
+	assert block.count(shared_check) == 1
+	assert block.find(shared_check) < block.find("grep -Eq '^auto/forward-merge-stable-'")
 	idx_review_skipped_label = block.find('ensure_label_exists "ai:review-skipped"')
 	idx_bound_squash_merge = block.find('--squash --auto --match-head-commit "${PR_HEAD_SHA}"')
 	assert idx_review_skipped_label > idx_bound_squash_merge, (
@@ -6718,9 +6724,12 @@ def test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha() -> None:
 		"deterministic-skip linked-issue advancement must be gated on successful bound enrolment"
 	)
 	assert re.search(
-		r'else\n\s+if deterministic_skip_head_is_current; then\n\s+auto_merge_ready_labels_allowed="true"',
+		r'else\n(?:\s+#[^\n]*\n)+\s+if \[ "\$\{deterministic_skip_head_verified\}" = "true" \] \|\| deterministic_skip_head_is_current; then\n\s+auto_merge_ready_labels_allowed="true"',
 		block,
 	), "configured forward-merge manual mode must still advance reviewed linked issues"
+	assert block.find('elif ! deterministic_skip_head_is_current "deterministic-skip auto-merge enablement"') < block.find('if [ "${deterministic_skip_head_verified}" = "true" ] || deterministic_skip_head_is_current; then'), (
+		"the forward-merge manual mode reuses the shared head check that precedes it, and re-checks when it fell back to the snapshot ref"
+	)
 
 
 def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
