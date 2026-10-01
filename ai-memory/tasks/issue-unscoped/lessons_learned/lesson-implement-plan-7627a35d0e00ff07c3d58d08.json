@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T10:18:55Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A Claude-fixer hand-off with 0 ledger entries and `no fresh ready same-head check-run snapshot` in the hand-off step is the collector's empty-snapshot failure (#5880), not a review result: check the snapshot's sha256 against a local collector run before judging findings, and close the round with a new head rather than a verdict when no verdict bot is configured.",
+  "phase": "implement_plan",
+  "pr_number": 5948,
+  "record_id": "lesson-implement-plan-7627a35d0e00ff07c3d58d08",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5904-block-merge-on-any-failed-newer-review",
+    "file:scripts/collect_pr_check_runs_context.py",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}
