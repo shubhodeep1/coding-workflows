@@ -1,0 +1,42 @@
+# Implement-Plan Log — Dispatched review runs check out the PR head
+
+- Plan: docs/plans/issue-5824-dispatched-review-pr-head-checkout-plan.md
+- Source issue: shubhodeep1/coding-workflows#5824
+- Repo: shubhodeep1/coding-workflows   Default branch: main
+- Project branch: claude/implement-plan-issue-5824-dispatched-review-pr-head-checkout   Final PR: (opening)
+- Status: IN_PROGRESS
+- Stage: phase 1/1
+- Activation: not started
+- Waiting on: none
+- Stage model: claude-opus-5-5   Permission mode: auto
+- Check-in: none
+- Last updated: 2026-10-01
+- Last note: project branch opened; implementing phase 1.
+
+## Phases
+1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs
+   - gate exports `review_checkout_sha` from the existing `/pulls/<n>` fetch (same-repo heads only)
+   - `codex-agent` → "Checkout repo" uses `pull_request.head.sha || review_checkout_sha || github.sha`
+   - regression test `tests/test_review_autofix_dispatch_pr_head_checkout.py`; updated `tests/test_review_autofix_merge_precheck.py`
+   - `agents.md` paragraph; changelog fragment `changelog.d/5824-dispatched-review-pr-head-checkout.md`
+   - done: tests pass, workflow under 480,000 bytes
+
+## Conformance
+
+## Security pass
+
+## Validation
+
+## Completion
+
+## Activation
+
+## Auto-decisions
+- AD-1 [plan, 2026-10-01] How should dispatched runs give reviewers the PR head's files? — Picked: A — check out the gate-verified PR head SHA into `GITHUB_WORKSPACE` for non-`pull_request` runs through a new gate output. Alternatives: B — repoint every reviewer-side read to `WORKSPACE_PATH` (~10 sites, 4 scripts); C — both. Why: one change covers every `GITHUB_WORKSPACE` reader and matches what `pull_request` runs already do (§5). Applied in: phase 1 PR. Status: pending review
+- AD-2 [plan, 2026-10-01] What should a dispatched run do for a PR whose head is in another repository? — Picked: A — keep the `github.sha` checkout and log a warning. Alternatives: B — skip the run; C — check out the fork head. Why: C would put untrusted fork code next to secrets that a fork `pull_request` run never gets (§1); B changes gate routing for a case the workflow does not support anyway (§5). Applied in: phase 1 PR. Status: pending review
+- AD-3 [plan, 2026-10-01] Should the `HEAD_SHA` env of the interim judge, behavioural smoke, and claude-branch consensus steps also switch to the gate head? — Picked: A — no, out of scope. Alternatives: B — switch them too. Why: they are not reviewer file reads, and the issue's acceptance criteria do not cover them (§5). Applied in: no code change. Status: pending review
+
+## Lessons
+
+## Notes
+- Security pass: run (`security_pass_skip.py`: no skip label).
