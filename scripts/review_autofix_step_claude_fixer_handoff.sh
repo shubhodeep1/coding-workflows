@@ -36,7 +36,12 @@
 # also counts only when its `evidence: <file>:<range> | quote: <text>` fields
 # verify against the reviewed commit HEAD_SHA, read with local git from the
 # PR checkout in GITHUB_WORKSPACE (issue #4976); a free-text reason alone
-# never demotes a finding, and an unreadable commit demotes nothing. The filtered
+# never demotes a finding, and an unreadable commit demotes nothing. Votes are
+# necessary but never sufficient (issue #5582): the filter also requires an
+# independent automated disproof of the finding, and this step supplies none,
+# so every entry stays blocking and the filter logs
+# CLAUDE_FIXER_NONBLOCKING_KEPT ... reason=no_automated_proof for an entry
+# that met every vote condition. The filtered
 # copy is what this step counts, digests, and posts; a round whose only
 # entries are non-blocking still posts the ledger, then takes the
 # zero-findings path. A missing or failing filter keeps the original ledger,
@@ -130,8 +135,9 @@ claude_fixer_nonblocking_count=0
 if [[ "${REVIEWERS_SUCCESSFUL:-}" =~ ^[1-9][0-9]*$ ]] \
   && claude_fixer_ledger_well_formed "${REVIEWER_CONSENSUS_FILE:-}"; then
   claude_fixer_ledger_state="ok"
-  # Demote rejected single-reviewer findings (issue #4586). Any failure keeps
-  # the original ledger, so every finding stays blocking.
+  # Demote rejected single-reviewer findings (issue #4586). Votes alone never
+  # demote (issue #5582), and any failure keeps the original ledger, so every
+  # finding stays blocking.
   claude_fixer_nonblocking_script="${SUPPORT_SCRIPTS_DIR}/review_claude_fixer_nonblocking.py"
   [ -f "${claude_fixer_nonblocking_script}" ] || claude_fixer_nonblocking_script="${GITHUB_WORKSPACE:-}/.codex-workflow-src/scripts/review_claude_fixer_nonblocking.py"
   claude_fixer_filtered_ledger="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/reviewer_consensus_claude_fixer.txt"
@@ -228,7 +234,7 @@ fi
   if [ "${claude_fixer_ledger_state}" = "ok" ]; then
     echo "Reviewer ledger entries: ${claude_fixer_finding_count} (posted above)."
     if [ "${claude_fixer_nonblocking_count}" -gt 0 ]; then
-      echo "Non-blocking entries: ${claude_fixer_nonblocking_count} (the ledger's NON-BLOCKING FINDINGS block: each was raised by one reviewer and rejected by a majority of the others; no fix or verdict is needed for them)."
+      echo "Non-blocking entries: ${claude_fixer_nonblocking_count} (the ledger's NON-BLOCKING FINDINGS block: each was raised by one reviewer, rejected by a majority of the others, and proved false by an independent automated check; no fix or verdict is needed for them)."
     fi
   else
     echo "The consensus ledger was not produced; the per-reviewer outputs are in the run's \`reviewer-logs-*\` artifact."

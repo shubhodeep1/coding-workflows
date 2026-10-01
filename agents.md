@@ -88,10 +88,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
    The bot's comment keeps `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`
    alongside the v2 digest marker; the session dispatches
    `claude_fixer_converged_head=<sha>` for verification. Before counting,
-   `scripts/review_claude_fixer_nonblocking.py` moves each consensus finding
-   raised by exactly one reviewer and rejected by a strict majority (at least
-   two) of the other successful pass-2 reviewers into a visible
-   `NON-BLOCKING FINDINGS` ledger block (issue #4586). Rejections are the
+   `scripts/review_claude_fixer_nonblocking.py` checks each consensus finding
+   raised by exactly one reviewer against the rejection votes of the other
+   successful pass-2 reviewers (issue #4586). Votes are necessary but never
+   sufficient (issue #5582): a finding moves into a visible
+   `NON-BLOCKING FINDINGS` ledger block only when a strict majority (at least
+   two) rejected it **and** an independent automated check (`disproof_check`)
+   proves it false. The hand-off step has no such check, so every entry stays
+   blocking and reaches the fixer; an entry that met every vote condition is
+   logged `CLAUDE_FIXER_NONBLOCKING_KEPT … reason=no_automated_proof`. Rejections are the
    `REJECTED_FINDING: <ID> | <file>:<line> | flagged_by: <slug> | reason: …`
    lines the cross-pollination header asks for, read from the raw
    `review_<slug>.txt` outputs of reviewers whose status is `success`. A line
