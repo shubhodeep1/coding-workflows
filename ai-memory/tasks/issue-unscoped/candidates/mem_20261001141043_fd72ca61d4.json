@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The conformance lesson requires every prose description of which `.claude/` paths are guard paths to name scripts alongside hooks and `settings.json`.\n  expected_change_site: `docs/completed/issue-5246-guard-sync-provenance-plan.md:52`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `docs/completed/issue-5246-guard-sync-provenance-plan.md:52` says \u201chooks and settings are never deleted through a sync\u201d but omits scripts; no diff hunk in this PR touches the file.\n- requirement: The conformance lesson requires every prose description of which `.claude/` paths are guard paths to name scripts alongside hooks and `settings.json`.\n  expected_change_site: `docs/completed/issue-5247-stable-twin-guard-check-plan.md:21`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `docs/completed/issue-5247-stable-twin-guard-check-plan.md:21` lists `hooks/` and settings files but omits `scripts/`; no diff hunk in this PR touches the file.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The conformance lesson requires every prose description of which `.claude/` paths are guard paths to name scripts alongside hooks and `settings.json`.\n  Expected change site: `docs/completed/issue-5246-guard-sync-provenance-plan.md:52` (the violation message text that lists the guard paths).\n  Evidence of absence: Line 52 reads `guard path deleted; hooks and settings are never deleted through a sync, so the repository owner merges this by hand (CLAUDE.md \u00a728.C)` \u2014 omits `.claude/scripts/**` from the guard-path enumeration, so a reader of the archived plan is misled about which deletions need an owner merge. No diff hunk in this PR touches the file. The PR's \"Not fixed\" list does not include it. The file is a completed plan, so the urgency is lower than the live docs the PR did fix, but the conformance lesson commits to grepping \"every prose description of both classes repo-wide.\"\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: Same conformance lesson \u2014 every prose description of the guard-path list must include scripts.\n  Expected change site: `docs/completed/issue-5247-stable-twin-guard-check-plan.md:21` (the parenthetical that enumerates `GUARD_PATH_PREFIXES` and `GUARD_PATH_FILES`).\n  Evidence of absence: Line 21 reads `On \\`main\\`, a guard path (\\`GUARD_PATH_PREFIXES\\` \\`hooks/\\`, \\`GUARD_PATH_FILES\\` \\`settings.json\\`, \\`settings.local.json\\`) reaches \\`.claude/\\` from its twin only through a sync PR` \u2014 the `GUARD_PATH_PREFIXES` enumeration lists only `hooks/`, missing `scripts/` which #5655 added. No diff hunk in this PR touches the file. The PR's \"Not fixed\" list does not include it. Same archived-plan caveat as above.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cGrep every prose description of both classes repo-wide, including comments in other workflows and operations tables.\u201d\n  Expected change site: docs/completed/issue-5246-guard-sync-provenance-plan.md, line 52.\n  Evidence of absence: The line says deleted guard paths are covered because \u201chooks and settings are never deleted through a sync,\u201d but does not include scripts. The PR changes no hunk in this file, despite the conformance lesson requiring repo-wide updates.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \u201cGrep every prose description of both classes repo-wide, including comments in other workflows and operations tables.\u201d\n  Expected change site: docs/completed/issue-5247-stable-twin-guard-check-plan.md, line 21.\n  Evidence of absence: The guard-path list names `hooks/` and settings files but omits `scripts/`. The PR changes no hunk in this file, despite the conformance lesson requiring repo-wide updates.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The PR's conformance lesson at `docs/implement-plan/issue-5609-guard-synced-claude-scripts.md` states: \"When a change moves paths from one class to another (here scripts from auto-merged to owner-merged guard paths), grep every prose description of both classes repo-wide, including comments in other workflows and operations tables, not only the docs the plan lists.\"\n  Expected change site: `docs/completed/issue-5246-guard-sync-provenance-plan.md:52`\n  Evidence of absence: Line 52 reads \"guard path deleted; hooks and settings are never deleted through a sync, so the repository owner merges this by hand\". This omits scripts, which are guard paths since #5609 (`GUARD_PATH_PREFIXES = (\"hooks/\", \"scripts/\")` at `scripts/claude_twin_sync.py:95`). No diff hunk in this PR touches this file.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- TASK_GAP\n  Requirement: Same conformance lesson as above.\n  Expected change site: `docs/completed/issue-5247-stable-twin-guard-check-plan.md:21`\n  Evidence of absence: Line 21 reads \"a guard path (`GUARD_PATH_PREFIXES` `hooks/`, `GUARD_PATH_FILES` `settings.json`, `settings.local.json`)\". This omits scripts. No diff hunk in this PR touches this file.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "cf779e7e19845e6efa9f59d9ff3d444d4d3680f9d50a9379caf7e6caa8223bf3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5699,
+    "run_id": "36871050790",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36871050790",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001141043_fd72ca61d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5699,
+    "run_id": "36871050790"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T14:10:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
