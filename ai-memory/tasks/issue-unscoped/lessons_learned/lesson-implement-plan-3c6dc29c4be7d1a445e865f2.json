@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T15:47:40Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a guard compares an id that has more than one accepted form (`session_<x>` / `cse_<x>`), normalise both sides of the comparison, not only the argument, and test the mixed-form pair.",
+  "phase": "implement_plan",
+  "pr_number": 4924,
+  "record_id": "lesson-implement-plan-3c6dc29c4be7d1a445e865f2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4887-archive-finished-sessions",
+    "file:scripts/claude_session_janitor.py",
+    "file:tests/test_claude_session_janitor.py"
+  ]
+}

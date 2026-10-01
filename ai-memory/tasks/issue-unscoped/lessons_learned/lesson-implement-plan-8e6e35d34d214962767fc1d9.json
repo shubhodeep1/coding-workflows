@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T15:47:40Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A pagination cursor computed from a page's timestamps must skip an entry it cannot parse rather than drop the whole page: one bad value otherwise resets the walk to the newest page on every wake that reaches it, and older entries are never reached.",
+  "phase": "implement_plan",
+  "pr_number": 4924,
+  "record_id": "lesson-implement-plan-8e6e35d34d214962767fc1d9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4887-archive-finished-sessions",
+    "file:scripts/claude_session_janitor.py"
+  ]
+}
