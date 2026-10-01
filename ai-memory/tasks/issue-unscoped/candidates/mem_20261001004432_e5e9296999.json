@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.github/workflows/review_autofix.yml:4395 and 4405` | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The required review check failed after reviewer-model failures, leaving the PR blocked.\n  WHY: The failure is confirmed, but the available evidence does not establish its root cause or link it to a changed file; the reviewer rated it MAJOR.\n- `tests/test_guard_differential.py:_delete_object helper, used by test_cli_an_unreadable_base_settings_blob_exits_2 (~line 870)` | confidence omitted\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test only deletes a loose Git object, so when the blob is packed it may pass without exercising the unreadable-blob code path.\n  WHY: `cat-file -p` can still resolve a packed blob, making the test environment-dependent.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- `tests/test_guard_differential.py`\n  Location: `_delete_object` helper, used by `test_cli_an_unreadable_base_settings_blob_exits_2` (~line 870)\n  Issue: The test only deletes the loose object at `.git/objects/<xx>/<rest>`. When git has repacked the blob into a pack file (e.g., after `git gc` or on shared CI runners with auto-gc enabled), the test silently stops exercising the round 3 code path because `cat-file -p` still resolves the blob from the pack. The test currently passes on the test's working tree because the blob stays loose, but the test is environment-dependent.\n  Suggested minimal fix: After `_git(repo, \"rev-parse\", rev)`, walk the `objects/pack/` directory too: for each `.idx` file, scan for the oid and, if present, mark the test as needing a pack-removal path (e.g., rewrite the pack or use `git repack -ad` to ensure the object is loose before deletion). Two lines, no behavior change for the loose case.\n  Severity: not stated\n  Confidence: not stated\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `.github/workflows/review_autofix.yml`\n  Line or code reference: Run reviewer models, lines 4395 and 4405\n  Problem: The supplied check-run context records a failed review / codex-agent check on head eaf0ba0c24bff8baefc0b25a3c0295ab393ee85d. The PR comments report three same-fingerprint failures followed by the identical-failure cap. The available log tail does not expose the underlying reviewer failure.\n  Why it fails at runtime: A nonzero exit from review_run_reviewers.sh is propagated as the step exit status, leaving the required review check failed and the PR blocked. The failure is confirmed, but the supplied evidence does not establish its root cause or link it to a changed file.\n  Severity: MAJOR\n  Issue confidence: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c043e659b45d60f9233d8b440b97fdc5bf702b2c6c6fec66fa89a3fdbcd20272",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5356,
+    "run_id": "36794168567",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794168567",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001004432_e5e9296999",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5356,
+    "run_id": "36794168567"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T00:44:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
