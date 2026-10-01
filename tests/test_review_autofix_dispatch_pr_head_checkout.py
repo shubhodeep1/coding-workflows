@@ -191,6 +191,32 @@ def test_reviewers_read_files_from_github_workspace():
 	assert 'local reviewer_opencode_workspace="${GITHUB_WORKSPACE:-$(pwd)}"' in text
 
 
+def test_agents_md_readers_use_checked_out_workspace():
+	"""Every reader the agents.md "Review checkout on dispatched runs" section names
+	resolves files from GITHUB_WORKSPACE in the codex-agent job (PR #5857 review round 2)."""
+	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	assert (
+		"The reviewer panel, the summariser, the slop scan,\n"
+		"  and the reviewer file-context helpers read files from `GITHUB_WORKSPACE`"
+	) in agents_text
+	steps = _workflow_yaml()["jobs"]["codex-agent"]["steps"]
+	step_names = [step.get("name") for step in steps]
+	assert step_names.index("Checkout repo") < step_names.index("Run reviewer models")
+	# Reviewer file-context helpers: targeted file context and the uninteresting-file filter.
+	reviewers_text = REVIEWERS_SCRIPT.read_text(encoding="utf-8")
+	assert 'python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"' in reviewers_text
+	assert reviewers_text.count('--repo-root "${GITHUB_WORKSPACE:-$(pwd)}"') >= 3
+	# Summariser, launched by review_run_reviewers.sh inside "Run reviewer models".
+	assert 'SUMMARISER_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/summarize_reviewer_consensus.sh"' in reviewers_text
+	summariser_text = (REPO_ROOT / "scripts" / "summarize_reviewer_consensus.sh").read_text(encoding="utf-8")
+	assert 'summariser_workspace="${GITHUB_WORKSPACE:-$(pwd)}"' in summariser_text
+	assert '--project-path "${summariser_workspace}"' in summariser_text
+	# Slop scan, its own step after the checkout in the same job.
+	slop_step = next(step for step in steps if step.get("name") == "Collect local slop-scan findings")
+	assert step_names.index("Checkout repo") < step_names.index("Collect local slop-scan findings")
+	assert '--repo-root "${GITHUB_WORKSPACE}"' in slop_step["run"]
+
+
 def test_review_checkout_log_prefix_is_registered_in_agents_md():
 	"""The gate's new log prefix is in both contractual inventories (PR #5857 review round 1)."""
 	assert "AUTOFIX_GATE_REVIEW_CHECKOUT pr=" in _workflow_text()

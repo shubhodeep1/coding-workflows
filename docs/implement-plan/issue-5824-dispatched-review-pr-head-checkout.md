@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_016vfvJu7J6F4Y3sRhBoQPFf   safety net and hand-back: see the latest stage report
 - Last updated: 2026-10-01
-- Last note: review round 1 on PR #5857 (head dd699bf3c838): fixed the one valid finding (AUTOFIX_GATE_REVIEW_CHECKOUT missing from both agents.md stable-log-prefix inventories) plus a regression test; nothing rejected.
+- Last note: review round 2 on PR #5857 (head 703472b444b0): the one finding (agents.md:658, the four `GITHUB_WORKSPACE` readers it names were unpinned) was valid as a coverage gap; the prose was already accurate, and a new test now pins all four readers. Nothing rejected.
 
 ## Phases
-1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs   — PR #5857 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs   — PR #5857 open (waiting); review rounds: 2; interventions: 0
    - gate exports `review_checkout_sha` from the existing `/pulls/<n>` fetch (same-repo heads only)
    - `codex-agent` → "Checkout repo" uses `pull_request.head.sha || review_checkout_sha || github.sha`
    - regression test `tests/test_review_autofix_dispatch_pr_head_checkout.py`; updated `tests/test_review_autofix_merge_precheck.py`
@@ -39,6 +39,7 @@
 
 ## Lessons
 - [source:intervention] A workflow change that emits a new stable log prefix must add it to both `agents.md` inventories (the "Stable log prefixes (contractual)" bullet list and the `LOG_PREFIX.name=` block) in the same PR, and a test should pin both entries. (files: agents.md, .github/workflows/review_autofix.yml)
+- [source:intervention] When `agents.md` prose says which files or directories a set of scripts reads, a test should pin each named reader, not just one, or reviewers flag the unverified ones. (files: agents.md, tests/test_review_autofix_dispatch_pr_head_checkout.py)
 
 ## Notes
 - Security pass: run (`security_pass_skip.py`: no skip label).
