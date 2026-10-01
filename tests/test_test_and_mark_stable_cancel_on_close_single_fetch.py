@@ -97,9 +97,12 @@ def test_phase7_accepts_event_or_scheduled_cleanup_runs() -> None:
 def test_open_pr_wait_loop_fetches_workflow_list_once_and_fails_on_api_error() -> None:
 	wf = _read_workflow()
 	loop = _new_run_wait_loop(_open_pr_close_branch(wf))
-	fetch_fragment = '"repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=10"'
+	# The listing goes through phase7_list_cancel_runs, which retries a
+	# transient error up to 3 times (run 36389883126) and still fails the
+	# loop with lookup_failed after that.
+	fetch_fragment = "phase7_list_cancel_runs 10"
 	assert loop.count(fetch_fragment) == 1
-	assert "if ! CANDIDATE_RUNS_JSON=$(gh api" in loop
+	assert "if ! phase7_list_cancel_runs 10; then" in loop
 	assert "|| echo" not in loop
 	assert 'echo "status=lookup_failed" >> "$GITHUB_OUTPUT"' in loop
 

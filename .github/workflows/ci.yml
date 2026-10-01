@@ -751,6 +751,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_editor_watchdog_kill_contract.py
 
+      - name: Claude-branch push PR grace window unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_internal_review_push_pr_grace.py
+
       - name: Sub-issue closing-PR resolution unit tests
         run: |
           set -euo pipefail
@@ -941,6 +946,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_summarize_reviewer_consensus_sandbox_pin.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_summarize_reviewer_consensus_prompt.py
 
       - name: Clarify loop guard unit tests
         run: |
@@ -1047,6 +1053,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
+
+      - name: Release smoke gate run-lookup regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_smoke_run_lookup.py
 
       - name: Alt-model cleanup PR-selector contract test
         run: |
