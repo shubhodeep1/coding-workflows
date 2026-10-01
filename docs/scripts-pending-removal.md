@@ -246,4 +246,5 @@ Copy this block when adding a new entry:
   - `gh api "repos/shubhodeep1/coding-workflows/pulls?state=open&per_page=100" --jq '[.[] | select(.head.ref | startswith("claude/claude-twin-sync-"))] | length'` returns `0`.
   - CLAUDE.md §28.C, `workflow-templates/.claude/commands/implement-plan-claude.md`, `implement-issue-claude.md`, and `fix-claude-pr.md` no longer tell sessions to edit the twin instead of `.claude/**` (`rg -n 'Edit the twin, never' CLAUDE.md workflow-templates/.claude/commands` returns nothing).
   - The CI step "Claude twin sync state (CLAUDE.md §28.C)", the `claude_twin_sync` skip in `review_autofix.yml`, and `CLAUDE_TWIN_SYNC_BRANCH_PREFIX` in `scripts/claude_pr_sweep.py` are removed in the same PR.
+  - That PR removes the CI step and `scripts/claude_twin_sync.py` together: the step runs the base commit's copy of the script, whose `check` refuses a range that deletes it (`GUARD_SCRIPT_PATH`, issue #5608), so a PR that deletes the script but keeps the step fails `lint`.
 - **Owner:** @shubhodeep1
