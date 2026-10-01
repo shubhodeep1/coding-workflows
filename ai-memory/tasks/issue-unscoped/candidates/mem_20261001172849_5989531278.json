@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/protected_path_authorization.py:287-295 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `evaluate_pr` allows an unprotected PR before validating its head SHA, so a missing or malformed SHA can cause the wrapper to merge without `--match-head-commit`.\n  WHY: A concurrent push can add unchecked protected changes between the file-list check and the unbound merge; reviewers rated this MAJOR.\n- scripts/protected_path_authorization.py:~290 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The comment that a head SHA is only needed to bind and authorize a protected merge is stale because the wrapper also binds unprotected merges to the checked head.\n  WHY: The misleading comment could lead a future maintainer to remove the unprotected-merge binding; reviewers rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/protected_path_authorization.py:287-291 | severity=MAJOR | confidence=4\n  PROBLEM: Head SHA validation sits after the unprotected-PR early return, so an unprotected PR with a missing or malformed head SHA can pass without a merge binding.\n  WHY: A concurrent push can add protected changes after the file-list read, and the unbound merge can land that unchecked head.\n- scripts/protected_path_authorization.py:~290 | severity=NIT | confidence=4\n  PROBLEM: The comment that a head SHA is only needed to bind and authorize a protected merge is stale because unprotected merges are also bound to the checked head.\n  WHY: A future maintainer could remove the unprotected-merge binding based on the misleading comment.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/protected_path_authorization.py:287-294 | severity=MAJOR | confidence=4\n  PROBLEM: `evaluate_pr()` allows an unprotected PR before validating that head is a valid 40-hex SHA, permitting the gate wrapper to execute an unbound merge without --match-head-commit.\n  WHY: A concurrent push between the file check and merge could add unreviewed protected changes that merge without owner authorization.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/protected_path_authorization.py:287-295 | severity=MAJOR | confidence=5\n  PROBLEM: `evaluate_pr` returns `allow` for an unprotected PR before validating that the PR head SHA is a well-formed 40-hex string.\n  WHY: The wrapper then omits `--match-head-commit`, allowing a concurrent push to add protected changes that merge without re-checking files or requiring owner authorization.\n- scripts/protected_path_authorization.py:290 | severity not stated | confidence not stated\n  PROBLEM: The inline comment that a head SHA is only needed to bind and authorize a protected merge is stale because AD-13 added binding for unprotected merges too.\n  WHY: The comment should describe that the head SHA is needed to bind every merge the gate lets through.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/protected_path_authorization.py: evaluate_pr, the unprotected early return (`if not paths and not truncated: result.update({\"decision\": \"allow\", \"protected\": False, ...}); return result`) | severity=MAJOR | confidence=4\n  PROBLEM: An unprotected PR is allowed before its head SHA is validated as a 40-hex string.\n  WHY: When the head is missing or malformed, the wrapper does not add `--match-head-commit`, so a concurrent push can merge protected changes without owner authorization.\n- scripts/protected_path_authorization.py: evaluate_pr, inline comment at the unprotected early return: \"a head SHA is only needed to bind and authorize a protected one\" | severity=NIT | confidence=5\n  PROBLEM: The comment is stale after AD-13, which added head binding for unprotected PRs too.\n  WHY: It contradicts the wrapper's behavior and could lead a future reader to re-introduce the gap by removing the unprotected binding branch.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "845cc83dff00bdc3385683b344ddd30e428ac17c3f9bbe482de3de19b188a45f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4973,
+    "run_id": "36888960455",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36888960455",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001172849_5989531278",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4973,
+    "run_id": "36888960455"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T17:28:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
