@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:47:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test that pins what may run before a trusted CI step must allow-list that step's own keys (`shell`, `continue-on-error`, `working-directory`, `if`), not only its `env` and `run`, and a shell scan must treat `<(` / `>(` as the start of a command: shlex returns each as one punctuation word, which a redirection check misreads.",
+  "phase": "implement_plan",
+  "pr_number": 5647,
+  "record_id": "lesson-implement-plan-42a9b43c9aea6745723748bd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:tests/test_guard_differential.py"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T07:47:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Pinning a trusted script to the base branch is only as strong as the interpreter it runs under: in a `pull_request` job, run it before any step that executes code from the checkout, which could plant a `.pth` file or rewrite a writable toolcache, and pin that position with a test.",
+  "phase": "implement_plan",
+  "pr_number": 5647,
+  "record_id": "lesson-implement-plan-5b39ece434846ee28bd83b4a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:.github/workflows/ci.yml",
+    "file:tests/test_guard_differential.py"
+  ]
+}

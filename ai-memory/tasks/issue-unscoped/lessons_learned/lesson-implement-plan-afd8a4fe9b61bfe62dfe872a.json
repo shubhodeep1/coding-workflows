@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:47:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test that guards a trust boundary against environment variables should allow-list keys, not deny-list them: each review round found another code-loading variable (`LD_PRELOAD`, `VIRTUAL_ENV`, `PATH`, ...).",
+  "phase": "implement_plan",
+  "pr_number": 5647,
+  "record_id": "lesson-implement-plan-afd8a4fe9b61bfe62dfe872a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:tests/test_guard_differential.py"
+  ]
+}

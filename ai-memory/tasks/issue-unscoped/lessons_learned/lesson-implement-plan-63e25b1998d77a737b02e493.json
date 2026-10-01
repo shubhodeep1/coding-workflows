@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T07:47:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A CI step that must run before any PR code must not run `python3 -c` or `python3 -m` from the checkout without `-P` (or `-I`): both put the working directory first on `sys.path`, so a PR's `json.py` or `pip/` package runs inside the step. A script path is safe, since `sys.path[0]` is the script's own directory.",
+  "phase": "implement_plan",
+  "pr_number": 5647,
+  "record_id": "lesson-implement-plan-63e25b1998d77a737b02e493",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:.github/workflows/ci.yml",
+    "file:tests/test_guard_differential.py"
+  ]
+}

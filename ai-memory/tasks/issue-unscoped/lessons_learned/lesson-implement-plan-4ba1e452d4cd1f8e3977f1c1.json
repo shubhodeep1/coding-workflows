@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:47:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test that scans shell for interpreter calls must parse the interpreter's own option grammar (clustered short flags, options that take an argument, `--`, stdin), not match a run of flags with a regex: `python3 -W ignore -c` hid an unisolated `-c` behind `-W`'s argument.",
+  "phase": "implement_plan",
+  "pr_number": 5647,
+  "record_id": "lesson-implement-plan-4ba1e452d4cd1f8e3977f1c1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:tests/test_guard_differential.py"
+  ]
+}

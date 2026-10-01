@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:47:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A path-containment check must test the remainder after the directory prefix (a plain file name, no `..`, no `/`), not `startswith`, and an interpreter-isolation check must also look at the environment the command gets: `-P` keeps the working directory off `sys.path` but still honours `PYTHONPATH`, so assignments before the call, `export`, and `PATH` edits belong in the same allow-list.",
+  "phase": "implement_plan",
+  "pr_number": 5647,
+  "record_id": "lesson-implement-plan-85bb17bfb26cc99ccc32853a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:tests/test_guard_differential.py"
+  ]
+}

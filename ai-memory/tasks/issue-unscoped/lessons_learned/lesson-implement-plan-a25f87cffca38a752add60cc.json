@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:47:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test that pins \"only a fixed dependency install runs before this step\" must match the whole `run:` body against one exact command shape (plain package names only) and reject variables that run code implicitly (`BASH_ENV`, `PIP_*`, `PYTHON*`); a deny-list of a few flags and paths misses `pip install .`, long-form flags, URLs, archives, and appended commands.",
+  "phase": "implement_plan",
+  "pr_number": 5647,
+  "record_id": "lesson-implement-plan-a25f87cffca38a752add60cc",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:tests/test_guard_differential.py"
+  ]
+}
