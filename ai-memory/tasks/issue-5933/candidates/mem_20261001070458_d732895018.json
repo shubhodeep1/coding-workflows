@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should be improved?\nChoices:\nA. A specific workflow or feature \u2014 name it and describe the problem. (RECOMMENDED)\nB. Documentation \u2014 name the page or topic and what is missing or unclear.\nC. Something else \u2014 name the affected area and describe the desired outcome.",
+  "fingerprint": "f5bddd58a29babf72cb008b0a20a774f1a8322d3d2b9f674a98157cb7a5ee90c",
+  "lineage": {
+    "issue_number": 5933,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36827493521",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36827493521",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261001070458_d732895018",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5933,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36827493521"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #5933 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-01T07:04:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
