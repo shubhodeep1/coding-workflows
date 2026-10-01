@@ -47,6 +47,8 @@
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py *)",
       "Bash(python3 .claude/scripts/stale_routines.py *)",
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/stale_routines.py *)",
+      "Bash(python3 .claude/scripts/usage_limit_resumes.py *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/usage_limit_resumes.py *)",
       "Bash(python3 .claude/scripts/claude_fix_claim.py *)",
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/claude_fix_claim.py *)",
       "Bash(python3 .claude/scripts/security_pass_skip.py *)",
