@@ -2649,6 +2649,134 @@ print(m.group(1) if m else "")
         fi
       fi
 
+      # New output paths: files the spot-fix follow-up must CREATE.  Neither
+      # source above can list them (a judge-cited file must exist at the
+      # closed head, and the closed PR never changed them), so #4664 (reissue
+      # of #4605 / PR #4607) was refused for a new changelog fragment and four
+      # new test fixtures and latched ai:scope-blocked (heal #4665).  The judge
+      # declares them in `new_output_paths`.  An entry must pass the path
+      # validator, must have no `.git` segment (any depth or letter case),
+      # must carry no glob metacharacter or
+      # trailing `/` (files_touched_scope_guard.py reads those as globs and
+      # directory prefixes), must not exist at the closed head, so no
+      # existing file or directory is ever exempted this way, and must end in
+      # a file-shaped segment with an extension (`no_extension` otherwise),
+      # because the guard also lets a bare entry cover everything beneath it,
+      # so a new directory-shaped path would exempt a new subtree.  The existence
+      # check is a literal-pathspec `git ls-tree` of the closed head: empty
+      # output with exit 0 is the only proof of absence, so a failed lookup
+      # skips the entry (`lookup_failed`) instead of reading as "new".  Only
+      # the first 10 declarations are read.  A rejected entry is skipped with
+      # its reason (the path is echoed only once it passed the validator),
+      # never a reason to fall back to redo.  A field that is present but not
+      # an array declares nothing and logs one notice.  No API call.  Only
+      # printable ASCII with no leading or trailing space is read: the scope
+      # guard trims each entry and splits the body with str.splitlines(), so
+      # " src" would exempt all of src/ and a U+2028 inside a path would
+      # inject an extra entry (conformance finding on #4665).
+      if [ "${RB_EFFECTIVE_REISSUE_MODE}" = "spot-fix" ] && [ -n "${RB_BASELINE_BRANCH}" ] && [ "${#RB_REISSUE_FILES[@]}" -gt 0 ]; then
+        RB_NEW_OUTPUT_MAX=10
+        RB_NEW_OUTPUT_FIELD_TYPE="$(printf '%s' "${JUDGE_JSON}" | jq -r '.new_output_paths | type' 2>/dev/null || true)"
+        case "${RB_NEW_OUTPUT_FIELD_TYPE}" in
+          array|null)
+            ;;
+          *)
+            echo "::notice::Ignoring judge new_output_paths: expected an array, got ${RB_NEW_OUTPUT_FIELD_TYPE:-unreadable JSON}."
+            ;;
+        esac
+        mapfile -t RB_NEW_OUTPUT_CANDIDATES < <(
+          printf '%s' "${JUDGE_JSON}" | jq -r '
+            if (.new_output_paths | type) == "array" then
+              .new_output_paths[]
+              | if type == "string" and (test("[\\n\\r]") | not) and (contains("\u0000") | not) and test("^[!-~]([ -~]*[!-~])?$") then . else "" end
+            else
+              empty
+            end
+          ' 2>/dev/null || true
+        )
+        RB_NEW_OUTPUT_DECLARED="${#RB_NEW_OUTPUT_CANDIDATES[@]}"
+        if [ "${RB_NEW_OUTPUT_DECLARED}" -gt 0 ]; then
+          RB_NEW_OUTPUT_ADDED=0
+          RB_NEW_OUTPUT_SKIPPED=0
+          RB_NEW_OUTPUT_INDEX=0
+          declare -A RB_NEW_OUTPUT_SEEN=()
+          for RB_FILE in "${RB_REISSUE_FILES[@]}"; do
+            RB_NEW_OUTPUT_SEEN["${RB_FILE}"]="1"
+          done
+          for RB_NEW_OUTPUT_PATH in "${RB_NEW_OUTPUT_CANDIDATES[@]}"; do
+            RB_NEW_OUTPUT_INDEX=$((RB_NEW_OUTPUT_INDEX + 1))
+            RB_NEW_OUTPUT_REASON=""
+            if [ "${RB_NEW_OUTPUT_INDEX}" -gt "${RB_NEW_OUTPUT_MAX}" ]; then
+              RB_NEW_OUTPUT_REASON="over_cap"
+            elif ! _rb_valid_repo_relative_path "${RB_NEW_OUTPUT_PATH}"; then
+              RB_NEW_OUTPUT_REASON="invalid_path"
+            else
+              # A `.git` segment is refused at any depth and in any letter
+              # case, as git's own verify_path refuses it (PR #4667 review
+              # round 2).  Lowercasing leaves the glob and `/` checks below
+              # unchanged.
+              case "${RB_NEW_OUTPUT_PATH,,}" in
+                .git|.git/*|*/.git|*/.git/*|*//*|*/.)
+                  RB_NEW_OUTPUT_REASON="invalid_path"
+                  ;;
+                *[\*\?\[]*)
+                  RB_NEW_OUTPUT_REASON="glob"
+                  ;;
+                */)
+                  RB_NEW_OUTPUT_REASON="directory"
+                  ;;
+              esac
+            fi
+            if [ -z "${RB_NEW_OUTPUT_REASON}" ]; then
+              if [ -n "${RB_NEW_OUTPUT_SEEN["${RB_NEW_OUTPUT_PATH}"]+x}" ]; then
+                RB_NEW_OUTPUT_REASON="duplicate"
+              elif ! RB_NEW_OUTPUT_AT_HEAD="$(git --literal-pathspecs ls-tree --full-tree --name-only "${RB_HEAD_SHA}" -- "${RB_NEW_OUTPUT_PATH}" 2>/dev/null)"; then
+                RB_NEW_OUTPUT_REASON="lookup_failed"
+              elif [ -n "${RB_NEW_OUTPUT_AT_HEAD}" ]; then
+                RB_NEW_OUTPUT_REASON="exists_at_head"
+              else
+                # The scope guard reads a bare entry as covering its
+                # descendants too, so a directory-shaped declaration such as
+                # `tests/fixtures/new_suite` would exempt a whole new subtree.
+                # Keep only file-shaped paths: the last segment needs a `.`
+                # that is neither its first nor its last character (PR #4667
+                # review round 1).  The name alone cannot tell a file from a
+                # directory, so this errs toward skipping: an extensionless
+                # new file (`Dockerfile`, `.gitignore`) falls back to today's
+                # human-gated scope block, and a new dotted directory name
+                # (`conf.d`) is the residual the plan accepts, one brand-new
+                # subtree the judge named (review round 2, AD-8).
+                RB_NEW_OUTPUT_BASENAME="${RB_NEW_OUTPUT_PATH##*/}"
+                case "${RB_NEW_OUTPUT_BASENAME#?}" in
+                  *.?*)
+                    ;;
+                  *)
+                    RB_NEW_OUTPUT_REASON="no_extension"
+                    ;;
+                esac
+              fi
+            fi
+            if [ -n "${RB_NEW_OUTPUT_REASON}" ]; then
+              RB_NEW_OUTPUT_SKIPPED=$((RB_NEW_OUTPUT_SKIPPED + 1))
+              case "${RB_NEW_OUTPUT_REASON}" in
+                over_cap|invalid_path)
+                  echo "::notice::Skipping judge new_output_paths entry ${RB_NEW_OUTPUT_INDEX}: ${RB_NEW_OUTPUT_REASON}."
+                  ;;
+                *)
+                  echo "::notice::Skipping judge new_output_paths entry ${RB_NEW_OUTPUT_INDEX} (${RB_NEW_OUTPUT_PATH}): ${RB_NEW_OUTPUT_REASON}."
+                  ;;
+              esac
+              continue
+            fi
+            RB_NEW_OUTPUT_SEEN["${RB_NEW_OUTPUT_PATH}"]="1"
+            RB_REISSUE_FILES+=("${RB_NEW_OUTPUT_PATH}")
+            RB_NEW_OUTPUT_ADDED=$((RB_NEW_OUTPUT_ADDED + 1))
+          done
+          unset RB_NEW_OUTPUT_SEEN
+          echo "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=${PR_NUMBER} declared=${RB_NEW_OUTPUT_DECLARED} added=${RB_NEW_OUTPUT_ADDED} skipped=${RB_NEW_OUTPUT_SKIPPED} total=${#RB_REISSUE_FILES[@]}"
+        fi
+      fi
+
       # Carry the parent issue's orchestrator metadata into the reissue.  The
       # poller's security-pass successor adoption
       # (resolve_security_pass_fix_successor) matches the replacement on the
