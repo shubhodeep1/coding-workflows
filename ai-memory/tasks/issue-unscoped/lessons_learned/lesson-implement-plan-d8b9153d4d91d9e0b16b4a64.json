@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T12:04:10Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Every `git fetch` that a guard or drift check depends on needs an explicit failure rule: a failed fetch leaves the remote-tracking ref where it was, and a three-dot diff against it reports a stale branch as fresh.",
+  "phase": "implement_plan",
+  "pr_number": 5280,
+  "record_id": "lesson-implement-plan-d8b9153d4d91d9e0b16b4a64",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5260-asset-sync-pr-base-drift",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md",
+    "file:workflow-templates/.claude/commands/fix-claude-pr.md"
+  ]
+}

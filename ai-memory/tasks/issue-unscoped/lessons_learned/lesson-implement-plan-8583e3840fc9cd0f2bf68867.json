@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T12:04:10Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A procedure that routes on `git diff --quiet` must treat only exit 1 as \"differs\": exit 128 means the comparison failed (`no merge base`, a bad revision), and \"any non-zero exit\" turns that error into a drift verdict.",
+  "phase": "implement_plan",
+  "pr_number": 5280,
+  "record_id": "lesson-implement-plan-8583e3840fc9cd0f2bf68867",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5260-asset-sync-pr-base-drift",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md",
+    "file:workflow-templates/.claude/commands/fix-claude-pr.md"
+  ]
+}

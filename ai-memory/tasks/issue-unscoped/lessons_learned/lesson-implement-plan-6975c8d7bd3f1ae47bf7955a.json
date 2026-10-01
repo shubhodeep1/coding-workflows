@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T12:04:10Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A command step that runs two git commands whose exit status matters must say to run each as its own Bash call: joined with `;` only the last exit status is seen.",
+  "phase": "implement_plan",
+  "pr_number": 5280,
+  "record_id": "lesson-implement-plan-6975c8d7bd3f1ae47bf7955a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5260-asset-sync-pr-base-drift",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md"
+  ]
+}

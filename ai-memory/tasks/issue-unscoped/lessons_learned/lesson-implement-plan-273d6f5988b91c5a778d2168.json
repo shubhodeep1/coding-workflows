@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T12:04:10Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a shared procedure gains a new failure class, update every caller's stop for every check that can hit it, not only the check that prompted the fix: a caller that still lists only the old failure modes reports the new one as the wrong problem.",
+  "phase": "implement_plan",
+  "pr_number": 5280,
+  "record_id": "lesson-implement-plan-273d6f5988b91c5a778d2168",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5260-asset-sync-pr-base-drift",
+    "file:workflow-templates/.claude/commands/fix-claude-pr.md"
+  ]
+}
