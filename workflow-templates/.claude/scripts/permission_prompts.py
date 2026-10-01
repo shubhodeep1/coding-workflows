@@ -245,10 +245,22 @@ _CREDENTIAL_COMMANDS = frozenset(key.split(" ", 1)[0] for key in _CREDENTIAL_SHO
 _SHELL_COMMAND_RUNNERS = frozenset(
 	{"sh", "bash", "rbash", "dash", "zsh", "ksh", "mksh", "pdksh", "ash", "yash", "posh", "fish", "csh", "tcsh", "pwsh", "powershell", "su", "runuser"}
 )
-_SHELL_COMMAND_FLAG_RE = re.compile(r"^(-[A-Za-z]*c|--(session-)?command|-[Cc]ommand)$")
-# A short-flag cluster with `c` before its end: `su -c'mysql -p…'` (the rest is the attached command
+# The command flag, in any case and abbreviated: a short-flag cluster ending in `c` (`-c`, `-lc`), PowerShell's
+# `-c` … `-Command` (any unambiguous prefix, any case, one or two dashes), and getopt_long's `--comm` and
+# `--session-c…` (`su`, `runuser`). Matching one flag too many only parses a word that is no command line.
+_SHELL_COMMAND_FLAG_NAMES = (
+	r"-[A-Za-z]*c|--?(?:"
+	+ "|".join(re.escape("command"[:length]) for length in range(len("command"), 0, -1))
+	+ r")|--(?:"
+	+ "|".join(re.escape("session-command"[:length]) for length in range(len("session-command"), 1, -1))
+	+ ")"
+)
+_SHELL_COMMAND_FLAG_RE = re.compile(rf"^(?:{_SHELL_COMMAND_FLAG_NAMES})$", re.IGNORECASE)
+# The command flag with its command line attached by `=` or `:` (`--command='mysql -p…'`, `pwsh -Command:'…'`).
+_SHELL_COMMAND_ATTACHED_RE = re.compile(rf"^(?:{_SHELL_COMMAND_FLAG_NAMES})[=:](.*)$", re.IGNORECASE | re.DOTALL)
+# A short-flag cluster with `c` (any case) before its end: `su -c'mysql -p…'` (the rest is the attached command
 # line) or `bash -ce 'mysql -p…'` (the next word is it). Both are parsed when a runner precedes it.
-_SHELL_COMMAND_CLUSTER_RE = re.compile(r"^(-[A-Za-z]*?c)(.+)$", re.DOTALL)
+_SHELL_COMMAND_CLUSTER_RE = re.compile(r"^(-[A-Za-z]*?c)(.+)$", re.IGNORECASE | re.DOTALL)
 # Deeper nesting of `-c` command lines than this withholds the command (fail closed).
 MAX_NESTED_COMMAND_DEPTH = 3
 _HEADER_WORD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(\S.*?)\s*$", re.DOTALL)
@@ -428,8 +440,13 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			# An attached credential or header value (`-udeploy:pwd`) never reaches the shape, behind a wrapper
 			# (`sudo mysql -pS3cret`) or a global option (`docker --config d login -pS3cret`) too.
 			cut = _cut_attached_value(token, _segment_flag_letters(tokens, command_position, index - 1, header=True))
-			attached_command = _SHELL_COMMAND_CLUSTER_RE.match(token) if cut is None and _shell_runner_before(tokens, command_position, index - 1) else None
-			if attached_command and not attached_command.group(2).isalpha():
+			runner_before = cut is None and _shell_runner_before(tokens, command_position, index - 1)
+			attached_flag = _SHELL_COMMAND_ATTACHED_RE.match(token) if runner_before else None
+			attached_command = _SHELL_COMMAND_CLUSTER_RE.match(token) if runner_before and not attached_flag else None
+			if attached_flag:
+				# `--command='…'`, `pwsh -Command:'…'`: the flag stays, its command line is one value.
+				cut = token[: len(token) - len(attached_flag.group(1))] + "*"
+			elif attached_command and not attached_command.group(2).isalpha():
 				# An attached `-c` command line (`su -c'mysql -p…'`) is one value; `-ce` stays a flag cluster.
 				cut = attached_command.group(1) + "*"
 			flag = cut if cut is not None else token.split("=", 1)[0] + ("=*" if "=" in token else "")
@@ -546,18 +563,19 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 		index += 1
 		following = words[index] if index < len(words) and not words[index].startswith("-") else None
 		values.update(_word_credentials(word))
-		flag_name, has_attached, attached = word.partition("=")
 		runner_before = index - 1 > start and _shell_runner_before(words, start, index - 1)
-		if runner_before and _SHELL_COMMAND_FLAG_RE.match(flag_name if flag_name.startswith("--") else word):
-			# `su pg -c 'mysql -p…'`, `sudo sh -c 'curl -u …'`: the argument is a command line of its own.
-			if has_attached and flag_name.startswith("--"):
-				values.update(_command_line_credentials(attached, depth + 1))
-			elif index < len(words):
+		attached_flag = _SHELL_COMMAND_ATTACHED_RE.match(word) if runner_before else None
+		attached_command = _SHELL_COMMAND_CLUSTER_RE.match(word) if runner_before and not attached_flag else None
+		if attached_flag:
+			# `su --command='mysql -p…'`, `pwsh -Command:'mysql -p…'`: the attached text is a command line of its own.
+			values.update(_command_line_credentials(attached_flag.group(1), depth + 1))
+		elif runner_before and _SHELL_COMMAND_FLAG_RE.match(word):
+			# `su pg -c 'mysql -p…'`, `pwsh -C 'curl -u …'`: the next word is a command line of its own. Both words
+			# are still read as words of their own below, since a credential value can end in `c` (`sudo -u bash
+			# mysql -pSecretAbc`, user `bash`) and the next word is then not a command line.
+			if index < len(words):
 				values.update(_command_line_credentials(words[index], depth + 1))
-				index += 1
-			continue
-		attached_command = _SHELL_COMMAND_CLUSTER_RE.match(word) if runner_before else None
-		if attached_command:
+		elif attached_command:
 			# `su -c'mysql -p…'` carries the command line in the word; `bash -ce 'mysql -p…'` in the next
 			# word, which is still read as a word of its own below. The word itself is read as a flag too,
 			# since a user name such as `bash` before it (`sudo -u bash mysql -pScret…`) can match.

@@ -350,6 +350,21 @@ def _bash(command):
 		("csh -c 'mysql -pS3cretPass app'", "S3cretPass", "csh -c 'mysql -p*** app'"),
 		("tcsh -c 'mysql -pS3cretPass app'", "S3cretPass", "tcsh -c 'mysql -p*** app'"),
 		("pwsh -Command 'curl -udeploy:mycustompwd https://a.b'", "mycustompwd", "pwsh -Command 'curl -u*** https://a.b'"),
+		# PowerShell's parameter names in any case and abbreviated, and getopt_long's abbreviated long options.
+		("pwsh -C 'mysql -pS3cretPass app'", "S3cretPass", "pwsh -C 'mysql -p*** app'"),
+		("pwsh -COMMAND 'mysql -pS3cretPass app'", "S3cretPass", "pwsh -COMMAND 'mysql -p*** app'"),
+		("pwsh -NoProfile -Com 'mysql -pS3cretPass app'", "S3cretPass", "pwsh -NoProfile -Com 'mysql -p*** app'"),
+		("pwsh --command 'mysql -pS3cretPass app'", "S3cretPass", "pwsh --command 'mysql -p*** app'"),
+		("su pg --comm 'mysql -pS3cretPass app'", "S3cretPass", "su pg --comm 'mysql -p*** app'"),
+		("su pg --session-c 'mysql -pS3cretPass app'", "S3cretPass", "su pg --session-c 'mysql -p*** app'"),
+		# A command line attached to the flag: in one word, or after `=` or `:`, for single-dash flags too.
+		("pwsh -C'mysql -pS3cretPass app'", "S3cretPass", "pwsh -C'mysql -p*** app'"),
+		("pwsh -Command='mysql -pS3cretPass app'", "S3cretPass", "pwsh -Command='mysql -p*** app'"),
+		("pwsh -Command:'mysql -pS3cretPass app'", "S3cretPass", "pwsh -Command:'mysql -p*** app'"),
+		("sh -c='mysql -pS3cretPass app'", "S3cretPass", "sh -c='mysql -p*** app'"),
+		# A credential value that ends in `c` is still a credential value, not a `-c` flag, behind a user named like a shell.
+		("sudo -u bash mysql -pSecretAbc app", "SecretAbc", "sudo -u bash mysql -p*** app"),
+		("sudo -u bash mysql -pSecretABC -h db app", "SecretABC", "sudo -u bash mysql -p*** -h db app"),
 		# An unencoded `@` in the password: userinfo runs to the last `@` before the path.
 		("git clone https://user:pa@ss1234@github.com/o/r.git", "ss1234", "git clone https://***@github.com/o/r.git"),
 		# A `?` in the password is still userinfo, and a query after the host stays.
@@ -423,6 +438,11 @@ def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
 		"bash -c 'cd /x && gh api repos/o/r'",
 		"docker exec db sh -c 'ls -la /var/lib/mysql'",
 		"kubectl exec db-0 -- psql -c 'select 1'",
+		# PowerShell's own parameters, and its command flag without credentials.
+		"pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./x.ps1",
+		"pwsh -NoProfile -Command Get-Date",
+		"pwsh -Command='Get-Date'",
+		"su postgres --command='psql -c \"select 1\"'",
 	],
 )
 def test_credential_free_commands_are_unchanged(command):
@@ -468,6 +488,12 @@ def test_credential_free_commands_are_unchanged(command):
 		("su postgres -c'mysql -pS3cretPass app'", "su * -c*"),
 		("sudo bash -lc'curl -udeploy:mycustompwd https://a.b'", "sudo * -lc*"),
 		("bash -ce 'mysql -pS3cretPass app'", "bash -ce *"),
+		# PowerShell's command flag in any case, attached in one word or after `=` or `:`.
+		("pwsh -C 'mysql -pS3cretPass app'", "pwsh -C *"),
+		("pwsh -C'mysql -pS3cretPass app'", "pwsh -C*"),
+		("pwsh -Command='mysql -pS3cretPass app'", "pwsh -Command=*"),
+		("pwsh -Command:'mysql -pS3cretPass app'", "pwsh -Command:*"),
+		("sudo -u bash mysql -pSecretAbc app", "sudo -u * -p* *"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):
