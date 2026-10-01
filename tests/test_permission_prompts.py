@@ -384,6 +384,15 @@ def _bash(command):
 		("bash -c -x 'mysql -pS3cretPass app'", "S3cretPass", "bash -c -x 'mysql -p*** app'"),
 		("bash -ce -- 'mysql -pS3cretPass app'", "S3cretPass", "bash -ce -- 'mysql -p*** app'"),
 		("sh -c '-x; mysql -pS3cretPass app'", "S3cretPass", "sh -c '-x; mysql -p*** app'"),
+		# A redirection does not end the command: the flag or `-c` before it still owns the word after it.
+		("sh -c 2>/dev/null 'mysql -pS3cretPass app'", "S3cretPass", "sh -c 2>/dev/null 'mysql -p*** app'"),
+		("bash -c >/tmp/out \"mysql -pS3cretPass\"", "S3cretPass", "bash -c >/tmp/out \"mysql -p***\""),
+		("sh -c 2>&1 'curl -u deploy:mycustompwd https://a.b'", "mycustompwd", "sh -c 2>&1 'curl -u *** https://a.b'"),
+		("mysql >out -pS3cretPass app", "S3cretPass", "mysql >out -p*** app"),
+		("curl -u >out deploy:mycustompwd https://a.b", "mycustompwd", "curl -u >out *** https://a.b"),
+		("echo x > \"$(mysql -pS3cretPass)\"", "S3cretPass", "echo x > \"$(mysql -p***)\""),
+		# A here-string fed to a shell is a command line of its own.
+		("bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "bash <<< 'mysql -p*** app'"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -408,6 +417,9 @@ def test_example_masks_credentials(command, secret, expected):
 		("su pg -c \"mysql -pS3cretPass 'unterminated\"", "S3cretPass", "su * -c *"),
 		# `-c` command lines nested deeper than MAX_NESTED_COMMAND_DEPTH are withheld.
 		("sh -c \"sh -c 'sh -c \\\"sh -c mysql\\\\ -pS3cretPass\\\"'\"", "S3cretPass", "sh -c *"),
+		# A digit word before a redirection is a file descriptor or a value; read both ways, the value that
+		# follows the redirection (`ssh`) is too short to mask, so the command is withheld.
+		("sshpass -p 123456789 >log ssh host", "123456789", "sshpass -p * > *"),
 	],
 )
 def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):
@@ -459,6 +471,9 @@ def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
 		"su postgres --command='psql -c \"select 1\"'",
 		# A quoted command substitution without credentials changes nothing.
 		"git tag \"v$(date +%Y%m%d)\"",
+		# Redirections and a here-string fed to a command that is not a shell change nothing.
+		"grep -r foo . 2>/dev/null | head",
+		"cat <<< \"it's\"",
 	],
 )
 def test_credential_free_commands_are_unchanged(command):
@@ -522,6 +537,10 @@ def test_credential_free_commands_are_unchanged(command):
 		("echo $(mysql -pS3cretPass app)", "echo * ( mysql -p* * )"),
 		("tool -o\"$(mysql -pS3cretPass app)\"", "tool -o*"),
 		("tool -o\"`mysql -pS3cretPass app`\"", "tool -o*"),
+		# Only a one-digit word joins a redirection as its file descriptor; a longer one is a value.
+		("sshpass -p 123456789 >log ssh host", "sshpass -p * > *"),
+		("sh -c 2>/dev/null 'mysql -pS3cretPass app'", "sh -c 2> *"),
+		("bash <<< 'mysql -pS3cretPass app'", "bash <<< *"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):

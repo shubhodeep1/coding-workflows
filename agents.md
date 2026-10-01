@@ -1147,7 +1147,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   flags (`curl -u/-U/-b/-E`, `mysql -p`, `sshpass -p`, `redis-cli -a`,
   `docker login -p`, also behind another command such as `sudo`,
   `runuser`, or `docker exec`, inside a shell's or `su`'s `-c`
-  command line, and inside a `$(…)` or backtick command substitution),
+  command line or a here-string fed to a shell, inside a `$(…)` or
+  backtick command substitution, and with a redirection between the
+  flag and its value),
   URL userinfo, and credential query parameters become
   `***`. A command that cannot be parsed, or whose credential is shorter
   than 4 characters or does not occur verbatim, is withheld and only its

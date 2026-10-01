@@ -566,7 +566,9 @@ def command_shape(command: str) -> str:
 			continue
 		redirect_target = False
 		if is_punctuation and set(token) <= set("<>&") and set(token) & set("<>"):
-			if segment and segment[-1].isdigit():
+			# Only a one-digit word joins the operator as its file descriptor: a longer one can be a value
+			# (`sshpass -p 123456789 >log`), which never reaches the shape.
+			if segment and segment[-1].isdigit() and len(segment[-1]) == 1:
 				token = segment.pop() + token
 			segment.append("\x00" + token)
 			redirect_target = True
@@ -697,13 +699,37 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 	lexer.whitespace_split = True
 	tokens = list(lexer)
 	values: set[str] = set()
+	# A redirection does not end a simple command (`sh -c 2>/dev/null 'mysql -p…'`, `mysql >out -p…`): its
+	# operator and target are left out of the segment, as command_shape leaves them out of the command. A
+	# digit word before the operator is its file descriptor or a value (`sshpass -p 1234 >log`), which the
+	# lexer cannot tell apart, so the segment is read both without it (`segment`) and with it (`with_digits`).
 	segment: list[str] = []
+	with_digits: list[str] = []
+	redirect = ""
 	for token in tokens + [";"]:
-		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
+		is_punctuation = bool(token) and set(token) <= set(_SHELL_PUNCTUATION_CHARS)
+		if redirect and not is_punctuation:
+			# A target can run a command substitution (`> "$(mysql -p…)"`), and a here-string fed to a shell
+			# (`bash <<< 'mysql -p…'`) is a command line of its own.
+			values.update(_segment_credentials([token], depth))
+			if redirect == "<<<" and _shell_runner_before(with_digits, 0, len(with_digits)):
+				values.update(_command_line_credentials(token, depth + 1))
+			redirect = ""
+			continue
+		redirect = ""
+		if is_punctuation and set(token) <= set("<>&") and set(token) & set("<>"):
+			if segment and segment[-1].isdigit():
+				segment.pop()
+			redirect = token
+		elif is_punctuation:
 			values.update(_segment_credentials(segment, depth))
+			if with_digits != segment:
+				values.update(_segment_credentials(with_digits, depth))
 			segment = []
+			with_digits = []
 		else:
 			segment.append(token)
+			with_digits.append(token)
 	return values
 
 
@@ -715,10 +741,11 @@ def _sanitize_bash_command(display: str, parse_text: str) -> str | None:
 	`command_shape` uses. Credential values are the values of credential-named
 	assignments, credential header fields, credential long flags, and the
 	`_CREDENTIAL_SHORT_FLAGS` of every credential command in a segment,
-	including those inside a shell's `-c` command line and inside a `$(…)` or
-	backtick command substitution. Returns None when the text (or such a
-	command line) cannot be tokenized, or when a value is
-	shorter than MIN_MASKED_VALUE_CHARS or does not occur verbatim in
+	including those inside a shell's `-c` command line, a here-string fed to a
+	shell, and a `$(…)` or backtick command substitution; a redirection between
+	a flag and its value or command line does not separate them. Returns None
+	when the text (or such a command line) cannot be tokenized, or when a
+	value is shorter than MIN_MASKED_VALUE_CHARS or does not occur verbatim in
 	`display` (quoting or escapes changed it), so the caller posts the shape
 	instead.
 	"""
