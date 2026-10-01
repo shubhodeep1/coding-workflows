@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T09:25:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A step that checks out one commit for file reads and later resets the branch to its live tip must compare the two SHAs and soft-exit (or re-align) when they differ, or reviewers read one tree while merge gates bind to another.",
+  "phase": "implement_plan",
+  "pr_number": 5857,
+  "record_id": "lesson-implement-plan-56a99c7f6b35886392d14ad2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5824-dispatched-review-pr-head-checkout",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

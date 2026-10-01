@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T09:25:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When `agents.md` prose says which files or directories a set of scripts reads, a test should pin each named reader, not just one, or reviewers flag the unverified ones.",
+  "phase": "implement_plan",
+  "pr_number": 5857,
+  "record_id": "lesson-implement-plan-76ca77f6428f43893b101cc3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5824-dispatched-review-pr-head-checkout",
+    "file:agents.md",
+    "file:tests/test_review_autofix_dispatch_pr_head_checkout.py"
+  ]
+}

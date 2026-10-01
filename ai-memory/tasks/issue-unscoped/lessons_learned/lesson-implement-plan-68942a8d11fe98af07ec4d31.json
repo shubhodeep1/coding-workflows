@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T09:25:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A workflow change that emits a new stable log prefix must add it to both `agents.md` inventories (the \"Stable log prefixes (contractual)\" bullet list and the `LOG_PREFIX.name=` block) in the same PR, and a test should pin both entries.",
+  "phase": "implement_plan",
+  "pr_number": 5857,
+  "record_id": "lesson-implement-plan-68942a8d11fe98af07ec4d31",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5824-dispatched-review-pr-head-checkout",
+    "file:agents.md",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

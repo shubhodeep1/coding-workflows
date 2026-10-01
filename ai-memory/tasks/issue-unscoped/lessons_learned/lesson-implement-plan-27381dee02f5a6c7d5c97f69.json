@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T09:25:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A moved-head guard must run before every early exit of the step that holds it (fork heads, rejected branch names), comparing against the head the diff was collected for, or the early-exit paths pair old files with a newer diff.",
+  "phase": "implement_plan",
+  "pr_number": 5857,
+  "record_id": "lesson-implement-plan-27381dee02f5a6c7d5c97f69",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5824-dispatched-review-pr-head-checkout",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/review_collect_pr_metadata.sh"
+  ]
+}

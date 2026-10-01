@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T09:25:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An exit that only sets `CAN_PUSH=false` does not stop `review_autofix.yml` from reviewing or merging; a run whose workspace cannot hold the PR head must set `AUTOFIX_STALE_BASE_SKIP` (the flag the reviewer, hand-off, and auto-merge steps check).",
+  "phase": "implement_plan",
+  "pr_number": 5857,
+  "record_id": "lesson-implement-plan-5003c46c5d113a2d310558ee",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5824-dispatched-review-pr-head-checkout",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

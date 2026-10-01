@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T09:25:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In Claude-fixer mode the fifth consecutive `[claude-autofix]` commit is never reviewed: the gate counts it, reaches `MAX_AUTOFIX_ITERATIONS`, and labels the PR `ai:review-blocked` before the reviewers run, so a block right after a last-round fix needs a `[claude-intervention]` commit to get that fix reviewed, not another fix.",
+  "phase": "implement_plan",
+  "pr_number": 5857,
+  "record_id": "lesson-implement-plan-ebbf9dc8237206d49402ea2e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5824-dispatched-review-pr-head-checkout",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}
