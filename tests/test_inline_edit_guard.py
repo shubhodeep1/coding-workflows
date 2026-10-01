@@ -14,6 +14,7 @@ Covers the pieces that can silently detach the mechanism:
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -538,6 +539,44 @@ def test_deny_message_matches_the_filing_exclusion_prefix(hook_path: Path):
 	assert hook.DENY_MESSAGE.startswith(prompts.EXPECTED_DENY_REASON_PREFIXES)
 	assert prompts.is_expected_deny({"event": "PermissionDenied", "reason": hook.DENY_MESSAGE})
 	assert hook.RECORD_SOURCE in prompts.EXPECTED_DENY_SOURCES
+
+
+@pytest.mark.parametrize("hook_path", [GUARD_PATH, TEMPLATE_GUARD_PATH], ids=["root", "template"])
+def test_heredoc_operator_regex_matches_the_tokenizer(hook_path: Path):
+	"""Pin `_HEREDOC_OPERATOR_RE` to the regex `strip_heredoc_bodies` uses.
+
+	The hook pairs its Nth operator match in the stripped command with the Nth
+	heredoc the tokenizer returns. If the tokenizer's regex changed and the hook's
+	did not, `_restore_heredocs` would put a body back into the wrong
+	substitution, and the guard would deny the wrong command or miss a write.
+	"""
+	spec = importlib.util.spec_from_file_location(f"_guard_heredoc_{hook_path.parent.parent.parent.name}", hook_path)
+	assert spec is not None and spec.loader is not None
+	hook = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(hook)
+	tokenizer_path = hook_path.parent / "gh_api_write_guard.py"
+	spec = importlib.util.spec_from_file_location(f"_tokenizer_heredoc_{hook_path.parent.parent.parent.name}", tokenizer_path)
+	assert spec is not None and spec.loader is not None
+	tokenizer = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(tokenizer)
+	tokenizer_source = inspect.getsource(tokenizer.strip_heredoc_bodies)
+	assert f'r"{hook._HEREDOC_OPERATOR_RE.pattern}"' in tokenizer_source, (
+		f"{tokenizer_path.name}'s strip_heredoc_bodies no longer uses the heredoc operator regex "
+		f"{hook_path.name} copies as _HEREDOC_OPERATOR_RE; update both together"
+	)
+	commands = [
+		"cat <<EOF\nbody\nEOF",
+		"cat <<-'EOF' | python3 -\n\tbody\n\tEOF",
+		'python3 - <<"PY" && cat << A\nx\nPY\ny\nA',
+		"cat <<A <<B\na\nA\nb\nB",
+		'echo "$(python3 - <<\'PY\'\nPath(\'x\').write_text(\'y\')\nPY\n)"',
+		"cat <<EOF\nno delimiter",
+		"echo a<<b",
+	]
+	for command in commands:
+		stripped, heredocs = tokenizer.strip_heredoc_bodies(command)
+		operators = [match for line in stripped.split("\n") for match in hook._HEREDOC_OPERATOR_RE.finditer(line)]
+		assert len(operators) == len(heredocs), command
 
 
 # ──────────────────────────────────────────────────────────────────
