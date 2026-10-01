@@ -96,7 +96,6 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 AUTHORIZE_RE = re.compile(r"/authorize-protected-paths ([0-9a-f]{40})")
 AUTHORIZE_COMMAND = "/authorize-protected-paths"
 INSTRUCTION_MARKER = "<!-- ai:protected-path-authorization:v1 head={head} -->"
-INSTRUCTION_MARKER_RE = re.compile(r"<!-- ai:protected-path-authorization:v1 head=([0-9a-f]{40}) -->")
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 PROTECTED_PREFIXES = (".claude/", "workflow-templates/.claude/")
 GATE_SCRIPT_PATH = "scripts/protected_path_authorization.py"

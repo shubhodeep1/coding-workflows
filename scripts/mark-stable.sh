@@ -7,7 +7,9 @@
 # (scripts/protected_path_authorization.py release, issue #4919), so it needs
 # `gh` authenticated for the repository and a full (not shallow) clone; exit 6
 # means the check refused or its checker could not run, exit 7 that
-# origin/stable moved after the check. No tag moves in either case. Exit 8
+# origin/stable moved between the check and the creation of a new version tag.
+# No tag moves in either case. A partial-publish recovery rerun releases the
+# commit its existing version tag names, so it never exits 7. Exit 8
 # means origin's `stable` or major-version tag changed after this run read it
 # (a concurrent release): the pointer push is refused instead of rolling it back.
 # Usage: ./scripts/mark-stable.sh v1.1.0
@@ -178,7 +180,13 @@ if [ "${SKIP_VERSION_TAG_CREATE}" -eq 0 ]; then
 	# fail loudly instead of silently retargeting the local immutable tag.
 	git tag -a "${VERSION_TAG}" -m "Release ${VERSION_TAG}" origin/stable
 fi
-# Release exactly the commit the protected-path check passed.
+# Release exactly the commit the protected-path check passed. On a new
+# release this catches origin/stable moving before `git tag -a` above. On a
+# partial-publish recovery the published version tag fixes the commit, and the
+# check ran on that commit, so the comparison holds by construction: the
+# stable branch advancing meanwhile does not change what this release is. The
+# pointers still only move forward, because the check blocks a head that does
+# not contain the previous stable tag and the pushes below lease on that tag.
 if [ "$(git rev-parse --verify "${VERSION_TAG}^{commit}")" != "${RELEASE_CHECK_HEAD}" ]; then
 	echo "error: ${VERSION_TAG} points at $(git rev-parse --verify "${VERSION_TAG}^{commit}"), not at ${RELEASE_CHECK_HEAD}, the commit the protected-path release check passed (origin/stable moved). No tag was pushed; rerun to check the new origin/stable." >&2
 	if [ "${SKIP_VERSION_TAG_CREATE}" -eq 0 ]; then

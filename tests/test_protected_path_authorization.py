@@ -1330,6 +1330,31 @@ def test_mark_stable_script_drops_its_unpushed_version_tag_when_origin_stable_mo
 	assert local == "", "the unpushed local version tag must be removed so a rerun can create it"
 
 
+def test_mark_stable_recovery_releases_the_published_version_tag_when_origin_stable_moves(tmp_path):
+	env, remote, operator, scripts, _calls, stable_head, previous = _mark_stable_setup(tmp_path, 0)
+	# A partial publish: the first run pushed v9.9.9 at the stable tip, then
+	# failed before moving `stable` and `v9`.
+	seed = tmp_path / "seed"
+	subprocess.run(["git", "-C", str(seed), "tag", "-a", "v9.9.9", "-m", "Release v9.9.9", stable_head], check=True, env=env)
+	subprocess.run(["git", "-C", str(seed), "push", "-q", "origin", "refs/tags/v9.9.9"], check=True, env=env, capture_output=True)
+	# The stable branch advances while the recovery rerun is checking.
+	_race_checker(scripts, f"""\
+		remote = {str(remote)!r}
+		tree = subprocess.run(["git", "-C", remote, "rev-parse", "refs/heads/stable^{{tree}}"], check=True, capture_output=True, text=True).stdout.strip()
+		new = subprocess.run(["git", "-C", remote, "commit-tree", tree, "-p", "refs/heads/stable", "-m", "race"], check=True, capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "-C", remote, "update-ref", "refs/heads/stable", new], check=True)
+		""")
+	proc = subprocess.run(["bash", str(scripts / "mark-stable.sh"), "v9.9.9"], cwd=operator, capture_output=True, text=True, env=env)
+	assert proc.returncode == 0, proc.stderr
+	assert "partial-publish recovery" in proc.stdout
+	tags = _remote_tags(remote, env)
+	assert tags["v9.9.9"] == tags["stable"] == tags["v9"] == stable_head, "the pointers name the published, checked version tag"
+	branch = subprocess.run(["git", "-C", str(remote), "rev-parse", "refs/heads/stable"], check=True, capture_output=True, text=True, env=env).stdout.strip()
+	assert branch != stable_head, "the race advanced the branch, and the release left it alone"
+	ancestry = subprocess.run(["git", "-C", str(remote), "merge-base", "--is-ancestor", previous, tags["stable"]], env=env)
+	assert ancestry.returncode == 0, "the stable tag moved forward from the previous release"
+
+
 @pytest.mark.parametrize("prefix", ["PROTECTED_PATH_GATE", "AUTOFIX_AUTO_MERGE_PROTECTED_PATH"])
 def test_log_prefixes_are_registered(prefix):
 	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
