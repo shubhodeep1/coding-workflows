@@ -88,7 +88,18 @@ Phases of the unattended pipeline (each is a separate workflow file under
    The bot's comment keeps `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`
    alongside the v2 digest marker; the session dispatches
    `claude_fixer_converged_head=<sha>` for verification. Zero ledger entries
-   with a clean check snapshot auto-merge in the run; at the cap the PR itself
+   with a clean check snapshot auto-merge in the run. A reviewer slot that
+   merely failed for infrastructure reasons (non-retryable error, token cap,
+   empty output, retryable-failure limit, `skipped_budget` / `skipped_unmapped`
+   / `skipped_open`) does not block: `summarize_reviewer_consensus.sh` drops
+   every input whose `status_<prefix>_<slot>.txt` is not `success` (an input
+   with no status file is kept), and the hand-off step requires
+   `REVIEWERS_SUCCESSFUL * 2 >= active` (active = the larger of the
+   `status_review_*.txt` count and the `reviewer_active_models.txt` line
+   count; unknown = floor not applied) before it calls a round clean, logging
+   `CLAUDE_FIXER_PANEL_FLOOR successful=<n> active=<m> floor_met=<true|false|unknown>`.
+   A finding or task gap from any successful reviewer still blocks, and below
+   the floor the round is handed off. At the cap the PR itself
    is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
    (`claude_fixer_awaiting_session`). Doc-only and small-diff `claude/*`
