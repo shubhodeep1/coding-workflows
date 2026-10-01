@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-5899-flag-allowlisted-classifier-denials-plan.md
 - Source issue: shubhodeep1/coding-workflows#5899
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5899-flag-allowlisted-classifier-denials   Final PR: pending
+- Project branch: claude/implement-plan-issue-5899-flag-allowlisted-classifier-denials   Final PR: #5913 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -15,11 +15,12 @@
 
 ## Phases
 1. [ ] Phase 1 — report allowlisted denials and document the sync merge — protected paths: .claude/scripts/permission_prompts.py
-   - [ ] twin `workflow-templates/.claude/scripts/permission_prompts.py`: `allow_rule_for`, `allow_rule` / `permission_modes` on patterns, report key, occurrence-block lines
-   - [ ] `tests/test_permission_prompts.py`: matcher, grouping, body/comment, real-settings tests against the twin
-   - [ ] `CLAUDE.md` §23.B routine sync-merge bullet
-   - [ ] `agents.md` prompt-report bullet
-   - [ ] `changelog.d/5899-flag-allowlisted-classifier-denials.md`
+   - [x] twin `workflow-templates/.claude/scripts/permission_prompts.py`: `allow_rule_for`, `allow_rule` / `permission_modes` on patterns, report key, occurrence-block lines (twin sha256 f1a4aabbeb0c202ebcb3b335800bfaedbc6af818e6039000cbfdc93342b9ec01)
+   - [x] `tests/test_permission_prompts.py`: matcher, grouping, body/comment, real-settings tests against the twin (78 passed; `test_template_parity` red until the twin sync)
+   - [x] `CLAUDE.md` §23.B routine sync-merge bullet
+   - [x] `agents.md` prompt-report bullet
+   - [x] `changelog.d/5899-flag-allowlisted-classifier-denials.md`
+   - [ ] `[claude-twin-sync]` copy of the twin into `.claude/scripts/permission_prompts.py` (supervising session)
    - Done: new tests pass on the twin; after twin sync the full permission-prompt suite and section-number test pass
 
 ## Conformance
