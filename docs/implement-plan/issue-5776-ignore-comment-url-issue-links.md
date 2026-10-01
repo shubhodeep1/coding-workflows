@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5776-ignore-comment-url-issue-links   Final PR: #5790 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #5825
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01Rqqfni66CCQPdBzVGK14Nh   safety net and hand-back: see the round-1 stage report (session_01L5cMnQrqvTDGXZk5sfsbMQ)
 - Last updated: 2026-10-01
-- Last note: phase 1 implemented and verified; phase PR #5825 opened against the project branch; waiting on its review round or merge.
+- Last note: review round 1 on PR #5825: fixed the one valid finding (changelog caller count, `review_autofix.yml` has 5 call sites) and resolved the README conflict the project-branch sync introduced; waiting on round 2 or merge.
 
 ## Phases
-1. [ ] Phase 1 — narrow `extract_repo_scoped_issue_refs_from_text` so `/issues/N#…` URLs are not linked issues; runtime tests pinning the target-branch gate for Claude project PRs; ci.yml, README row, changelog fragment   — PR #5825 open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — narrow `extract_repo_scoped_issue_refs_from_text` so `/issues/N#…` URLs are not linked issues; runtime tests pinning the target-branch gate for Claude project PRs; ci.yml, README row, changelog fragment   — PR #5825 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -37,9 +37,12 @@
 - AD-7 [plan, 2026-10-01] The issue asks to update the `agents.md` line for the status sync "if one describes this behaviour". — Picked: A — `agents.md` has no such line (its only `issue_pr_status.yml` line covers lessons ingestion), so update the README `issue_pr_status.yml` row instead. Alternatives: B — add a new `agents.md` line. Why: §5, §7. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] When a changelog or plan cites how many places call a shell helper, count invocation lines only; `type <helper> >/dev/null` availability guards sit beside each call and are not call sites. (files: changelog.d/5776-ignore-comment-url-issue-links.md, .github/workflows/review_autofix.yml)
 
 ## Notes
 - Issue progress comment: 5922355476.
 - Local verification (2026-10-01): of the sweep of tests that load `gh_helpers.sh`, 542 passed and 1 failed: `test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean`, failing with `gawk: command not found` in the container, identical with the old helper.
 - `security_pass_skip.py`: `{"skip": false, "label": null, "reason": "no skip label"}` → `Security pass: run`.
 - Base check (2026-10-01): no merged PR with head `claude/implement-plan-issue-4813-close-sweep-target-branch-merges`; its final PR #4826 is an open draft into `main`.
+- Round 1 (2026-10-01): the stage synced the project branch with the issue base (merge c319847, which brought in the #5617 unmerged-close gate; no conflict, gate and helper tests pass) and pushed it, which made PR #5825 conflict in the README `issue_pr_status.yml` row. Resolved by keeping the base's row and appending this project's #5776 sentence. Base check: still no merged PR with head `claude/implement-plan-issue-4813-close-sweep-target-branch-merges`.
+- Round 1 also corrected the same stale count in the plan's Context section (four → five `review_autofix.yml` call sites), a proactive stale-doc fix.

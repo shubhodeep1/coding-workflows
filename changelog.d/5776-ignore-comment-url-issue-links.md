@@ -7,7 +7,7 @@ On 2026-09-30, conformance-fix PR #5649 merged into #4867's own project branch. 
 | --- | --- |
 | URLs no longer counted as linked issues | `https://github.com/<repo>/issues/<n>#…` and `<repo>/issues/<n>#…` |
 | Still counted | `close`/`fix`/`resolve` keywords with `#<n>`, and bare `/issues/<n>` URLs and paths |
-| Callers of the helper | `issue_pr_status.yml`, `review_autofix.yml` (4 sites), `scripts/review_collect_pr_metadata.sh`, `scripts/review_rb_judge.sh` |
+| Callers of the helper | `issue_pr_status.yml`, `review_autofix.yml` (5 sites), `scripts/review_collect_pr_metadata.sh`, `scripts/review_rb_judge.sh` |
 | New GitHub API calls | 0 |
 
 What this means for operators: citing a comment in a PR body is safe again. Only a closing keyword or a bare issue URL ties a PR to an issue. Consumer repos pick up the change from the `scripts/gh_helpers.sh` the workflows fetch on the next `@stable` sync, with no variable to set.
