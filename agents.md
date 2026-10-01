@@ -1197,7 +1197,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   `os.replace`, `os.rename`, `os.renames`, `os.remove`, a mutating `shutil`
   call (`copy`, `copy2`, `copyfile`, `copyfileobj`, `copytree`, `copymode`,
   `copystat`, `move`, `rmtree`, `chown`, `make_archive`, `unpack_archive`),
-  `.unlink(`), and for `sed -i`, `perl -i` / `-pi`, `ruby -i`, and
+  `.unlink(`, `Path(…).replace(` / `.rename(`), and for `sed -i`,
+  `perl -i` / `-pi`, `ruby -i`, and
   `awk -i inplace`, also inside a double-quoted `$(…)` or a backtick, and
   behind the wrappers `env`, `command`, `exec`, `time`, `sudo`, `doas`,
   `timeout`, and `nice` with their options. Reads,

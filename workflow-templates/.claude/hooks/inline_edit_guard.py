@@ -24,7 +24,8 @@ and the wrappers `env`, `command`, `exec`, `time`, `sudo`, `doas`,
     `w` / `a` / `x` / `+` mode, `os.replace`, `os.rename`, `os.renames`,
     `os.remove`, a mutating `shutil` call (`copy`, `copy2`, `copyfile`,
     `copyfileobj`, `copytree`, `copymode`, `copystat`, `move`, `rmtree`,
-    `chown`, `make_archive`, `unpack_archive`), or `.unlink(`;
+    `chown`, `make_archive`, `unpack_archive`), `.unlink(`, or
+    `Path(…).replace(` / `Path(…).rename(`;
   - `sed -i` / `--in-place`, `perl -i` / `-pi`, `ruby -i`, and
     `awk` / `gawk -i inplace`: those flags exist only to edit files in place.
 The same applies to a command inside a substitution Bash runs within one word
@@ -144,6 +145,9 @@ _PYTHON_WRITE_PATTERNS = (
 		r"|chown|make_archive|unpack_archive)\s*\("
 	),
 	re.compile(r"\.unlink\s*\("),
+	# pathlib's siblings of `os.replace` / `os.rename`, only on a direct `Path(…)`
+	# call: a bare `.replace(` is also `str.replace`.
+	re.compile(r"\bPath\s*\(" + _OPEN_ARGUMENT_UNIT + r"*?\)\s*\.(?:replace|rename)\s*\("),
 )
 
 # Substitutions nested deeper than this inside one word are left to the normal
@@ -326,7 +330,9 @@ def _switch_in_place(args: list[str], next_value: str, attached_value: str, digi
 
 
 def _perl_in_place(args: list[str]) -> bool:
-	return _switch_in_place(args, next_value="eE", attached_value="IMmxFdDC", digits="0l")
+	# `-I` alone at the end of a cluster takes the next argument (`-I lib`); the
+	# other value letters only take the rest of their cluster.
+	return _switch_in_place(args, next_value="eEI", attached_value="MmxFdDC", digits="0l")
 
 
 def _ruby_in_place(args: list[str]) -> bool:

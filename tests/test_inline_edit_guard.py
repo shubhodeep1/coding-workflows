@@ -219,6 +219,13 @@ def test_observed_prompts_are_denied(name):
 		("time -p sed -i 's/a/b/' f", "sed"),
 		("/usr/bin/time -o t.log perl -pi -e 's/a/b/' f", "perl"),
 		("sudo command -p sed -i 's/a/b/' f", "sed"),
+		# Perl's `-I` takes a separate directory (final PR #4877 review round 5).
+		("perl -I lib -pi -e 's/a/b/' f", "perl"),
+		("perl -pI lib -i -e 's/a/b/' f", "perl"),
+		("perl -Ilib -pi -e 's/a/b/' f", "perl"),
+		# pathlib's siblings of `os.replace` / `os.rename`.
+		("python3 -c \"from pathlib import Path; Path('a').replace('b')\"", "python"),
+		("python3 -c \"import pathlib; pathlib.Path(os.path.join(d, 'a')).rename('b')\"", "python"),
 	],
 )
 def test_inline_writes_are_denied(command, kind):
@@ -280,6 +287,17 @@ def test_deny_message_is_the_issue_text():
 		"command -pv perl -pi",
 		"command -p sed -n 1p f",
 		"time -p python3 -c \"print(1)\"",
+		# `perl -I -pi` reads `-pi` as the directory; the other value letters and
+		# Ruby's never take a separate argument, so the next word is the script.
+		"perl -I -pi -e 's/a/b/' f",
+		"perl -M strict -pi -e 's/a/b/' f",
+		"perl -F : -pi -e 's/a/b/' f",
+		"ruby -F : -i -pe '$_.upcase!' f",
+		"ruby -x lib -i -pe '$_.upcase!' f",
+		# `str.replace`, and a `Path` method other than replace / rename.
+		"python3 -c \"print('a.txt'.replace('a', 'b'))\"",
+		"python3 -c \"from pathlib import Path; print(Path('a').read_text().replace('x', 'y'))\"",
+		"python3 -c \"from pathlib import Path; print(str(Path('a')).replace('a', 'b'))\"",
 	],
 )
 def test_reads_scripts_and_data_get_no_decision(command):

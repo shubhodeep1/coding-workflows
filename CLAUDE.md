@@ -1415,7 +1415,8 @@ enforced one (issue #4858):
   `+` mode, `os.replace`, `os.rename`, `os.renames`, `os.remove`, a mutating
   `shutil` call (`copy`, `copy2`, `copyfile`, `copyfileobj`, `copytree`,
   `copymode`, `copystat`, `move`, `rmtree`, `chown`, `make_archive`,
-  `unpack_archive`), `.unlink(`), or is `sed -i` / `--in-place`, `perl -i`,
+  `unpack_archive`), `.unlink(`, `Path(…).replace(` / `.rename(`), or is
+  `sed -i` / `--in-place`, `perl -i`,
   `ruby -i`, or `awk -i inplace`, including inside a double-quoted `$(…)` or
   a backtick substitution that Bash runs.
   The reason tells the session to use the Edit tool (exact `old_string` /
