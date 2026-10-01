@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:548-551 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The comment groups issue #5609 as a separate owner-merge condition instead of a citation for the guard-path condition.\n  WHY: This has no runtime effect, but could mislead future readers into treating an issue-number signal as a routing category that does not exist in the runtime code.\n- docs/operations/master-session.md:Line 27 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Q46 excludes `.claude/hooks/**`, `.claude/scripts/**`, and `settings.json`, but omits `.claude/settings.local.json`.\n  WHY: A held PR that changes only `.claude/settings.local.json` could satisfy Q46\u2019s path exclusion and be merged under standing approval, bypassing owner-only handling for guard-path changes.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:548-551 | severity=low | confidence=4\n  PROBLEM: The comment groups \"issue #5609\" as if it were a separate owner-merge condition, although it is a citation for the guard-path condition.\n  WHY: This has no runtime effect \u2014 `SHOULD_RUN=\"false\"` and `SKIP_REASON=\"claude_twin_sync\"` are set unconditionally for `claude/claude-twin-sync-*` head refs, and the comment is purely documentation. However, it is a maintenance hazard: a future reader (or future autofix) could mis-parse \"issue #5609\" as a third routing category and add a guard that special-cases an issue-number signal, which does not exist in the runtime code path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/operations/master-session.md:Line 27 | severity=high | confidence=4\n  PROBLEM: Q46 excludes changes to `.claude/hooks/**`, `.claude/scripts/**`, and `settings.json`, but omits `.claude/settings.local.json`. The twin-sync guard treats `settings.local.json` as a guard file (`scripts/claude_twin_sync.py:96`).\n  WHY: A held PR that changes only `.claude/settings.local.json` satisfies Q46\u2019s path exclusion and may be merged under the standing approval, bypassing the owner-only handling for guard-path changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:548-551 | severity=low | confidence=4\n  PROBLEM: The comment lists three items inside the parenthetical \u2014 \"hooks/scripts/settings, issue #5609, or any listed conflict\" \u2014 as if they were parallel owner-merge categories, but \"issue #5609\" is a citation that belongs to the first item, not a third category.\n  WHY: No runtime effect \u2014 this is purely a comment documenting the rationale for `SHOULD_RUN=\"false\"` and `SKIP_REASON=\"claude_twin_sync\"`. The mis-grouping is a maintenance hazard: a future reader or autofix pass reading \"issue #5609\" as a third category could add a guard that special-cases an issue-number signal, which does not exist in `scripts/claude_twin_sync.py:824-832`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3adc293385d015044ae579d932aca8521f6ab0726d7f2d2a05a6e59503389f97",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5699,
+    "run_id": "36889547002",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36889547002",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001165303_b990462bb9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5699,
+    "run_id": "36889547002"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T16:53:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
