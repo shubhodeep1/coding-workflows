@@ -240,6 +240,13 @@ def test_observed_prompts_are_denied(name):
 		("env -S 'python3 -' <<'EOF'\nopen('x', 'w')\nEOF", "python"),
 		# `-uS` unsets `S`; it is not the split-string option.
 		("env -uS sed -i s/a/b/ f", "sed"),
+		# A heredoc inside a substitution Bash runs within one word keeps its
+		# body (final PR #4877 review round 7).
+		("echo \"$(python3 - <<'PY'\nfrom pathlib import Path\nPath('x').write_text('y')\nPY\n)\"", "python"),
+		("echo `python3 - <<'PY'\nPath('x').write_text('y')\nPY\n`", "python"),
+		("out=\"$(python3 <<-'PY'\n\topen('x', 'w').write('y')\n\tPY\n)\"", "python"),
+		("echo \"$(cat <<'A'\nhello\nA\n)\" \"$(python3 - <<'B'\nimport os\nos.remove('x')\nB\n)\"", "python"),
+		("echo \"$(echo `python3 - <<'PY'\nPath('x').unlink()\nPY\n`)\"", "python"),
 	],
 )
 def test_inline_writes_are_denied(command, kind):
@@ -318,6 +325,11 @@ def test_deny_message_is_the_issue_text():
 		"env -S 'python3 -c \"print(1)\"'",
 		"env -S",
 		"env -S \"sed -i 's/a/b/ f\"",
+		# A heredoc inside a substitution with a read, and heredoc text that is
+		# data: a quoted body inside or outside a substitution is never scanned.
+		"echo \"$(python3 - <<'PY'\nprint(open('x').read())\nPY\n)\"",
+		"gh pr create --body \"$(cat <<'EOF'\nGuard `sed -i` and Path('x').write_text('y')\nEOF\n)\"",
+		"git commit -F - <<'EOF'\nfix: `sed -i s/a/b/ f` and \"$(perl -pi -e x f)\"\nEOF",
 	],
 )
 def test_reads_scripts_and_data_get_no_decision(command):

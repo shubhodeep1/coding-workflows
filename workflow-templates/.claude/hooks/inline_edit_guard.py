@@ -31,7 +31,7 @@ and the wrappers `env`, `command`, `exec`, `time`, `sudo`, `doas`,
     `awk` / `gawk -i inplace`: those flags exist only to edit files in place.
 The same applies to a command inside a substitution Bash runs within one word
 (a double-quoted `"$(…)"` or a backtick), which the tokenizer keeps inside
-another command's argument.
+another command's argument, a heredoc inside the substitution included.
 
 No decision (the normal permission flow applies):
   - a read-only interpreter program, `pytest`, `python3 -m …`, and a script
@@ -99,6 +99,10 @@ _FAST_PATH_RE = re.compile(r"python|perl|ruby|sed|awk")
 # The heredoc operator exactly as `strip_heredoc_bodies` finds it, so the Nth
 # match in the stripped command is the Nth heredoc it returns.
 _HEREDOC_OPERATOR_RE = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+# Marks the Nth heredoc operator in the stripped command (`\0N\0`, after the
+# operator), so a substitution body that holds the operator gets its heredoc
+# body back. A Bash command never contains a NUL character.
+_HEREDOC_MARK_RE = re.compile("\x00([0-9]+)\x00")
 
 _PYTHON_RE = re.compile(r"^python(?:[0-9]+(?:\.[0-9]+)*)?$")
 _SED_NAMES = frozenset({"sed", "gsed"})
@@ -424,6 +428,38 @@ def _lines_with_offsets(text: str) -> list[tuple[int, str]]:
 	return lines
 
 
+def _mark_heredoc_operators(stripped: str) -> tuple[str, list[str]]:
+	"""The stripped command with `\\0N\\0` after its Nth heredoc operator, and each operator's delimiter."""
+	delimiters: list[str] = []
+	lines: list[str] = []
+	for line in stripped.split("\n"):
+		pieces: list[str] = []
+		last = 0
+		for match in _HEREDOC_OPERATOR_RE.finditer(line):
+			pieces.append(line[last : match.end()])
+			pieces.append(f"\x00{len(delimiters)}\x00")
+			delimiters.append(match.group(3))
+			last = match.end()
+		pieces.append(line[last:])
+		lines.append("".join(pieces))
+	return "\n".join(lines), delimiters
+
+
+def _restore_heredocs(text: str, heredocs: list[tuple[str, bool, str]], delimiters: list[str]) -> str:
+	"""`text` with each marked heredoc's body and delimiter back after the line that holds its operator."""
+	lines: list[str] = []
+	for line in text.split("\n"):
+		marks = [int(match.group(1)) for match in _HEREDOC_MARK_RE.finditer(line)]
+		lines.append(_HEREDOC_MARK_RE.sub("", line))
+		for mark in marks:
+			if mark < len(heredocs) and mark < len(delimiters):
+				body = heredocs[mark][2]
+				if body:
+					lines.append(body)
+				lines.append(delimiters[mark])
+	return "\n".join(lines)
+
+
 def segment_kind(tokens: list[str], tokenizer) -> str:
 	"""The interpreter kind when one command segment edits files in place, else ""."""
 	start = _command_start(tokens, tokenizer)
@@ -481,9 +517,13 @@ def inline_edit_kind(command: str, tokenizer, _depth: int = 0) -> str:
 	# A double-quoted `$(…)` or a backtick runs its body as a command, but the
 	# tokenizer keeps it inside one word of another command, so no segment
 	# above starts with it. An unquoted `$(…)` is already its own segment.
+	# Substitutions are found in the stripped command, so heredoc text outside
+	# them stays data, and get back the bodies of the heredocs they hold.
 	if _depth < _MAX_SUBSTITUTION_DEPTH:
-		for substitution in tokenizer.substitution_bodies(stripped):
-			kind = inline_edit_kind(substitution, tokenizer, _depth + 1)
+		marked, delimiters = _mark_heredoc_operators(stripped) if heredocs else (stripped, [])
+		for substitution in tokenizer.substitution_bodies(marked):
+			restored = _restore_heredocs(substitution, heredocs, delimiters) if heredocs else substitution
+			kind = inline_edit_kind(restored, tokenizer, _depth + 1)
 			if kind:
 				return kind
 	return ""
