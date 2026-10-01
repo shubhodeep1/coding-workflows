@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:186 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The failure-path instruction \u201cresolve, `git add`, and commit nothing\u201d can be read as directing conflict resolution and staging before the Settings restart.\n  WHY: A literal reading permits conflict work under unconfirmed settings wiring; severity ranged from low (NIT) to high (MAJOR), so the highest severity is used.\n- workflow-templates/.claude/commands/implement-plan-claude.md:186 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The failure-path instruction \u201cresolve, `git add`, and commit nothing\u201d can be read as directing conflict resolution and staging before the Settings restart.\n  WHY: A literal reading permits conflict work under unconfirmed settings wiring; severity ranged from low (NIT) to high (MAJOR), so the highest severity is used.\n- tests/test_claude_asset_sync_command.py:356 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, qwen_qwen3_7-plus]\n  PROBLEM: The assertion requires the ambiguous instruction wording, so clarifying the command text requires updating the test assertion too.\n  WHY: Otherwise the test fails when the instruction is reworded to prohibit resolution and staging.\n- /fix-claude-pr.md: step 5 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The same ambiguous instruction appears in step 5 and can direct conflict resolution and staging before the Settings restart.\n  WHY: A literal reading permits conflict work under unconfirmed settings wiring.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/implement-plan-claude.md (both .claude/ and workflow-templates/.claude/ copies): Step 5 (Conflict), line 186 | severity=low | confidence=[2]\n  PROBLEM: The phrase \"resolve, `git add`, and commit nothing\" can be read as instructing the session to resolve conflicts and stage them before abandoning the work.\n  WHY: A session parsing the phrase literally could run git add under unconfirmed settings wiring, although the surrounding context and test clarify the intended behavior.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/commands/implement-plan-claude.md: line 186 | severity=high | confidence=[5]\n  PROBLEM: The failure branch says \"resolve, `git add`, and commit nothing,\" which can be parsed as directing conflict resolution and staging before dropping the commit and restarting.\n  WHY: An automated session may perform privileged conflict work under unconfirmed hook wiring, defeating the mid-merge check.\n- workflow-templates/.claude/commands/implement-plan-claude.md: line 186 | severity=high | confidence=[5]\n  PROBLEM: The failure branch says \"resolve, `git add`, and commit nothing,\" which can be parsed as directing conflict resolution and staging before dropping the commit and restarting.\n  WHY: An agent may resolve conflicts and run git add under unconfirmed hook wiring before restarting.\n- tests/test_claude_asset_sync_command.py: line 356 | severity=high | confidence=[5]\n  PROBLEM: The assertion locks in the ambiguous instruction phrasing.\n  WHY: Clarifying the command text to prohibit resolution and staging will fail this assertion unless it is updated too.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/commands/implement-plan-claude.md: line 186, Claude-asset sync step 5 | severity=high | confidence=[5]\n  PROBLEM: The instruction \"resolve, `git add`, and commit nothing\" is grammatically ambiguous and naturally parses as resolving conflicts and staging files before the Settings restart.\n  WHY: A literal reading permits local conflict-resolution work under unconfirmed hook wiring; the same wording (and same defect) appears in the `.claude/` twin copy and in `/fix-claude-pr.md` step 5.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/implement-plan-claude.md; workflow-templates/.claude/commands/implement-plan-claude.md: Claude-asset sync step 5, line 186 | severity=high | confidence=[4]\n  PROBLEM: After the settings check still fails on its retry, \u201cresolve, `git add`, and commit nothing\u201d directs conflict resolution and staging before the Settings restart when read literally.\n  WHY: A session following that sequence performs conflict work under unconfirmed settings wiring before the restart discards the local merge.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/implement-plan-claude.md (and .claude/ copy): Step 5 (Conflict), the failure-path instruction: \"still exit 1 after the re-run \u2192 resolve, `git add`, and commit nothing, and follow [Settings restart]\"\n  PROBLEM: The phrase is grammatically ambiguous and can be parsed as sequential imperatives to resolve, stage, and then commit nothing.\n  WHY: A literal reader could perform conflict resolution under unconfirmed wiring before the restart; the surrounding context clarifies the intent.\n- tests/test_claude_asset_sync_command.py:356\n  PROBLEM: The test asserts the exact ambiguous wording.\n  WHY: Rewording the instruction requires updating the test assertion.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/commands/implement-plan-claude.md: line 186, step 5 (Conflict), failure path after the mid-merge settings check; identical text in workflow-templates/.claude/commands/implement-plan-claude.md:186 | severity=high | confidence=[4]\n  PROBLEM: \"resolve, `git add`, and commit nothing\" is grammatically ambiguous and can instruct the session to resolve conflicts and stage files.\n  WHY: A literal reading permits conflict-resolution edits and `git add` under unconfirmed `settings.json` wiring; the test at tests/test_claude_asset_sync_command.py:356 locks in the wording.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2270f44467073919f199a59900c92f5c5726265963699fa9c10f04c2d6d8bc18",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5511,
+    "run_id": "36807570578",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36807570578",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001031003_0b950c15d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5511,
+    "run_id": "36807570578"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T03:10:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
