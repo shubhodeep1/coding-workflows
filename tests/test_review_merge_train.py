@@ -65,6 +65,8 @@ path="${endpoint%%\?*}"
 # total_count. actions_runs_switch_at (a call number, counting every
 # actions/runs call from 1) serves actions_runs_after_switch.json from that
 # call on: a run changed status between two status queries.
+# actions_runs_switch2_at serves actions_runs_after_switch2.json from that
+# call on, after the first switch: the run changed status a second time.
 # runs_raw_page.json, when present, is served as is for every actions/runs
 # call (a response whose shape the listing must validate itself).
 if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
@@ -99,6 +101,9 @@ if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
     fi
     if [ -f "${FAKE_GH_DIR}/actions_runs_switch_at" ] && [ "${run_call}" -ge "$(cat "${FAKE_GH_DIR}/actions_runs_switch_at")" ]; then
       runs_source="$(cat "${FAKE_GH_DIR}/actions_runs_after_switch.json")"
+    fi
+    if [ -f "${FAKE_GH_DIR}/actions_runs_switch2_at" ] && [ "${run_call}" -ge "$(cat "${FAKE_GH_DIR}/actions_runs_switch2_at")" ]; then
+      runs_source="$(cat "${FAKE_GH_DIR}/actions_runs_after_switch2.json")"
     fi
     page_json="$(printf '%s' "${runs_source}" | jq -c --arg st "${run_status}" --arg cm "${run_created_max}" --argjson pg "${run_page}" --argjson pp "${run_per_page}" '
       ((.workflow_runs // []) | map(select($st == "" or (.listed_status // .status) == $st))
@@ -565,7 +570,11 @@ def test_release_ignores_pr_named_runs_of_other_prs_and_other_events(tmp_path: P
 
 
 def test_release_empty_head_does_not_match_blank_run_branch(tmp_path: Path) -> None:
-	"""An empty PR head is never a grep pattern, so a run with head_branch "" does not hold the PR."""
+	"""An empty PR head is never a grep pattern, so a run with head_branch "" does not hold the PR.
+
+	The blank-branch run is a dispatch named for another PR, so it has a key
+	and the listing stays complete (AD-14).
+	"""
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	(fixtures / "pulls.json").write_text(json.dumps([
 		_pr(4077, "", labels=["ai:merge-queued"]),
@@ -575,8 +584,8 @@ def test_release_empty_head_does_not_match_blank_run_branch(tmp_path: Path) -> N
 			"id": 9005,
 			"status": "in_progress",
 			"head_branch": "",
-			"event": "pull_request",
-			"display_title": "AI Review",
+			"event": "workflow_dispatch",
+			"display_title": "AI Review [pr:9999]",
 			"path": ".github/workflows/ai-review.yml",
 		},
 		{
@@ -678,12 +687,13 @@ def test_release_ignores_ref_suffixed_runs_of_other_workflows(tmp_path: Path) ->
 
 RUNS_STATUS_ORDER = (
 	"requested", "pending", "queued", "waiting", "in_progress",
-	"requested", "pending", "queued", "waiting",
+	"requested", "pending", "queued", "waiting", "in_progress",
 )
 
 
 def test_release_queries_each_active_status_in_lifecycle_order(tmp_path: Path) -> None:
-	"""PR #5451 review round 4 (AD-13): the five statuses, then all but the last once more."""
+	"""PR #5451 review round 4 (AD-13) and the review of head fd3ad67 (AD-15):
+	the five statuses in lifecycle order, twice."""
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	_queued_pr_4077(fixtures)
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
@@ -727,6 +737,95 @@ def test_release_holds_pr_for_review_run_that_changes_status_mid_listing(tmp_pat
 		assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (switch_at, result.stderr)
 		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout, (switch_at, result.stdout)
 		assert "gh workflow run" not in log_text, switch_at
+
+
+@pytest.mark.parametrize("statuses", [
+	("in_progress", "waiting", "in_progress"),
+	("requested", "queued", "in_progress"),
+	("queued", "waiting", "in_progress"),
+	("waiting", "queued", "in_progress"),
+	("pending", "queued", "waiting"),
+])
+def test_release_holds_pr_for_review_run_that_changes_status_twice_mid_listing(tmp_path: Path, statuses: tuple[str, str, str]) -> None:
+	"""PR #5451, review of head fd3ad67 (AD-15): a run that changes status twice
+	while the statuses are read is still seen, when at most one change is
+	backward (into `waiting` after `in_progress`, or out of it to `queued`).
+
+	With `in_progress` missing from the second pass, a run in `in_progress`
+	that moved to `waiting` after the first `in_progress` query was issued and
+	back to `in_progress` after the second `waiting` query was in no result.
+	"""
+	first, second, third = statuses
+	for switch_at in range(2, len(RUNS_STATUS_ORDER) + 1):
+		for switch2_at in range(switch_at + 1, len(RUNS_STATUS_ORDER) + 1):
+			case_dir = tmp_path / f"switch-{switch_at}-{switch2_at}"
+			case_dir.mkdir()
+			bin_dir, fixtures, log = _install_fake_gh(case_dir)
+			_queued_pr_4077(fixtures)
+			run = {"id": 5000, "head_branch": "ai/issue-4064", "event": "pull_request",
+				"path": ".github/workflows/internal-review.yml", "created_at": _run_created_at(0)}
+			_write_runs(fixtures, [dict(run, status=first)])
+			(fixtures / "actions_runs_after_switch.json").write_text(
+				json.dumps({"workflow_runs": [dict(run, status=second)]}), encoding="utf-8")
+			(fixtures / "actions_runs_switch_at").write_text(str(switch_at), encoding="utf-8")
+			(fixtures / "actions_runs_after_switch2.json").write_text(
+				json.dumps({"workflow_runs": [dict(run, status=third)]}), encoding="utf-8")
+			(fixtures / "actions_runs_switch2_at").write_text(str(switch2_at), encoding="utf-8")
+			result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log)
+			case = (statuses, switch_at, switch2_at)
+			assert result.returncode == 0, (case, result.stderr)
+			assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (case, result.stderr)
+			assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout, (case, result.stdout)
+			assert "gh workflow run" not in log_text, case
+
+
+@pytest.mark.parametrize("run_fields", [
+	{"head_branch": None, "event": "pull_request", "display_title": "Add promo sender"},
+	{"head_branch": "", "event": "pull_request", "display_title": "Add promo sender"},
+	{"event": "push"},
+	{"head_branch": None, "event": "workflow_dispatch", "display_title": "AI Review"},
+	{"head_branch": "", "event": "workflow_dispatch", "display_title": "Internal: AI Review & Autofix [pr:0]"},
+])
+def test_release_leaves_pr_queued_when_a_review_run_has_no_key(tmp_path: Path, run_fields: dict) -> None:
+	"""PR #5451, review of head fd3ad67 (AD-14): a review run with no non-empty
+	head_branch and no PR-named dispatch title could be running for any queued
+	PR, so the listing is incomplete and nothing is released."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [dict({"id": 5000, "status": "in_progress",
+		"path": ".github/workflows/ai-review.yml@refs/heads/main"}, **run_fields)])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def test_release_keys_pr_named_dispatch_run_with_no_head_branch(tmp_path: Path) -> None:
+	"""A PR-named dispatch run with a null head_branch still holds its PR (AD-14)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 5000, "status": "queued", "head_branch": None, "event": "workflow_dispatch",
+		"display_title": "AI Review [pr:4077]", "path": ".github/workflows/ai-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_ignores_keyless_runs_of_other_workflows(tmp_path: Path) -> None:
+	"""A run of another workflow with no head_branch never holds the train (AD-14)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 5000, "status": "in_progress", "head_branch": None, "event": "schedule",
+		"display_title": "Nightly", "path": ".github/workflows/ci.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
 
 
 @pytest.mark.parametrize("status", ["requested", "waiting"])
@@ -774,7 +873,7 @@ def test_release_reads_every_page_before_deciding(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert f"actions/runs?status=in_progress&per_page=100&page=1&created=%3C%3D{_run_created_at(99)}" in log_text
 	assert "page=2" not in log_text
-	assert log_text.count("actions/runs?status=in_progress") == 2
+	assert log_text.count("actions/runs?status=in_progress") == 4, "two queries in each of the two in_progress reads"
 	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 
@@ -1093,7 +1192,7 @@ def test_release_accepts_empty_workflow_runs_array(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
 	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
-	assert log_text.count("actions/runs") == 9
+	assert log_text.count("actions/runs") == len(RUNS_STATUS_ORDER)
 
 
 def test_release_skips_run_listing_when_nothing_queued(tmp_path: Path) -> None:

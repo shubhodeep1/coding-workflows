@@ -13,10 +13,10 @@ The merge train's `release` subcommand decides whether a queued PR already has a
 The review rounds changed the listing after this plan was written. The sections below keep the original text, with an "As shipped" note where it no longer matches the code; the auto-decisions are in the progress log (`docs/implement-plan/issue-5443-merge-train-complete-run-listing.md`).
 
 - Statuses (AD-12, supersedes AD-6): all five non-terminal statuses, `requested`, `pending`, `queued`, `waiting`, `in_progress`.
-- Order (AD-13): the five statuses, then `requested`, `pending`, `queued`, `waiting` once more, so a run that changes status once while the listing is read is seen whichever way it moves (`waiting` can follow `in_progress`).
+- Order (AD-13, AD-15): the five statuses in lifecycle order, twice, so a run is seen however often it moves forward, and a run whose status moves backward (`in_progress` to `waiting`, `waiting` to `queued`, only through a deployment environment) is missed only when it does so during both passes.
 - Paging (AD-8, supersedes AD-7): each follow-up query is bounded by `created=<=<oldest created_at read>` (rounded up to a whole second, AD-9) instead of an offset page; a status is complete when one response holds its whole `total_count`.
-- Malformed pages (AD-10, AD-11): a run with no numeric id, no non-empty path, or no non-empty status, a `total_count` that is not a whole number, or a `workflow_runs` that is missing, null, or not an array (review round 5), makes the listing incomplete; every run an active-status query returns counts as active.
-- API calls: normally 9 per release invocation with a queued PR, 0 with none.
+- Malformed pages (AD-10, AD-11): a run with no numeric id, no non-empty path, or no non-empty status, a `total_count` that is not a whole number, or a `workflow_runs` that is missing, null, or not an array (review round 5), makes the listing incomplete; every run an active-status query returns counts as active. A review run with no non-empty head branch and no PR-named dispatch title makes it incomplete too (AD-14, reason `unattributed_run`).
+- API calls: normally 10 per release invocation with a queued PR, 0 with none.
 
 ## Context
 
@@ -48,7 +48,7 @@ The review rounds changed the listing after this plan was written. The sections 
 - §5: only `_mt_inflight_review_branches`, its caller in `_mt_release`, the file header's API-budget and fail-open text, the tests, the README row that describes `release`, and one changelog fragment change.
 - §6: no identifier is renamed or removed. `_mt_inflight_review_branches` keeps its name, takes no arguments, and still prints one sorted key per line (`<head branch>` or `pr:<N>`); it returns 1 on an incomplete listing, as it already did on a failed call. Existing log keys (`MERGE_TRAIN_RELEASE_ACTIVE`, `MERGE_TRAIN_RELEASED`, …) keep their names and fields. The new log keys (`MERGE_TRAIN_RUNS_LISTING`, `MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE`) and the new locals are checked against the file for collisions.
 - §8: every incomplete listing is logged once with its reason, and each queued PR it holds back is logged.
-- §15: one `GET actions/runs?status=<s>&per_page=100&page=<p>` per page per status: 3 calls per release invocation in the normal case (one page each), issued only when a queued PR is evaluated (as shipped: 9 calls, AD-12 and AD-13). Today every invocation makes 1 call whether or not anything is queued, so ticks with an empty queue drop from 1 call to 0. The function comment documents input, output, return codes, call budget, and failure behaviour. REST only.
+- §15: one `GET actions/runs?status=<s>&per_page=100&page=<p>` per page per status: 3 calls per release invocation in the normal case (one page each), issued only when a queued PR is evaluated (as shipped: 10 calls, AD-12, AD-13, and AD-15). Today every invocation makes 1 call whether or not anything is queued, so ticks with an empty queue drop from 1 call to 0. The function comment documents input, output, return codes, call budget, and failure behaviour. REST only.
 - §9: tabs, opening braces on a new line for the new function body, matching the file's existing style.
 - §20: one `changelog.d/` fragment (`security`).
 - §12/§19: phase and fix PRs use `Refs #5443`; the base is not the default branch, so the final PR also uses `Refs #5443` and the final-merge stage closes the issue explicitly.
@@ -103,7 +103,7 @@ Phase 1:
 ## Risks & Mitigations
 
 - A burst of more than 1,000 active runs in one status keeps the listing incomplete and holds every queued PR. — ACCEPTED: the train only ever delays a review (its documented contract), and the hold lifts on the first invocation whose listing completes.
-- Runs change status while the three queries run. — Queried in lifecycle order so a forward move is seen at least once (as shipped: a second pass covers a run that changes status once in either direction, AD-13); a run created after the snapshot was already outside the previous design's snapshot too, and the label-removal claim still prevents two releases racing.
+- Runs change status while the three queries run. — Queried in lifecycle order so a forward move is seen at least once (as shipped: a second full pass covers a run that also moves backward once, AD-13 and AD-15); a run created after the snapshot was already outside the previous design's snapshot too, and the label-removal claim still prevents two releases racing.
 - Extra API calls on busy ticks. — Lazy fetch: 0 calls when nothing is queued (previously 1), 3 when something is (as shipped: 9).
 
 ## Rollout

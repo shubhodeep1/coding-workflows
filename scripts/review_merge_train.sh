@@ -51,9 +51,9 @@
 #   release: 1 list call (open PRs, all bases, 100 per page) + the active-run
 #            listing that prevents dispatch beside an active review (one
 #            `actions/runs?status=<s>` call per 100 runs for each of
-#            requested, pending, queued, waiting, in_progress, then requested,
-#            pending, queued, waiting again, follow-ups bounded by created_at,
-#            at most 10 each — normally 9 calls — read once,
+#            requested, pending, queued, waiting, in_progress, then all five
+#            again, follow-ups bounded by created_at,
+#            at most 10 each — normally 10 calls — read once,
 #            only when a queued PR passes the base filter; see
 #            _mt_inflight_review_branches) + files calls
 #            as above, cached per PR for the run; each unblocked queued PR adds
@@ -441,25 +441,29 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            state before it is queued; `waiting` is only reached through a
 #            deployment environment, which the review workflows do not use,
 #            and is read so a wrapper that adds one is still covered), then
-#            requested, pending, queued, waiting once more. The repo's other
+#            all five once more. The repo's other
 #            active-run guards count the same five statuses
 #            (scripts/apply_analysis_on_main.sh, scripts/auto_release_stable.sh).
-#            Order (PR #5451 review round 4): the queries run one after
-#            another, so a run that leaves a status after that status was
-#            read and enters one that was read before it is in neither
-#            result. `waiting` can follow `in_progress` (a later job reaching
-#            a deployment environment) and precede `queued` or `in_progress`,
-#            so no single pass covers every move. The second pass reads every
-#            status again after the first read of every other status, so a
-#            run that changes status at most once while the listing is read
-#            is returned by some query, whichever way it moves.
+#            Order (PR #5451 review round 4, and the review of head fd3ad67):
+#            the queries run one after another, so a run that leaves a status
+#            after that status was read and enters one that was read before
+#            it is in neither result. Each pass reads the statuses in
+#            lifecycle order, so a run whose status only moves forward during
+#            a pass is returned by that pass however often it moves: it never
+#            falls behind the status being read. The backward moves,
+#            `in_progress` to `waiting` (a later job reaching a deployment
+#            environment) and `waiting` to `queued` (an approved job), only
+#            happen through a deployment environment, which the review
+#            workflows do not use. A run is missed only when it moves
+#            backward during both passes, within the seconds the listing
+#            takes.
 #            A status is complete when one response holds
 #            every run its query matched (workflow_runs reaches total_count).
 #            Otherwise the next query adds `&created=<=<oldest created_at
 #            read>` and asks again, at most 10 queries ("pages") per status.
 #            A created_at with fractional seconds is rounded up to the next
 #            whole second, so the inclusive bound still covers that run.
-#            Normally 9 calls, one per status query. REST only (CLAUDE.md §15).
+#            Normally 10 calls, one per status query. REST only (CLAUDE.md §15).
 # Keyset:    the listing is filtered by status and sorted by created_at,
 #            newest first (checked live on 2026-09-30), so offset pages
 #            (`page=2`, …) skip a run whenever runs above it leave the status
@@ -481,16 +485,19 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            next query), a short page
 #            before its total_count (the listing shifted while it was read),
 #            more runs than 10 queries read or a query that adds no new run
-#            (more than 100 runs created in one second), or a failed key
-#            filter. Each is logged once on stderr (CLAUDE.md §8):
-#            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|filter_failed> status=<s> page=<p> read=<n> total=<n>
+#            (more than 100 runs created in one second), a review run that
+#            yields no key (no non-empty head_branch and no PR-named dispatch
+#            title, so it could belong to any queued PR; PR #5451, review of
+#            head fd3ad67), or a failed key filter. Each is logged once on stderr
+#            (CLAUDE.md §8):
+#            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|unattributed_run|filter_failed> status=<s> page=<p> read=<n> total=<n>
 _mt_inflight_review_branches()
 {
 	local __mt_runs_max_pages=10 __mt_runs_status="" __mt_runs_page=0 __mt_runs_reason=""
 	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0 __mt_runs_read_before=0
 	local __mt_runs_query="" __mt_runs_created_bound=""
-	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys=""
-	for __mt_runs_status in requested pending queued waiting in_progress requested pending queued waiting; do
+	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys="" __mt_runs_keyed='[]'
+	for __mt_runs_status in requested pending queued waiting in_progress requested pending queued waiting in_progress; do
 		__mt_runs_page=1
 		__mt_runs_total=0
 		__mt_runs_read=0
@@ -561,7 +568,14 @@ _mt_inflight_review_branches()
 		fi
 	done
 	if [ -z "${__mt_runs_reason}" ]; then
-		if ! __mt_runs_keys="$(printf '%s' "${__mt_runs_all}" | jq -r '.[]? | select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | ((.head_branch // empty), (if (.event // "") == "workflow_dispatch" then ((.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)") else empty end))' 2>/dev/null)"; then
+		# One array of keys per review run. A review run with no key at all (no
+		# non-empty head_branch and no PR-named dispatch title) could belong to
+		# any queued PR, so the listing is incomplete (PR #5451, review of head fd3ad67).
+		if ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_all}" | jq -c '[.[]? | select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | [(.head_branch | select(type == "string" and length > 0)), (if (.event // "") == "workflow_dispatch" then ((.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)") else empty end)]]' 2>/dev/null)"; then
+			__mt_runs_reason="filter_failed"
+		elif ! printf '%s' "${__mt_runs_keyed}" | jq -e 'all(.[]; length > 0)' >/dev/null 2>&1; then
+			__mt_runs_reason="unattributed_run"
+		elif ! __mt_runs_keys="$(printf '%s' "${__mt_runs_keyed}" | jq -r '.[][]' 2>/dev/null)"; then
 			__mt_runs_reason="filter_failed"
 		fi
 	fi
