@@ -41,7 +41,7 @@ This plan closes the gate in layers. Escalation comments get markers, the later-
 - §1: security first. Every new rule narrows the gate, and none widens it.
 - §6: no identifier is renamed or removed. New names are `<!-- ai:clarify-escalation:v1 -->`, `<!-- ai:plan-blocked:v1 -->`, `<!-- ai:implement-blocked:v1 -->`, `<!-- ai:clarification-required:v1 -->`, and the bash variables `RECLARIFY_FENCE_OPEN_RE`, `RECLARIFY_FENCE_CLOSE_RE`, `RECLARIFY_OPEN_FENCE`, `RECLARIFY_SCAN_LINE`, `RECLARIFY_LINE_NO`. They are checked for collisions before use.
 - §14: the consumer wrapper `workflow-templates/ai-clarify.yml` stays identical to the reusable predicate (parity test). A new wrapper with an old reusable workflow, or the reverse, is safe, because each only narrows.
-- §15: no new GitHub API call. The label removals reuse the release step's existing DELETE pattern, one call per label.
+- §15: no new GitHub API call per route. When a Codex route releases a Claude claim, the release step removes every Claude label the issue carries (read from the route step's issue snapshot) in one GraphQL `removeLabelsFromLabelable` call, and falls back to one REST DELETE per present label only when that call fails or the snapshot lacks node ids (review round 4).
 - §20: one changelog fragment (`security`). The unreleased `changelog.d/5243-reclarify-any-line.md` is corrected where it describes the marker rule.
 - §27: `clarify.yml`, `plan.yml` and `implement.yml` stay far under 480,000 bytes.
 - §9: YAML 2-space, shell scripts in `scripts/` use tabs.
@@ -51,7 +51,7 @@ This plan closes the gate in layers. Escalation comments get markers, the later-
 1. **Job-level predicate, all four copies.** In the later-line clause, replace `!contains(body, '<!-- ai:')` with `!contains(body, '<!--')`, and add `!contains(toJson(github.event.issue.labels.*.name), '"ai:orchestrator-tracking"') && !contains(toJson(github.event.issue.labels.*.name), '"ai:orchestrator-managed"')`. The first-line `startsWith` clause is unchanged.
 2. **Route step `Decide clarify route`.** The later-line branch uses the same `<!--` test and the same label exclusions (jq). It also scans the lowercased body line by line and accepts a `/reclarify` line only when it is outside a fenced code block. A fence opens with 0–3 spaces and then 3+ backticks or tildes, and it closes on a line of the same character, at least as long, with nothing after it. The expression language cannot parse fences, so this check lives only in the step: such a comment starts a runner that then skips with `not_reclarify_command`.
 3. **Markers on escalation comments.** Append the marker as the final line, after the model text: `orchestrate_parse_and_post_answer.sh` (both loop-break variants) → `<!-- ai:clarify-escalation:v1 -->`; `plan.yml` blocked comment → `<!-- ai:plan-blocked:v1 -->`; `implement.yml` blocked comment → `<!-- ai:implement-blocked:v1 -->`; `plan.yml` non-orchestrated "Clarification required" comment → `<!-- ai:clarification-required:v1 -->` (the orchestrated variant already starts with `ai:clarification-questions`).
-4. **Release step.** `RELEASE_CLAUDE_CLAIM` also turns true when the issue carries `ai:claude-blocked` or `ai:claude-handoff-failed`, and the release step deletes those two labels as well as `ai:claude`.
+4. **Release step.** `RELEASE_CLAUDE_CLAIM` also turns true when the issue carries `ai:claude-blocked` or `ai:claude-handoff-failed`, and the release step removes those two labels as well as `ai:claude`: every one the issue carries, in one batched GraphQL call with a per-label REST DELETE fallback (see the §15 constraint).
 
 ## Phases & Merge Strategy
 
@@ -66,7 +66,7 @@ Single phase. Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: the 
 
 1. `.github/workflows/clarify.yml:21`, `.github/workflows/internal-clarify.yml:17`, `workflow-templates/ai-clarify.yml:17`, `README.md:369`: new later-line clause (Approach 1).
 2. `.github/workflows/clarify.yml` `Decide clarify route`: `<!--`, the label exclusions and the fence scan in the `IS_RECLARIFY_COMMAND` branch, and an updated comment block. `RELEASE_CLAUDE_CLAIM` condition.
-3. `.github/workflows/clarify.yml` "Release Claude claim on switch to Codex": delete `ai:claude-blocked` and `ai:claude-handoff-failed` too.
+3. `.github/workflows/clarify.yml` "Release Claude claim on switch to Codex": remove `ai:claude-blocked` and `ai:claude-handoff-failed` too, batched with `ai:claude` in one GraphQL `removeLabelsFromLabelable` call (REST DELETE per present label as the fallback).
 4. `scripts/orchestrate_parse_and_post_answer.sh:190–212`, `.github/workflows/plan.yml` (blocked comment, clarification-required comment), `.github/workflows/implement.yml` (blocked comment): markers.
 5. Tests (see Tests).
 6. Docs: `README.md` trusted-comment paragraph, `agents.md` intake bullet (around line 227), `docs/how-it-works.md:85`, `changelog.d/5243-reclarify-any-line.md` (the marker sentences), and `changelog.d/5309-reclarify-fail-closed.md` (new, `security`).
@@ -100,7 +100,7 @@ Single phase. Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: the 
   - `/reclarify` after a closed fence → passes;
   - an unclosed fence → skipped.
   Assert `skip_codex=true`, `orchestrator_fast_path=false` and the `not_reclarify_command` line for orchestrator-managed later-line comments. Assert `release_claude_claim=true` for a Codex route on an issue with only `ai:claude-blocked`.
-- Static checks that each escalation site writes its marker after its model text (orchestrate script, both `plan.yml` comments, `implement.yml`), and that the release step deletes all three labels.
+- Static checks that each escalation site writes its marker after its model text (orchestrate script, both `plan.yml` comments, `implement.yml`), and that the release step removes all three labels: in one GraphQL call when it succeeds, else one REST DELETE per present label.
 - Run: `python3 -m pytest tests/test_phase_wrapper_predicate_contract.py tests/test_phase_skip_gate_telemetry_contract.py tests/test_orchestrate_clarify_loop_guard.py tests/test_plan_clarify_blocked_output.py tests/test_implement_blocked_verdict_terminalizes.py tests/test_claude_issue_route.py tests/test_changelog_fragment_contract.py tests/test_workflow_file_size_limit.py`, `bash -n` / `shellcheck` on the script, and `actionlint` on the three workflows when available.
 
 ## Risks & Mitigations
