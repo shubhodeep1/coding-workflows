@@ -596,6 +596,8 @@ def test_handoff_issue_5582_nonblocking_note_names_the_automated_disproof():
 		"verified=0 unverified=2"),
 	# Evidence that would verify, but the workspace holds no reviewed commit.
 	(REJECTING_REVIEWS, None, "source=unavailable commit=" + HEAD),
+	# Evidence that would verify, but the reviewed commit does not hold the quoted file.
+	(REJECTING_REVIEWS, {"OTHER.md": "Line 1.\n"}, "reviewer=minimax reason=source_unavailable"),
 ])
 def test_handoff_rejections_without_verified_evidence_hand_the_round_off(reviews, source_files, evidence_line):
 	"""Issue #4976: free-text votes alone never authorize a clean review or auto-merge."""
