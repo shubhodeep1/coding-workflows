@@ -23,7 +23,8 @@ Output: one JSON object on stdout, e.g.
    "next_after_id": "session_…"}
 
 `next_after_id` is the page's `last_id` while more pages exist and the page's
-oldest session is newer than `--horizon-days` (default 30); otherwise null.
+oldest readable `created_at` is newer than `--horizon-days` (default 30), or
+no `created_at` on the page is readable; otherwise null.
 The pickup passes it as `after_id` on its next wake, so one page per wake
 still reaches week-old sessions, and starts again from the newest page when
 it is null.
@@ -305,7 +306,10 @@ def classify(sessions: list[dict], now: dt.datetime, self_id: str | None = None,
 		if status == STATUS_ARCHIVED:
 			already_archived += 1
 			continue
-		if session_id == self_id or status != STATUS_IDLE or session.get("status_bucket") == BUCKET_WORKING:
+		# Compare both ids in the `session_` form: a page could list the
+		# pickup as `cse_<x>` while `--self` names it `session_<x>`.
+		is_self = self_id is not None and _normalise_session_id(session_id) == self_id
+		if is_self or status != STATUS_IDLE or session.get("status_bucket") == BUCKET_WORKING:
 			kept += 1
 			continue
 		reason = None
@@ -353,7 +357,9 @@ def next_after_id(sessions: list[dict], has_more: bool, last_id: str | None, now
 		except (AttributeError, ValueError):
 			continue
 	if not created:
-		return None
+		# No readable timestamp, so the horizon cannot be judged here: walk
+		# on, and let the next page's timestamps (or its end) stop the walk.
+		return last_id
 	oldest = min(created)
 	return last_id if (now - oldest).total_seconds() < horizon_days * 86400 else None
 

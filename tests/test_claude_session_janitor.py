@@ -198,6 +198,19 @@ def test_the_pickup_itself_is_never_named(monkeypatch):
 	assert _archived_ids(janitor.classify(sessions, NOW, self_id="session_other")) == ["session_selfid"]
 
 
+def test_the_pickup_is_matched_in_either_id_form(monkeypatch):
+	# A page may list the pickup as cse_<x> while --self names it session_<x> (PR #4924 review round 2).
+	_stub(monkeypatch, {"repos/o/r/pulls/12": _merged(10)})
+	sessions = [_session("cse_selfid", "PR o/r#12 — fixed review")]
+	for self_id in ("session_selfid", "cse_selfid"):
+		result = janitor.classify(sessions, NOW, self_id=self_id)
+		assert result["archive"] == [] and result["kept"] == 1, self_id
+	assert _archived_ids(janitor.classify(sessions, NOW, self_id="session_other")) == ["cse_selfid"]
+	# An unparseable --self matches nothing, not every unparseable page id.
+	odd = [_session("odd-id", "PR o/r#12 — fixed review")]
+	assert _archived_ids(janitor.classify(odd, NOW, self_id="not-an-id")) == ["odd-id"]
+
+
 def test_other_titles_are_counted_not_ours_and_cost_no_call(monkeypatch):
 	calls = _stub(monkeypatch, {})
 	sessions = [
@@ -450,8 +463,12 @@ def test_next_after_id_skips_an_unreadable_timestamp():
 		sessions[0]["created_at"] = bad
 		assert janitor.next_after_id(sessions, True, "session_b", NOW, 30) == "session_b", bad
 		assert janitor.next_after_id(sessions, True, "session_b", NOW, 1) is None, bad
+	# A page with no readable created_at walks on too (PR #4924 review round 2);
+	# the next page's timestamps or its end stop the walk.
 	sessions[1]["created_at"] = None
-	assert janitor.next_after_id(sessions, True, "session_b", NOW, 30) is None
+	assert janitor.next_after_id(sessions, True, "session_b", NOW, 30) == "session_b"
+	assert janitor.next_after_id(sessions, True, "session_b", NOW, 1) == "session_b"
+	assert janitor.next_after_id(sessions, False, "session_b", NOW, 30) is None
 
 
 # --- CLI and input shapes ----------------------------------------------------
