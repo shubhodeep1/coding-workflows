@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-10-01T19:03:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A project that changes a shared constant must re-run the base project's parity tests after every sync merge: #5607 tied `update_workflows.yml`'s shell guard pattern to `GUARD_PATH_PREFIXES` with a test, so a textually clean merge failed until the consumer pattern gained `scripts/*`. A plan's non-goal can be overtaken by a later base change.",
+  "phase": "implement_plan",
+  "pr_number": 5699,
+  "record_id": "lesson-implement-plan-d8c04c2d6cd47571ad7080f0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5609-guard-synced-claude-scripts",
+    "file:.github/workflows/update_workflows.yml",
+    "file:scripts/claude_twin_sync.py",
+    "file:tests/test_update_workflows_guardrails.py"
+  ]
+}

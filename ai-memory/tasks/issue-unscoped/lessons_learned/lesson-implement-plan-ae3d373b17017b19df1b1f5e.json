@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T19:03:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change moves paths into a stricter merge class, keep \"how the duty is done today\" separate from \"who merges after the automation lands\": moving scripts into the approval-window row made a table claim script copies need a non-Auto window, which a reviewer then propagated to the operator's Q67 rule.",
+  "phase": "implement_plan",
+  "pr_number": 5699,
+  "record_id": "lesson-implement-plan-ae3d373b17017b19df1b1f5e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5609-guard-synced-claude-scripts",
+    "file:docs/operations/master-session.md"
+  ]
+}

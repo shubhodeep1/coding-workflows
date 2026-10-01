@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T19:03:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a sync PR's merge class depends on both the paths and a conflict list, every prose description of \"who merges it\" must name both conditions. Describing the auto-merged class as \"commands\" alone misstates conflict-only syncs, which go to the owner.",
+  "phase": "implement_plan",
+  "pr_number": 5699,
+  "record_id": "lesson-implement-plan-eb37775315a3c263e6af6ba6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5609-guard-synced-claude-scripts",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/claude_twin_sync.py"
+  ]
+}

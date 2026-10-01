@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T19:03:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Archived plans in `docs/completed/` are reference docs too: when a later change makes one stale, add a dated `> **Extended by #<N>**` (or `Superseded`) note below the stale line instead of rewriting the record of what that project shipped.",
+  "phase": "implement_plan",
+  "pr_number": 5699,
+  "record_id": "lesson-implement-plan-dd03e01f93dec5d506b3119a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5609-guard-synced-claude-scripts",
+    "file:docs/completed/issue-5246-guard-sync-provenance-plan.md",
+    "file:docs/completed/issue-5247-stable-twin-guard-check-plan.md"
+  ]
+}

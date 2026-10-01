@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T19:03:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When prose lists a guard set that code defines, copy the whole set from the constants (`GUARD_PATH_PREFIXES` and `GUARD_PATH_FILES`), not from the sentence being edited: extending \"hooks or settings.json\" with scripts kept the older omission of `settings.local.json`.",
+  "phase": "implement_plan",
+  "pr_number": 5699,
+  "record_id": "lesson-implement-plan-773d01b2690ab59f1724a6f0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5609-guard-synced-claude-scripts",
+    "file:scripts/claude_twin_sync.py",
+    "file:docs/operations/master-session.md"
+  ]
+}

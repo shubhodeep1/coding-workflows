@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T19:03:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A stage that commits the progress log before arming its wait should create the hand-back Routine and the safety net first (neither depends on the push), so the committed `Check-in:` line carries real trigger ids; only the checker-instructions trigger must wait for the push.",
+  "phase": "implement_plan",
+  "pr_number": 5699,
+  "record_id": "lesson-implement-plan-525bfa5bfbddb429d12a20dd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5609-guard-synced-claude-scripts",
+    "file:.claude/commands/implement-plan-claude.md",
+    "file:docs/implement-plan/issue-5609-guard-synced-claude-scripts.md"
+  ]
+}

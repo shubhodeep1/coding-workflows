@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T19:03:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A change to which paths need the owner also changes every standing approval that lists the old set (here Q46's \"no hooks or settings.json\" merge rule): grep operator decisions and their procedures for the old path list, because an approval left as is lets a session that acts as the owner skip the new gate. Dated \"Learned\" bullets that a session still follows are rules, not history.",
+  "phase": "implement_plan",
+  "pr_number": 5699,
+  "record_id": "lesson-implement-plan-2f77e619c252d3ba97061f49",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5609-guard-synced-claude-scripts",
+    "file:docs/operations/master-session.md"
+  ]
+}

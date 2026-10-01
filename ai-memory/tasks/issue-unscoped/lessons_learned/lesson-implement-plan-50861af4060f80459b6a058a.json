@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-10-01T19:03:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A review sweep re-dispatch (`review_autofix_sweep.yml`, which dispatches from the default branch with no `--ref` since #4618) attaches its check runs to the default branch's SHA, not the PR head, so a failed `review / codex-agent` from an earlier outage stays on the head even after a clean re-review. Only a run on the PR head clears it: a new push, or a dispatch with `--ref <head branch>` such as the orchestrator's conflict-recovery dispatch (`_dispatch_review_for_conflicts`).",
+  "phase": "implement_plan",
+  "pr_number": 5699,
+  "record_id": "lesson-implement-plan-50861af4060f80459b6a058a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5609-guard-synced-claude-scripts",
+    "file:.github/workflows/review_autofix.yml",
+    "file:.github/workflows/review_autofix_sweep.yml",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T19:03:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change moves paths from one class to another (here scripts from auto-merged to owner-merged guard paths), grep every prose description of both classes repo-wide, including comments in other workflows and operations tables, not only the docs the plan lists.",
+  "phase": "implement_plan",
+  "pr_number": 5699,
+  "record_id": "lesson-implement-plan-d470058ebd166f199bcdd8ad",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5609-guard-synced-claude-scripts",
+    "file:.github/workflows/review_autofix.yml",
+    "file:docs/operations/master-session.md"
+  ]
+}

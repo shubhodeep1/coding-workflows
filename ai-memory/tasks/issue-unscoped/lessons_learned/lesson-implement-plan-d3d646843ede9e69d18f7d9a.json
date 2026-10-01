@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T19:03:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A dated note that contradicts the sentence it annotates makes a row worse, not safer: when a correction negates a claim, change the claim in place and keep the original wording in a dated marker.",
+  "phase": "implement_plan",
+  "pr_number": 5699,
+  "record_id": "lesson-implement-plan-d3d646843ede9e69d18f7d9a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5609-guard-synced-claude-scripts",
+    "file:docs/operations/master-session.md"
+  ]
+}
