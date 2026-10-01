@@ -2121,7 +2121,11 @@ sweep runs in the sessions that create them, never in Actions:
   `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3); a push moves the head and
   ends it. While a live claim or a hold exists, `check_in_status.py
   --hand-back` reports `claimed` / `held`, so neither the checker nor the
-  sweep starts another fixer. `/implement-plan-claude` stage sessions claim
+  sweep starts another fixer. Plain `--pr` mode (the `/implement-plan-claude`
+  project checker) also reports `held` for a hold on the current head of a
+  `claude/implement-plan-*` PR, whatever labels, hand-off, conflict, or
+  checks it shows, so a twin-sync blocker is never answered by another
+  review round (issue #5667). `/implement-plan-claude` stage sessions claim
   the PRs they fix too.
 - **The cap.** Conflict, CI, and block fixes on one PR are counted per
   distinct head and kind (`hand_backs`); at `CLAUDE_FIX_HAND_BACK_CAP`

@@ -1017,7 +1017,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   counts; issue #4622), times them by the comment's `created_at`, treats
   a claim on the current head as live for `CLAUDE_FIX_CLAIM_LEASE_HOURS`
   (default 3) and a `hold`
-  as live until the head moves, and reports `hand_backs` (distinct
+  as live until the head moves (plain `--pr` mode, the
+  `/implement-plan-claude` project checker, reads the same claims for a
+  `claude/implement-plan-*` head and reports `held` for a hold on the current
+  head before labels, hand-offs, conflicts, or checks; issue #5667), and
+  reports `hand_backs` (distinct
   head/kind pairs of conflict, ci, and blocked claims) against
   `CLAUDE_FIX_HAND_BACK_CAP` (default 3). The `claude-pr-catch-all` job of
   `.github/workflows/review_autofix_sweep.yml` (cron `17 * * * *`; the
@@ -1056,7 +1060,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   holds a byte-identical copy. Every verdict carries an additive `action`
   field, derived by `route_verdict` from the data already read (no extra
   API call), and the checkers route on it alone: plain PR mode →
-  `wait` / `hand_back` (blocked, closed, stuck) / `next_stage` with
+  `wait` (open, or `held` on a `claude/implement-plan-*` head) /
+  `hand_back` (blocked, closed, stuck) / `next_stage` with
   `next_stage` `success` (merged) or `review` (review-round, conflict —
   never `hand_back`); run and issue-list modes → `wait` / `next_stage`
   with `success` (completed, resolved) or `block` (failed, blocked);

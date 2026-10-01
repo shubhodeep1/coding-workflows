@@ -821,3 +821,193 @@ def test_bad_repo_carries_retry(capsys):
 	code = checker.main(["--repo", "nope", "--pr", "1"], now=NOW)
 	out = json.loads(capsys.readouterr().out)
 	assert code == 2 and out["action"] == "retry"
+
+
+# --- Plain PR mode honours a hold on a Claude-fixer head (issue #5667) --------
+# Twin-first (Q40 / #4948): the change lands in the workflow-templates twin
+# first and reaches .claude/ by a [claude-twin-sync] commit, so these tests run
+# against the twin; test_template_parity keeps the two copies identical.
+
+_twin_spec = importlib.util.spec_from_file_location("check_in_status_twin", TEMPLATE_SCRIPT_PATH)
+twin_checker = importlib.util.module_from_spec(_twin_spec)
+_twin_spec.loader.exec_module(twin_checker)
+
+HOLD_PR_AUTHOR = "pr-author"
+
+
+def _held_fixer_pr(**overrides):
+	return _fixer_pr(user={"login": HOLD_PR_AUTHOR}, **overrides)
+
+
+def _claim(kind="hold", head=FIXER_HEAD, by="session_01Stage", login=HOLD_PR_AUTHOR, association="OWNER"):
+	return {
+		"body": f"**Claude fixes on hold.**\n<!-- ai:claude-fix-claim:v1 head={head} kind={kind} by={by} -->",
+		"author_association": association,
+		"user": {"login": login, "type": "User"},
+		"created_at": YOUNG,
+	}
+
+
+def _stub_twin_fixer(monkeypatch, responses, comments):
+	"""Serve the twin's `gh_api` / `gh_api_list` like `_stub_fixer` does."""
+	calls = []
+
+	def fake(path):
+		calls.append(path)
+		if path not in responses:
+			raise AssertionError(f"unexpected gh api call: {path}")
+		payload = responses[path]
+		if isinstance(payload, Exception):
+			raise payload
+		return payload
+
+	def fake_list(path):
+		calls.append(path)
+		assert path == "repos/o/r/issues/7/comments"
+		return comments
+
+	for index, comment in enumerate(comments, 1):
+		comment.setdefault("id", index)
+	monkeypatch.setattr(twin_checker, "gh_api", fake)
+	monkeypatch.setattr(twin_checker, "gh_api_list", fake_list)
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "workflow-bot")
+	return calls
+
+
+def _twin_run(argv, capsys):
+	code = twin_checker.main(["--repo", REPO, *argv], now=NOW)
+	return code, json.loads(capsys.readouterr().out)
+
+
+def test_held_head_with_a_later_handoff_waits_instead_of_a_review_round(monkeypatch, capsys):
+	# The issue's case: the stage pushed a twin-first fix, held the head, and the
+	# review workflow then handed that same head off before the twin sync.
+	calls = _stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()),
+		[_claim(), _comment(_handoff(round_number=2))])
+	code, out = _twin_run(["--pr", "7"], capsys)
+	assert code == 0
+	assert out["done"] is False and out["state"] == "held" and out["action"] == "wait"
+	assert "next_stage" not in out
+	assert out["head_sha"] == FIXER_HEAD and out["claim"]["kind"] == "hold" and out["claim"]["by"] == "session_01Stage"
+	# No review-run, check-run, or branch-run read: the PR and one comment listing.
+	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments"]
+
+
+@pytest.mark.parametrize("pr_overrides", [
+	{"mergeable_state": "dirty"},
+	{"labels": [{"name": "ai:review-blocked"}]},
+	{"labels": [{"name": "ai:needs-human"}], "mergeable_state": "dirty"},
+])
+def test_hold_outranks_conflict_and_blocking_labels(monkeypatch, capsys, pr_overrides):
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr(**pr_overrides)), [_claim()])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "held" and out["action"] == "wait"
+
+
+def test_hold_posted_by_the_workflow_account_counts(monkeypatch, capsys):
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()),
+		[_claim(login="workflow-bot", association="MEMBER"), _comment(_handoff())])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "held"
+
+
+@pytest.mark.parametrize("pr_overrides", [
+	{"merged": True, "merged_at": "t", "merge_commit_sha": "m"},
+	{"state": "closed", "closed_at": "t"},
+])
+def test_merged_or_closed_outranks_a_hold_without_reading_comments(monkeypatch, capsys, pr_overrides):
+	calls = _stub_twin_fixer(monkeypatch, {"repos/o/r/pulls/7": _held_fixer_pr(**pr_overrides)}, [_claim()])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] in ("merged", "closed")
+	assert calls == ["repos/o/r/pulls/7"]
+
+
+def test_a_push_lifts_the_hold(monkeypatch, capsys):
+	# The hold names the old head; the twin sync pushed a new one, which the
+	# workflow then handed off: that is a real review round.
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()),
+		[_claim(head="b" * 40), _comment(_handoff())])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "review-round" and out["action"] == "next_stage" and out["next_stage"] == "review"
+
+
+@pytest.mark.parametrize("claim", [
+	_claim(login="attacker", association="COLLABORATOR"),
+	_claim(association="NONE"),
+	_claim(association="CONTRIBUTOR"),
+])
+def test_untrusted_hold_never_stops_a_review_round(monkeypatch, capsys, claim):
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [dict(claim), _comment(_handoff())])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "review-round"
+
+
+@pytest.mark.parametrize("kind", ["review", "conflict", "ci", "blocked"])
+def test_a_non_hold_claim_does_not_stop_the_project_checker(monkeypatch, capsys, kind):
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [_claim(kind=kind), _comment(_handoff())])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "review-round"
+
+
+def test_an_older_hold_then_a_newer_claim_on_the_same_head_is_not_held(monkeypatch, capsys):
+	# The latest trusted claim on the head decides, as in --hand-back mode.
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()),
+		[_claim(), _claim(kind="review", by="session_01Resumed"), _comment(_handoff())])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "review-round"
+
+
+def test_blocked_fixer_head_without_a_hold_reads_comments_once(monkeypatch, capsys):
+	# The hold outranks a blocking label (AD-2), so a blocked fixer PR pays one
+	# comment listing to rule the hold out; the changelog states that cost.
+	calls = _stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr(labels=[{"name": "ai:review-blocked"}])),
+		[_comment(_handoff())])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "blocked" and out["action"] == "hand_back"
+	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments"]
+
+
+def test_fixer_handoff_reads_comments_once(monkeypatch, capsys):
+	calls = _stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [_comment(_handoff())])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "review-round"
+	assert calls.count("repos/o/r/issues/7/comments") == 1
+
+
+def test_non_fixer_claude_head_ignores_a_hold(monkeypatch, capsys):
+	# Plain mode reads comments only for claude/implement-plan- heads (AD-3).
+	calls = _stub_twin_fixer(monkeypatch, {
+		"repos/o/r/pulls/7": _pr(user={"login": HOLD_PR_AUTHOR}),
+		"repos/o/r/commits/abc/check-runs?per_page=100&page=1": {"check_runs": []},
+	}, [_claim(head="abc")])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "open" and "repos/o/r/issues/7/comments" not in calls
+
+
+def test_held_fixer_head_with_malformed_sha_exits_2(monkeypatch, capsys):
+	_stub_twin_fixer(monkeypatch, {"repos/o/r/pulls/7": _pr(head={"sha": "abc", "ref": FIXER_REF})}, [])
+	code, out = _twin_run(["--pr", "7"], capsys)
+	assert code == 2 and out["action"] == "retry" and "40 lowercase hex" in out["error"]
+
+
+def test_hold_comment_read_failure_is_retryable(monkeypatch, capsys):
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [])
+
+	def failing_list(path):
+		raise twin_checker.ReadError("HTTP 502")
+
+	monkeypatch.setattr(twin_checker, "gh_api_list", failing_list)
+	code, out = _twin_run(["--pr", "7"], capsys)
+	assert code == 2 and out == {"done": False, "error": "HTTP 502", "action": "retry"}
+
+
+def test_route_verdict_held_in_plain_pr_mode_is_wait():
+	assert twin_checker.route_verdict({"done": False, "state": "held"}, "pr") == {"action": "wait"}
+
+
+def test_command_twin_documents_the_held_wait():
+	text = " ".join((ROOT / "workflow-templates" / ".claude" / "commands" / "implement-plan-claude.md").read_text(encoding="utf-8").split())
+	section = text[text.index("**What counts as \"done waiting\"**"):text.index("### Checker prompt")]
+	assert "**Held**: a trusted `hold` claim on the current head" in section
+	assert "is never done (`state: held`, `action: wait`)" in section
+	assert "The hold goes on the head it pushed, in the same step as the blocker" in text
