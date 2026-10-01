@@ -2042,17 +2042,20 @@ if [ ! -f "${SUMMARISER_SCRIPT}" ]; then
   exit 1
 fi
 
+# Reviewers run with the reviewer-role OpenCode config, which rejects reads
+# outside the checkout. PREVIOUS_REVIEWS_DIR and RUNTIME_CONTEXT_DIR live under
+# /tmp, so a reviewer told to read them has the read rejected and can end its
+# turn with no output (runs 36656409877, 36666750539, 36678296691).
 PROMPT_ARTIFACT_PATH_HINT="$(printf '%s\n' \
   'WORKING DIRECTORY + ARTIFACT PATH (MANDATORY)' \
   'The workflow runs from the repository root.' \
-  "All transient reviewer artifacts are under ${PREVIOUS_REVIEWS_DIR}." \
+  'Other reviewers'"'"' outputs are not files you can read: they sit outside the checkout, where reads are rejected.' \
   'Do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow.' \
-  "Example file to read: ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt")"
+  'Review from this prompt and the repository files.')"
 PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
-  'RUNTIME CONTEXT FILES (READ-ONLY)' \
-  "Runtime context is stored under ${RUNTIME_CONTEXT_DIR}." \
-  'Useful files include git_status.txt, git_diff_stat.txt, shallow_tree.txt, environment_sorted.txt, recent_commits.txt, branches.txt, workflow_snapshot.yml, and run_logs_best_effort.txt.' \
-  "Example file to read: ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
+  'RUNTIME CONTEXT FILES (NOT READABLE)' \
+  'The workflow keeps runtime context files outside the checkout, where reads are rejected.' \
+  'Do not try to open them; use the context inlined in this prompt and the repository files.')"
 
 # Detect whether this is the first review iteration (no prior AI autofix run).
 # Two conditions cover all first-run states:
@@ -2599,18 +2602,10 @@ Identify issues that would only appear during runtime execution rather than stat
 Verify proposed issues against end-to-end system behavior, not only static text patterns.
 Confirm whether each issue can realistically reproduce in CI runtime with current script flow and guards.
 
-USING RUNTIME CONTEXT FILES
-Runtime diagnostics are available under ${RUNTIME_CONTEXT_DIR}.
-Use these files when needed to validate runtime assumptions:
-- git_status.txt
-- git_diff_stat.txt
-- shallow_tree.txt
-- environment_sorted.txt
-- recent_commits.txt
-- branches.txt
-- workflow_snapshot.yml
-- run_logs_best_effort.txt
-Example file to read: ${RUNTIME_CONTEXT_DIR}/git_status.txt
+USING RUNTIME CONTEXT
+Runtime diagnostics files are kept outside the checkout, where reads are rejected.
+Do not try to open them. Validate runtime assumptions against the inlined
+context in this prompt and the repository files.
 
 Avoid reviewing unrelated areas of the repository.
 Do not suggest repository-wide refactors.
@@ -2678,9 +2673,8 @@ unless the original task explicitly requires them.
 Web search is strictly forbidden.
 Do not access the internet.
 All required context is already provided.
-reviewer artifacts are stored under ${PREVIOUS_REVIEWS_DIR}
+reviewer artifacts are kept outside the checkout, where reads are rejected; do not try to open them
 do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
-use the read tool for files such as ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt
 use read, grep, and glob tools only for repository inspection
 do not modify repository files
 do not create new files except your assigned reviewer output/log files managed by the workflow
@@ -5005,9 +4999,9 @@ build_cross_pollination_summary() {
     echo ""
     echo "The consolidated ledger below was produced by ${XPOLL_SUMMARISER_MODEL:-openai/gpt-6-luna}"
     echo "from all pass-1 reviewer outputs (CONSENSUS FINDINGS + CONSENSUS TASK GAPS blocks + per-reviewer sections)."
-    echo "The raw per-reviewer outputs remain on disk at:"
-    echo "  ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt"
-    echo "Read a raw file only if a ledger entry is ambiguous or lacks detail."
+    echo "This ledger is the only pass-1 input you get. Do not try to open the raw"
+    echo "pass-1 outputs: they sit outside the checkout, where reads are rejected."
+    echo "If a ledger entry is ambiguous, verify it against the code instead."
     echo ""
     if [ -s "${ledger_file}" ]; then
       cat "${ledger_file}"
