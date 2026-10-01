@@ -9,9 +9,9 @@
 - Activation: pending verify-activation
 - Waiting on: PR #5605 (final PR into the issue base; this log rides it)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01EbGhNnCvS36xDxb7uEq7sz   safety net (re-armed by the final-merge — review round stage)   hand-back (re-armed by the final-merge — review round stage)
+- Check-in: checker session_01EbGhNnCvS36xDxb7uEq7sz   safety net (re-armed by the final-merge — review round 2 stage)   hand-back (re-armed by the final-merge — review round 2 stage)
 - Last updated: 2026-10-01
-- Last note: final PR #5605 review round 1 (head ae9eb47, run 36819223164): 5 consensus findings, all valid doc wording, all fixed in one [claude-autofix] commit (stage session session_013WdgzLTn2cVsar6zakV6Se)
+- Last note: final PR #5605 review round 2 (head bf878b7, run 36832619840): 1 consensus finding (the demoted record shares `entry` / `rejecters` with the gate's locals), fixed as hardening in one [claude-autofix] commit, AD-7 (stage session session_01Dj5aBmHZqGEsJHt6NXNsx4)
 
 ## Phases
 1. [x] Phase 1 — votes alone never demote a single-reviewer finding   — PR #5611 merged 2026-09-30 (cb8a7aa); review rounds: 2; interventions: 0
@@ -29,7 +29,7 @@
 
 ## Completion
 - PR #5900 merged 2026-10-01 (ae9eb47) — doc moved to docs/completed/issue-5582-rejection-votes-need-automated-proof-plan.md
-- Final PR #5605 ready 2026-10-01 — review rounds: 1 (into `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason`)
+- Final PR #5605 ready 2026-10-01 — review rounds: 2 (into `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason`)
 
 ## Activation
 
@@ -40,6 +40,7 @@
 - AD-4 [plan, 2026-09-30] Should other projects' changelog fragments and the `.claude/` command docs be edited? — Picked: A — no; the new `security` fragment states the change, and the `.claude/` text stays true of the (now never produced) `NON-BLOCKING FINDINGS` block. Alternatives: B — edit the #4586/#4976 fragments and the `.claude/` twins. Why: smallest change (§5), and no protected-path edit in an unattended session (§28.C). Applied in: phase 1. Status: pending review
 - AD-5 [phase 1/1 — review round 2, 2026-09-30] How should the misnamed test `test_handoff_rejected_singleton_auto_merges_and_stays_visible` (it now asserts no auto-merge) be fixed? — Picked: A — define it under the accurate name `test_handoff_rejected_singleton_is_handed_off_not_auto_merged` and keep the old name as an alias bound to it. Alternatives: B — rename in place; C — keep the name and reject the finding. Why: fixes the misleading name while honouring §6 (no in-place rename); the only cost is pytest running the same test twice. Applied in: PR #5611. Status: pending review
 - AD-6 [conformance 1/3 — review round 1, 2026-10-01] Is PR #5741's finding that the end-to-end tests skip the verifier branch for a quoted file missing from the source valid? — Picked: A — valid at the hand-off layer: add one case to `test_handoff_rejections_without_verified_evidence_hand_the_round_off` where the reviewed commit exists but lacks the quoted file (`source_unavailable`). Alternatives: B — reject it as covered by the module test `tests/test_review_claude_fixer_nonblocking.py:1390`. Why: the end-to-end list enumerates evidence-failure shapes and lacked this one; one parametrize row, no behaviour change (§5); B would need a dedicated-bot verdict, which this repo has not configured. Applied in: PR #5741. Status: pending review
+- AD-7 [final-merge — review round 2, 2026-10-01] Is final PR #5605's round-2 consensus finding, that the demoted record keeps live references to `entry` and `rejecters` instead of copies, valid? — Picked: A — apply it as hardening: the demoted record gets its own `list(entry)` / `list(rejecters)` copies, matching the copy already given to `disproof_check`. Alternatives: B — reject it, since neither list is mutated today and production never reaches the path (`disproof_check` is `None`). Why: one-line change with no behaviour change (§5); B would need a dedicated-bot verdict, which this repo has not configured, so the PR would block. Applied in: PR #5605. Status: pending review
 
 ## Lessons
 - [source:security] A reviewer vote is model output from PR-influenced input: verifying its fields (IDs, quotes, ranges) proves the reviewer copied text, never that a finding is false, so an unattended gate must not let votes alone clear a finding. (files: scripts/review_claude_fixer_nonblocking.py)
@@ -56,3 +57,4 @@
 - 2026-10-01 (conformance 2/3 stage): follow-up issue #5880 filed for the check-run collector's empty-snapshot ready status, found while waiting on validation; it is out of this project's scope.
 - 2026-10-01 (validation 1/3 — read result stage): the step 2 `git merge --no-edit origin/<issue base>` was denied by the Auto-mode classifier (`[Modify Shared Resources]`); no merge was needed, because `git rev-list --count HEAD..origin/<issue base>` was 0.
 - 2026-10-01 (final-merge — review round stage): final PR #5605 review round 1 handed 5 consensus findings on ae9eb47 (two themes: the run log holds only aggregate vote diagnostics, and verdict-bot convergence needs `CLAUDE_FIXER_VERDICT_BOT_LOGIN`, empty by default). All valid; fixed in the changelog fragment, README, the pass-2 header in `scripts/review_run_reviewers.sh`, and the archived plan. No new auto-decision.
+- 2026-10-01 (final-merge — review round 2 stage): two review runs on bf878b7 (36832092673, 36832619840) each handed round 2 to Claude with the same theme; the later hand-off (ledger b89d6aa6…) was answered. Fix in `scripts/review_claude_fixer_nonblocking.py` (the `demoted.append` line); no test can observe the aliasing from outside the function, so the existing 383 tests in `tests/test_review_claude_fixer_nonblocking.py` and `tests/test_review_autofix_claude_fixer_mode.py` were the check (all pass).

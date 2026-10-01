@@ -1100,7 +1100,7 @@ def demote_with_diagnostics(ledger_text: str, reviews_dir: Path, manifest_path: 
 				else:
 					remaining.append(candidate)
 			block.entries = remaining
-		demoted.append({**demotion_candidate, "moved": moved})
+		demoted.append({**demotion_candidate, "entry": list(entry), "rejecters": list(rejecters), "moved": moved})
 	consensus.entries = kept
 
 	if demoted:
