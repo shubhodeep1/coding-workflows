@@ -72,8 +72,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on every
    PR-backed `claude/*` head (`/implement-plan-claude` stages and any Claude
    session's PR, CLAUDE.md §26.H) the reviewer panel runs as
-   usual, but the GPT editor, conflict resolver, push / re-trigger tail and
-   review-blocked judge are skipped. `scripts/review_autofix_step_claude_fixer_handoff.sh`
+   usual, but the GPT editor never runs, the conflict resolver and the
+   push / re-trigger tail run only for a pre-review conflict that touches
+   `.claude/**`, and the review-blocked judge runs only in its Claude mode
+   (both below). `scripts/review_autofix_step_claude_fixer_handoff.sh`
    posts the consensus ledger (or the pre-review conflict) and an
    `<!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->`
    comment for the Claude session that owns the PR, which fixes the round in

@@ -2,8 +2,10 @@
 """Contract for review_autofix.yml Claude-fixer mode.
 
 Every PR-backed `claude/*` head (/implement-plan-claude stages and any
-session's PR under CLAUDE.md §26) keeps the reviewer panel, but the GPT editor, conflict resolver, push / re-trigger tail
-and review-blocked judge do not run: the findings (or the pre-review
+session's PR under CLAUDE.md §26) keeps the reviewer panel, but the GPT editor
+never runs, the conflict resolver and push / re-trigger tail run only for a
+pre-review conflict that touches `.claude/**`, and the review-blocked judge
+runs only in its Claude mode: the findings (or any other pre-review
 conflict) are handed to the Claude session that owns the PR, and a
 `claude_fixer_converged_head` dispatch re-reviews a bot-authenticated ledger
 verdict. Only the fresh clean review can auto-merge, and the
