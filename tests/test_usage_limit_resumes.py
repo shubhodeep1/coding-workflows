@@ -596,6 +596,15 @@ def test_harness_envelope_and_pages_are_read(tmp_path, capsys):
 	assert result["considered"] == 3
 
 
+def test_json_start_scan_stops_at_the_cap():
+	"""Only the first MAX_JSON_START_CANDIDATES `{`/`[` positions are tried (PR #5718 review round)."""
+	cap = resumes.MAX_JSON_START_CANDIDATES
+	payload = json.dumps({"data": []})
+	assert resumes._decode_json_text("[" * (cap - 1) + payload, "f") == {"data": []}
+	with pytest.raises(resumes.InputError, match="no JSON object or array found"):
+		resumes._decode_json_text("[" * cap + payload, "f")
+
+
 def test_bare_arrays_are_accepted(tmp_path, capsys):
 	sessions_path = tmp_path / "s.json"
 	sessions_path.write_text(json.dumps([_session("session_a")]), encoding="utf-8")
