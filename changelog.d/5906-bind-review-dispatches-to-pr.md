@@ -1,0 +1,17 @@
+<!-- changelog: security -->
+- **A failed forced or judge review now stops the pending-checks auto-merge, even after it finished.** `review_autofix.yml`, `ai-review.yml`, and `review_rb_judge_dispatch.yml` dispatches now carry their PR in the run name, and the hourly `claude-pr-catch-all` sweep counts a finished one as a review of that PR.
+
+The sweep's pending-checks pass (issues #4900 and #5148) enables auto-merge from an earlier clean review's `ai:claude-fixer-pending-checks:v1` marker once the head's checks are green, and refuses when a newer review of the PR did not succeed. It could only tell which PR a dispatch of these three workflows was for while the run was still active, so a forced review or a `force_rb_judge` review dispatched after the marker that then failed was ignored, and the older marker still enabled auto-merge. The four workflow files now set `run-name` to `<workflow name> [pr:<N>]` on `workflow_dispatch`, the way `internal-review.yml` already does. `scripts/claude_fixer_pending_checks.py` reads that title: a newer finished dispatch titled for the PR is one of its reviews, so a failed one returns `review_superseded`. A newer finished dispatch that names no PR and did not succeed also returns `review_superseded`, because it may have been a review of this PR.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Audit finding | `failed-unbound-review-dispatch-ignored`, high, `scripts/claude_fixer_pending_checks.py:493` (issue #5906) |
+| Workflow files given a run name | 4: `.github/workflows/review_autofix.yml`, `.github/workflows/review_rb_judge_dispatch.yml`, `workflow-templates/ai-review.yml`, `workflow-templates/review_rb_judge_dispatch.yml` |
+| Run name on `workflow_dispatch` | `<workflow name> [pr:<pr_number>]` |
+| Extra API calls | 0 (the titles come from the listings the sweep already reads) |
+
+What this means for operators: a PR whose forced or judge review failed is no longer merged on the earlier clean result. It waits until a push or a new forced review gives the head a fresh review. Consumer repos get the titled `ai-review.yml` and `review_rb_judge_dispatch.yml` wrappers on the next `@stable` sync. Until then their dispatches name no PR, so a failed one blocks every pending-checks merge in that repository whose marker is older than it, and the sweep logs `pending_checks ... state=review_superseded` naming the run. Active dispatches still delay every pending-checks merge by one tick, as before.
+
+### For contributors
+
+The binding is `DISPATCH_TITLE_PR_RE` and `_dispatch_title_pr()` in `scripts/claude_fixer_pending_checks.py`, used in the `UNBOUND_DISPATCH_REVIEW_WORKFLOWS` loop of `check_review_runs()`. Titled dispatches for the PR join the bound reviews, so the latest-newer rule decides them exactly like an `internal-review.yml` dispatch. A gate-skipped success that is newer than a failed review still clears it under that rule; that is issue #5904. `tests/test_claude_fixer_pending_checks.py` covers the audit's scenario for each workflow, the fail-closed untitled case, the cases that still merge, and pins each workflow file's `run-name` against the parser.

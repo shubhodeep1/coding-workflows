@@ -15,6 +15,11 @@ is never merged on it.
 
 Issue #5148: no merge while a newer review of the PR may still be running,
 or when the latest newer one did not succeed.
+
+Issue #5906: a finished review_autofix.yml / ai-review.yml /
+review_rb_judge_dispatch.yml dispatch is bound to its PR by the `[pr:<N>]`
+its run name carries, so a newer failed one for this PR supersedes the
+marker, and a newer failed one that names no PR fails closed.
 """
 
 from __future__ import annotations
@@ -461,6 +466,23 @@ def _dispatch_runs(**listings) -> dict:
 	return runs
 
 
+# The run names the four dispatch workflow files give a workflow_dispatch run
+# (issue #5906); test_review_dispatch_workflows_title_their_runs_by_pr pins them.
+_DISPATCH_RUN_NAMES = {
+	"review_autofix.yml": "Codex PR Self-Healing Semantic Agent",
+	"ai-review.yml": "AI Review",
+	"review_rb_judge_dispatch.yml": "Internal: Review-Blocked Judge Dispatch",
+}
+
+
+def _titled(run_id: int, workflow: str, *, pr: int = PR, title_pr: str | None = None, **overrides) -> dict:
+	# A dispatch of a workflow with no PR binding of its own, titled
+	# `<workflow name> [pr:<N>]` by its run name.
+	suffix = str(pr) if title_pr is None else title_pr
+	return _run(run_id, workflow=workflow, event="workflow_dispatch", head_branch="main",
+		title=f"{_DISPATCH_RUN_NAMES[workflow]} [pr:{suffix}]", **overrides)
+
+
 def test_forced_review_running_from_the_default_branch_blocks_the_merge(fake_gh):
 	# The audit's scenario: the old head's checks are green and its marker is
 	# live, while a forced review dispatched from main is still reviewing it.
@@ -512,6 +534,36 @@ def test_an_active_review_defers_a_dry_run_too(fake_gh):
 	("newer sweep dispatch for this PR failed", [], {"internal-review.yml": [_dispatch(RUN_ID + 2, conclusion="failure")]}),
 	("the latest of several newer reviews failed",
 		[_run(RUN_ID + 1, conclusion="success")], {"internal-review.yml": [_dispatch(RUN_ID + 2, conclusion="failure")]}),
+	# Issue #5906, the audit's scenario: a forced or judge review of this PR
+	# dispatched after the marker failed; once it finished it used to be ignored.
+	("newer titled review_autofix.yml dispatch for this PR failed", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", conclusion="failure")]}),
+	("newer titled consumer ai-review.yml dispatch for this PR timed out", [],
+		{"internal-review.yml": None, "review_autofix.yml": None,
+			"ai-review.yml": [_titled(RUN_ID + 4, "ai-review.yml", conclusion="timed_out")]}),
+	("newer titled review_rb_judge_dispatch.yml dispatch for this PR failed", [],
+		{"review_rb_judge_dispatch.yml": [_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", conclusion="failure")]}),
+	("a newer successful bound review, then a failed titled dispatch for this PR",
+		[_run(RUN_ID + 1, conclusion="success")],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", conclusion="failure")]}),
+	# A dispatch that names no PR (a wrapper that predates the run name) may
+	# have been a review of this PR: fail closed.
+	("newer untitled review_autofix.yml dispatch failed", [],
+		{"review_autofix.yml": [_run(RUN_ID + 3, workflow="review_autofix.yml", conclusion="failure", event="workflow_dispatch",
+			head_branch="main")]}),
+	("newer untitled review_rb_judge_dispatch.yml dispatch failed", [],
+		{"review_rb_judge_dispatch.yml": [_run(RUN_ID + 5, workflow="review_rb_judge_dispatch.yml", conclusion="failure",
+			event="workflow_dispatch", head_branch="main", title="Internal: Review-Blocked Judge Dispatch")]}),
+	("newer untitled consumer ai-review.yml dispatch cancelled", [],
+		{"internal-review.yml": None, "review_autofix.yml": None,
+			"ai-review.yml": [_run(RUN_ID + 4, workflow="ai-review.yml", conclusion="cancelled", event="workflow_dispatch",
+				head_branch="main", title="AI Review")]}),
+	("newer untitled dispatch failed even though a newer bound review succeeded",
+		[_run(RUN_ID + 6, conclusion="success")],
+		{"review_autofix.yml": [_run(RUN_ID + 3, workflow="review_autofix.yml", conclusion="failure", event="workflow_dispatch",
+			head_branch="main", title="Codex PR Self-Healing Semantic Agent")]}),
+	("newer dispatch with a malformed PR binding failed", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", conclusion="failure", title_pr="")]}),
 ])
 def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -530,14 +582,31 @@ def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, bran
 	("a newer non-review run failed on the head branch", [_run(RUN_ID + 1, workflow="ci.yml", conclusion="failure")], {}),
 	("an active sweep dispatch for another PR", [], {"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, status="in_progress")]}),
 	("a failed sweep dispatch for another PR", [], {"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, conclusion="failure")]}),
-	("finished unbound dispatches", [],
-		{"review_autofix.yml": [_run(RUN_ID + 3, workflow="review_autofix.yml", conclusion="failure", event="workflow_dispatch",
-			head_branch="main")]}),
 	("no review workflow dispatch listings at all (404)", [],
 		{"internal-review.yml": None, "review_autofix.yml": None}),
-	("a finished review_rb_judge_dispatch.yml dispatch", [],
-		{"review_rb_judge_dispatch.yml": [_run(RUN_ID + 5, workflow="review_rb_judge_dispatch.yml", conclusion="failure",
-			event="workflow_dispatch", head_branch="main", title="Internal: Review-Blocked Judge Dispatch")]}),
+	# Issue #5906: finished dispatches of the workflows with no PR binding of
+	# their own are read by the `[pr:<N>]` of their run name.
+	("a newer titled review_autofix.yml dispatch for this PR succeeded", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml")]}),
+	("a newer titled review_autofix.yml dispatch for another PR failed", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure")]}),
+	("a newer titled review_rb_judge_dispatch.yml dispatch for another PR was cancelled", [],
+		{"review_rb_judge_dispatch.yml": [_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="cancelled")]}),
+	("a newer untitled dispatch succeeded (gate-skipped, wrapper before the run name)", [],
+		{"review_autofix.yml": [_run(RUN_ID + 3, workflow="review_autofix.yml", event="workflow_dispatch", head_branch="main",
+			title="Codex PR Self-Healing Semantic Agent")]}),
+	("an older untitled dispatch failed", [],
+		{"review_autofix.yml": [_run(RUN_ID - 3, workflow="review_autofix.yml", conclusion="failure", event="workflow_dispatch",
+			head_branch="main", title="Codex PR Self-Healing Semantic Agent")]}),
+	("an older titled dispatch for this PR failed", [],
+		{"ai-review.yml": [_titled(RUN_ID - 4, "ai-review.yml", conclusion="failure")]}),
+	("the marker's own run is a titled dispatch", [],
+		{"review_autofix.yml": [_titled(RUN_ID, "review_autofix.yml", conclusion="failure")]}),
+	# The latest-newer rule (#5148) still decides between bound reviews; a
+	# later gate-skipped success masking a failed one is issue #5904.
+	("a failed titled dispatch for this PR, then a newer successful bound review", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", conclusion="failure")],
+			"internal-review.yml": [_dispatch(RUN_ID + 4)]}),
 ])
 def test_settled_reviews_let_the_merge_through(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -545,6 +614,55 @@ def test_settled_reviews_let_the_merge_through(fake_gh, label, branch_runs, list
 	result = _evaluate()
 	assert result["state"] == "merge_enabled", (label, result)
 	assert fake_gh.merges() == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]], label
+
+
+def test_an_untitled_failed_dispatch_names_the_run_it_blocked_on(fake_gh):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, dispatch_runs=_dispatch_runs(**{
+		"review_autofix.yml": [_run(RUN_ID + 3, workflow="review_autofix.yml", conclusion="failure", event="workflow_dispatch",
+			head_branch="main", title="Codex PR Self-Healing Semantic Agent")]}))
+	result = _evaluate(dry_run=True)
+	assert result["state"] == "review_superseded", result
+	assert "names no PR in its run name" in result["reason"]
+	assert f".github/workflows/review_autofix.yml run {RUN_ID + 3} (failure)" in result["reason"]
+
+
+@pytest.mark.parametrize("title, expected", [
+	("Codex PR Self-Healing Semantic Agent [pr:42]", 42),
+	("AI Review [pr:7]", 7),
+	("Internal: Review-Blocked Judge Dispatch [pr:5906]", 5906),
+	("AI Review [pr:]", None),
+	("AI Review [pr:0]", None),
+	("AI Review [pr:042]", None),
+	("AI Review [pr:42] ", None),
+	("[pr:42]", None),
+	("AI Review", None),
+	(None, None),
+	(42, None),
+])
+def test_dispatch_title_pr_reads_only_a_well_formed_suffix(title, expected):
+	assert pending_checks._dispatch_title_pr({"display_title": title}) == expected
+
+
+@pytest.mark.parametrize("path", [
+	".github/workflows/review_autofix.yml",
+	".github/workflows/review_rb_judge_dispatch.yml",
+	"workflow-templates/ai-review.yml",
+	"workflow-templates/review_rb_judge_dispatch.yml",
+])
+def test_review_dispatch_workflows_title_their_runs_by_pr(path):
+	"""Issue #5906: every UNBOUND_DISPATCH_REVIEW_WORKFLOWS file titles a dispatch `<its name> [pr:<pr_number>]`."""
+	assert Path(path).name in {Path(entry).name for entry in pending_checks.UNBOUND_DISPATCH_REVIEW_WORKFLOWS}
+	text = (ROOT / path).read_text(encoding="utf-8")
+	names = re.findall(r"^name: (.+)$", text, re.MULTILINE)
+	run_names = re.findall(r"^run-name: (.+)$", text, re.MULTILINE)
+	assert len(names) == 1 and len(run_names) == 1, path
+	name = names[0].strip().strip('"')
+	match = re.fullmatch(r"\"\$\{\{ github\.event_name == 'workflow_dispatch' && format\('(.+)', inputs\.pr_number\) \|\| '' \}\}\"",
+		run_names[0].strip())
+	assert match, (path, run_names[0])
+	assert match.group(1) == f"{name} [pr:{{0}}]", path
+	title = match.group(1).replace("{0}", "5906")
+	assert pending_checks._dispatch_title_pr({"display_title": title}) == 5906, title
 
 
 def test_a_failed_run_listing_read_raises_for_the_sweep_to_log(fake_gh):

@@ -50,11 +50,15 @@ Fail closed. Auto-merge is enabled only when ALL of these hold:
   * no newer review of the PR is still running (issue #5148): no run on the
     head branch, no internal-review.yml dispatch titled for this PR, and no
     review_autofix.yml / ai-review.yml / review_rb_judge_dispatch.yml dispatch
-    (those carry no PR binding)
+    (whatever PR their run name names)
     is in any status but `completed`, older runs included (each listing is
     also read with `status=` when it may go on past the pages read); the
     latest completed review run bound
-    to this PR that is newer than the marker's run concluded `success`; and
+    to this PR that is newer than the marker's run concluded `success`
+    (a dispatch of those three workflows is bound by the `[pr:<N>]` its run
+    name carries, issue #5906); no completed dispatch of those three that
+    is newer than the marker's run and names no PR in its run name
+    concluded anything but `success` (fail closed); and
     a re-read of the comments, after those run reads, still finds the same
     marker (a newer review that finished in between has posted its own
     comment by then);
@@ -138,16 +142,23 @@ AUTO_MERGE_ENABLED_LINE_PREFIX = "Auto-merge enabled."
 # The forms `gh api` (and the GitHub error body it prints to stdout) use for a
 # 404; scripts/gh_helpers.sh recognises the same set.
 NOT_FOUND_RE = re.compile(r"HTTP 404|gh: Not Found|404 Not Found|status code 404|\"status\":\s*\"404\"", re.IGNORECASE)
-# Review workflows whose workflow_dispatch runs carry no PR in their run name
-# (review_autofix.yml here: convergence and direct dispatches; ai-review.yml
-# in consumers; review_rb_judge_dispatch.yml in both, which the orchestrator
-# stall poller dispatches with force_rb_judge=true and which, on a
-# Claude-fixer head, labels the PR ai:review-blocked). The review gate lets a
-# force_rb_judge or force-review dispatch through on a pending-checks head, so
-# while any such run is active it may be a newer review of this PR
-# (issue #5148).
+# Review workflows whose workflow_dispatch runs have no PR binding of their
+# own (review_autofix.yml here: convergence and direct dispatches;
+# ai-review.yml in consumers; review_rb_judge_dispatch.yml in both, which the
+# orchestrator stall poller dispatches with force_rb_judge=true and which, on
+# a Claude-fixer head, labels the PR ai:review-blocked). The review gate lets
+# a force_rb_judge or force-review dispatch through on a pending-checks head,
+# so while any such run is active it may be a newer review of this PR
+# (issue #5148). Their run name carries the PR (`<workflow name> [pr:<N>]`,
+# DISPATCH_TITLE_PR_RE) since issue #5906, so a finished one is bound to its
+# PR by title; one from a wrapper that predates the run name names no PR.
 UNBOUND_DISPATCH_REVIEW_WORKFLOWS = (".github/workflows/review_autofix.yml", ".github/workflows/ai-review.yml",
 	".github/workflows/review_rb_judge_dispatch.yml")
+# The PR a dispatch of an UNBOUND_DISPATCH_REVIEW_WORKFLOWS entry was started
+# for, from the `[pr:<N>]` suffix of its run name (issue #5906). The listing
+# the run comes from already fixes the workflow, so any workflow name before
+# the suffix matches.
+DISPATCH_TITLE_PR_RE = re.compile(r"^.+ \[pr:([1-9][0-9]*)\]$")
 REVIEW_RUNS_PER_PAGE = 100
 # Every Actions run status but `completed` (issue #5148 AD-3: any status other
 # than `completed` counts as active). A listing paged down to the marker's run
@@ -431,6 +442,13 @@ def _run_path(run: dict) -> str:
 	return path.split("@", 1)[0] if isinstance(path, str) else ""
 
 
+def _dispatch_title_pr(run: dict) -> int | None:
+	"""The PR number a review dispatch's run name binds it to (DISPATCH_TITLE_PR_RE), or None when it names none."""
+	title = run.get("display_title")
+	match = DISPATCH_TITLE_PR_RE.fullmatch(title) if isinstance(title, str) else None
+	return int(match.group(1)) if match else None
+
+
 def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int) -> dict | None:
 	"""Return why a newer review of PR `number` blocks the marker's merge, or None (issue #5148).
 
@@ -464,16 +482,24 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	Output: None, or {"state": "review_active" | "review_superseded",
 	"reason": str}. `review_active`: a run on the head branch, an
 	internal-review.yml dispatch titled for this PR
-	(`check_in_status.DISPATCHED_REVIEW_TITLE`), or any unbound review dispatch
-	is in any status but `completed`. `review_superseded`: of the completed
-	review runs bound to this PR (a head-branch run of
-	`check_in_status.FIXER_WORKFLOW_PATHS`, or an internal-review.yml dispatch
-	titled for it), only those with an id above `marker_run_id` count, and the
-	newest of them did not conclude `success`. The id filter is required: the
-	marker's own run is the review it records, and older runs came before
-	that review, so neither can supersede it. Gate-skipped dispatches
-	conclude `success`; a newer review that posted findings or a newer marker
-	is caught by `find_pending_marker`.
+	(`check_in_status.DISPATCHED_REVIEW_TITLE`), or any
+	UNBOUND_DISPATCH_REVIEW_WORKFLOWS dispatch, whatever PR its run name
+	names, is in any status but `completed`. `review_superseded`, when
+	nothing is active: of the completed review runs bound to this PR (a
+	head-branch run of `check_in_status.FIXER_WORKFLOW_PATHS`, an
+	internal-review.yml dispatch titled for it, or an
+	UNBOUND_DISPATCH_REVIEW_WORKFLOWS dispatch whose run name ends in
+	`[pr:<number>]`, issue #5906), only those with an id above
+	`marker_run_id` count, and the newest of them did not conclude
+	`success`; or a completed UNBOUND_DISPATCH_REVIEW_WORKFLOWS dispatch
+	with an id above `marker_run_id` whose run name names no PR (a wrapper
+	that predates the run name) did not conclude `success` (fail closed:
+	it may have been a review of this PR). A dispatch titled for another PR
+	never counts once completed. The id filter is required: the marker's
+	own run is the review it records, and older runs came before that
+	review, so neither can supersede it. Gate-skipped dispatches conclude
+	`success`; a newer review that posted findings or a newer marker is
+	caught by `find_pending_marker`.
 	"""
 	branch_path = f"repos/{repo}/actions/runs?branch={quote(head_ref, safe='/')}&per_page={REVIEW_RUNS_PER_PAGE}"
 	branch_runs = _read_review_runs_to_marker(branch_path, marker_run_id)
@@ -486,6 +512,11 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	if dispatched_runs is not None:
 		active.extend(run for run in _read_active_runs_past_listing(dispatched_path, dispatched_runs, title_bound=True)
 			if run.get("display_title") == title)
+	# Finished dispatches of the unbound review workflows newer than the
+	# marker's run (issue #5906): titled for this PR, they are reviews of it;
+	# naming no PR, an unsuccessful one may have been, so it blocks.
+	titled_dispatches: list[dict] = []
+	untitled_failures: list[dict] = []
 	for workflow_path in UNBOUND_DISPATCH_REVIEW_WORKFLOWS:
 		unbound_path = (f"repos/{repo}/actions/workflows/{Path(workflow_path).name}/runs"
 			f"?event=workflow_dispatch&per_page={REVIEW_RUNS_PER_PAGE}")
@@ -493,10 +524,19 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 		if listing is not None:
 			active.extend(run for run in listing if run.get("status") != "completed")
 			active.extend(_read_active_runs_past_listing(unbound_path, listing))
+			for run in listing:
+				if run.get("status") != "completed" or run["id"] <= marker_run_id:
+					continue
+				bound_pr = _dispatch_title_pr(run)
+				if bound_pr == number:
+					titled_dispatches.append(run)
+				elif bound_pr is None and run.get("conclusion") != "success":
+					untitled_failures.append(run)
 	if active:
 		names = ", ".join(sorted({f"{_run_path(run) or 'unknown workflow'} run {run.get('id')} ({run.get('status')})" for run in active}))
 		return {"state": "review_active", "reason": f"a newer review of this PR may still be running: {names}"}
-	bound_reviews = [run for run in branch_runs if _run_path(run) in check_in_status.FIXER_WORKFLOW_PATHS] + bound_dispatches
+	bound_reviews = ([run for run in branch_runs if _run_path(run) in check_in_status.FIXER_WORKFLOW_PATHS]
+		+ bound_dispatches + titled_dispatches)
 	# Keep the id filter: the marker's own run is the review it records and
 	# older runs came before it, so only a strictly newer run can supersede it.
 	newer = [run for run in bound_reviews if run["id"] > marker_run_id]
@@ -505,6 +545,11 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 		if latest.get("conclusion") != "success":
 			return {"state": "review_superseded", "reason": f"the latest review run of this PR, {latest['id']} "
 				f"({_run_path(latest)}), is newer than the marker's run {marker_run_id} and concluded {latest.get('conclusion')}"}
+	if untitled_failures:
+		names = ", ".join(sorted({f"{_run_path(run) or 'unknown workflow'} run {run['id']} ({run.get('conclusion')})"
+			for run in untitled_failures}))
+		return {"state": "review_superseded", "reason": f"a review dispatch newer than the marker's run {marker_run_id} "
+			f"names no PR in its run name and did not succeed, so it may have been a review of this PR: {names}"}
 	return None
 
 

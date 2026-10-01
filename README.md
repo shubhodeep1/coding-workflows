@@ -1485,7 +1485,12 @@ dispatch titled for the PR, or any `review_autofix.yml` / `ai-review.yml` /
 older runs included: a listing that may go on past the pages it read is
 also listed by run status, and it never merges when
 the latest newer completed review of the PR did not succeed or the marker
-changed while it checked (`review_superseded`). A runs listing that holds
+changed while it checked (`review_superseded`). The `review_autofix.yml`,
+`ai-review.yml`, and `review_rb_judge_dispatch.yml` dispatches are titled
+`<workflow name> [pr:<N>]` by their `run-name` (issue #5906), so a finished
+one titled for the PR counts as a review of it, and a newer one that names no
+PR (a consumer wrapper before the `@stable` sync) and did not succeed also
+returns `review_superseded` (fail closed). A runs listing that holds
 1,000 or more runs newer than the marker's run is a failed read
 (`pending_checks_failed`), repeated every hour until a push, a base change,
 or a forced review sends the head through a new review. A check that fails

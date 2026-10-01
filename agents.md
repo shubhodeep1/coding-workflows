@@ -1076,6 +1076,12 @@ reviews, comments, and conflicts stay a direct §12 request.
   review counts too. The latest newer completed review
   of the PR that did not conclude `success`, or a marker that is no longer
   the live one on a re-read of the comments, returns `review_superseded`.
+  Those three dispatch workflows title a `workflow_dispatch` run
+  `<workflow name> [pr:<N>]` (`run-name`, issue #5906; parsed by
+  `DISPATCH_TITLE_PR_RE`): a finished one titled for the PR is one of its
+  reviews, one titled for another PR is ignored, and a newer one that names
+  no PR and did not conclude `success` also returns `review_superseded`
+  (fail closed).
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
   running); a failed read, or a snapshot whose temp directory cannot be

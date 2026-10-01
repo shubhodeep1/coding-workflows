@@ -1,4 +1,11 @@
 name: "Internal: Review-Blocked Judge Dispatch"
+# Dispatched runs carry their PR in the run name, as internal-review.yml's
+# do: a workflow_dispatch run has no pull_requests binding, and the
+# claude-pr-catch-all sweep's pending-checks pass
+# (scripts/claude_fixer_pending_checks.py, issue #5906) counts a finished
+# dispatch titled for a PR as a review of that PR. Every other event gets an
+# empty expression, which GitHub replaces with its default title.
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('Internal: Review-Blocked Judge Dispatch [pr:{0}]', inputs.pr_number) || '' }}"
 
 # Thin wrapper around review_autofix.yml that runs only the
 # review-blocked judge step (scripts/review_rb_judge.sh) against a given
