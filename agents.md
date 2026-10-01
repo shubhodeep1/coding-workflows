@@ -1086,8 +1086,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   its own `ci.yml` step.
 - Denied cleanup calls (CLAUDE.md §26.I, issue #5068): `delete_trigger`,
   `archive_session`, and `set_session_title` in the §26 flows,
-  `/implement-plan-claude` (resume hygiene, zombie-checker cleanup, re-arm
-  cleanup, hand-back, end-of-project archives, checker prompt),
+  `/implement-plan-claude` (resume hygiene, step 2 stale-Routine delete,
+  zombie-checker cleanup, re-arm cleanup, rename on opening a PR,
+  hand-back, end-of-project archives, checker prompt),
   `/fix-claude-pr`, and `/claude-issue-pickup` are housekeeping. A denied
   one is never retried: the step's remaining cleanup is skipped,
   `cleanup skipped: <tool> denied (<reason>)` goes into the report (and

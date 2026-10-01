@@ -357,6 +357,17 @@ def test_claude_md_26_flows_point_to_26i():
 	assert "These deletes are cleanup calls (§26.I): after the first denial, skip the rest of the list" in sweep
 
 
+def test_claude_md_26i_covers_the_per_stage_delete_and_rename(twin_text):
+	# Conformance run 1 for #5068: step 2 deletes stale Routines and every stage
+	# that opens a PR renames itself, so both run on every stage and must be
+	# named as cleanup calls too.
+	section = _section(_flat(CLAUDE_MD), "### I) Denied cleanup calls are skipped, never retried", "## §27.")
+	assert "the step 2 delete of stale Routines from the previous design" in section
+	assert "the rename when a stage opens a PR" in section
+	assert "delete stale `implement-plan <slug>` Routines from the previous design" in twin_text
+	assert "**Rename when you open a PR.**" in twin_text
+
+
 def test_resume_hygiene_skips_a_denied_cleanup_call(twin_text):
 	hygiene = _section(twin_text, "**Resume hygiene**", "**No claude-code-remote tools**")
 	assert "each only after `get_trigger` shows it is this project's own" in hygiene

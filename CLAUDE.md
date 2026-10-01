@@ -2188,9 +2188,11 @@ Workloads]`. It was retrying the resume-hygiene `delete_trigger` on
 
 - **Cleanup calls** are `delete_trigger`, `archive_session`, and
   `set_session_title` in the §26 flows (§26.C step 5, §26.D, the §26.G
-  sweep), in `/implement-plan-claude` (resume hygiene, the zombie-checker
-  cleanup, the re-arm cleanup, a failed two-step start, the hand-back, the
-  end-of-project archives, and its checker prompt), in `/fix-claude-pr`,
+  sweep), in `/implement-plan-claude` (resume hygiene, the step 2 delete
+  of stale Routines from the previous design, the zombie-checker cleanup,
+  the re-arm cleanup, a failed two-step start, the rename when a stage
+  opens a PR, the hand-back, the end-of-project archives, and its checker
+  prompt), in `/fix-claude-pr`,
   and in `/claude-issue-pickup`. They are housekeeping: every leftover is
   also handled elsewhere. An archived session's triggers auto-disable
   (`auto_disabled_session_gone`), the stale Routine sweep (§26.G) deletes
