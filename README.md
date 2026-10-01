@@ -1058,6 +1058,15 @@ not delete wrappers that are already present in `.github/workflows/`.
 > check, review hand-off, block label) back to the pushing session, which
 > fixes it with `/fix-claude-pr` (see
 > [Claude fixes every claude/* PR](#claude-fixes-every-claude-pr)).
+> The hooks, `settings.json`, and `settings.local.json` come from the
+> `stable` commit's own `.claude/` tree, not its `workflow-templates/.claude/`
+> twin. When the two differ, because an owner-only sync PR is still pending,
+> a consumer keeps the guard file it already has; a guard with no twin is
+> installed from `.claude/` only where the consumer lacks it, and a guard
+> that does not resolve to a guard path inside the `.claude/` tree (a symlink
+> into its twin, to a non-guard file such as `.claude/scripts/`, or
+> elsewhere) is never installed; nor is a guard ever written through a
+> symlink in the consumer's own `.claude/` tree (issue #5607).
 > `.claude/scripts/stale_routines.py` sweeps the Routines these check-ins
 > leave behind (fired reminders, dead-session Routines, finished hand-backs)
 > each time one is armed or reported, and never touches any other Routine.
