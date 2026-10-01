@@ -1765,7 +1765,8 @@ through `clarify → plan → implement → review`.
   stripped); a review/autofix report's signature comes from its evidence
   without the reporter's own `failure_reason=` / `finalize_reason=` /
   `consecutive_failed_runs=` / `flags:` header lines, led by the run's first
-  error (`AUTOFIX_FAILURE_FIRST_ERROR`) — the same bug in ten consumers is one
+  error (`AUTOFIX_FAILURE_FIRST_ERROR`), and an `identical_failure_cap` report's
+  from its validated `failure_fingerprint` — the same bug in ten consumers is one
   issue with an occurrence comment per report (`<!-- workflow-failure-heal:fp=… -->`).
   A recurrence after the previous heal issue closed increments the generation
   (`<!-- workflow-failure-heal:gen=N -->`, `root=…`); an escalation on a heal

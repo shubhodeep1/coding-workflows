@@ -171,7 +171,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `##[error]` output, not the echoed step script; for an `autofix_failure`
     report it comes from the evidence minus the reporter's header lines,
     `error-signature --strip-autofix-header`, led by the
-    `AUTOFIX_FAILURE_FIRST_ERROR` line the reporter adds), de-dupes an
+    `AUTOFIX_FAILURE_FIRST_ERROR` line the reporter adds; an
+    `identical_failure_cap` report uses its payload `failure_fingerprint`), de-dupes an
     `autofix_failure` report also by its pull request's `source=` marker (that
     PR's closed heal issues, and the heal issue its `ai/issue-<N>` head branch
     fixes, continue the lineage), caps the lineage at

@@ -1682,6 +1682,31 @@ def test_intake_autofix_fingerprint_ignores_reporter_header_lines() -> None:
 	assert f"{heal.MARKER_PREFIX}fp={expected_fp}" in created["body"] and f"{heal.MARKER_PREFIX}gen=1" in created["body"]
 
 
+def test_intake_cap_report_fingerprints_by_its_failure_fingerprint() -> None:
+	# The cap's evidence is gate marker data that matches no signature
+	# pattern, so without failure_fingerprint every cap report would share the
+	# `no-error-lines` signature and one heal lineage.
+	jobs = {"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}
+	job_logs = {"9001": "2026-10-01T07:21:13.000Z ##[error]Process completed with exit code 1.\n"}
+	evidence = AUTOFIX_EVIDENCE_HEADER.replace("workflow_failure", "identical_failure_cap") + "--- fingerprint_cap_log.txt (tail) ---\nidentical_failure_cap: 3 identical review/autofix failures on head abc (max 3)\nrepeated failure_reason=editor_empty_noop\n"
+	assert heal.error_signature(heal.strip_autofix_evidence_header(evidence)) == "no-error-lines"
+	printed = []
+	for cap_fp in ("a" * 64, "b" * 64, None):
+		payload = _autofix_payload(failure_reason="identical_failure_cap", failure_evidence=evidence)
+		if cap_fp is None:
+			payload.pop("failure_fingerprint", None)
+		else:
+			payload["failure_fingerprint"] = cap_fp
+		result, _, _ = _run_intake(payload, _intake_state(jobs=jobs, job_logs=job_logs), diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		match = re.search(r"fingerprint fp=([0-9a-f]{64}) ", result.stdout)
+		assert match, result.stdout
+		printed.append(match.group(1))
+		signature = f"autofix-fp:{cap_fp}" if cap_fp else "no-error-lines"
+		assert match.group(1) == heal.fingerprint("AI Review", "autofix:identical_failure_cap", signature)
+	assert len(set(printed)) == 3
+
+
 def _self_repo_autofix_payload() -> dict:
 	return _autofix_payload(
 		source_repo=SELF_REPO,
