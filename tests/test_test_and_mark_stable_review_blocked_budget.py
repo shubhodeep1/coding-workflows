@@ -562,12 +562,14 @@ def test_phase4b_rate_limited_adopted_run_reads_wait_instead_of_rereading_every_
 	assert result["rc"] == 0, result["transcript"]
 	assert _PHASE4B_REACHED in result["transcript"]
 	assert result["output"] == "", result["output"]
-	assert result["transcript"].count(f"Retry review run #{_PHASE4B_ADOPTED_RUN} read was rate-limited") == 5
+	assert result["transcript"].count(f"Retry review run #{_PHASE4B_ADOPTED_RUN} read was rate-limited") == 6
 	assert "not counted as an unresolvable state" not in result["transcript"]
 	assert "60s fallback: core.remaining=4999, so a secondary limit" in result["transcript"]
-	assert result["sleeps"].count(60) == 5
-	# Five limited reads, each followed by a 60s wait, then two good reads.
-	assert len(_calls_to(result, f"repos/example/repo/actions/runs/{_PHASE4B_ADOPTED_RUN}")) == 7
+	# Each read follows the previous 60s wait at once, with no 15s poll
+	# sleep in between (PR #5874 review round 2): limited reads at +15s,
+	# +75s, ... +315s, a good read at +375s, then the normal 15s poll.
+	assert result["sleeps"] == [15] + [60] * 6 + [15], result["sleeps"]
+	assert len(_calls_to(result, f"repos/example/repo/actions/runs/{_PHASE4B_ADOPTED_RUN}")) == 8
 
 
 def test_phase4b_rate_limited_registration_list_waits_for_the_reset_then_registers() -> None:
@@ -601,8 +603,56 @@ def test_phase4b_sustained_rate_limit_on_registration_list_fails_closed_in_the_w
 	assert result["rc"] == 1, result["transcript"]
 	assert result["output"] == "status=retry_dispatch_failed\n", result["output"]
 	assert "did not register a matching review run within 90 seconds" in result["transcript"]
-	assert result["clock"] <= _PHASE4B_START_EPOCH + 90, result["clock"] - _PHASE4B_START_EPOCH
-	assert result["sleeps"].count(60) == 1
+	# Waits stop at the window's end (+90s), where one more list read is
+	# made; only the ordinary 15s poll sleep follows before the step fails.
+	assert result["sleeps"] == [15, 60, 15, 0, 15], result["sleeps"]
+	assert result["clock"] <= _PHASE4B_START_EPOCH + 90 + 15, result["clock"] - _PHASE4B_START_EPOCH
+	# The baseline read before the dispatch, then reads at +15s, +75s, +90s.
+	assert len([call for call in result["calls"] if "/actions/workflows/" in call]) == 4
+
+
+def test_phase4b_registration_list_limit_clearing_at_the_window_end_still_registers() -> None:
+	"""PR #5874 review round 2: a wait that ends at the deadline gets its read.
+
+	The secondary limit clears exactly when the 90s registration window
+	ends. The old loop slept another 15s after the capped wait and failed
+	`retry_dispatch_failed` without re-reading the run list.
+	"""
+	result = _run_phase4b_retry(
+		pr_states=["open"],
+		run_statuses=["completed"],
+		limited_for=90,
+		limit_kind="secondary",
+		limited_endpoints=("runs_list",),
+		dispatch=True,
+	)
+	assert result["rc"] == 0, result["transcript"]
+	assert _PHASE4B_REACHED in result["transcript"]
+	assert result["output"] == "", result["output"]
+	assert f"Registered retry review run #{_PHASE4B_DISPATCHED_RUN}" in result["transcript"]
+	assert result["sleeps"] == [15, 60, 15], result["sleeps"]
+	assert result["clock"] == _PHASE4B_START_EPOCH + 90
+
+
+def test_phase4b_run_status_limit_clearing_at_the_deadline_still_reads_the_run() -> None:
+	"""PR #5874 review round 2: the pinned run gets one read at the deadline.
+
+	The core quota resets exactly at the 25-minute deadline, so the wait is
+	capped there. The old loop condition ended the wait without reading the
+	run and failed `retry_timeout` although the run had completed.
+	"""
+	result = _run_phase4b_retry(
+		pr_states=["open"],
+		run_statuses=["completed"],
+		limited_for=_PHASE4B_DEADLINE - _PHASE4B_START_EPOCH,
+		limited_endpoints=("run",),
+	)
+	assert result["rc"] == 0, result["transcript"]
+	assert _PHASE4B_REACHED in result["transcript"]
+	assert result["output"] == "", result["output"]
+	assert f"retry run #{_PHASE4B_ADOPTED_RUN}: status=completed conclusion=success" in result["transcript"]
+	assert result["clock"] == _PHASE4B_DEADLINE
+	assert result["sleeps"] == [15, _PHASE4B_DEADLINE - _PHASE4B_START_EPOCH - 15], result["sleeps"]
 
 
 def test_gh_api_with_retry_rate_limit_warning_keeps_earlier_attempts_stderr() -> None:
@@ -679,6 +729,13 @@ def test_phase4b_rate_limit_branch_contract() -> None:
 		after = retry[retry.index(read_call):]
 		assert after.index('-eq "${GH_API_RATE_LIMITED_RC}"') < after.index("continue")
 		assert after.index("phase4b_wait_out_rate_limit") < after.index("continue")
+		# The read a wait owes is consumed by the next read, never left set.
+		before = retry[:retry.index(read_call)]
+		assert re.search(r"RETRY_READ_AFTER_RATE_LIMIT_WAIT=0\s+RETRY_READ_RC=0\s+\w+=\$\($", before)
+	# Only a wait that slept owes a read, so a zero wait at a deadline ends the loop.
+	assert re.search(r'if \[ "\$\{wait_seconds\}" -gt 0 \]; then\s+RETRY_READ_AFTER_RATE_LIMIT_WAIT=1\s+fi', wait_helper)
+	assert 'while [ "$(date +%s)" -lt "${DEADLINE}" ] || [ "${RETRY_READ_AFTER_RATE_LIMIT_WAIT}" -eq 1 ]; do' in retry
+	assert '-ge "${RETRY_REGISTRATION_DEADLINE}" ] && [ "${RETRY_READ_AFTER_RATE_LIMIT_WAIT}" -ne 1 ]' in retry
 	assert retry.index('if [ "${PR_STATE}" = "closed" ]; then') < retry.index(
 		'if [ "${PR_STATE}" = "rate_limited" ]; then'
 	)
