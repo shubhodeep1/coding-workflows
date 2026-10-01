@@ -16,7 +16,8 @@ Usage:
 `--session-id` defaults to `CLAUDE_CODE_SESSION_ID` (the session's transcript
 id, which is the `session_id` every hook receives); `--settings` defaults to
 `.claude/settings.json` in the current directory. `--before` names the
-revision of the branch before the sync merge (the sync passes `HEAD^1`): the
+revision of the branch before the sync merge (the sync passes `HEAD^1` after
+the merge commit, and `HEAD` while a conflicted merge is unfinished): the
 check reads that revision's `settings.json` with `git show` and reports
 whether it wired the recorder under `ConfigChange`. Claude Code runs
 `ConfigChange` with the hooks loaded before a change, so on a branch whose
