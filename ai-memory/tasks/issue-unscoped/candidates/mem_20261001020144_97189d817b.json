@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1239-1249 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: PR-named review runs are accepted without verifying that `head_branch` is the default branch, allowing a forged run to suppress retriggers or consume the changes-lost retry budget.\n  WHY: A workflow dispatched from a non-default branch can use a matching title and path to be counted as a peer run, blocking legitimate recovery.\n- .claude/scripts/check_in_status.py:294-317, 320-327 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: `_active_run_count` accepts PR-named runs without verifying that `head_branch` is the default branch, unlike the hand-off verification path.\n  WHY: A forged active run can keep the checker waiting and block hand-off to the Claude fixer even though its review result would not be accepted.\n- scripts/orchestrate_poll_process.sh:17663-17664 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When a short page causes the helper to stop before querying the second wrapper, its incomplete-listing diagnostic omits whether that wrapper had matching runs.\n  WHY: An operator investigating a stalled PR cannot tell from the log whether the consumer wrapper was reached; callers already skip dispatch or push on incomplete results.\n- .github/workflows/test-and-mark-stable.yml:~1700-1720 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The Bug B SHA verification error message treats every return code other than 0 or 1 as \u201chas no codex-agent checkout,\u201d although return code 3 means there is no `codex-agent` job.\n  WHY: The message conflates distinct failure modes and makes log triage harder; the retry path has the same message pattern.\n- .claude/scripts/check_in_status.py:294-317 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A failed repo-wide `actions/runs` listing now raises `ReadError` rather than treating a per-workflow 404 as zero, causing affected open PRs to receive `action: retry` during transient API failures.\n  WHY: This documented fail-closed behavior can cause a wider cascade of retry verdicts, including in consumer repos that never had `internal-review.yml`; the reviewer notes the fail direction is correct.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh:1208-1250 | severity=high | confidence=[4]\n  PROBLEM: The PR-named run matcher does not verify that `head_branch` is the default branch, so a forged run can suppress retriggers or consume the changes-lost retry budget.\n  WHY: A non-default-branch workflow run with a matching title and path can be counted as a peer run and block legitimate recovery.\n- .claude/scripts/check_in_status.py:294-317, 320-327 | severity=high | confidence=[4]\n  PROBLEM: `_active_run_count` accepts PR-named runs without checking that `head_branch` is the default branch, unlike hand-off verification.\n  WHY: A forged active run can keep the checker waiting even though its review result would not be accepted.\n- scripts/review_merge_train.sh:410-414 | severity=high | confidence=[4]\n  PROBLEM: `_mt_inflight_review_branches` accepts PR-named workflow-dispatch runs without checking the default branch or wrapper path.\n  WHY: A forged `pr:<N>` key can cause `_mt_release` to skip the legitimate PR, leaving it stuck in the queue until the forged run completes or ages out.\n- scripts/orchestrate_poll_process.sh:17663-17664 | severity=low | confidence=[2]\n  PROBLEM: When a short page causes the helper to stop before querying the second wrapper, the incomplete-listing diagnostic reports only the first wrapper's state.\n  WHY: An operator investigating a stalled PR cannot tell from the log whether the consumer wrapper was reached; callers already skip dispatch or push on incomplete results.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ---\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/check_in_status.py:294-317 and 320-327 | severity=high | confidence=[4]\n  PROBLEM: `_active_run_count` accepts PR-named runs without verifying the default-branch provenance, unlike `_is_pr_dispatched_review_run`.\n  WHY: A forged active run can keep the checker from handing off to the Claude fixer.\n- scripts/gh_helpers.sh:1208-1250 | severity=high | confidence=[4]\n  PROBLEM: `_autofix_pr_named_review_runs` does not verify that `head_branch` is the default branch.\n  WHY: A forged run can suppress the post-commit retrigger or consume the changes-lost retry budget.\n- .github/workflows/test-and-mark-stable.yml:~1700-1720 | severity=low | confidence=[4]\n  PROBLEM: The Bug B SHA verification error message treats return code 3 as \u201chas no codex-agent checkout,\u201d though that code means there is no `codex-agent` job.\n  WHY: The message conflates distinct failure modes and makes log triage harder; the retry path has the same message pattern.\n- .claude/scripts/check_in_status.py:294-317 | severity=low | confidence=[3]\n  PROBLEM: A failed repo-wide `actions/runs` listing now raises `ReadError` rather than treating a per-workflow 404 as zero.\n  WHY: Transient API failures can cause a wider cascade of `action: retry` verdicts; the reviewer notes the fail direction is correct.\n- scripts/gh_helpers.sh:1239-1249\n  PROBLEM: The path filter may miss runs if the REST API returns `path` with an `@ref` suffix.\n  WHY: The filter is anchored to the end of the path, while the sibling matcher strips `@ref` before comparing.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e9f636d7e96b2fc109d21c9d310ee6c6c55e2544b059f93503ac7dfa4cf7b356",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36803184906",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36803184906",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001020144_97189d817b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36803184906"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T02:01:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
