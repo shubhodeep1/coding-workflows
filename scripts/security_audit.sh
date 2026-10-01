@@ -64,9 +64,16 @@ security_audit_emit_failure() {
 
 security_audit_emit_path_diagnostic() {
 	local diagnostic_file="${1:?diagnostic file required}"
+	# Optional: "mask" also runs security_audit_mask_stderr_line over the
+	# selected lines. Only the codex-execution call passes it, because Codex
+	# stderr can carry provider keys (#5785); other phases print as before.
+	local diagnostic_mask_mode="${2:-}"
 	local path_diagnostic
 	path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
 	if [ -n "${path_diagnostic}" ]; then
+		if [ "${diagnostic_mask_mode}" = "mask" ]; then
+			path_diagnostic="$(security_audit_mask_stderr_line "${path_diagnostic}")"
+		fi
 		printf 'security-audit: captured_path_error=%s\n' \
 			"$(security_audit_sanitize_log_value "${path_diagnostic}")" >&2
 	fi
@@ -83,7 +90,8 @@ SECURITY_AUDIT_CODEX_PROVIDER="unknown"
 # MAX_THINKING_TOKENS=5 does not rewrite every digit), sk- keys, 32+ hex runs,
 # and 40+ base64 or token runs in either alphabet, padded or not. Values are
 # replaced with bash expansion, never passed in a process argv. Used only for
-# the codex-stderr-tail lines (#5785).
+# Codex stderr: the codex-stderr-tail lines and the codex-execution
+# captured_path_error= diagnostic (#5785).
 security_audit_mask_stderr_line() {
 	local stderr_line="${1-}"
 	local secret_env_name
@@ -1338,7 +1346,7 @@ if codex --ask-for-approval never \
 	:
 else
 	CODEX_EXECUTION_STATUS=$?
-	security_audit_emit_path_diagnostic "${CODEX_ERROR_FILE}"
+	security_audit_emit_path_diagnostic "${CODEX_ERROR_FILE}" mask
 	security_audit_emit_codex_stderr_tail "${CODEX_ERROR_FILE}" "${RENDERED_PROMPT_FILE}" || true
 	security_audit_emit_failure "codex-execution" "codex" "Codex exited nonzero" "${SECURITY_AUDIT_CODEX_PROVIDER:-unknown}"
 	exit "${CODEX_EXECUTION_STATUS}"

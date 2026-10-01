@@ -1110,6 +1110,35 @@ def test_security_audit_codex_stderr_tail_masks_short_secrets_and_unpadded_base6
 		assert secret_fragment not in proc.stderr, secret_fragment
 
 
+def test_security_audit_codex_path_diagnostic_masks_secrets_on_path_error_line() -> None:
+	# Review round 3 on PR #5816: captured_path_error= prints Codex stderr
+	# before the tail, so it applies the same masks to the lines it selects.
+	fake_generic_key = "sk-proj-" + "Qw7" * 12
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "9",
+			"SHORT_API_KEY": "k3y9",
+			"MOCK_CODEX_STDERR": (
+				"provider failed: k3y9 No such file or directory\n"
+				f"load {fake_generic_key} test-openrouter-key: ENOENT\n"
+			),
+		},
+	)
+	assert proc.returncode == 9, proc.stderr
+	path_error_lines = [
+		stderr_line
+		for stderr_line in proc.stderr.splitlines()
+		if stderr_line.startswith("security-audit: captured_path_error=")
+	]
+	assert len(path_error_lines) == 1, proc.stderr
+	assert "No\\ such\\ file\\ or\\ directory" in path_error_lines[0], path_error_lines
+	assert "ENOENT" in path_error_lines[0], path_error_lines
+	assert "\\[redacted\\]" in path_error_lines[0], path_error_lines
+	for secret_fragment in (" k3y9", "Qw7Qw7", "test-openrouter-key"):
+		assert secret_fragment not in proc.stderr, secret_fragment
+
+
 def test_security_audit_codex_stderr_tail_byte_cap_holds_for_multibyte_text() -> None:
 	# The sanitizer keeps printable ASCII only, so the 4096 budget is in bytes.
 	proc, _ = _run_security_audit(
