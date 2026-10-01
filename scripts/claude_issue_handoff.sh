@@ -38,6 +38,10 @@
 #   CLAUDE_ISSUE_ROUTE_PY            path of claude_issue_route.py
 #                                    (default scripts/claude_issue_route.py)
 #   RUN_URL                          URL of the calling run (for comments / alerts)
+#   CLAUDE_ISSUE_ROUTED_ALERT_LEVEL  threshold for the success-only "handoff
+#                                    dispatched" Telegram DEBUG ping (default
+#                                    SILENT, so it is dropped; set DEBUG to get it).
+#                                    The failure ERROR still honours ALERT_MSG_LEVEL.
 #   RUNTIME_DIR                      scratch dir (default mktemp -d)
 
 set -euo pipefail
@@ -118,7 +122,9 @@ A Claude session will implement this issue with the \`/implement-issue-claude\` 
 	[ -z "${RUN_URL}" ] || BODY+=$'\n\n'"Run: ${RUN_URL}"
 	gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || \
 		log "warn routing_comment_failed issue=${ISSUE_NUMBER}"
-	tg_send_msg "Claude issue handoff dispatched for ${REPO}#${ISSUE_NUMBER} (${TRIGGER})."$'\n'"Issue: ${ISSUE_URL}" "DEBUG" >/dev/null 2>&1 || true
+	# Success-only ping: thresholded by CLAUDE_ISSUE_ROUTED_ALERT_LEVEL (default
+	# SILENT), not the global ALERT_MSG_LEVEL. Mirrors PR_PROCESSED_ALERT_LEVEL.
+	ALERT_MSG_LEVEL="${CLAUDE_ISSUE_ROUTED_ALERT_LEVEL:-SILENT}" tg_send_msg "Claude issue handoff dispatched for ${REPO}#${ISSUE_NUMBER} (${TRIGGER})."$'\n'"Issue: ${ISSUE_URL}" "DEBUG" >/dev/null 2>&1 || true
 	exit 0
 fi
 
