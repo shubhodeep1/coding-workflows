@@ -1101,10 +1101,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   (`revoke_auto_merge`) and returns `merge_revoked`, or
   `merge_revoke_failed` when that call fails. A PR already merged is judged
   by head and base ref only (a merge can refresh `base.sha`), and one merged
-  with another head or ref returns `merged_unreviewed_base`. The sweep
-  prints `::warning::` for `merge_revoke_failed` and `merged_unreviewed_base`
-  (`PENDING_CHECKS_ALARM_STATES`). Cost: 1 PR read per enabled merge, plus 1
-  GraphQL disable only when the pair moved. Tests:
+  with another head or ref returns `merged_unreviewed_base`. After a
+  successful disable one more PR read confirms the PR did not merge in
+  between: merged → `merged_unreviewed_base`, unreadable →
+  `merge_revoke_unconfirmed`. The sweep prints `::warning::` for
+  `merge_revoke_failed`, `merge_revoke_unconfirmed`, and
+  `merged_unreviewed_base` (`PENDING_CHECKS_ALARM_STATES`). Cost: 1 PR read
+  per enabled merge, plus 1 GraphQL disable and 1 confirming PR read only
+  when the pair moved. Tests:
   `tests/test_check_in_status_hand_back.py`,
   `tests/test_claude_pr_sweep.py`, `tests/test_claude_fixer_pending_checks.py`.
 

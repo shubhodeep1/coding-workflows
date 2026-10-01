@@ -1256,9 +1256,39 @@ def test_issue_5905_the_reviewed_pair_holding_still_merges_with_one_more_pr_read
 	("re-read not an object", ["not", "a", "pr"]),
 ])
 def test_issue_5905_a_moved_pair_after_the_merge_call_disables_auto_merge(fake_gh, label, after_merge):
-	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, pr_sequence=[_pr(), _pr(), after_merge])
+	# The fourth read confirms, after the disable, that the PR did not merge.
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		pr_sequence=[_pr(), _pr(), after_merge, _pr(base=RETARGETED)])
 	result = _evaluate()
 	assert result["state"] == "merge_revoked", (label, result)
+	assert fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE], label
+	assert fake_gh.pr_reads() == 4, label
+
+
+def test_issue_5905_a_merge_between_the_re_read_and_the_disable_is_reported(fake_gh):
+	"""The re-read finds the PR retargeted but not merged yet, GitHub merges it
+	before the disable lands, and the disable still succeeds: the confirming
+	read reports the merge instead of a clean revoke (review round 1 of #5917)."""
+	merged = _pr(state="closed", merged=True, base=RETARGETED)
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		pr_sequence=[_pr(), _pr(), _pr(base=RETARGETED), merged])
+	result = _evaluate()
+	assert result["state"] == "merged_unreviewed_base", result
+	assert "before auto-merge was disabled" in result["reason"]
+	assert fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE]
+	assert fake_gh.pr_reads() == 4
+
+
+@pytest.mark.parametrize("label, confirm", [
+	("confirming read failed", "error"),
+	("confirming read without a base", _pr(base=None)),
+])
+def test_issue_5905_an_unconfirmed_revoke_is_reported(fake_gh, label, confirm):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		pr_sequence=[_pr(), _pr(), _pr(base=RETARGETED), confirm])
+	result = _evaluate()
+	assert result["state"] == "merge_revoke_unconfirmed", (label, result)
+	assert "cannot be ruled out" in result["reason"], label
 	assert fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE], label
 
 
@@ -1269,6 +1299,8 @@ def test_issue_5905_a_failed_disable_is_reported(fake_gh):
 	assert result["state"] == "merge_revoke_failed", result
 	assert "could not disable auto-merge" in result["reason"]
 	assert fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE]
+	# No confirming read after a failed disable: the state already warns.
+	assert fake_gh.pr_reads() == 3
 
 
 def test_issue_5905_a_merge_into_the_reviewed_base_ref_stands(fake_gh):
@@ -1357,13 +1389,14 @@ def test_enable_auto_merge_reports_a_base_refusal(monkeypatch):
 
 
 def test_sweep_warns_when_an_unreviewed_base_may_still_merge(monkeypatch, capsys):
-	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: [{"number": n, "head_ref": REF} for n in (1, 2, 3)])
+	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: [{"number": n, "head_ref": REF} for n in (1, 2, 3, 4)])
 	monkeypatch.setattr(sweeper.check_in_status, "check_pr_hand_back", lambda *a, **k: {"done": False, "state": "open"})
-	states = {1: "merge_revoke_failed", 2: "merged_unreviewed_base", 3: "merge_revoked"}
+	states = {1: "merge_revoke_failed", 2: "merged_unreviewed_base", 3: "merge_revoked", 4: "merge_revoke_unconfirmed"}
 	summary = _sweep(pending=lambda repo, number, dry_run: {"state": states[number], "head_sha": HEAD, "reason": "r"})
 	out = capsys.readouterr().out
 	assert "::warning::CLAUDE_PR_SWEEP pending_checks_merge_revoke_failed repo=o/r pr=#1" in out
 	assert "::warning::CLAUDE_PR_SWEEP pending_checks_merged_unreviewed_base repo=o/r pr=#2" in out
+	assert "::warning::CLAUDE_PR_SWEEP pending_checks_merge_revoke_unconfirmed repo=o/r pr=#4" in out
 	assert "pending_checks_merge_revoked repo=o/r pr=#3" not in out
 	assert "pending_checks repo=o/r pr=#3 state=merge_revoked" in out
 	assert summary["pending_checks_merged"] == 0

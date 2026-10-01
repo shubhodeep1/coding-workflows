@@ -1521,10 +1521,13 @@ head, so after enabling auto-merge the sweep reads the PR once more:
   `gh pr merge --disable-auto` (`state=merge_revoked`), and the next review
   sweep reviews the PR against its new base;
 - that disable fails → `merge_revoke_failed`;
-- the PR already merged with another head or base ref →
-  `merged_unreviewed_base`.
+- the disable succeeds, but one more PR read (which confirms the PR did not
+  merge between the re-read and the disable) fails →
+  `merge_revoke_unconfirmed`;
+- the PR already merged with another head or base ref, or that confirming
+  read finds it merged → `merged_unreviewed_base`.
 
-Both of the last two are also printed as `::warning::` lines.
+The last three are also printed as `::warning::` lines.
 
 **Claims** (`.claude/scripts/claude_fix_claim.py`) stop two fixers racing:
 one PR comment ending in

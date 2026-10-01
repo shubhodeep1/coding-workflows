@@ -69,7 +69,8 @@ PR minutes and a dozen calls earlier). GitHub's merge APIs bind only the head,
 so after the helper enabled auto-merge the PR is read once more: a head or
 base that moved in between, or a re-read that fails, disables auto-merge again
 (`gh pr merge --disable-auto`), and the gate's stale-binding rule (#5147) lets
-the next review sweep review the PR against its new base.
+the next review sweep review the PR against its new base. One more read after
+that disable reports a PR that merged in between as `merged_unreviewed_base`.
 
 A check that finishes failed is not handled here: `check_in_status.py
 --hand-back` reports it as `ci-failed` like any other `claude/*` head, and a
@@ -91,7 +92,8 @@ read per 100 comments again, 1 repository-variable read, then
 `review_enable_auto_merge.sh` (1 paginated labels read, 1 PR read, 1 merge
 call), and after a merge call that succeeded, 1 more PR read plus, only when
 the reviewed head or base no longer holds, 1 `gh pr merge --disable-auto`
-(GraphQL) write. Every read goes through `gh api` with
+(GraphQL) write and, when that succeeded, 1 PR read confirming the PR did
+not merge first. Every read goes through `gh api` with
 GH_TOKEN; nothing is retried in a loop, and a failed read raises
 `check_in_status.ReadError` for the caller to log (fail open per PR).
 """
@@ -583,36 +585,37 @@ def recheck_reviewed_pair(repo: str, number: int, head_sha: str, base_ref: str, 
 	The helper's PR read and its `gh pr merge --auto` call are separate, so
 	a retarget in between still gets auto-merge for the new base. One PR
 	read. Output: {"outcome": "held" | "moved" | "merged_elsewhere" |
-	"unreadable", "detail": str}. `held`: the PR still has the reviewed head
-	and base (merged or not). `moved`: not merged, and its head or base is no
-	longer the reviewed one. `merged_elsewhere`: already merged, into a base
-	other than the reviewed one. `unreadable`: the read failed or returned no
-	usable head and base; the caller treats it like `moved` (fail closed).
+	"unreadable", "merged": bool, "detail": str}. `held`: the PR still has the
+	reviewed head and base (merged or not). `moved`: not merged, and its head
+	or base is no longer the reviewed one. `merged_elsewhere`: already merged,
+	into a base other than the reviewed one. `unreadable`: the read failed or
+	returned no usable head and base; the caller treats it like `moved` (fail
+	closed). `merged` is True only when the read showed the PR merged.
 	"""
 	try:
 		pr = check_in_status.gh_api(f"repos/{repo}/pulls/{number}")
 	except check_in_status.ReadError as exc:
-		return {"outcome": "unreadable", "detail": f"could not re-read the PR: {exc}"}
+		return {"outcome": "unreadable", "merged": False, "detail": f"could not re-read the PR: {exc}"}
 	if not isinstance(pr, dict):
-		return {"outcome": "unreadable", "detail": "the PR re-read was not a JSON object"}
+		return {"outcome": "unreadable", "merged": False, "detail": "the PR re-read was not a JSON object"}
 	head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
 	base = pr.get("base") if isinstance(pr.get("base"), dict) else {}
 	current_head = head.get("sha") if isinstance(head.get("sha"), str) else ""
 	current_ref = base.get("ref") if isinstance(base.get("ref"), str) else ""
 	current_sha = base.get("sha") if isinstance(base.get("sha"), str) else ""
 	if not current_head or not current_ref or not current_sha:
-		return {"outcome": "unreadable", "detail": "the PR re-read carried no head sha, base ref, or base sha"}
+		return {"outcome": "unreadable", "merged": False, "detail": "the PR re-read carried no head sha, base ref, or base sha"}
 	detail = f"head {current_head[:12]}, base {current_ref} at {current_sha[:12]}"
 	if pr.get("merged") is True:
 		# A merge may refresh the PR's base.sha snapshot to the base tip it
 		# merged onto, so a merged PR is judged by its head and base ref: a
 		# retarget always changes the ref.
 		if current_head == head_sha and current_ref == base_ref:
-			return {"outcome": "held", "detail": detail}
-		return {"outcome": "merged_elsewhere", "detail": detail}
+			return {"outcome": "held", "merged": True, "detail": detail}
+		return {"outcome": "merged_elsewhere", "merged": True, "detail": detail}
 	if current_head == head_sha and current_ref == base_ref and current_sha == base_sha:
-		return {"outcome": "held", "detail": detail}
-	return {"outcome": "moved", "detail": detail}
+		return {"outcome": "held", "merged": False, "detail": detail}
+	return {"outcome": "moved", "merged": False, "detail": detail}
 
 
 def revoke_auto_merge(repo: str, number: int) -> dict:
@@ -642,10 +645,14 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 	`base_changed` again when review_enable_auto_merge.sh refused a base that
 	moved since the first read, `merge_revoked` (auto-merge was enabled, but
 	the re-read PR no longer had the reviewed head and base, or could not be
-	read, so it was disabled again), `merge_revoke_failed` (that disable
-	failed; auto-merge may still be on), and `merged_unreviewed_base` (the PR
-	had already merged with another head or base ref). Only `merge_enabled`,
-	`merge_revoke_failed`, and `merged_unreviewed_base` leave a change behind.
+	read, so it was disabled again, and a further read confirmed it had not
+	merged), `merge_revoke_failed` (that disable failed; auto-merge may still
+	be on), `merge_revoke_unconfirmed` (the disable succeeded, but the
+	confirming read failed, so a merge just before it is not ruled out), and
+	`merged_unreviewed_base` (the PR had already merged with another head or
+	base ref, or merged after the re-read found the pair moved). Only
+	`merge_enabled`, `merge_revoke_failed`, `merge_revoke_unconfirmed`, and
+	`merged_unreviewed_base` may leave a change behind.
 	Raises `check_in_status.ReadError` when a read fails, and `OSError` when
 	the snapshot's temp directory cannot be written; the sweep logs both per PR.
 	"""
@@ -742,6 +749,20 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 	if not revoke["revoked"]:
 		return {"state": "merge_revoke_failed", "head_sha": head_sha,
 			"reason": f"{pair['detail']}; disabling auto-merge failed: {revoke['output'][-300:]}"}
+	# The re-read and the disable are two calls and GitHub merges
+	# asynchronously, so the PR can merge into the moved base between them,
+	# and a disable on a merged PR is not reliably an error. Read once more
+	# (only on this path) so such a merge raises the alarm instead of being
+	# logged as a clean revoke.
+	confirm = recheck_reviewed_pair(repo, number, head_sha, base_ref, base_sha)
+	if confirm["outcome"] == "unreadable":
+		return {"state": "merge_revoke_unconfirmed", "head_sha": head_sha,
+			"reason": f"auto-merge disabled after {pair['detail']}, but {confirm['detail']}, so a merge before the "
+				f"disable cannot be ruled out; reviewed {head_sha[:12]} into {base_ref} at {base_sha[:12]}"}
+	if confirm["merged"]:
+		return {"state": "merged_unreviewed_base", "head_sha": head_sha,
+			"reason": f"the PR merged as {confirm['detail']} after the re-read found {pair['detail']}, before auto-merge "
+				f"was disabled; reviewed {head_sha[:12]} into {base_ref} at {base_sha[:12]}"}
 	return {"state": "merge_revoked", "head_sha": head_sha,
 		"reason": f"auto-merge disabled again: {pair['detail']} after the merge call, reviewed {head_sha[:12]} "
 			f"into {base_ref} at {base_sha[:12]}; the next sweep or review run decides this head again"}

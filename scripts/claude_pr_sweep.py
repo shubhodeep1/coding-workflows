@@ -44,8 +44,8 @@ Batching contract (CLAUDE.md §15):
           and 1 per 100 comments
           again (issue #5148), 1 variable read and the auto-merge helper's
           calls, then after a successful merge call 1 PR re-read and, only
-          when the reviewed head or base moved, 1 auto-merge disable,
-          issue #5905);
+          when the reviewed head or base moved, 1 auto-merge disable and,
+          when it succeeded, 1 confirming PR read, issue #5905);
   output  one `CLAUDE_PR_SWEEP` log line per decision plus a summary line;
   failure fail open per PR and per repo: a read error is logged and the
           sweep moves on; nothing is retried in a tight loop. A failed queue
@@ -65,8 +65,8 @@ auto-merge once the head's check runs behind a trusted
 current base (issue #5147), have all completed without a failure. The
 merge helper re-checks that base right before its merge call, and a PR
 retargeted around that call has its auto-merge disabled again (issue #5905;
-`merge_revoke_failed` and `merged_unreviewed_base` are also logged as
-`::warning::`). `--dry-run` only logs what it would enable.
+`merge_revoke_failed`, `merge_revoke_unconfirmed`, and `merged_unreviewed_base`
+are also logged as `::warning::`). `--dry-run` only logs what it would enable.
 
 Each queue issue it opens is also recorded (number, title, payload) in this
 run's binding file (`CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE`, default
@@ -109,7 +109,7 @@ claude_fixer_pending_checks = _load("claude_fixer_pending_checks", ROOT / "scrip
 DUE_STATES = ("conflict", "review-round", "ci-failed", "blocked")
 # claude_fixer_pending_checks.evaluate states that leave a merge authorization
 # for an unreviewed base behind (issue #5905); each gets a ::warning:: line.
-PENDING_CHECKS_ALARM_STATES = ("merge_revoke_failed", "merged_unreviewed_base")
+PENDING_CHECKS_ALARM_STATES = ("merge_revoke_failed", "merge_revoke_unconfirmed", "merged_unreviewed_base")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
