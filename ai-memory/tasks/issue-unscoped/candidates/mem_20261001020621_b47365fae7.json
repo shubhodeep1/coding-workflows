@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1244 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The PR-named run lookup accepts runs without verifying default-branch provenance or pairing each workflow path with its specific title, allowing a forged run to affect retry dispatch and budget decisions.\n  WHY: A branch writer can dispatch a run with a matching PR title, causing the retrigger peer check to skip a dispatch or the changes-lost budget to miscount a retry; severity differed between the security finding and the secondary path-regex finding, so the higher severity is used.\n- .claude/scripts/check_in_status.py:316 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_active_run_count` counts PR-named runs without verifying that `head_branch` equals the default branch.\n  WHY: A spoofed run from a non-default branch can be counted as an active review for the PR, holding back the \u00a726 checker hand-off while the forged run is active.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Every PR-named match in the poller should check `head_branch == default_branch` (provenance) and the wrapper path that sets the run name (identity); the same fix is deferred for `.claude/scripts/check_in_status.py` and `scripts/gh_helpers.sh`'s `_autofix_pr_named_review_runs`.\n  expected_change_site: `.claude/scripts/check_in_status.py` (`_active_run_count`); `scripts/gh_helpers.sh` (`_autofix_pr_named_review_runs`)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `_active_run_count` (line 313-317) selects with `_is_pr_named_review_pair(run, pr_number)` only; the jq filter inside `_autofix_pr_named_review_runs` (line 1239-1248) selects on `event`, `path`, and `display_title` but not on `head_branch`; no test in this PR covers a forged PR-named run from a non-default branch being filtered out of either helper; the issue #5094 plan's \"Residual same-pattern matchers\" section names both files by line number as out of scope.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh:1244 | severity=high | confidence=4\n  PROBLEM: The function does not verify that head_branch equals the default branch (provenance) and does not pair the workflow path with its specific title (identity). A run dispatched on any branch with a workflow file named internal-review.yml or ai-review.yml that sets either PR-named title is accepted.\n  WHY: A writer who pushes a branch can dispatch a workflow_dispatch run at that branch whose copy sets run-name to another PR's title. The retrigger peer check (autofix_retrigger_has_inflight_peer) and the changes-lost budget (autofix_changes_lost_head_retry_consumed) then skip the dispatch or miscount the retry.\n- scripts/gh_helpers.sh:1244 | severity=low | confidence=2\n  PROBLEM: The path regex accepts any parent directory rather than requiring .github/workflows/ specifically.\n  WHY: This is a secondary detail that does not independently enable exploitation; the absence of head_branch and path/title pairing is the root cause covered by the SECURITY finding above.\n- .claude/scripts/check_in_status.py:316 | severity=high | confidence=4\n  PROBLEM: The function reads PR_NAMED_REVIEW_RUNS_PATH (a repo-wide actions/runs listing) and matches runs by (path, display_title) pair only. It does not check that the run's head_branch is the default branch.\n  WHY: A spoofed dispatch run on a non-default branch that sets the PR-named title is counted as an active review run for that PR. The \u00a726 checker then holds a hand-off back while the forged run is active, preventing the real fixer from being woken.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The issue #5094 plan (`docs/completed/issue-5094-verify-pr-named-review-run-provenance-plan.md`) requires every PR-named match in the poller to check `head_branch == default_branch` (provenance) and the wrapper path that sets the run name (identity). The \"Residual same-pattern matchers outside this scope\" section of that plan explicitly defers the same fix in `.claude/scripts/check_in_status.py` and `scripts/gh_helpers.sh`'s `_autofix_pr_named_review_runs` to a follow-up.\n  Expected change site: `.claude/scripts/check_in_status.py:294` (`_active_run_count`); the sibling helper `_is_pr_dispatched_review_run` at line 338 already does this; `scripts/gh_helpers.sh:1208` (`_autofix_pr_named_review_runs`) has the same gap.\n  Evidence of absence: `_active_run_count` (line 313-317) selects with `_is_pr_named_review_pair(run, pr_number)` only. The jq filter inside `_autofix_pr_named_review_runs` (line 1239-1248) selects on `event`, `path`, and `display_title` but not on `head_branch`. No test in this PR covers a forged PR-named run from a non-default branch being filtered out of either helper. The issue #5094 plan's \"Residual same-pattern matchers\" section names both files by line number as out of scope.\n  severity: NIT\n  confidence: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7f83ddef959a297ded099ca0303221f0b3678aeb758ff29edfb88d79c9e5e920",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36803186334",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36803186334",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001020621_b47365fae7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36803186334"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T02:06:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
