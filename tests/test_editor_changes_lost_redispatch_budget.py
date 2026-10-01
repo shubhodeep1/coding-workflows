@@ -131,6 +131,7 @@ gh() {
 	cat "${RUNS_FIXTURE}"
 }
 
+eval "$(extract_fn _autofix_pr_named_review_default_branch)"
 eval "$(extract_fn _autofix_pr_named_review_runs)"
 eval "$(extract_fn autofix_changes_lost_head_retry_consumed)"
 autofix_changes_lost_head_retry_consumed "$@"
@@ -141,8 +142,13 @@ def _run_helper(runs_json: str, *args: str, api_fail: bool = False) -> subproces
 	with tempfile.TemporaryDirectory() as tmp:
 		fixture = Path(tmp) / "runs.json"
 		fixture.write_text(runs_json, encoding="utf-8")
+		# The event payload names the default branch, so the PR-named lookup
+		# makes no default-branch read (issue #5838).
+		event = Path(tmp) / "event.json"
+		event.write_text(json.dumps({"repository": {"full_name": "owner/repo", "default_branch": "main"}}), encoding="utf-8")
 		env = dict(os.environ)
 		env["GITHUB_REPOSITORY"] = "owner/repo"
+		env["GITHUB_EVENT_PATH"] = str(event)
 		env["RUNS_FIXTURE"] = str(fixture)
 		if api_fail:
 			env["GH_API_FAIL"] = "1"
