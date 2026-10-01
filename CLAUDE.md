@@ -1143,6 +1143,13 @@ without a separate approval round:
   review, and pushing follow-up commits to it;
 - pull request and issue comments, review-thread replies, and resolving
   review threads you have addressed;
+- local `git merge` of `origin/<default>`, of an issue's base branch
+  (`origin/<issue base>`, which can be another project's
+  `claude/implement-plan-*` branch), or of a pull request's base branch
+  into a `claude/*` branch the session works on, as the
+  `/implement-plan-claude` sync and conflict steps and `/fix-claude-pr`
+  prescribe. The merge changes only the local checkout until the session
+  pushes its own `claude/*` branch (issue #5899);
 - applying or removing `ai:*` and other workflow labels the pipelines expect,
   and unsubscribing from PR activity. Subscribing to PR activity is **not**
   a routine write: §25 forbids it outright, and a `PreToolUse` hook blocks

@@ -1171,6 +1171,15 @@ reviews, comments, and conflicts stay a direct §12 request.
   from filing the same occurrences again. No cap on open issues. Issue text
   masks token-like strings, removes heredoc bodies, and truncates commands to
   2,000 characters. In consumer repos it only reports.
+  The issue body and each "Seen again" comment also show the permission
+  mode the occurrences were logged under. When the denied call is a single
+  command (no shell operator, newline, backtick, or `$(`) that a `Bash(...)`
+  rule in the checkout's `.claude/settings.json` `permissions.allow`
+  matches, they add an **Already allowlisted** line naming the rule. That
+  call was decided despite the rule, so reshaping it or adding another rule
+  cannot clear the pattern (issue #5899). `report` lists the matching rule
+  as `allow_rule` (or `null`) per pattern. The check reads only the local
+  settings file and issues no API calls.
 - `/implement-plan-claude` step 0 now refuses to run outside Auto mode
   (except issue mode, which records the mode), and a phase touching
   `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md

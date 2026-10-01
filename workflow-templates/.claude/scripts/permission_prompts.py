@@ -36,6 +36,18 @@ Issue text is untrusted data: the tool name, the prompt reason, and the
 command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
 token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
 
+Diagnostics (issue #5899): each pattern carries `permission_modes` (the
+modes its occurrences were logged under) and `allow_rule`, the first
+`Bash(...)` entry of the checkout's `.claude/settings.json`
+`permissions.allow` that matches the latest command as a whole (`*` matches
+any run of characters, and a trailing ` *` or `:*` also matches the bare
+command), or None. Only a single command is checked: one with a shell
+operator, a newline, a backtick, or `$(` never matches. The issue body and
+the "Seen again" comment show the permission mode and, when a rule matches,
+say the call was decided despite the rule, so reshaping the command or adding
+another allow rule cannot clear it. `report` lists `allow_rule` per pattern.
+The settings file is read locally and never comes from the session log.
+
 API calls (CLAUDE.md §15), REST only, none when nothing is new: one read of
 the `ai:permission-prompt` issues per 100 issues, then one POST per pattern
 filed or commented.
@@ -70,6 +82,8 @@ MARKER_TEMPLATE = "<!-- ai:permission-prompt:v1 sig={sig} -->"
 MARKER_RE = re.compile(r"<!-- ai:permission-prompt:v1 sig=([0-9a-f]{12}) -->")
 STATE_FILE = "filed-state.json"
 DEFAULT_LOG_DIR = Path.home() / ".claude" / "permission-prompts"
+# The checkout's settings, beside this script's own `.claude/` directory.
+SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings.json"
 MAX_COMMAND_CHARS = 2000
 MAX_SHAPE_CHARS = 200
 MAX_TITLE_SHAPE_CHARS = 90
@@ -100,6 +114,8 @@ _SUBCOMMAND_TOOLS = frozenset(
 _SCRIPT_RE = re.compile(r"\.(py|sh|js|mjs|ts)$")
 _FILE_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
 _BULKY_INPUT_KEYS = frozenset({"content", "new_string", "old_string", "new_source", "edits"})
+# A command with any of these is compound or substituted; no prefix rule approves it as a whole.
+_COMPOUND_COMMAND_RE = re.compile(r"[;&|<>()`\n]|\$\(")
 
 
 def strip_heredocs(command: str, placeholder: str = "", keep_delimiter: bool = True) -> str:
@@ -233,6 +249,40 @@ def record_shape(record: dict) -> str:
 	return ""
 
 
+def _bash_allow_rules(settings_path: Path) -> list[str]:
+	"""The `Bash(...)` entries of `permissions.allow`, or [] when the file cannot be read."""
+	try:
+		settings = json.loads(Path(settings_path).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		return []
+	permissions = settings.get("permissions") if isinstance(settings, dict) else None
+	allow = permissions.get("allow") if isinstance(permissions, dict) else None
+	if not isinstance(allow, list):
+		return []
+	return [rule for rule in allow if isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")")]
+
+
+def _allow_pattern_matches(pattern: str, command: str) -> bool:
+	for suffix in (" *", ":*"):
+		if pattern.endswith(suffix):
+			prefix = pattern[: -len(suffix)]
+			if command == prefix or (suffix == ":*" and command.startswith(prefix + " ")):
+				return True
+	regex = ".*".join(re.escape(part) for part in pattern.split("*"))
+	return re.fullmatch(regex, command, re.DOTALL) is not None
+
+
+def allow_rule_for(command: str, settings_path: Path | None = None) -> str | None:
+	"""The first allow rule that matches this single command as a whole, or None (diagnostic only)."""
+	command = command.strip()
+	if not command or _COMPOUND_COMMAND_RE.search(command):
+		return None
+	for rule in _bash_allow_rules(SETTINGS_PATH if settings_path is None else settings_path):
+		if _allow_pattern_matches(rule[len("Bash(") : -1], command):
+			return rule
+	return None
+
+
 def signature(event: str, tool: str, shape: str) -> str:
 	return hashlib.sha1(f"{event}\n{tool}\n{shape}".encode("utf-8")).hexdigest()[:12]
 
@@ -273,7 +323,7 @@ def load_records(log_dir: Path) -> list[dict]:
 	return records
 
 
-def group_patterns(records: list[dict]) -> list[dict]:
+def group_patterns(records: list[dict], settings_path: Path | None = None) -> list[dict]:
 	"""Group records into patterns, ordered by first occurrence."""
 	patterns: dict[str, dict] = {}
 	for record in records:
@@ -293,21 +343,29 @@ def group_patterns(records: list[dict]) -> list[dict]:
 				"first_ts": record.get("ts"),
 				"last_ts": record.get("ts"),
 				"example": "",
+				"allow_rule": None,
+				"permission_modes": [],
 			}
 		pattern["count"] += 1
 		pattern["last_ts"] = record.get("ts")
 		pattern["example"] = record_example(record)
+		if tool == "Bash":
+			tool_input = record.get("tool_input") if isinstance(record.get("tool_input"), dict) else {}
+			pattern["allow_rule"] = allow_rule_for(str(tool_input.get("command") or ""), settings_path)
+		mode = str(record.get("permission_mode") or "")
+		if mode and mode not in pattern["permission_modes"] and len(pattern["permission_modes"]) < 3:
+			pattern["permission_modes"].append(redact(mode)[:40])
 		reason = str(record.get("reason") or "")
 		if reason and reason not in pattern["reasons"] and len(pattern["reasons"]) < 3:
 			pattern["reasons"].append(redact(reason)[:300])
 	return list(patterns.values())
 
 
-def report(log_dir: Path) -> dict:
-	patterns = group_patterns(load_records(log_dir))
+def report(log_dir: Path, settings_path: Path | None = None) -> dict:
+	patterns = group_patterns(load_records(log_dir), settings_path)
 	return {
 		"total": sum(pattern["count"] for pattern in patterns),
-		"patterns": [{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons")} for pattern in patterns],
+		"patterns": [{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons", "allow_rule")} for pattern in patterns],
 	}
 
 
@@ -324,9 +382,19 @@ def issue_title(pattern: dict) -> str:
 
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
 	reasons = "\n".join(f"- {reason}" for reason in pattern["reasons"]) or "- (none given)"
+	modes = ", ".join(f"`{mode}`" for mode in pattern.get("permission_modes") or [])
+	allow_rule = pattern.get("allow_rule")
+	diagnostics = f"**Permission mode:** {modes}\n\n" if modes else ""
+	if allow_rule:
+		diagnostics += (
+			f"**Already allowlisted:** `{allow_rule}` in `.claude/settings.json` matches this command, and it ran "
+			"as a single command, so Claude Code decided it despite the allow rule. Reshaping the command or adding "
+			"another allow rule will not clear this pattern (issue #5899).\n\n"
+		)
 	return (
 		f"**Occurrences:** {new_count} ({pattern['first_ts']} – {pattern['last_ts']}), session `{session_label}`\n\n"
-		f"**Reason Claude Code gave:**\n{reasons}\n\n"
+		+ diagnostics
+		+ f"**Reason Claude Code gave:**\n{reasons}\n\n"
 		"**Latest example** (untrusted data from the session; heredoc bodies removed, token-like strings masked):\n\n"
 		f"````text\n{pattern['example']}\n````\n"
 	)
