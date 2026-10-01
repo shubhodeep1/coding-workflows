@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/claude-issue-pickup.md:line 38 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The start-mode instruction both says to end the turn after two `create_trigger` failures and to continue with step 1a, so a literal reading can skip the immediate resume and queue-drain work.\n  WHY: That can leave stopped sessions and queued items unattended until a later wake or restart; severity is highest because openai_gpt-6-luna rated it MAJOR while the other reviewers rated it NIT.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py (and twin .claude/scripts/usage_limit_resumes.py):line 185 | severity=low | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The report claims `[:MAX_JSON_START_CANDIDATES]` slices the string literal rather than the list of positions, leaving candidate decode attempts uncapped.\n  WHY: The report says inputs with many bracket characters before the JSON payload could cause attempts beyond the intended cap; deepseek_deepseek-v4-pro, minimax_minimax-m3, and z-ai_glm-5_2 explicitly reject this as a false positive and say the cap is applied to the list.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py (and twin .claude/scripts/usage_limit_resumes.py):_skip_reason, lines ~364-369 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: When a session is both older than 72 hours and non-IDLE, `_skip_reason` reports `too_old` instead of the more specific `not_idle:<status>`.\n  WHY: The session is still skipped, but the less specific reason can mislead operators investigating why it was not resumed.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/claude-issue-pickup.md:line 38 | severity=NIT | confidence=3\n  PROBLEM: The instruction says to end the turn after two `create_trigger` failures and then continue with step 1a.\n  WHY: A literal reading of \u201cend the turn\u201d skips immediate resume and queue-drain work; the contradictory pattern pre-existed this PR.\n- .claude/scripts/usage_limit_resumes.py:_skip_reason, lines 364-366 and 367-369 | severity=NIT | confidence=4\n  PROBLEM: When a session is both older than 72 hours and non-IDLE, `_skip_reason` reports `too_old` instead of `not_idle:<status>`.\n  WHY: The session is still correctly skipped, but the less specific reason may mislead operators investigating why it was not resumed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/claude-issue-pickup.md:line 38 | severity=NIT | confidence=4\n  PROBLEM: The instruction to end the turn after two `create_trigger` failures contradicts the direction to continue with step 1a.\n  WHY: Following \u201cend the turn\u201d literally can skip resume and queue-drain work for that start; the next cron wake may be up to an hour away.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/claude-issue-pickup.md:line 38 | severity=MAJOR | confidence=4\n  PROBLEM: The instruction says to end the turn and then directs the pickup to continue with step 1a.\n  WHY: Following \u201cend the turn\u201d skips step 1a; because the hourly trigger failed, stopped sessions and queued items may remain unattended until the pickup is started again.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py (and twin .claude/scripts/usage_limit_resumes.py):_decode_json_text, line 185 | severity=NIT | confidence=5\n  PROBLEM: The report claims the `[:MAX_JSON_START_CANDIDATES]` slice applies to the string literal rather than the list comprehension result, leaving the candidate positions uncapped.\n  WHY: It says a future envelope with many bracket characters before the JSON payload could cause attempts beyond the intended cap.\n- .claude/commands/claude-issue-pickup.md:line 38 | severity=NIT | confidence=4\n  PROBLEM: The instruction to end the turn after two `create_trigger` failures contradicts the direction to continue with step 1a.\n  WHY: Following \u201cend the turn\u201d prevents resume and queue-drain work during the current start invocation.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py (and twin .claude/scripts/usage_limit_resumes.py):_skip_reason function, the too_old check at line ~364 precedes the not_idle check at line ~367 | severity=NIT | confidence=4\n  PROBLEM: When a session is both older than 72 hours and non-IDLE, `_skip_reason` reports `too_old` instead of the more specific `not_idle:<status>`.\n  WHY: The session is still skipped, but the skipped-session report can mislead operators investigating why it was not resumed.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/usage_limit_resumes.py:_skip_reason, the `too_old` check (line ~364) precedes the `not_idle` check (line ~367) | severity=NIT | confidence=4\n  PROBLEM: When a session is both older than 72 hours and non-IDLE, `_skip_reason` returns `too_old` instead of the more specific `not_idle:<status>`.\n  WHY: The session is still correctly skipped, so the impact is limited to diagnostic clarity.\n- .claude/commands/claude-issue-pickup.md:step 1, `start` mode, line 38 | severity=NIT | confidence=4\n  PROBLEM: The instruction says to end the turn and then continue with step 1a.\n  WHY: A literal reading can prevent step 1a and the queue drain this wake; the same pattern existed before, when the next step was step 2.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4271a03b55289d16cf8fc56cb2778df11bfe4900f3148c9a224ec93bbc0ac9f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5718,
+    "run_id": "36812758702",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36812758702",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001043209_32c529002d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5718,
+    "run_id": "36812758702"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T04:32:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
