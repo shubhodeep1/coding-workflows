@@ -3,6 +3,7 @@ issue mode of /implement-plan-claude, and the CLAUDE.md §28 issue-mode scope.""
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -109,6 +110,39 @@ def test_security_skip_is_verified_not_label_only(issue_cmd, plan_cmd):
 	assert "instead when the issue carries" not in issue_cmd
 	assert "that `.claude/scripts/security_pass_skip.py` verifies as automation-produced" in plan_cmd
 	assert "A label alone never sets it (issue #4623)." in plan_cmd
+
+
+@pytest.mark.parametrize("commands_dir", (COMMANDS, TEMPLATE_COMMANDS), ids=("live", "template"))
+def test_allowlisted_calls_run_standalone(commands_dir):
+	# Issue #4798: an allowlisted call chained with `; echo "exit=$?"` and other
+	# reads matched no allow rule, so an unattended session stopped at a prompt.
+	issue_text = _flat(commands_dir / "implement-issue-claude.md")
+	plan_text = _flat(commands_dir / "implement-plan-claude.md")
+	assert "--issue <N>` as its own Bash call, exactly as written: its exit status is in the tool result, so never append `; echo \"exit=$?\"`, a pipe, or other commands to it (issue #4798)." in issue_text
+	assert "Run each helper, and every other allowlisted script call this command names (`check_in_status.py`, `claude_fix_claim.py`, `stale_routines.py`, `security_pass_skip.py`), as its own Bash call, exactly as written" in plan_text
+	assert "chaining it with `;`, `&&`, `echo \"$?\"`, or other reads makes a command no allow rule matches, and the session stops at a prompt (issue #4798)." in plan_text
+	# The checker's env-prefixed `check_in_status.py` call matches no allow rule
+	# even when run alone, so the guidance must not claim it is allowlisted.
+	assert "the checker prompt's `check_in_status.py` call sets `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` and `CLAUDE_FIXER_VERDICT_BOT_LOGIN` before `python3`, which neither `check_in_status.py` rule in `.claude/settings.json` covers" in plan_text
+
+
+@pytest.mark.parametrize("commands_dir", (COMMANDS, TEMPLATE_COMMANDS), ids=("live", "template"))
+def test_git_commands_run_unchained(commands_dir):
+	# Issue #5293: an allowlisted `git fetch` and `git merge --no-edit` chained
+	# with `2>&1 | tail` and `git status` / `git log` reads matched no allow rule,
+	# and the Auto-mode classifier denied the whole command. Both the live copies
+	# unattended sessions read and the twins synced to consumers are pinned, and
+	# no git command the files name is chained to another one.
+	plan_text = _flat(commands_dir / "implement-plan-claude.md")
+	fix_text = _flat(commands_dir / "fix-claude-pr.md")
+	assert "Run the git commands this command names (`git fetch`, `git checkout -B`, `git merge --no-edit`, `git push`) exactly as written too, each as its own Bash call, with no `2>&1`, no pipe into `tail` or `head`, and no `;` or `&&` chain, neither to another git command (a fetch and the checkout or merge after it are two Bash calls) nor to `git status` or `git log` reads" in plan_text
+	assert "read their output from the tool result, and check the branch state with `git status -sb` run as its own Bash call, with nothing piped or chained to it." in plan_text
+	assert "which denied a fetch-and-merge of the project branch as `[Modify Shared Resources]` (issue #5293)." in plan_text
+	assert "Run these git commands, and the `git merge` below, exactly as written, each as its own Bash call, with no `2>&1`, no pipe into `tail` or `head`, and no `;` or `&&` chain, neither to each other (the fetch, the checkout, and the merge are separate Bash calls) nor to `git status` or `git log` reads" in fix_text
+	assert "check the branch state with `git status -sb`, and `HEAD` with `git rev-parse HEAD`, each run as its own Bash call with nothing piped or chained to it." in fix_text
+	assert "goes to the Auto-mode classifier, which has denied it (issue #5293)." in fix_text
+	for text in (plan_text, fix_text):
+		assert not re.search(r"`git [^`]*(?:&&|;)\s*git ", text)
 
 
 def test_issue_command_resumes_before_writing(issue_cmd):
@@ -234,6 +268,35 @@ def test_pickup_is_one_session_woken_by_a_self_bound_trigger(pickup_cmd):
 	# the §26 checker of an `— arm-check-in` request (step 5).
 	assert pickup_cmd.count("`create_session` with") == 2
 	assert pickup_cmd.index("**Keep exactly one pickup.**") < pickup_cmd.index("**Read the queue.**") < pickup_cmd.index("**Start one session per pending entry.**")
+
+
+def test_pickup_schedules_one_self_bound_catch_up_wake(pickup_cmd):
+	"""Issue #4990: one catch-up wake 30 minutes after an hourly wake that left work."""
+	assert "- **`— wake. — catch-up`**: the one catch-up wake an hourly wake schedules" in pickup_cmd
+	assert "it never schedules another catch-up" in pickup_cmd
+	# The script decides (catch_up_due), for the wake kind the pickup passes.
+	assert "queue-pending --fetch-repo shubhodeep1/coding-workflows --registry .github/ai/consumer_repos.json --wake <wake>" in pickup_cmd
+	assert "with `<wake>` = `catch-up` in a `— wake. — catch-up` wake and `hourly` otherwise" in pickup_cmd
+	# Self-bound send_later, never a new session, at most one pending.
+	assert "call `send_later` into this session with `delay_minutes: 30`, `initiation: own_followup`, `name: Claude issue pickup: catch-up`" in pickup_cmd
+	assert "Read .claude/commands/claude-issue-pickup.md in full and follow it with these arguments: — wake. — catch-up" in pickup_cmd
+	assert "showed an enabled `Claude issue pickup: catch-up` trigger bound to your own session, schedule nothing: `catch_up=pending`" in pickup_cmd
+	assert "never by a catch-up wake, and bound to the pickup session itself" in pickup_cmd
+	assert "If it fails, do not retry: report `catch_up=failed`" in pickup_cmd
+	assert "delete every such trigger and every enabled `Claude issue pickup: catch-up` trigger" in pickup_cmd
+	assert "`set_session_title`, `send_later` (load them with ToolSearch when deferred)" in pickup_cmd
+	# The catch-up adds no session, so the create_session count is unchanged.
+	assert pickup_cmd.count("`create_session` with") == 2
+	assert pickup_cmd.index("**Start one session per pending entry.**") < pickup_cmd.index("**Catch-up wake.**") < pickup_cmd.index("**Arm a check-in**")
+
+
+def test_pickup_reports_queue_age_limit_and_resume_order(pickup_cmd):
+	"""Issue #4990: resumes first, limit 20 (overridable), and oldest_waiting in the report."""
+	assert "Resumes come first: every `issue` entry whose `trigger` is `reclarify`" in pickup_cmd
+	assert "`QUEUE_PICKUP_LIMIT` (20), or the session's `CLAUDE_ISSUE_PICKUP_LIMIT` clamped to 1..30" in pickup_cmd
+	assert "at most 10 are started per wake" not in pickup_cmd
+	assert "first 3 × `limit` targets (60 at the default)" in pickup_cmd
+	assert "failed <f>; oldest_waiting=<oldest_waiting_minutes, or none>; catch_up=<scheduled | pending | none | failed>`" in pickup_cmd
 
 
 def test_pickup_arms_check_ins_for_deep_sessions(pickup_cmd):

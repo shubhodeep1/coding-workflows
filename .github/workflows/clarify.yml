@@ -537,6 +537,10 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          # Threshold for the success-only "Claude issue handoff dispatched"
+          # DEBUG ping; SILENT by default, set vars.CLAUDE_ISSUE_ROUTED_ALERT_LEVEL=DEBUG
+          # to get it back. The handoff-failed ERROR keeps ALERT_MSG_LEVEL.
+          CLAUDE_ISSUE_ROUTED_ALERT_LEVEL: ${{ vars.CLAUDE_ISSUE_ROUTED_ALERT_LEVEL || 'SILENT' }}
           CLAUDE_ISSUE_TRIGGER: ${{ github.event_name == 'issue_comment' && 'reclarify' || 'opened' }}
           CLAUDE_ISSUE_ROUTE_REASON: ${{ steps.clarify_route.outputs.issue_implementer_reason }}
           CLAUDE_ISSUE_SKIP_SECURITY_PASS: ${{ steps.clarify_route.outputs.skip_security_pass }}
