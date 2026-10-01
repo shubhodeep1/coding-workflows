@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5785-security-audit-codex-stderr-tail   Final PR: #5806 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: phase 1 PR (this PR)
+- Waiting on: PR #5816
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01SLmbVzcitKU2aiKHq634QY   (triggers in the round-1 stage report)
 - Last updated: 2026-10-01
-- Last note: phase 1 implemented and verified (contract tests, shellcheck); phase 1 PR opened against the project branch.
+- Last note: review round 1 on PR #5816: fixed the cut-line prompt-filter bypass (drop the cut first line) and the import-time `next()` nit; rejected the PAT-glob hardening suggestion.
 
 ## Phases
-1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR #5816 open (waiting); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -32,10 +32,11 @@
 - AD-3 [plan, 2026-10-01] How are provider failures matched? — Picked: A — reason phrases plus 401/402/429/5xx codes only in `http|status|code|error` context; latest matching line wins; within a line 402 > 401 > 429 > 5xx. Alternatives: B — bare numbers anywhere. Why: bare 3-digit numbers (token counts, ids) would misclassify, and the newest error is the cause. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-10-01] Where do the tests go? — Picked: A — extend `tests/test_security_audit_workflow_contract.py`. Alternatives: B — new `tests/test_security_audit_codex_stderr_tail.py` registered in `ci.yml`. Why: it already has the fake-Codex harness, runs in CI, and holds the codex-failure test that must change anyway (§5). Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-10-01] The issue asks for an `agents.md` note only if the security-audit section describes failure output, which it does not. Add one? — Picked: A — add a one-sentence note to the security-audit bullet. Alternatives: B — no `agents.md` change. Why: §7 requires documenting failure-mode changes. Applied in: phase 1 PR. Status: pending review
-- AD-6 [plan, 2026-10-01] How are input bounding and the 4 KiB cap applied? — Picked: A — read at most the last 64 KiB (replace the cut leading token of the first line with `[cut]` when larger), drop blank lines, count the 4096-byte budget over sanitized line content keeping the newest lines, truncate a single over-budget newest line to its first 4096 bytes. Alternatives: B — cap raw bytes before sanitizing. Why: the issue's "sanitize first, then cap"; replacing the cut token stops a boundary-cut token from escaping the prefix masks and keeps the error text of a single over-long line. Applied in: phase 1 PR. Status: pending review
+- AD-6 [plan, 2026-10-01] How are input bounding and the 4 KiB cap applied? — Picked: A — read at most the last 64 KiB (drop the partial first line when larger), drop blank lines, count the 4096-byte budget over sanitized line content keeping the newest lines, truncate a single over-budget newest line to its first 4096 bytes. Alternatives: B — cap raw bytes before sanitizing. Why: the issue's "sanitize first, then cap"; dropping the partial line stops a boundary-cut token from escaping the prefix masks. Applied in: phase 1 PR. Status: pending review
+- AD-7 [phase 1/1 — review round 1, 2026-10-01] Review round 1 found that rewriting the cut first line as `[cut] …` lets a fragment of a >64 KiB rendered-prompt line pass the exact prompt filter (and set `provider=`). How should the cut line be handled? — Picked: A — drop the cut first line whole, reading one extra byte so a boundary at a line start loses no complete line (the plan's original AD-6 wording). Alternatives: B — keep `[cut]` but first drop the cut line when its remainder is a suffix of a rendered-prompt line. Why: smallest change that lets no fragment of a prompt line or token escape (§1, §5); a >64 KiB single stderr line is almost always a prompt echo, not the provider error. Applied in: PR #5816 (review round 1). Status: pending review
 
 ## Lessons
-- [source:plan-deviation] When a log tail is bounded by bytes, replace the cut leading token of the first line instead of dropping the whole line: a single over-long line otherwise loses its error text, while a token has no whitespace, so replacing the leading non-space run still removes any cut secret fragment. (files: scripts/security_audit.sh)
+- [source:intervention] When a log tail is bounded by bytes, drop the cut first line instead of rewriting it: any rewrite (such as a `[cut]` marker) makes the fragment fail later exact-match filters like a prompt-echo `grep -vxF`, so filtered text leaks. Read one extra byte so a boundary that falls at a line start costs no complete line. (files: scripts/security_audit.sh)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude from #5785; base branch main; security pass: run (`security_pass_skip.py`: no skip label).

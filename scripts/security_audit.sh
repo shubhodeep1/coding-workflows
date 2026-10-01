@@ -128,12 +128,12 @@ security_audit_classify_codex_provider() {
 # Prints a sanitized, size-capped tail of Codex stderr between
 # `security-audit: codex-stderr-tail begin|end` marker lines (#5785), and sets
 # SECURITY_AUDIT_CODEX_PROVIDER from the newest line that names a provider
-# failure. Reads at most the last 64 KiB (replacing the leading token of a cut
-# first line with [cut], so no fragment of a token escapes the masks), drops
-# blank lines and lines that echo the rendered prompt verbatim, keeps the last
-# 40 lines, masks and sanitizes each, then keeps the newest lines whose
-# sanitized text fits in 4096 bytes. Never prints the raw file. Fail-open:
-# call it as `... || true`.
+# failure. Reads at most the last 64 KiB (dropping the cut first line, so no
+# fragment of a token or a prompt line escapes the masks or the prompt
+# filter), drops blank lines and lines that echo the rendered prompt
+# verbatim, keeps the last 40 lines, masks and sanitizes each, then keeps the
+# newest lines whose sanitized text fits in 4096 bytes. Never prints the raw
+# file. Fail-open: call it as `... || true`.
 security_audit_emit_codex_stderr_tail() {
 	local stderr_tail_file="${1:?stderr file required}"
 	local stderr_prompt_file="${2:-}"
@@ -156,9 +156,16 @@ security_audit_emit_codex_stderr_tail() {
 		if [ -z "${stderr_prompt_file}" ] || [ ! -r "${stderr_prompt_file}" ]; then
 			stderr_prompt_file="/dev/null"
 		fi
+		# Over 64 KiB, read one extra byte and drop the first line: it is the
+		# cut line, or only the newline before a complete one. Never rewrite a
+		# cut line: a fragment of a prompt line would no longer match the
+		# exact prompt filter below, and a token fragment would lose its prefix.
 		mapfile -t stderr_window_lines < <(
-			tail -c "${stderr_tail_read_bytes}" -- "${stderr_tail_file}" 2>/dev/null \
-				| if [ "${stderr_file_bytes}" -gt "${stderr_tail_read_bytes}" ]; then LC_ALL=C sed '1s/^[^[:space:]]*/[cut]/'; else cat; fi \
+			if [ "${stderr_file_bytes}" -gt "${stderr_tail_read_bytes}" ]; then
+				tail -c "$(( stderr_tail_read_bytes + 1 ))" -- "${stderr_tail_file}" 2>/dev/null | LC_ALL=C sed '1d'
+			else
+				tail -c "${stderr_tail_read_bytes}" -- "${stderr_tail_file}" 2>/dev/null
+			fi \
 				| LC_ALL=C tr -d '\000\r' \
 				| LC_ALL=C grep -v '^[[:space:]]*$' \
 				| LC_ALL=C grep -vxF -f "${stderr_prompt_file}" \

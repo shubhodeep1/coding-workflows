@@ -6,7 +6,7 @@ Until now a `security-audit.yml` run that failed at **Run security audit** logge
 | The numbers that matter | Value |
 | --- | --- |
 | Tail size | at most the last 40 non-blank lines and 4096 bytes of sanitized text |
-| Stderr read | at most the last 64 KiB; the cut leading token becomes `[cut]` |
+| Stderr read | at most the last 64 KiB; the line the 64 KiB boundary cuts is dropped |
 | Provider classes | `402`, `401`, `429`, `5xx`, `unknown` (the newest matching line wins) |
 | Source runs | 36748018397, 36749008453, 36754588874 (2026-09-30) |
 
@@ -14,4 +14,4 @@ What this means for operators: the next audit that fails on a provider outage sa
 
 ### For contributors
 
-The new helpers are `security_audit_mask_stderr_line`, `security_audit_classify_codex_provider`, and `security_audit_emit_codex_stderr_tail`. `security_audit_emit_failure` takes an optional fourth `provider` argument, and only the `codex-execution` branch passes it. `tests/test_security_audit_workflow_contract.py` covers the 402 tail with masked keys, the 40-line and 4 KiB caps, the 64 KiB cut, each provider class, and prompt-echo filtering. The `provider=` field is meant for #5773's provider-outage handling.
+The new helpers are `security_audit_mask_stderr_line`, `security_audit_classify_codex_provider`, and `security_audit_emit_codex_stderr_tail`. `security_audit_emit_failure` takes an optional fourth `provider` argument, and only the `codex-execution` branch passes it. `tests/test_security_audit_workflow_contract.py` covers the 402 tail with masked keys, the 40-line and 4 KiB caps, the 64 KiB cut (including a cut prompt line), each provider class, and prompt-echo filtering. The `provider=` field is meant for #5773's provider-outage handling.

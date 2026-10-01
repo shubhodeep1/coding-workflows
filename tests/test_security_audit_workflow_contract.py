@@ -965,6 +965,7 @@ def test_security_audit_render_failure_preserves_status_and_reports_context() ->
 
 
 def test_security_audit_codex_failure_preserves_status_and_reports_context() -> None:
+	assert _SECURITY_AUDIT_PROMPT_ECHO_LINE, "no prompt line mentions Chief Security Officer"
 	proc, final_state = _run_security_audit(
 		_security_audit_tracker_state(),
 		extra_env={
@@ -991,10 +992,15 @@ def test_security_audit_codex_failure_preserves_status_and_reports_context() -> 
 
 # A line of prompts/mode-security-audit.txt with no template placeholder, so it
 # reaches the rendered prompt verbatim; `codex exec` echoes the prompt to stderr.
+# An empty default keeps a prompt rewrite from breaking collection of the whole
+# module; the tests that use it assert it is non-empty.
 _SECURITY_AUDIT_PROMPT_ECHO_LINE = next(
-	prompt_line
-	for prompt_line in (REPO_ROOT / "prompts" / "mode-security-audit.txt").read_text(encoding="utf-8").splitlines()
-	if "Chief Security Officer" in prompt_line
+	(
+		prompt_line
+		for prompt_line in (REPO_ROOT / "prompts" / "mode-security-audit.txt").read_text(encoding="utf-8").splitlines()
+		if "Chief Security Officer" in prompt_line
+	),
+	"",
 )
 _CODEX_STDERR_TAIL_LINE_PREFIX = "security-audit: codex-stderr-tail line="
 
@@ -1035,6 +1041,7 @@ def test_security_audit_codex_failure_prints_masked_stderr_tail_with_provider_40
 	fake_generic_key = "sk-proj-" + "Zx9" * 12
 	fake_github_token = "ghp_" + "A1b2C3d4E5" * 4
 	fake_base64_run = "QUJD" * 16 + "=="
+	assert _SECURITY_AUDIT_PROMPT_ECHO_LINE, "no prompt line mentions Chief Security Officer"
 	proc, final_state = _run_security_audit(
 		_security_audit_tracker_state(),
 		extra_env={
@@ -1105,18 +1112,81 @@ def test_security_audit_codex_stderr_tail_is_capped_to_40_lines_and_4_kib() -> N
 
 
 def test_security_audit_codex_stderr_tail_cuts_partial_token_past_64_kib() -> None:
-	# Over 64 KiB only the file's end is read; the cut leading token is replaced
-	# so a fragment of a secret can never escape the prefix-based masks.
-	cut_stderr = "sk-or-v1-" + "f" * 70000 + " HTTP Error 402: Payment Required\n"
+	# Over 64 KiB only the file's end is read and the cut first line is dropped
+	# whole, so a fragment of a secret can never escape the prefix-based masks.
+	cut_stderr = (
+		"sk-or-v1-" + "f" * 70000 + " cut-line-tail\n"
+		"HTTP Error 402: Payment Required\n"
+	)
 	proc, _ = _run_security_audit(
 		_security_audit_tracker_state(),
 		extra_env={"MOCK_CODEX_EXIT_CODE": "5", "MOCK_CODEX_STDERR": cut_stderr},
 	)
 	assert proc.returncode == 5, proc.stderr
 	_, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
-	assert tail_payloads == ["\\[cut\\]\\ HTTP\\ Error\\ 402:\\ Payment\\ Required"], tail_payloads
+	assert tail_payloads == ["HTTP\\ Error\\ 402:\\ Payment\\ Required"], tail_payloads
 	assert "ffff" not in proc.stderr
+	assert "cut-line-tail" not in proc.stderr
 	assert failure_line.endswith(" provider=402"), failure_line
+
+	# A single line longer than 64 KiB is the cut line, so nothing is printed.
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "5",
+			"MOCK_CODEX_STDERR": "sk-or-v1-" + "f" * 70000 + " HTTP Error 402: Payment Required\n",
+		},
+	)
+	begin_line, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert begin_line == "security-audit: codex-stderr-tail begin lines=0 omitted_lines=0", proc.stderr
+	assert tail_payloads == []
+	assert "Payment" not in proc.stderr
+	assert failure_line.endswith(" provider=unknown"), failure_line
+
+
+def test_security_audit_codex_stderr_tail_keeps_complete_line_at_64_kib_boundary() -> None:
+	# When the 64 KiB boundary falls exactly at a line start, the extra byte read
+	# is the preceding newline, so the first complete line is kept.
+	boundary_line = "ERROR: unexpected status 503 Service Unavailable\n"
+	filler_line = "word " * 600 + "\n"
+	read_window = boundary_line + filler_line * 20
+	padding_size = 65536 - len(read_window)
+	assert padding_size > 1
+	read_window += ("end " * padding_size)[:padding_size - 1] + "\n"
+	assert len(read_window.encode("utf-8")) == 65536
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={"MOCK_CODEX_EXIT_CODE": "4", "MOCK_CODEX_STDERR": "A" * 100 + "\n" + read_window},
+	)
+	assert proc.returncode == 4, proc.stderr
+	_, _, failure_line = _codex_stderr_tail(proc.stderr)
+	assert failure_line.endswith(" provider=5xx"), failure_line
+	assert "AAAA" not in proc.stderr
+
+
+def test_security_audit_codex_stderr_tail_drops_prompt_line_cut_past_64_kib() -> None:
+	# `codex exec` echoes the prompt; a prompt line longer than 64 KiB is cut by
+	# the read window, and its remainder must neither print nor set provider.
+	long_prompt_line = "Spec note: " + "alpha beta " * 7000 + "HTTP Error 402: Payment Required"
+	with tempfile.TemporaryDirectory(prefix="security-audit-long-prompt-") as td:
+		spec_path = Path(td) / "project-spec.md"
+		spec_path.write_text(long_prompt_line + "\n", encoding="utf-8")
+		proc, _ = _run_security_audit(
+			{},
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(Path(td) / "findings.json"),
+				"MOCK_CODEX_EXIT_CODE": "6",
+				"MOCK_CODEX_STDERR": long_prompt_line + "\nError: stream disconnected before completion\n",
+			},
+			script_args=(str(spec_path),),
+		)
+	assert proc.returncode == 6, proc.stderr
+	_, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads == ["Error:\\ stream\\ disconnected\\ before\\ completion"], tail_payloads
+	assert "Payment" not in proc.stderr
+	assert "alpha" not in proc.stderr
+	assert failure_line.endswith(" provider=unknown"), failure_line
 
 
 def test_security_audit_codex_failure_classifies_provider_status() -> None:
