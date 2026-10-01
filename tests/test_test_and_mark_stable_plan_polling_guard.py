@@ -644,11 +644,33 @@ def test_implement_fails_with_our_run_id_when_our_run_completed_without_a_pr() -
 def test_implement_fails_when_no_run_ran_for_our_issue() -> None:
 	# The guard is not weakened: a complete walk with no non-skipped Implement
 	# run for the issue (a skipped one of ours does not count) still fails.
+	# PR #5712 review round 3: the first empty walk is confirmed by a second
+	# complete walk IMPL_SCOPED_RETRY_SECONDS later (terminal checks 100 s
+	# apart: walk, throttled, walk again at 200 s) before the step fails.
 	page_two = _noise_page(2000, count=10) + [_run(700, name="Internal: AI Implement", conclusion="skipped")]
-	rc, outputs, _calls, log = _run_phase_step("wait-implement", [_other_issue_completed_impl_page(), page_two], fake_clock=True)
+	rc, outputs, calls, log = _run_phase_step("wait-implement", [_other_issue_completed_impl_page(), page_two], fake_clock=True)
 	assert rc == 1, log
 	assert outputs.get("status") == "implement_failed", outputs
-	assert f"::error::All 1 implement workflow run(s) completed but no PR was created — none of them ran for issue #4712: no non-skipped Implement run titled '{ISSUE_TITLE}' was created after {APPROVED_AT}" in log, log
+	assert f"No non-skipped Implement run titled '{ISSUE_TITLE}' is listed yet — walking again after 120s to confirm before failing, waiting" in log, log
+	assert "No Implement run for issue #4712 was listed 100s ago — walking again after 120s to confirm, waiting" in log, log
+	assert f"::error::All 1 implement workflow run(s) completed but no PR was created — none of them ran for issue #4712: no non-skipped Implement run titled '{ISSUE_TITLE}' was created after {APPROVED_AT} (confirmed by a second walk 200s after the first)" in log, log
+	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 2, _run_pages_requested(calls)
+
+
+def test_implement_keeps_waiting_when_our_run_is_listed_after_an_empty_walk() -> None:
+	# PR #5712 review round 3: our run is missing from the first walk (not yet
+	# listed) and appears by the confirming walk, which caches it and waits; the
+	# PR then appears. Each terminal check makes two PR lookups (poll + recheck),
+	# so switch_after=4 serves the later pages from the third terminal check on.
+	pages = [_other_issue_completed_impl_page(), _noise_page(2000, count=37)]
+	pages_later = [_other_issue_completed_impl_page(), _our_impl_run_page()]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, pr_number=42, pr_after=8, pages_later=pages_later, switch_after=4, fake_clock=True)
+	assert rc == 0, log
+	assert outputs.get("status") == "success", outputs
+	assert outputs.get("run_id") == str(OUR_IMPL_RUN_ID), outputs
+	assert "no PR was created" not in log, log
+	assert f"No non-skipped Implement run titled '{ISSUE_TITLE}' is listed yet" in log, log
+	assert f"Implement run {OUR_IMPL_RUN_ID} for issue #4712 is still active" in log, log
 
 
 def test_implement_treats_an_unreadable_page_as_unknown_until_the_inactivity_limit() -> None:
@@ -662,7 +684,7 @@ def test_implement_treats_an_unreadable_page_as_unknown_until_the_inactivity_lim
 	assert "::error::Implement phase stalled — no activity for 1 minutes" in log, log
 	# PR #5712 review: the second terminal check, 100 s after the unreadable
 	# walk, is inside IMPL_SCOPED_RETRY_SECONDS and does not walk again.
-	assert "a runs page could not be read 100s ago — walking again after 120s, waiting" in log, log
+	assert "a read of a runs page first failed 100s ago — walking again after 120s, waiting" in log, log
 	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 1, _run_pages_requested(calls)
 
 
@@ -719,8 +741,8 @@ def test_implement_throttles_the_walk_when_the_cached_run_cannot_be_read() -> No
 	assert rc == 1, log
 	assert outputs.get("status") == "timeout", outputs
 	assert "no PR was created" not in log, log
-	assert f"Implement run {OUR_IMPL_RUN_ID} could not be read 0s ago — walking again after 120s, waiting" in log, log
-	assert f"Implement run {OUR_IMPL_RUN_ID} could not be read 100s ago — walking again after 120s, waiting" in log, log
+	assert f"a read of Implement run {OUR_IMPL_RUN_ID} first failed 0s ago — walking again after 120s, waiting" in log, log
+	assert f"a read of Implement run {OUR_IMPL_RUN_ID} first failed 100s ago — walking again after 120s, waiting" in log, log
 	assert log.count(f"Implement run {OUR_IMPL_RUN_ID} for issue #4712 is still active") == 2, log
 	assert len(_run_by_id_reads(calls)) == 3, _run_by_id_reads(calls)
 	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 2, _run_pages_requested(calls)

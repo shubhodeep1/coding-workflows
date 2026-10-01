@@ -1289,6 +1289,11 @@ jobs:
           IMPL_SCOPED_UNREADABLE_AT=""
           IMPL_SCOPED_UNREADABLE_READ=""
           IMPL_SCOPED_RETRY_SECONDS=120
+          # A complete walk that finds no run of ours may have run before the
+          # API listed it (the race capture_run_id retries for), so it fails
+          # only when a second complete walk, IMPL_SCOPED_RETRY_SECONDS later,
+          # still finds none (PR #5712 review round 3).
+          IMPL_SCOPED_NONE_AT=""
 
           while true; do
             NOW=$(date +%s)
@@ -1392,7 +1397,9 @@ jobs:
               elif [ "$IMPL_SCOPED_CAPPED" -eq 1 ]; then
                 echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: an earlier walk found every page up to ${SCOPED_RUN_LOOKUP_MAX_PAGES} full — treating as unknown, waiting"
               elif [ -n "$IMPL_SCOPED_UNREADABLE_AT" ] && [ $((NOW - IMPL_SCOPED_UNREADABLE_AT)) -lt "$IMPL_SCOPED_RETRY_SECONDS" ]; then
-                echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: ${IMPL_SCOPED_UNREADABLE_READ} could not be read $((NOW - IMPL_SCOPED_UNREADABLE_AT))s ago — walking again after ${IMPL_SCOPED_RETRY_SECONDS}s, waiting"
+                echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: a read of ${IMPL_SCOPED_UNREADABLE_READ} first failed $((NOW - IMPL_SCOPED_UNREADABLE_AT))s ago — walking again after ${IMPL_SCOPED_RETRY_SECONDS}s, waiting"
+              elif [ -n "$IMPL_SCOPED_NONE_AT" ] && [ $((NOW - IMPL_SCOPED_NONE_AT)) -lt "$IMPL_SCOPED_RETRY_SECONDS" ]; then
+                echo "  ⏳ No Implement run for issue #${ISSUE_NUMBER} was listed $((NOW - IMPL_SCOPED_NONE_AT))s ago — walking again after ${IMPL_SCOPED_RETRY_SECONDS}s to confirm, waiting"
               else
                 IMPL_SCOPED_ACTIVE_RUN_ID=""
                 IMPL_SCOPED_UNREADABLE_AT=""
@@ -1400,8 +1407,11 @@ jobs:
                 IMPL_SCOPED_SUMMARY=$(summarize_scoped_impl_runs) || IMPL_SCOPED_RC=$?
                 IMPL_SCOPED_TOTAL=""; IMPL_SCOPED_ACTIVE=""; IMPL_SCOPED_NEWEST_ID=""; IMPL_SCOPED_NEWEST_CONCLUSION=""; IMPL_SCOPED_ACTIVE_ID=""
                 read -r IMPL_SCOPED_TOTAL IMPL_SCOPED_ACTIVE IMPL_SCOPED_NEWEST_ID IMPL_SCOPED_NEWEST_CONCLUSION IMPL_SCOPED_ACTIVE_ID <<< "${IMPL_SCOPED_SUMMARY}" || true
-                if [ "$IMPL_SCOPED_RC" -eq 0 ] && [ "$IMPL_SCOPED_ACTIVE" = "0" ] && [ "$IMPL_SCOPED_TOTAL" = "0" ]; then
-                  echo "::error::All ${IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created — none of them ran for issue #${ISSUE_NUMBER}: no non-skipped Implement run titled '${ISSUE_TITLE}' was created after ${IMPL_CREATED_AFTER}"
+                if [ "$IMPL_SCOPED_RC" -eq 0 ] && [ "$IMPL_SCOPED_ACTIVE" = "0" ] && [ "$IMPL_SCOPED_TOTAL" = "0" ] && [ -z "$IMPL_SCOPED_NONE_AT" ]; then
+                  IMPL_SCOPED_NONE_AT="$NOW"
+                  echo "  ⏳ No non-skipped Implement run titled '${ISSUE_TITLE}' is listed yet — walking again after ${IMPL_SCOPED_RETRY_SECONDS}s to confirm before failing, waiting"
+                elif [ "$IMPL_SCOPED_RC" -eq 0 ] && [ "$IMPL_SCOPED_ACTIVE" = "0" ] && [ "$IMPL_SCOPED_TOTAL" = "0" ]; then
+                  echo "::error::All ${IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created — none of them ran for issue #${ISSUE_NUMBER}: no non-skipped Implement run titled '${ISSUE_TITLE}' was created after ${IMPL_CREATED_AFTER} (confirmed by a second walk $((NOW - IMPL_SCOPED_NONE_AT))s after the first)"
                   echo "status=implement_failed" >> "$GITHUB_OUTPUT"
                   exit 1
                 elif [ "$IMPL_SCOPED_RC" -eq 0 ] && [ "$IMPL_SCOPED_ACTIVE" = "0" ]; then
@@ -1410,6 +1420,7 @@ jobs:
                   exit 1
                 elif [ "$IMPL_SCOPED_RC" -eq 0 ]; then
                   IMPL_SCOPED_ACTIVE_RUN_ID="$IMPL_SCOPED_ACTIVE_ID"
+                  IMPL_SCOPED_NONE_AT=""
                   echo "  ⏳ Implement run ${IMPL_SCOPED_ACTIVE_ID} for issue #${ISSUE_NUMBER} is still active — the ${IMPL_RUN_TOTAL} completed run(s) on page 1 are not all ours; waiting"
                 elif [ "$IMPL_SCOPED_RC" -eq 2 ]; then
                   IMPL_SCOPED_CAPPED=1

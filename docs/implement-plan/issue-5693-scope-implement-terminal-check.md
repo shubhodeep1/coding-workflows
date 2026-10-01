@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01BjYNqoKcxG8jz4wxY4r8co   safety net and hand-back: see the stage report (re-armed each stage)
 - Last updated: 2026-10-01
-- Last note: review round 2 on PR #5712: fixed the cached-run read finding (a failed by-ID read now takes the 120 s re-walk throttle), rejected three findings with reasons; 34/34 guard tests pass
+- Last note: review round 3 on PR #5712: fixed the empty-walk finding (a walk that finds no run of ours is confirmed by a second walk 120 s later, AD-9) and the cached-read wording nit, rejected two findings with reasons; 35/35 guard tests pass
 
 ## Phases
-1. [ ] Phase 1 — confirm the issue's own Implement runs finished before failing `wait-implement`   — PR #5712 opened 2026-09-30 (waiting); review rounds: 2; interventions: 0
+1. [ ] Phase 1 — confirm the issue's own Implement runs finished before failing `wait-implement`   — PR #5712 opened 2026-09-30 (waiting); review rounds: 3; interventions: 0
    - [x] `summarize_scoped_impl_runs` helper in the `wait-implement` step (`.github/workflows/test-and-mark-stable.yml`)
    - [x] terminal branch: cached active-run read, issue-scoped walk, fail only on a complete walk with no active issue-scoped run; unknown falls through to the inactivity check
    - [x] behavioural tests in `tests/test_test_and_mark_stable_plan_polling_guard.py`
@@ -42,10 +42,12 @@
 - AD-6 [plan, 2026-09-30] Which docs change? — Picked: A — a changelog fragment only. Alternatives: B — also add an `agents.md` paragraph. Why: neither `README.md` nor `agents.md` documents the `wait-implement` terminal check, and #4723 made the same call for this step (§5). Applied in: phase 1 PR. Status: pending review
 - AD-7 [phase 1/1 — review round, 2026-09-30] How does the terminal branch avoid repeating an unknown walk on every poll (PR #5712 review round 1)? — Picked: A — keep a capped walk for the rest of the phase (the created=> window only grows, so no later walk can complete) and retry an unreadable page's walk no sooner than 120 seconds later. Alternatives: B — retry both after a fixed interval; C — reject the finding as a NIT bounded by PHASE_TIMEOUT. Why: §15 forbids per-iteration API calls in poll loops; A removes every useless re-walk and still retries a transient read failure. Applied in: PR #5712. Status: pending review
 - AD-8 [phase 1/1 — review round, 2026-10-01] How does a failed read of the cached active Implement run avoid a full walk on every poll (PR #5712 review round 2)? — Picked: A — treat it as an unreadable read: the walk it falls back to waits for the same 120 s `IMPL_SCOPED_RETRY_SECONDS` interval. Alternatives: B — keep waiting on the cached run until it reads again; C — reject the finding as a NIT bounded by PHASE_TIMEOUT. Why: §15 forbids per-iteration API calls in poll loops; A reuses the round-1 throttle, while B could wait on a run that is gone until the inactivity limit. Applied in: PR #5712. Status: pending review
+- AD-9 [phase 1/1 — review round, 2026-10-01] A complete walk finds no non-skipped Implement run for the smoke issue: fail at once, or confirm first (PR #5712 review round 3)? — Picked: A — confirm with a second complete walk at least `IMPL_SCOPED_RETRY_SECONDS` (120 s) later and fail only if it still finds none. Alternatives: B — fail at once (AD-2 as planned, the reviewer's finding rejected as a pre-existing risk); C — keep waiting until the inactivity limit. Why: the step's own run-ID capture retries empty scoped lookups for the run-listing race, and one bounded confirmation removes that false failure for one extra walk and a 120 s delay on a genuine one; C is the unbounded wait AD-2 rejected. Applied in: PR #5712. Status: pending review
 
 ## Lessons
 - [source:intervention] A poll loop that walks paged results only at a terminal decision must also remember an inconclusive walk (a page cap, an unreadable page), or the walk repeats on every poll cycle; a cap over a window that only grows is final for the phase. (files: .github/workflows/test-and-mark-stable.yml)
 - [source:intervention] When a poll loop caches an item and re-reads it by ID, a failed by-ID read needs the same throttle as a failed list read, or the fallback full walk runs on every poll cycle. (files: .github/workflows/test-and-mark-stable.yml)
+- [source:intervention] A terminal check that fails on an empty issue-scoped lookup must ride out the same listing race as the run-ID capture: confirm the empty result with a second complete lookup after a bounded delay before failing. (files: .github/workflows/test-and-mark-stable.yml)
 
 ## Notes
 - Issue mode: base branch `stable` from the issue's `Target branch:` line. The final PR targets `stable`, so steps 12–13 do not run (`Activation: n/a (base stable)`), and `forward-merge-stable-to-main.yml` carries the fix to `main`.
