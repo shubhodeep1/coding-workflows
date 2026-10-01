@@ -686,7 +686,7 @@ def test_missing_security_pass_skip_only_disables_duplicate_check(tmp_path, monk
 
 
 def test_decide_without_security_pass_skip_fails_closed(tmp_path):
-	# PR #5862 review round 1: a direct caller of the pure decision must get a
+	# PR #5862 review round 2: a direct caller of the pure decision must get a
 	# refusal, not an AttributeError, when security_pass_skip.py did not load.
 	scripts = tmp_path / "scripts"
 	scripts.mkdir()
