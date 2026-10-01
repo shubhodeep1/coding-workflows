@@ -6,7 +6,7 @@ On 2026-09-30, conformance-fix PR #5649 merged into #4867's own project branch. 
 | The numbers that matter | Value |
 | --- | --- |
 | URLs no longer counted as linked issues | `https://github.com/<repo>/issues/<n>#…`, `<repo>/issues/<n>#…`, and the same with a `/…` or `?…` tail before the `#`, including when that tail holds another `<repo>/issues/<m>` |
-| Still counted | `close`/`fix`/`resolve` keywords with `#<n>`, and `/issues/<n>` URLs and paths with no fragment, query strings included, each Markdown link on its own when links sit side by side |
+| Still counted | `close`/`fix`/`resolve` keywords with `#<n>`, and `/issues/<n>` URLs and paths with no fragment, query strings and root-relative `/<repo>/issues/<n>` paths included, each Markdown link on its own when links sit side by side |
 | Callers of the helper | `issue_pr_status.yml`, `review_autofix.yml` (5 sites), `scripts/review_collect_pr_metadata.sh`, `scripts/review_rb_judge.sh` |
 | New GitHub API calls | 0 |
 

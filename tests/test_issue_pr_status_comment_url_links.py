@@ -224,6 +224,37 @@ def test_longer_host_ending_in_github_com_is_not_a_link() -> None:
 	assert _extract(f'"https://github.com/{path}/56"') == [56]
 
 
+def test_root_relative_issue_path_still_links() -> None:
+	"""A lone `/` before the issue path makes it a root-relative path, not
+	the end of an enclosing URL, so it links as it did before issue #5776
+	(round 3 review after intervention 1 on PR #5825)."""
+	path = f"{REPOSITORY}/issues"
+	assert _extract(f"/{path}/42") == [42]
+	assert _extract(f"see /{path}/43 now") == [43]
+	assert _extract(f"[t](/{path}/44)") == [44]
+	assert _extract(f"(/{path}/45)") == [45]
+	assert _extract(f"**/{path}/46**") == [46]
+	assert _extract(f"Refs:/{path}/47") == [47]
+	assert _extract(f"[a](/{path}/48),[b](/{path}/49)") == [48, 49]
+	assert _extract(f"/{path}/50 fixes #51") == [50, 51]
+	# A fragment still drops it, and a Markdown destination still ends at its `)`.
+	for text in (
+		f"/{path}/52#issuecomment-1",
+		f"[t](/{path}/53?q=(a)#c)",
+	):
+		assert _extract(text) == [], text
+	assert _extract(f"[a](/{path}/54),[b](/{path}/55#c)") == [54]
+	# A `/` that ends a host or path segment is still another URL's path.
+	for text in (
+		f"x/{path}/56",
+		f"./{path}/57",
+		f"//{path}/58",
+		f"a.b/{path}/59",
+		f"example.com/{path}/60",
+	):
+		assert _extract(text) == [], text
+
+
 def test_escaped_parenthesis_stays_inside_a_markdown_destination() -> None:
 	"""A backslash-escaped `)` is part of a Markdown link destination, so a
 	fragment after it still drops the link (round 2 review after intervention
@@ -368,6 +399,7 @@ if __name__ == "__main__":
 	test_issue_path_inside_a_url_query_or_fragment_is_not_a_link()
 	test_issue_path_inside_another_hosts_url_is_not_a_link()
 	test_longer_host_ending_in_github_com_is_not_a_link()
+	test_root_relative_issue_path_still_links()
 	test_escaped_parenthesis_stays_inside_a_markdown_destination()
 	test_closing_keyword_after_a_link_or_keyword_still_links()
 	test_bare_urls_paths_and_closing_keywords_still_link()

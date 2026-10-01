@@ -1682,7 +1682,13 @@ PY
 # or `#`, or ends with `/`, the path is part of that URL and never a
 # link, so https://example.com/?next=owner/repo/issues/2,
 # https://example.com/#see-owner/repo/issues/2, and
-# https://example.com/owner/repo/issues/2 yield nothing. The
+# https://example.com/owner/repo/issues/2 yield nothing. A lone `/`
+# right before the path, at the start of the run or after a character
+# that cannot end a host or path segment (`(`, `*`, `:`), makes it a
+# root-relative path, which is a link: /owner/repo/issues/2,
+# [t](/owner/repo/issues/2), and (/owner/repo/issues/2) yield 2, while
+# x/owner/repo/issues/2, ./owner/repo/issues/2, and
+# //owner/repo/issues/2 yield nothing. The
 # `github.com/` lead must start a hostname, so a longer host ending in
 # it (evilgithub.com/owner/repo/issues/2, gist.github.com/…) is another
 # host's URL and yields nothing either. Inside a
@@ -1724,6 +1730,7 @@ keyword_ref = re.compile(
 	re.IGNORECASE,
 )
 word_char = re.compile(r"\w")
+root_relative_lead = re.compile(r"(?:\A|[^\w.~%/-])/\Z")
 
 found = set()
 url_starts = []
@@ -1742,7 +1749,10 @@ while True:
 	if destination_open >= 0:
 		lead_start = destination_open + 2
 	lead = text[lead_start:url_start]
-	embedded = "://" in lead or "?" in lead or "#" in lead or lead.endswith("/")
+	root_relative = host is None and root_relative_lead.search(lead) is not None
+	if root_relative:
+		url_start -= 1
+	embedded = "://" in lead or "?" in lead or "#" in lead or (lead.endswith("/") and not root_relative)
 	if embedded:
 		url_start = lead_start
 	markdown_destination = text[max(0, url_start - 2):url_start] == "]("
