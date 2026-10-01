@@ -1616,12 +1616,29 @@ jobs:
             source ".codex-workflow-src/scripts/gh_helpers.sh" 2>/dev/null || true
           fi
           if ! type gh_retry >/dev/null 2>&1; then
+            # Buffers each attempt's stdout and prints only the successful
+            # attempt's, like scripts/gh_helpers.sh: gh api prints a failed
+            # response body to stdout, which would otherwise land in front
+            # of the real response in a $(gh_retry ...) capture (#5495).
             gh_retry() {
               local n=0 max=4 delay=2
+              local _gh_retry_inline_out _gh_retry_inline_bytes _gh_retry_inline_rc=0
+              if ! _gh_retry_inline_out="$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null)"; then
+                echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+                return 1
+              fi
               while :; do
-                if "$@"; then return 0; fi
+                if "$@" >"${_gh_retry_inline_out}"; then
+                  cat "${_gh_retry_inline_out}" || _gh_retry_inline_rc=$?
+                  rm -f "${_gh_retry_inline_out}"
+                  return "${_gh_retry_inline_rc}"
+                fi
                 n=$((n+1))
-                if [ "${n}" -ge "${max}" ]; then return 1; fi
+                if [ -s "${_gh_retry_inline_out}" ]; then
+                  _gh_retry_inline_bytes="$(wc -c <"${_gh_retry_inline_out}" 2>/dev/null | tr -d '[:space:]' || true)"
+                  echo "::warning::  gh_retry: dropped ${_gh_retry_inline_bytes:-?} bytes of stdout from failed attempt ${n}/${max}" >&2
+                fi
+                if [ "${n}" -ge "${max}" ]; then rm -f "${_gh_retry_inline_out}"; return 1; fi
                 sleep "${delay}"
                 delay=$((delay*2))
               done
@@ -1831,13 +1848,30 @@ jobs:
 
           # Inline retry wrapper (mirrors gh_retry pattern from
           # SUPPORT_SCRIPTS_DIR/gh_helpers.sh; we avoid loading the full
-          # support source here to keep this job lightweight).
+          # support source here to keep this job lightweight). Each attempt's
+          # stdout is buffered and only the successful attempt's is printed:
+          # gh api prints a failed response body to stdout, which would
+          # otherwise land in front of the real response in a
+          # $(gh_retry ...) capture (#5495).
           gh_retry() {
             local n=0 max=4 delay=2
+            local _gh_retry_inline_out _gh_retry_inline_bytes _gh_retry_inline_rc=0
+            if ! _gh_retry_inline_out="$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null)"; then
+              echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+              return 1
+            fi
             while :; do
-              if "$@"; then return 0; fi
+              if "$@" >"${_gh_retry_inline_out}"; then
+                cat "${_gh_retry_inline_out}" || _gh_retry_inline_rc=$?
+                rm -f "${_gh_retry_inline_out}"
+                return "${_gh_retry_inline_rc}"
+              fi
               n=$((n+1))
-              if [ "${n}" -ge "${max}" ]; then return 1; fi
+              if [ -s "${_gh_retry_inline_out}" ]; then
+                _gh_retry_inline_bytes="$(wc -c <"${_gh_retry_inline_out}" 2>/dev/null | tr -d '[:space:]' || true)"
+                echo "::warning::  gh_retry: dropped ${_gh_retry_inline_bytes:-?} bytes of stdout from failed attempt ${n}/${max}" >&2
+              fi
+              if [ "${n}" -ge "${max}" ]; then rm -f "${_gh_retry_inline_out}"; return 1; fi
               sleep "${delay}"
               delay=$((delay*2))
             done
