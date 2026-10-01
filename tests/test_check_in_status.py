@@ -1009,5 +1009,119 @@ def test_command_twin_documents_the_held_wait():
 	text = " ".join((ROOT / "workflow-templates" / ".claude" / "commands" / "implement-plan-claude.md").read_text(encoding="utf-8").split())
 	section = text[text.index("**What counts as \"done waiting\"**"):text.index("### Checker prompt")]
 	assert "**Held**: a trusted `hold` claim on the current head" in section
-	assert "is never done (`state: held`, `action: wait`)" in section
+	assert "is not done (`state: held`, `action: wait`)" in section
 	assert "The hold goes on the head it pushed, in the same step as the blocker" in text
+
+
+# --- A plain-mode hold is bounded by age (issue #5927) ------------------------
+# A hold that waited CLAUDE_FIX_HOLD_MAX_HOURS (default 24) or longer, or one
+# whose comment time cannot be read, is handed back as blocked instead of
+# parking the project checker for good.
+
+HOLD_EXACTLY_AT_LIMIT = "2026-09-22T12:00:00Z"  # 24h before NOW
+HOLD_30_HOURS_OLD = "2026-09-22T06:00:00Z"
+HOLD_23_HOURS_OLD = "2026-09-22T13:00:00Z"
+
+
+def _aged_claim(created_at, **claim_kwargs):
+	aged = _claim(**claim_kwargs)
+	aged["created_at"] = created_at
+	return aged
+
+
+@pytest.mark.parametrize("created_at", [HOLD_23_HOURS_OLD, YOUNG])
+def test_hold_younger_than_the_limit_still_waits(monkeypatch, capsys, created_at):
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr(labels=[{"name": "ai:needs-human"}])),
+		[_aged_claim(created_at), _comment(_handoff())])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["done"] is False and out["state"] == "held" and out["action"] == "wait"
+
+
+@pytest.mark.parametrize("created_at", [HOLD_EXACTLY_AT_LIMIT, HOLD_30_HOURS_OLD])
+@pytest.mark.parametrize("pr_overrides,extra_comments", [
+	({}, []),
+	({}, [_comment(_handoff())]),
+	({"mergeable_state": "dirty"}, []),
+	({"labels": [{"name": "ai:review-blocked"}]}, [_comment(_handoff())]),
+])
+def test_stale_hold_is_handed_back_as_blocked(monkeypatch, capsys, created_at, pr_overrides, extra_comments):
+	# The finding's case: a hold nobody answered no longer outranks a blocking
+	# label, a hand-off, or a conflict; it routes to the blocked-PR hand-back.
+	calls = _stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr(**pr_overrides)),
+		[_aged_claim(created_at), *[dict(comment) for comment in extra_comments]])
+	code, out = _twin_run(["--pr", "7"], capsys)
+	assert code == 0
+	assert out["done"] is True and out["state"] == "blocked" and out["action"] == "hand_back"
+	assert "next_stage" not in out
+	assert out["head_sha"] == FIXER_HEAD and out["claim"]["kind"] == "hold" and out["claim"]["by"] == "session_01Stage"
+	assert "past the 24h limit" in out["reason"] and "session_01Stage" in out["reason"]
+	# No new API call: the PR and the one comment listing it already read.
+	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments"]
+
+
+def test_stale_hold_reason_names_the_blocking_labels(monkeypatch, capsys):
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr(labels=[{"name": "ai:needs-human"}, {"name": "other"}])),
+		[_aged_claim(HOLD_30_HOURS_OLD)])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "blocked"
+	assert "30.0h old" in out["reason"] and out["reason"].endswith("; labels: ai:needs-human")
+
+
+@pytest.mark.parametrize("created_at", [None, "", "not-a-time", 12345])
+def test_hold_with_an_unreadable_time_is_handed_back(monkeypatch, capsys, created_at):
+	claim = _claim()
+	if created_at is None:
+		del claim["created_at"]
+	else:
+		claim["created_at"] = created_at
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [claim])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == "blocked" and out["action"] == "hand_back"
+	assert "of unknown age" in out["reason"]
+
+
+def test_hold_limit_is_configurable(monkeypatch, capsys):
+	monkeypatch.setenv("CLAUDE_FIX_HOLD_MAX_HOURS", "48")
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [_aged_claim(HOLD_30_HOURS_OLD)])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "held"
+	# A 2-hour limit hands back even the 2-hour-old hold.
+	monkeypatch.setenv("CLAUDE_FIX_HOLD_MAX_HOURS", "2")
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [_aged_claim(YOUNG)])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "blocked" and "past the 2h limit" in out["reason"]
+
+
+@pytest.mark.parametrize("bad_limit", ["0", "-1", "abc", ""])
+def test_invalid_hold_limit_falls_back_to_24_hours(monkeypatch, capsys, bad_limit):
+	monkeypatch.setenv("CLAUDE_FIX_HOLD_MAX_HOURS", bad_limit)
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [_aged_claim(HOLD_23_HOURS_OLD)])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "held"
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [_aged_claim(HOLD_EXACTLY_AT_LIMIT)])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "blocked"
+
+
+def test_a_newer_hold_restarts_the_limit(monkeypatch, capsys):
+	# The latest trusted claim on the head decides (AD-5 of issue #5927).
+	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()),
+		[_aged_claim(HOLD_30_HOURS_OLD), _aged_claim(YOUNG, by="session_01Resumed")])
+	_, out = _twin_run(["--pr", "7"], capsys)
+	assert out["state"] == "held" and out["claim"]["by"] == "session_01Resumed"
+
+
+def test_hand_back_mode_keeps_a_stale_hold(monkeypatch, capsys):
+	# The bound is plain mode only; the §26.H cap hold is unchanged (AD-4).
+	calls = _stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr(labels=[{"name": "ai:review-blocked"}])),
+		[_aged_claim(HOLD_30_HOURS_OLD)])
+	_, out = _twin_run(["--pr", "7", "--hand-back"], capsys)
+	assert out["done"] is False and out["state"] == "held" and out["action"] == "wait"
+	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments"]
+
+
+def test_command_twin_documents_the_bounded_hold():
+	text = " ".join((ROOT / "workflow-templates" / ".claude" / "commands" / "implement-plan-claude.md").read_text(encoding="utf-8").split())
+	section = text[text.index("**What counts as \"done waiting\"**"):text.index("### Checker prompt")]
+	assert "The wait is bounded: a hold at least `CLAUDE_FIX_HOLD_MAX_HOURS` old (default 24" in section
+	assert "is done as `state: blocked` (`action: hand_back`)" in section

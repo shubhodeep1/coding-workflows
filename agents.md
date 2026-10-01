@@ -1020,7 +1020,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   as live until the head moves (plain `--pr` mode, the
   `/implement-plan-claude` project checker, reads the same claims for a
   `claude/implement-plan-*` head and reports `held` for a hold on the current
-  head before labels, hand-offs, conflicts, or checks; issue #5667), and
+  head before labels, hand-offs, conflicts, or checks; issue #5667; that
+  hold waits only while younger than `CLAUDE_FIX_HOLD_MAX_HOURS`, default
+  24, and an older or undatable one reports `blocked`, issue #5927), and
   reports `hand_backs` (distinct
   head/kind pairs of conflict, ci, and blocked claims) against
   `CLAUDE_FIX_HAND_BACK_CAP` (default 3). The `claude-pr-catch-all` job of
@@ -1061,7 +1063,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   field, derived by `route_verdict` from the data already read (no extra
   API call), and the checkers route on it alone: plain PR mode →
   `wait` (open, or `held` on a `claude/implement-plan-*` head) /
-  `hand_back` (blocked, closed, stuck) / `next_stage` with
+  `hand_back` (blocked — including a hold at least
+  `CLAUDE_FIX_HOLD_MAX_HOURS` old — closed, stuck) / `next_stage` with
   `next_stage` `success` (merged) or `review` (review-round, conflict —
   never `hand_back`); run and issue-list modes → `wait` / `next_stage`
   with `success` (completed, resolved) or `block` (failed, blocked);
