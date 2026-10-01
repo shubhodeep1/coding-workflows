@@ -155,11 +155,15 @@ findings ledger plus per-reviewer sections. This is STRICT summarisation plus
 cross-reviewer deduplication. Do NOT invent, weaken, strengthen, or drop
 findings.
 
-The full untruncated per-reviewer outputs remain on disk at
-  ${PREVIOUS_REVIEWS_DIR}/${PREFIX}_<reviewer_slug>.txt
-Downstream consumers (pass-2 reviewers or the editor) may open those files if
-a ledger entry is ambiguous. Do NOT paraphrase source lines that cite file
-paths or line numbers — copy them verbatim.
+Every reviewer output you need is inlined below between the BEGIN/END INPUTS
+markers; that text is your only input. Do NOT call any tool: do not read, list,
+glob, or grep files, and do not try to open reviewer outputs on disk (file
+access outside the checkout is rejected, and a run that ends on a rejected
+tool call produces no ledger). If an input block is short, truncated, a bare
+failure notice, or narration without findings, summarise exactly what it
+says; for a block with no findings use "(No findings reported.)". Reply with
+the ledger text only. Do NOT paraphrase source lines that cite file paths or
+line numbers — copy them verbatim.
 
 OUTPUT FORMAT (sentinel-delimited, in this exact order, nothing before or after):
 
