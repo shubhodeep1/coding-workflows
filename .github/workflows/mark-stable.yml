@@ -542,7 +542,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/protected_path_authorization.py release \
             --repo "${{ github.repository }}" --base refs/tags/stable --head HEAD || rc=$?
           if [ "${rc}" -ne 0 ]; then
-            echo "::error::Protected-path authorization failed (exit ${rc}). For each blocked PR above, the repository owner posts '/authorize-protected-paths <merged head sha>' on it, then re-runs this release."
+            echo "::error::Protected-path authorization failed (exit ${rc}). For each blocked PR above, the repository owner posts '/authorize-protected-paths <sha>' on it, with the SHA its blocked entry's reason names (the merged head, or the merge commit itself), then re-runs this release."
             exit 1
           fi
 

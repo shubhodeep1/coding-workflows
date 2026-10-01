@@ -166,7 +166,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 "${RELEASE_CHECK_SCRIPT}" release --repo "${RE
 RELEASE_CHECK_RC=$?
 set -e
 if [ "${RELEASE_CHECK_RC}" -ne 0 ]; then
-	echo "error: protected-path authorization failed (exit ${RELEASE_CHECK_RC}, issue #4919). For each blocked PR above, the repository owner posts '/authorize-protected-paths <merged head sha>' on it, then reruns this script. No tag was moved." >&2
+	echo "error: protected-path authorization failed (exit ${RELEASE_CHECK_RC}, issue #4919). For each blocked PR above, the repository owner posts '/authorize-protected-paths <sha>' on it, with the SHA its blocked entry's reason names (the merged head, or the merge commit itself), then reruns this script. No tag was moved." >&2
 	exit 6
 fi
 

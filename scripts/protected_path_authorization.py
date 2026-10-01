@@ -57,7 +57,12 @@ wrapping a change in a merge commit cannot hide it. It needs the full
 history: a shallow checkout fails. A commit passes when one of its merged PRs
 (`commits/{sha}/pulls`) has an authorizing comment at that PR's `head.sha`,
 or when it is grandfathered: reachable from the gate's arrival commit, the
-oldest first-parent commit on `<head>` that changed this script. Reachability
+oldest first-parent commit on `<head>` that changed this script. A merge
+commit with a protected change of its own is covered by a `head.sha`
+comment only when that head contains the merge; otherwise (a local merge
+pushed straight to a branch, which GitHub still links to the PR it merged)
+it needs an authorizing comment naming the merge commit's own SHA on one of
+those PRs, because the owner never saw that resolution. Reachability
 is pure git history, so no date an agent can set decides it. A commit that
 is not grandfathered and has no merged PR is blocked. A missing `<base>`
 (first release) checks the whole history. It
@@ -139,14 +144,13 @@ def _gh_json(args: list[str]) -> Any:
 
 def gh_get_json(path: str, sleep: Callable[[float], None] = time.sleep) -> Any:
 	"""GET one REST path, retrying transient failures (2s, 4s backoff)."""
-	for attempt in range(READ_ATTEMPTS):
+	for attempt in range(READ_ATTEMPTS - 1):
 		try:
 			return _gh_json([path])
 		except ReadError:
-			if attempt == READ_ATTEMPTS - 1:
-				raise
 			sleep(2 ** (attempt + 1))
-	raise ReadError(f"gh api {path} failed")
+	# The last attempt's ReadError reaches the caller.
+	return _gh_json([path])
 
 
 def _get_pages(path: str, max_pages: int, get: Callable[[str], Any]) -> tuple[list[Any], bool]:
@@ -546,16 +550,50 @@ def protected_commits(base: str | None, head: str, git_dir: str | None) -> list[
 	return commits
 
 
+def _merge_commits(shas: list[str], git_dir: str | None) -> set[str]:
+	"""The merge commits among `shas` (one git call; none for an empty list)."""
+	if not shas:
+		return set()
+	out = _git(["rev-list", "--no-walk=unsorted", "--min-parents=2", *shas], git_dir)
+	return {line.strip() for line in out.splitlines() if SHA_RE.fullmatch(line.strip())}
+
+
+def _is_ancestor(ancestor: str, descendant: str, git_dir: str | None) -> bool:
+	"""Whether `ancestor` is in `descendant`'s history (a commit is its own
+	ancestor). A commit missing from this clone, or any git error, is False:
+	the caller then needs the stricter authorization (fail closed)."""
+	if not SHA_RE.fullmatch(ancestor or "") or not SHA_RE.fullmatch(descendant or ""):
+		return False
+	cmd = ["git"] + (["-C", git_dir] if git_dir else []) + ["merge-base", "--is-ancestor", ancestor, descendant]
+	try:
+		proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+	except (OSError, subprocess.TimeoutExpired):
+		return False
+	return proc.returncode == 0
+
+
 def evaluate_release(
 	commits: list[str],
 	grandfathered: set[str],
 	pulls_for: Callable[[str], list[Any]],
 	comments_for: Callable[[int], list[Any]],
+	merges: set[str] | None = None,
+	head_contains: Callable[[str, str], bool] | None = None,
 ) -> dict[str, Any]:
 	"""Pure release decision; the callables do the (cached) reads.
 
 	`grandfathered` holds the commits reachable from the gate's arrival
-	commit; they pass without any API read."""
+	commit; they pass without any API read.
+
+	`merges` holds the commits that are merges making a protected change of
+	their own. The owner's comment at a PR's merged `head.sha` approved that
+	head's tree, so it covers such a merge only when the head contains it
+	(`head_contains(head, merge)`, a merge on the PR's own branch). A merge
+	made outside the approved head (a local merge pushed straight to a
+	branch, which GitHub still links to the PR it merged) passes only with
+	an owner comment naming the merge commit itself. Without `head_contains`
+	no head covers a merge (fail closed)."""
+	merges = merges or set()
 	blocked: list[dict[str, Any]] = []
 	counts = {"authorized": 0, "grandfathered": 0}
 	for sha in commits:
@@ -569,19 +607,29 @@ def evaluate_release(
 		if not merged:
 			blocked.append({"commit": sha, "prs": [], "reason": "no merged pull request carries this commit"})
 			continue
+		is_merge = sha in merges
 		authorized = False
 		for pr in merged:
+			comments = comments_for(pr["number"])
+			if is_merge and authorizing_comment(comments, sha) is not None:
+				authorized = True
+				break
 			head = pr.get("head", {}).get("sha") if isinstance(pr.get("head"), dict) else None
-			if isinstance(head, str) and authorizing_comment(comments_for(pr["number"]), head) is not None:
+			if not isinstance(head, str):
+				continue
+			if is_merge and (head_contains is None or not head_contains(head, sha)):
+				continue
+			if authorizing_comment(comments, head) is not None:
 				authorized = True
 				break
 		if authorized:
 			counts["authorized"] += 1
 			continue
+		wanted = f"{sha} (this merge commit; its protected change is not in an approved PR head)" if is_merge else "<merged head>"
 		blocked.append({
 			"commit": sha,
 			"prs": [pr["number"] for pr in merged],
-			"reason": f"no owner {AUTHORIZE_COMMAND} <merged head> comment on PR(s) "
+			"reason": f"no owner {AUTHORIZE_COMMAND} {wanted} comment on PR(s) "
 				+ ", ".join(f"#{pr['number']}" for pr in merged),
 		})
 	return {
@@ -617,6 +665,7 @@ def check_release(
 		raise ReadError(f"{GATE_SCRIPT_PATH} has no first-parent history on {head_ref}; cannot place the grandfather boundary")
 	commits = protected_commits(base, head, git_dir)
 	grandfathered = set(protected_commits(base, arrival, git_dir))
+	merges = _merge_commits([sha for sha in commits if sha not in grandfathered], git_dir)
 	comments_cache: dict[int, list[Any]] = {}
 
 	def pulls_for(sha: str) -> list[Any]:
@@ -630,7 +679,10 @@ def check_release(
 			comments_cache[number], _complete = _get_pages(f"repos/{repo}/issues/{number}/comments", MAX_COMMENT_PAGES, get)
 		return comments_cache[number]
 
-	result = evaluate_release(commits, grandfathered, pulls_for, comments_for)
+	result = evaluate_release(
+		commits, grandfathered, pulls_for, comments_for,
+		merges=merges, head_contains=lambda pr_head, merge: _is_ancestor(merge, pr_head, git_dir),
+	)
 	result.update({"base": base, "base_ref": base_ref, "head": head, "gate_arrival": arrival})
 	return result
 

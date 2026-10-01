@@ -585,9 +585,79 @@ def test_check_release_checks_a_merge_that_carries_its_own_protected_change(tmp_
 	assert blocked["decision"] == "block" and blocked["checked"] == 1
 	assert [entry["commit"] for entry in blocked["blocked"]] == [evil]
 
+	# GitHub links a local merge pushed straight to a branch to the PR it
+	# merged, but the owner's approval of that PR's head never covered the
+	# edit made inside the merge, which the head does not contain.
 	prs[evil] = [_merged(21)]
 	comments[21] = [_comment()]
+	head_only = ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=get)
+	assert head_only["decision"] == "block"
+	assert f"/authorize-protected-paths {evil}" in head_only["blocked"][0]["reason"]
+
+	# An owner comment naming the merge commit itself authorizes it.
+	comments[21] = [_comment(body=f"/authorize-protected-paths {evil}")]
 	assert ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=get)["decision"] == "pass"
+
+
+def test_check_release_covers_a_merge_inside_the_authorized_pr_head(tmp_path):
+	# A conflict resolution made on the PR's own branch is part of the head
+	# the owner approved, so the head comment covers it.
+	repo, _arrival = _release_repo(tmp_path)
+	_git(repo, "checkout", "-q", "-b", "side")
+	_commit(repo, "docs/side.md", "side\n", "unprotected side change")
+	_git(repo, "checkout", "-q", "-b", "pr", "stable")
+	_commit(repo, "docs/pr.md", "pr\n", "unprotected pr change")
+	branch_merge = _merge_with_edit(repo, ["side"], ".claude/commands/a.md", "resolved\n", "merge side into the PR")
+	pr_head = _commit(repo, "docs/pr.md", "pr two\n", "later PR commit")
+	_git(repo, "checkout", "-q", "main")
+	_git(repo, "merge", "-q", "--no-ff", "-m", "merge pr", "pr")
+
+	prs = {branch_merge: [_merged(30, head=pr_head)]}
+	comments = {30: [_comment(body=f"/authorize-protected-paths {pr_head}")]}
+	result = ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=_release_get(prs, comments))
+	assert result["checked"] == 1 and result["decision"] == "pass" and result["authorized"] == 1
+
+	# The same merge linked to a PR whose head does not contain it is blocked.
+	prs[branch_merge] = [_merged(31, head=OTHER)]
+	comments[31] = [_comment(body=f"/authorize-protected-paths {OTHER}")]
+	assert ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=_release_get(prs, comments))["decision"] == "block"
+
+
+def test_evaluate_release_merge_rules():
+	merge_sha = "c" * 40
+	assert merge_sha not in (HEAD, OTHER)
+	pulls = lambda sha: [_merged(1)]
+	head_comment = lambda number: [_comment()]
+	merge_comment = lambda number: [_comment(body=f"/authorize-protected-paths {merge_sha}")]
+	contains = lambda head, sha: True
+	not_contains = lambda head, sha: False
+
+	def decide(comments_for, **kwargs):
+		return ppa.evaluate_release([merge_sha], set(), pulls, comments_for, **kwargs)["decision"]
+
+	assert decide(head_comment, merges={merge_sha}, head_contains=contains) == "pass"
+	assert decide(head_comment, merges={merge_sha}, head_contains=not_contains) == "block"
+	assert decide(head_comment, merges={merge_sha}) == "block", "no containment check fails closed"
+	assert decide(merge_comment, merges={merge_sha}) == "pass"
+	# A non-merge commit is unaffected: the head comment covers it, and a
+	# comment naming the commit itself does not.
+	assert decide(head_comment) == "pass"
+	assert decide(merge_comment) == "block"
+
+
+def test_read_errors_are_retried_until_one_succeeds(monkeypatch):
+	results = [ppa.ReadError("one"), ppa.ReadError("two"), {"ok": True}]
+
+	def flaky(args):
+		result = results.pop(0)
+		if isinstance(result, Exception):
+			raise result
+		return result
+
+	monkeypatch.setattr(ppa, "_gh_json", flaky)
+	sleeps = []
+	assert ppa.gh_get_json("repos/o/r/pulls/7", sleep=sleeps.append) == {"ok": True}
+	assert sleeps == [2, 4] and not results
 
 
 def test_check_release_checks_a_protected_conflict_resolution_but_not_a_clean_merge(tmp_path):

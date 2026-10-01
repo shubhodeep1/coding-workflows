@@ -1213,15 +1213,21 @@ reviews, comments, and conflicts stay a direct §12 request.
       content merge cannot be verified. A clean merge only brings in
       commits that are checked themselves, so it is not listed. Without
       this, wrapping a protected edit in a merge commit (for example one
-      pushed straight to `main`) would hide it from the check.
+      pushed straight to `main`) would hide it from the check. Such a merge
+      passes on a PR's merged-head comment only when that head contains the
+      merge (a conflict resolved on the PR's own branch). A merge made
+      outside the approved head, such as a local merge pushed straight to a
+      branch that GitHub still links to the PR it merged, needs the owner's
+      command naming the merge commit's own SHA on that PR.
     - Commits reachable from the gate's arrival commit are grandfathered.
       The arrival commit is the oldest first-parent commit that changed the
       script.
     - A shallow checkout fails the check: its boundary commit would stand in
       for the arrival commit and be grandfathered.
     - A commit with no merged PR is blocked.
-    - To unblock a release, the owner posts the command with the merged head
-      SHA on each listed PR and re-runs the release.
+    - To unblock a release, the owner posts the command with the SHA each
+      blocked entry's `reason` names (the merged head, or the merge commit
+      itself) on a listed PR and re-runs the release.
     - `scripts/mark-stable.sh`, the manual release path, runs the same check
       before any tag moves. Its base is the remote's `stable` tag, fetched
       into `refs/mark-stable/previous-stable`. Its head is the commit the
