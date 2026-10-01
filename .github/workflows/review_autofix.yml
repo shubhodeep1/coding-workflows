@@ -7211,7 +7211,12 @@ jobs:
           ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           MSG="PR autofix failed"
           MSG+=$'\n'
-          MSG+="PR: ${PR_URL}"
+          if [ -n "${PR_NUMBER:-}" ]; then
+            MSG+="PR: ${PR_URL}"
+          else
+            # No-PR claude-branch-review path: there is no PR to link.
+            MSG+="Branch: ${TARGET_BRANCH:-${HEAD_REF_OVERRIDE_INPUT:-unknown}} (no PR)"
+          fi
           if [ -n "${ISSUE_NUM}" ]; then
             MSG+=$'\n'
             MSG+="Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
