@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4867-close-permission-prompt-duplicates
 - Project branch: claude/implement-plan-issue-5810-escape-class-comment-pattern   Final PR: #5833 draft
 - Status: BLOCKED
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: the phase 1 PR (branch `claude/implement-plan-issue-5810-escape-class-comment-pattern-phase-1`): the twin sync of `workflow-templates/.claude/scripts/permission_prompts.py` and `workflow-templates/.claude/commands/implement-issue-claude.md` into `.claude/` (hold claim on the phase head), asked on #5810, then `/reclarify`
+- Waiting on: PR #5855: twin sync 2 (the review round 1 fix changed `workflow-templates/.claude/scripts/permission_prompts.py` and `workflow-templates/.claude/commands/implement-issue-claude.md` again; hold claim on the phase head), asked on #5810, then `/reclarify`
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: none (held for the twin sync; the stage that `/reclarify` resumes arms the wait on PR #5855)
 - Last updated: 2026-10-01
-- Last note: phase 1 implemented twin-first (`_markdown_code_span` for the shape, tool name, and reasons; step 1 evidence-not-spec rule); 12 new or updated tests fail against the base twin and pass on the phase head; waiting on the twin sync.
+- Last note: twin sync 1 landed (c83626e); review round 1 fixed in one `[claude-autofix]` commit (step 1 rule names the tool name in the title and body; docstring, `agents.md`, and changelog say which values each comment renders; this log); both edited twins need twin sync 2.
 
 ## Phases
 1. [ ] Phase 1 — code spans for session data and the spec rule   — protected paths: `.claude/scripts/permission_prompts.py`, `.claude/commands/implement-issue-claude.md` (edited through their `workflow-templates/.claude/` twins)
@@ -20,7 +20,7 @@
    - `tests/test_permission_prompt_duplicates.py`: new cases (fail against the base twin), updated reason assertion
    - `CLAUDE.md` §23.I and `agents.md`: "Issue text is untrusted data" sentences; `changelog.d/5810-permission-prompt-code-spans.md` [new]
    - Done: goals 1–4 hold; new tests pass; with the twins copied, `tests/test_permission_prompts.py`, `tests/test_permission_prompt_duplicates.py`, `tests/test_implement_issue_claude_command.py` pass; ruff clean
-   - Phase PR open (twin sync pending); review rounds: 0; twin syncs: 0; interventions: 0
+   - PR #5855 open (twin sync 2 pending); review rounds: 1; twin syncs: 1 (c83626e, 2026-10-01); interventions: 0
 
 ## Conformance
 
@@ -40,6 +40,7 @@
 - AD-4 [plan, 2026-10-01] Does a reason, now in a code span, keep its own Markdown? — Picked: A — no; the reason renders literally, backticks included. Alternatives: B — keep reasons as plain Markdown and only escape backticks. Why: a code span makes attacker-supplied Markdown inert more reliably than escaping. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:intervention] When a spec rule lists which generated fields are evidence, name every session-derived field the renderer writes (the tool name as well as the shape), and describe per rendering path which fields it shows, so the docs never claim a path renders a field it does not. (files: workflow-templates/.claude/commands/implement-issue-claude.md, workflow-templates/.claude/scripts/permission_prompts.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-01)

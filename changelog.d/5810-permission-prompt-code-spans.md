@@ -6,7 +6,8 @@
 | The numbers that matter | Value |
 | --- | --- |
 | Rendering paths guarded | 3 (`issue_body`, `comment_body`, `class_comment_body`) |
-| Values guarded per path | shape, tool name, every prompt reason |
+| Shape and tool name guarded in | 2 (`issue_body`, `class_comment_body`; `comment_body` renders neither) |
+| Prompt reasons guarded in | 3 (all paths) |
 | Signature changes for filed issues | 0 (only the rendering changes) |
 | Extra API calls | 0 |
 
