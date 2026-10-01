@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml: lines 235-241 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The comment says `LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS` only picks the log line, but membership in the list also suppresses lineage finalization for unverified issues, including on a matching completion-PR head.\n  WHY: The misleading comment may lead a future maintainer to remove the fail-closed membership check and allow an unverified issue's lineage to be finalized.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/issue_pr_status.yml: Line 240 | severity=low | confidence=5\n  PROBLEM: The comment for LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS says the list \u201conly picks the log line,\u201d but membership also suppresses lineage finalization for unverified issues.\n  WHY: A future editor may remove the membership check, reopening the bypass that allows an unverified issue's lineage to be finalized from a matching head.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/issue_pr_status.yml: lines 235-241 | severity=low | confidence=5\n  PROBLEM: The comment says unclassified issues follow the completion-PR rule and the list only picks the log line, but list membership gates lineage finalization.\n  WHY: The comment contradicts the fail-closed logic that skips finalization for unclassified issues even on a matching completion-PR head.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/issue_pr_status.yml: lines 235-240 | severity=low | confidence=5\n  PROBLEM: The comment says the list only picks the log line, but membership in the list is used to suppress lineage finalization in two sites.\n  WHY: A future maintainer may treat the checks as cosmetic and remove one, reopening the lineage-finalization tampering prevented by the fail-closed gate.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/issue_pr_status.yml: Lines 237-240; compared with lines 646-648 | severity=low | confidence=5\n  PROBLEM: The comment says unclassified issues follow the completion-PR rule and the list \u201conly picks the log line,\u201d but membership prevents lineage finalization even when the PR matches the completion-PR conditions.\n  WHY: A maintainer relying on the comment may misunderstand or remove the fail-closed check, allowing an unverified issue's lineage to be finalized.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/issue_pr_status.yml: Lines 235-241, comment for LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS\n  PROBLEM: The comment says the list \u201conly picks the log line,\u201d but membership also suppresses lineage finalization for unverified issues, even when the completion-PR head matches.\n  WHY: A future editor may treat the list as cosmetic and remove the membership check, reopening the bypass for an unclassified issue on a matching completion head.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/issue_pr_status.yml: lines 235-240, comment for LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS\n  PROBLEM: The comment describes the fail-closed gate as cosmetic, saying the list \u201conly picks the log line,\u201d although it suppresses finalization of an unverified issue even on a matching completion-PR head.\n  WHY: The misleading comment could prompt a future editor to remove the membership check and reopen the #5619 bypass for unclassified issues.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1162e0e6d44b5dcfbe3f338fc9d4185bdc8b9396d6f76d3e5be23b03a054bc34",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5632,
+    "run_id": "36839613108",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36839613108",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001092934_3d5f8bd15c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5632,
+    "run_id": "36839613108"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T09:29:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
