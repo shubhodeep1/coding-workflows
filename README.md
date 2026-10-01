@@ -1490,7 +1490,11 @@ changed while it checked (`review_superseded`). The `review_autofix.yml`,
 `<workflow name> [pr:<N>]` by their `run-name` (issue #5906), so a finished
 one titled for the PR counts as a review of it, and a newer one that names no
 PR (a consumer wrapper before the `@stable` sync) and did not succeed also
-returns `review_superseded` (fail closed). A runs listing that holds
+returns `review_superseded` (fail closed). A run name only binds a dispatch,
+of these workflows or `internal-review.yml`, that ran from the default
+branch: one from any other ref runs that ref's workflow file, so it never
+counts as a review of the PR, and a newer one titled for the PR that did not
+succeed returns `review_superseded` too. A runs listing that holds
 1,000 or more runs newer than the marker's run is a failed read
 (`pending_checks_failed`), repeated every hour until a push, a base change,
 or a forced review sends the head through a new review. A check that fails

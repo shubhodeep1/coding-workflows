@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
 - Project branch: claude/implement-plan-issue-5906-bind-unbound-review-dispatches   Final PR: #5916 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #5929
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: project checker armed at the end of the phase 1 stage (ids in the phase 1 report and the issue progress comment)
+- Check-in: checker session_016uEWHbfeYumDLuXt13ZaAp   safety net and hand-back re-armed by the review round 1 stage (ids in its report)
 - Last updated: 2026-10-01
-- Last note: phase 1 PR #5929 opened against the project branch; waiting on its review.
+- Last note: review round 1 on PR #5929: 2 findings fixed (a dispatch's run name only binds from the default branch), 2 rejected (contradict AD-2); waiting on round 2.
 
 ## Phases
-1. [ ] Phase 1 — bind review dispatches to their PR and count their failures   — PR #5929 open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — bind review dispatches to their PR and count their failures   — PR #5929 open (waiting); review rounds: 1; interventions: 0
    - `run-name` `<workflow name> [pr:<pr_number>]` on `workflow_dispatch` in `.github/workflows/review_autofix.yml`, `.github/workflows/review_rb_judge_dispatch.yml`, `workflow-templates/ai-review.yml`, `workflow-templates/review_rb_judge_dispatch.yml`
    - `check_review_runs()` in `scripts/claude_fixer_pending_checks.py`: a newer completed dispatch titled for the PR joins the bound reviews; a newer unsuccessful one with no PR binding returns `review_superseded`
    - Tests: the audit's scenario, every new path, the run-name wiring; existing #4900 / #5147 / #5148 suites green
@@ -39,8 +39,10 @@
 - AD-3 [plan, 2026-10-01] How strictly is the title matched? — Picked: A — any title ending in ` [pr:<N>]` (`^.+ \[pr:([1-9][0-9]*)\]$`) in these workflows' listings. Alternatives: B — an exact title per workflow name. Why: the listing already fixes the workflow; a suffix survives a renamed workflow, and only a workflow author controls the run name. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-10-01] Do active dispatches titled for another PR stop blocking? — Picked: A — no, every active dispatch of these workflows still blocks (`review_active`). Alternatives: B — block only on ones titled for this PR or untitled. Why: §5 (no relaxation in a security fix); the delay is one sweep tick. Applied in: no code change. Status: pending review
 - AD-5 [plan, 2026-10-01] Also change the "latest newer review" rule so a later gate-skipped success cannot clear the failure? — Picked: A — no, that is #5904; titled dispatches join the bound set, so #5904's fix covers them too. Alternatives: B — fix it here. Why: one issue per project (`/implement-issue-claude` rules). Applied in: no code change. Status: pending review
+- AD-6 [phase 1/1 — review round 1, 2026-10-01] How does `check_review_runs()` treat a finished review dispatch that did not run from the default branch, whose run name its own ref's workflow file sets? — Picked: A — its run name never binds it: it is never a bound review (a success is ignored), and when it did not succeed and its title names this PR or no PR it returns `review_superseded`; the same for `internal-review.yml` dispatches; no default branch known means no run name binds. Alternatives: B — ignore every non-default-branch dispatch (a failed review of this PR from another ref would be lost); C — trust the title on any ref (a forged success masks a failed review, the round 1 finding). Why: §1, an untrusted title may only block a merge, never allow one; keeps AD-2 fail closed. Applied in: PR #5929. Status: pending review
 
 ## Lessons
+- [source:intervention] A workflow run's `display_title` (its `run-name`) is only trustworthy on a run from the default branch: a `workflow_dispatch` on any other ref runs that ref's workflow file, so any PR binding read from a title must also check `head_branch` against the default branch. (files: scripts/claude_fixer_pending_checks.py, .claude/scripts/check_in_status.py)
 
 ## Notes
 - Issue mode; session `session_01YEZ7MVKkvpsMYW3kkWx4by` (started by the Claude issue pickup routine `PR dispatch: #5906`).

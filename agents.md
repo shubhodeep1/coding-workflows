@@ -1081,7 +1081,12 @@ reviews, comments, and conflicts stay a direct §12 request.
   `DISPATCH_TITLE_PR_RE`): a finished one titled for the PR is one of its
   reviews, one titled for another PR is ignored, and a newer one that names
   no PR and did not conclude `success` also returns `review_superseded`
-  (fail closed).
+  (fail closed). A run name only binds a dispatch that ran from the default
+  branch (theirs and `internal-review.yml`'s): `check_review_runs()` takes
+  the PR's `default_branch`, a dispatch from any other ref is never a bound
+  review, and a newer one titled for the PR that did not conclude `success`
+  returns `review_superseded`. With no default branch known, no run name
+  binds.
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
   running); a failed read, or a snapshot whose temp directory cannot be

@@ -453,11 +453,12 @@ def _run(run_id: int, *, workflow: str = "internal-review.yml", status: str = "c
 		"display_title": title, "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
 
 
-def _dispatch(run_id: int, *, pr: int = PR, **overrides) -> dict:
+def _dispatch(run_id: int, *, pr: int = PR, head_branch: str = "main", **overrides) -> dict:
 	# What review_autofix_sweep.yml starts every 30 minutes, and what a
 	# force-review PR gets: an internal-review.yml dispatch from main, bound to
 	# its PR only by the run title.
-	return _run(run_id, event="workflow_dispatch", head_branch="main", title=f"Internal: AI Review & Autofix [pr:{pr}]", **overrides)
+	return _run(run_id, event="workflow_dispatch", head_branch=head_branch, title=f"Internal: AI Review & Autofix [pr:{pr}]",
+		**overrides)
 
 
 def _dispatch_runs(**listings) -> dict:
@@ -475,11 +476,12 @@ _DISPATCH_RUN_NAMES = {
 }
 
 
-def _titled(run_id: int, workflow: str, *, pr: int = PR, title_pr: str | None = None, **overrides) -> dict:
+def _titled(run_id: int, workflow: str, *, pr: int = PR, title_pr: str | None = None, head_branch: str = "main",
+	**overrides) -> dict:
 	# A dispatch of a workflow with no PR binding of its own, titled
 	# `<workflow name> [pr:<N>]` by its run name.
 	suffix = str(pr) if title_pr is None else title_pr
-	return _run(run_id, workflow=workflow, event="workflow_dispatch", head_branch="main",
+	return _run(run_id, workflow=workflow, event="workflow_dispatch", head_branch=head_branch,
 		title=f"{_DISPATCH_RUN_NAMES[workflow]} [pr:{suffix}]", **overrides)
 
 
@@ -564,6 +566,27 @@ def test_an_active_review_defers_a_dry_run_too(fake_gh):
 			head_branch="main", title="Codex PR Self-Healing Semantic Agent")]}),
 	("newer dispatch with a malformed PR binding failed", [],
 		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", conclusion="failure", title_pr="")]}),
+	# PR #5929 review round 1: a run name is only trusted on a default-branch
+	# run. A dispatch from another ref runs that ref's workflow file, so its
+	# `[pr:<N>]` title cannot let a merge through, and a failed one still blocks.
+	("a forged successful review_autofix.yml dispatch for this PR from a PR branch after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure")],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", head_branch="claude/forged")]}),
+	("a forged successful ai-review.yml dispatch for this PR from a PR branch after a failed review",
+		[_run(RUN_ID + 1, workflow="ai-review.yml", conclusion="failure")],
+		{"internal-review.yml": None, "review_autofix.yml": None,
+			"ai-review.yml": [_titled(RUN_ID + 4, "ai-review.yml", head_branch="feature/x")]}),
+	("a forged successful internal-review.yml dispatch for this PR from a PR branch after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure")], {"internal-review.yml": [_dispatch(RUN_ID + 2, head_branch="claude/forged")]}),
+	("newer titled review_rb_judge_dispatch.yml dispatch for this PR from another ref failed", [],
+		{"review_rb_judge_dispatch.yml": [_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", conclusion="failure",
+			head_branch="claude/other")]}),
+	("newer internal-review.yml dispatch for this PR from another ref failed, then a successful bound review",
+		[_run(RUN_ID + 6, conclusion="success")],
+		{"internal-review.yml": [_dispatch(RUN_ID + 2, conclusion="failure", head_branch="stable")]}),
+	("newer untitled review_autofix.yml dispatch from another ref failed", [],
+		{"review_autofix.yml": [_run(RUN_ID + 3, workflow="review_autofix.yml", conclusion="failure", event="workflow_dispatch",
+			head_branch="claude/other", title="Codex PR Self-Healing Semantic Agent")]}),
 ])
 def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -607,6 +630,15 @@ def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, bran
 	("a failed titled dispatch for this PR, then a newer successful bound review", [],
 		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", conclusion="failure")],
 			"internal-review.yml": [_dispatch(RUN_ID + 4)]}),
+	# PR #5929 review round 1: a dispatch from another ref is never a bound
+	# review, so its success is ignored, and a failed one titled for another
+	# PR is not a review of this one.
+	("a newer successful titled dispatch for this PR from another ref", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", head_branch="claude/other")]}),
+	("a newer failed titled dispatch for another PR from another ref", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch="claude/other")]}),
+	("a newer failed internal-review.yml dispatch for another PR from another ref", [],
+		{"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, conclusion="failure", head_branch="claude/other")]}),
 ])
 def test_settled_reviews_let_the_merge_through(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -623,7 +655,36 @@ def test_an_untitled_failed_dispatch_names_the_run_it_blocked_on(fake_gh):
 	result = _evaluate(dry_run=True)
 	assert result["state"] == "review_superseded", result
 	assert "names no PR in its run name" in result["reason"]
-	assert f".github/workflows/review_autofix.yml run {RUN_ID + 3} (failure)" in result["reason"]
+	assert f".github/workflows/review_autofix.yml run {RUN_ID + 3} on main (failure)" in result["reason"]
+
+
+def test_a_titled_failed_dispatch_from_another_ref_names_its_branch(fake_gh):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, dispatch_runs=_dispatch_runs(**{
+		"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", conclusion="failure", head_branch="claude/other")]}))
+	result = _evaluate(dry_run=True)
+	assert result["state"] == "review_superseded", result
+	assert "names this PR from a ref other than the default branch (main)" in result["reason"]
+	assert f".github/workflows/review_autofix.yml run {RUN_ID + 3} on claude/other (failure)" in result["reason"]
+
+
+@pytest.mark.parametrize("label, branch_runs, listings, expected", [
+	("a successful default-branch titled dispatch cannot mask a failed review", [_run(RUN_ID + 1, conclusion="failure")],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml")], "internal-review.yml": [_dispatch(RUN_ID + 4)]},
+		"review_superseded"),
+	("a failed titled dispatch for this PR still blocks", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", conclusion="failure")]}, "review_superseded"),
+	("a successful titled dispatch alone merges", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml")]}, "merge_enabled"),
+])
+def test_an_unknown_default_branch_trusts_no_run_name(fake_gh, label, branch_runs, listings, expected):
+	# The PR object names no default branch: no dispatch's run name is
+	# trusted, so none is a bound review (fail closed).
+	fake_gh.set(pr=_pr(base={"ref": BASE_REF, "sha": BASE_SHA, "repo": {"full_name": REPO}}),
+		comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
+		dispatch_runs=_dispatch_runs(**listings))
+	result = _evaluate()
+	assert result["state"] == expected, (label, result)
+	assert bool(fake_gh.merges()) == (expected == "merge_enabled"), label
 
 
 @pytest.mark.parametrize("title, expected", [
