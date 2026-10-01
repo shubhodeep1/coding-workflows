@@ -43,7 +43,9 @@ Batching contract (CLAUDE.md §15):
           the 5 run statuses but `completed` (usually 1 call, at most 10),
           and 1 per 100 comments
           again (issue #5148), 1 variable read and the auto-merge helper's
-          calls);
+          calls, then after a successful merge call 1 PR re-read and, only
+          when the reviewed head or base moved, 1 auto-merge disable and,
+          when it succeeded, 1 confirming PR read, issue #5905);
   output  one `CLAUDE_PR_SWEEP` log line per decision plus a summary line;
   failure fail open per PR and per repo: a read error is logged and the
           sweep moves on; nothing is retried in a tight loop. A failed queue
@@ -60,8 +62,11 @@ The sweep also finishes clean Claude-fixer reviews that ended before CI did
 `scripts/claude_fixer_pending_checks.py`, which enables head-bound
 auto-merge once the head's check runs behind a trusted
 `ai:claude-fixer-pending-checks:v1` marker, bound by its v2 line to the PR's
-current base (issue #5147), have all completed without a failure.
-`--dry-run` only logs what it would enable.
+current base (issue #5147), have all completed without a failure. The
+merge helper re-checks that base right before its merge call, and a PR
+retargeted around that call has its auto-merge disabled again (issue #5905;
+`merge_revoke_failed`, `merge_revoke_unconfirmed`, and `merged_unreviewed_base`
+are also logged as `::warning::`). `--dry-run` only logs what it would enable.
 
 Each queue issue it opens is also recorded (number, title, payload) in this
 run's binding file (`CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE`, default
@@ -102,6 +107,9 @@ claude_issue_route = _load("claude_issue_route", ROOT / "scripts" / "claude_issu
 claude_fixer_pending_checks = _load("claude_fixer_pending_checks", ROOT / "scripts" / "claude_fixer_pending_checks.py")
 
 DUE_STATES = ("conflict", "review-round", "ci-failed", "blocked")
+# claude_fixer_pending_checks.evaluate states that leave a merge authorization
+# for an unreviewed base behind (issue #5905); each gets a ::warning:: line.
+PENDING_CHECKS_ALARM_STATES = ("merge_revoke_failed", "merge_revoke_unconfirmed", "merged_unreviewed_base")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
@@ -276,6 +284,11 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 						summary["pending_checks_waiting"] += 1
 					if pending.get("state") not in ("not_eligible", "no_marker"):
 						log(f"pending_checks repo={repo} pr=#{number} state={pending.get('state')} "
+							f"head={str(pending.get('head_sha') or '')[:12]} reason={json.dumps(pending.get('reason', ''))}")
+					if pending.get("state") in PENDING_CHECKS_ALARM_STATES:
+						# Issue #5905: auto-merge may still be on for a base
+						# nobody reviewed, or the PR already merged into one.
+						print(f"::warning::CLAUDE_PR_SWEEP pending_checks_{pending.get('state')} repo={repo} pr=#{number} "
 							f"head={str(pending.get('head_sha') or '')[:12]} reason={json.dumps(pending.get('reason', ''))}")
 				continue
 			summary["due"] += 1
