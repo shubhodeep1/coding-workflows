@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends existing `tests/e2e_smoke_canary.txt`\nScope-mode justification: The complete change is a one-file replacement; there is no shortcut to expand. Per `unattended_system_instructions.md` \u00a76, correctness takes priority over speed.\n\n## Execution and automation\n- Modify existing code only; introduce no script or supervisor. The existing `implement.yml` PR-push path is the entry point. No database gate applies.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` only.\n\n## Functions or modules to implement\n- None. Replace the entire file with the three specified lines and a final newline.\n\n## Data structures affected\n- The canary\u2019s plain-text contents only.\n\n## API/interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Replace the whole canary\n- **Chosen:** Overwrite the existing file with the exact requested bytes.\n- **Alternatives considered:** Edit only the `run_id` line.\n- **Why:** Full replacement guarantees no extra content while satisfying the explicit constraint.\n\n## Security considerations\nNo new trust boundary, endpoint, authorization surface, or external input is introduced. Do not interpolate issue text into an executable command; use the specified literal content.\n\n## Risks and edge cases\nThe current file has three lines but a different `run_id` (`26151428977`); replace it with `36827347052`. Do not alter any other path.\n\n## Testing considerations\nVerify the file\u2019s exact bytes, including its final newline, and confirm that the changed-path list contains only `tests/e2e_smoke_canary.txt`. No test-suite run is needed for this data-only replacement.\n\n## Pre-execution self-check\nPlanning ref: `main` at `1084dfddbc34d428952a8349a95c9dce05dae876`. The file exists and is tracked. Integration branch metadata is empty, so no mismatch is established. The auto-answer maps to the clarifier\u2019s determination that no questions were needed. No missing context or implementation blocker remains.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ddf105512f23d43f6cbef42f0f80474f680ee45bb9426d66a0cbd61daf2f86e8",
+  "lineage": {
+    "issue_number": 5935,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36827839632",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36827839632",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5935"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261001070552_01c28cc435",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5935,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36827839632"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #5935",
+  "timestamps": {
+    "created_at": "2026-10-01T07:05:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
