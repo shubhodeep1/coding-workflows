@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T04:15:24Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A twin-first phase PR's description must be rewritten when the `[claude-twin-sync]` commit lands (tick the sync item, drop the \"parity red by design\" note, refresh the test counts); reviewers read the description as the PR's claim and flag a stale one as a task gap.",
+  "phase": "implement_plan",
+  "pr_number": 5714,
+  "record_id": "lesson-implement-plan-ed331ae01081ce62dabd1886",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5700-edit-comment-own-session-scratchpad",
+    "file:docs/implement-plan/issue-5700-edit-comment-own-session-scratchpad.md"
+  ]
+}

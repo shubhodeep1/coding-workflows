@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T04:15:24Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A helper that checks a resolved path and then opens it by name must open each directory relative to its parent descriptor with `O_NOFOLLOW`; `O_NOFOLLOW` on the final open protects only the last component, so a same-uid process can swap a parent for a symlink after the check.",
+  "phase": "implement_plan",
+  "pr_number": 5714,
+  "record_id": "lesson-implement-plan-a9f4b29a64fb558855957284",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5700-edit-comment-own-session-scratchpad",
+    "file:.claude/scripts/edit_comment.py"
+  ]
+}

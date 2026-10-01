@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T04:15:24Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A path check that binds a file to a session by directory name cannot stop a same-uid rename or copy that finishes before the check runs; descriptor-identity checks only close races the attacker would otherwise need, so judge such findings by whether the attack still works with no race at all.",
+  "phase": "implement_plan",
+  "pr_number": 5714,
+  "record_id": "lesson-implement-plan-3d546372e7c3954d9e2c7aac",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5700-edit-comment-own-session-scratchpad",
+    "file:.claude/scripts/edit_comment.py"
+  ]
+}
