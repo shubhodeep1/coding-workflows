@@ -1332,7 +1332,7 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `.claude/hooks/**`, `.claude/settings.json`, and
   `.claude/settings.local.json`, copies that `.claude/` file instead of the
   twin. When the twin and the `.claude/` copy differ (bytes) and the consumer
-  already has the file, the consumer keeps its file; when the `.claude/` copy
+  already has the file (a dangling symlink counts), the consumer keeps it; when the `.claude/` copy
   is missing at that commit, nothing is installed; when the compare itself
   fails (`cmp` exit 2+, a read error), nothing changes for that file and the
   warning says so rather than reporting a difference; a guard in the
@@ -1356,10 +1356,12 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `claude-twin-sync/owner-approval` status is posted only when its state or
   description changes (GitHub allows 1000 statuses per sha and context). No
   GraphQL except `gh pr merge`.
-- **Consumers:** unaffected. `update_workflows.yml` already copies
-  `workflow-templates/.claude/**` into consumer repos at `@stable`, so they
-  never depend on a sync PR, and the workflow runs only in
-  `shubhodeep1/coding-workflows`. The twinned commands tell consumer
+- **Consumers:** `update_workflows.yml` copies
+  `workflow-templates/.claude/**` into consumer repos at `@stable`, so
+  non-guard files never depend on a sync PR; guard files come from the
+  `stable` commit's `.claude/` tree (issue #5607, above), so a guard change
+  reaches consumers only once its sync PR merged and was promoted. The
+  workflow runs only in `shubhodeep1/coding-workflows`. The twinned commands tell consumer
   sessions to keep the protected-path stop, since a consumer has no
   `workflow-templates/.claude/`.
 - **Residual risks:** every AI actor here authenticates to GitHub as the

@@ -330,12 +330,14 @@ def _run_claude_sync(
 	local: dict[str, str],
 	extra_path: str | None = None,
 	twin_symlinks: dict[str, str] | None = None,
+	local_symlinks: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], str, dict[str, str]]:
 	"""Run the real claude_sync step body against a fake stable checkout.
 
 	``extra_path`` is prepended to PATH (for stub commands). ``twin_symlinks``
-	maps a twin path to the symlink target written there. Returns the consumer
-	.claude/ tree afterwards, the step's stdout, and its outputs.
+	and ``local_symlinks`` map a twin or consumer path to the symlink target
+	written there. Returns the consumer .claude/ tree afterwards (a symlink as
+	``symlink:<target>``), the step's stdout, and its outputs.
 	"""
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
@@ -344,10 +346,11 @@ def _run_claude_sync(
 		# The sparse checkout always has workflow-templates/, even when it
 		# carries no .claude/ twin tree.
 		(upstream / "workflow-templates").mkdir(parents=True)
-		for rel, target in (twin_symlinks or {}).items():
-			link = upstream / "workflow-templates" / ".claude" / rel
-			link.parent.mkdir(parents=True, exist_ok=True)
-			link.symlink_to(target)
+		for base, links in ((upstream / "workflow-templates" / ".claude", twin_symlinks), (consumer / ".claude", local_symlinks)):
+			for rel, target in (links or {}).items():
+				link = base / rel
+				link.parent.mkdir(parents=True, exist_ok=True)
+				link.symlink_to(target)
 		for base, files in ((upstream / "workflow-templates" / ".claude", twins), (upstream / ".claude", reviewed), (consumer / ".claude", local)):
 			for rel, body in files.items():
 				path = base / rel
@@ -375,9 +378,11 @@ def _run_claude_sync(
 		outputs = dict(line.split("=", 1) for line in output_file.read_text(encoding="utf-8").splitlines() if "=" in line)
 		consumer_claude = (consumer if consumer.exists() else root) / ".claude"
 		tree = {
-			str(path.relative_to(consumer_claude)): path.read_text(encoding="utf-8")
+			str(path.relative_to(consumer_claude)): (
+				f"symlink:{os.readlink(path)}" if path.is_symlink() else path.read_text(encoding="utf-8")
+			)
 			for path in sorted(consumer_claude.rglob("*"))
-			if path.is_file()
+			if path.is_symlink() or path.is_file()
 		}
 		return tree, result.stdout, outputs
 
@@ -542,6 +547,27 @@ def test_claude_sync_symlink_guard_twin_is_handled_by_the_reviewed_pass() -> Non
 	assert outputs["claude_changed"] == "2"
 
 
+def test_claude_sync_keeps_a_dangling_consumer_symlink_at_a_differing_guard() -> None:
+	"""A dangling consumer symlink is a file the consumer has: kept, never copied through (PR #5654 review)."""
+	twins = {"hooks/pending.py": "UNREVIEWED twin\n", "settings.json": "{\"twin\": true}\n", "commands/foo.md": "twin command\n"}
+	reviewed = {"hooks/pending.py": "reviewed hook\n", "settings.json": "{\"reviewed\": true}\n", "hooks/twin_deleted.py": "reviewed hook 2\n"}
+	local_symlinks = {
+		"hooks/pending.py": "missing_target.py",
+		"settings.json": "missing_settings.json",
+		"hooks/twin_deleted.py": "missing_target_2.py",
+	}
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, {}, local_symlinks=local_symlinks)
+	assert tree["hooks/pending.py"] == "symlink:missing_target.py"
+	assert tree["settings.json"] == "symlink:missing_settings.json"
+	assert tree["hooks/twin_deleted.py"] == "symlink:missing_target_2.py"
+	assert tree["commands/foo.md"] == "twin command\n"
+	assert "UNREVIEWED" not in "".join(tree.values())
+	for rel in ("hooks/pending.py", "settings.json"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} differs from its workflow-templates twin on stable (owner sync pending); kept the existing file." in stdout
+	assert "::warning::claude-guard-sync: .claude/hooks/twin_deleted.py has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); kept the existing file." in stdout
+	assert outputs["claude_changed"] == "1"
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
@@ -563,6 +589,7 @@ def main() -> int:
 	test_claude_sync_checks_reviewed_guards_without_a_twin_tree()
 	test_claude_sync_without_any_claude_tree_changes_nothing()
 	test_claude_sync_symlink_guard_twin_is_handled_by_the_reviewed_pass()
+	test_claude_sync_keeps_a_dangling_consumer_symlink_at_a_differing_guard()
 	return 0
 
 

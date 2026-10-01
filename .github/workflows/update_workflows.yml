@@ -269,7 +269,9 @@ jobs:
                   printf '::warning::claude-guard-sync: could not compare .claude/%s with its workflow-templates twin (cmp exit %s); nothing changed.\n' "${rel}" "${guard_cmp_status}"
                   continue
                 fi
-                if [ "${guard_cmp_status}" -eq 1 ] && [ -e "${local_path}" ]; then
+                # `-L` too: a dangling consumer symlink is a file the
+                # consumer has, and `cp` refuses to write through it.
+                if [ "${guard_cmp_status}" -eq 1 ] && { [ -e "${local_path}" ] || [ -L "${local_path}" ]; }; then
                   printf '::warning::claude-guard-sync: .claude/%s differs from its workflow-templates twin on stable (owner sync pending); kept the existing file.\n' "${rel}"
                   continue
                 fi
