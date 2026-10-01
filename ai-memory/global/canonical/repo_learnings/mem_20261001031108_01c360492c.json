@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Treat validation and agent handoffs as trust boundaries; preserve process isolation and validate target refs explicitly.",
   "timestamps": {
     "created_at": "2026-10-01T03:11:08Z",
