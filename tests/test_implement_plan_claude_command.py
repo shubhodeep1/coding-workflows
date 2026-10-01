@@ -382,6 +382,37 @@ def test_command_rules_cover_the_per_stage_delete_and_rename(twin_text):
 	assert "The rename is a cleanup call (CLAUDE.md §26.I): a denied one is never retried." in twin_text
 
 
+def test_step_2_sweep_is_skipped_after_a_denied_delete(twin_text):
+	# PR #5856 review round 1 (head 4854299): the §26.G sweep's deletes are cleanup
+	# calls of the same step, so a denied step 2 delete must skip the sweep too.
+	context = _section(twin_text, "- **Context.** Then always read", "3. **Build the phase checklist.**")
+	gate = "then run the stale Routine sweep (CLAUDE.md §26.G) only when none of those deletes was denied"
+	assert gate in context
+	assert "so a denial skips the sweep too, and a later sweep (Arming the wait, step 0) removes what it would have." in context
+	assert "then run the stale Routine sweep (CLAUDE.md §26.G)." not in context
+	assert "0. **Sweep, then the hand-back Routine.** Run the stale Routine sweep (CLAUDE.md §26.G)." in twin_text
+
+
+def test_agents_md_lists_every_26i_implement_plan_cleanup_site():
+	# PR #5856 review round 1: agents.md mirrors the §26.I list for /implement-plan-claude.
+	agents = _flat(AGENTS_MD)
+	bullet = agents[agents.index("- Denied cleanup calls (CLAUDE.md §26.I, issue #5068)"):]
+	start = bullet.index("`/implement-plan-claude` (")
+	sites = bullet[start:bullet.index(")", start)]
+	for site in (
+		"resume hygiene",
+		"step 2 stale-Routine delete",
+		"zombie-checker cleanup",
+		"re-arm cleanup",
+		"a failed two-step start",
+		"rename on opening a PR",
+		"hand-back",
+		"end-of-project archives",
+		"checker prompt",
+	):
+		assert site in sites, site
+
+
 def test_resume_hygiene_skips_a_denied_cleanup_call(twin_text):
 	hygiene = _section(twin_text, "**Resume hygiene**", "**No claude-code-remote tools**")
 	assert "each only after `get_trigger` shows it is this project's own" in hygiene
