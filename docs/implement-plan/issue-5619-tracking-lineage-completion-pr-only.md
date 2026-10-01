@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5619-tracking-lineage-completion-pr-only-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5619
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5619-tracking-lineage-completion-pr-only   Final PR: #5632 ready — review rounds: 3
+- Project branch: claude/implement-plan-issue-5619-tracking-lineage-completion-pr-only   Final PR: #5632 ready — review rounds: 4
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4813-close-sweep-target-branch-merges; the change goes live with that branch's own lifecycle)
-- Waiting on: PR #5632 (final PR, review round 4)
+- Waiting on: PR #5632 (final PR, review round 5)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01LHayV9tdHEAgtpejcbwf7v   safety net and hand-back: ids in the final-merge review-round stage report
 - Last updated: 2026-10-01
-- Last note: final PR #5632 review round 3 (head 292ae7e): the reviewer panel found that an unclassified issue linked by a matching `orchestrator/project-<n>` head was still finalized; fixed so the head shape alone never finalizes an unclassified issue, and the head-derived read is skipped when `<T>` is linked (AD-9), in one `[claude-autofix]` commit.
+- Last note: final PR #5632 review round 4 (head 6b375ba): all 6 reviewers flagged the `LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS` comment as calling the fail-closed membership check cosmetic ("only picks the log line"); comment and README row corrected in one `[claude-autofix]` commit (the 4th of `MAX_AUTOFIX_ITERATIONS` 5).
 
 ## Phases
 1. [x] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)   — PR #5643 merged 2026-10-01T01:39:03Z (merge 7d3cb06); review rounds: 3; interventions: 1 (2026-10-01: merged the project branch after the reviewer outage, Q1: A)
@@ -27,7 +27,7 @@
 
 ## Completion
 - Completion PR #5886 merged 2026-10-01 — doc moved to docs/completed/issue-5619-tracking-lineage-completion-pr-only-plan.md
-- Final PR #5632 ready 2026-10-01 (into claude/implement-plan-issue-4813-close-sweep-target-branch-merges) — review rounds: 3
+- Final PR #5632 ready 2026-10-01 (into claude/implement-plan-issue-4813-close-sweep-target-branch-merges) — review rounds: 4
 
 ## Activation
 - n/a: issue base is claude/implement-plan-issue-4813-close-sweep-target-branch-merges, not the default branch (Issue Mode); steps 12–13 run only if the base moves onto main before the final merge.
@@ -50,6 +50,7 @@
 - [source:intervention] A conservative fallback that puts an unclassifiable item in a privileged bucket to skip a mutation ("treat as tracking, so do not close it") must not also grant that bucket's privileges ("finalize it as the tracker"); keep the unverified items in their own list and check it before any privileged action. (files: .github/workflows/issue_pr_status.yml)
 
 ## Notes
+- 2026-10-01 final-merge review round 4 (head 6b375ba, run 36839613108, ledger 273641a2…): one consensus finding (6 of 6 reviewers, low): the comment on `LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS` still said unclassified issues follow the completion-PR rule and that the list "only picks the log line", though since AD-9 membership is the fail-closed gate that stops a matching completion head from finalizing an unclassified issue. Valid (stale comment); fixed the comment, and the README row's matching sentence, which still said an unclassified issue is "finalized only by its completion PR". No behaviour change. `[claude-autofix]` commits on the final PR: 4 of 5.
 - 2026-10-01 final-merge review round 3 (head 292ae7e, run 36830799649, ledger c2688b81…): three consensus findings and one task gap (6 reviewers, gemini reported nothing). Valid: the loop finalized an unclassified issue from a matching `orchestrator/project-<n>` head without a tracking-label check (4 reviewers, plus the task gap), the head-derived read duplicated classification for a linked `<T>` (3), and the plan's §15 line read "zero new calls" next to the one read (2). Fixed per AD-9 with `test_unclassified_linked_issue_on_completion_head_is_not_finalized` and `test_completion_pr_linked_tracker_is_read_once`; `test_unclassified_issue_lineage_needs_its_completion_pr`'s matching-head case now expects no finalization.
 - 2026-10-01 final-merge review round 2 (head 75bf650, run 36823304512, ledger b3e3c4d9…): one consensus finding (3 of 5 reviewers; minimax failed, 2 reported nothing): the head-derived path queued `<T>` without checking it is a tracking issue. Valid; fixed per AD-8 (one REST read on a completion-PR merge, issue not pull request, `ai:orchestrator-tracking` label, fail closed) with `test_completion_pr_head_needs_a_tracking_issue`.
 - 2026-10-01 final-merge review round 1 (head f11e889, run 36819687680, ledger 58f99c54…): all 6 reviewers flagged the completion-PR gate as unreachable for the production `Refs #<T>` body and the positive-path test as using a URL body. Valid; fixed per AD-7 (head-derived `<T>`, lineage list only; export dedupes; the lineage step no longer skips when only the derived list is set; production-body tests).

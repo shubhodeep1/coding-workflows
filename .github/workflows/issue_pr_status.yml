@@ -234,10 +234,17 @@ jobs:
           LINEAGE_FINALIZE_ISSUE_NUMBERS=""
           # Issues put in TRACKING_ISSUES only because their classification
           # lookup failed. The gate never read their labels or body, so
-          # they may be tracking issues: their lineage follows the same
-          # completion-PR rule (fail closed, #5227, #5619), which never
-          # finalizes on an unmerged close (stricter than #5617). This
-          # list only picks the log line.
+          # they may be tracking issues, and that skip list keeps their
+          # labels and state untouched. Membership here is a fail-closed
+          # gate, not just a log choice: the loop's tracking-issue branch
+          # checks it before queuing a completion-PR head's issue, so an
+          # unclassified issue's lineage is never finalized — not on a
+          # default-branch merge, not on an unmerged close (stricter than
+          # #5617), and not on a merge of a matching
+          # `orchestrator/project-<n>` head, because nothing verified its
+          # `ai:orchestrator-tracking` label (#5227, #5619). Removing that
+          # check would reopen the bypass; the second membership check in
+          # the loop only picks the log line for a non-completion PR.
           LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS=""
           if ! type issue_body_integration_branch >/dev/null 2>&1; then
             # Older gh_helpers.sh: no parser, so only default-branch
