@@ -32,6 +32,23 @@ if not args or args[0] != "api":
 path = args[1]
 jq_filter = args[args.index("--jq") + 1] if "--jq" in args else None
 issue_path = "repos/" + os.environ["TEST_REPO"] + "/issues/" + os.environ["ISSUE_NUMBER"]
+
+
+def pull_reads():
+	# wait-implement's PR lookups so far, this call included: the clock for
+	# STUB_PR_NUMBER_AFTER and STUB_RUN_PAGES_SWITCH_AFTER.
+	with open(os.environ["STUB_GH_LOG"], encoding="utf-8") as log:
+		return sum(1 for line in log if "/pulls?" in json.loads(line)[1])
+
+
+def run_pages():
+	# STUB_RUN_PAGES until STUB_RUN_PAGES_SWITCH_AFTER PR lookups, then STUB_RUN_PAGES_LATER.
+	pages_path = os.environ["STUB_RUN_PAGES"]
+	if os.environ.get("STUB_RUN_PAGES_SWITCH_AFTER") and pull_reads() > int(os.environ["STUB_RUN_PAGES_SWITCH_AFTER"]):
+		pages_path = os.environ["STUB_RUN_PAGES_LATER"]
+	return json.loads(open(pages_path, encoding="utf-8").read())
+
+
 if path == issue_path:
 	# STUB_LABELS until STUB_LABELS_SWITCH_AFTER issue reads, then STUB_LABELS_LATER.
 	with open(os.environ["STUB_GH_LOG"], encoding="utf-8") as log:
@@ -43,14 +60,24 @@ if path == issue_path:
 elif path.startswith(issue_path + "/comments"):
 	payload = []
 elif "/pulls?" in path:
-	# wait-implement's PR lookup: one open PR when STUB_PR_NUMBER is set.
+	# wait-implement's PR lookup: one open PR when STUB_PR_NUMBER is set,
+	# and only after STUB_PR_NUMBER_AFTER lookups when that is set too.
 	payload = [{"number": int(os.environ["STUB_PR_NUMBER"])}] if os.environ.get("STUB_PR_NUMBER") else []
+	if os.environ.get("STUB_PR_NUMBER_AFTER") and pull_reads() <= int(os.environ["STUB_PR_NUMBER_AFTER"]):
+		payload = []
+	# A slow PR lookup: the STUB_SLOW_PULL_READ-th one moves the stub clock
+	# STUB_SLOW_SECONDS ahead (STUB_DATE_OFFSET).
+	if os.environ.get("STUB_SLOW_PULL_READ") and pull_reads() == int(os.environ["STUB_SLOW_PULL_READ"]):
+		offset_path = os.environ["STUB_DATE_OFFSET"]
+		offset = int(open(offset_path).read()) if os.path.exists(offset_path) else 0
+		with open(offset_path, "w") as handle:
+			handle.write(str(offset + int(os.environ["STUB_SLOW_SECONDS"])))
 elif "/actions/runs?" in path and os.environ.get("STUB_UNPAGED_RUNS_INVALID") and "&page=" not in path:
 	# The other-active check's page-1 read (fetch_plan_runs_json) is the only
 	# runs request without &page=; this makes just that read unreadable.
 	payload = {"workflow_runs": None}
 elif "/actions/runs?" in path:
-	pages = json.loads(open(os.environ["STUB_RUN_PAGES"], encoding="utf-8").read())
+	pages = run_pages()
 	match = re.search(r"[?&]page=(\d+)", path)
 	page = int(match.group(1)) if match else 1
 	if os.environ.get("STUB_RUN_PAGE_FAILS") == str(page):
@@ -58,6 +85,22 @@ elif "/actions/runs?" in path:
 		sys.stderr.write("HTTP 502: Bad Gateway\n")
 		sys.exit(1)
 	payload = {"workflow_runs": pages[page - 1] if page <= len(pages) else []}
+elif re.fullmatch(r"repos/[^/]+/[^/]+/actions/runs/\d+", path):
+	# wait-implement's cached run read: the run as the current pages show it,
+	# or a failed read when STUB_RUN_BY_ID_FAILS is set.
+	if os.environ.get("STUB_RUN_BY_ID_FAILS"):
+		sys.stderr.write("HTTP 502: Bad Gateway\n")
+		sys.exit(1)
+	run_id = int(path.rsplit("/", 1)[1])
+	found = [run for page_runs in run_pages() for run in (page_runs or []) if run.get("id") == run_id]
+	if not found:
+		sys.stderr.write("HTTP 404: Not Found\n")
+		sys.exit(1)
+	payload = found[0]
+elif re.fullmatch(r"repos/[^/]+/[^/]+/actions/runs/\d+/jobs\?.*", path):
+	payload = {"jobs": []}
+elif "/commits?" in path:
+	payload = []
 else:
 	sys.stderr.write("stub gh: unexpected path " + path + "\n")
 	sys.exit(1)
@@ -65,6 +108,26 @@ text = json.dumps(payload)
 if jq_filter is not None:
 	text = subprocess.run(["jq", "-r", jq_filter], input=text, capture_output=True, text=True, check=True).stdout.rstrip("\n")
 sys.stdout.write(text)
+'''
+
+
+# Stub `date` for wait-implement tests: `date +%s` returns a clock that
+# advances STUB_DATE_STEP seconds (default 100) per call (counter in
+# STUB_DATE_COUNTER), plus any seconds a slow stub call added to
+# STUB_DATE_OFFSET; anything else goes to the real date.
+STUB_DATE = r'''#!/usr/bin/env python3
+import os, sys
+if sys.argv[1:] == ["+%s"]:
+	counter = os.environ["STUB_DATE_COUNTER"]
+	ticks = int(open(counter).read()) if os.path.exists(counter) else 0
+	with open(counter, "w") as handle:
+		handle.write(str(ticks + 1))
+	offset_path = os.environ["STUB_DATE_OFFSET"]
+	offset = int(open(offset_path).read()) if os.path.exists(offset_path) else 0
+	sys.stdout.write(str(1790000000 + int(os.environ.get("STUB_DATE_STEP", "100")) * ticks + offset) + "\n")
+	sys.exit(0)
+real_date = "/usr/bin/date" if os.path.exists("/usr/bin/date") else "/bin/date"
+os.execv(real_date, [real_date] + sys.argv[1:])
 '''
 
 
@@ -394,9 +457,13 @@ def _phase_step_script(step_id: str) -> str:
 	raise AssertionError(f"{step_id} step not found")
 
 
-def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE) -> tuple[int, dict[str, str], list[list[str]], str]:
+def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, pr_after: int | None = None, pages_later: list | None = None, switch_after: int = 0, fail_page: int | None = None, phase_timeout: str = "60", fake_clock: bool = False, run_by_id_fails: bool = False, clock_step: int = 100, slow_pull_read: int | None = None, slow_pull_seconds: int = 0) -> tuple[int, dict[str, str], list[list[str]], str]:
 	# Runs the real wait-clarify / wait-implement script against the stub gh
 	# and returns its exit code, GITHUB_OUTPUT, gh calls, and combined output.
+	# fake_clock puts a stub `date` on PATH whose `date +%s` advances
+	# clock_step seconds (default 100) per call, so wait-implement's 60-second
+	# grace period elapses at once; slow_pull_read makes that PR lookup move
+	# the clock slow_pull_seconds ahead.
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		bin_dir = tmp_path / "bin"
@@ -407,8 +474,14 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 		sleep = bin_dir / "sleep"
 		sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 		sleep.chmod(0o755)
+		if fake_clock:
+			date = bin_dir / "date"
+			date.write_text(STUB_DATE, encoding="utf-8")
+			date.chmod(0o755)
 		pages_file = tmp_path / "pages.json"
 		pages_file.write_text(json.dumps(pages), encoding="utf-8")
+		pages_later_file = tmp_path / "pages_later.json"
+		pages_later_file.write_text(json.dumps(pages_later if pages_later is not None else pages), encoding="utf-8")
 		log_file = tmp_path / "gh.log"
 		log_file.touch()
 		output_file = tmp_path / "github_output"
@@ -419,15 +492,30 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 			"TEST_REPO": "owner/repo",
 			"ISSUE_NUMBER": ISSUE_NUMBER,
 			"ISSUE_TITLE": issue_title,
-			"PHASE_TIMEOUT": "60",
+			"PHASE_TIMEOUT": phase_timeout,
 			"POLL_INTERVAL": "0",
 			"GITHUB_OUTPUT": str(output_file),
 			"STUB_GH_LOG": str(log_file),
 			"STUB_RUN_PAGES": str(pages_file),
+			"STUB_RUN_PAGES_LATER": str(pages_later_file),
+			"STUB_DATE_COUNTER": str(tmp_path / "date_counter"),
+			"STUB_DATE_OFFSET": str(tmp_path / "date_offset"),
+			"STUB_DATE_STEP": str(clock_step),
 			"STUB_LABELS": labels,
 		})
 		if pr_number is not None:
 			env["STUB_PR_NUMBER"] = str(pr_number)
+		if pr_after is not None:
+			env["STUB_PR_NUMBER_AFTER"] = str(pr_after)
+		if pages_later is not None:
+			env["STUB_RUN_PAGES_SWITCH_AFTER"] = str(switch_after)
+		if fail_page is not None:
+			env["STUB_RUN_PAGE_FAILS"] = str(fail_page)
+		if run_by_id_fails:
+			env["STUB_RUN_BY_ID_FAILS"] = "1"
+		if slow_pull_read is not None:
+			env["STUB_SLOW_PULL_READ"] = str(slow_pull_read)
+			env["STUB_SLOW_SECONDS"] = str(slow_pull_seconds)
 		proc = subprocess.run(["bash", "-c", _phase_step_script(step_id)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60)
 		outputs: dict[str, str] = {}
 		for line in output_file.read_text(encoding="utf-8").splitlines():
@@ -521,6 +609,188 @@ def test_clarify_and_implement_fail_before_polling_without_an_issue_title() -> N
 		assert "run_id" not in outputs, outputs
 		assert f"::error::Missing issue title for {phase} run scoping" in log, log
 		assert calls == [], calls
+
+
+OUR_IMPL_RUN_ID = 36720184070
+
+
+def _other_issue_completed_impl_page() -> list[dict]:
+	# Run 36717635823 (issue #5693): page 1 of the window held one completed
+	# Implement run, the alt-model job's cancelled run, among skipped runs.
+	return [_run(601, name="Internal: AI Implement", title=ALT_TITLE, conclusion="cancelled", created_at="2026-09-29T00:51:00Z")] + _noise_page(1000, count=99)
+
+
+def _our_impl_run_page(conclusion: str | None = None, status: str = "in_progress") -> list[dict]:
+	# A short page 2 holding our Implement run, older than every page-1 run.
+	return _noise_page(2000, count=37) + [_run(OUR_IMPL_RUN_ID, name="Internal: AI Implement", conclusion=conclusion, status=status, created_at="2026-09-29T00:48:42Z")]
+
+
+# PR #5712 review round 4: a terminal check reads the clock at NOW, at the
+# check itself, and after a walk, so at the default 100 s per read the 120 s
+# retry interval has always passed by the next check. Tests of that interval
+# use 40 s per read: one grace-period poll, then terminal checks where a walk
+# ends 80 s before the next check (waiting) and 160 s before the one after.
+RETRY_CLOCK_STEP = 40
+
+
+def _run_by_id_reads(calls: list[list[str]]) -> list[str]:
+	return [call[1] for call in calls if call[1].endswith(f"/actions/runs/{OUR_IMPL_RUN_ID}")]
+
+
+def test_implement_keeps_waiting_while_our_run_is_active_behind_other_completed_runs() -> None:
+	# Issue #5693: page 1 showed "1 total, 0 active" (another issue's cancelled
+	# run) while our run was in progress past it; the step failed with "All 1
+	# implement workflow run(s) completed". It must wait for our run instead.
+	pages = [_other_issue_completed_impl_page(), _our_impl_run_page()]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, pr_number=42, pr_after=5, fake_clock=True)
+	assert rc == 0, log
+	assert outputs.get("status") == "success", outputs
+	assert outputs.get("run_id") == str(OUR_IMPL_RUN_ID), outputs
+	assert outputs.get("pr_number") == "42", outputs
+	assert "no PR was created" not in log, log
+	assert f"Implement run {OUR_IMPL_RUN_ID} for issue #4712 is still active" in log, log
+	# The next terminal check re-reads the cached run by ID instead of walking.
+	assert f"Implement run {OUR_IMPL_RUN_ID} for issue #4712 is still in_progress" in log, log
+	assert len(_run_by_id_reads(calls)) == 1, _run_by_id_reads(calls)
+	page_two_reads = [path for path in _run_pages_requested(calls) if "&page=2&" in path]
+	# One walk at the first terminal check, one run-ID capture once the PR appears.
+	assert len(page_two_reads) == 2, page_two_reads
+	assert all(f"created=>{APPROVED_AT}" in path for path in page_two_reads), page_two_reads
+
+
+def test_implement_fails_with_our_run_id_when_our_run_completed_without_a_pr() -> None:
+	pages = [_other_issue_completed_impl_page(), _our_impl_run_page(conclusion="failure", status="completed")]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, fake_clock=True)
+	assert rc == 1, log
+	assert outputs.get("status") == "implement_failed", outputs
+	assert f"::error::All 1 implement workflow run(s) completed but no PR was created — issue #4712's newest Implement run {OUR_IMPL_RUN_ID} concluded failure" in log, log
+
+
+def test_implement_fails_when_no_run_ran_for_our_issue() -> None:
+	# The guard is not weakened: a complete walk with no non-skipped Implement
+	# run for the issue (a skipped one of ours does not count) still fails.
+	# PR #5712 review round 3: the first empty walk is confirmed by a second
+	# complete walk IMPL_SCOPED_RETRY_SECONDS later (walk, throttled 80 s after
+	# it, walk again) before the step fails.
+	page_two = _noise_page(2000, count=10) + [_run(700, name="Internal: AI Implement", conclusion="skipped")]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", [_other_issue_completed_impl_page(), page_two], fake_clock=True, clock_step=RETRY_CLOCK_STEP)
+	assert rc == 1, log
+	assert outputs.get("status") == "implement_failed", outputs
+	assert f"No non-skipped Implement run titled '{ISSUE_TITLE}' is listed yet — walking again after 120s to confirm before failing, waiting" in log, log
+	assert "No Implement run for issue #4712 was listed by a walk that finished 80s ago — walking again after 120s to confirm, waiting" in log, log
+	assert f"::error::All 1 implement workflow run(s) completed but no PR was created — none of them ran for issue #4712: no non-skipped Implement run titled '{ISSUE_TITLE}' was created after {APPROVED_AT} (confirmed by a second walk that finished 200s after the first)" in log, log
+	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 2, _run_pages_requested(calls)
+
+
+def test_implement_times_the_confirming_walk_from_the_end_of_the_empty_walk() -> None:
+	# PR #5712 review round 4: the first terminal check's PR recheck is slow
+	# (150 s), so its empty walk ends well after that iteration's NOW. Timed
+	# from NOW, the next check walked again 40 s after the empty walk and
+	# failed; timed from the end of the walk, it waits, and the confirming walk
+	# runs 120 s or more after it.
+	page_two = _noise_page(2000, count=10)
+	# Read 1 is the grace-period poll; reads 2 and 3 are the first terminal
+	# check's poll and recheck.
+	rc, outputs, calls, log = _run_phase_step("wait-implement", [_other_issue_completed_impl_page(), page_two], fake_clock=True, clock_step=RETRY_CLOCK_STEP, slow_pull_read=3, slow_pull_seconds=150)
+	assert rc == 1, log
+	assert outputs.get("status") == "implement_failed", outputs
+	assert "No Implement run for issue #4712 was listed by a walk that finished 80s ago — walking again after 120s to confirm, waiting" in log, log
+	assert "(confirmed by a second walk that finished 200s after the first)" in log, log
+	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 2, _run_pages_requested(calls)
+
+
+def test_implement_keeps_waiting_when_our_run_is_listed_after_an_empty_walk() -> None:
+	# PR #5712 review round 3: our run is missing from the first walk (not yet
+	# listed) and appears by the confirming walk, which caches it and waits; the
+	# PR then appears. One grace-period poll makes one PR lookup and each
+	# terminal check two (poll + recheck), so switch_after=5 serves the later
+	# pages from the third terminal check on (walk, throttled, walk).
+	pages = [_other_issue_completed_impl_page(), _noise_page(2000, count=37)]
+	pages_later = [_other_issue_completed_impl_page(), _our_impl_run_page()]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, pr_number=42, pr_after=9, pages_later=pages_later, switch_after=5, fake_clock=True, clock_step=RETRY_CLOCK_STEP)
+	assert rc == 0, log
+	assert outputs.get("status") == "success", outputs
+	assert outputs.get("run_id") == str(OUR_IMPL_RUN_ID), outputs
+	assert "no PR was created" not in log, log
+	assert f"No non-skipped Implement run titled '{ISSUE_TITLE}' is listed yet" in log, log
+	assert f"Implement run {OUR_IMPL_RUN_ID} for issue #4712 is still active" in log, log
+
+
+def test_implement_treats_an_unreadable_page_as_unknown_until_the_inactivity_limit() -> None:
+	# PHASE_TIMEOUT=1 and the fake clock make the second terminal check exceed
+	# the limit.
+	pages = [_other_issue_completed_impl_page(), _our_impl_run_page(conclusion="failure", status="completed")]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, fail_page=2, phase_timeout="1", fake_clock=True, clock_step=RETRY_CLOCK_STEP)
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "Implement runs finished: a runs page could not be read — treating as unknown, waiting" in log, log
+	assert "no PR was created" not in log, log
+	assert "::error::Implement phase stalled — no activity for 1 minutes" in log, log
+	# PR #5712 review: the second terminal check, 80 s after the unreadable
+	# walk, is inside IMPL_SCOPED_RETRY_SECONDS and does not walk again.
+	assert "a read of a runs page first failed 80s ago — walking again after 120s, waiting" in log, log
+	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 1, _run_pages_requested(calls)
+
+
+def test_implement_walks_again_after_an_unreadable_page_once_the_retry_interval_passed() -> None:
+	# PHASE_TIMEOUT=5 gives four terminal checks: walk (unreadable), throttled
+	# 80 s after it, walk again 160 s after it, throttled; then the inactivity
+	# limit.
+	pages = [_other_issue_completed_impl_page(), _our_impl_run_page(conclusion="failure", status="completed")]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, fail_page=2, phase_timeout="5", fake_clock=True, clock_step=RETRY_CLOCK_STEP)
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "no PR was created" not in log, log
+	assert log.count("a runs page could not be read — treating as unknown, waiting") == 2, log
+	assert log.count("walking again after 120s, waiting") == 2, log
+	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 2, _run_pages_requested(calls)
+
+
+def test_implement_treats_a_capped_walk_as_unknown_and_reads_at_most_ten_pages() -> None:
+	pages = [_other_issue_completed_impl_page()] + [_noise_page(3000 + 100 * i) for i in range(11)]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, phase_timeout="5", fake_clock=True)
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "every page up to 10 was full — treating as unknown, waiting" in log, log
+	assert "no PR was created" not in log, log
+	# PR #5712 review: the window only grows, so the cap is kept and later
+	# terminal checks never walk again.
+	assert "an earlier walk found every page up to 10 full — treating as unknown, waiting" in log, log
+	paged = [path for path in _run_pages_requested(calls) if "&page=" in path]
+	# One walk of 10 pages across every terminal check; never page 11.
+	assert len(paged) == 10, len(paged)
+	assert not any("&page=11&" in path for path in paged), paged
+
+
+def test_implement_walks_again_once_the_cached_run_completes() -> None:
+	# The first terminal check caches our active run; by the second our run has
+	# failed, so the cached read sees "completed" and a new walk decides.
+	pages = [_other_issue_completed_impl_page(), _our_impl_run_page()]
+	pages_later = [_other_issue_completed_impl_page(), _our_impl_run_page(conclusion="failure", status="completed")]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, pages_later=pages_later, switch_after=3, fake_clock=True)
+	assert rc == 1, log
+	assert outputs.get("status") == "implement_failed", outputs
+	assert f"Implement run {OUR_IMPL_RUN_ID} for issue #4712 is still active" in log, log
+	assert f"newest Implement run {OUR_IMPL_RUN_ID} concluded failure" in log, log
+	assert len(_run_by_id_reads(calls)) == 1, _run_by_id_reads(calls)
+
+
+def test_implement_throttles_the_walk_when_the_cached_run_cannot_be_read() -> None:
+	# PR #5712 review round 2: a read of the cached run that keeps failing must
+	# not send every poll back to a full walk. PHASE_TIMEOUT=5 gives four
+	# terminal checks 80 s apart: walk (caches our active run), by-ID read
+	# fails (throttled), fails again 80 s later (throttled), fails 160 s after
+	# the first failure and walks again; then the inactivity limit.
+	pages = [_other_issue_completed_impl_page(), _our_impl_run_page()]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, phase_timeout="5", fake_clock=True, run_by_id_fails=True, clock_step=RETRY_CLOCK_STEP)
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "no PR was created" not in log, log
+	assert f"a read of Implement run {OUR_IMPL_RUN_ID} first failed 0s ago — walking again after 120s, waiting" in log, log
+	assert f"a read of Implement run {OUR_IMPL_RUN_ID} first failed 80s ago — walking again after 120s, waiting" in log, log
+	assert log.count(f"Implement run {OUR_IMPL_RUN_ID} for issue #4712 is still active") == 2, log
+	assert len(_run_by_id_reads(calls)) == 3, _run_by_id_reads(calls)
+	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 2, _run_pages_requested(calls)
 
 
 def main() -> int:
