@@ -284,6 +284,7 @@ jobs:
       force_full_review_tier: ${{ steps.evaluate.outputs.force_full_review_tier }}
       head_ref: ${{ steps.evaluate.outputs.head_ref }}
       head_sha: ${{ steps.evaluate.outputs.head_sha }}
+      review_checkout_sha: ${{ steps.evaluate.outputs.review_checkout_sha }}
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
       post_merge_validate_context_definitely_empty: ${{ steps.evaluate.outputs.post_merge_validate_context_definitely_empty }}
@@ -485,6 +486,7 @@ jobs:
           pr_mergeable=""
           pr_mergeable_state=""
           pr_head_sha_gate=""
+          pr_head_repo_gate=""
           pr_title_cached="${PR_TITLE:-}"
           pr_body_cached="${PR_BODY:-}"
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -512,12 +514,13 @@ jobs:
             # suppression below), and changed_files (to verify the paginated
             # path list before either skip branch can run).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), head_repo: (.head.repo.full_name // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
               pr_head_ref="$(printf '%s' "${_pr_gate}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
               pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
+              pr_head_repo_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_repo // ""' 2>/dev/null || echo "")"
               pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
               pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
               pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
@@ -1549,6 +1552,26 @@ jobs:
           # exact head evaluated by this gate. Consumers fail closed when the
           # authenticated PR metadata did not provide a head SHA.
           echo "head_sha=${pr_head_sha_gate}" >> "${GITHUB_OUTPUT}"
+          # Commit codex-agent's "Checkout repo" puts into GITHUB_WORKSPACE
+          # when the event carries no pull_request payload (workflow_dispatch:
+          # the sweep's re-runs and the claude_fixer_converged_head dispatch).
+          # The reviewers read files from GITHUB_WORKSPACE, so without this a
+          # dispatched run reviewed the default branch's files against the
+          # PR's diff (issue #5824). Same-repository heads only: a fork head
+          # is never checked out next to this run's secrets, so it keeps the
+          # event SHA and logs a warning. Rides the /pulls/{n} fetch above
+          # (§15).
+          review_checkout_sha_gate=""
+          if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+            if [ -n "${pr_head_repo_gate}" ] && [ "${pr_head_repo_gate}" = "${REPOSITORY}" ]; then
+              review_checkout_sha_gate="${pr_head_sha_gate}"
+              echo "AUTOFIX_GATE_REVIEW_CHECKOUT pr=${PR_NUMBER} event=${EVENT_NAME:-unknown} head_sha=${pr_head_sha_gate} head_repo=${pr_head_repo_gate} checkout=pr_head"
+            elif [ "${EVENT_NAME:-}" != "pull_request" ]; then
+              echo "AUTOFIX_GATE_REVIEW_CHECKOUT pr=${PR_NUMBER} event=${EVENT_NAME:-unknown} head_sha=${pr_head_sha_gate} head_repo=${pr_head_repo_gate:-unknown} checkout=event_sha reason=cross_repo_head"
+              echo "::warning::PR #${PR_NUMBER} head is in ${pr_head_repo_gate:-an unknown repository}, not ${REPOSITORY}; this ${EVENT_NAME:-unknown} run checks out the event SHA, so reviewers read the base files, not the PR head."
+            fi
+          fi
+          echo "review_checkout_sha=${review_checkout_sha_gate}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
           echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
@@ -2444,8 +2467,12 @@ jobs:
           # (refs/pull/<number>/merge). When the PR has merge conflicts,
           # the merge ref may not exist, causing checkout to fail and
           # preventing the entire workflow — including conflict resolution
-          # — from running.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # — from running. A run with no pull_request payload (a dispatch)
+          # takes the same-repository head SHA the gate read, so the
+          # reviewers, which read files from GITHUB_WORKSPACE, see the PR
+          # head and not the default branch (issue #5824). github.sha stays
+          # the fallback for the no-PR claude/** push path and fork heads.
+          ref: ${{ github.event.pull_request.head.sha || needs.gate.outputs.review_checkout_sha || github.sha }}
           # Shallow clone to bound disk/memory cost on history-heavy
           # consumer repos.  fetch-depth: 0 (full clone with all branches +
           # tags) was the dominant cause of "runner died mid-step" on

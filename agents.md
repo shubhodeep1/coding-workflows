@@ -653,6 +653,31 @@ a new value, add it to the appropriate overrides file with a
 - The `.codex-workflow-src` fallback is the verified workflow-commit checkout;
   a missing required script never falls back to a PR-head or moving-ref copy.
 
+## Review checkout on dispatched runs
+
+- `codex-agent` → "Checkout repo" in `review_autofix.yml` checks out
+  `github.event.pull_request.head.sha || needs.gate.outputs.review_checkout_sha || github.sha`
+  into `GITHUB_WORKSPACE`. The reviewer panel, the summariser, the slop scan,
+  and the reviewer file-context helpers read files from `GITHUB_WORKSPACE`,
+  while "Activate workspace shell context" points `GIT_DIR` at
+  `GITHUB_WORKSPACE/.git` and `GIT_WORK_TREE` at `WORKSPACE_PATH`, where
+  "Checkout PR head branch" lands the head.
+- `review_checkout_sha` is the gate's PR head SHA when the head is in this
+  repository, read from the gate's single `/pulls/<n>` fetch (no extra API
+  call). It covers runs with no `pull_request` payload: the sweep's
+  `workflow_dispatch` re-runs and the Claude-fixer
+  `claude_fixer_converged_head` dispatch. Before issue #5824 those runs
+  reviewed the default branch's files against the PR's diff and handed off
+  false "missing at HEAD" findings (run 36794195824, PR #5097).
+- `pull_request` runs keep the event's head SHA, and the no-PR `claude/**`
+  push path keeps `github.sha` (the pushed commit). A dispatched run on a
+  fork head keeps `github.sha` too, so fork code never lands next to the
+  run's secrets; the gate logs `AUTOFIX_GATE_REVIEW_CHECKOUT ...
+  checkout=event_sha reason=cross_repo_head` with a warning. A resolved
+  checkout logs `checkout=pr_head`.
+- `tests/test_review_autofix_dispatch_pr_head_checkout.py` pins the wiring and
+  runs the gate fragment for each event shape.
+
 ## Test-suite git environment isolation
 
 - `tests/conftest.py` strips the repo-pinning git variables (`GIT_DIR`,
