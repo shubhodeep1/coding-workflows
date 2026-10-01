@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-5858-phase4b-rate-limit-aware-pr-state-plan.md
 - Source issue: shubhodeep1/coding-workflows#5858
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5858-phase4b-rate-limit-aware-pr-state   Final PR: (opening)
+- Project branch: claude/implement-plan-issue-5858-phase4b-rate-limit-aware-pr-state   Final PR: #5861 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,16 +11,16 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: project started by /implement-issue-claude (issue mode); plan and log committed.
+- Last note: phase 1 implemented and verified; phase PR opened against the project branch.
 
 ## Phases
 1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
-   - [ ] `gh_api_with_retry` returns `GH_API_RATE_LIMITED_RC` (75) on a rate-limited attempt without the short retries
-   - [ ] `fetch_pr_state` reports `rate_limited` separately from `unknown`
-   - [ ] `phase4b_rate_limit_wait_seconds` derives the wait from `GET /rate_limit`, capped at the deadline
-   - [ ] poll loop: `rate_limited` branch leaves `PR_STATE_FAILURES` unchanged and waits (capped at the registration deadline while no run is registered)
-   - [ ] behavioural + contract tests; every existing test in the file passes under `python3 <file>` and `pytest`
-   - [ ] changelog fragment
+   - [x] `gh_api_with_retry` returns `GH_API_RATE_LIMITED_RC` (75) on a rate-limited attempt without the short retries
+   - [x] `fetch_pr_state` reports `rate_limited` separately from `unknown`
+   - [x] `phase4b_rate_limit_wait_seconds` derives the wait from `GET /rate_limit`, capped at the deadline
+   - [x] poll loop: `rate_limited` branch leaves `PR_STATE_FAILURES` unchanged and waits (capped at the registration deadline while no run is registered)
+   - [x] behavioural + contract tests; every existing test in the file passes under `python3 <file>` and `pytest`
+   - [x] changelog fragment
    - Done when: the plan's Phase 1 "done" condition holds.
 
 ## Conformance
