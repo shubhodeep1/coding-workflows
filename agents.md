@@ -928,7 +928,9 @@ never repeats `budget` or `descope` for the same fingerprint (`close`
 stays available; the fingerprint of `intervention-cap` and
 `fix-check-defective` includes the PR number, and their `ES-<n>` entry's
 `why=` starts with `PR #<N>: `, which `escalation_ledger.py record`
-enforces, so the intervention cap of one PR counts only its own grants),
+enforces, checking `<N>` against the `pr` of the evidence the fingerprint
+was computed from, so the intervention cap of one PR counts only its own
+grants),
 never skips or waives a security or validation pass, never merges, and
 sends a `PushNotification` only for `close`. A `budget` for
 `fix-check-defective` is a fix round: a

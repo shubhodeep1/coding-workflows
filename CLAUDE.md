@@ -2270,9 +2270,10 @@ This is an explicit carve-out from §0 and §2 (including §2's
   label), sends no `PushNotification`, and hands its project checker the
   escalation wait, as the command describes. Only when that wait cannot
   be armed (the claude-code-remote tools are missing, or a call is
-  refused) does the stop wait for a human. In issue mode nobody watches
-  the session, so the ask is delivered on the source issue: one comment
-  naming the blocker, the options, and the recommended one, the
+  refused) does the stop wait for a human, and only that fallback
+  notifies: in issue mode nobody watches the session, so for that
+  fallback the ask is delivered on the source issue: one comment naming
+  the blocker, the options, and the recommended one, the
   `ai:claude-blocked` label, and one `PushNotification`. A human answers
   there and comments `/reclarify` to resume.
 - **Ask-first operations** — §22.B (DigitalOcean mutations), §23.C

@@ -57,6 +57,14 @@ def _entry(n, stop="security-cap", fp=FP, choice="budget", why="narrower fix"):
 	return f"- ES-{n} [{stop}, 2026-09-29] fingerprint={fp} choice={choice} why={why}\n"
 
 
+def _pr_evidence(tmp_path, stop, pr=12):
+	"""An evidence file for a PR-scoped stop and the fingerprint it gives."""
+	evidence = {"checks": ["unit tests"], "pr": pr}
+	path = tmp_path / f"evidence-{stop}-{pr}.json"
+	path.write_text(json.dumps(evidence), encoding="utf-8")
+	return str(path), ledger.fingerprint(stop, evidence)
+
+
 # --- fingerprint -----------------------------------------------------------
 
 
@@ -272,9 +280,11 @@ def test_record_prints_the_next_line_and_writes_nothing(tmp_path, capsys):
 
 
 def test_record_starts_at_one_and_takes_an_explicit_date(tmp_path, capsys):
+	evidence_file, fp = _pr_evidence(tmp_path, "intervention-cap")
 	code, out = _run(
-		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "intervention-cap", "--fingerprint", FP,
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "intervention-cap", "--fingerprint", fp,
 		"--choice", "close", "--why", "PR #12: budget and descope both used", "--date", "2026-10-01",
+		"--evidence-file", evidence_file,
 	)
 	assert code == 0 and out["id"] == "ES-1"
 	assert out["line"].startswith("- ES-1 [intervention-cap, 2026-10-01] ")
@@ -290,21 +300,73 @@ def test_pr_scoped_record_requires_the_pr_prefix(tmp_path, capsys, stop, why):
 
 @pytest.mark.parametrize("stop", ["intervention-cap", "fix-check-defective"])
 def test_pr_scoped_record_accepts_the_pr_prefix(tmp_path, capsys, stop):
+	evidence_file, fp = _pr_evidence(tmp_path, stop)
 	code, out = _run(
-		capsys, "record", "--log", str(_log(tmp_path)), "--stop", stop, "--fingerprint", FP,
-		"--choice", "budget", "--why", "  PR #12:   retry the failing check  ",
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", stop, "--fingerprint", fp,
+		"--choice", "budget", "--why", "  PR #12:   retry the failing check  ", "--evidence-file", evidence_file,
 	)
 	assert code == 0
 	assert out["line"].endswith("why=PR #12: retry the failing check")
+
+
+@pytest.mark.parametrize("stop", ["intervention-cap", "fix-check-defective"])
+def test_pr_scoped_record_requires_the_evidence(tmp_path, capsys, stop):
+	# Without the evidence the PR in `why=` cannot be checked against the fingerprint.
+	_, fp = _pr_evidence(tmp_path, stop)
+	code, out = _run(
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", stop, "--fingerprint", fp,
+		"--choice", "budget", "--why", "PR #12: retry the failing check",
+	)
+	assert code == 1 and "pass the evidence" in out["error"]
+
+
+@pytest.mark.parametrize("stop", ["intervention-cap", "fix-check-defective"])
+@pytest.mark.parametrize("why_pr", ["13", "120", "1"])
+def test_pr_scoped_record_refuses_a_reason_naming_another_pr(tmp_path, capsys, stop, why_pr):
+	# A grant recorded under another PR's number would be counted for that PR's cap.
+	evidence_file, fp = _pr_evidence(tmp_path, stop, pr="#12")
+	code, out = _run(
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", stop, "--fingerprint", fp,
+		"--choice", "budget", "--why", f"PR #{why_pr}: retry the failing check", "--evidence-file", evidence_file,
+	)
+	assert code == 1 and "is about PR #12" in out["error"] and "'PR #12: '" in out["error"]
+
+
+@pytest.mark.parametrize("stop", ["intervention-cap", "fix-check-defective", "security-cap"])
+def test_record_refuses_evidence_that_does_not_give_the_fingerprint(tmp_path, capsys, stop):
+	# FP was not computed from this evidence, so the entry would name another failure.
+	evidence_file = tmp_path / "evidence.json"
+	evidence_file.write_text(json.dumps({"issues": [7], "pr": 12}), encoding="utf-8")
+	code, out = _run(
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", stop, "--fingerprint", FP,
+		"--choice", "budget", "--why", "PR #12: retry", "--evidence-file", str(evidence_file),
+	)
+	assert code == 1 and "does not give fingerprint 0123456789ab" in out["error"]
+
+
+def test_project_scoped_record_accepts_matching_evidence(tmp_path, capsys):
+	evidence = '{"issues": [7, 9]}'
+	fp = ledger.fingerprint("security-cap", json.loads(evidence))
+	code, _ = _run(
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "security-cap", "--fingerprint", fp,
+		"--choice", "budget", "--why", "re-dispatch the audit", "--evidence", evidence,
+	)
+	assert code == 0
+	code, _ = _run(
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "security-cap", "--fingerprint", fp,
+		"--choice", "budget", "--why", "x", "--evidence", evidence, "--evidence-file", str(tmp_path / "e.json"),
+	)
+	assert code == 1
 
 
 def test_record_reads_the_reason_from_a_file_verbatim(tmp_path, capsys):
 	# `--why-file` keeps shell syntax in the reason as literal text.
 	why_file = tmp_path / "why.txt"
 	why_file.write_text("PR #12: retry `make test` and $(rerun)\n", encoding="utf-8")
+	evidence_file, fp = _pr_evidence(tmp_path, "intervention-cap")
 	code, out = _run(
-		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "intervention-cap", "--fingerprint", FP,
-		"--choice", "budget", "--why-file", str(why_file),
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "intervention-cap", "--fingerprint", fp,
+		"--choice", "budget", "--why-file", str(why_file), "--evidence-file", evidence_file,
 	)
 	assert code == 0
 	assert out["line"].endswith("why=PR #12: retry `make test` and $(rerun)")

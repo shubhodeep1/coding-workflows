@@ -128,7 +128,7 @@ def test_judge_records_the_pr_of_a_pr_scoped_stop(judge):
 	# its `why=` names, so the judge must write that PR into `--why`.
 	record = judge[judge.index("5. **Record.**"):judge.index("6. **Post the escalation comment**")]
 	assert "start the reason with `PR #<N>: `, where `<N>` is the fingerprint's `pr`" in record
-	assert "`record` refuses a PR-scoped entry without that prefix (exit 1)" in record
+	assert "`record` refuses a PR-scoped entry without that prefix, without the evidence," in record
 
 
 def test_judge_passes_the_reason_through_a_file(judge):
@@ -139,6 +139,15 @@ def test_judge_passes_the_reason_through_a_file(judge):
 	assert "--choice <choice> --why-file <file>" in record
 	assert "Never pass the reason inline with `--why`" in record
 	assert '--why "' not in record
+
+
+def test_judge_records_with_the_fingerprint_evidence(judge):
+	# `record` checks the PR in `why=` against the evidence's `pr`, so the
+	# judge passes the step 2 evidence file it computed the fingerprint from.
+	record = judge[judge.index("5. **Record.**"):judge.index("6. **Post the escalation comment**")]
+	assert "--why-file <file> --evidence-file <evidence file>" in record
+	assert "`<evidence file>` is the step 2 file the fingerprint was computed from" in record
+	assert "or whose `<N>` is not the evidence's `pr` (exit 1)" in record
 
 
 def test_judge_close_skips_finished_items_and_keeps_going(judge):
@@ -343,6 +352,11 @@ def test_claude_md_section_28g():
 	assert failure.index("Only when that wait cannot be armed") < failure.index("one `PushNotification`")
 	assert failure.index("Only when that wait cannot be armed") < failure.index("`/reclarify`")
 	assert "The chain stops at `Status: BLOCKED` and asks" not in failure
+	# The issue-mode ask names the fallback it belongs to, so it never reads
+	# as a second instruction for every escalation stop.
+	assert "and only that fallback notifies" in failure
+	assert "so for that fallback the ask is delivered on the source issue" in failure
+	assert "In issue mode nobody watches the session, so the ask is delivered" not in failure
 
 
 @pytest.mark.parametrize("name", ["escalation-judge.md", "implement-plan-claude.md"])
