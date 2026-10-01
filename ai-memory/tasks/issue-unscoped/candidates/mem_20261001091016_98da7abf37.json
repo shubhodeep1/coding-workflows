@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:564 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: A path-matched review run with no usable `head_branch` and no parseable PR-number title produces no key, while the listing is still reported complete.\n  WHY: `_mt_release` can then treat an active review as absent and dispatch a duplicate; the finding is consistently rated MAJOR across reviewers.\n- scripts/review_merge_train.sh:447-455, 493 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: Sequential status queries can miss an active review run that changes status multiple times during the listing.\n  WHY: The run can transition between queried statuses without appearing in any snapshot, allowing `_mt_release` to treat the listing as complete and dispatch a duplicate; severity differs between reviewers (NIT and MAJOR), so the higher severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_merge_train.sh:564 | severity=MAJOR | confidence=[4]\n  PROBLEM: A matching review run with an empty `head_branch` and an unparseable `display_title` emits no key but the listing is treated as complete.\n  WHY: `_mt_release` can assume no review is active, retire the queue marker, remove the label, and dispatch a duplicate.\n- scripts/review_merge_train.sh:447-455, 493 | severity=NIT | confidence=[3]\n  PROBLEM: The two-pass design guarantees detection only when a run changes status at most once.\n  WHY: A run can transition between statuses during the listing and be invisible to all queries; the code documents this limitation.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/review_merge_train.sh:564 | severity=MAJOR | confidence=[4]\n  PROBLEM: A matching review run with an empty `head_branch` and an unparseable or absent `display_title` produces no key, but the listing is treated as complete.\n  WHY: `_mt_release` can assume no review is active and dispatch a duplicate while the unclassified run is executing.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_merge_train.sh:561-565 | severity=MAJOR | confidence=[4]\n  PROBLEM: A matching review run with an empty `head_branch` and a nonmatching `display_title` produces no key, but the listing is treated as complete.\n  WHY: `_mt_release` can retire the queue marker, remove the label, and dispatch a duplicate review beside the active run.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_merge_train.sh:493; `_mt_release` checks the returned keys at 640-641 | severity=MAJOR | confidence=[4]\n  PROBLEM: Sequential status queries can miss an active review run that changes status multiple times during the listing.\n  WHY: The run can transition between queried statuses without appearing in any snapshot, allowing `_mt_release` to dispatch another review while the first is active.\n- scripts/review_merge_train.sh:564; `_mt_release` matches the resulting keys at 640 | severity=MAJOR | confidence=[4]\n  PROBLEM: A matching review run without a usable `head_branch` or PR-number title produces no key, while the listing is still reported complete.\n  WHY: A queued PR can appear to have no active review, allowing release to retire its queue marker and dispatch another review.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_merge_train.sh:564 | severity=MAJOR | confidence=[4]\n  PROBLEM: A matching review run with an empty `head_branch` and missing or nonmatching PR-number title produces no key, but the listing returns complete.\n  WHY: `_mt_release` cannot see the run and may retire the queue marker and dispatch a duplicate review.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_merge_train.sh:564; `_mt_release` grep match at line 640 | severity=MAJOR | confidence=[4]\n  PROBLEM: A matching review run with an empty `head_branch` and a nonmatching `display_title` produces no key, but the listing is treated as complete.\n  WHY: `_mt_release` finds no match, releases the queued PR, and dispatches a duplicate review beside the still-active run.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "09b5f74a9ee45a703a08ae25553762405aab67ec998d49bc7a40647cdd025763",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5451,
+    "run_id": "36834841667",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36834841667",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001091016_98da7abf37",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5451,
+    "run_id": "36834841667"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T09:10:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
