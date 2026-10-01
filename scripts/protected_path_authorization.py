@@ -27,7 +27,8 @@ when all of these hold:
      merged head);
   2. `user.type` is `User` and `author_association` is OWNER, MEMBER, or
      COLLABORATOR;
-  3. `performed_via_github_app` is null: Claude sessions post through the
+  3. `performed_via_github_app` is present and null (a payload without the
+     field fails closed): Claude sessions post through the
      claude.ai proxy's GitHub App (`claude`), so an agent cannot authorize;
   4. it was never edited (`updated_at == created_at`), because an agent acting
      as the same account could edit an owner comment.
@@ -204,7 +205,12 @@ def comment_authorizes(comment: Any, head_sha: str) -> str:
 		return f"author type {user.get('type') or 'unknown'} is not User"
 	if comment.get("author_association") not in TRUSTED_ASSOCIATIONS:
 		return f"author association {comment.get('author_association') or 'none'} is not trusted"
-	if comment.get("performed_via_github_app") is not None:
+	# GitHub's REST comment payloads always carry this nullable field; a
+	# payload without it cannot show the comment was not posted through an
+	# app, so it fails closed instead of reading as null.
+	if "performed_via_github_app" not in comment:
+		return "performed_via_github_app is missing"
+	if comment["performed_via_github_app"] is not None:
 		app = comment["performed_via_github_app"]
 		slug = app.get("slug") if isinstance(app, dict) else None
 		return f"posted through GitHub App {slug or 'unknown'}"

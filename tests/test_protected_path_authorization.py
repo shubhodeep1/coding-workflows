@@ -140,6 +140,14 @@ def test_comment_rejections(overrides, reason):
 	assert reason in ppa.comment_authorizes(_comment(**overrides), HEAD)
 
 
+def test_comment_without_app_field_fails_closed():
+	comment = _comment()
+	del comment["performed_via_github_app"]
+	assert "performed_via_github_app is missing" in ppa.comment_authorizes(comment, HEAD)
+	assert ppa.authorizing_comment([comment], HEAD) is None
+	assert ppa.comment_authorizes(_comment(), HEAD) == ""
+
+
 def test_instruction_comment_never_authorizes():
 	body = ppa.instruction_body(HEAD, [".claude/settings.json"])
 	assert f"<!-- ai:protected-path-authorization:v1 head={HEAD} -->" in body

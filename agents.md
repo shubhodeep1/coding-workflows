@@ -1143,8 +1143,8 @@ reviews, comments, and conflicts stay a direct §12 request.
     `/authorize-protected-paths <40-hex head sha>`. It counts only when all
     of these hold:
     - the author is a `User` with OWNER/MEMBER/COLLABORATOR association;
-    - `performed_via_github_app` is null (Claude sessions post as the
-      `claude` app);
+    - `performed_via_github_app` is present and null (Claude sessions post
+      as the `claude` app; a payload without the field fails closed);
     - it was never edited.
   - **Merge.** Every `gh pr merge` in `scripts/*.sh` is prefixed with
     `protected_path_guarded_merge`. That covers `review_enable_auto_merge.sh`,
