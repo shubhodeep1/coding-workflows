@@ -314,6 +314,46 @@ def redact(text: str) -> str:
 	return text
 
 
+def _backticks_as_substitutions(text: str) -> str:
+	"""`text` with every backtick outside single quotes replaced by `$(` (opening) or `)` (closing).
+
+	The lexer then splits a `` `mysql -p…` `` substitution into commands of its
+	own, exactly as it splits `$(mysql -p…)` (issue #5124). A backtick inside
+	double quotes is replaced too, so the word carries `$(` and
+	_segment_credentials parses it. An escaped backtick (`\\``) is replaced as
+	well, without its backslash: it is text at this level, but a substitution
+	inside a `-c` command line (`sh -c "echo \\`mysql -p…\\`"`), and the lexer
+	keeps that backslash inside double quotes where Bash drops it. Reading
+	text as a command line too often only masks more.
+	"""
+	output: list[str] = []
+	quote = ""
+	opened = False
+	index = 0
+	while index < len(text):
+		char = text[index]
+		if char == "\\" and quote != "'":
+			if text[index + 1 : index + 2] == "`":
+				index += 1
+				continue
+			output.append(text[index : index + 2])
+			index += 2
+			continue
+		index += 1
+		if quote == "'":
+			quote = "" if char == "'" else quote
+		elif char == "'" and not quote:
+			quote = "'"
+		elif char == '"':
+			quote = "" if quote else '"'
+		elif char == "`":
+			output.append(")" if opened else "$(")
+			opened = not opened
+			continue
+		output.append(char)
+	return "".join(output)
+
+
 def _strip_url_userinfo(text: str) -> str:
 	"""`scheme://***@host…` for a URL with userinfo; any other text unchanged."""
 	return _URL_USERINFO_RE.sub(r"\1***@", text)
@@ -449,6 +489,9 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			elif attached_command and not attached_command.group(2).isalpha():
 				# An attached `-c` command line (`su -c'mysql -p…'`) is one value; `-ce` stays a flag cluster.
 				cut = attached_command.group(1) + "*"
+			if cut is None and "$(" in token.split("=", 1)[0]:
+				# A command substitution attached to a flag (`-o"$(mysql -p…)"`) is a value: it never reaches the shape.
+				cut = token[: token.index("$(")] + "*"
 			flag = cut if cut is not None else token.split("=", 1)[0] + ("=*" if "=" in token else "")
 			if flag in ("-X", "--method") and index < len(tokens):
 				flag = f"{flag} {tokens[index].upper()}"
@@ -477,7 +520,7 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 def command_shape(command: str) -> str:
 	"""Return the Bash command's shape: structure kept, literal values replaced by `*`."""
 	stripped = strip_heredocs(command, keep_delimiter=False)
-	lexer = shlex.shlex(stripped.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer = shlex.shlex(_backticks_as_substitutions(stripped).replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
@@ -551,9 +594,9 @@ def _word_credentials(word: str) -> set[str]:
 
 
 def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
-	"""Credential values in one simple command: word credentials, credential long flags, the credential short flags of its credential commands, and the credentials of a shell's `-c` command line.
+	"""Credential values in one simple command: word credentials, credential long flags, the credential short flags of its credential commands, and the credentials of a shell's `-c` command line or of a command substitution inside a quoted word.
 
-	Raises ValueError, like _command_line_credentials, when a `-c` command line cannot be parsed.
+	Raises ValueError, like _command_line_credentials, when such a command line cannot be parsed.
 	"""
 	values: set[str] = set()
 	start = next((position for position, word in enumerate(words) if not _ASSIGNMENT_RE.match(word)), len(words))
@@ -563,6 +606,9 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 		index += 1
 		following = words[index] if index < len(words) and not words[index].startswith("-") else None
 		values.update(_word_credentials(word))
+		if "$(" in word:
+			# A command substitution inside a quoted word (`"$(mysql -p…)"`, `` "`mysql -p…`" ``) runs a command line of its own.
+			values.update(_command_line_credentials(word, depth + 1))
 		runner_before = index - 1 > start and _shell_runner_before(words, start, index - 1)
 		attached_flag = _SHELL_COMMAND_ATTACHED_RE.match(word) if runner_before else None
 		attached_command = _SHELL_COMMAND_CLUSTER_RE.match(word) if runner_before and not attached_flag else None
@@ -617,7 +663,7 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 	"""
 	if depth > MAX_NESTED_COMMAND_DEPTH:
 		raise ValueError("nested command lines too deep")
-	lexer = shlex.shlex(text.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer = shlex.shlex(_backticks_as_substitutions(text).replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
@@ -641,8 +687,9 @@ def _sanitize_bash_command(display: str, parse_text: str) -> str | None:
 	`command_shape` uses. Credential values are the values of credential-named
 	assignments, credential header fields, credential long flags, and the
 	`_CREDENTIAL_SHORT_FLAGS` of every credential command in a segment,
-	including those inside a shell's `-c` command line. Returns None when the
-	text (or a `-c` command line) cannot be tokenized, or when a value is
+	including those inside a shell's `-c` command line and inside a `$(…)` or
+	backtick command substitution. Returns None when the text (or such a
+	command line) cannot be tokenized, or when a value is
 	shorter than MIN_MASKED_VALUE_CHARS or does not occur verbatim in
 	`display` (quoting or escapes changed it), so the caller posts the shape
 	instead.
