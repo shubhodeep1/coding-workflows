@@ -828,9 +828,15 @@ def test_cli_the_pr_body_can_list_an_unparseable_base_repair(settings_repo: Path
 
 
 def _delete_object(repo: Path, rev: str) -> None:
-	"""Drop the loose object `rev` names, as a missing or corrupt blob would be."""
+	"""Drop the loose object `rev` names, as a missing or corrupt blob would be.
+
+	`unlink` fails loudly when the object is not loose, and the `cat-file -e`
+	check fails the test when git can still read the object (for example from
+	a pack), so a caller never runs against a blob that is still readable."""
 	oid = _git(repo, "rev-parse", rev)
 	(repo / ".git" / "objects" / oid[:2] / oid[2:]).unlink()
+	with pytest.raises(subprocess.CalledProcessError):
+		_git(repo, "cat-file", "-e", oid)
 
 
 def test_read_settings_text_at_a_ref_tells_absent_from_present(settings_repo: Path) -> None:

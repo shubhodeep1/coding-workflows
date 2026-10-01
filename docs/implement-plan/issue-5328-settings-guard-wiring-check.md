@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5328-settings-guard-wiring-check-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5328   Progress comment: 5902373778
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5174-guard-differential-check
-- Project branch: claude/implement-plan-issue-5328-settings-guard-wiring-check   Final PR: #5356 draft
+- Project branch: claude/implement-plan-issue-5328-settings-guard-wiring-check   Final PR: #5356 ready (marked ready 2026-09-30)
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round 4
 - Activation: n/a (base claude/implement-plan-issue-5174-guard-differential-check) — the base is not the default branch, so steps 12–13 do not run (Issue Mode)
-- Waiting on: completion PR (claude/implement-plan-issue-5328-settings-guard-wiring-check-complete → the project branch)
+- Waiting on: PR #5356 (final PR, review round 5 after the round 4 push)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01DZdvBhT9Qf3x3SXQfb4Ugi (reused)   safety net / hand-back: see the validation 1/3 read-result stage report
-- Last updated: 2026-09-30
-- Last note: validation cycle 1 (run 36678494935, target_ref = the project branch at ac0c3b2) passed 10/10; no validation-fix PR, so no conformance re-run. Plan moved to docs/completed/ in the completion PR; next is final-merge (mark final PR #5356 ready, then close #5328 after it merges into the #5174 branch).
+- Check-in: checker session_01DZdvBhT9Qf3x3SXQfb4Ugi (reused)   safety net / hand-back: see the final-merge — review round 4 stage report
+- Last updated: 2026-10-01
+- Last note: final PR #5356 review round 4 (head eaf0ba0): the `review / codex-agent` failure finding was rejected (the 2026-09-30 19:47–22:02Z reviewer outage, no code defect); the `_delete_object` test-helper finding was fixed by asserting the blob is unreadable after the delete. Project branch synced with the issue base in the same push. After #5356 merges: close #5328 (completed, add ai:merged).
 
 ## Phases
 1. [x] Phase 1 — settings guard-wiring check (`scripts/guard_differential.py`, tests, `ci.yml` step comment, `agents.md`, changelog)   — PR #5369 merged 2026-09-30 (bbcb6b1); review rounds: 3; interventions: 0
@@ -26,8 +26,8 @@
 - Cycle 1 — run 36678494935 2026-09-30 (target_ref: claude/implement-plan-issue-5328-settings-guard-wiring-check at ac0c3b2; authorized as a stacked target by main's validate.yml): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 269s); no fix PR
 
 ## Completion
-- Completion PR (branch claude/implement-plan-issue-5328-settings-guard-wiring-check-complete) open — doc moved to docs/completed/issue-5328-settings-guard-wiring-check-plan.md
-- Final PR #5356 draft (into claude/implement-plan-issue-5174-guard-differential-check)
+- Completion PR #5549 merged 2026-09-30 (781dd5a) — doc moved to docs/completed/issue-5328-settings-guard-wiring-check-plan.md
+- Final PR #5356 ready (into claude/implement-plan-issue-5174-guard-differential-check) — review rounds: 4 (rounds 1–3 fixed in 993d284, 6fc4da8, eaf0ba0; round 4 in this push)
 
 ## Activation
 - n/a: the base branch is the #5174 project branch, so the change goes live with that project's final PR #5185 (Issue Mode)
@@ -51,3 +51,4 @@
 - Protected paths: none. Phase 1 edits no `.claude/**` file.
 - 2026-09-30 (conformance 1/3): project branch synced with the issue base in ac0c3b2 (`[claude-merge-resolve]`; the `ci.yml` step comment conflicted with #5325's change to the same comment, both sides kept).
 - 2026-09-30 (validation 1/3): `docs/INVENTORY.md` still has no entry for `scripts/guard_differential.py`, so `tests/inventory_parity.py` fails on this branch and its base. It is inherited from #5174 (PR #5187) and recorded as the #5325 project's AD-4; it surfaces on #5174's final PR #5185 into `main`, so this project does not fix it (§5).
+- 2026-10-01 (final-merge — review round 4): between 2026-09-30 19:47Z and 22:02Z three review runs on head eaf0ba0 failed the same way (reviewer credits ran out) and the identical-failure cap stopped them; the 00:44Z run reviewed the head and handed round 4 over. Its `review / codex-agent` finding restated that outage and was rejected. The minimax finding on `_delete_object` was overstated (an object that is not loose makes `unlink` raise, so the test cannot pass silently), but the helper now also asserts `git cat-file -e` fails, so a blob still readable from a pack fails the test instead of weakening it.
