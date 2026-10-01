@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5905-pending-merge-base-retarget-race-plan.md
 - Source issue: shubhodeep1/coding-workflows#5905
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
-- Project branch: claude/implement-plan-issue-5905-pending-merge-base-retarget-race   Final PR: pending
+- Project branch: claude/implement-plan-issue-5905-pending-merge-base-retarget-race   Final PR: #5915 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5917
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: project branch opened from the #4900 project branch; phase 1 starting.
+- Last note: phase 1 PR #5917 opened (161 + 496 pytest passed, ruff/shellcheck clean); waiting on its Claude-fixer review round or merge.
 
 ## Phases
-1. [ ] Phase 1 — re-check the reviewed base at merge time and revoke a stale authorization
+1. [ ] Phase 1 — re-check the reviewed base at merge time and revoke a stale authorization   — PR #5917 open (waiting); review rounds: 0; interventions: 0
    - `scripts/review_enable_auto_merge.sh` refuses a merge when optional `REVIEWED_BASE_REF` / `REVIEWED_BASE_SHA` do not match its pre-merge PR read (unchanged when both are empty)
    - `scripts/claude_fixer_pending_checks.py` passes the reviewed base, reports a helper refusal as `base_changed`, re-reads the PR after enabling auto-merge, and revokes it (`merge_revoked` / `merge_revoke_failed`) or reports `merged_unreviewed_base`
    - `scripts/claude_pr_sweep.py` warns on `merge_revoke_failed` / `merged_unreviewed_base`
@@ -41,6 +41,7 @@
 - AD-6 [plan, 2026-10-01] Which states does `evaluate` report for the refusal and the post-enable outcomes? — Picked: A — `base_changed` for the refusal; new `merge_revoked`, `merge_revoke_failed`, `merged_unreviewed_base`. Alternatives: B — fold into `merge_failed`. Why: operators can tell a security refusal and a revoke apart; no existing state changes meaning. Applied in: phase 1. Status: pending review
 
 ## Lessons
+- [source:security] A read-compare guard placed in a caller is only as fresh as its read: re-check the guarded value in the helper that makes the final read before the write, and verify again after a write that the API cannot bind atomically. (files: scripts/claude_fixer_pending_checks.py, scripts/review_enable_auto_merge.sh)
 
 ## Notes
 - Security pass skipped: `security_pass_skip.py` verified `ai:security` created and labelled by the issue automation (`Refs #3576`).
