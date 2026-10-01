@@ -376,6 +376,128 @@ def test_head_moved_log_prefix_is_registered_in_agents_md():
 
 
 # ---------------------------------------------------------------------------
+# Head moved before the PR metadata was read (PR #5857 review round 4)
+# ---------------------------------------------------------------------------
+
+FORK_REPOSITORY = "someone/coding-workflows"
+METADATA_CHECK_START = 'review_metadata_head_sha=""'
+
+
+def _metadata_check_fragment() -> str:
+	"""The metadata-head comparison, from its variable to the `fi` of its second `if`."""
+	lines = _codex_agent_step("Checkout PR head branch")["run"].splitlines()
+	start = next((i for i, line in enumerate(lines) if line.strip() == METADATA_CHECK_START), -1)
+	assert start >= 0, "metadata-head comparison not found in Checkout PR head branch"
+	indent = len(lines[start]) - len(lines[start].lstrip(" "))
+	closers = [
+		i for i in range(start + 1, len(lines))
+		if lines[i].strip() == "fi" and len(lines[i]) - len(lines[i].lstrip(" ")) == indent
+	]
+	assert len(closers) >= 2, "closing fi of the metadata-head comparison not found"
+	return textwrap.dedent("\n".join(lines[start : closers[1] + 1]))
+
+
+def _run_metadata_check(
+	tmp_path: Path,
+	*,
+	workspace_sha: str,
+	metadata_head_sha: str | None,
+	event_head_sha: str,
+	head_repo: str,
+	pr_number: str = "5857",
+) -> tuple[str, str]:
+	env_file = tmp_path / "github_env"
+	env_file.write_text("", encoding="utf-8")
+	payload_file = tmp_path / "pr_payload.json"
+	if metadata_head_sha is not None:
+		payload_file.write_text(json.dumps({"head": {"sha": metadata_head_sha}}), encoding="utf-8")
+	fragment = (
+		_metadata_check_fragment()
+		.replace("${{ github.event.pull_request.head.sha }}", event_head_sha)
+		.replace("${{ github.repository }}", REPOSITORY)
+	)
+	assert "${{" not in fragment
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"PR_NUMBER": pr_number,
+		"PR_PAYLOAD_FILE": str(payload_file),
+		"HEAD_REF": "feature",
+		"HEAD_REPO": head_repo,
+		"review_workspace_sha": workspace_sha,
+		"GITHUB_ENV": str(env_file),
+	}
+	result = subprocess.run(
+		["bash", "-c", "set -euo pipefail\n" + fragment + "\n"],
+		env=env,
+		text=True,
+		capture_output=True,
+		check=True,
+	)
+	return env_file.read_text(encoding="utf-8"), result.stdout
+
+
+def test_metadata_head_check_runs_before_every_non_push_exit():
+	run = _codex_agent_step("Checkout PR head branch")["run"]
+	capture = run.index('review_workspace_sha="${INITIAL_HEAD_SHA}"')
+	check = run.index(METADATA_CHECK_START)
+	first_exit = re.search(r"^\s*exit \d", run, re.MULTILINE).start()
+	fork_exit = run.index('echo "PR head repo (${HEAD_REPO}) is not writable from this workflow."')
+	assert capture < check < first_exit < fork_exit
+
+
+def test_fork_pull_request_with_moved_head_soft_exits(tmp_path):
+	moved = "c" * 40
+	env_text, stdout = _run_metadata_check(
+		tmp_path, workspace_sha=HEAD, metadata_head_sha=moved, event_head_sha=HEAD, head_repo=FORK_REPOSITORY
+	)
+	assert env_text == "AUTOFIX_STALE_BASE_SKIP=true\n"
+	assert (
+		f"AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED pr=5857 workspace_sha={HEAD} head_sha={moved} "
+		"target_branch=feature source=pr_metadata action=soft_exit"
+	) in stdout
+	assert "::warning::PR #5857 head moved from" in stdout
+
+
+def test_fork_pull_request_with_unmoved_head_keeps_running(tmp_path):
+	env_text, stdout = _run_metadata_check(
+		tmp_path, workspace_sha=HEAD, metadata_head_sha=HEAD, event_head_sha=HEAD, head_repo=FORK_REPOSITORY
+	)
+	assert env_text == ""
+	assert stdout == ""
+
+
+def test_same_repo_dispatch_with_moved_head_soft_exits(tmp_path):
+	moved = "c" * 40
+	env_text, stdout = _run_metadata_check(
+		tmp_path, workspace_sha=HEAD, metadata_head_sha=moved, event_head_sha="", head_repo=REPOSITORY
+	)
+	assert env_text == "AUTOFIX_STALE_BASE_SKIP=true\n"
+	assert "source=pr_metadata action=soft_exit" in stdout
+
+
+def test_fork_dispatch_keeps_event_sha_without_skip(tmp_path):
+	"""AD-2: a dispatched fork run checked out github.sha on purpose and keeps running."""
+	env_text, stdout = _run_metadata_check(
+		tmp_path, workspace_sha=EVENT_SHA, metadata_head_sha=HEAD, event_head_sha="", head_repo=FORK_REPOSITORY
+	)
+	assert env_text == ""
+	assert stdout == ""
+
+
+def test_no_pr_path_and_missing_payload_are_not_compared(tmp_path):
+	(tmp_path / "no_pr").mkdir()
+	(tmp_path / "no_payload").mkdir()
+	env_text, stdout = _run_metadata_check(
+		tmp_path / "no_pr", workspace_sha=EVENT_SHA, metadata_head_sha=HEAD, event_head_sha="", head_repo=REPOSITORY, pr_number=""
+	)
+	assert (env_text, stdout) == ("", "")
+	env_text, stdout = _run_metadata_check(
+		tmp_path / "no_payload", workspace_sha=HEAD, metadata_head_sha=None, event_head_sha=HEAD, head_repo=FORK_REPOSITORY
+	)
+	assert (env_text, stdout) == ("", "")
+
+
+# ---------------------------------------------------------------------------
 # End to end on a scratch repository
 # ---------------------------------------------------------------------------
 

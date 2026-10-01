@@ -685,7 +685,13 @@ a new value, add it to the appropriate overrides file with a
   so the run skips the reviewers, the Claude-fixer hand-off, and auto-merge;
   the run that the push started reviews the new head. A push that starts no
   run (one made with `GITHUB_TOKEN`) waits for the next event or the hourly
-  sweep.
+  sweep. Before any of the step's exits, the step also compares that commit
+  with the head "Collect PR metadata" read (`PR_PAYLOAD_FILE` `.head.sha`,
+  the head of the diff the reviewers get), and soft-exits the same way with
+  `source=pr_metadata` in the log line when they differ. This covers fork
+  heads on `pull_request` runs and rejected branch names, which exit before
+  the fetch. A dispatched run on a fork head is not compared: it checked out
+  `github.sha` on purpose (`checkout=event_sha` above).
 - `tests/test_review_autofix_dispatch_pr_head_checkout.py` pins the wiring and
   runs the gate fragment and the moved-head check for each case.
 

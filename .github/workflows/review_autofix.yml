@@ -3538,6 +3538,23 @@ jobs:
           # reviewers read. The reset below moves only WORKSPACE_PATH.
           review_workspace_sha="${INITIAL_HEAD_SHA}"
 
+          # "Collect PR metadata" already read the PR's diff and head. Compare
+          # that head with the checked-out commit before any exit below, so a
+          # fork head or a rejected branch name (which exit before the fetch)
+          # cannot pair old files with a newer diff (PR #5857 review round 4).
+          # A dispatched run on a fork head checked out github.sha on purpose
+          # (the gate's checkout=event_sha warning, AD-2) and is not compared.
+          review_metadata_head_sha=""
+          if [ -n "${PR_NUMBER:-}" ] && [ -s "${PR_PAYLOAD_FILE:-}" ] \
+            && { [ -n "${{ github.event.pull_request.head.sha }}" ] || [ "${HEAD_REPO}" = "${{ github.repository }}" ]; }; then
+            review_metadata_head_sha="$(jq -r '.head.sha // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo "")"
+          fi
+          if [ -n "${review_metadata_head_sha}" ] && [ "${review_metadata_head_sha}" != "${review_workspace_sha}" ]; then
+            echo "AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED pr=${PR_NUMBER:-} workspace_sha=${review_workspace_sha:-unknown} head_sha=${review_metadata_head_sha} target_branch=${HEAD_REF} source=pr_metadata action=soft_exit"
+            echo "::warning::PR #${PR_NUMBER:-} head moved from ${review_workspace_sha:-unknown} to ${review_metadata_head_sha} before its metadata and diff were read; skipping this run so no review or auto-merge pairs the new head with the old files."
+            echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+          fi
+
           if [ -z "${HEAD_REF}" ] || [ "${HEAD_REF}" = "null" ]; then
             echo "Unable to determine PR head branch"
             exit 1

@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_016vfvJu7J6F4Y3sRhBoQPFf   safety net and hand-back: see the latest stage report
 - Last updated: 2026-10-01
-- Last note: review round 3 on PR #5857 (head bee70a7d753f): the one finding (a push between the workspace checkout and "Checkout PR head branch" leaves the reviewers on the older files while auto-merge binds to the new tip) was valid; "Checkout PR head branch" now soft-exits through `AUTOFIX_STALE_BASE_SKIP` with `AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED` when the tip moved. Nothing rejected.
+- Last note: review round 4 on PR #5857 (head 0d00acfed176): the one finding (a fork head on a `pull_request` run exits "Checkout PR head branch" before the moved-head comparison, so reviewers could read the old checkout against a newer diff) was valid; the step now compares the checked-out commit with the metadata head (`PR_PAYLOAD_FILE` `.head.sha`) before every exit and soft-exits with `source=pr_metadata`, except for the AD-2 dispatched fork case. Nothing rejected.
 
 ## Phases
-1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs   — PR #5857 open (waiting); review rounds: 3; interventions: 0
+1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs   — PR #5857 open (waiting); review rounds: 4; interventions: 0
    - gate exports `review_checkout_sha` from the existing `/pulls/<n>` fetch (same-repo heads only)
    - `codex-agent` → "Checkout repo" uses `pull_request.head.sha || review_checkout_sha || github.sha`
    - regression test `tests/test_review_autofix_dispatch_pr_head_checkout.py`; updated `tests/test_review_autofix_merge_precheck.py`
@@ -41,6 +41,7 @@
 - [source:intervention] A workflow change that emits a new stable log prefix must add it to both `agents.md` inventories (the "Stable log prefixes (contractual)" bullet list and the `LOG_PREFIX.name=` block) in the same PR, and a test should pin both entries. (files: agents.md, .github/workflows/review_autofix.yml)
 - [source:intervention] When `agents.md` prose says which files or directories a set of scripts reads, a test should pin each named reader, not just one, or reviewers flag the unverified ones. (files: agents.md, tests/test_review_autofix_dispatch_pr_head_checkout.py)
 - [source:intervention] A step that checks out one commit for file reads and later resets the branch to its live tip must compare the two SHAs and soft-exit (or re-align) when they differ, or reviewers read one tree while merge gates bind to another. (files: .github/workflows/review_autofix.yml)
+- [source:intervention] A moved-head guard must run before every early exit of the step that holds it (fork heads, rejected branch names), comparing against the head the diff was collected for, or the early-exit paths pair old files with a newer diff. (files: .github/workflows/review_autofix.yml, scripts/review_collect_pr_metadata.sh)
 
 ## Notes
 - Security pass: run (`security_pass_skip.py`: no skip label).
