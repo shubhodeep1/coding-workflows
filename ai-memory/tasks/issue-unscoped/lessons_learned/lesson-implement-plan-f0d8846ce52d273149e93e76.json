@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T01:41:38Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A history-based release check that lists commits with `git rev-list --no-merges` misses a change made inside a merge commit (a conflict resolution or a hand edit); also list merges whose `git log --remerge-diff` touches the guarded paths, and refuse a shallow checkout, whose boundary commit otherwise looks like it added every file. Gate every path that moves the release tag, manual scripts included.",
+  "phase": "implement_plan",
+  "pr_number": 5721,
+  "record_id": "lesson-implement-plan-f0d8846ce52d273149e93e76",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_authorization.py",
+    "file:scripts/mark-stable.sh"
+  ]
+}

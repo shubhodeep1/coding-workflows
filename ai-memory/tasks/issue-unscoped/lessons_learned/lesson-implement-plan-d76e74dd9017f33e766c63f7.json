@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T01:41:38Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Do not find merge commits for a path check with `git rev-list <range> -- <paths>`: default history simplification hides a merge whose tree on those paths equals one parent's (a merge that silently drops another parent's change) and lists a clean merge that combines changes from several parents. Enumerate the merges without a pathspec and compare each file with the parent that changed it. A release script that force-pushes a moving tag must lease on the value it read before its checks (`--force-with-lease=refs/tags/<t>:<old>`, empty for \"absent\"), or a concurrent release is rolled back.",
+  "phase": "implement_plan",
+  "pr_number": 5721,
+  "record_id": "lesson-implement-plan-d76e74dd9017f33e766c63f7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_authorization.py",
+    "file:scripts/mark-stable.sh"
+  ]
+}
