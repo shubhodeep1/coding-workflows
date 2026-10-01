@@ -113,14 +113,14 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 				assert "reason=untrusted_issue_author" in result.stdout
 
 
-def _run_clarify_route(step: dict, root: Path, body: str, labels: list[str], implementer: str = "codex") -> tuple[str, str]:
+def _run_clarify_route(step: dict, root: Path, body: str, labels: list[str], implementer: str = "codex", issue_body: str | None = "") -> tuple[str, str]:
 	"""Run the real `Decide clarify route` body for one issue comment; return (stdout, outputs)."""
 	meta_path = root / "issue.json"
 	output_path = root / "output"
 	payload = {
 		"number": 123,
 		"title": "Fix it",
-		"body": "",
+		"body": issue_body,
 		"state": "open",
 		"user": {"type": "User", "login": "maintainer"},
 		"author_association": "OWNER",
@@ -227,6 +227,28 @@ def test_clarify_route_gates_reclarify_comment_like_the_job_predicate() -> None:
 				assert "skip_codex=true" in outputs, description
 				assert "orchestrator_fast_path=false" in outputs, description
 				assert "reclarify_command=false" in stdout, description
+		# Review round 3: an orchestrator child issue that lost its label is
+		# still recognised by its `Managed by: AI Orchestrator` body line, as
+		# scripts/claude_issue_route.py does; only a first-line /reclarify
+		# counts there. Case-insensitive, like the job predicate's contains.
+		child_body = "## Task\n\nFix it.\n\n## Metadata\n- Managed by: AI Orchestrator\n- Parent: #41"
+		for description, body, issue_body, is_command in (
+			("trailing line, body-marked issue", "Use v2.\n/reclarify", child_body, False),
+			("unmarked escalation model text, body-marked issue", "Autonomous resolution not possible.\n\nESCALATION: pick one\n/reclarify\n\n- Cycle: 3/3", child_body, False),
+			("trailing line, body marker in another case", "Use v2.\n/reclarify", "managed BY: ai orchestrator", False),
+			("first line, body-marked issue", "/reclarify", child_body, True),
+			("trailing line, null issue body", "Use v2.\n/reclarify", None, True),
+			("trailing line, unrelated issue body", "Use v2.\n/reclarify", "Managed by: the platform team", True),
+		):
+			stdout, outputs = _run_clarify_route(step, root, body, ["ai:blocked"], issue_body=issue_body)
+			if is_command:
+				assert NOT_RECLARIFY_SKIP_LINE not in stdout, description
+				assert "reclarify_command=true" in stdout, description
+			else:
+				assert NOT_RECLARIFY_SKIP_LINE in stdout, description
+				assert "skip_codex=true" in outputs, description
+				assert "orchestrator_fast_path=false" in outputs, description
+				assert "reclarify_command=false" in stdout, description
 
 
 def test_clarify_route_releases_stale_claude_labels_on_switch_to_codex() -> None:
@@ -247,6 +269,55 @@ def test_clarify_route_releases_stale_claude_labels_on_switch_to_codex() -> None
 	release_block = _step_block(CLARIFY_WF, "Release Claude claim on switch to Codex")
 	for encoded in ("ai%3Aclaude\"", "ai%3Aclaude-blocked\"", "ai%3Aclaude-handoff-failed\""):
 		assert f"/labels/{encoded}" in release_block, encoded
+
+
+def test_clarify_release_step_deletes_only_labels_the_issue_carries() -> None:
+	"""Review round 3 (§15): one DELETE per Claude label actually on the issue.
+
+	The step reads the issue metadata the route step already fetched, so a
+	release on an issue with only `ai:claude-blocked` costs one API call, not
+	three.
+	"""
+	workflow = yaml.safe_load(_read(CLARIFY_WF))
+	step = next(step for step in workflow["jobs"]["clarify"]["steps"] if step.get("name") == "Release Claude claim on switch to Codex")
+	script = step["run"].replace("${{ github.repository }}", "o/r").replace(
+		"${{ steps.clarify_route.outputs.issue_implementer_reason }}", "label_override"
+	)
+	assert "${{" not in script
+	with tempfile.TemporaryDirectory() as workdir:
+		root = Path(workdir)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		calls_path = root / "calls"
+		gh_stub = bin_dir / "gh"
+		gh_stub.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "${GH_CALLS_FILE}"\n', encoding="utf-8")
+		gh_stub.chmod(0o755)
+		meta_path = root / "issue.json"
+		for labels, expected in (
+			(["ai:codex", "ai:claude-blocked"], ["ai%3Aclaude-blocked"]),
+			(["ai:codex", "ai:claude-handoff-failed"], ["ai%3Aclaude-handoff-failed"]),
+			(["ai:codex", "ai:claude"], ["ai%3Aclaude"]),
+			(
+				["ai:claude", "ai:claude-blocked", "ai:claude-handoff-failed", "ai:codex"],
+				["ai%3Aclaude", "ai%3Aclaude-blocked", "ai%3Aclaude-handoff-failed"],
+			),
+			(["ai:codex", "ai:claude-blocked-extra"], []),
+		):
+			meta_path.write_text(json.dumps({"number": 123, "labels": [{"name": label} for label in labels]}), encoding="utf-8")
+			calls_path.write_text("", encoding="utf-8")
+			env = os.environ.copy()
+			for name in ("BASH_ENV", "ENV"):
+				env.pop(name, None)
+			env.update({
+				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+				"GH_CALLS_FILE": str(calls_path),
+				"ISSUE_META_FILE": str(meta_path),
+				"ISSUE_NUMBER": "123",
+			})
+			result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=True)
+			calls = calls_path.read_text(encoding="utf-8").splitlines()
+			assert calls == [f"api -X DELETE repos/o/r/issues/123/labels/{encoded}" for encoded in expected], labels
+			assert "CLAUDE_ISSUE_HANDOFF released issue=123" in result.stdout, labels
 
 
 def test_clarify_route_hands_trailing_reclarify_answer_to_claude() -> None:

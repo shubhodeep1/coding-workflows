@@ -226,7 +226,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `ai:claude-blocked` / `ai:claude-handoff-failed` / `ai:blocked` issue
     also one with `/reclarify` at the start of a later line and no
     `<!--` HTML comment, issue #5243, never on an `ai:orchestrator-tracking`
-    / `ai:orchestrator-managed` issue, issue #5309; the route step repeats
+    / `ai:orchestrator-managed` issue or one whose body carries the
+    `Managed by: AI Orchestrator` line, issue #5309; the route step repeats
     this rule, also ignores a `/reclarify` line inside a fenced code block,
     and logs `reason=not_reclarify_command` for anything else; a Codex route
     also drops stale `ai:claude-blocked` / `ai:claude-handoff-failed`),

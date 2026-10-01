@@ -91,13 +91,16 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 # start of a later line counts only in a comment without an automation
 # marker, on an issue that waits on a human answer. Issue #5309: any `<!--`
 # HTML comment marks automation, and orchestrator tracking and managed
-# issues never take the later-line form.
+# issues never take the later-line form. An orchestrator-managed issue is
+# recognised by its label or by the `Managed by: AI Orchestrator` body line,
+# as scripts/claude_issue_route.py does.
 RECLARIFY_COMMAND_CLAUSE = (
 	"(startsWith(github.event.comment.body, '/reclarify') || "
 	"(contains(github.event.comment.body, fromJson('\"\\n/reclarify\"')) && "
 	"!contains(github.event.comment.body, '<!--') && "
 	"!contains(toJson(github.event.issue.labels.*.name), '\"ai:orchestrator-tracking\"') && "
 	"!contains(toJson(github.event.issue.labels.*.name), '\"ai:orchestrator-managed\"') && "
+	"!contains(github.event.issue.body, 'Managed by: AI Orchestrator') && "
 	"(contains(toJson(github.event.issue.labels.*.name), '\"ai:claude-blocked\"') || "
 	"contains(toJson(github.event.issue.labels.*.name), '\"ai:claude-handoff-failed\"') || "
 	"contains(toJson(github.event.issue.labels.*.name), '\"ai:blocked\"'))))"
@@ -107,13 +110,15 @@ AWAITING_ANSWER_LABELS = ("ai:claude-blocked", "ai:claude-handoff-failed", "ai:b
 ORCHESTRATOR_LABELS = ("ai:orchestrator-tracking", "ai:orchestrator-managed")
 
 
-def _reclarify_clause_matches(body: str, labels: list[str]) -> bool:
+def _reclarify_clause_matches(body: str, labels: list[str], issue_body: str | None = "") -> bool:
 	"""Evaluate RECLARIFY_COMMAND_CLAUSE the way GitHub expressions do.
 
 	startsWith and contains compare case-insensitively; toJson renders the
-	label names as a pretty-printed JSON array of quoted strings.
+	label names as a pretty-printed JSON array of quoted strings; a null
+	issue body coerces to an empty string.
 	"""
 	body_lc = body.lower()
+	issue_body_lc = (issue_body or "").lower()
 	labels_json = json.dumps(labels, indent=2).lower()
 	newline_command = json.loads('"\\n/reclarify"')
 	if body_lc.startswith("/reclarify"):
@@ -122,6 +127,7 @@ def _reclarify_clause_matches(body: str, labels: list[str]) -> bool:
 		newline_command in body_lc
 		and "<!--" not in body_lc
 		and not any(f'"{label}"' in labels_json for label in ORCHESTRATOR_LABELS)
+		and "managed by: ai orchestrator" not in issue_body_lc
 		and any(f'"{label}"' in labels_json for label in AWAITING_ANSWER_LABELS)
 	)
 
@@ -193,12 +199,29 @@ RECLARIFY_COMMENT_CASES = (
 )
 
 
+# Issue #5309 review round 3: an orchestrator child issue is also recognised
+# by its `Managed by: AI Orchestrator` body line when the label is missing.
+ORCHESTRATOR_CHILD_BODY = "## Task\n\nFix it.\n\n## Metadata\n- Managed by: AI Orchestrator\n- Parent: #41"
+
+RECLARIFY_ISSUE_BODY_CASES = (
+	# (description, comment body, labels, issue body, expected)
+	("trailing line, body-marked orchestrator issue", "Use v2.\n/reclarify", ["ai:blocked"], ORCHESTRATOR_CHILD_BODY, False),
+	("escalation model text, body-marked issue", ORCHESTRATOR_ESCALATION_TEXT, ["ai:blocked"], ORCHESTRATOR_CHILD_BODY, False),
+	("trailing line, body marker in another case", "Use v2.\n/reclarify", ["ai:blocked"], "managed BY: ai orchestrator", False),
+	("first line, body-marked orchestrator issue", "/reclarify", ["ai:blocked"], ORCHESTRATOR_CHILD_BODY, True),
+	("trailing line, null issue body", "Use v2.\n/reclarify", ["ai:blocked"], None, True),
+	("trailing line, unrelated issue body", "Use v2.\n/reclarify", ["ai:blocked"], "Managed by: the platform team", True),
+)
+
+
 def test_clarify_predicate_accepts_reclarify_on_any_line_with_guards() -> None:
 	predicate = _canonical_predicate("clarify")
 	assert predicate.count(RECLARIFY_COMMAND_CLAUSE) == 1, "clarify /reclarify command clause drifted"
 	assert json.loads('"\\n/reclarify"') == "\n/reclarify"
 	for description, body, labels, expected in RECLARIFY_COMMENT_CASES:
 		assert _reclarify_clause_matches(body, labels) is expected, description
+	for description, body, labels, issue_body, expected in RECLARIFY_ISSUE_BODY_CASES:
+		assert _reclarify_clause_matches(body, labels, issue_body) is expected, description
 
 
 def test_plan_predicate_preserves_trusted_human_and_bot_answer_routes() -> None:

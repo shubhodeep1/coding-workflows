@@ -6,7 +6,7 @@ Until now the clarify job started only when the comment body began with `/reclar
 | The numbers that matter | Value |
 | --- | --- |
 | Labels that allow a later-line `/reclarify` | `ai:claude-blocked`, `ai:claude-handoff-failed`, `ai:blocked` |
-| Never counts | a mention inside a sentence, in backticks, or indented; a comment carrying `<!--` with `/reclarify` below its first line; a later line on an `ai:orchestrator-tracking` or `ai:orchestrator-managed` issue |
+| Never counts | a mention inside a sentence, in backticks, or indented; a comment carrying `<!--` with `/reclarify` below its first line; a later line on an `ai:orchestrator-tracking` or `ai:orchestrator-managed` issue, or one whose body carries the `Managed by: AI Orchestrator` line |
 | Comment starting with `/reclarify` | unchanged, on every issue |
 | New automation marker | `<!-- ai:implementation-plan:v1 -->`, last line of the `plan.yml` implementation-plan comment |
 | Extra GitHub API calls | 0 |
