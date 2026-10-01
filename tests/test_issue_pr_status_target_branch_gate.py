@@ -538,13 +538,15 @@ def test_default_branch_merge_from_fork_still_labels_and_closes() -> None:
 
 
 def test_unmerged_close_behaviour_is_unchanged() -> None:
-	"""Out of scope for #4813: a PR closed without merging keeps labelling the
-	linked issue `ai:closed` and closing it, whatever its base."""
+	"""Out of scope for #4813: the issue's own automation PR closed without
+	merging keeps labelling the linked issue `ai:closed` and closing it,
+	whatever its base (issue #5617 gates every other head)."""
 	result = _run_step(
 		issues={10: {"body": "Standalone issue.", "labels": []}},
 		pr_base_ref="claude/implement-plan-issue-10-own-project",
 		pr_body="Fixes #10\n",
 		pr_merged=False,
+		pr_head_ref="ai/issue-10",
 	)
 	assert result["labels"] == [("10", "ai:closed")], result
 	assert result["closed"] == [10], result
@@ -667,14 +669,15 @@ def test_mixed_link_finalizes_only_the_accepted_issue() -> None:
 
 
 def test_unmerged_close_still_finalizes_as_closed() -> None:
-	"""AD-1: a PR closed without merging keeps today's lineage finalization,
-	whatever its base."""
+	"""AD-1: the issue's own automation PR closed without merging keeps
+	today's lineage finalization, whatever its base (issue #5617)."""
 	gate = _run_step(
 		issues={10: {"body": "Standalone issue.", "labels": ["ai:claude"]}},
 		pr_base_ref="feature/unrelated",
 		pr_body="Fixes #10\n",
 		closing_refs=[10],
 		pr_merged=False,
+		pr_head_ref="ai/issue-10",
 	)
 	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [10], gate["env"]
 	lineage = _run_lineage_step(gate["env"], pr_merged=False)
@@ -733,7 +736,8 @@ def test_unclassified_issue_on_non_default_merge_is_not_finalized() -> None:
 
 def test_unclassified_issue_keeps_default_merge_and_unmerged_lineage() -> None:
 	"""An unclassified issue still finalizes where no target branch is needed:
-	a default-branch merge (`merged`) and an unmerged close (`closed`)."""
+	a default-branch merge (`merged`) and an unmerged close of the issue's own
+	automation PR (`closed`, issue #5617)."""
 	cases = [("main", True, "merged"), ("feature/unrelated", False, "closed")]
 	for base, merged, final_state in cases:
 		gate = _run_step(
@@ -741,6 +745,7 @@ def test_unclassified_issue_keeps_default_merge_and_unmerged_lineage() -> None:
 			pr_base_ref=base,
 			pr_body="Fixes #10\n",
 			pr_merged=merged,
+			pr_head_ref="ai/issue-10",
 			orch_graphql_fail=True,
 			orch_rest_fail=True,
 		)
@@ -786,6 +791,136 @@ def test_non_automation_head_merge_is_not_finalized() -> None:
 		assert '"reason":"no_accepted_issues"' in lineage["stdout"], lineage["stdout"]
 
 
+# Issue #5617: a PR closed without merging changes an issue's labels, state,
+# or lineage only when it is that issue's own automation PR (a same-repository
+# `ai/issue-<n>…` or `fix/<n>-followup-<epoch>` head).
+
+UNMERGED_REJECTED_HEADS = (
+	("patch-1", REPOSITORY),
+	("claude/some-feature", REPOSITORY),
+	("ai/issue-10", "attacker/widgets"),
+	("ai/issue-10", ""),
+)
+
+
+def test_unmerged_close_from_non_automation_head_leaves_issue_untouched() -> None:
+	"""The #5617 finding: a PR whose author wrote `Fixes #10` and closed it
+	without merging must not label, close, or finalize #10, whether its head is
+	another branch in this repository or a fork (another issue's automation
+	head is covered by the mixed-link test)."""
+	for head_ref, head_repo in UNMERGED_REJECTED_HEADS:
+		gate = _run_step(
+			issues={10: {"body": "Standalone issue.", "labels": ["ai:claude"]}},
+			pr_base_ref="main",
+			pr_body="Fixes #10\n",
+			closing_refs=[10],
+			pr_merged=False,
+			pr_head_ref=head_ref,
+			pr_head_repo=head_repo,
+		)
+		assert gate["labels"] == [] and gate["closed"] == [], (head_ref, head_repo, gate)
+		assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [10], (head_ref, head_repo, gate["env"])
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], (head_ref, head_repo, gate["env"])
+		assert (
+			f"PR #4748 closed without merging is not an automation PR for issue #10 "
+			f"(head {head_ref}, head repo {head_repo or 'none'}); leaving its labels, state, and lineage unchanged."
+		) in gate["stdout"], gate["stdout"]
+		lineage = _run_lineage_step(gate["env"], pr_merged=False)
+		assert lineage["finalized"] == [], (head_ref, head_repo, lineage)
+		assert '"reason":"no_accepted_issues"' in lineage["stdout"], lineage["stdout"]
+
+
+def test_unmerged_close_from_non_automation_head_leaves_managed_child_untouched() -> None:
+	"""A labelled orchestrator-managed child is gated the same way."""
+	for head_ref, head_repo in UNMERGED_REJECTED_HEADS:
+		gate = _run_step(
+			issues={10: {"body": MANAGED_CHILD_BODY, "labels": ["ai:orchestrator-managed"]}},
+			pr_base_ref="orchestrator/project-5",
+			pr_body="Fixes #10\n",
+			closing_refs=[10],
+			pr_merged=False,
+			pr_head_ref=head_ref,
+			pr_head_repo=head_repo,
+		)
+		assert gate["labels"] == [] and gate["closed"] == [], (head_ref, head_repo, gate)
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], (head_ref, head_repo, gate["env"])
+
+
+def test_unmerged_close_from_automation_heads_labels_and_closes() -> None:
+	"""The implement pipeline's `ai/issue-<n>` shapes and the judge's
+	`fix/<n>-followup-<epoch>` head keep today's `ai:closed` + close +
+	lineage `closed`, for standalone and managed issues alike."""
+	for body, labels, base in (
+		("Standalone issue.", ["ai:claude"], "main"),
+		(MANAGED_CHILD_BODY, ["ai:orchestrator-managed"], "orchestrator/project-5"),
+	):
+		for head_ref in ("ai/issue-10", "ai/issue-10-retry", "ai/issue-10/sub", "fix/10-followup-1790000000"):
+			gate = _run_step(
+				issues={10: {"body": body, "labels": labels}},
+				pr_base_ref=base,
+				pr_body="Fixes #10\n",
+				closing_refs=[10],
+				pr_merged=False,
+				pr_head_ref=head_ref,
+			)
+			assert gate["labels"] == [("10", "ai:closed")], (head_ref, base, gate)
+			assert gate["closed"] == [10], (head_ref, base, gate)
+			assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [10], (head_ref, base, gate["env"])
+			lineage = _run_lineage_step(gate["env"], pr_merged=False)
+			assert lineage["finalized"] == [(10, "closed")], (head_ref, base, lineage)
+
+
+def test_unmerged_close_mixed_link_changes_only_the_automation_issue() -> None:
+	"""One PR closed without merging links #10 and #11, and its head is #10's
+	automation branch: only #10 changes."""
+	gate = _run_step(
+		issues={
+			10: {"body": "Standalone issue.", "labels": ["ai:claude"]},
+			11: {"body": "Standalone issue.", "labels": ["ai:claude"]},
+		},
+		pr_base_ref="main",
+		pr_body="Fixes #10\nFixes #11\n",
+		closing_refs=[10, 11],
+		pr_merged=False,
+		pr_head_ref="ai/issue-10",
+	)
+	assert gate["labels"] == [("10", "ai:closed")], gate
+	assert gate["closed"] == [10], gate
+	assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [10, 11], gate["env"]
+	assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [10], gate["env"]
+	lineage = _run_lineage_step(gate["env"], pr_merged=False)
+	assert lineage["finalized"] == [(10, "closed")], lineage
+
+
+def test_unmerged_close_skips_tracking_and_unclassified_lineage() -> None:
+	"""AD-2 of #5617: an orchestrator-tracking issue, and an issue whose
+	classification lookups both failed, are not finalized by an unmerged close
+	from a head that is not their own automation branch."""
+	cases = [
+		({5: {"body": "Project tracker.", "labels": ["ai:orchestrator-tracking"]}}, 5, [5], False),
+		({10: {"body": "Standalone issue.", "labels": ["ai:claude"]}}, 10, [], True),
+	]
+	for issues, num, closing_refs, lookups_fail in cases:
+		gate = _run_step(
+			issues=issues,
+			pr_base_ref="main",
+			pr_body=f"Fixes #{num}\n",
+			closing_refs=closing_refs,
+			pr_merged=False,
+			pr_head_ref="patch-1",
+			orch_graphql_fail=lookups_fail,
+			orch_rest_fail=lookups_fail,
+		)
+		assert gate["labels"] == [] and gate["closed"] == [], (num, gate)
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], (num, gate["env"])
+		assert (
+			f"PR #4748 closed without merging is not an automation PR for issue #{num} "
+			"(head patch-1, head repo acme/widgets); skipping its lineage finalization."
+		) in gate["stdout"], gate["stdout"]
+		lineage = _run_lineage_step(gate["env"], pr_merged=False)
+		assert lineage["finalized"] == [], (num, lineage)
+
+
 # CI runs this file as a script (ci.yml "Phase label transition and fallback
 # contract tests"), not under pytest, so every test must be called here. Keep
 # this block last: a test defined after it never runs in CI.
@@ -816,4 +951,9 @@ if __name__ == "__main__":
 	test_unclassified_issue_keeps_default_merge_and_unmerged_lineage()
 	test_classified_tracking_issue_keeps_lineage_when_rest_fallback_works()
 	test_non_automation_head_merge_is_not_finalized()
+	test_unmerged_close_from_non_automation_head_leaves_issue_untouched()
+	test_unmerged_close_from_non_automation_head_leaves_managed_child_untouched()
+	test_unmerged_close_from_automation_heads_labels_and_closes()
+	test_unmerged_close_mixed_link_changes_only_the_automation_issue()
+	test_unmerged_close_skips_tracking_and_unclassified_lineage()
 	print("PASS")
