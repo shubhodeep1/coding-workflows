@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/completed/issue-5328-settings-guard-wiring-check-plan.md:50 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The archived plan says an omitted hook timeout defaults to 60 seconds, but the implementation uses a 600-second default with lower event-specific defaults.\n  WHY: There is no runtime failure, but the stale acceptance criterion could mislead future readers assessing the timeout baseline.\n- docs/completed/issue-5328-settings-guard-wiring-check-plan.md:53 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The archived plan says an unparseable base contributes no wiring, but the implementation fails closed with `reason=base-unparseable`.\n  WHY: There is no runtime failure, but the plan's stated behavior contradicts the implementation and could mislead future readers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/completed/issue-5328-settings-guard-wiring-check-plan.md:50 | severity=low | confidence=5\n  PROBLEM: The archived plan's Approach section says an omitted timeout uses Claude Code's 60-second default, but the implementation uses a 600-second default with lower per-event defaults.\n  WHY: No runtime failure; the archived plan could mislead a reader about the timeout threshold.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- docs/completed/issue-5328-settings-guard-wiring-check-plan.md:50 | severity=low | confidence=5\n  PROBLEM: The plan records an omitted hook timeout as Claude Code's 60-second default, while the implementation and operator documentation use a 600-second default with event-specific overrides.\n  WHY: It does not cause a runtime exception, but the archived plan contains an inaccurate acceptance criterion.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/completed/issue-5328-settings-guard-wiring-check-plan.md:50 | severity=low | confidence=5\n  PROBLEM: The archived plan says an omitted timeout defaults to 60 seconds, while the implementation uses 600 seconds with lower event-specific defaults.\n  WHY: The plan does not affect runtime, but it could mislead readers about the timeout-comparison rule.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/completed/issue-5328-settings-guard-wiring-check-plan.md:50 | severity=low | confidence=5\n  PROBLEM: The archived plan says an omitted timeout defaults to 60 seconds, while the implementation uses 600 seconds for most events and lower event-specific defaults.\n  WHY: There is no current runtime failure, but the plan gives future maintainers an incorrect timeout baseline.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/completed/issue-5328-settings-guard-wiring-check-plan.md:50 | severity=low | confidence=5\n  PROBLEM: The archived plan records a 60-second default timeout, but the implementation uses 600 seconds with per-event overrides.\n  WHY: There is no runtime failure, but a future reader assessing preserved behavior could use the wrong threshold.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/completed/issue-5328-settings-guard-wiring-check-plan.md:50 | severity=low | confidence=5\n  PROBLEM: The archived plan says an omitted timeout defaults to 60 seconds, but the implementation uses a 600-second default with per-event overrides.\n  WHY: There is no runtime failure, but the plan's acceptance logic could lead a future reader to apply the wrong timeout threshold.\n- docs/completed/issue-5328-settings-guard-wiring-check-plan.md:53 | severity=low | confidence=4\n  PROBLEM: The plan says an unparseable base contributes no wiring, but the implementation fails closed with `reason=base-unparseable`.\n  WHY: There is no runtime failure, but the plan's stated behavior contradicts the implementation and could mislead future readers.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8e95d381753e5479c27e38fb70e8b6f8bef20a9584eb24f09888d72c72607417",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5356,
+    "run_id": "36810232144",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36810232144",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001034415_2743380287",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5356,
+    "run_id": "36810232144"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T03:44:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
