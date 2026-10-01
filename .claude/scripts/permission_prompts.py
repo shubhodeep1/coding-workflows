@@ -895,8 +895,11 @@ def decide_duplicate_close(
 	`reasons` (every failed check), and the evidence fields. Trust comes from
 	`author_association` (`check_in_status.FIX_CLAIM_TRUSTED_ASSOCIATIONS`) and
 	the PR's head and base `repo.full_name`, all in the objects already read; a
-	missing field is untrusted.
+	missing field is untrusted. When `security_pass_skip.py` did not load, it
+	refuses with `_SKIP_CHECK_ERROR` instead of raising.
 	"""
+	if security_pass_skip is None:
+		return {"eligible": False, "reasons": [_SKIP_CHECK_ERROR], "issue": issue_number, "target": target_number, "fix_pr": fix_pr.get("number")}
 	reasons: list[str] = []
 	body = str(issue.get("body") or "")
 	markers = _outside_fenced_examples(body)
