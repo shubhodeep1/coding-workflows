@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T06:55:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A `[claude-twin-sync]` commit that lifts a twin-sync block must also update the progress log (`Status`, `Waiting on`, `Check-in`, the phase's twin-sync count) in the same commit; otherwise the next review round flags a log that still says `BLOCKED` on a sync already done.",
+  "phase": "implement_plan",
+  "pr_number": 5855,
+  "record_id": "lesson-implement-plan-d248f12418028d83698e5709",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5810-escape-class-comment-pattern",
+    "file:docs/implement-plan/issue-5810-escape-class-comment-pattern.md"
+  ]
+}
