@@ -243,7 +243,13 @@ def _label_names(obj: dict) -> list[str]:
 def _parse_time(value: str) -> dt.datetime:
 	if not isinstance(value, str):
 		raise ValueError(f"timestamp must be a string, got {type(value).__name__}")
-	return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+	parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+	# A time with no offset cannot be compared with the aware `now`; report it
+	# as unreadable rather than letting the subtraction raise TypeError
+	# (issue #5927: an undatable hold is handed back, not retried).
+	if parsed.tzinfo is None or parsed.utcoffset() is None:
+		raise ValueError(f"timestamp has no UTC offset: {value!r}")
+	return parsed
 
 
 def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, now: dt.datetime) -> dict:
