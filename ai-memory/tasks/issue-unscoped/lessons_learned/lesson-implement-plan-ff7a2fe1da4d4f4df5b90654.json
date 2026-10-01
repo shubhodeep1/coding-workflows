@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T11:56:59Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Docs that describe where reviewer votes or verdicts surface must name the real surface: the Actions run log carries only the gate's aggregate lines, per-reviewer output is in the `reviewer-logs-*` artifact, and verdict convergence happens only when `CLAUDE_FIXER_VERDICT_BOT_LOGIN` is set (empty by default).",
+  "phase": "implement_plan",
+  "pr_number": 5605,
+  "record_id": "lesson-implement-plan-ff7a2fe1da4d4f4df5b90654",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5582-rejection-votes-need-automated-proof",
+    "file:README.md",
+    "file:scripts/review_run_reviewers.sh"
+  ]
+}
