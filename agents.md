@@ -1178,11 +1178,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   only outside `.claude/` is resolved inside the sync merge
   (`git commit --no-edit` keeps the `[claude-asset-sync]` subject). The
   merge's source is the PR's base, and the merged `.claude/` files are
-  already in the working tree, so the fix runs under the current guards.
+  already in the working tree, so the merged hook scripts run; when the
+  merge brings a `settings.json` change, the settings check below runs
+  with `--before HEAD` before anything is resolved.
   When that resolution is not evident, the session aborts and stops as it
   does on any conflict it cannot resolve, and never continues the fix on
   the unsynced head (issue #5258). A merged `settings.json`
-  change applies from the next session. Local git only, no GitHub API
+  change is confirmed by the settings check below before anything is
+  pushed. Local git only, no GitHub API
   calls. The SessionStart hook logs the drift as
   `[session-start] claude_assets=stale …`, or `claude_assets=diverged …`
   when shallow history has no merge base (stable log prefixes). Tests:
@@ -1201,10 +1204,21 @@ reviews, comments, and conflicts stay a direct §12 request.
   `compact` keep the earlier record). It prints nothing, never blocks, and
   must stay the only `ConfigChange` hook. When a sync merge changed
   `settings.json`, the sync's step 6 runs the allowlisted
-  `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py`
+  `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py --before HEAD^1`
   (one JSON line; exit 0 current, 1 not current, 2 usage error; the session
   id defaults to `CLAUDE_CODE_SESSION_ID`; a missing record, or no readable
-  `settings.json` on disk, is not current).
+  `settings.json` on disk, is not current). Claude Code runs `ConfigChange`
+  with the hooks loaded before a change, so on a branch whose
+  `settings.json` predates the recorder the merged file's reload is never
+  recorded: `--before HEAD^1` then reports `"before_recorder_wired": false`
+  and a reason that says so. On a sync merge stopped by a conflict outside
+  `.claude/`, the same check runs as `--before HEAD` (the unfinished merge
+  has no merge commit yet, and `HEAD` is still the branch before it) before
+  any resolution, so no conflict work runs under unconfirmed wiring. The
+  verdict stays "not current" (fail closed),
+  so such a branch ends in the escalation below once, and a human confirms
+  the merged wiring and pushes the sync merge; after that the branch
+  carries the recorder.
   Still not current after one re-run → the session writes nothing more for
   that work and hands it to a fresh session: a `— settings restart` stage
   session carrying `Asset-sync restart: <id>`, or a fresh `/fix-claude-pr`
