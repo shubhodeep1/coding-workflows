@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/protected_path_authorization.py:553-577 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Protected merge commits are authorized against the PR's pre-merge `head.sha` instead of the merge commit SHA, so approval of the PR head can authorize protected content introduced only during merge resolution.\n  WHY: The release gate can ship protected bytes that the owner did not approve; severity disagreement: google_gemini-3_8-flash rated this BLOCKER, while deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, and z-ai_glm-5_2 rated it MAJOR.\n- scripts/protected_path_authorization.py:149 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, z-ai_glm-5_2]\n  PROBLEM: The trailing `raise ReadError(f\"gh api {path} failed\")` in `gh_get_json` is unreachable after the retry loop.\n  WHY: The final retry attempt re-raises the caught `ReadError`, so control cannot reach the trailing raise; this has no runtime impact.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/protected_path_authorization.py:572-577 | severity=MAJOR | confidence=3\n  PROBLEM: When a merge commit carries protected changes of its own, the release check authorizes it against the associated PR's `head.sha` rather than the merge commit SHA.\n  WHY: A merge resolution could introduce protected content not present in the approved PR head, allowing unreviewed bytes to ship.\n- scripts/protected_path_authorization.py:149 | severity=NIT | confidence=5\n  PROBLEM: The final `raise ReadError(f\"gh api {path} failed\")` after the retry loop is unreachable.\n  WHY: The final retry attempt re-raises `ReadError`; the dead code has no runtime impact.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/protected_path_authorization.py:565-577 | severity=BLOCKER | confidence=5\n  PROBLEM: Merge commits with protected-equivalent changes of their own are authorized against the merged PR's pre-merge head SHA rather than the merge commit SHA.\n  WHY: Protected changes introduced during merge resolution can ship after approval of the clean pre-merge PR head; authorization by commenting with the merge commit SHA also remains blocked.\n- scripts/protected_path_authorization.py:149 | severity=NIT | confidence=5\n  PROBLEM: The `raise ReadError` statement after the retry loop in `gh_get_json` is unreachable.\n  WHY: The final attempt re-raises the caught `ReadError`, and successful calls return before reaching it.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/protected_path_authorization.py:553-576\n  PROBLEM: Protected merge commits are authorized against `pr.head.sha`, not the merge commit SHA.\n  WHY: The reviewer output ends after identifying this concern and does not provide further analysis, severity, or confidence.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/protected_path_authorization.py:553-576 | severity=MAJOR | confidence=4\n  PROBLEM: Protected merge commits are authorized against the PR's `head.sha` rather than the merge commit SHA.\n  WHY: Protected content introduced through conflict resolution or hand-editing can ship under authorization of bytes the owner did not review.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/protected_path_authorization.py: evaluate_release, the authorization loop:\n  for pr in merged:\n      head = pr.get(\"head\", {}).get(\"sha\") if isinstance(pr.get(\"head\"), dict) else None\n      if isinstance(head, str) and authorizing_comment(comments_for(pr[\"number\"]), head) is not None:\n          authorized = True\n          break\n  | severity=MAJOR | confidence=4\n  PROBLEM: Merge commits carrying their own protected content are authorized against the associated PR's pre-merge `head.sha`, not the merge commit SHA.\n  WHY: The owner can approve the clean source head while protected conflict-resolution changes absent from that head ship unapproved.\n- scripts/protected_path_authorization.py: gh_get_json, trailing `raise ReadError(f\"gh api {path} failed\")` after the for-loop | severity=NIT | confidence=5\n  PROBLEM: The final raise is unreachable dead code.\n  WHY: The last retry re-raises the original `ReadError`; there is no runtime impact.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6705543ebc7915f993f7f84c649c48bb02f89e94af7e86924fc4ba609de71447",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4973,
+    "run_id": "36816192959",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36816192959",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001051425_deb6033a96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4973,
+    "run_id": "36816192959"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T05:14:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
