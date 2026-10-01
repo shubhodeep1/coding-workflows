@@ -61,8 +61,8 @@ API budget (CLAUDE.md §15): ``GET /actions/runs/{id}``, ``GET
 /actions/runs/{id}/artifacts``, and the artifact download; plus one
 paginated ``GET /pulls/{n}/files`` when the run came from the PR head branch
 and no changed-files list was passed; plus ``GET /repos/{repo}`` when
-``--default-branch`` is empty. Results are cached per run id for the
-process. Any API failure, missing artifact, or malformed evidence returns
+``--default-branch`` is empty. Nothing is cached: each ``verify`` call
+reads its own run (callers verify each run id at most once). Any API failure, missing artifact, or malformed evidence returns
 ``verified: false`` (callers fail closed to the pre-evidence behaviour).
 """
 
@@ -294,8 +294,9 @@ def verify_evidence(
 	if run_branch == default_branch:
 		pass
 	elif pr_head_ref and run_branch == pr_head_ref and str(run.get("head_sha") or "") == head_sha:
+		# A missing head repository (a deleted fork) proves nothing about the caller: fail closed.
 		head_repo = run.get("head_repository") if isinstance(run.get("head_repository"), dict) else {}
-		if str(head_repo.get("full_name") or repo).lower() != repo.lower():
+		if str(head_repo.get("full_name") or "").lower() != repo.lower():
 			return reject("untrusted_caller_ref")
 		changed = _changed_files(repo, pr, changed_files_file, api)
 		if changed is None:

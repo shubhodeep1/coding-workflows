@@ -81,6 +81,8 @@ STICKY_LINE_WINDOW = 3
 RULINGS = ("invalid", "upheld")
 CATEGORIES = ("security", "data-loss", "correctness", "other")
 HOLD_CATEGORIES = ("security", "data-loss")
+# Comment authors whose judge markers prior_rulings follows (the same set the rejection comment needs).
+TRUSTED_COMMENT_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 MODEL_ACTIONS = ("merge", "fix", "merge_with_followup", "hold", "close_and_reissue")
 DECISIONS = ("merge", "fix", "merge_with_followup", "hold")
 
@@ -152,6 +154,11 @@ def parse_findings(ledger_text: str) -> list[dict[str, Any]]:
 	return findings
 
 
+def _one_line(value: Any) -> str:
+	"""Model text on one line, so it can never add a marker or a checklist line to a comment."""
+	return " ".join(str(value or "").split())
+
+
 def _load_json(path: str) -> Any:
 	try:
 		return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -203,13 +210,15 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 		"cap": cap,
 		"rulings": rulings,
 		"upheld": upheld,
-		"justification": str(model.get("justification") or "")[:2000],
+		"justification": _one_line(model.get("justification"))[:2000],
 		"fix_description": str(model.get("fix_description") or "")[:4000],
 	}
-	if findings and not by_id:
-		result.update(decision="error", reason="no_usable_rulings")
-	elif model_action in ("hold", "close_and_reissue"):
+	# A model hold (or close_and_reissue, which is not allowed here) stays a hold even without
+	# rulings: the plan maps both to `hold`, and every unruled finding already counts as upheld.
+	if model_action in ("hold", "close_and_reissue"):
 		result.update(decision="hold", reason=f"model_{model_action}")
+	elif findings and not by_id:
+		result.update(decision="error", reason="no_usable_rulings")
 	elif not upheld:
 		result.update(decision="merge", reason="all_invalid")
 	elif fix_count < cap:
@@ -283,7 +292,9 @@ def prior_rulings(
 ) -> dict[str, Any]:
 	markers: list[tuple[int, str, str]] = []
 	for comment in comments if isinstance(comments, list) else []:
-		if not isinstance(comment, dict):
+		# Only collaborators' comments can point at judge runs (as for the rejection comment), so a
+		# stranger's fake markers cannot use up the newest-runs budget and switch sticky rulings off.
+		if not isinstance(comment, dict) or comment.get("author_association") not in TRUSTED_COMMENT_ASSOCIATIONS:
 			continue
 		try:
 			comment_id = int(comment.get("id") or 0)
@@ -349,7 +360,7 @@ def followup(result: dict[str, Any], *, pr: int, head: str, run_url: str) -> dic
 	]
 	for ruling in result["upheld"]:
 		location = f"{ruling['file']}:{ruling['line']}" if ruling["file"] else "(no location)"
-		body.append(f"- [ ] `{location}` ({ruling['category']}): {ruling['claim']} — {ruling['reason']}")
+		body.append(f"- [ ] `{location}` ({ruling['category']}): {_one_line(ruling['claim'])} — {_one_line(ruling['reason'])}")
 	body.extend(["", f"Refs #{pr}"])
 	return {"title": title[:250], "body": "\n".join(body) + "\n"}
 

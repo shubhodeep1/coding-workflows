@@ -136,6 +136,10 @@ claude_fixer_write_evidence()
 # place when it is already the newest Claude-fixer marker comment for the
 # head (a newer hand-off on the same head gets a fresh comment instead, so
 # the gate's newest-marker rule sees the current state).
+# §15 audit: PR_ISSUE_COMMENTS_FILE ("Collect PR metadata") is read before
+# the reviewers run, so it can miss a marker posted since, and no earlier
+# call in this step resolves the comment account; hence one `GET /user` and
+# one paginated comments read, issued only on the checks-pending path.
 claude_fixer_upsert_checks_pending_comment()
 {
   local marker_login="" existing_id="" payload_file
