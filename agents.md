@@ -1078,7 +1078,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   the live one on a re-read of the comments, returns `review_superseded`.
   A later `success` does not clear a failed one (issue #5904: gate-skipped
   dispatches conclude `success`); only a newer marker, whose run is newer
-  than the failure, does. After a failed review, a push, a base change, or
+  than the failure, does. A successful re-run does not clear a failed
+  attempt of the same run either: a re-run keeps the run's id and the
+  listings show only its newest attempt, so a newer bound review with
+  `run_attempt` above 1 has its earlier attempts read
+  (`actions/runs/<id>/attempts/<n>`, only when no newer review failed
+  outright, at most `MAX_EARLIER_REVIEW_RUN_ATTEMPTS` = 5 per run; more
+  counts as failed, and a malformed `run_attempt` or attempt read is a
+  failed read). After a failed review, a push, a base change, or
   the `force-review` label sends the head through a new review.
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still

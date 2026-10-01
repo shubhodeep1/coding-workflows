@@ -1487,8 +1487,12 @@ also listed by run status, and it never merges when
 any newer completed review of the PR did not succeed or the marker
 changed while it checked (`review_superseded`). A later run that concluded
 `success` does not clear the failure (issue #5904): a dispatch the review
-gate skipped also concludes `success`. Only a newer marker from a successful
-full review clears it, so after a failed review a push, a base change, or the
+gate skipped also concludes `success`. Neither does a successful re-run: a
+re-run keeps its run's id and the runs listings show only its newest
+attempt, so a newer review that was re-run has its earlier attempts read
+(`actions/runs/<id>/attempts/<n>`, none in the usual case, at most 5 per
+run; a run with more earlier attempts than that counts as failed). Only a
+newer marker from a successful full review clears it, so after a failed review a push, a base change, or the
 `force-review` label sends the head through a new review. A runs listing that holds
 1,000 or more runs newer than the marker's run is a failed read
 (`pending_checks_failed`), repeated every hour until a push, a base change,

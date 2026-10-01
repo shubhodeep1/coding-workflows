@@ -55,7 +55,9 @@ Fail closed. Auto-merge is enabled only when ALL of these hold:
     also read with `status=` when it may go on past the pages read); every
     completed review run bound to this PR that is newer than the marker's
     run concluded `success` (issue #5904: a later gate-skipped `success`
-    does not clear an earlier failure; only a newer marker does); and
+    does not clear an earlier failure; only a newer marker does), and on
+    every attempt, since a re-run keeps the run's id and its listing shows
+    only the newest attempt; and
     a re-read of the comments, after those run reads, still finds the same
     marker (a newer review that finished in between has posted its own
     comment by then);
@@ -79,7 +81,9 @@ review_rb_judge_dispatch.yml; a missing workflow costs its one 404), each 1
 call per 100 runs down to the marker's run (usually 1, at most 10), and,
 for a listing whose last page read was full, 1 status-filtered listing
 for each of the 5 run statuses but `completed` (1 call per 100 runs,
-usually 1, at most 10), 1
+usually 1, at most 10), only when every newer bound review run succeeded,
+1 attempt read per earlier attempt of each one that was re-run (none in
+the usual case, at most MAX_EARLIER_REVIEW_RUN_ATTEMPTS per run), 1
 read per 100 comments again, 1 repository-variable read, then
 `review_enable_auto_merge.sh` (1 paginated labels read, 1 PR read, 1 merge
 call). Every read goes through `gh api` with
@@ -155,6 +159,12 @@ REVIEW_RUNS_PER_PAGE = 100
 # leaves older runs unread, so each of these is listed with `status=` whenever
 # that listing may go on past its last page (PR #5178 review of 95d932b).
 ACTIVE_REVIEW_RUN_STATUSES = ("requested", "waiting", "pending", "queued", "in_progress")
+# A re-run keeps its run's id and the runs listings show only the newest
+# attempt, so a successful re-run of a newer review has its earlier attempts
+# read (issue #5904 review round 1). A run re-run more often than this counts
+# as not succeeded without being read (fail closed); GitHub allows 50
+# attempts per run.
+MAX_EARLIER_REVIEW_RUN_ATTEMPTS = 5
 
 
 def _comment_id(comment: dict) -> int:
@@ -432,6 +442,38 @@ def _run_path(run: dict) -> str:
 	return path.split("@", 1)[0] if isinstance(path, str) else ""
 
 
+def _earlier_unsuccessful_attempt(repo: str, run: dict) -> str:
+	"""Why an earlier attempt of the successful review run `run` blocks the merge, or "" (issue #5904 review round 1).
+
+	A re-run keeps the run's id, and the runs listings report only its newest
+	attempt, so a re-run the review gate skipped concludes `success` and
+	would hide a failed attempt before it. Input: one run from a runs
+	listing; its `run_attempt` must be an integer of at least 1, or this
+	raises `check_in_status.ReadError` (fail closed). Attempt 1 costs no
+	call. Otherwise the earlier attempts are read newest first,
+	`repos/<repo>/actions/runs/<id>/attempts/<n>`, until one did not conclude
+	`success`: 1 call per earlier attempt, at most
+	MAX_EARLIER_REVIEW_RUN_ATTEMPTS. A run with more earlier attempts than
+	that is reported without any read. A failed read, or one that is not the
+	completed attempt `<n>` of that run, raises `check_in_status.ReadError`.
+	"""
+	attempt = run.get("run_attempt")
+	if type(attempt) is not int or attempt < 1:
+		raise check_in_status.ReadError(f"review run {run.get('id')} has no valid run_attempt: {attempt!r}")
+	if attempt - 1 > MAX_EARLIER_REVIEW_RUN_ATTEMPTS:
+		return (f"succeeded on attempt {attempt}, after more than {MAX_EARLIER_REVIEW_RUN_ATTEMPTS} "
+			f"earlier attempts that were not read")
+	for attempt_number in range(attempt - 1, 0, -1):
+		path = f"repos/{repo}/actions/runs/{run['id']}/attempts/{attempt_number}"
+		earlier = check_in_status.gh_api(path)
+		if (earlier.get("id") != run["id"] or earlier.get("run_attempt") != attempt_number
+			or earlier.get("status") != "completed"):
+			raise check_in_status.ReadError(f"gh api {path} did not return completed attempt {attempt_number} of run {run['id']}")
+		if earlier.get("conclusion") != "success":
+			return f"concluded {earlier.get('conclusion')} on attempt {attempt_number} before re-run attempt {attempt} succeeded"
+	return ""
+
+
 def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int) -> dict | None:
 	"""Return why a newer review of PR `number` blocks the marker's merge, or None (issue #5148).
 
@@ -453,7 +495,11 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	is also listed (`_read_active_runs_past_listing`: 1 call per status in
 	the usual case, at most `check_in_status.MAX_PAGINATED_API_PAGES` each),
 	and an older queued or running review still counts as active (PR #5178
-	review of 95d932b). Any other failed read, a 404 on the head-branch
+	review of 95d932b). When every newer bound review run concluded
+	`success`, each one that is a re-run (`run_attempt` above 1) has its
+	earlier attempts read (`_earlier_unsuccessful_attempt`: 1 call per
+	earlier attempt, at most MAX_EARLIER_REVIEW_RUN_ATTEMPTS per run; none
+	in the usual case). Any other failed read, a 404 on the head-branch
 	listing or on a status listing included, a listing that needs more
 	pages than that, and a listing with a run that
 	has no integer `id` or string `status` (or, in the internal-review.yml
@@ -472,7 +518,10 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	titled for it), only those with an id above `marker_run_id` count, and
 	any one of them did not conclude `success` (issue #5904: the newest alone
 	is not enough, because a gate-skipped dispatch concludes `success`
-	without reviewing anything and would hide an earlier failed review). The
+	without reviewing anything and would hide an earlier failed review), or
+	succeeded only on a re-run after an earlier attempt that did not
+	(issue #5904 review round 1: a re-run keeps the run's id, so a
+	gate-skipped re-run would hide its own failed attempt the same way). The
 	id filter is required: the marker's own run is the review it records,
 	and older runs came before that review, so neither can supersede it. A
 	newer review that posted findings or a newer marker is caught by
@@ -510,9 +559,20 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	# so it must not hide an earlier failed review. Only a successful full
 	# review clears a failure, by posting a newer marker (whose run id then
 	# passes the failed run), a hand-off, or enabling auto-merge itself.
-	unsuccessful = sorted((run for run in newer if run.get("conclusion") != "success"), key=lambda run: run["id"])
+	unsuccessful = [(run, f"concluded {run.get('conclusion')}")
+		for run in sorted(newer, key=lambda run: run["id"]) if run.get("conclusion") != "success"]
+	if not unsuccessful:
+		# A successful re-run keeps the run's id and hides its earlier
+		# attempts (issue #5904 review round 1): a gate-skipped re-run of a
+		# failed forced review concludes `success` under the same id. Read
+		# only when no newer run failed outright, so the usual case costs
+		# no call.
+		for run in sorted(newer, key=lambda run: run["id"]):
+			masked = _earlier_unsuccessful_attempt(repo, run)
+			if masked:
+				unsuccessful.append((run, masked))
 	if unsuccessful:
-		names = ", ".join(f"{run['id']} ({_run_path(run)}) concluded {run.get('conclusion')}" for run in unsuccessful)
+		names = ", ".join(f"{run['id']} ({_run_path(run)}) {detail}" for run, detail in unsuccessful)
 		return {"state": "review_superseded", "reason": f"a review run of this PR newer than the marker's run "
 			f"{marker_run_id} did not succeed: {names}; only a newer marker from a successful full review clears it"}
 	return None

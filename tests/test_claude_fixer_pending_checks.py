@@ -201,6 +201,14 @@ elif base.endswith("/check-runs"):
 		emit({"total_count": len(runs), "check_runs": runs})
 elif base == f"repos/o/r/actions/runs/{state['review_run']['id']}":
 	emit(state["review_run"])
+elif base.startswith("repos/o/r/actions/runs/") and "/attempts/" in base:
+	run_id, _, attempt_number = base[len("repos/o/r/actions/runs/"):].partition("/attempts/")
+	attempt_run = state.get("run_attempts", {}).get(run_id, {}).get(attempt_number)
+	if attempt_run is None:
+		fail("gh: Not Found (HTTP 404)")
+	if attempt_run == "error":
+		fail("gh: Server Error (HTTP 502)")
+	emit(attempt_run)
 elif base == "repos/o/r/actions/runs":
 	runs_listing(state.get("branch_runs", []))
 elif base.startswith("repos/o/r/actions/workflows/") and base.endswith("/runs"):
@@ -244,16 +252,20 @@ def fake_gh(tmp_path, monkeypatch):
 
 	class Fake:
 		def set(self, *, pr=None, comments=(), check_runs=(), review_run=None, enable_auto_merge=None, merge_fails=False,
-			branch_runs=(), dispatch_runs=None):
+			branch_runs=(), dispatch_runs=None, run_attempts=None):
 			# dispatch_runs maps a workflow file to its workflow_dispatch runs;
 			# a workflow left out (or None) answers 404, as a missing workflow
 			# does. The default is this repo: internal-review.yml and
-			# review_autofix.yml exist, ai-review.yml does not.
+			# review_autofix.yml exist, ai-review.yml does not. run_attempts
+			# maps a run id to {attempt number: that attempt's run}; an
+			# attempt left out answers 404.
 			state_file.write_text(json.dumps({
 				"pr": pr or _pr(), "comments": list(comments), "check_runs": list(check_runs),
 				"review_run": review_run or _review_run(), "enable_auto_merge": enable_auto_merge, "merge_fails": merge_fails,
 				"branch_runs": list(branch_runs),
 				"dispatch_runs": dispatch_runs if dispatch_runs is not None else {"internal-review.yml": [], "review_autofix.yml": []},
+				"run_attempts": {str(run_id): {str(number): attempt for number, attempt in attempts.items()}
+					for run_id, attempts in (run_attempts or {}).items()},
 			}), encoding="utf-8")
 
 		def calls(self) -> list[list[str]]:
@@ -445,10 +457,10 @@ def test_default_branch_review_run_needs_the_full_dispatch_binding(fake_gh, labe
 # ---- a newer review of the PR (issue #5148) ----
 
 def _run(run_id: int, *, workflow: str = "internal-review.yml", status: str = "completed", conclusion: str | None = "success",
-	head_branch: str = REF, event: str = "pull_request", title: str = "t") -> dict:
+	head_branch: str = REF, event: str = "pull_request", title: str = "t", run_attempt: int = 1) -> dict:
 	return {"id": run_id, "path": f".github/workflows/{workflow}", "status": status,
 		"conclusion": conclusion if status == "completed" else None, "head_branch": head_branch, "event": event,
-		"display_title": title, "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
+		"display_title": title, "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}", "run_attempt": run_attempt}
 
 
 def _dispatch(run_id: int, *, pr: int = PR, **overrides) -> dict:
@@ -592,6 +604,114 @@ def test_a_failed_review_is_cleared_by_a_newer_marker_from_a_full_review(fake_gh
 	result = _evaluate()
 	assert result["state"] == "merge_enabled", result
 	assert fake_gh.merges() == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
+
+
+# ---- issue #5904 review round 1: a successful re-run must not mask its own failed attempt ----
+
+def _attempt(run: dict, number: int, *, conclusion: str | None = "success", status: str = "completed") -> dict:
+	# What `actions/runs/<id>/attempts/<n>` returns: the run as it was on that attempt.
+	return {**run, "run_attempt": number, "status": status, "conclusion": conclusion}
+
+
+def _attempt_reads(fake_gh) -> list[str]:
+	return [arg for call in fake_gh.calls() for arg in call if "/attempts/" in arg]
+
+
+@pytest.mark.parametrize("label, rerun, attempts, detail", [
+	# The audit's scenario on one run id: a forced re-review dispatched for
+	# this PR fails, the force-review label is gone, and a re-run of that run
+	# is skipped by the review gate, so its newest attempt concludes `success`.
+	("forced dispatch failed, then its re-run was gate-skipped",
+		_dispatch(RUN_ID + 2, run_attempt=2), {1: "failure"}, "concluded failure on attempt 1 before re-run attempt 2 succeeded"),
+	("head-branch review timed out, then its re-run was gate-skipped",
+		_run(RUN_ID + 1, run_attempt=2), {1: "timed_out"}, "concluded timed_out on attempt 1 before re-run attempt 2 succeeded"),
+	("a failure two attempts back",
+		_dispatch(RUN_ID + 2, run_attempt=3), {2: "success", 1: "cancelled"}, "concluded cancelled on attempt 1 before re-run attempt 3 succeeded"),
+])
+def test_a_successful_rerun_does_not_mask_its_failed_attempt(fake_gh, label, rerun, attempts, detail):
+	branch_runs = [rerun] if rerun["event"] == "pull_request" else []
+	dispatches = [rerun] if rerun["event"] == "workflow_dispatch" else []
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": dispatches}),
+		run_attempts={rerun["id"]: {number: _attempt(rerun, number, conclusion=conclusion) for number, conclusion in attempts.items()}})
+	result = _evaluate()
+	assert result["state"] == "review_superseded", (label, result)
+	assert f"{rerun['id']} (.github/workflows/internal-review.yml) {detail}" in result["reason"], (label, result["reason"])
+	assert fake_gh.merges() == [], label
+	# Newest earlier attempt first, stopping at the first one that did not succeed.
+	assert _attempt_reads(fake_gh) == [f"repos/{REPO}/actions/runs/{rerun['id']}/attempts/{number}"
+		for number in range(rerun["run_attempt"] - 1, 0, -1)], label
+
+
+def test_a_rerun_whose_earlier_attempts_all_succeeded_lets_the_merge_through(fake_gh):
+	rerun = _dispatch(RUN_ID + 2, run_attempt=3)
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": [rerun]}),
+		run_attempts={rerun["id"]: {1: _attempt(rerun, 1), 2: _attempt(rerun, 2)}})
+	result = _evaluate()
+	assert result["state"] == "merge_enabled", result
+	assert _attempt_reads(fake_gh) == [f"repos/{REPO}/actions/runs/{rerun['id']}/attempts/2",
+		f"repos/{REPO}/actions/runs/{rerun['id']}/attempts/1"]
+
+
+@pytest.mark.parametrize("label, branch_runs, listings", [
+	("no newer review was re-run", [_run(RUN_ID + 1)], {"internal-review.yml": [_dispatch(RUN_ID + 2)]}),
+	("a re-run of the marker's own run", [_run(RUN_ID, run_attempt=2)], {}),
+	("a re-run of an older review", [_run(RUN_ID - 1, run_attempt=2)], {}),
+	("a re-run of a newer non-review run", [_run(RUN_ID + 1, workflow="ci.yml", run_attempt=2)], {}),
+	("a re-run dispatch for another PR", [], {"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, run_attempt=2)]}),
+])
+def test_attempts_are_read_only_for_newer_bound_reruns(fake_gh, label, branch_runs, listings):
+	# §15: the usual case costs no attempt read.
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
+		dispatch_runs=_dispatch_runs(**listings))
+	assert _evaluate()["state"] == "merge_enabled", label
+	assert _attempt_reads(fake_gh) == [], label
+
+
+def test_attempts_are_not_read_once_a_newer_review_failed_outright(fake_gh):
+	rerun = _dispatch(RUN_ID + 2, run_attempt=2)
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=[_run(RUN_ID + 1, conclusion="failure")],
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": [rerun]}))
+	result = _evaluate()
+	assert result["state"] == "review_superseded", result
+	assert _attempt_reads(fake_gh) == []
+
+
+def test_a_run_rerun_too_often_counts_as_not_succeeded_without_reads(fake_gh):
+	limit = pending_checks.MAX_EARLIER_REVIEW_RUN_ATTEMPTS
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": [_dispatch(RUN_ID + 2, run_attempt=limit + 2)]}))
+	result = _evaluate()
+	assert result["state"] == "review_superseded", result
+	assert f"succeeded on attempt {limit + 2}, after more than {limit} earlier attempts that were not read" in result["reason"]
+	assert _attempt_reads(fake_gh) == []
+	assert fake_gh.merges() == []
+
+
+@pytest.mark.parametrize("label, run_attempt, attempt", [
+	("run_attempt missing", None, None),
+	("run_attempt zero", 0, None),
+	("run_attempt a string", "2", None),
+	("run_attempt a bool", True, None),
+	("attempt read failed", 2, "error"),
+	("attempt not found", 2, None),
+	("attempt of another run", 2, lambda run: _attempt({**run, "id": RUN_ID + 9}, 1, conclusion="failure")),
+	("another attempt number", 2, lambda run: _attempt(run, 2, conclusion="failure")),
+	("attempt not completed", 2, lambda run: _attempt(run, 1, status="in_progress", conclusion=None)),
+])
+def test_an_unreadable_attempt_history_fails_closed(fake_gh, label, run_attempt, attempt):
+	rerun = _dispatch(RUN_ID + 2)
+	if run_attempt is None:
+		rerun.pop("run_attempt")
+	else:
+		rerun["run_attempt"] = run_attempt
+	attempts = {} if attempt is None else {rerun["id"]: {1: attempt(rerun) if callable(attempt) else attempt}}
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": [rerun]}), run_attempts=attempts)
+	with pytest.raises(pending_checks.check_in_status.ReadError):
+		_evaluate()
+	assert fake_gh.merges() == [], label
 
 
 def test_a_failed_run_listing_read_raises_for_the_sweep_to_log(fake_gh):
