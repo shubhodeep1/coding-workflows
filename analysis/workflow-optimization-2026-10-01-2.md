@@ -241,3 +241,42 @@ The target-file scan found no `TODO`, `FIXME`, or `HACK` markers. ShellCheck rep
 | Code modularization | 7 workflow files, existing helpers, and up to 4 new shared scripts | Large |
 | Expression size reduction | `implement.yml`, `review_autofix.yml`, and extracted support scripts | Medium |
 | Medium/Low fixes | Queue producer/readers, `review_rb_judge.sh`, `orchestrate_poll_process.sh`, and logging callers | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-01)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for direct implementation; `NEEDS_VERIFICATION` requires the stated checks; `RISKY_SKIP` identifies an overlap that must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — `RISKY_SKIP`** · **Calls:** `scripts/orchestrate_poll_process.sh:10441` and `scripts/orchestrate_poll_process.sh:10442`, in `finalize_integration_merge_if_needed`. **Current → proposed:** two PR reads → one when the PR snapshot does not match. **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{final_pr}`. **Evidence:** consecutive `_safe_gh_jq` calls request `.state` and `.merged_at != null` from the same PR. **Proposed fix:** fetch one PR payload and derive both fields locally, retaining the existing snapshot-match path. **Safety rationale:** this is an upstream-race-defending poller path; combining the reads also changes how independently failed reads produce empty values. **Downstream signal:** Do not auto-implement. Manually review the final-merge race and test first-read failure, second-read failure, and a PR merging between reads before considering consolidation.
+
+- **MERGE-002 — `RISKY_SKIP`** · **Calls:** `scripts/orchestrate_poll_process.sh:13935` and `scripts/orchestrate_poll_process.sh:13936`, in the stalled-issue close-and-reissue path. **Current → proposed:** two issue reads → one per reissued issue. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_num}`. **Evidence:** adjacent reads select `.title // ""` and `.body // ""` from the same issue before its label and close mutations at `scripts/orchestrate_poll_process.sh:13938-13945`. **Proposed fix:** derive `orig_title` and `orig_body` from one payload, preserving each field’s empty-string fallback. **Safety rationale:** the calls are in orchestrator stall recovery, an explicit `RISKY_SKIP` path even though no mutation separates these two reads. **Downstream signal:** Do not auto-implement. Manually verify that a failed combined read preserves both fallback values and the recovery path’s behavior before changing it.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — the existing comments read uses `--paginate`; retain page-boundary behavior when carrying its body into the upsert.
+- API-002: `RISKY_SKIP` — the proposed reduction changes retry/backoff behavior; review permanent-failure classification manually.
+- BATCH-001: `RISKY_SKIP` — both the PR listing and file reads are paginated; verify complete per-PR file lists and cache-miss fallback.
+- BATCH-002: `RISKY_SKIP` — the thread read is paginated, and batched mutations require independent partial-error handling.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| `SAFE_TO_MERGE` | 0 | — |
+| `NEEDS_VERIFICATION` | 0 | — |
+| `RISKY_SKIP` | 2 | MERGE-001, MERGE-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
