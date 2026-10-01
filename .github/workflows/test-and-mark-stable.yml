@@ -4304,7 +4304,9 @@ jobs:
             tests/test_claude_issue_route.py \
             tests/test_implement_issue_claude_command.py \
             tests/test_security_pass_skip.py \
-            tests/test_claude_md_section_numbers.py
+            tests/test_claude_md_section_numbers.py \
+            tests/test_audit_plans_command.py \
+            tests/test_ingest_implement_plan_lessons.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
 
       - name: Prompt files integrity

@@ -5,8 +5,8 @@ The daily promote cycle (`scripts/promote_main_cycle.sh`) counted root `.claude/
 
 | The numbers that matter | Value |
 | --- | --- |
-| Test files added to each release gate | 19 (18 pytest files plus `tests/test_session_start_extract_repo_slug.py`) |
-| Added gate time (local run) | about 36 seconds |
+| Test files added to each release gate | 21 (20 pytest files plus `tests/test_session_start_extract_repo_slug.py`) |
+| Added gate time (local run) | about 40 seconds |
 | Path pattern added to both classifiers | `*/.claude/*` |
 
 What this means for operators: edits to Claude commands, hooks, scripts, or `settings.json` reach consumers on the next daily promotion even when nothing else changed, and a regression in those files fails the release instead of shipping. Coding-workflows' own Claude automation (issue pickup, the `claude-pr-catch-all` sweep) still runs from `main`, unchanged.
