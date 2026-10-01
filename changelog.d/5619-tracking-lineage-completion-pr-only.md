@@ -1,0 +1,15 @@
+<!-- changelog: security -->
+- **Only an orchestrator project's completion PR can now mark its tracking issue's AI-memory lineage as finished.** `issue_pr_status.yml` also stops a failed issue lookup from dropping a tracking issue out of its skip list, a failure that could label the tracking issue `ai:merged` and close it.
+
+Before this change, the `Update linked issue labels when PR closes` step in `.github/workflows/issue_pr_status.yml` queued every linked `ai:orchestrator-tracking` issue for lineage finalization, whatever the PR merged into. A child PR merged into `orchestrator/project-<T>`, or any unrelated PR that linked the tracker, then had `Finalize linked issue lineage state` record the project as `merged` (or `closed`) while it was still running. The security audit reported this as issue #5619. The step now finalizes a tracking issue `<T>` only for its completion PR: merged into the default branch from the head `orchestrator/project-<T>` in this repository. That PR finalizes `<T>` even when its body links the tracker only as `Refs #<T>`, because `<T>` is read from its head, and only after one REST read confirms `<T>` is an `ai:orchestrator-tracking` issue rather than another issue or a pull request. Any other PR, merged or not, leaves the lineage alone and logs why. An issue whose classification lookups both failed is never finalized, not even by a matching `orchestrator/project-<n>` head, because nothing confirmed it is a tracking issue.
+
+While fixing this, a second defect turned up in the same step. When the per-issue REST fallback appended a failed lookup to `TRACKING_ISSUES`, the list read from the PR's closing references had no trailing newline. Tracking issue `5` plus failed issue `10` became `510`, so neither matched the skip list. A default-branch merge then labelled the tracking issue `ai:merged` and closed it, which stalls the project the way the #2760 incident did. The fallback now merges numbers with `merge_issue_number_list`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| PRs that finalize a tracking issue's lineage | its completion PR only (was: every linked PR) |
+| Completion PR | merged, base = default branch, head `orchestrator/project-<T>` from this repository |
+| Unmerged close of a PR linking a tracking issue | lineage untouched (was: written as `closed`) |
+| New GitHub API calls | 1 REST read of `<T>`, only on a completion-PR merge whose body does not link `<T>` (0 on every other PR) |
+
+What this means for operators: a tracking issue's lineage reads `merged` only when the whole project has landed on the default branch. A failed issue lookup can no longer close a tracking issue and stall its project. The orchestrator's own final PR body names the tracker only with `Refs #<T>`, which this step does not read as a link, so the step takes `<T>` from the completion PR's verified `orchestrator/project-<T>` head and finalizes the tracker's lineage without touching its labels or state. Consumer repos get the fix through the `ai-issue-pr-status.yml` wrapper on the next `@stable` sync, with no variable to set.
