@@ -1466,8 +1466,18 @@ requires the marker from `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` for the
 current head with no later hand-off, a successful linked review run, no
 blocking label, no conflict, and the repository's `ENABLE_AUTO_MERGE`
 variable (unset means `true`; `GH_PAT` needs Actions-variables read, or the
-PR is left alone). A check that fails instead is a `ci-failed` Claude fix,
-and a push starts a new review round.
+PR is left alone). It also waits while a newer review of the PR may still be
+running (issue #5148): any run on the head branch, an `internal-review.yml`
+dispatch titled for the PR, or any `review_autofix.yml` / `ai-review.yml` /
+`review_rb_judge_dispatch.yml` dispatch that has not completed (`review_active`),
+older runs included: a listing that may go on past the pages it read is
+also listed by run status, and it never merges when
+the latest newer completed review of the PR did not succeed or the marker
+changed while it checked (`review_superseded`). A runs listing that holds
+1,000 or more runs newer than the marker's run is a failed read
+(`pending_checks_failed`), repeated every hour until a push, a base change,
+or a forced review sends the head through a new review. A check that fails
+instead is a `ci-failed` Claude fix, and a push starts a new review round.
 
 The comment is bound to the base it reviewed (issue #5147): a second line,
 `<!-- ai:claude-fixer-pending-checks:v2 head=<sha> round=<n> ledger=<sha256> base_sha=<sha> base_ref_sha256=<sha256> -->`,
