@@ -480,8 +480,12 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            a total_count that is not a whole number, a workflow_runs that
 #            is missing, null, or not an array, which the projection passes
 #            through for the type check to reject (PR #5451 review round 5),
-#            a run with no numeric id, no non-empty path, or no non-empty
-#            status, which the listing can neither deduplicate nor classify,
+#            a workflow_runs entry that is not an object, which the projection
+#            also passes through (PR #5451, review of head 73e97f5),
+#            a run with no numeric id, no non-empty path, no non-empty
+#            status, or no non-empty event (the event decides whether a run is
+#            keyed by its PR-named title or its head_branch, AD-17), which the
+#            listing can neither deduplicate nor classify,
 #            and a missing or malformed created_at on a page that needs a
 #            next query), a short page
 #            before its total_count (the listing shifted while it was read),
@@ -512,13 +516,13 @@ _mt_inflight_review_branches()
 				__mt_runs_query="${__mt_runs_query}&created=%3C%3D${__mt_runs_created_bound}"
 			fi
 			if ! __mt_runs_page_json="$(gh_retry gh api -X GET "${__mt_runs_query}" \
-				--jq '{total_count: .total_count, workflow_runs: (.workflow_runs | if type == "array" then [.[] | select(type == "object") | {id: .id, status: .status, event: .event, head_branch: .head_branch, display_title: .display_title, path: .path, created_at: .created_at}] else . end)}' \
+				--jq '{total_count: .total_count, workflow_runs: (.workflow_runs | if type == "array" then [.[] | if type == "object" then {id: .id, status: .status, event: .event, head_branch: .head_branch, display_title: .display_title, path: .path, created_at: .created_at} else . end] else . end)}' \
 				2>/dev/null)"; then
 				__mt_runs_reason="page_failed"
 				break 2
 			fi
 			if ! printf '%s' "${__mt_runs_page_json}" \
-				| jq -e '(.total_count | type == "number" and . >= 0 and . == floor) and (.workflow_runs | type == "array") and all(.workflow_runs[]; (.id | type == "number") and (.path | type == "string" and length > 0) and (.status | type == "string" and length > 0))' >/dev/null 2>&1; then
+				| jq -e '(.total_count | type == "number" and . >= 0 and . == floor) and (.workflow_runs | type == "array") and all(.workflow_runs[]; type == "object" and (.id | type == "number") and (.path | type == "string" and length > 0) and (.status | type == "string" and length > 0) and (.event | type == "string" and length > 0))' >/dev/null 2>&1; then
 				__mt_runs_reason="malformed_page"
 				break 2
 			fi

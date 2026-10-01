@@ -15,7 +15,7 @@ The review rounds changed the listing after this plan was written. The sections 
 - Statuses (AD-12, supersedes AD-6): all five non-terminal statuses, `requested`, `pending`, `queued`, `waiting`, `in_progress`.
 - Order (AD-13, AD-15): the five statuses in lifecycle order, twice, so a run is seen however often it moves forward, and a run whose status moves backward (`in_progress` to `waiting`, `waiting` to `queued`, only through a deployment environment) is missed only when it does so during both passes.
 - Paging (AD-8, supersedes AD-7): each follow-up query is bounded by `created=<=<oldest created_at read>` (rounded up to a whole second, AD-9) instead of an offset page; a status is complete when one response holds its whole `total_count`.
-- Malformed pages (AD-10, AD-11): a run with no numeric id, no non-empty path, or no non-empty status, a `total_count` that is not a whole number, or a `workflow_runs` that is missing, null, or not an array (review round 5), makes the listing incomplete; every run an active-status query returns counts as active. A review run with no non-empty head branch and no PR-named dispatch title makes it incomplete too (AD-14, reason `unattributed_run`), and so does a `workflow_dispatch` review run with no PR-named title whatever its head branch, which is the ref the workflow ran from, not the PR (AD-16).
+- Malformed pages (AD-10, AD-11, AD-17): a run with no numeric id, no non-empty path, or no non-empty status, a `total_count` that is not a whole number, a `workflow_runs` that is missing, null, or not an array (review round 5), a `workflow_runs` entry that is not an object, or a run with no non-empty `event` (AD-17), makes the listing incomplete; every run an active-status query returns counts as active. A review run with no non-empty head branch and no PR-named dispatch title makes it incomplete too (AD-14, reason `unattributed_run`), and so does a `workflow_dispatch` review run with no PR-named title whatever its head branch, which is the ref the workflow ran from, not the PR (AD-16).
 - API calls: normally 10 per release invocation with a queued PR, 0 with none.
 
 ## Context
@@ -55,7 +55,7 @@ The review rounds changed the listing after this plan was written. The sections 
 
 ## Approach
 
-`_mt_inflight_review_branches` reads the three active statuses in lifecycle order (`pending`, `queued`, `in_progress`), so a run that moves forward between two queries is seen in at least one of them (as shipped: five statuses, then all but `in_progress` again, AD-12 and AD-13; follow-up queries add `&created=<=<oldest created_at read>` with `page=1`, AD-8):
+`_mt_inflight_review_branches` reads the three active statuses in lifecycle order (`pending`, `queued`, `in_progress`), so a run that moves forward between two queries is seen in at least one of them (as shipped: all five statuses in lifecycle order, twice, AD-12 and AD-15; follow-up queries add `&created=<=<oldest created_at read>` with `page=1`, AD-8):
 
 ```
 gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?status=<s>&per_page=100&page=<p>" \
@@ -104,7 +104,7 @@ Phase 1:
 
 - A burst of more than 1,000 active runs in one status keeps the listing incomplete and holds every queued PR. — ACCEPTED: the train only ever delays a review (its documented contract), and the hold lifts on the first invocation whose listing completes.
 - Runs change status while the three queries run. — Queried in lifecycle order so a forward move is seen at least once (as shipped: a second full pass covers a run that also moves backward once, AD-13 and AD-15); a run created after the snapshot was already outside the previous design's snapshot too, and the label-removal claim still prevents two releases racing.
-- Extra API calls on busy ticks. — Lazy fetch: 0 calls when nothing is queued (previously 1), 3 when something is (as shipped: 9).
+- Extra API calls on busy ticks. — Lazy fetch: 0 calls when nothing is queued (previously 1), 3 when something is (as shipped: normally 10, AD-15).
 
 ## Rollout
 

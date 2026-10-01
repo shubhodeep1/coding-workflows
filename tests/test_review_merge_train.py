@@ -507,6 +507,7 @@ def test_release_leaves_active_review_queued_without_dispatch(tmp_path: Path) ->
 		"id": 9001,
 		"status": "in_progress",
 		"head_branch": "ai/issue-4064",
+		"event": "pull_request",
 		"path": ".github/workflows/ai-review.yml",
 	}]}), encoding="utf-8")
 	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
@@ -1186,6 +1187,45 @@ def test_release_leaves_pr_queued_when_workflow_runs_is_not_an_array(tmp_path: P
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
 	assert "reason=malformed_page status=requested page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+@pytest.mark.parametrize("entry", [None, "run", 5000, ["run"]])
+def test_release_leaves_pr_queued_when_a_workflow_runs_entry_is_not_an_object(tmp_path: Path, entry: object) -> None:
+	"""PR #5451 review round 3: a non-object workflow_runs entry is malformed.
+
+	The projection used to drop it, so total_count 0 with one such entry read
+	as a complete, empty listing and the queued PR was released.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "runs_raw_page.json").write_text(json.dumps({"total_count": 0, "workflow_runs": [entry]}), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=requested page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+@pytest.mark.parametrize("event", ["missing", None, ""])
+def test_release_leaves_pr_queued_when_a_run_has_no_event(tmp_path: Path, event: object) -> None:
+	"""PR #5451 review round 3 (AD-17): a run with no event could be a dispatch run.
+
+	The event decides whether a run is keyed by its PR-named title or by its
+	head_branch, which for a dispatch run is the ref it ran from. A run with no
+	non-empty event makes the page malformed and the queued PR stays queued.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	run = {"id": 5000, "status": "in_progress", "head_branch": "main",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]", "path": ".github/workflows/internal-review.yml"}
+	if event != "missing":
+		run["event"] = event
+	_write_runs(fixtures, [run])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=in_progress page=1" in result.stderr
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 
