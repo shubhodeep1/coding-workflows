@@ -9,7 +9,7 @@ A denied command such as `curl -u deploy:mycustompwd …` used to be posted as i
 | Shortest value masked in place | 4 characters (shorter ones withhold the command) |
 | Sites covered | `file` issue bodies and comments, the `report-now` report in coding-workflows and on consumer PRs and issues, and `lookup`'s `command` |
 
-What this means for operators: a report can now read `<command withheld: …>` with only the command's shape. That is deliberate: the session link in the report still leads to the full command. Patterns of unparseable commands, and of commands with an attached credential short flag such as `-udeploy:pwd` (including behind another command, `sudo mysql -p…`), get a new signature, so each opens a new `ai:permission-prompt` issue once.
+What this means for operators: a report can now read `<command withheld: …>` with only the command's shape. That is deliberate: the session link in the report still leads to the full command. Patterns of unparseable commands, and of commands with an attached credential short flag such as `-udeploy:pwd` (including behind another command, `sudo mysql -p…`), and of shell `-c` commands whose command line follows other options or ends like a script name (`bash -c -x '…'`, `bash -c ./x.sh`, now `bash -c *`), get a new signature, so each opens a new `ai:permission-prompt` issue once.
 
 ### For contributors
 

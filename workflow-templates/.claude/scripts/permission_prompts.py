@@ -403,6 +403,20 @@ def _shell_runner_before(words: list[str], start: int, position: int) -> bool:
 	return any(earlier.rsplit("/", 1)[-1] in _SHELL_COMMAND_RUNNERS for earlier in words[start:position])
 
 
+def _shell_command_line_words(words: list[str], index: int) -> list[str]:
+	"""The words from `index` that may hold a shell's command line: each one up to and including the first that does not start with `-`.
+
+	A shell reads its command line from the first argument after its options,
+	so options and `--` can come between the command flag and it (`bash -c --
+	'mysql -p…'`, `bash -c -x '…'`), and a quoted command line can itself
+	start with `-` (`sh -c '-x; mysql -p…'`).
+	"""
+	end = index
+	while end < len(words) and words[end].startswith("-"):
+		end += 1
+	return words[index : end + 1]
+
+
 def _credential_flag_position(token: str, letters: str) -> int | None:
 	"""Index in `token` of a flag from `letters` in a `-abc` cluster: the first letter, or one preceded only by boolean flags; else None.
 
@@ -499,6 +513,17 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			if flag not in seen_flags:
 				seen_flags.add(flag)
 				shape.append(flag)
+			if runner_before and (_SHELL_COMMAND_FLAG_RE.match(token) or (attached_command and attached_command.group(2).isalpha())):
+				# A shell's command line is one value: the first word after its options (`bash -c -- '…'`), which can
+				# start with `-` (`sh -c '-x; mysql -p…'`) or end like a script name (`sh -c '… ./run.sh'`). Neither
+				# it nor those options reach the shape.
+				line_words = _shell_command_line_words(tokens, index)
+				if line_words and line_words[-1].startswith("\x00"):
+					line_words.pop()
+				index += len(line_words)
+				if line_words and shape[-1] != "*":
+					shape.append("*")
+				continue
 			if index < len(tokens) and tokens[index].startswith("-") and _credential_flag_awaits_value(token, command, subcommand, _segment_flag_letters(tokens, command_position, index - 1)):
 				# A next word that starts with `-` may be this flag's value (`--password -s3cret`): it never reaches the shape.
 				index += 1
@@ -616,18 +641,21 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 			# `su --command='mysql -p…'`, `pwsh -Command:'mysql -p…'`: the attached text is a command line of its own.
 			values.update(_command_line_credentials(attached_flag.group(1), depth + 1))
 		elif runner_before and _SHELL_COMMAND_FLAG_RE.match(word):
-			# `su pg -c 'mysql -p…'`, `pwsh -C 'curl -u …'`: the next word is a command line of its own. Both words
-			# are still read as words of their own below, since a credential value can end in `c` (`sudo -u bash
-			# mysql -pSecretAbc`, user `bash`) and the next word is then not a command line.
-			if index < len(words):
-				values.update(_command_line_credentials(words[index], depth + 1))
+			# `su pg -c 'mysql -p…'`, `pwsh -C 'curl -u …'`: the next word is a command line of its own, or the
+			# first word after the shell's options (_shell_command_line_words). These words are still read as
+			# words of their own below, since a credential value can end in `c` (`sudo -u bash mysql
+			# -pSecretAbc`, user `bash`) and the next word is then not a command line.
+			for line in _shell_command_line_words(words, index):
+				values.update(_command_line_credentials(line, depth + 1))
 		elif attached_command:
 			# `su -c'mysql -p…'` carries the command line in the word; `bash -ce 'mysql -p…'` in the next
-			# word, which is still read as a word of its own below. The word itself is read as a flag too,
-			# since a user name such as `bash` before it (`sudo -u bash mysql -pScret…`) can match.
+			# word (or the first after the shell's options), which is still read as a word of its own below.
+			# The word itself is read as a flag too, since a user name such as `bash` before it (`sudo -u
+			# bash mysql -pScret…`) can match.
 			values.update(_command_line_credentials(attached_command.group(2), depth + 1))
-			if attached_command.group(2).isalpha() and index < len(words):
-				values.update(_command_line_credentials(words[index], depth + 1))
+			if attached_command.group(2).isalpha():
+				for line in _shell_command_line_words(words, index):
+					values.update(_command_line_credentials(line, depth + 1))
 		if word.startswith("--"):
 			name, has_value, value = word.partition("=")
 			if _CREDENTIAL_LONG_FLAG_RE.match(name):

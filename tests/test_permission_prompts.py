@@ -379,6 +379,11 @@ def _bash(command):
 		("tool -o\"$(mysql -pS3cretPass app)\"", "S3cretPass", "tool -o\"$(mysql -p*** app)\""),
 		("echo \"$(echo \"$(mysql -pS3cretPass)\")\"", "S3cretPass", "echo \"$(echo \"$(mysql -p***)\")\""),
 		("sh -c \"echo \\`mysql -pS3cretPass\\`\"", "S3cretPass", "sh -c \"echo \\`mysql -p***\\`\""),
+		# A shell's command line is the first word after its options, and a quoted one can start with `-`.
+		("bash -c -- 'mysql -pS3cretPass app'", "S3cretPass", "bash -c -- 'mysql -p*** app'"),
+		("bash -c -x 'mysql -pS3cretPass app'", "S3cretPass", "bash -c -x 'mysql -p*** app'"),
+		("bash -ce -- 'mysql -pS3cretPass app'", "S3cretPass", "bash -ce -- 'mysql -p*** app'"),
+		("sh -c '-x; mysql -pS3cretPass app'", "S3cretPass", "sh -c '-x; mysql -p*** app'"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -499,6 +504,13 @@ def test_credential_free_commands_are_unchanged(command):
 		("su postgres -c'mysql -pS3cretPass app'", "su * -c*"),
 		("sudo bash -lc'curl -udeploy:mycustompwd https://a.b'", "sudo * -lc*"),
 		("bash -ce 'mysql -pS3cretPass app'", "bash -ce *"),
+		# The command line is one value even when it starts with `-`, follows the shell's options, or ends like a script name.
+		("sh -c '-x; mysql -pS3cretPass app'", "sh -c *"),
+		("bash -ce '-x; mysql -pS3cretPass app'", "bash -ce *"),
+		("pwsh -Command '-x; curl -u deploy:mycustompwd https://a.b'", "pwsh -Command *"),
+		("bash -c -- 'mysql -pS3cretPass app'", "bash -c *"),
+		("sh -c 'mysql -pS3cretPass app && ./run.sh'", "sh -c *"),
+		("bash -c 'echo hi' -- arg", "bash -c * -- *"),
 		# PowerShell's command flag in any case, attached in one word or after `=` or `:`.
 		("pwsh -C 'mysql -pS3cretPass app'", "pwsh -C *"),
 		("pwsh -C'mysql -pS3cretPass app'", "pwsh -C*"),
