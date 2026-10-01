@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5667-checker-waits-on-held-head   Final PR: #5684 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #5716
+- Waiting on: PR #5924
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_018LkNbzAgey2wPnVX3E4HT7 (reused)   safety net and hand-back (in the round 3 stage report, session_01JoMpSWi4VrkutkixEM4jXS)
+- Check-in: checker session_018LkNbzAgey2wPnVX3E4HT7 (reused)   safety net and hand-back (in the conformance 1/3 stage report, session_01ALQLZx7FNPpMLoxRjmE3Da)
 - Last updated: 2026-10-01
-- Last note: Review round 3 (session_01JoMpSWi4VrkutkixEM4jXS; the workflow numbered it round 1 on head `4a42d08`): all six ledger entries (2 consensus findings, 1 task gap) say the PR description's "no API call is added" missed the blocking-label, no-hold path. Valid; the PR description now gives the per-path cost the changelog already stated. No code change; this log commit moves the head.
+- Last note: Conformance run 1 (session_01ALQLZx7FNPpMLoxRjmE3Da): CONFORMANT, Correctness CONCERNS. One EVIDENCE-BASED doc finding: the changelog's "What lifts a hold" row named only a push, while the latest trusted claim on the head decides, so a newer claim lifts a hold too. Fixed in conformance fix PR #5924; the same wording in three `.claude/` places is left as is (AD-7).
 
 ## Phases
-1. [ ] Phase 1 — plain PR mode honours a hold on a Claude-fixer head   — protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/implement-plan-claude.md` (twins only) — PR #5716 open (waiting); review rounds: 3; interventions: 0
+1. [x] Phase 1 — plain PR mode honours a hold on a Claude-fixer head   — protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/implement-plan-claude.md` (twins only) — PR #5716 merged 2026-10-01; review rounds: 3; interventions: 0
    - [x] `check_pr` reads trusted claims once for a `claude/implement-plan-` head and returns `held` before labels / hand-off / conflict / checks (`workflow-templates/.claude/scripts/check_in_status.py:250-278`), reusing the listing for `_check_claude_fixer_pr` (`:276`); docstring rule and API budget updated
    - [x] Command twin: done-waiting *PR* bullet adds **Held** (`workflow-templates/.claude/commands/implement-plan-claude.md:223`); twin-first later-stage bullet puts the hold on the pushed head in the same step as the blocker (`:38`)
    - [x] Tests against the twin: `tests/test_check_in_status.py:861-1003` (`test_held_head_with_a_later_handoff_waits_instead_of_a_review_round` …); the 5 new core tests fail against the old script and pass against the twin
@@ -22,6 +22,7 @@
    - [x] `[claude-twin-sync]` copy of both twins into `.claude/` (`d67f5fb`; template-parity tests green)
 
 ## Conformance
+- Run 1 — 2026-10-01: CONFORMANT (Correctness: CONCERNS) — fix PR #5924 (pre-security): changelog row "What lifts a hold" now names a newer trusted claim on the same head as well as a push
 
 ## Security pass
 
@@ -38,11 +39,13 @@
 - AD-4 [plan, 2026-09-30] Should this issue also stop the project checker from re-arming after it starts a stage? — Picked: A — no; record it as a finding. Alternatives: B — add a deterministic guard in this phase. Why: §5 minimal change; the hold fix removes the held-head case, and a re-arm guard needs its own design. Applied in: no code change. Status: pending review
 - AD-5 [plan, 2026-09-30] Where do the tests for the new behaviour live while `.claude/` is not synced? — Picked: A — in `tests/test_check_in_status.py`, against the twin loaded as a second module. Alternatives: B — a new test file wired into `ci.yml`. Why: the issue names this file, and A needs no workflow edit. Applied in: phase 1 PR. Status: pending review
 - AD-6 [phase 1/1 — review round 2, 2026-10-01] Review round 2 (head `02d8a56`) has one consensus finding: the failed `review / codex-agent` check, which the OpenRouter credit outage caused, not this PR. `CLAUDE_FIXER_VERDICT_BOT_LOGIN` is unset, so no verdict can be posted. How does the round close? — Picked: A — reject the finding in the PR reply and push a new head: main merged into the phase branch through the synced project branch, with this log update, which starts a fresh review round and fresh checks. Alternatives: B — re-dispatch `review_autofix.yml` on the same head; C — stop BLOCKED until a verdict bot exists. Why: the operator's Q1: A answer says not to dispatch review again, the base merge is due anyway, and AD-12 / AD-15 of issue-4886 closed the same state this way. Applied in: phase 1 PR (merge commit). Status: pending review
+- AD-7 [conformance 1/3, 2026-10-01] The push-only "what lifts a hold" wording also sits in three `.claude/` places (`.claude/scripts/check_in_status.py:50-54` docstring and `:256-259` comment, `.claude/commands/implement-plan-claude.md:223` **Held** bullet). Fixing them needs a twin-first edit, a hold, and a human twin sync on the conformance fix PR. How is that part handled? — Picked: A — leave the `.claude/` wording, fix only the changelog row, and record the rest in Notes for the next `.claude/` edit of these files. Alternatives: B — fix all three twin-first and stop at the twin-sync blocker; C — leave the changelog row too. Why: the checker-facing meaning holds (in the twin-sync case only the sync push lifts the hold the checker waits on); §5 smallest change and §18 fewer human steps; the operator-facing claim is corrected. Applied in: PR #5924 (changelog row only). Status: pending review
 
 ## Lessons
 - [source:intervention] A review run's stale failed check stays on the PR head after the outage that caused it ends, and the next review round hands it off as a finding; a new head (a base merge) clears it, while a same-head re-review cannot. (files: .github/workflows/review_autofix.yml)
 - [source:plan-deviation] When a status helper moves a read earlier so a new check can outrank an existing early return, the early-return path pays that read too; state the per-path API cost in the docstring and changelog instead of claiming zero new calls. (files: .claude/scripts/check_in_status.py, changelog.d/5667-checker-waits-on-held-head.md)
 - [source:intervention] When a review round corrects a claim in the changelog or docstring (such as an API-cost row), correct the same claim in the PR description in that round; the reviewer panel reads the description and flags the stale copy in the next round. (files: changelog.d/5667-checker-waits-on-held-head.md)
+- [source:conformance] When docs say what lifts a claim-based state such as a hold, check the claim reader's rule: the latest trusted claim on the head decides, so a newer claim on the same head lifts it as well as a push. (files: .claude/scripts/check_in_status.py, changelog.d/5667-checker-waits-on-held-head.md)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
@@ -53,3 +56,5 @@
 - 2026-09-30 21:01Z: blocked PR (session_01WfXaPVd6fZWZ2Wx5TS9dWx): every review run on `02d8a56` failed in `Run reviewer models` with OpenRouter `Insufficient credits`, and the identical-failure cap labelled #5716 `ai:review-blocked`. No intervention commit (interventions: 0); `hold` claim on `02d8a56`; Q1 asked on #5667 (comment 5919662713).
 - 2026-10-01: Q1: A answered (comment 5922471506): credits added, `ai:review-blocked` removed at 23:39Z, the 00:00Z sweep re-reviewed `02d8a56` (run 36794098183) and handed off review round 2 at 00:33:42Z. This stage posted a review claim on `02d8a56` (lifting the hold), synced the project branch with main (6050c5e), and merged it into the phase branch. Local run of 9 related test files: 614 passed, 1 skipped.
 - 2026-10-01: review round 3 on `4a42d08` (session_01JoMpSWi4VrkutkixEM4jXS): 2 consensus findings (low) and 1 task gap, all about the PR description's "so no API call is added", which missed the `claude/implement-plan-*` blocking-label, no-hold path (one comment listing per check-in, AD-2). The code (`workflow-templates/.claude/scripts/check_in_status.py:255-271`) and the changelog row were already right; the PR description now lists the cost per path. Project branch synced with main (`27fd288`).
+- 2026-10-01: conformance 1/3 (session_01ALQLZx7FNPpMLoxRjmE3Da): project branch synced with main (`c15a8a7`). Checks under Python 3.12: the 61 related test files 2919 passed, 1 skipped, 2 failed (the known `gawk` environment failure, and `test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone`, which timed out at 90 s under `-n 4` and passes alone in 118 s; neither file is in the project's diff). Plan deviation already recorded: the goal "no new GitHub API call for a Claude-fixer PR" holds except on the blocking-label, no-hold path, by design of AD-2.
+- Open wording (AD-7, for the next `.claude/` edit of these files): `.claude/scripts/check_in_status.py:50-54` and `:256-259`, and `.claude/commands/implement-plan-claude.md:223`, say only a push lifts a hold; a newer trusted claim on the same head lifts it too.
