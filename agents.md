@@ -1090,9 +1090,16 @@ reviews, comments, and conflicts stay a direct §12 request.
   review, a newer one that did not conclude `success` returns
   `review_superseded` whatever PR its run name names, and an
   `internal-review.yml` one still running returns `review_active`. With no
-  default branch known, no run name binds. Every dispatch, from whichever
-  listing, goes through the one rule in `_classify_review_dispatch()`
-  (PR #5929 review rounds 1 to 4).
+  default branch known, no run name binds. On the head branch only a
+  `pull_request` run whose `head_repository` is this repository
+  (`_is_this_repo_pull_request_run()`) is a bound review; every other
+  head-branch run of a review workflow (a `push` run, the no-PR route of
+  `internal-review.yml` that concludes `success` once the branch has a PR;
+  a head-branch dispatch; a fork's run under the same branch name) is
+  untrusted: never a bound review, and a newer one that did not conclude
+  `success` returns `review_superseded`. Every dispatch, from whichever
+  listing, and every such head-branch run goes through the one rule in
+  `_classify_review_dispatch()` (PR #5929 review rounds 1 to 5).
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
   running); a failed read, or a snapshot whose temp directory cannot be

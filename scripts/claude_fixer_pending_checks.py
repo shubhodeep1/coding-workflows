@@ -461,20 +461,41 @@ def _is_default_branch_run(run: dict, default_branch: str | None) -> bool:
 	return default_branch is not None and run.get("head_branch") == default_branch
 
 
-def _classify_review_dispatch(run: dict, trusted: bool, names_this_pr: bool, names_no_pr: bool) -> str | None:
-	"""How a completed review workflow dispatch newer than the marker's run counts for the PR being checked.
+def _is_this_repo_pull_request_run(run: dict, repo: str) -> bool:
+	"""True for a `pull_request` run whose head is in `repo`: the only head-branch run that is a review of the PR.
 
-	`trusted` is True only for a run from the default branch, whose run name
-	came from a trusted workflow file (`_is_default_branch_run`); a dispatch
-	from any other ref, the PR's head branch included, ran that ref's own
-	workflow file, which can title it for any PR. `names_this_pr` /
-	`names_no_pr` say what its run name binds it to, and are only read when
-	`trusted`. Returns "bound" (a review of this PR), "blocks" (it did not
-	conclude `success` and may have been a review of this PR, so fail
-	closed), or None (ignored). An untrusted dispatch is never "bound", and
-	it "blocks" whenever it did not succeed, whatever PR its run name names
-	(PR #5929 review rounds 1 to 4: the run name of an untrusted run must
-	never decide anything).
+	The review workflows review a PR from its head branch only on
+	`pull_request` events. A `push` run of internal-review.yml on a
+	`claude/**` branch is its no-PR route, which exits with `success` when
+	the branch already has an open PR; a `workflow_dispatch` run on the
+	head branch ran the branch's workflow file with whatever PR it was
+	given; and a fork's `pull_request` run is listed under the fork's branch
+	name and ran the fork's workflow file. None of these is bound to this PR
+	(PR #5929 review rounds 2 and 5). A run without a `head_repository`
+	object is not trusted (fail closed).
+	"""
+	head_repository = run.get("head_repository")
+	return (run.get("event") == "pull_request" and isinstance(head_repository, dict)
+		and head_repository.get("full_name") == repo)
+
+
+def _classify_review_dispatch(run: dict, trusted: bool, names_this_pr: bool, names_no_pr: bool) -> str | None:
+	"""How a completed review workflow run newer than the marker's run, other than a bound head-branch review, counts.
+
+	It classifies every review workflow dispatch and every head-branch run
+	of a review workflow that is not `_is_this_repo_pull_request_run`.
+	`trusted` is True only for a dispatch from the default branch, whose run
+	name came from a trusted workflow file (`_is_default_branch_run`); a
+	dispatch from any other ref, the PR's head branch included, ran that
+	ref's own workflow file, which can title it for any PR, and a head-branch
+	run from any other event is not a review of this PR it can vouch for.
+	`names_this_pr` / `names_no_pr` say what its run name binds it to, and
+	are only read when `trusted`. Returns "bound" (a review of this PR),
+	"blocks" (it did not conclude `success` and may have been a review of
+	this PR, so fail closed), or None (ignored). An untrusted run is never
+	"bound", and it "blocks" whenever it did not succeed, whatever PR its run
+	name names (PR #5929 review rounds 1 to 5: the run name or event of an
+	untrusted run must never let a merge through).
 	"""
 	if trusted and names_this_pr:
 		return "bound"
@@ -524,8 +545,9 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int,
 	whatever PR its run name names, is in any status but `completed`.
 	`review_superseded`, when nothing is active: of the completed review
 	runs bound to this PR (a head-branch run of
-	`check_in_status.FIXER_WORKFLOW_PATHS` from any event but
-	`workflow_dispatch`, an internal-review.yml dispatch titled for it, or
+	`check_in_status.FIXER_WORKFLOW_PATHS` that is a `pull_request` run of
+	`repo`, `_is_this_repo_pull_request_run`; an internal-review.yml dispatch
+	titled for it; or
 	an UNBOUND_DISPATCH_REVIEW_WORKFLOWS dispatch whose run name ends in
 	`[pr:<number>]`, issue #5906, both dispatches only when run from
 	`default_branch`), only those with an id above
@@ -538,9 +560,13 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int,
 	head branch itself included, whatever PR its run name names: that ref's
 	workflow file set the run name, so the default branch does not vouch for
 	it (fail closed: it may have been a review of this PR; PR #5929 review
-	rounds 1 to 4). Every dispatch, from whichever listing, goes through
-	`_classify_review_dispatch`. A dispatch from another ref never counts as
-	a bound review, so a successful one is ignored rather than trusted. A
+	rounds 1 to 4); or any other head-branch run of a review workflow (a
+	`push` run, internal-review.yml's no-PR route, or a fork's `pull_request`
+	run listed under the same branch name), which is not bound to this PR
+	either (round 5). Every dispatch, from whichever listing, and every such
+	head-branch run goes through `_classify_review_dispatch`. A dispatch from
+	another ref and every such head-branch run never count as a bound review,
+	so a successful one is ignored rather than trusted. A
 	default-branch dispatch titled for another PR never counts once
 	completed. The id filter is required: the marker's
 	own run is the review it records, and older runs came before that
@@ -566,22 +592,29 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int,
 	if dispatched_runs is not None:
 		active.extend(run for run in _read_active_runs_past_listing(dispatched_path, dispatched_runs, title_bound=True)
 			if internal_run_may_be_this_pr(run))
+	# On the head branch only a `pull_request` run of this repository is a
+	# review of the PR (`_is_this_repo_pull_request_run`): the check names the
+	# one trusted event instead of excluding untrusted ones, so a `push` run
+	# of internal-review.yml's no-PR route, which concludes `success` when the
+	# PR exists, can never mask a failed review (PR #5929 review round 5).
 	bound_reviews = [run for run in branch_runs if _run_path(run) in check_in_status.FIXER_WORKFLOW_PATHS
-		and run.get("event") != "workflow_dispatch"]
+		and _is_this_repo_pull_request_run(run, repo)]
 	unbindable_failures: list[dict] = []
-	# Every finished review workflow dispatch newer than the marker's run goes
-	# through the one rule in `_classify_review_dispatch`, whichever listing it
-	# came from. A review workflow dispatched with the PR's head branch as its
-	# ref is in the head-branch listing too; it ran the branch's workflow file
-	# with whatever PR it was given, so it is never trusted (PR #5929 review
-	# round 2), and every review workflow counts, the judge wrapper included,
-	# which FIXER_WORKFLOW_PATHS lacks (round 3).
-	review_dispatches: list[tuple[dict, bool, bool, bool]] = [
-		(run, False, False, False) for run in branch_runs if run.get("event") == "workflow_dispatch"
-		and _run_path(run) in (*check_in_status.FIXER_WORKFLOW_PATHS, *UNBOUND_DISPATCH_REVIEW_WORKFLOWS)]
+	# Every other finished review workflow run newer than the marker's run
+	# goes through the one rule in `_classify_review_dispatch`, whichever
+	# listing it came from. Every other head-branch run of a review workflow
+	# is untrusted: a dispatch with the head branch as its ref ran the
+	# branch's workflow file with whatever PR it was given (PR #5929 review
+	# round 2), a `push` run is the no-PR route (round 5), and every review
+	# workflow counts, the judge wrapper included, which FIXER_WORKFLOW_PATHS
+	# lacks (round 3).
+	classified_review_runs: list[tuple[dict, bool, bool, bool]] = [
+		(run, False, False, False) for run in branch_runs
+		if _run_path(run) in (*check_in_status.FIXER_WORKFLOW_PATHS, *UNBOUND_DISPATCH_REVIEW_WORKFLOWS)
+		and not (_run_path(run) in check_in_status.FIXER_WORKFLOW_PATHS and _is_this_repo_pull_request_run(run, repo))]
 	# An internal-review.yml dispatch from the default branch always carries
 	# its PR in its run name, so one not titled for this PR is for another.
-	review_dispatches.extend((run, _is_default_branch_run(run, default_branch), run.get("display_title") == title, False)
+	classified_review_runs.extend((run, _is_default_branch_run(run, default_branch), run.get("display_title") == title, False)
 		for run in internal_runs)
 	# The unbound review workflows (issue #5906) are bound by the `[pr:<N>]`
 	# of their run name; one from the default branch that names no PR comes
@@ -593,9 +626,9 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int,
 		if listing is not None:
 			active.extend(run for run in listing if run.get("status") != "completed")
 			active.extend(_read_active_runs_past_listing(unbound_path, listing))
-			review_dispatches.extend((run, _is_default_branch_run(run, default_branch), _dispatch_title_pr(run) == number,
+			classified_review_runs.extend((run, _is_default_branch_run(run, default_branch), _dispatch_title_pr(run) == number,
 				_dispatch_title_pr(run) is None) for run in listing)
-	for run, trusted, names_this_pr, names_no_pr in review_dispatches:
+	for run, trusted, names_this_pr, names_no_pr in classified_review_runs:
 		if run.get("status") != "completed" or run["id"] <= marker_run_id:
 			continue
 		verdict = _classify_review_dispatch(run, trusted, names_this_pr, names_no_pr)
@@ -617,9 +650,10 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int,
 	if unbindable_failures:
 		names = ", ".join(sorted({f"{_run_path(run) or 'unknown workflow'} run {run['id']} on "
 			f"{run.get('head_branch') or 'unknown branch'} ({run.get('conclusion')})" for run in unbindable_failures}))
-		return {"state": "review_superseded", "reason": f"a review dispatch newer than the marker's run {marker_run_id} "
+		return {"state": "review_superseded", "reason": f"a review run newer than the marker's run {marker_run_id} "
 			f"names no PR in its run name, or ran from a ref other than the default branch "
 			f"({default_branch or 'unknown'}), this PR's head branch included, whose run name is not trusted, "
+			f"or ran on this PR's head branch from an event other than a pull_request of this repository, "
 			f"and did not succeed, so it may have been a review of this PR: {names}"}
 	return None
 

@@ -447,10 +447,13 @@ def test_default_branch_review_run_needs_the_full_dispatch_binding(fake_gh, labe
 # ---- a newer review of the PR (issue #5148) ----
 
 def _run(run_id: int, *, workflow: str = "internal-review.yml", status: str = "completed", conclusion: str | None = "success",
-	head_branch: str = REF, event: str = "pull_request", title: str = "t") -> dict:
-	return {"id": run_id, "path": f".github/workflows/{workflow}", "status": status,
+	head_branch: str = REF, event: str = "pull_request", title: str = "t", head_repository: str | None = REPO) -> dict:
+	run = {"id": run_id, "path": f".github/workflows/{workflow}", "status": status,
 		"conclusion": conclusion if status == "completed" else None, "head_branch": head_branch, "event": event,
 		"display_title": title, "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
+	if head_repository is not None:
+		run["head_repository"] = {"full_name": head_repository}
+	return run
 
 
 def _dispatch(run_id: int, *, pr: int = PR, head_branch: str = "main", **overrides) -> dict:
@@ -644,6 +647,24 @@ def test_an_active_review_defers_a_dry_run_too(fake_gh):
 	("a failed dispatch from another ref titled for another PR, then a successful bound review",
 		[_run(RUN_ID + 6)],
 		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch="claude/forged")]}),
+	# PR #5929 review round 5: on the head branch only a pull_request run of
+	# this repository is a review of the PR. internal-review.yml's push leg is
+	# the no-PR route, which concludes success when the PR already exists, so
+	# it must not mask a failed review; a fork's run listed under the same
+	# branch name ran the fork's workflow file.
+	("a successful push run of internal-review.yml after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure"), _run(RUN_ID + 2, event="push")], {}),
+	("a successful push run of internal-review.yml in the same push as a failed review",
+		[_run(RUN_ID + 2, event="push"), _run(RUN_ID + 1, conclusion="failure")], {}),
+	("a failed push run of internal-review.yml on the head branch", [_run(RUN_ID + 1, event="push", conclusion="failure")], {}),
+	("a failed push run of internal-review.yml, then a successful pull_request review",
+		[_run(RUN_ID + 1, event="push", conclusion="cancelled"), _run(RUN_ID + 6)], {}),
+	("a successful fork pull_request run under the same branch name after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure"), _run(RUN_ID + 2, head_repository="someone/fork")], {}),
+	("a successful pull_request run with no head repository after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure"), _run(RUN_ID + 2, head_repository=None)], {}),
+	("a failed fork pull_request run under the same branch name",
+		[_run(RUN_ID + 1, workflow="ai-review.yml", conclusion="failure", head_repository="someone/fork")], {}),
 ])
 def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -712,6 +733,15 @@ def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, bran
 		[_titled(RUN_ID - 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure", head_branch=REF)],
 		{"review_rb_judge_dispatch.yml": [_titled(RUN_ID - 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure",
 			head_branch=REF)]}),
+	# PR #5929 review round 5: a successful push run (the no-PR route skipping
+	# a branch that has a PR) changes nothing, and an older failed one or a
+	# failed non-review push run does not block.
+	("a newer successful push run of internal-review.yml on the head branch", [_run(RUN_ID + 1, event="push")], {}),
+	("an older failed push run of internal-review.yml", [_run(RUN_ID - 1, event="push", conclusion="failure")], {}),
+	("a newer failed non-review push run on the head branch",
+		[_run(RUN_ID + 1, workflow="ci.yml", event="push", conclusion="failure")], {}),
+	("a newer successful fork pull_request run under the same branch name",
+		[_run(RUN_ID + 1, head_repository="someone/fork")], {}),
 ])
 def test_settled_reviews_let_the_merge_through(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -759,6 +789,43 @@ def test_a_titled_failed_dispatch_from_another_ref_names_its_branch(fake_gh):
 def test_one_rule_classifies_every_review_dispatch(trusted, names_this_pr, names_no_pr, conclusion, expected):
 	run = _run(RUN_ID + 1, conclusion=conclusion, event="workflow_dispatch")
 	assert pending_checks._classify_review_dispatch(run, trusted, names_this_pr, names_no_pr) == expected
+
+
+@pytest.mark.parametrize("label, overrides, expected", [
+	("a pull_request run of this repository", {}, True),
+	("a push run", {"event": "push"}, False),
+	("a workflow_dispatch run", {"event": "workflow_dispatch"}, False),
+	("a pull_request_target run", {"event": "pull_request_target"}, False),
+	("a fork's pull_request run", {"head_repository": "someone/fork"}, False),
+	("a pull_request run with no head repository", {"head_repository": None}, False),
+])
+def test_only_a_pull_request_run_of_this_repo_is_a_head_branch_review(label, overrides, expected):
+	assert pending_checks._is_this_repo_pull_request_run(_run(RUN_ID + 1, **overrides), REPO) is expected, label
+
+
+def test_a_malformed_head_repository_is_not_trusted():
+	run = _run(RUN_ID + 1)
+	run["head_repository"] = REPO
+	assert pending_checks._is_this_repo_pull_request_run(run, REPO) is False
+
+
+def test_a_successful_push_run_cannot_mask_a_failed_review_and_names_its_event(fake_gh):
+	# PR #5929 review round 5: the push run's success is ignored, so the failed
+	# pull_request review is still the latest bound review.
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		branch_runs=[_run(RUN_ID + 2, event="push"), _run(RUN_ID + 1, conclusion="failure")])
+	result = _evaluate(dry_run=True)
+	assert result["state"] == "review_superseded", result
+	assert f"the latest review run of this PR, {RUN_ID + 1}" in result["reason"]
+
+
+def test_a_failed_push_run_names_why_it_blocked(fake_gh):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		branch_runs=[_run(RUN_ID + 1, event="push", conclusion="failure")])
+	result = _evaluate(dry_run=True)
+	assert result["state"] == "review_superseded", result
+	assert "from an event other than a pull_request of this repository" in result["reason"]
+	assert f".github/workflows/internal-review.yml run {RUN_ID + 1} on {REF} (failure)" in result["reason"]
 
 
 def test_a_failed_dispatch_from_another_ref_titled_for_another_pr_still_blocks(fake_gh):
