@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/guard_differential.py:654-658 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A subprocess timeout in the at-ref `read_settings_text` path propagates as an unhandled `TimeoutExpired` instead of being converted to `SetupError`.\n  WHY: A Git process that hangs for 120 seconds causes a raw traceback instead of the documented exit-2 error path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/guard_differential.py | severity=NIT | confidence=2\n  PROBLEM: _repo_git passes timeout=120 to subprocess.run, which can raise TimeoutExpired. When triggered inside read_settings_text (at-ref cat-file -p path), TimeoutExpired propagates as an unhandled exception rather than a clean SetupError (exit 2 / status=error).\n  WHY: A Git process that hangs for 120 seconds (network filesystem stall, corrupt pack index) would crash the comparison with a raw traceback instead of the documented exit-2 path. This is extremely unlikely in practice because cat-file -p on a small JSON file completes instantly, and test_cli_an_unreadable_base_settings_blob_exits_2 tests the real error path (missing blob) which raises SetupError correctly.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f6a0e91626a1cac013bfef14237f1828be8d495f981bd40ce67c61a4835200f9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5356,
+    "run_id": "36812790795",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36812790795",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001042545_2ca9d3f941",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5356,
+    "run_id": "36812790795"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T04:25:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
