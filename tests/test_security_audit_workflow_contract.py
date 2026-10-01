@@ -970,7 +970,8 @@ def test_security_audit_codex_failure_preserves_status_and_reports_context() -> 
 		extra_env={
 			"MOCK_CODEX_EXIT_CODE": "29",
 			"MOCK_CODEX_STDERR": (
-				"test-openrouter-key Chief Security Officer\n"
+				f"{_SECURITY_AUDIT_PROMPT_ECHO_LINE}\n"
+				"auth test-openrouter-key test-token\n"
 				"Error: No such file or directory (os error 2)\n"
 			),
 		},
@@ -983,8 +984,163 @@ def test_security_audit_codex_failure_preserves_status_and_reports_context() -> 
 	assert proc.returncode == 29
 	assert "captured_path_error=" in proc.stderr
 	assert "os\\ error\\ 2" in proc.stderr
+	assert "Chief\\ Security\\ Officer" not in proc.stderr
 	assert len(final_state.get("codex_calls", [])) == 1
 	assert final_state.get("issue_comment_args", []) == []
+
+
+# A line of prompts/mode-security-audit.txt with no template placeholder, so it
+# reaches the rendered prompt verbatim; `codex exec` echoes the prompt to stderr.
+_SECURITY_AUDIT_PROMPT_ECHO_LINE = next(
+	prompt_line
+	for prompt_line in (REPO_ROOT / "prompts" / "mode-security-audit.txt").read_text(encoding="utf-8").splitlines()
+	if "Chief Security Officer" in prompt_line
+)
+_CODEX_STDERR_TAIL_LINE_PREFIX = "security-audit: codex-stderr-tail line="
+
+
+def _codex_stderr_tail(stderr: str) -> tuple[str, list[str], str]:
+	"""Return (begin marker, tail payloads, failure line) from the script's stderr."""
+	stderr_lines = stderr.splitlines()
+	begin_indexes = [
+		index
+		for index, stderr_line in enumerate(stderr_lines)
+		if stderr_line.startswith("security-audit: codex-stderr-tail begin ")
+	]
+	end_indexes = [
+		index
+		for index, stderr_line in enumerate(stderr_lines)
+		if stderr_line == "security-audit: codex-stderr-tail end"
+	]
+	assert len(begin_indexes) == 1 and len(end_indexes) == 1, stderr
+	begin_index, end_index = begin_indexes[0], end_indexes[0]
+	assert begin_index < end_index, stderr
+	tail_lines = stderr_lines[begin_index + 1:end_index]
+	assert all(tail_line.startswith(_CODEX_STDERR_TAIL_LINE_PREFIX) for tail_line in tail_lines), stderr
+	failure_lines = [
+		stderr_line
+		for stderr_line in stderr_lines[end_index + 1:]
+		if stderr_line.startswith("security-audit: phase=codex-execution ")
+	]
+	assert len(failure_lines) == 1, stderr
+	return (
+		stderr_lines[begin_index],
+		[tail_line[len(_CODEX_STDERR_TAIL_LINE_PREFIX):] for tail_line in tail_lines],
+		failure_lines[0],
+	)
+
+
+def test_security_audit_codex_failure_prints_masked_stderr_tail_with_provider_402() -> None:
+	fake_openrouter_key = "sk-or-v1-" + "0123456789abcdef" * 4
+	fake_generic_key = "sk-proj-" + "Zx9" * 12
+	fake_github_token = "ghp_" + "A1b2C3d4E5" * 4
+	fake_base64_run = "QUJD" * 16 + "=="
+	proc, final_state = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "7",
+			"MOCK_CODEX_STDERR": (
+				"OpenAI Codex v0.0.0 (research preview)\n"
+				"\n"
+				f"{_SECURITY_AUDIT_PROMPT_ECHO_LINE}\n"
+				f"Authorization: Bearer {fake_openrouter_key}\n"
+				f"keys {fake_generic_key} {fake_github_token} {fake_base64_run}\n"
+				"env test-openrouter-key test-token\n"
+				'ERROR: unexpected status 402 Payment Required: {"error":{"message":"Insufficient credits","code":402}}\n'
+			),
+		},
+	)
+
+	assert proc.returncode == 7, proc.stderr
+	begin_line, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert begin_line == "security-audit: codex-stderr-tail begin lines=5 omitted_lines=0", proc.stderr
+	assert failure_line.endswith(" provider=402"), failure_line
+	assert "error=Codex\\ exited\\ nonzero" in failure_line
+	assert proc.stderr.splitlines()[-1] == failure_line
+	assert tail_payloads[0] == "OpenAI\\ Codex\\ v0.0.0\\ \\(research\\ preview\\)"
+	assert "Payment\\ Required" in tail_payloads[-1]
+	assert "Insufficient\\ credits" in tail_payloads[-1]
+	for secret_value in (
+		fake_openrouter_key,
+		"0123456789abcdef",
+		fake_generic_key,
+		"Zx9Zx9Zx9",
+		fake_github_token,
+		"A1b2C3d4E5",
+		"QUJDQUJD",
+		"test-openrouter-key",
+		"test-token",
+	):
+		assert secret_value not in proc.stderr, secret_value
+	assert "redacted" in "".join(tail_payloads[1:4])
+	assert "Chief" not in proc.stderr
+	assert len(final_state.get("codex_calls", [])) == 1
+	assert final_state.get("issue_comment_args", []) == []
+
+
+def test_security_audit_codex_stderr_tail_is_capped_to_40_lines_and_4_kib() -> None:
+	many_lines = "".join(f"line-{index:03d} " + "word " * 58 + "\n" for index in range(200))
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={"MOCK_CODEX_EXIT_CODE": "3", "MOCK_CODEX_STDERR": many_lines},
+	)
+	assert proc.returncode == 3, proc.stderr
+	begin_line, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert 0 < len(tail_payloads) <= 40
+	assert sum(len(tail_payload) for tail_payload in tail_payloads) <= 4096
+	omitted_lines = int(begin_line.rsplit("omitted_lines=", 1)[1])
+	assert omitted_lines > 0 and omitted_lines + len(tail_payloads) == 40, begin_line
+	assert tail_payloads[-1].startswith("line-199\\ ")
+	assert "line-160" not in proc.stderr
+	assert failure_line.endswith(" provider=unknown"), failure_line
+
+	one_long_line = "word " * 2000 + "\n"
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={"MOCK_CODEX_EXIT_CODE": "3", "MOCK_CODEX_STDERR": one_long_line},
+	)
+	begin_line, tail_payloads, _ = _codex_stderr_tail(proc.stderr)
+	assert begin_line == "security-audit: codex-stderr-tail begin lines=1 omitted_lines=0"
+	assert len(tail_payloads[0]) == 4096
+
+
+def test_security_audit_codex_stderr_tail_cuts_partial_token_past_64_kib() -> None:
+	# Over 64 KiB only the file's end is read; the cut leading token is replaced
+	# so a fragment of a secret can never escape the prefix-based masks.
+	cut_stderr = "sk-or-v1-" + "f" * 70000 + " HTTP Error 402: Payment Required\n"
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={"MOCK_CODEX_EXIT_CODE": "5", "MOCK_CODEX_STDERR": cut_stderr},
+	)
+	assert proc.returncode == 5, proc.stderr
+	_, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads == ["\\[cut\\]\\ HTTP\\ Error\\ 402:\\ Payment\\ Required"], tail_payloads
+	assert "ffff" not in proc.stderr
+	assert failure_line.endswith(" provider=402"), failure_line
+
+
+def test_security_audit_codex_failure_classifies_provider_status() -> None:
+	cases = {
+		"Error: HTTP Error 401: Unauthorized\n": "401",
+		"warn: status 429 Too Many Requests, retrying\n": "429",
+		"Error: Rate limit exceeded for model\n": "429",
+		"ERROR: unexpected status 503 Service Unavailable\n": "5xx",
+		# The newest matching line wins over an older retry message.
+		"stream error: status 429 Too Many Requests\nERROR: HTTP Error 402: Payment Required\n": "402",
+		# Bare numbers and audit wording are not provider failures.
+		"tokens used: 429\nreview missing rate limiting on login\n": "unknown",
+		"": "unknown",
+	}
+	for codex_stderr, expected_provider in cases.items():
+		proc, _ = _run_security_audit(
+			_security_audit_tracker_state(),
+			extra_env={"MOCK_CODEX_EXIT_CODE": "1", "MOCK_CODEX_STDERR": codex_stderr},
+		)
+		assert proc.returncode == 1, proc.stderr
+		_, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+		assert failure_line.endswith(f" provider={expected_provider}"), (codex_stderr, failure_line)
+		if not codex_stderr:
+			assert tail_payloads == []
 
 
 def test_security_audit_missing_codex_reports_sanitized_context() -> None:
