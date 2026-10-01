@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5906-bind-unbound-review-dispatches-plan.md
 - Source issue: shubhodeep1/coding-workflows#5906
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
-- Project branch: claude/implement-plan-issue-5906-bind-unbound-review-dispatches   Final PR: pending (draft)
+- Project branch: claude/implement-plan-issue-5906-bind-unbound-review-dispatches   Final PR: #5916 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5929
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: project checker armed at the end of the phase 1 stage (ids in the phase 1 report and the issue progress comment)
 - Last updated: 2026-10-01
-- Last note: project branch opened from the #4900 project branch; implementing phase 1.
+- Last note: phase 1 PR #5929 opened against the project branch; waiting on its review.
 
 ## Phases
-1. [ ] Phase 1 — bind review dispatches to their PR and count their failures
+1. [ ] Phase 1 — bind review dispatches to their PR and count their failures   — PR #5929 open (waiting); review rounds: 0; interventions: 0
    - `run-name` `<workflow name> [pr:<pr_number>]` on `workflow_dispatch` in `.github/workflows/review_autofix.yml`, `.github/workflows/review_rb_judge_dispatch.yml`, `workflow-templates/ai-review.yml`, `workflow-templates/review_rb_judge_dispatch.yml`
    - `check_review_runs()` in `scripts/claude_fixer_pending_checks.py`: a newer completed dispatch titled for the PR joins the bound reviews; a newer unsuccessful one with no PR binding returns `review_superseded`
    - Tests: the audit's scenario, every new path, the run-name wiring; existing #4900 / #5147 / #5148 suites green
@@ -29,6 +29,7 @@
 ## Validation
 
 ## Completion
+- Final PR #5916 draft (into the #4900 project branch)
 
 ## Activation
 
@@ -44,4 +45,5 @@
 ## Notes
 - Issue mode; session `session_01YEZ7MVKkvpsMYW3kkWx4by` (started by the Claude issue pickup routine `PR dispatch: #5906`).
 - `security_pass_skip.py`: `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`.
+- Validation: dispatched normally against the project branch (`docs/operations/master-session.md` Q17 was superseded on 2026-09-30, once #4734 let `validate.yml` authorize a final PR into another project's branch).
 - Base branch check (2026-10-01): the PR whose head is the base branch, #4922 (into `main`), is open and unmerged, so the base has not moved.
