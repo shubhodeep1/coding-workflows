@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:Lines 1429\u20131445 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The statement \u201cA Claude session fixes everything else\u201d conflicts with the description that the GPT judge can fix upheld findings or merge the PR.\n  WHY: Readers may incorrectly expect the Claude session to handle those findings, although the dispatched judge can act on them directly.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md | severity=low | confidence=[4]\n  PROBLEM: \u201cA Claude session fixes everything else\u201d conflicts with the following description: when the session rejects every finding, the GPT judge can fix upheld findings or merge the PR.\n  WHY: Readers may incorrectly expect the Claude session to handle those findings, although the dispatched judge can act on them directly.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "081630d7e9ffb6755de3a912b71e9dcb4ef838457e4bbccef3a42ebd6d76f6af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6013,
+    "run_id": "36920868882",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36920868882",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001203559_c47823db94",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6013,
+    "run_id": "36920868882"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T20:35:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
