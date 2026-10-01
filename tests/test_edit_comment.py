@@ -32,13 +32,17 @@ def _load():
 ec = _load()
 
 
+SESSION_ID = "session-uuid"
+
+
 @pytest.fixture
 def scratchpad(monkeypatch, tmp_path):
-	"""A session scratchpad under a fake temp root: <root>/claude-0/<project>/<session>/scratchpad/."""
+	"""This session's scratchpad under a fake temp root: <root>/claude-<uid>/<project>/<session>/scratchpad/."""
 	root = tmp_path / "tmp"
-	pad = root / "claude-0" / "-home-user-repo" / "session-uuid" / "scratchpad"
+	pad = root / f"claude-{os.getuid()}" / "-home-user-repo" / SESSION_ID / "scratchpad"
 	pad.mkdir(parents=True)
 	monkeypatch.setattr(ec, "_temp_roots", lambda: [root.resolve()])
+	monkeypatch.setenv(ec.SESSION_ID_ENV_VAR, SESSION_ID)
 	return pad
 
 
@@ -294,6 +298,137 @@ def test_is_scratchpad_path(relative, expected):
 	root = Path("/tmp")
 	assert ec.is_scratchpad_path(root / relative, [root]) is expected
 	assert ec.is_scratchpad_path(Path("/home/user/.config/gh/hosts.yml"), [root]) is False
+
+
+@pytest.mark.parametrize(
+	("relative", "expected"),
+	[
+		("claude-0/-home-user-repo/me/scratchpad/body.md", True),
+		("claude-0/other-project/me/scratchpad/sub/reps.json", True),
+		# Another session's or another user's scratchpad (issue #5700).
+		("claude-0/-home-user-repo/other-session/scratchpad/body.md", False),
+		("claude-1000/-home-user-repo/me/scratchpad/body.md", False),
+		("claude-00/-home-user-repo/me/scratchpad/body.md", False),
+		# The #5452 layout rules still apply.
+		("claude-0/-home-user-repo/me/scratchpad", False),
+		("claude-0/-home-user-repo/me/extra/scratchpad/body.md", False),
+		("claude-0/me/scratchpad/body.md", False),
+	],
+)
+def test_is_own_scratchpad_path(relative, expected):
+	root = Path("/tmp")
+	assert ec.is_own_scratchpad_path(root / relative, [root], ("claude-0", "me")) is expected
+	assert ec.is_own_scratchpad_path(Path("/home/user/.config/gh/hosts.yml"), [root], ("claude-0", "me")) is False
+
+
+@pytest.mark.parametrize("flag", ["--body-file", "--replacements"])
+def test_another_sessions_scratchpad_is_rejected(github, reads, scratchpad, capsys, flag):
+	other = scratchpad.parents[1] / "other-session" / "scratchpad"
+	other.mkdir(parents=True)
+	body_file = other / "body.md"
+	body_file.write_text(SECRET, encoding="utf-8")
+	assert "session scratchpad" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", flag, str(body_file)], github, reads)
+
+
+@pytest.mark.parametrize("flag", ["--body-file", "--replacements"])
+def test_another_uids_scratchpad_is_rejected(github, reads, scratchpad, capsys, flag):
+	other = scratchpad.parents[3] / f"claude-{os.getuid() + 1}" / "-home-user-repo" / SESSION_ID / "scratchpad"
+	other.mkdir(parents=True)
+	body_file = other / "body.md"
+	body_file.write_text(SECRET, encoding="utf-8")
+	assert "session scratchpad" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", flag, str(body_file)], github, reads)
+
+
+@pytest.mark.parametrize("session_id", [None, "", "..", ".", "a/b", "../session-uuid", "-x", "x" * 129])
+@pytest.mark.parametrize("flag", ["--body-file", "--replacements"])
+def test_unverifiable_session_id_rejects_every_file(monkeypatch, github, reads, scratchpad, capsys, flag, session_id):
+	body_file = scratchpad / "body.md"
+	body_file.write_text(SECRET, encoding="utf-8")
+	if session_id is None:
+		monkeypatch.delenv(ec.SESSION_ID_ENV_VAR, raising=False)
+	else:
+		monkeypatch.setenv(ec.SESSION_ID_ENV_VAR, session_id)
+	assert ec.SESSION_ID_ENV_VAR in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", flag, str(body_file)], github, reads)
+
+
+def test_missing_getuid_rejects_every_file(monkeypatch, github, reads, scratchpad, capsys):
+	body_file = scratchpad / "body.md"
+	body_file.write_text(SECRET, encoding="utf-8")
+	monkeypatch.delattr(ec.os, "getuid")
+	assert "cannot be verified" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", "--body-file", str(body_file)], github, reads)
+
+
+def test_file_owned_by_another_uid_is_rejected(monkeypatch, github, reads, scratchpad, capsys):
+	body_file = scratchpad / "body.md"
+	body_file.write_text(SECRET, encoding="utf-8")
+	real_fstat = os.fstat
+
+	def foreign_fstat(fd):
+		fields = list(real_fstat(fd))
+		fields[4] = os.getuid() + 1  # st_uid, as if another account created the file
+		return os.stat_result(fields)
+
+	monkeypatch.setattr(ec.os, "fstat", foreign_fstat)
+	assert "owned by uid" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", "--body-file", str(body_file)], github, reads)
+
+
+def test_fixture_session_id_is_a_valid_session_id():
+	# Every own-scratchpad test depends on the fixture passing the identity check.
+	assert ec.SESSION_ID_RE.fullmatch(SESSION_ID)
+
+
+@pytest.mark.parametrize("flag", ["--body-file", "--replacements"])
+def test_directory_swapped_for_a_symlink_after_the_check_is_not_followed(monkeypatch, github, reads, scratchpad, tmp_path, capsys, flag):
+	# A same-uid process replaces the scratchpad directory with a symlink to an
+	# outside directory between the path check and the open (issue #5700 review).
+	body_file = scratchpad / "body.md"
+	body_file.write_text(json.dumps([{"old": "run 1", "new": "run 2"}]), encoding="utf-8")
+	outside = tmp_path / "outside"
+	outside.mkdir()
+	# Valid for both flags, so the pre-fix helper would have used it and leaked SECRET.
+	(outside / "body.md").write_text(json.dumps([{"old": SECRET, "new": "x"}]), encoding="utf-8")
+	real_check = ec.is_own_scratchpad_path
+
+	def check_then_swap(resolved, roots, identity):
+		result = real_check(resolved, roots, identity)
+		scratchpad.rename(scratchpad.with_name("scratchpad.moved"))
+		scratchpad.symlink_to(outside, target_is_directory=True)
+		return result
+
+	monkeypatch.setattr(ec, "is_own_scratchpad_path", check_then_swap)
+	_rejected(capsys, ["--repo", "o/r", "--comment-id", "5", flag, str(body_file)], github, reads)
+
+
+def test_open_scratchpad_file_refuses_a_symlinked_parent(scratchpad, tmp_path):
+	body_file = scratchpad / "body.md"
+	body_file.write_text("mine\n", encoding="utf-8")
+	fd = ec._open_scratchpad_file(body_file.resolve())
+	try:
+		assert os.read(fd, 16) == b"mine\n"
+	finally:
+		os.close(fd)
+	outside = tmp_path / "outside"
+	outside.mkdir()
+	(outside / "body.md").write_text(SECRET, encoding="utf-8")
+	resolved = body_file.resolve()
+	scratchpad.rename(scratchpad.with_name("scratchpad.moved"))
+	scratchpad.symlink_to(outside, target_is_directory=True)
+	with pytest.raises(OSError):
+		ec._open_scratchpad_file(resolved)
+
+
+def test_platform_without_dir_fd_support_rejects_every_file(monkeypatch, github, reads, scratchpad, capsys):
+	body_file = scratchpad / "body.md"
+	body_file.write_text(SECRET, encoding="utf-8")
+	monkeypatch.setattr(ec.os, "supports_dir_fd", set())
+	assert "without following symlinks" in _rejected(capsys, ["--repo", "o/r", "--comment-id", "5", "--body-file", str(body_file)], github, reads)
+
+
+def test_caller_scratchpad_identity(monkeypatch):
+	monkeypatch.setenv(ec.SESSION_ID_ENV_VAR, "884f673e-3156-5ccb-a763-8feb64e7b7e4")
+	assert ec._caller_scratchpad_identity() == (f"claude-{os.getuid()}", "884f673e-3156-5ccb-a763-8feb64e7b7e4")
+	monkeypatch.delenv(ec.SESSION_ID_ENV_VAR)
+	assert ec._caller_scratchpad_identity() is None
 
 
 def test_temp_roots_include_the_resolved_temp_dir():
