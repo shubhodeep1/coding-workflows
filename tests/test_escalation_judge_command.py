@@ -263,6 +263,16 @@ def test_fix_check_budget_is_a_fix_round(plan):
 	assert "after a `budget` for `fix-check-defective`, `#<fix PR>` is that budget round's fix PR" in step8
 
 
+def test_fix_check_descope_checks_the_descope_pr(plan):
+	# A revert merged into the base branch leaves the original fix PR's diff
+	# unchanged, so the fix check after a `descope` must audit the descope PR.
+	section = plan[plan.index("## Escalations"):plan.index("## Progress Log")]
+	assert "the next stage on merge is `conformance 3/3 — fix check` on that descope PR (`scope fix-check #<the descope PR>`), never on the original fix PR" in section
+	assert "the revert PR's body also lists the findings the fix check reported as unresolved or defective" in section
+	step8 = plan[plan.index("8. **Conformance audit"):plan.index("9. **Security pass")]
+	assert "and after a `descope` it is the descope PR" in step8
+
+
 def test_every_cap_defers_to_the_escalations_counting_rule(plan):
 	# Each cap names the judge's granted rounds and links to the one place
 	# ("Escalations") that says they are counted per stop id.
