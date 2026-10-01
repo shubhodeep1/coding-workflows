@@ -542,3 +542,11 @@ def test_conformance_fixes_in_the_twins():
 	assert "the GPT editor, the GPT conflict resolver, and the GPT review-blocked judge never run" not in twin
 	fixer = " ".join(TEMPLATE_FIX_CLAUDE_PR.read_text(encoding="utf-8").split())
 	assert "except a hold's reasoning comment ([Holds](#holds) step 1), which comes before its hold claim" in fixer
+
+
+def test_conformance_run_2_readme_claude_fixer_summary():
+	"""Conformance run 2: README's Claude-fixer summary matches D14 and the judge's Claude mode."""
+	readme = _flat(ROOT / "README.md")
+	assert "the GPT conflict resolver runs only for a conflict that touches `.claude/**`" in readme
+	assert "the review-blocked judge runs only in its Claude mode (below)" in readme
+	assert "GPT editor, conflict resolver, and review-blocked judge never run on it" not in readme
