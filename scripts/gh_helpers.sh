@@ -1661,6 +1661,10 @@ PY
 #   owner/repo/issues/56/#x
 #   https://github.com/owner/repo/issues/78?q=(a)#issuecomment-2
 #
+# Adjacent links each count on their own:
+#   [one](https://github.com/owner/repo/issues/1?q=1),[two](https://github.com/owner/repo/issues/2)
+#   yields 1 and 2.
+#
 # A URL or path that carries a `#` fragment points at something inside
 # the issue (usually a comment), not at the issue as the PR's subject, so
 # it is not a linked issue (issue #5776). The fragment may follow the
@@ -1669,8 +1673,18 @@ PY
 # after `?q=(a)` is still seen. Each URL/path match keeps that tail and the
 # character after it, a match that ends in `#` is dropped, and the issue
 # number is read from just after `issues/`, so a digit in the query never
-# replaces it. A Markdown link's closing `)` joins the tail, which is
-# harmless: only a `#` ends the match in a way that drops it.
+# replaces it. Because the tail excludes `#`, a fragment can only be the
+# match's last character, so the trailing-`#` filter sees every one.
+# Before matching, a line break is put in front of every
+# `<owner/repo>/issues/<n>` that follows a non-word character, so a tail
+# ends where the next issue link starts: otherwise
+# `…/issues/1?q=1),[two](…/issues/2)` is one match that yields only 1, and
+# a `#` on the second link would drop both. (A space would not do: grep
+# would use it up as the first match's last character, leaving the second
+# without the non-word character it must follow.) The break also leaves
+# `github.com/` apart from the path, which the path form then matches at
+# the start of its line. A Markdown link's closing `)` still joins the
+# tail; only a `#` ends the match in a way that drops it.
 #
 # Fail-open:
 #   empty text or malformed repository input emits no matches
@@ -1687,6 +1701,7 @@ extract_repo_scoped_issue_refs_from_text()
 
 	_repository_escaped="$(printf '%s' "${_repository}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
 	printf '%s\n' "${_text}" \
+		| sed -E "s#([^[:alnum:]_])(${_repository_escaped}/issues/[0-9])#\\1\\n\\2#gI" \
 		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([/?][^[:space:]#<>]*)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([/?][^[:space:]#<>]*)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
 		| grep -viE 'issues/[0-9]+.*#$' \
 		| sed -E 's#(issues/[0-9]+).*#\1#I' \

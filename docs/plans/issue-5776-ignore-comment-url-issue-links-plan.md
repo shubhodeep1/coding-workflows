@@ -32,7 +32,7 @@ Security pass: run
 
 ## Constraints
 
-- §5: one regex change in the shared helper, plus tests and docs. No change to the label/close loop.
+- §5: a change to the shared helper's matching only (the regex, and from review round 4 a split before each issue link), plus tests and docs. No change to the label/close loop.
 - §6: no identifier is renamed. The helper keeps its name and signature. New test names are unique.
 - §9: shell keeps the helper's tab indentation, YAML stays 2-space, and tests use tabs.
 - §15: no new GitHub API call; the helper is pure text processing.
@@ -42,7 +42,7 @@ Security pass: run
 
 ## Approach
 
-In `extract_repo_scoped_issue_refs_from_text`, change the trailing boundary of the two URL/path alternatives from `([^[:alnum:]_]|$)` to `([^[:alnum:]_#]|$)`. A number followed by `#` then matches no alternative: shorter prefixes are followed by a digit, and the keyword alternative needs `<keyword> #N`. Review round 2 on PR #5825 widened this: each URL/path alternative also takes an optional `/…` or `?…` tail (up to whitespace, `#`, `<`, `>`; review round 3 let it run through `(` and `)`), a match ending in `#` is dropped, and the number is read from just after `issues/`, so `…/issues/N?query#issuecomment-…` is rejected too and a digit in the query is never read as the issue. The doc comment gains the rejected examples. Narrowing the shared helper (AD-3) gives every caller one meaning of "linked issue". The `review_autofix.yml` identical-failure cap would otherwise label a comment-linked issue `ai:review-blocked` the same way.
+In `extract_repo_scoped_issue_refs_from_text`, change the trailing boundary of the two URL/path alternatives from `([^[:alnum:]_]|$)` to `([^[:alnum:]_#]|$)`. A number followed by `#` then matches no alternative: shorter prefixes are followed by a digit, and the keyword alternative needs `<keyword> #N`. Review round 2 on PR #5825 widened this: each URL/path alternative also takes an optional `/…` or `?…` tail (up to whitespace, `#`, `<`, `>`; review round 3 let it run through `(` and `)`; review round 4 puts a line break before every repo-scoped `<repo>/issues/<n>` that follows a non-word character, so a tail never runs into the next issue link), a match ending in `#` is dropped, and the number is read from just after `issues/`, so `…/issues/N?query#issuecomment-…` is rejected too and a digit in the query is never read as the issue. The doc comment gains the rejected examples. Narrowing the shared helper (AD-3) gives every caller one meaning of "linked issue". The `review_autofix.yml` identical-failure cap would otherwise label a comment-linked issue `ai:review-blocked` the same way.
 
 The label/lineage gate needs no code change on this base (AD-2). New runtime tests drive the real step script through the existing stub harness and pin the four cases the issue lists, plus the keyword case into a Claude project branch.
 

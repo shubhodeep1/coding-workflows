@@ -123,6 +123,24 @@ def test_fragment_after_parentheses_in_the_tail_is_not_a_link() -> None:
 	assert _extract(f"(see https://github.com/{REPOSITORY}/issues/19?q=1) and Fixes #20") == [19, 20]
 
 
+def test_adjacent_issue_links_each_count_on_their_own() -> None:
+	"""A tail that runs through `)`, `,` and `[` must still stop where the next
+	issue link starts, or the second link is lost, and a fragment on it drops
+	the first (round 4 review of PR #5825)."""
+	url = f"https://github.com/{REPOSITORY}/issues"
+	assert _extract(f"[one]({url}/1?q=1),[two]({url}/2)") == [1, 2]
+	assert _extract(f"[one]({url}/1/),[two]({url}/2?x=1)") == [1, 2]
+	assert _extract(f"{url}/1?q=1,{url}/2") == [1, 2]
+	assert _extract(f"{url}/1/,{REPOSITORY}/issues/2") == [1, 2]
+	assert _extract(f"{url}/1?q=(a),{url}/2?q=(b),{url}/3") == [1, 2, 3]
+	# A fragment on the neighbour drops only the neighbour.
+	assert _extract(f"[a]({url}/1/),[b]({url}/2#issuecomment-3)") == [1]
+	assert _extract(f"[a]({url}/1#issuecomment-3),[b]({url}/2?q=1)") == [2]
+	# Another repository's issue path is not split off and never links.
+	assert _extract(f"{url}/1?q=1,other/repo/issues/2") == [1]
+	assert _extract(f"{url}/1?q=x{REPOSITORY}/issues/2") == [1]
+
+
 def test_bare_urls_paths_and_closing_keywords_still_link() -> None:
 	assert _extract(f"https://github.com/{REPOSITORY}/issues/78") == [78]
 	assert _extract(f"{REPOSITORY}/issues/56.") == [56]
